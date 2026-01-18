@@ -3,4 +3,5 @@ numpy
 pillow
 scipy
 trimesh
+opencv-python
 networkx
