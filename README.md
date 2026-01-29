@@ -48,6 +48,13 @@ The HueForge authors have also clearly stated that this technology has entered t
 The pioneers have chosen to remain open to help the community develop; therefore, this technology is generally **not patentable**.
 
 Lumina Studio will continue to maintain its open-source, collaborative, and non-profit positioning, and we welcome everyone's supervision.
+Lumina Studio will continue to operate on an open-source, collaborative, and non-profit basis, and we welcome your feedback.
+
+- This project is an open-source, non-profit project. There will be no bundled sales, and no features will be made into paid features.
+- If you or your company wish to support the project's continued development, please contact us. Sponsored products will only be used for software development, testing, and optimization.
+- Sponsorship represents support for the project only and does not constitute any commercial binding.
+- We reject any sponsorship collaborations that could influence technical decisions or open-source licenses.
+
 Lumina Studio did not refer to any patent applications because such patents usually only contain specifications and the technical code is not disclosed in the short term. Blindly referring to these patents would affect its own development process.
 
 **Special thanks to the HueForge team for their support and understanding of open source!**  **
