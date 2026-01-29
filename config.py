@@ -20,6 +20,15 @@ class PrinterConfig:
     SHRINK_OFFSET: float = 0.02
 
 
+class ThinModeConfig:
+    """W+CMYK (341 Swatches) mode configuration."""
+    GRID_W: int = 19  # 19 columns
+    GRID_H: int = 18  # 18 rows
+    MAX_LAYERS: int = 4  # 0-4 layers variable
+    BASE_MM: float = 1.0  # 1.0mm white base
+    TOTAL_SWATCHES: int = 341  # 1 + 4 + 16 + 64 + 256 = 341
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
 # ║                           INTERNATIONALIZATION                                ║
 # ╚═══════════════════════════════════════════════════════════════════════════════╝
@@ -52,6 +61,7 @@ class I18N:
         'cal_mode': {'zh': '色彩模式', 'en': 'Color Mode'},
         'cal_mode_cmyw': {'zh': 'CMYW (青/品红/黄)', 'en': 'CMYW (Cyan/Magenta/Yellow)'},
         'cal_mode_rybw': {'zh': 'RYBW (红/黄/蓝)', 'en': 'RYBW (Red/Yellow/Blue)'},
+        'cal_mode_cmykw': {'zh': 'W+CMYK (341色块)', 'en': 'W+CMYK (341 Swatches)'},
         'cal_block_size': {'zh': '色块尺寸 (mm)', 'en': 'Block Size (mm)'},
         'cal_gap': {'zh': '间隙 (mm)', 'en': 'Gap (mm)'},
         'cal_backing': {'zh': '底板颜色', 'en': 'Backing Color'},
@@ -136,7 +146,7 @@ class I18N:
 
 
 class ColorSystem:
-    """Color model definitions for CMYW and RYBW."""
+    """Color model definitions for CMYW, RYBW, and CMYK_W (341 mode)."""
 
     CMYW = {
         'name': 'CMYW',
@@ -150,7 +160,9 @@ class ColorSystem:
         'map': {"White": 0, "Cyan": 1, "Magenta": 2, "Yellow": 3},
         # 定位点顺序: TL, TR, BR, BL
         'corner_labels': ["白色 (左上)", "青色 (右上)", "品红 (右下)", "黄色 (左下)"],
-        'corner_labels_en': ["White (TL)", "Cyan (TR)", "Magenta (BR)", "Yellow (BL)"]
+        'corner_labels_en': ["White (TL)", "Cyan (TR)", "Magenta (BR)", "Yellow (BL)"],
+        'is_thin_mode': False,
+        'color_layers': 5
     }
 
     RYBW = {
@@ -165,24 +177,75 @@ class ColorSystem:
         'map': {"White": 0, "Red": 1, "Yellow": 2, "Blue": 3},
         # 定位点顺序: TL, TR, BR, BL
         'corner_labels': ["白色 (左上)", "红色 (右上)", "蓝色 (右下)", "黄色 (左下)"],
-        'corner_labels_en': ["White (TL)", "Red (TR)", "Blue (BR)", "Yellow (BL)"]
+        'corner_labels_en': ["White (TL)", "Red (TR)", "Blue (BR)", "Yellow (BL)"],
+        'is_thin_mode': False,
+        'color_layers': 5
+    }
+
+    # W+CMYK 341 Swatches Mode (Thin Mode)
+    # 5 slots: White(base) + Cyan, Magenta, Yellow, Black (color layers)
+    # Note: Corner labels are for VIEWING FROM BOTTOM (print surface)
+    # The printed calibration board is viewed from the bottom/color side
+    CMYK_W = {
+        'name': 'CMYK_W',
+        'slots': ["White", "Cyan", "Magenta", "Yellow", "Black"],
+        'preview': {
+            0: [255, 255, 255, 255],  # White (Base)
+            1: [0, 134, 214, 255],     # Cyan
+            2: [236, 0, 140, 255],     # Magenta
+            3: [244, 238, 42, 255],    # Yellow
+            4: [30, 30, 30, 255]       # Black
+        },
+        'map': {"White": 0, "Cyan": 1, "Magenta": 2, "Yellow": 3, "Black": 4},
+        # 定位点顺序: TL, TR, BR, BL (从底面/外观面观看)
+        # 打印后翻转观看: 左上=黄, 右上=品红, 右下=青, 左下=白
+        'corner_labels': ["黄色 (左上)", "品红 (右上)", "青色 (右下)", "白色 (左下)"],
+        'corner_labels_en': ["Yellow (TL)", "Magenta (TR)", "Cyan (BR)", "White (BL)"],
+        'is_thin_mode': True,
+        'color_layers': 4,  # Variable 0-4 layers
+        'grid_w': 19,
+        'grid_h': 18,
+        'total_swatches': 341,
+        'base_mm': 1.0
     }
 
     @staticmethod
     def get(mode: str):
-        return ColorSystem.CMYW if "CMYW" in mode else ColorSystem.RYBW
+        if "CMYK_W" in mode or "W+CMYK" in mode or "341" in mode:
+            return ColorSystem.CMYK_W
+        elif "CMYW" in mode:
+            return ColorSystem.CMYW
+        else:
+            return ColorSystem.RYBW
+    
+    @staticmethod
+    def is_thin_mode(mode: str) -> bool:
+        """Check if the mode is thin mode (W+CMYK 341)."""
+        return "CMYK_W" in mode or "W+CMYK" in mode or "341" in mode
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
 # ║                           GLOBAL CONSTANTS                                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════════╝
 
-# Extractor constants
+# Extractor constants (1024 mode: 32x32 data grid + 2 padding = 34x34 physical)
 PHYSICAL_GRID_SIZE = 34
 DATA_GRID_SIZE = 32
 DST_SIZE = 1000
 CELL_SIZE = DST_SIZE / PHYSICAL_GRID_SIZE
 LUT_FILE_PATH = os.path.join(tempfile.gettempdir(), "lumina_lut.npy")
+
+# Thin Mode (341 swatches) extractor constants
+# 19x18 data grid + 2 padding = 21x20 physical grid
+THIN_PHYSICAL_GRID_W = 21  # 19 + 2 padding
+THIN_PHYSICAL_GRID_H = 20  # 18 + 2 padding
+THIN_DATA_GRID_W = 19
+THIN_DATA_GRID_H = 18
+THIN_DST_SIZE_W = 1000
+THIN_DST_SIZE_H = int(1000 * THIN_PHYSICAL_GRID_H / THIN_PHYSICAL_GRID_W)
+THIN_CELL_SIZE_W = THIN_DST_SIZE_W / THIN_PHYSICAL_GRID_W
+THIN_CELL_SIZE_H = THIN_DST_SIZE_H / THIN_PHYSICAL_GRID_H
+THIN_LUT_FILE_PATH = os.path.join(tempfile.gettempdir(), "lumina_lut_341.npy")
 
 # Converter constants
 PREVIEW_SCALE = 2  # 固定预览缩放倍数

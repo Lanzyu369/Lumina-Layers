@@ -5,7 +5,7 @@ Lumina Studio - UI Callbacks
 
 import gradio as gr
 
-from config import ColorSystem
+from config import ColorSystem, ThinModeConfig
 from core.extractor import generate_simulated_reference
 
 
@@ -55,6 +55,7 @@ def on_extractor_rotate(i, mode):
 def on_extractor_click(img, pts, mode, evt: gr.SelectData):
     """点击图片设置角点"""
     from core.extractor import draw_corner_points
+
     if len(pts) >= 4:
         return img, pts, "#### ✅ 定位完成 Complete!"
     n = pts + [[evt.index[0], evt.index[1]]]

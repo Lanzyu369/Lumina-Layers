@@ -8,7 +8,8 @@ import cv2
 from PIL import Image
 from scipy.spatial import KDTree
 
-from config import PrinterConfig
+from config import PrinterConfig, ThinModeConfig, ColorSystem
+from config import THIN_DATA_GRID_W, THIN_DATA_GRID_H
 
 
 class LuminaImageProcessor:
@@ -23,18 +24,23 @@ class LuminaImageProcessor:
         
         Args:
             lut_path: LUT文件路径 (.npy)
-            color_mode: 色彩模式字符串 (CMYW/RYBW)
+            color_mode: 色彩模式字符串 (CMYW/RYBW/W+CMYK)
         """
         self.color_mode = color_mode
+        self.is_thin_mode = ColorSystem.is_thin_mode(color_mode)
         self.lut_rgb = None
         self.ref_stacks = None
+        self.ref_seq_lengths = None  # For 341 mode
         self.kdtree = None
         
         # 加载并验证LUT
-        self._load_lut(lut_path)
+        if self.is_thin_mode:
+            self._load_lut_341(lut_path)
+        else:
+            self._load_lut_1024(lut_path)
     
-    def _load_lut(self, lut_path):
-        """加载并验证LUT文件"""
+    def _load_lut_1024(self, lut_path):
+        """加载并验证1024色LUT文件"""
         try:
             lut_grid = np.load(lut_path)
             measured_colors = lut_grid.reshape(-1, 3)
@@ -67,9 +73,48 @@ class LuminaImageProcessor:
         
         self.lut_rgb = np.array(valid_rgb)
         self.ref_stacks = np.array(valid_stacks)
+        self.ref_seq_lengths = np.full(len(valid_stacks), 5, dtype=np.int32)  # All 5 layers
         self.kdtree = KDTree(self.lut_rgb)
         
-        print(f"✅ LUT已加载 (过滤了{dropped}个异常点)")
+        print(f"✅ LUT已加载 (1024色模式, 过滤了{dropped}个异常点)")
+    
+    def _load_lut_341(self, lut_path):
+        """加载并验证341色LUT文件"""
+        from core.calibration import generate_341_sequences
+        
+        try:
+            lut_grid = np.load(lut_path)
+            # 341 mode uses 19x18 grid
+            if lut_grid.shape[0] == THIN_DATA_GRID_H and lut_grid.shape[1] == THIN_DATA_GRID_W:
+                measured_colors = lut_grid.reshape(-1, 3)
+            else:
+                measured_colors = lut_grid.reshape(-1, 3)
+        except Exception as e:
+            raise ValueError(f"❌ LUT文件损坏: {e}")
+        
+        # Generate reference sequences
+        sequences = generate_341_sequences()
+        
+        valid_rgb, valid_stacks, valid_lengths = [], [], []
+        
+        num_colors = min(len(measured_colors), 341)
+        for i in range(num_colors):
+            seq = sequences[i]
+            real_rgb = measured_colors[i]
+            
+            # Pad sequence to 4 elements for consistent array shape
+            padded_seq = seq + [-1] * (4 - len(seq))  # Pad with -1
+            
+            valid_rgb.append(real_rgb)
+            valid_stacks.append(padded_seq)
+            valid_lengths.append(len(seq))
+        
+        self.lut_rgb = np.array(valid_rgb)
+        self.ref_stacks = np.array(valid_stacks)
+        self.ref_seq_lengths = np.array(valid_lengths, dtype=np.int32)
+        self.kdtree = KDTree(self.lut_rgb)
+        
+        print(f"✅ LUT已加载 (341色模式, {num_colors}个颜色)")
     
     def process_image(self, image_path, target_width_mm, modeling_mode,
                      quantize_colors, auto_bg, bg_tol):
@@ -88,6 +133,7 @@ class LuminaImageProcessor:
             dict: 包含处理结果的字典
                 - matched_rgb: (H, W, 3) 匹配后的RGB数组
                 - material_matrix: (H, W, Layers) 材质索引矩阵
+                - seq_lengths: (H, W) 每个像素的序列长度 (341模式)
                 - mask_solid: (H, W) 实体掩码
                 - dimensions: (width, height) 像素尺寸
                 - pixel_scale: mm/pixel 比例
@@ -105,7 +151,11 @@ class LuminaImageProcessor:
         else:
             mode_name = "Voxel"
         
-        print(f"[IMAGE_PROCESSOR] Mode: {mode_name}")
+        # Add thin mode indicator
+        if self.is_thin_mode:
+            mode_name += " (341)"
+        
+        print(f"[IMAGE_PROCESSOR] Mode: {mode_name}, Thin: {self.is_thin_mode}")
         
         # 加载图像
         img = Image.open(image_path).convert('RGBA')
@@ -138,11 +188,11 @@ class LuminaImageProcessor:
         
         # 色彩处理和匹配
         if use_vector_mode or use_woodblock_mode:
-            matched_rgb, material_matrix, bg_reference = self._process_vector_mode(
+            matched_rgb, material_matrix, seq_lengths, bg_reference = self._process_vector_mode(
                 rgb_arr, target_h, target_w, quantize_colors
             )
         else:
-            matched_rgb, material_matrix, bg_reference = self._process_voxel_mode(
+            matched_rgb, material_matrix, seq_lengths, bg_reference = self._process_voxel_mode(
                 rgb_arr, target_h, target_w
             )
         
@@ -159,13 +209,16 @@ class LuminaImageProcessor:
         return {
             'matched_rgb': matched_rgb,
             'material_matrix': material_matrix,
+            'seq_lengths': seq_lengths,
             'mask_solid': mask_solid,
             'dimensions': (target_w, target_h),
             'pixel_scale': pixel_to_mm_scale,
+            'is_thin_mode': self.is_thin_mode,
             'mode_info': {
                 'name': mode_name,
                 'use_vector': use_vector_mode,
-                'use_woodblock': use_woodblock_mode
+                'use_woodblock': use_woodblock_mode,
+                'is_thin': self.is_thin_mode
             }
         }
 
@@ -213,25 +266,35 @@ class LuminaImageProcessor:
         # 建立颜色映射
         color_to_stack = {}
         color_to_rgb = {}
+        color_to_length = {}
         for i, color in enumerate(unique_colors):
             color_key = tuple(color)
             color_to_stack[color_key] = self.ref_stacks[unique_indices[i]]
             color_to_rgb[color_key] = self.lut_rgb[unique_indices[i]]
+            color_to_length[color_key] = self.ref_seq_lengths[unique_indices[i]]
+        
+        # Determine layer count based on mode
+        if self.is_thin_mode:
+            max_layers = ThinModeConfig.MAX_LAYERS  # 4 for 341 mode
+        else:
+            max_layers = PrinterConfig.COLOR_LAYERS  # 5 for 1024 mode
         
         # 映射回完整图像
         print(f"[IMAGE_PROCESSOR] Mapping to full image...")
         matched_rgb = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-        material_matrix = np.zeros((target_h, target_w, PrinterConfig.COLOR_LAYERS), dtype=int)
+        material_matrix = np.zeros((target_h, target_w, max_layers), dtype=int)
+        seq_lengths = np.zeros((target_h, target_w), dtype=np.int32)
         
         for y in range(target_h):
             for x in range(target_w):
                 color_key = tuple(quantized_image[y, x])
                 matched_rgb[y, x] = color_to_rgb[color_key]
-                material_matrix[y, x] = color_to_stack[color_key]
+                material_matrix[y, x] = color_to_stack[color_key][:max_layers]
+                seq_lengths[y, x] = color_to_length[color_key]
         
         print(f"[IMAGE_PROCESSOR] Color matching complete!")
         
-        return matched_rgb, material_matrix, quantized_image
+        return matched_rgb, material_matrix, seq_lengths, quantized_image
     
     def _process_voxel_mode(self, rgb_arr, target_h, target_w):
         """
@@ -243,11 +306,21 @@ class LuminaImageProcessor:
         flat_rgb = rgb_arr.reshape(-1, 3)
         _, indices = self.kdtree.query(flat_rgb)
         
+        # Determine layer count based on mode
+        if self.is_thin_mode:
+            max_layers = ThinModeConfig.MAX_LAYERS  # 4 for 341 mode
+        else:
+            max_layers = PrinterConfig.COLOR_LAYERS  # 5 for 1024 mode
+        
         matched_rgb = self.lut_rgb[indices].reshape(target_h, target_w, 3)
-        material_matrix = self.ref_stacks[indices].reshape(
-            target_h, target_w, PrinterConfig.COLOR_LAYERS
-        )
+        
+        # Handle stacks with proper shape
+        stacks = self.ref_stacks[indices]
+        material_matrix = stacks[:, :max_layers].reshape(target_h, target_w, max_layers)
+        
+        # Get sequence lengths
+        seq_lengths = self.ref_seq_lengths[indices].reshape(target_h, target_w)
         
         print(f"[IMAGE_PROCESSOR] Direct matching complete!")
         
-        return matched_rgb, material_matrix, rgb_arr
+        return matched_rgb, material_matrix, seq_lengths, rgb_arr

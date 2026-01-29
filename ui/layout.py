@@ -38,23 +38,25 @@ from .callbacks import (
 
 def create_app():
     """创建Gradio应用界面"""
-    with gr.Blocks(title="Lumina Studio") as app:
+    with gr.Blocks(title="Lumina Studio", css=CUSTOM_CSS, theme=gr.themes.Soft()) as app:
 
-        # Header with Language Indicator
+        # Header with Language Selector
         with gr.Row():
             with gr.Column(scale=10):
                 gr.HTML("""
                 <div class="header-banner">
                     <h1>✨ Lumina Studio</h1>
-                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | v1.4</p>
+                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | v1.5</p>
                 </div>
                 """)
-            with gr.Column(scale=1, min_width=120):
+            with gr.Column(scale=1, min_width=150):
+                # Language selector - currently display only (i18n framework not implemented)
                 gr.HTML("""
                 <div style="text-align:right; padding:10px;">
                     <span style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                                 color:white; padding:5px 15px; border-radius:20px; font-weight:bold; white-space: nowrap;">
-                        🌐 中文 | EN
+                                 color:white; padding:5px 15px; border-radius:20px; font-weight:bold; white-space: nowrap;
+                                 cursor: default; user-select: none;" title="界面已双语显示 / UI is bilingual">
+                        🌐 中文 / EN
                     </span>
                 </div>
                 """)
@@ -91,7 +93,7 @@ def create_app():
             # ═══════════════════════════════════════════════════════════════
             # TAB 4: About
             # ═══════════════════════════════════════════════════════════════
-            create_about_tab()
+            create_about_tab(stats_html)
 
         # Footer
         gr.HTML("""
@@ -116,7 +118,11 @@ def create_calibration_tab():
             with gr.Column(scale=1):
                 gr.Markdown("#### ⚙️ 参数 Parameters")
                 cal_mode = gr.Radio(
-                    choices=["CMYW (Cyan/Magenta/Yellow)", "RYBW (Red/Yellow/Blue)"],
+                    choices=[
+                        "CMYW (Cyan/Magenta/Yellow)", 
+                        "RYBW (Red/Yellow/Blue)",
+                        "W+CMYK (341 Swatches)"
+                    ],
                     value="RYBW (Red/Yellow/Blue)",
                     label="色彩模式 Color Mode"
                 )
@@ -132,7 +138,7 @@ def create_calibration_tab():
 
             with gr.Column(scale=1):
                 gr.Markdown("#### 👁️ 预览 Preview")
-                cal_preview = gr.Image(label="Calibration Preview", show_label=False)
+                cal_preview = gr.Image(label="Calibration Preview", show_label=False, show_fullscreen_button=True)
                 cal_file = gr.File(label="下载 Download 3MF")
 
         cal_btn.click(
@@ -154,19 +160,30 @@ def create_extractor_tab():
         ext_state_img = gr.State(None)
         ext_state_pts = gr.State([])
         ext_curr_coord = gr.State(None)
-        ref_img = generate_simulated_reference()
+        ref_img = generate_simulated_reference("RYBW")  # Default mode
 
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("#### 📸 上传照片 Upload Photo")
 
                 ext_color_mode = gr.Radio(
-                    choices=["CMYW (Cyan/Magenta/Yellow)", "RYBW (Red/Yellow/Blue)"],
+                    choices=[
+                        "CMYW (Cyan/Magenta/Yellow)", 
+                        "RYBW (Red/Yellow/Blue)",
+                        "W+CMYK (341 Swatches)"
+                    ],
                     value="RYBW (Red/Yellow/Blue)",
                     label="🎨 色彩模式 Color Mode"
                 )
 
-                ext_img_in = gr.Image(label="校准板照片 Calibration Photo", type="numpy", interactive=True)
+                ext_img_in = gr.Image(
+                    label="校准板照片 Calibration Photo", 
+                    type="numpy", 
+                    interactive=True, 
+                    show_fullscreen_button=False,
+                    show_download_button=False,
+                    elem_classes=["no-clear-btn"]
+                )
 
                 with gr.Row():
                     ext_rot_btn = gr.Button("↺ 旋转 Rotate")
@@ -187,20 +204,27 @@ def create_extractor_tab():
 
             with gr.Column(scale=1):
                 ext_hint = gr.Markdown("#### 👉 点击 Click: **White (左上 Top-Left)**")
-                ext_work_img = gr.Image(label="标记图 Marked", show_label=False, interactive=True)
+                ext_work_img = gr.Image(
+                    label="标记图 Marked", 
+                    show_label=False, 
+                    interactive=False, 
+                    show_fullscreen_button=False, 
+                    show_download_button=False,
+                    elem_classes=["no-clear-btn"]
+                )
 
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown("#### 📍 采样预览 Sampling")
-                        ext_warp_view = gr.Image(show_label=False)
+                        ext_warp_view = gr.Image(show_label=False, show_fullscreen_button=True)
                     with gr.Column():
                         gr.Markdown("#### 🎯 参考 Reference")
-                        ext_ref_view = gr.Image(show_label=False, value=ref_img, interactive=False)
+                        ext_ref_view = gr.Image(show_label=False, value=ref_img, interactive=False, show_fullscreen_button=True)
 
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown("#### 📊 结果 Result (点击修正 Click to fix)")
-                        ext_lut_view = gr.Image(show_label=False, interactive=True)
+                        ext_lut_view = gr.Image(show_label=False, interactive=False, show_fullscreen_button=True)
                     with gr.Column():
                         gr.Markdown("#### 🛠️ 手动修正 Manual Fix")
                         ext_probe_html = gr.HTML("点击左侧色块 Click cell on left...")
@@ -240,7 +264,7 @@ def create_extractor_tab():
         )
 
         extract_inputs = [ext_state_img, ext_state_pts, ext_off_x, ext_off_y,
-                          ext_zoom, ext_barrel, ext_wb, ext_bf]
+                          ext_zoom, ext_barrel, ext_wb, ext_bf, ext_color_mode]
         extract_outputs = [ext_warp_view, ext_lut_view, ext_dl_btn, ext_log]
 
         ext_run_btn.click(run_extraction, extract_inputs, extract_outputs)
@@ -248,8 +272,8 @@ def create_extractor_tab():
         for s in [ext_off_x, ext_off_y, ext_zoom, ext_barrel]:
             s.release(run_extraction, extract_inputs, extract_outputs)
 
-        ext_lut_view.select(probe_lut_cell, [], [ext_probe_html, ext_picker, ext_curr_coord])
-        ext_fix_btn.click(manual_fix_cell, [ext_curr_coord, ext_picker], [ext_lut_view, ext_log])
+        ext_lut_view.select(probe_lut_cell, [ext_color_mode], [ext_probe_html, ext_picker, ext_curr_coord])
+        ext_fix_btn.click(manual_fix_cell, [ext_curr_coord, ext_picker, ext_color_mode], [ext_lut_view, ext_log])
 
 
 def create_converter_tab():
@@ -271,11 +295,15 @@ def create_converter_tab():
             with gr.Column(scale=1):
                 gr.Markdown("#### 📁 输入")
                 conv_lut = gr.File(label="校准数据 (.npy)", file_types=['.npy'])
-                conv_img = gr.Image(label="输入图像", type="filepath")
+                conv_img = gr.Image(label="输入图像", type="filepath", show_fullscreen_button=True)
 
                 gr.Markdown("#### ⚙️ 参数")
                 conv_color_mode = gr.Radio(
-                    choices=["CMYW (Cyan/Magenta/Yellow)", "RYBW (Red/Yellow/Blue)"],
+                    choices=[
+                        "CMYW (Cyan/Magenta/Yellow)", 
+                        "RYBW (Red/Yellow/Blue)",
+                        "W+CMYK (341 Swatches)"
+                    ],
                     value="RYBW (Red/Yellow/Blue)",
                     label="色彩模式"
                 )
@@ -324,7 +352,8 @@ def create_converter_tab():
                     type="numpy",
                     height=500,
                     interactive=False,  # 禁止拖拽上传
-                    show_label=False
+                    show_label=False,
+                    show_fullscreen_button=True
                 )
 
                 # 挂孔设置
@@ -408,16 +437,40 @@ def create_converter_tab():
         )
 
 
-def create_about_tab():
+def create_about_tab(stats_component):
     """创建关于Tab"""
     with gr.TabItem("ℹ️ 关于 About", id=3):
+        with gr.Row():
+            with gr.Column(scale=4):
+                gr.Markdown("""
+                ## 🌟 Lumina Studio v1.5
+                
+                **多材料3D打印色彩系统** | Multi-Material 3D Print Color System
+                
+                让FDM打印也能拥有精准的色彩还原 | Accurate color reproduction for FDM printing
+                """)
+            with gr.Column(scale=1):
+                reset_btn = gr.Button("🗑️ 重置统计数据 Reset Stats", variant="secondary")
+                reset_status = gr.Markdown("")
+
+        def handle_reset_stats():
+            new_stats = Stats.reset_all()
+            new_html = f"""
+            <div class="stats-bar">
+                📊 累计生成 Total: 
+                <strong>{new_stats.get('calibrations', 0)}</strong> 校准板 Calibrations | 
+                <strong>{new_stats.get('extractions', 0)}</strong> 颜色提取 Extractions | 
+                <strong>{new_stats.get('conversions', 0)}</strong> 模型转换 Conversions
+            </div>
+            """
+            return new_html, "✅ 已重置 Reset Complete"
+
+        reset_btn.click(
+            handle_reset_stats,
+            outputs=[stats_component, reset_status]
+        )
+
         gr.Markdown("""
-        ## 🌟 Lumina Studio v1.4
-        
-        **多材料3D打印色彩系统** | Multi-Material 3D Print Color System
-        
-        让FDM打印也能拥有精准的色彩还原 | Accurate color reproduction for FDM printing
-        
         ---
         
         ### 📖 使用流程 Workflow
@@ -434,6 +487,9 @@ def create_about_tab():
         |-----------|---------|---------|---------|---------|
         | **RYBW** | ⬜ White | 🟥 Red | 🟦 Blue | 🟨 Yellow |
         | **CMYW** | ⬜ White | 🔵 Cyan | 🟣 Magenta | 🟨 Yellow |
+        | **W+CMYK (341)** | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
+        
+        > ⚠️ **注意**: W+CMYK模式的角点顺序是从底面（外观面）观看的结果
         
         ---
         
@@ -447,7 +503,19 @@ def create_about_tab():
         
         ---
         
-        ### 📝 v1.4 更新日志 Changelog
+        ### 📝 v1.5 更新日志 Changelog
+        
+        #### 🆕 W+CMYK 341色块模式
+        
+        - ✅ **341色块校准板** - 19×18网格，可变层数(0-4层)
+        - ✅ **5种材质支持** - White底座 + Cyan/Magenta/Yellow/Black色彩层
+        - ✅ **阶梯高度网格** - 每个色块根据序列长度呈现不同高度
+        - ✅ **固定1.0mm白色底座** - 更薄的打印件，更高的透光性
+        - ✅ **动态LUT匹配** - 341个颜色序列的精确匹配
+        
+        ---
+        
+        ### 📝 v1.4 更新日志 Previous Changelog
         
         #### 🚀 核心功能：三大建模模式
         
@@ -485,7 +553,7 @@ def create_about_tab():
         - ✅ **新增钥匙扣挂孔** Added keychain loop feature
         - ✅ 挂孔颜色自动检测 Auto-detect loop color from nearby pixels
         - ✅ 2D预览显示挂孔 2D preview shows loop
-        - ✅ 修复3MF对象命名 Fixed 3MF object naming
+        - ✅ 修复3MF对象 naming Fixed 3MF object naming
         - ✅ 颜色提取/转换添加模式选择 Added color mode selection
         - ✅ 默认间隙改为0.82mm Default gap changed to 0.82mm
         - ✅ **新增3D实时预览** Added 3D preview with true colors
@@ -498,6 +566,7 @@ def create_about_tab():
         - [✅] 三种建模模式 Three modeling modes (Vector/Woodblock/Voxel)
         - [✅] 版画模式SLIC引擎 Woodblock mode SLIC engine
         - [✅] 钥匙扣挂孔 Keychain loop
+        - [✅] **W+CMYK 341色块模式** 5-color thin mode with variable layers
         - [🚧] 漫画模式 Manga mode (Ben-Day dots simulation)
         - [ ] 6色扩展模式 6-color extended mode
         - [ ] 8色专业模式 8-color professional mode
@@ -526,10 +595,6 @@ def create_about_tab():
         
         <div style="text-align:center; color:#888; margin-top:20px;">
             Made with ❤️ by [MIN]<br>
-            v1.4.0 | 2025
+            v1.5.0 | 2026
         </div>
         """)
-
-
-
-

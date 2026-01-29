@@ -50,13 +50,13 @@ if __name__ == "__main__":
         PORT = find_available_port(7860)
         tray = LuminaTray(port=PORT)
     except Exception as e:
-        print(f"⚠️ Warning: Failed to initialize tray: {e}")
+        print(f"[Warning] Failed to initialize tray: {e}")
 
     # 2. Start Browser Thread (Fix: Added args=(PORT,))
     threading.Thread(target=start_browser, args=(PORT,), daemon=True).start()
 
     # 3. Launch Gradio App
-    print(f"✨ Lumina Studio is running on http://127.0.0.1:{PORT}")
+    print(f"[Lumina Studio] Running on http://127.0.0.1:{PORT}")
     app = create_app()
 
     try:
@@ -66,9 +66,7 @@ if __name__ == "__main__":
             server_port=PORT,
             show_error=True,
             prevent_thread_lock=True,
-            favicon_path="icon.ico" if os.path.exists("icon.ico") else None,
-            css=CUSTOM_CSS,
-            theme=gr.themes.Soft()
+            favicon_path="icon.ico" if os.path.exists("icon.ico") else None
         )
     except Exception as e:
         raise
@@ -78,10 +76,10 @@ if __name__ == "__main__":
     # 4. Start System Tray (Blocking) or Keep Alive
     if tray:
         try:
-            print("🚀 Starting System Tray...")
+            print("[Lumina] Starting System Tray...")
             tray.run()
         except Exception as e:
-            print(f"⚠️ Warning: System tray crashed: {e}")
+            print(f"[Warning] System tray crashed: {e}")
             # Fallback if tray crashes immediately
             try:
                 while True:

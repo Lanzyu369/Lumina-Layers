@@ -23,6 +23,13 @@ class Stats:
         return Stats._load()
 
     @staticmethod
+    def reset_all():
+        """Reset all statistics to zero."""
+        empty_data = {"calibrations": 0, "extractions": 0, "conversions": 0}
+        Stats._save(empty_data)
+        return empty_data
+
+    @staticmethod
     def _load() -> dict:
         try:
             with open(Stats._file, 'r') as f:

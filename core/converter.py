@@ -12,7 +12,7 @@ import trimesh
 from PIL import Image, ImageDraw, ImageFont
 import gradio as gr
 
-from config import PrinterConfig, ColorSystem, PREVIEW_SCALE, PREVIEW_MARGIN
+from config import PrinterConfig, ThinModeConfig, ColorSystem, PREVIEW_SCALE, PREVIEW_MARGIN
 from utils import Stats, safe_fix_3mf_names
 
 # 导入重构后的模块
@@ -68,12 +68,14 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     # 提取处理结果
     matched_rgb = result['matched_rgb']
     material_matrix = result['material_matrix']
+    seq_lengths = result['seq_lengths']
     mask_solid = result['mask_solid']
     target_w, target_h = result['dimensions']
     pixel_scale = result['pixel_scale']
     mode_info = result['mode_info']
+    is_thin_mode = result.get('is_thin_mode', False)
     
-    print(f"[CONVERTER] Image processed: {target_w}×{target_h}px, scale={pixel_scale}mm/px")
+    print(f"[CONVERTER] Image processed: {target_w}×{target_h}px, scale={pixel_scale}mm/px, thin={is_thin_mode}")
     
     # ========== 步骤2: 生成预览图像 ==========
     preview_rgba = np.zeros((target_h, target_w, 4), dtype=np.uint8)
@@ -97,9 +99,14 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     preview_img = Image.fromarray(preview_rgba, mode='RGBA')
     
     # ========== 步骤4: 构建体素矩阵 ==========
-    full_matrix = _build_voxel_matrix(
-        material_matrix, mask_solid, spacer_thick, structure_mode
-    )
+    if is_thin_mode:
+        full_matrix = _build_voxel_matrix_341(
+            material_matrix, seq_lengths, mask_solid, spacer_thick, structure_mode
+        )
+    else:
+        full_matrix = _build_voxel_matrix(
+            material_matrix, mask_solid, spacer_thick, structure_mode
+        )
     
     total_layers = full_matrix.shape[0]
     print(f"[CONVERTER] Voxel matrix: {full_matrix.shape} (Z×H×W)")
@@ -120,7 +127,9 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     print(f"[CONVERTER] Using mesher: {mesher.__class__.__name__}")
     
     # 为每种材质生成网格
-    for mat_id in range(4):
+    # 341 mode uses 5 materials (White + CMYK), 1024 mode uses 4
+    num_materials = 5 if is_thin_mode else 4
+    for mat_id in range(num_materials):
         mesh = mesher.generate_mesh(full_matrix, mat_id, target_h)
         if mesh:
             mesh.apply_transform(transform)
@@ -333,7 +342,7 @@ def _draw_loop_on_preview(preview_rgba, loop_info, color_conf, pixel_scale):
 
 
 def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mode):
-    """构建完整的体素矩阵"""
+    """构建完整的体素矩阵 (1024色模式)"""
     target_h, target_w = material_matrix.shape[:2]
     mask_transparent = ~mask_solid
     
@@ -373,6 +382,115 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
         spacer[~mask_transparent] = 0
         for z in range(5, total_layers):
             full_matrix[z] = spacer
+    
+    return full_matrix
+
+
+def _build_voxel_matrix_341(material_matrix, seq_lengths, mask_solid, spacer_thick, structure_mode):
+    """
+    构建完整的体素矩阵 (341色 W+CMYK 模式)
+    
+    关键区别:
+    - 固定 1.0mm 白色底座 (约13层)
+    - 可变高度色彩层 (0-4层)
+    - 材质索引: White=0, C=1, M=2, Y=3, K=4
+    
+    体素结构 (以单面模式为例):
+    Layer 0 to N-1: 白色底座 (White, mat_id=0)
+    Layer N to N+L-1: 彩色序列 (根据seq_lengths, mat_id需要+1偏移)
+    Layer N+L to top: 空 (-1)
+    """
+    target_h, target_w = material_matrix.shape[:2]
+    mask_transparent = ~mask_solid
+    
+    # 白色底座层数 (1.0mm)
+    base_mm = ThinModeConfig.BASE_MM
+    base_layers = int(round(base_mm / PrinterConfig.LAYER_HEIGHT))
+    
+    # 最大色彩层数
+    max_color_layers = ThinModeConfig.MAX_LAYERS  # 4
+    
+    # 背板层数 (spacer)
+    spacer_layers = max(1, int(round(spacer_thick / PrinterConfig.LAYER_HEIGHT)))
+    
+    if "双面" in structure_mode:
+        # 双面模式: color + base + base + color
+        total_layers = max_color_layers + base_layers + spacer_layers + base_layers + max_color_layers
+        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        
+        # 底面色彩层 (Layer 0 to max_color_layers-1)
+        for y in range(target_h):
+            for x in range(target_w):
+                if mask_transparent[y, x]:
+                    continue
+                seq_len = int(seq_lengths[y, x])
+                for layer_idx in range(seq_len):
+                    mat_id = material_matrix[y, x, layer_idx]
+                    if mat_id >= 0:
+                        # 转换材质ID: 原始C=0,M=1,Y=2,K=3 → 3MF中C=1,M=2,Y=3,K=4
+                        full_matrix[layer_idx, y, x] = mat_id + 1
+        
+        # 底面白色底座 (Layer max_color_layers to max_color_layers+base_layers-1)
+        for z in range(max_color_layers, max_color_layers + base_layers):
+            for y in range(target_h):
+                for x in range(target_w):
+                    if not mask_transparent[y, x]:
+                        full_matrix[z, y, x] = 0  # White
+        
+        # 中间背板 (spacer)
+        mid_start = max_color_layers + base_layers
+        for z in range(mid_start, mid_start + spacer_layers):
+            for y in range(target_h):
+                for x in range(target_w):
+                    if not mask_transparent[y, x]:
+                        full_matrix[z, y, x] = 0  # White
+        
+        # 顶面白色底座
+        top_base_start = mid_start + spacer_layers
+        for z in range(top_base_start, top_base_start + base_layers):
+            for y in range(target_h):
+                for x in range(target_w):
+                    if not mask_transparent[y, x]:
+                        full_matrix[z, y, x] = 0  # White
+        
+        # 顶面色彩层 (镜像)
+        top_color_start = top_base_start + base_layers
+        for y in range(target_h):
+            for x in range(target_w):
+                if mask_transparent[y, x]:
+                    continue
+                seq_len = int(seq_lengths[y, x])
+                for layer_idx in range(seq_len):
+                    mat_id = material_matrix[y, x, seq_len - 1 - layer_idx]  # 镜像
+                    if mat_id >= 0:
+                        full_matrix[top_color_start + layer_idx, y, x] = mat_id + 1
+    
+    else:
+        # 单面模式: base (bottom) + color (top)
+        total_layers = base_layers + max_color_layers
+        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        
+        # 白色底座 (Layer 0 to base_layers-1)
+        for z in range(base_layers):
+            for y in range(target_h):
+                for x in range(target_w):
+                    if not mask_transparent[y, x]:
+                        full_matrix[z, y, x] = 0  # White
+        
+        # 色彩层 (Layer base_layers to base_layers+seq_len-1, variable per pixel)
+        for y in range(target_h):
+            for x in range(target_w):
+                if mask_transparent[y, x]:
+                    continue
+                seq_len = int(seq_lengths[y, x])
+                for layer_idx in range(seq_len):
+                    mat_id = material_matrix[y, x, layer_idx]
+                    if mat_id >= 0:
+                        # 转换材质ID: 原始C=0,M=1,Y=2,K=3 → 3MF中C=1,M=2,Y=3,K=4
+                        z = base_layers + layer_idx
+                        full_matrix[z, y, x] = mat_id + 1
+    
+    print(f"[CONVERTER 341] Voxel matrix: base={base_layers} layers, color=0-{max_color_layers} layers")
     
     return full_matrix
 

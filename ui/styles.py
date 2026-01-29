@@ -107,4 +107,10 @@ CUSTOM_CSS = """
     color: #888;
     font-size: 0.9em;
 }
+
+/* 彻底隐藏定位点图上的所有功能按钮 */
+.no-clear-btn .built-in-buttons,
+.no-clear-btn .button-group {
+    display: none !important;
+}
 """

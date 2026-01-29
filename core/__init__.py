@@ -4,7 +4,12 @@ Lumina Studio - Core Module (Refactored)
 """
 
 # Calibration module
-from .calibration import generate_calibration_board
+from .calibration import (
+    generate_calibration_board,
+    generate_341_sequences,
+    get_sequence_by_id,
+    sequence_id_from_sequence
+)
 
 # Extractor module
 from .extractor import (
@@ -37,6 +42,9 @@ from .geometry_utils import create_keychain_loop
 __all__ = [
     # Calibration
     'generate_calibration_board',
+    'generate_341_sequences',
+    'get_sequence_by_id',
+    'sequence_id_from_sequence',
     
     # Extractor
     'rotate_image',
