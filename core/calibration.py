@@ -1,6 +1,6 @@
 """
 Lumina Studio - Calibration Generator Module
-校准板生成模块
+Calibration board generation module
 """
 
 import os
@@ -11,7 +11,7 @@ import numpy as np
 import trimesh
 from PIL import Image
 
-from config import PrinterConfig, ThinModeConfig, ColorSystem
+from config import PrinterConfig, ThinModeConfig, ColorSystem, OUTPUT_DIR
 from utils import Stats, safe_fix_3mf_names
 
 
@@ -315,10 +315,10 @@ def generate_calibration_board_1024(color_mode: str, block_size_mm: float,
         for z in range(PrinterConfig.COLOR_LAYERS):
             full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = stack[z]
 
-    # Corner markers - 根据模式设置不同的角点颜色
-    # 角点位置: (row, col, mat_id)
-    # row=0是顶部, row=total_h-1是底部
-    # col=0是左边, col=total_w-1是右边
+    # Corner markers - Set different corner colors based on mode
+    # Corner positions: (row, col, mat_id)
+    # row=0 is top, row=total_h-1 is bottom
+    # col=0 is left, col=total_w-1 is right
     if "RYBW" in color_mode:
         # RYBW: slots = [White(0), Red(1), Yellow(2), Blue(3)]
         # corner_labels: TL=White, TR=Red, BR=Blue, BL=Yellow
@@ -357,7 +357,7 @@ def generate_calibration_board_1024(color_mode: str, block_size_mm: float,
 
     # Export
     mode_tag = color_conf['name']
-    output_path = os.path.join(tempfile.gettempdir(), f"Lumina_Calibration_{mode_tag}.3mf")
+    output_path = os.path.join(OUTPUT_DIR, f"Lumina_Calibration_{mode_tag}.3mf")
     scene.export(output_path)
 
     # Fix object names in 3MF for better slicer compatibility
@@ -464,7 +464,7 @@ def generate_calibration_board_341(color_mode: str, block_size_mm: float, gap_mm
             print(f"[CALIBRATION 341] Added {name} mesh")
     
     # Export
-    output_path = os.path.join(tempfile.gettempdir(), "Lumina_Calibration_CMYK_W_341.3mf")
+    output_path = os.path.join(OUTPUT_DIR, "Lumina_Calibration_CMYK_W_341.3mf")
     scene.export(output_path)
     
     # Fix object names

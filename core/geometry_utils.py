@@ -1,6 +1,6 @@
 """
 Lumina Studio - Geometry Utilities
-几何工具模块 - 纯函数式几何计算工具
+Geometry utilities module - Pure functional geometry calculation tools
 """
 
 import numpy as np
@@ -10,54 +10,54 @@ import trimesh
 def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm, 
                          attach_x_mm, attach_y_mm):
     """
-    创建钥匙扣挂孔网格
+    Create keychain loop mesh
     
-    这是一个纯函数，生成带孔洞的矩形+半圆挂孔几何体
+    This is a pure function that generates a rectangle + semicircle loop geometry with hole
     
     Args:
-        width_mm: 挂孔宽度(毫米)
-        length_mm: 挂孔长度(毫米)
-        hole_dia_mm: 孔洞直径(毫米)
-        thickness_mm: 挂孔厚度(毫米)
-        attach_x_mm: 附着点X坐标(毫米)
-        attach_y_mm: 附着点Y坐标(毫米)
+        width_mm: Loop width (millimeters)
+        length_mm: Loop length (millimeters)
+        hole_dia_mm: Hole diameter (millimeters)
+        thickness_mm: Loop thickness (millimeters)
+        attach_x_mm: Attachment point X coordinate (millimeters)
+        attach_y_mm: Attachment point Y coordinate (millimeters)
     
     Returns:
-        trimesh.Trimesh: 挂孔网格对象
+        trimesh.Trimesh: Loop mesh object
     """
     print(f"[GEOMETRY] Creating keychain loop: w={width_mm}, l={length_mm}, "
           f"hole={hole_dia_mm}, thick={thickness_mm}, pos=({attach_x_mm}, {attach_y_mm})")
     
-    # 计算几何参数
+    # Calculate geometric parameters
     half_w = width_mm / 2
     circle_radius = half_w
     hole_radius = min(hole_dia_mm / 2, circle_radius * 0.8)
     rect_height = max(0.2, length_mm - circle_radius)
     circle_center_y = rect_height
     
-    # 生成外轮廓点
+    # Generate outer contour points
     n_arc = 32
     outer_pts = []
     
-    # 矩形底部
+    # Rectangle bottom
     outer_pts.append((-half_w, 0))
     outer_pts.append((half_w, 0))
     outer_pts.append((half_w, rect_height))
     
-    # 半圆顶部
+    # Semicircle top
     for i in range(1, n_arc):
         angle = np.pi * i / n_arc
         x = circle_radius * np.cos(angle)
         y = circle_center_y + circle_radius * np.sin(angle)
         outer_pts.append((x, y))
     
-    # 矩形左边
+    # Rectangle left side
     outer_pts.append((-half_w, rect_height))
     
     outer_pts = np.array(outer_pts)
     n_outer = len(outer_pts)
     
-    # 生成孔洞点
+    # Generate hole points
     n_hole = 32
     hole_pts = []
     for i in range(n_hole):
@@ -68,33 +68,33 @@ def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm,
     hole_pts = np.array(hole_pts)
     n_hole_pts = len(hole_pts)
     
-    # 构建3D顶点
+    # Build 3D vertices
     vertices = []
     faces = []
     
-    # 底面外轮廓
+    # Bottom face outer contour
     for pt in outer_pts:
         vertices.append([pt[0], pt[1], 0])
     
-    # 底面孔洞
+    # Bottom face hole
     for pt in hole_pts:
         vertices.append([pt[0], pt[1], 0])
     
-    # 顶面外轮廓
+    # Top face outer contour
     for pt in outer_pts:
         vertices.append([pt[0], pt[1], thickness_mm])
     
-    # 顶面孔洞
+    # Top face hole
     for pt in hole_pts:
         vertices.append([pt[0], pt[1], thickness_mm])
     
-    # 索引定义
+    # Index definitions
     bottom_outer_start = 0
     bottom_hole_start = n_outer
     top_outer_start = n_outer + n_hole_pts
     top_hole_start = n_outer + n_hole_pts + n_outer
     
-    # 外轮廓侧面
+    # Outer contour side faces
     for i in range(n_outer):
         i_next = (i + 1) % n_outer
         bi = bottom_outer_start + i
@@ -104,7 +104,7 @@ def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm,
         faces.append([bi, bi_next, ti_next])
         faces.append([bi, ti_next, ti])
     
-    # 孔洞侧面
+    # Hole side faces
     for i in range(n_hole_pts):
         i_next = (i + 1) % n_hole_pts
         bi = bottom_hole_start + i
@@ -114,7 +114,7 @@ def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm,
         faces.append([bi, ti, ti_next])
         faces.append([bi, ti_next, bi_next])
     
-    # 连接外轮廓和孔洞 (顶面和底面)
+    # Connect outer contour and hole (top and bottom faces)
     vertices_arr = np.array(vertices)
     
     bottom_outer_idx = list(range(bottom_outer_start, bottom_outer_start + n_outer))
@@ -127,12 +127,12 @@ def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm,
     top_faces = _connect_rings(top_outer_idx, top_hole_idx, vertices_arr, is_top=True)
     faces.extend(top_faces)
     
-    # 应用位置偏移
+    # Apply position offset
     vertices_arr = np.array(vertices)
     vertices_arr[:, 0] += attach_x_mm
     vertices_arr[:, 1] += attach_y_mm
     
-    # 创建网格
+    # Create mesh
     mesh = trimesh.Trimesh(vertices=vertices_arr, faces=np.array(faces))
     mesh.fix_normals()
     
@@ -143,27 +143,27 @@ def create_keychain_loop(width_mm, length_mm, hole_dia_mm, thickness_mm,
 
 def _connect_rings(outer_indices, hole_indices, vertices_arr, is_top=True):
     """
-    连接外环和内环的辅助函数
-    使用贪心算法生成三角面片
+    Helper function to connect outer ring and inner ring
+    Uses greedy algorithm to generate triangular faces
     
     Args:
-        outer_indices: 外环顶点索引列表
-        hole_indices: 内环顶点索引列表
-        vertices_arr: 顶点数组
-        is_top: 是否为顶面
+        outer_indices: Outer ring vertex index list
+        hole_indices: Inner ring vertex index list
+        vertices_arr: Vertex array
+        is_top: Whether it's the top face
     
     Returns:
-        list: 面片索引列表
+        list: Face index list
     """
     ring_faces = []
     n_o = len(outer_indices)
     n_h = len(hole_indices)
     
-    oi = 0  # 外环指针
-    hi = 0  # 内环指针
+    oi = 0  # Outer ring pointer
+    hi = 0  # Inner ring pointer
     
     def get_2d(idx):
-        """获取顶点的2D坐标"""
+        """Get 2D coordinates of vertex"""
         return np.array([vertices_arr[idx][0], vertices_arr[idx][1]])
     
     total_steps = n_o + n_h
@@ -173,33 +173,33 @@ def _connect_rings(outer_indices, hole_indices, vertices_arr, is_top=True):
         h_curr = hole_indices[hi % n_h]
         h_next = hole_indices[(hi + 1) % n_h]
         
-        # 计算距离决定连接方向
+        # Calculate distance to decide connection direction
         dist_o = np.linalg.norm(get_2d(o_next) - get_2d(h_curr))
         dist_h = np.linalg.norm(get_2d(o_curr) - get_2d(h_next))
         
         if oi >= n_o:
-            # 外环已完成，只连接内环
+            # Outer ring complete, only connect inner ring
             if is_top:
                 ring_faces.append([o_curr, h_next, h_curr])
             else:
                 ring_faces.append([o_curr, h_curr, h_next])
             hi += 1
         elif hi >= n_h:
-            # 内环已完成，只连接外环
+            # Inner ring complete, only connect outer ring
             if is_top:
                 ring_faces.append([o_curr, o_next, h_curr])
             else:
                 ring_faces.append([o_curr, h_curr, o_next])
             oi += 1
         elif dist_o < dist_h:
-            # 连接外环下一个点
+            # Connect next point of outer ring
             if is_top:
                 ring_faces.append([o_curr, o_next, h_curr])
             else:
                 ring_faces.append([o_curr, h_curr, o_next])
             oi += 1
         else:
-            # 连接内环下一个点
+            # Connect next point of inner ring
             if is_top:
                 ring_faces.append([o_curr, h_next, h_curr])
             else:

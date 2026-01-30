@@ -4,10 +4,5 @@ opencv-python
 Pillow
 trimesh>=4.0.0
 scipy
-shapely
-scikit-image
-mapbox_earcut
-lxml
-networkx
 pystray
 pytz

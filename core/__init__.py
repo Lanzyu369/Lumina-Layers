@@ -36,7 +36,7 @@ from .converter import (
 
 # New refactored modules
 from .image_processing import LuminaImageProcessor
-from .mesh_generators import get_mesher, VoxelMesher, VectorMesher, WoodblockMesher
+from .mesh_generators import get_mesher, VoxelMesher, HighFidelityMesher
 from .geometry_utils import create_keychain_loop
 
 __all__ = [
@@ -69,7 +69,6 @@ __all__ = [
     'LuminaImageProcessor',
     'get_mesher',
     'VoxelMesher',
-    'VectorMesher',
-    'WoodblockMesher',
+    'HighFidelityMesher',
     'create_keychain_loop',
 ]

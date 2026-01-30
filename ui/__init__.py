@@ -1,6 +1,6 @@
 """
 Lumina Studio - UI Module
-用户界面模块
+User interface module
 """
 
 from .layout import create_app

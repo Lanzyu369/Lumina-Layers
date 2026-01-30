@@ -1,10 +1,18 @@
 """
 Lumina Studio - Configuration Module
-包含所有配置类、常量和国际化文本
+Contains all configuration classes, constants, and internationalization texts
 """
 
 import os
-import tempfile
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════════╗
+# ║                           OUTPUT DIRECTORY                                    ║
+# ╚═══════════════════════════════════════════════════════════════════════════════╝
+
+# 输出目录：项目根目录下的 output 文件夹（不再写入 C 盘临时目录）
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -158,7 +166,7 @@ class ColorSystem:
             3: [244, 238, 42, 255]
         },
         'map': {"White": 0, "Cyan": 1, "Magenta": 2, "Yellow": 3},
-        # 定位点顺序: TL, TR, BR, BL
+        # Corner point order: TL, TR, BR, BL
         'corner_labels': ["白色 (左上)", "青色 (右上)", "品红 (右下)", "黄色 (左下)"],
         'corner_labels_en': ["White (TL)", "Cyan (TR)", "Magenta (BR)", "Yellow (BL)"],
         'is_thin_mode': False,
@@ -175,7 +183,7 @@ class ColorSystem:
             3: [0, 100, 240, 255]
         },
         'map': {"White": 0, "Red": 1, "Yellow": 2, "Blue": 3},
-        # 定位点顺序: TL, TR, BR, BL
+        # Corner point order: TL, TR, BR, BL
         'corner_labels': ["白色 (左上)", "红色 (右上)", "蓝色 (右下)", "黄色 (左下)"],
         'corner_labels_en': ["White (TL)", "Red (TR)", "Blue (BR)", "Yellow (BL)"],
         'is_thin_mode': False,
@@ -233,7 +241,7 @@ PHYSICAL_GRID_SIZE = 34
 DATA_GRID_SIZE = 32
 DST_SIZE = 1000
 CELL_SIZE = DST_SIZE / PHYSICAL_GRID_SIZE
-LUT_FILE_PATH = os.path.join(tempfile.gettempdir(), "lumina_lut.npy")
+LUT_FILE_PATH = os.path.join(OUTPUT_DIR, "lumina_lut.npy")
 
 # Thin Mode (341 swatches) extractor constants
 # 19x18 data grid + 2 padding = 21x20 physical grid

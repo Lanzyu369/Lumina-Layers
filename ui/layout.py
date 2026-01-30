@@ -1,12 +1,12 @@
 """
 Lumina Studio - UI Layout
-界面布局定义
+UI layout definition
 """
 
 import gradio as gr     # type:ignore
 
 from config import ColorSystem
-from utils import Stats
+from utils import Stats, LUTManager
 from core.calibration import generate_calibration_board
 from core.extractor import (
     rotate_image,
@@ -32,12 +32,14 @@ from .callbacks import (
     on_extractor_mode_change,
     on_extractor_rotate,
     on_extractor_click,
-    on_extractor_clear
+    on_extractor_clear,
+    on_lut_select,
+    on_lut_upload_save
 )
 
 
 def create_app():
-    """创建Gradio应用界面"""
+    """创建 Gradio 应用界面 | Create Gradio application interface"""
     with gr.Blocks(title="Lumina Studio", css=CUSTOM_CSS, theme=gr.themes.Soft()) as app:
 
         # Header with Language Selector
@@ -46,7 +48,7 @@ def create_app():
                 gr.HTML("""
                 <div class="header-banner">
                     <h1>✨ Lumina Studio</h1>
-                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | v1.5</p>
+                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | v1.4.2</p>
                 </div>
                 """)
             with gr.Column(scale=1, min_width=150):
@@ -76,19 +78,19 @@ def create_app():
         with gr.Tabs() as tabs:
 
             # ═══════════════════════════════════════════════════════════════
-            # TAB 1: Calibration Generator
+            # TAB 1: Image Converter
+            # ═══════════════════════════════════════════════════════════════
+            create_converter_tab()
+
+            # ═══════════════════════════════════════════════════════════════
+            # TAB 2: Calibration Generator
             # ═══════════════════════════════════════════════════════════════
             create_calibration_tab()
 
             # ═══════════════════════════════════════════════════════════════
-            # TAB 2: Color Extractor
+            # TAB 3: Color Extractor
             # ═══════════════════════════════════════════════════════════════
             create_extractor_tab()
-
-            # ═══════════════════════════════════════════════════════════════
-            # TAB 3: Image Converter
-            # ═══════════════════════════════════════════════════════════════
-            create_converter_tab()
 
             # ═══════════════════════════════════════════════════════════════
             # TAB 4: About
@@ -107,9 +109,9 @@ def create_app():
 
 def create_calibration_tab():
     """创建校准板生成Tab"""
-    with gr.TabItem("📐 校准板 Calibration", id=0):
+    with gr.TabItem("📐 校准板 Calibration", id=1):
         cal_desc = gr.Markdown("""
-        ### 第一步：生成校准板 | Step 1: Generate Calibration Board
+        ### 第二步：生成校准板 | Step 2: Generate Calibration Board
         生成1024种颜色的校准板，打印后用于提取打印机的实际色彩数据。
         Generate a 1024-color calibration board to extract your printer's actual color data.
         """)
@@ -150,9 +152,9 @@ def create_calibration_tab():
 
 def create_extractor_tab():
     """创建颜色提取Tab"""
-    with gr.TabItem("🎨 颜色提取 Extractor", id=1):
+    with gr.TabItem("🎨 颜色提取 Extractor", id=2):
         gr.Markdown("""
-        ### 第二步：提取颜色数据 | Step 2: Extract Color Data
+        ### 第三步：提取颜色数据 | Step 3: Extract Color Data
         拍摄打印好的校准板照片，提取真实的色彩数据生成 LUT 文件。
         Take a photo of your printed calibration board to extract real color data.
         """)
@@ -278,26 +280,58 @@ def create_extractor_tab():
 
 def create_converter_tab():
     """创建图像转换Tab"""
-    with gr.TabItem("💎 图像转换 Converter", id=2):
+    with gr.TabItem("💎 图像转换 Converter", id=0):
         gr.Markdown("""
-        ### 第三步：转换图像 | Step 3: Convert Image 已知BUG：部分图会产生模型生成问题 请选择边缘干净的图片 矢量模式为后续更新准备，目前与版画模式差异极小
-        **三种建模模式**：矢量（平滑曲线）、版画（细节优化）、像素（方块风格）
+        ### 第一步：转换图像 | Step 1: Convert Image
+        **两种建模模式**：高保真（RLE无缝拼接）、像素艺术（方块风格）
         
         **流程**: 上传LUT和图像 → 选择建模模式 → 调整色彩细节 → 预览 → 生成
         """)
 
-        # 状态变量
-        conv_loop_pos = gr.State(None)  # 挂孔位置 (x, y)
-        conv_preview_cache = gr.State(None)  # 缓存预览数据
+        # State variables
+        conv_loop_pos = gr.State(None)  # Loop position (x, y)
+        conv_preview_cache = gr.State(None)  # Cache preview data
 
         with gr.Row():
-            # 左侧：输入和参数
+            # Left: Input and parameters
             with gr.Column(scale=1):
-                gr.Markdown("#### 📁 输入")
-                conv_lut = gr.File(label="校准数据 (.npy)", file_types=['.npy'])
-                conv_img = gr.Image(label="输入图像", type="filepath", show_fullscreen_button=True)
+                gr.Markdown("#### 📁 输入 Input")
+                
+                # ========== LUT Preset Selector (Upstream Feature) ==========
+                with gr.Group():
+                    gr.Markdown("**校准数据 Calibration Data (.npy)**")
+                    
+                    # LUT selection dropdown
+                    conv_lut_dropdown = gr.Dropdown(
+                        choices=LUTManager.get_lut_choices(),
+                        label="选择预设 Select Preset",
+                        value=None,
+                        interactive=True,
+                        info="从预设库中选择LUT | Select from library"
+                    )
+                    
+                    # Micro upload area (auto-save)
+                    conv_lut_upload = gr.File(
+                        label="",
+                        show_label=False,
+                        file_types=['.npy'],
+                        height=60,
+                        elem_classes=["micro-upload"]
+                    )
+                    
+                    # Status hint
+                    conv_lut_status = gr.Markdown(
+                        value="💡 拖放.npy文件自动添加 | Drop .npy to add",
+                        visible=True
+                    )
+                
+                # Hidden State to store actual LUT path
+                conv_lut_path = gr.State(None)
+                # ========== END LUT SELECTOR ==========
+                
+                conv_img = gr.Image(label="输入图像 Input Image", type="filepath")
 
-                gr.Markdown("#### ⚙️ 参数")
+                gr.Markdown("#### ⚙️ 参数 Parameters")
                 conv_color_mode = gr.Radio(
                     choices=[
                         "CMYW (Cyan/Magenta/Yellow)", 
@@ -305,32 +339,31 @@ def create_converter_tab():
                         "W+CMYK (341 Swatches)"
                     ],
                     value="RYBW (Red/Yellow/Blue)",
-                    label="色彩模式"
+                    label="色彩模式 Color Mode"
                 )
                 conv_structure = gr.Radio(
-                    ["双面 (钥匙扣)", "单面 (浮雕)"],
-                    value="双面 (钥匙扣)",
-                    label="结构"
+                    ["双面 (钥匙扣) Double-Sided", "单面 (浮雕) Single-Sided"],
+                    value="双面 (钥匙扣) Double-Sided",
+                    label="结构 Structure"
                 )
 
-                # ========== NEW: Modeling Mode Controls ==========
+                # ========== Modeling Mode Controls (Upstream Consolidated) ==========
                 conv_modeling_mode = gr.Radio(
                     choices=[
-                        "矢量 (平滑曲线) Vector (Smooth)",
-                        "像素 (方块风格) Voxel (Blocky)",
-                        "版画 (细节优化) Woodblock (Detail-Optimized)"
+                        "高保真 (细节优先) High-Fidelity (Detail)",
+                        "像素艺术 (方块风格) Pixel Art (Blocky)"
                     ],
-                    value="矢量 (平滑曲线) Vector (Smooth)",
+                    value="高保真 (细节优先) High-Fidelity (Detail)",
                     label="🎨 建模模式 Modeling Mode",
-                    info="矢量：平滑曲线 | 像素：方块风格 | 版画：SLIC超像素+细节保护"
+                    info="高保真：RLE无缝拼接，水密模型 | 像素艺术：经典方块美学"
                 )
 
                 conv_quantize_count = gr.Slider(
-                    minimum=8, maximum=256, step=8, value=16,
-                    label="🎨 矢量色彩细节 Vector Color Detail",
+                    minimum=8, maximum=256, step=8, value=64,
+                    label="🎨 色彩细节 Color Detail",
                     info="颜色数量越多细节越丰富，但生成越慢 | Higher = More detail, Slower"
                 )
-                # ========== END NEW CONTROLS ==========
+                # ========== END CONTROLS ==========
 
                 conv_auto_bg = gr.Checkbox(label="🗑️ 移除背景 Remove Background", value=True,
                                           info="自动移除图像背景色 | Auto remove background")
@@ -338,15 +371,15 @@ def create_converter_tab():
                                     info="背景容差值 (0-150)，值越大移除越多 | Higher = Remove more")
 
                 conv_width = gr.Slider(20, 400, 60, label="宽度 Width (mm)")
-                conv_thick = gr.Slider(0.2, 3.5, 1.2, step=0.08, label="背板 (mm)")
+                conv_thick = gr.Slider(0.2, 3.5, 1.2, step=0.08, label="背板 Spacer (mm)")
 
-                conv_preview_btn = gr.Button("👁️👁️ 生成预览", variant="secondary", size="lg")
+                conv_preview_btn = gr.Button("👁️👁️ 生成预览 Generate Preview", variant="secondary", size="lg")
 
-            # 中间：预览编辑区
+            # Middle: Preview edit area
             with gr.Column(scale=2):
-                gr.Markdown("#### 🎨 2D预览 - 点击图片放置挂孔位置（暂不推荐使用）")
+                gr.Markdown("#### 🎨 2D预览 - 点击图片放置挂孔位置 | 2D Preview - Click to place loop")
 
-                # 预览图 - 不可交互上传，但可点击
+                # Preview image - not interactive for upload, but clickable
                 conv_preview = gr.Image(
                     label="",
                     type="numpy",
@@ -356,44 +389,58 @@ def create_converter_tab():
                     show_fullscreen_button=True
                 )
 
-                # 挂孔设置
+                # Loop settings
                 with gr.Group():
-                    gr.Markdown("##### 🔗 挂孔设置")
+                    gr.Markdown("##### 🔗 挂孔设置 Loop Settings")
                     with gr.Row():
-                        conv_add_loop = gr.Checkbox(label="启用挂孔", value=False)
-                        conv_remove_loop = gr.Button("🗑️ 移除挂孔", size="sm")
+                        conv_add_loop = gr.Checkbox(label="启用挂孔 Enable Loop", value=False)
+                        conv_remove_loop = gr.Button("🗑️ 移除挂孔 Remove Loop", size="sm")
                     with gr.Row():
-                        conv_loop_width = gr.Slider(2, 10, 4, step=0.5, label="宽度(mm)")
-                        conv_loop_length = gr.Slider(4, 15, 8, step=0.5, label="长度(mm)")
-                        conv_loop_hole = gr.Slider(1, 5, 2.5, step=0.25, label="孔径(mm)")
+                        conv_loop_width = gr.Slider(2, 10, 4, step=0.5, label="宽度 Width (mm)")
+                        conv_loop_length = gr.Slider(4, 15, 8, step=0.5, label="长度 Length (mm)")
+                        conv_loop_hole = gr.Slider(1, 5, 2.5, step=0.25, label="孔径 Hole (mm)")
                     with gr.Row():
-                        conv_loop_angle = gr.Slider(-180, 180, 0, step=5, label="旋转角度°")
-                        conv_loop_info = gr.Textbox(label="挂孔位置", interactive=False, scale=2)
+                        conv_loop_angle = gr.Slider(-180, 180, 0, step=5, label="旋转角度 Angle°")
+                        conv_loop_info = gr.Textbox(label="挂孔位置 Position", interactive=False, scale=2)
 
-                conv_log = gr.Textbox(label="状态", lines=6, interactive=False, max_lines=10, show_label=True)
+                conv_log = gr.Textbox(label="状态 Status", lines=6, interactive=False, max_lines=10, show_label=True)
 
-            # 右侧：输出
+            # Right: Output
             with gr.Column(scale=1):
-                conv_btn = gr.Button("🚀 生成3MF", variant="primary", size="lg")
-                gr.Markdown("#### 🎮 3D预览")
+                conv_btn = gr.Button("🚀 生成3MF Generate 3MF", variant="primary", size="lg")
+                gr.Markdown("#### 🎮 3D预览 3D Preview")
                 conv_3d_preview = gr.Model3D(
                     label="3D",
                     clear_color=[0.9, 0.9, 0.9, 1.0],
                     height=280
                 )
-                gr.Markdown("#### 📁 下载【务必合并对象后再切片】")
+                gr.Markdown("#### 📁 下载 Download")
                 conv_file = gr.File(label="3MF文件")
 
-        # ===== 事件绑定 =====
+        # ===== Event Binding =====
+        
+        # LUT selection event
+        conv_lut_dropdown.change(
+            on_lut_select,
+            inputs=[conv_lut_dropdown],
+            outputs=[conv_lut_path, conv_lut_status]
+        )
+        
+        # LUT upload event (auto-save)
+        conv_lut_upload.upload(
+            on_lut_upload_save,
+            inputs=[conv_lut_upload],
+            outputs=[conv_lut_dropdown, conv_lut_status]
+        )
 
-        # 生成预览
+        # Generate preview
         conv_preview_btn.click(
             generate_preview_cached,
-            inputs=[conv_img, conv_lut, conv_width, conv_auto_bg, conv_tol, conv_color_mode],
+            inputs=[conv_img, conv_lut_path, conv_width, conv_auto_bg, conv_tol, conv_color_mode],
             outputs=[conv_preview, conv_preview_cache, conv_log]
         )
 
-        # 点击预览图放置挂孔
+        # Click preview image to place loop
         conv_preview.select(
             on_preview_click,
             inputs=[conv_preview_cache, conv_loop_pos],
@@ -405,7 +452,7 @@ def create_converter_tab():
             outputs=[conv_preview]
         )
 
-        # 移除挂孔
+        # Remove loop
         conv_remove_loop.click(
             on_remove_loop,
             outputs=[conv_loop_pos, conv_add_loop, conv_loop_angle, conv_loop_info]
@@ -416,7 +463,7 @@ def create_converter_tab():
             outputs=[conv_preview]
         )
 
-        # 挂孔参数变化时实时更新预览
+        # Update preview in real-time when loop parameters change
         loop_params = [conv_loop_width, conv_loop_length, conv_loop_hole, conv_loop_angle]
         for param in loop_params:
             param.change(
@@ -426,13 +473,13 @@ def create_converter_tab():
                 outputs=[conv_preview]
             )
 
-        # 生成最终模型
+        # Generate final model
         conv_btn.click(
             generate_final_model,
-            inputs=[conv_img, conv_lut, conv_width, conv_thick,
+            inputs=[conv_img, conv_lut_path, conv_width, conv_thick,
                     conv_structure, conv_auto_bg, conv_tol, conv_color_mode,
                     conv_add_loop, conv_loop_width, conv_loop_length, conv_loop_hole, conv_loop_pos,
-                    conv_modeling_mode, conv_quantize_count],  # NEW: Added modeling_mode and quantize_count
+                    conv_modeling_mode, conv_quantize_count],
             outputs=[conv_file, conv_3d_preview, conv_preview, conv_log]
         )
 
@@ -443,7 +490,7 @@ def create_about_tab(stats_component):
         with gr.Row():
             with gr.Column(scale=4):
                 gr.Markdown("""
-                ## 🌟 Lumina Studio v1.5
+                ## 🌟 Lumina Studio v1.4.2
                 
                 **多材料3D打印色彩系统** | Multi-Material 3D Print Color System
                 
@@ -497,13 +544,12 @@ def create_about_tab(stats_component):
         
         - **Beer-Lambert 光学混色** Optical Color Mixing
         - **KD-Tree 色彩匹配** Color Matching
-        - **OpenCV 轮廓提取** Contour Extraction for Vector Mode
-        - **SLIC 超像素分割** Superpixel Segmentation for Woodblock Mode
+        - **RLE 几何生成** Run-Length Encoding for Geometry
         - **K-Means 色彩量化** Color Quantization for Detail Preservation
         
         ---
         
-        ### 📝 v1.5 更新日志 Changelog
+        ### 📝 v1.4.2 更新日志 Changelog
         
         #### 🆕 W+CMYK 341色块模式
         
@@ -513,58 +559,33 @@ def create_about_tab(stats_component):
         - ✅ **固定1.0mm白色底座** - 更薄的打印件，更高的透光性
         - ✅ **动态LUT匹配** - 341个颜色序列的精确匹配
         
+        #### 🚀 建模模式整合 Modeling Mode Consolidation
+        
+        - **高保真模式取代矢量和版画模式** High-Fidelity Mode Replaces Vector & Woodblock
+        - **优化 RLE 几何引擎** Optimized RLE geometry engine for water-tight meshes
+        
+        ---
+        
+        ### 📝 v1.4.1 更新日志 Previous Changelog
+        
+        - **语言切换功能** Language Switching Feature
+        - **LUT 预设库** LUT Preset Selector
+        
         ---
         
         ### 📝 v1.4 更新日志 Previous Changelog
         
-        #### 🚀 核心功能：三大建模模式
-        
-        - ✅ **矢量模式（Vector）** - CAD级精度，平滑曲线（10 px/mm）
-        - ✅ **版画模式（Woodblock）** ⭐ - SLIC超像素 + 细节保护
-        - ✅ **像素模式（Voxel）** - 经典方块美学，像素艺术风格
-        
-        #### 🖼️ 版画模式技术栈
-    
-        - RAG智能合并（区分噪点与真实细节）
-        - Mitre连接（保持尖锐角点，版画刀刻质感）
-        
-        #### 🎨 矢量模式升级
-        
-        - 超高精度矢量化（epsilon=0.1，~80-100点/cm）
-        - 0.2mm喷嘴兼容（保留 ≥ 4像素² 特征）
-        - 垂直层合并RLE（消除Z轴阶梯伪影）
-        
-        #### 🌈 色彩量化新架构
-        
-        - K-Means聚类（8-256色可调，默认16色）
-        - "先聚类，后匹配"（速度提升1000×）
-        - 双边滤波 + 中值滤波（消除碎片化区域）
-        
-        #### 其他改进
-        
-        - 📏 分辨率解耦（矢量/版画10px/mm，像素2.4px/mm）
-        - 🎮 3D预览智能降采样（大模型自动简化）
-        - 🚫 浏览器崩溃保护（检测复杂度，超200万像素禁用预览）
-        
-        ---
-        
-        ### 📝 v1.3 更新日志 Previous Changelog
-        
-        - ✅ **新增钥匙扣挂孔** Added keychain loop feature
-        - ✅ 挂孔颜色自动检测 Auto-detect loop color from nearby pixels
-        - ✅ 2D预览显示挂孔 2D preview shows loop
-        - ✅ 修复3MF对象 naming Fixed 3MF object naming
-        - ✅ 颜色提取/转换添加模式选择 Added color mode selection
-        - ✅ 默认间隙改为0.82mm Default gap changed to 0.82mm
-        - ✅ **新增3D实时预览** Added 3D preview with true colors
+        - ✅ **高保真模式（High-Fidelity）** - RLE算法，无缝拼接，水密模型（10 px/mm）
+        - ✅ **像素艺术模式（Pixel Art）** - 经典方块美学，像素艺术风格
+        - ✅ **色彩量化架构** K-Means聚类（8-256色可调，默认64色）
         
         ---
         
         ### 🚧 开发路线图 Roadmap
         
         - [✅] 4色基础模式 4-color base mode
-        - [✅] 三种建模模式 Three modeling modes (Vector/Woodblock/Voxel)
-        - [✅] 版画模式SLIC引擎 Woodblock mode SLIC engine
+        - [✅] 两种建模模式 Two modeling modes (High-Fidelity/Pixel Art)
+        - [✅] RLE几何引擎 RLE geometry engine
         - [✅] 钥匙扣挂孔 Keychain loop
         - [✅] **W+CMYK 341色块模式** 5-color thin mode with variable layers
         - [🚧] 漫画模式 Manga mode (Ben-Day dots simulation)
@@ -595,6 +616,6 @@ def create_about_tab(stats_component):
         
         <div style="text-align:center; color:#888; margin-top:20px;">
             Made with ❤️ by [MIN]<br>
-            v1.5.0 | 2026
+            v1.4.2 | 2026
         </div>
         """)

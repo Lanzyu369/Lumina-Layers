@@ -8,7 +8,7 @@ Physics-Based Multi-Material FDM Color System
 
 ## Project Status
 
-**Current Version**: v1.4  
+**Current Version**: v1.4.1  
 **License**: CC BY-NC-SA 4.0 (with Commercial Exemption)  
 **Nature**: Non-profit independent implementation, open-source community project
 
@@ -48,6 +48,13 @@ The HueForge authors have also clearly stated that this technology has entered t
 The pioneers have chosen to remain open to help the community develop; therefore, this technology is generally **not patentable**.
 
 Lumina Studio will continue to maintain its open-source, collaborative, and non-profit positioning, and we welcome everyone's supervision.
+Lumina Studio will continue to operate on an open-source, collaborative, and non-profit basis, and we welcome your feedback.
+
+- This project is an open-source, non-profit project. There will be no bundled sales, and no features will be made into paid features.
+- If you or your company wish to support the project's continued development, please contact us. Sponsored products will only be used for software development, testing, and optimization.
+- Sponsorship represents support for the project only and does not constitute any commercial binding.
+- We reject any sponsorship collaborations that could influence technical decisions or open-source licenses.
+
 Lumina Studio did not refer to any patent applications because such patents usually only contain specifications and the technical code is not disclosed in the short term. Blindly referring to these patents would affect its own development process.
 
 **Special thanks to the HueForge team for their support and understanding of open source!**  **
@@ -92,7 +99,7 @@ You **do NOT need to ask for permission**. You automatically have the right to:
 
 ---
 
-Lumina Studio v1.4 integrates three major modules into a unified interface:
+Lumina Studio v1.4.1 integrates three major modules into a unified interface:
 
 ### 📐 Module 1: Calibration Generator
 
@@ -130,7 +137,40 @@ Converts images into printable 3D models using calibrated data.
 
 ---
 
-## What's New in v1.4 🚀
+## What's New in v1.4.1 🚀
+
+### Modeling Mode Consolidation
+
+**High-Fidelity Mode Replaces Vector & Woodblock Modes**:
+
+The three modeling modes (Vector/Woodblock/Voxel) have been streamlined into **two unified modes**:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| 🎨 **High-Fidelity Mode** | Unified RLE-based mesh generation with K-Means quantization | Logos, photos, portraits, illustrations |
+| 🧱 **Pixel Art Mode** | Legacy voxel mesher with blocky aesthetic | Pixel art, 8-bit style graphics |
+
+**Why the change?**
+- Vector and Woodblock modes shared 90% of the same code
+- High-Fidelity mode combines the best of both: smooth curves + detail preservation
+- Simpler UI with fewer confusing options
+- Consistent 10 px/mm resolution for all high-quality outputs
+
+### Language Switching
+
+- **🌐 Dynamic Language Toggle**: Click the language button in the top-right corner to switch between Chinese and English
+- **Full UI Translation**: All interface elements update instantly without page reload
+- **Persistent Settings**: Language preference is maintained during the session
+
+### Other Improvements
+
+- **Code Optimization**: Improved code structure and maintainability
+- **Documentation Updates**: Enhanced inline documentation and comments
+- **Stability Improvements**: Minor bug fixes and performance tweaks
+
+---
+
+### Previous Updates (v1.4)
 
 ### Three Modeling Modes
 
@@ -182,14 +222,15 @@ Traditional methods match 1 million pixels to LUT individually. v1.4 instead:
 **Target**: Pixel Art & Photographic Graphics
 
 - ✅ Fixed CMYW/RYBW mixing
-- ✅ Three modeling modes (Vector/Woodblock/Voxel)
-- ✅ Woodblock mode SLIC superpixel engine
-- ✅ Vector mode ultra-high precision (0.2mm nozzle compatible)
+- ✅ Two modeling modes (High-Fidelity/Pixel Art)
+- ✅ High-Fidelity mode with RLE mesh generation
+- ✅ Ultra-high precision (10 px/mm, 0.1mm/pixel)
 - ✅ K-Means color quantization architecture
 - ✅ Solid Backing generation
 - ✅ Closed-loop calibration system
 - ✅ Live 3D preview with true colors
 - ✅ Keychain loop generator
+- ✅ Dynamic language switching (Chinese/English)
 
 ### Phase 2: Manga Mode (Monochrome) 🚧 IN PROGRESS
 
@@ -233,13 +274,6 @@ cd Lumina-Layers
 ```bash
 pip install -r requirements.txt
 ```
-
-**Woodblock mode dependency** (optional, for photo/portrait conversion):
-```bash
-pip install scikit-image
-```
-
-If `scikit-image` is not installed, Woodblock mode will automatically fall back to Vector mode.
 
 ---
 
@@ -301,10 +335,9 @@ This launches the web interface with all three modules in tabs.
 3. Upload your image
 4. Select the same color mode as your LUT
 5. **Choose Modeling Mode**:
-   - **Vector (Smooth)** - Recommended for logos, illustrations, cartoons
-   - **Woodblock (Detail-Optimized)** - Recommended for photos, portraits (requires scikit-image)
-   - **Voxel (Blocky)** - Recommended for pixel art
-6. Adjust **Vector Color Detail** slider (8-256 colors, default 64):
+   - **High-Fidelity (Smooth)** - Recommended for logos, photos, portraits, illustrations
+   - **Pixel Art (Blocky)** - Recommended for pixel art and 8-bit style graphics
+6. Adjust **Color Detail** slider (8-256 colors, default 64):
    - 8-32 colors: Minimalist style, fast generation
    - 64-128 colors: Balanced detail & speed (recommended)
    - 128-256 colors: Photographic detail, slower generation

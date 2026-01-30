@@ -1,6 +1,6 @@
 """
 Lumina Studio - Helper Functions
-辅助函数模块
+Helper functions module
 """
 
 import zipfile
@@ -14,9 +14,9 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
     Maps objects to slot_names in the order they appear in the file.
 
     Args:
-        filepath: 3MF文件路径
-        slot_names: 对象名称列表
-        create_assembly: 是否创建组合体
+        filepath: 3MF file path
+        slot_names: Object name list
+        create_assembly: Whether to create assembly
     """
     try:
         # Read original 3MF

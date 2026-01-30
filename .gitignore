@@ -205,3 +205,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Lumina Studio output files
+output/*.3mf
+output/*.glb
+output/*.npy
+output/lumina_stats.txt
+
+# Gradio cache directory
+output/.gradio_cache/
