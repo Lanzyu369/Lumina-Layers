@@ -4,6 +4,7 @@ Contains all configuration classes, constants, and internationalization texts
 """
 
 import os
+import tempfile
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -29,7 +30,7 @@ class PrinterConfig:
 
 
 class ThinModeConfig:
-    """W+CMYK (341 Swatches) mode configuration."""
+    """CMYK+W mode configuration. Total 341 swatches."""
     GRID_W: int = 19  # 19 columns
     GRID_H: int = 18  # 18 rows
     MAX_LAYERS: int = 4  # 0-4 layers variable
@@ -69,7 +70,7 @@ class I18N:
         'cal_mode': {'zh': '色彩模式', 'en': 'Color Mode'},
         'cal_mode_cmyw': {'zh': 'CMYW (青/品红/黄)', 'en': 'CMYW (Cyan/Magenta/Yellow)'},
         'cal_mode_rybw': {'zh': 'RYBW (红/黄/蓝)', 'en': 'RYBW (Red/Yellow/Blue)'},
-        'cal_mode_cmykw': {'zh': 'W+CMYK (341色块)', 'en': 'W+CMYK (341 Swatches)'},
+        'cal_mode_cmykw': {'zh': 'CMYK+W', 'en': 'CMYK+W'},
         'cal_block_size': {'zh': '色块尺寸 (mm)', 'en': 'Block Size (mm)'},
         'cal_gap': {'zh': '间隙 (mm)', 'en': 'Gap (mm)'},
         'cal_backing': {'zh': '底板颜色', 'en': 'Backing Color'},
@@ -190,7 +191,7 @@ class ColorSystem:
         'color_layers': 5
     }
 
-    # W+CMYK 341 Swatches Mode (Thin Mode)
+    # CMYK+W mode (thin). Total 341 swatches.
     # 5 slots: White(base) + Cyan, Magenta, Yellow, Black (color layers)
     # Note: Corner labels are for VIEWING FROM BOTTOM (print surface)
     # The printed calibration board is viewed from the bottom/color side
@@ -219,7 +220,7 @@ class ColorSystem:
 
     @staticmethod
     def get(mode: str):
-        if "CMYK_W" in mode or "W+CMYK" in mode or "341" in mode:
+        if "CMYK_W" in mode or "CMYK+W" in mode or "341" in mode:
             return ColorSystem.CMYK_W
         elif "CMYW" in mode:
             return ColorSystem.CMYW
@@ -228,8 +229,8 @@ class ColorSystem:
     
     @staticmethod
     def is_thin_mode(mode: str) -> bool:
-        """Check if the mode is thin mode (W+CMYK 341)."""
-        return "CMYK_W" in mode or "W+CMYK" in mode or "341" in mode
+        """Check if the mode is thin mode (CMYK+W, 341 swatches)."""
+        return "CMYK_W" in mode or "CMYK+W" in mode or "341" in mode
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -253,7 +254,7 @@ THIN_DST_SIZE_W = 1000
 THIN_DST_SIZE_H = int(1000 * THIN_PHYSICAL_GRID_H / THIN_PHYSICAL_GRID_W)
 THIN_CELL_SIZE_W = THIN_DST_SIZE_W / THIN_PHYSICAL_GRID_W
 THIN_CELL_SIZE_H = THIN_DST_SIZE_H / THIN_PHYSICAL_GRID_H
-THIN_LUT_FILE_PATH = os.path.join(tempfile.gettempdir(), "lumina_lut_341.npy")
+THIN_LUT_FILE_PATH = os.path.join(OUTPUT_DIR, "lumina_lut_341.npy")
 
 # Converter constants
 PREVIEW_SCALE = 2  # 固定预览缩放倍数

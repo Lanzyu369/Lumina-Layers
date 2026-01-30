@@ -124,6 +124,47 @@ def rotate_image(img, direction):
     return img
 
 
+def pad_to_square(img):
+    """Pad image to a square to avoid UI letterboxing offsets."""
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    if h == w:
+        return img
+    size = max(h, w)
+    top = (size - h) // 2
+    bottom = size - h - top
+    left = (size - w) // 2
+    right = size - w - left
+
+    corner_samples = np.array([
+        img[0, 0],
+        img[0, w - 1],
+        img[h - 1, 0],
+        img[h - 1, w - 1]
+    ])
+    pad_color = corner_samples.mean(axis=0).astype(int).tolist()
+
+    return cv2.copyMakeBorder(
+        img, top, bottom, left, right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=pad_color
+    )
+
+
+def maybe_pad_for_display(img, color_mode: str):
+    """
+    Conditionally pad image to avoid UI letterboxing offsets.
+    For CMYK+W (thin mode), always pad to square to avoid offset.
+    For other modes, keep original image to preserve display size.
+    """
+    if img is None:
+        return None
+    if ColorSystem.is_thin_mode(color_mode):
+        return pad_to_square(img)
+    return img
+
+
 def draw_corner_points(img, points, color_mode: str):
     """Draw corner points with mode-specific colors and labels."""
     if img is None:

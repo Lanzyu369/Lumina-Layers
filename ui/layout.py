@@ -238,13 +238,13 @@ def create_extractor_tab():
         ext_img_in.upload(
             on_extractor_upload,
             [ext_img_in, ext_color_mode],
-            [ext_state_img, ext_work_img, ext_state_pts, ext_curr_coord, ext_hint]
+            [ext_state_img, ext_work_img, ext_state_pts, ext_curr_coord, ext_hint, ext_ref_view]
         )
 
         ext_color_mode.change(
             on_extractor_mode_change,
             [ext_state_img, ext_color_mode],
-            [ext_state_pts, ext_hint, ext_work_img]
+            [ext_state_img, ext_state_pts, ext_hint, ext_work_img, ext_ref_view]
         )
 
         ext_rot_btn.click(

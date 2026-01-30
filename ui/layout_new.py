@@ -242,7 +242,8 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
                     label=I18n.get(choice_key, lang),
                     choices=[
                         I18n.get('conv_color_mode_cmyw', lang),
-                        I18n.get('conv_color_mode_rybw', lang)
+                        I18n.get('conv_color_mode_rybw', lang),
+                        I18n.get('conv_color_mode_cmykw', lang)
                     ]
                 ))
             elif choice_key == 'conv_structure':
@@ -382,8 +383,7 @@ def create_converter_tab_content(lang: str) -> dict:
             # Input image
             components['image_conv_image_label'] = gr.Image(
                 label=I18n.get('conv_image_label', lang),
-                type="filepath",
-                image_mode="RGBA"  # Force RGBA mode to preserve alpha channel
+                type="filepath"
             )
                 
             # Parameter settings
@@ -392,7 +392,8 @@ def create_converter_tab_content(lang: str) -> dict:
             components['radio_conv_color_mode'] = gr.Radio(
                 choices=[
                     I18n.get('conv_color_mode_cmyw', lang),
-                    I18n.get('conv_color_mode_rybw', lang)
+                    I18n.get('conv_color_mode_rybw', lang),
+                    I18n.get('conv_color_mode_cmykw', lang)
                 ],
                 value=I18n.get('conv_color_mode_rybw', lang),
                 label=I18n.get('conv_color_mode', lang)
@@ -663,7 +664,8 @@ def create_calibration_tab_content(lang: str) -> dict:
             components['radio_cal_color_mode'] = gr.Radio(
                 choices=[
                     I18n.get('conv_color_mode_cmyw', lang),
-                    I18n.get('conv_color_mode_rybw', lang)
+                    I18n.get('conv_color_mode_rybw', lang),
+                    I18n.get('conv_color_mode_cmykw', lang)
                 ],
                 value=I18n.get('conv_color_mode_rybw', lang),
                 label=I18n.get('cal_color_mode', lang)
@@ -748,7 +750,8 @@ def create_extractor_tab_content(lang: str) -> dict:
             components['radio_ext_color_mode'] = gr.Radio(
                 choices=[
                     I18n.get('conv_color_mode_cmyw', lang),
-                    I18n.get('conv_color_mode_rybw', lang)
+                    I18n.get('conv_color_mode_rybw', lang),
+                    I18n.get('conv_color_mode_cmykw', lang)
                 ],
                 value=I18n.get('conv_color_mode_rybw', lang),
                 label=I18n.get('ext_color_mode', lang)
@@ -819,7 +822,7 @@ def create_extractor_tab_content(lang: str) -> dict:
             ext_work_img = gr.Image(
                 label=I18n.get('ext_marked', lang),
                 show_label=False,
-                interactive=True
+                interactive=False
             )
                 
             with gr.Row():
@@ -872,13 +875,13 @@ def create_extractor_tab_content(lang: str) -> dict:
     ext_img_in.upload(
             on_extractor_upload,
             [ext_img_in, components['radio_ext_color_mode']],
-            [ext_state_img, ext_work_img, ext_state_pts, ext_curr_coord, ext_hint]
+            [ext_state_img, ext_work_img, ext_state_pts, ext_curr_coord, ext_hint, ext_ref_view]
     )
     
     components['radio_ext_color_mode'].change(
             on_extractor_mode_change,
             [ext_state_img, components['radio_ext_color_mode']],
-            [ext_state_pts, ext_hint, ext_work_img]
+            [ext_state_img, ext_state_pts, ext_hint, ext_work_img, ext_ref_view]
     )
     
     components['btn_ext_rotate_btn'].click(
@@ -903,7 +906,8 @@ def create_extractor_tab_content(lang: str) -> dict:
             ext_state_img, ext_state_pts,
             components['slider_ext_offset_x'], components['slider_ext_offset_y'],
             components['slider_ext_zoom'], components['slider_ext_distortion'],
-            components['checkbox_ext_wb'], components['checkbox_ext_vignette']
+            components['checkbox_ext_wb'], components['checkbox_ext_vignette'],
+            components['radio_ext_color_mode']
     ]
     extract_outputs = [
             ext_warp_view, ext_lut_view,
@@ -916,10 +920,14 @@ def create_extractor_tab_content(lang: str) -> dict:
                   components['slider_ext_zoom'], components['slider_ext_distortion']]:
             s.release(run_extraction, extract_inputs, extract_outputs)
     
-    ext_lut_view.select(probe_lut_cell, [], [ext_probe_html, ext_picker, ext_curr_coord])
+    ext_lut_view.select(
+        probe_lut_cell, 
+        [components['radio_ext_color_mode']], 
+        [ext_probe_html, ext_picker, ext_curr_coord]
+    )
     components['btn_ext_apply_btn'].click(
             manual_fix_cell,
-            [ext_curr_coord, ext_picker],
+            [ext_curr_coord, ext_picker, components['radio_ext_color_mode']],
             [ext_lut_view, components['textbox_ext_status']]
     )
     

@@ -18,6 +18,21 @@ from abc import ABC, abstractmethod
 import numpy as np
 import cv2
 import trimesh
+from shapely.geometry import Polygon, MultiPolygon
+from shapely.ops import unary_union
+
+# Woodblock mode dependency check
+try:
+    from skimage import color, segmentation
+    from skimage.measure import regionprops
+    try:
+        from skimage import graph
+    except ImportError:
+        from skimage.future import graph
+    WOODBLOCK_AVAILABLE = True
+except Exception as e:
+    WOODBLOCK_AVAILABLE = False
+    print(f"[MESH_GENERATORS] scikit-image not available: {e}")
 
 
 class BaseMesher(ABC):
@@ -259,25 +274,15 @@ def get_mesher(mode_name):
     
     Args:
         mode_name: Mode name string
-            - "high-fidelity" / "高保真" → HighFidelityMesher
-            - "pixel" / "像素" → VoxelMesher
-    
-    Returns:
-        BaseMesher instance
     """
     mode_str = str(mode_name).lower()
     
-    # High-Fidelity mode (replaces Vector and Woodblock)
     if "high-fidelity" in mode_str or "高保真" in mode_str:
-        print("[MESHER_FACTORY] Selected: HighFidelityMesher (RLE-based with Dilation)")
+        print("[MESHER_FACTORY] Selected: HighFidelityMesher")
         return HighFidelityMesher()
-    
-    # Pixel Art mode (legacy voxel)
     elif "pixel" in mode_str or "像素" in mode_str:
-        print("[MESHER_FACTORY] Selected: VoxelMesher (Blocky)")
+        print("[MESHER_FACTORY] Selected: VoxelMesher")
         return VoxelMesher()
-    
-    # Default fallback to High-Fidelity
     else:
         print(f"[MESHER_FACTORY] Unknown mode '{mode_name}', defaulting to HighFidelityMesher")
         return HighFidelityMesher()

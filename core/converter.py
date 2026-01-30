@@ -11,6 +11,7 @@ import trimesh
 from PIL import Image, ImageDraw, ImageFont
 import gradio as gr
 
+
 from config import PrinterConfig, ThinModeConfig, ColorSystem, PREVIEW_SCALE, PREVIEW_MARGIN, OUTPUT_DIR
 from utils import Stats, safe_fix_3mf_names
 
@@ -144,7 +145,11 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
         if loop_info:
             preview_rgba = _draw_loop_on_preview(preview_rgba, loop_info, color_conf, pixel_scale)
     
-    preview_img = Image.fromarray(preview_rgba, mode='RGBA')
+    # Create preview image with white background
+    preview_pil = Image.fromarray(preview_rgba, mode='RGBA')
+    bg = Image.new('RGB', (target_w, target_h), (255, 255, 255))
+    bg.paste(preview_pil, (0, 0), preview_pil)
+    preview_img = bg
     
     # ========== Step 5: Build Voxel Matrix ==========
     if is_thin_mode:
@@ -525,7 +530,7 @@ def render_preview(preview_rgba, loop_pos, loop_width, loop_length,
     if loop_enabled and loop_pos is not None:
         canvas = _draw_loop_on_canvas(canvas, loop_pos, loop_width, loop_length, loop_hole, loop_angle, color_conf, margin)
     
-    return np.array(canvas)
+    return np.array(canvas.convert('RGB'))
 
 
 def _draw_loop_on_canvas(pil_img, loop_pos, loop_width, loop_length, 

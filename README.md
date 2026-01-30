@@ -8,7 +8,7 @@ Physics-Based Multi-Material FDM Color System
 
 ## Project Status
 
-**Current Version**: v1.4.1  
+**Current Version**: v1.4.2  
 **License**: CC BY-NC-SA 4.0 (with Commercial Exemption)  
 **Nature**: Non-profit independent implementation, open-source community project
 
@@ -99,14 +99,14 @@ You **do NOT need to ask for permission**. You automatically have the right to:
 
 ---
 
-Lumina Studio v1.4.1 integrates three major modules into a unified interface:
+Lumina Studio v1.4.2 integrates three major modules into a unified interface:
 
 ### 📐 Module 1: Calibration Generator
 
 Generates precision calibration boards to physically test filament mixing.
 
 - **1024-Color Matrix**: Full permutation of 4 base filaments across 5 layers (0.4mm total)
-- **Dual Color Modes**: Supports both CMYW (Cyan/Magenta/Yellow/White) and RYBW (Red/Yellow/Blue/White)
+- **Multi Color Modes**: Supports CMYW (Cyan/Magenta/Yellow/White), RYBW (Red/Yellow/Blue/White), and CMYK+W
 - **Face-Down Optimization**: Viewing surface prints directly on the build plate for a smooth finish
 - **Solid Backing**: Automatically generates a 1.6mm opaque backing to ensure color consistency and structural rigidity
 - **Anti-Overlap Geometry**: Applies 0.02mm micro-shrinkage to voxels to prevent slicer line-width conflicts
@@ -137,7 +137,19 @@ Converts images into printable 3D models using calibrated data.
 
 ---
 
-## What's New in v1.4.1 🚀
+## What's New in v1.4.2 🚀
+
+### CMYK+W Mode
+
+- **CMYK+W Support**: White base + Cyan/Magenta/Yellow/Black layers
+- **341-Swatch Calibration Board**: 19×18 grid, variable layer counts (0–4)
+- **Stepped Height Grid**: Each swatch height reflects its sequence length
+- **Fixed 1.0mm White Base**: Similar to print paper, improves translucency and contrast
+- **Dynamic LUT Matching**: Precise matching for all 341 color sequences
+
+---
+
+### Previous Updates (v1.4.1)
 
 ### Modeling Mode Consolidation
 
@@ -295,6 +307,7 @@ This launches the web interface with all three modules in tabs.
 2. Select your color mode:
    - **RYBW** (Red/Yellow/Blue/White) - Traditional primaries
    - **CMYW** (Cyan/Magenta/Yellow/White) - Print colors, wider gamut
+   - **CMYK+W** - White base + CMYK color layers
 3. Adjust block size (default: 5mm) and gap (default: 0.82mm)
 4. Click **Generate** and download the `.3mf` file
 
@@ -307,6 +320,8 @@ This launches the web interface with all three modules in tabs.
 |------|--------|--------|--------|--------|
 | RYBW | White | Red | Yellow | Blue |
 | CMYW | White | Cyan | Magenta | Yellow |
+
+**CMYK+W**: Requires 5 slots—White base + Cyan/Magenta/Yellow/Black.
 
 ---
 
@@ -322,6 +337,9 @@ This launches the web interface with all three modules in tabs.
 |------|---------------|---------------|---------------|---------------|
 | RYBW | ⬜ White | 🟥 Red | 🟦 Blue | 🟨 Yellow |
 | CMYW | ⬜ White | 🔵 Cyan | 🟣 Magenta | 🟨 Yellow |
+| CMYK+W | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
+
+> ⚠️ **Note**: The CMYK+W corner order is viewed from the bottom (display) side.
 
 6. Adjust correction sliders if needed (white balance, vignette, distortion)
 7. Click **Extract** and download `my_printer_lut.npy`

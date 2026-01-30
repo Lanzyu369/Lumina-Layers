@@ -48,9 +48,9 @@ def create_about_tab(stats_component):
         |-----------|---------|---------|---------|---------|
         | **RYBW** | ⬜ White | 🟥 Red | 🟦 Blue | 🟨 Yellow |
         | **CMYW** | ⬜ White | 🔵 Cyan | 🟣 Magenta | 🟨 Yellow |
-        | **W+CMYK (341)** | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
+        | **CMYK+W** | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
         
-        > ⚠️ **注意**: W+CMYK模式的角点顺序是从底面（外观面）观看的结果
+        > ⚠️ **注意**: CMYK+W模式的角点顺序是从底面（外观面）观看的结果
         
         ---
         
@@ -66,7 +66,7 @@ def create_about_tab(stats_component):
         
         ### 📝 v1.5 更新日志 Changelog
         
-        #### 🆕 W+CMYK 341色块模式
+        #### 🆕 CMYK+W 模式
         
         - ✅ **341色块校准板** - 19×18网格，可变层数(0-4层)
         - ✅ **5种材质支持** - White底座 + Cyan/Magenta/Yellow/Black色彩层
@@ -127,7 +127,7 @@ def create_about_tab(stats_component):
         - [✅] 三种建模模式 Three modeling modes (Vector/Woodblock/Voxel)
         - [✅] 版画模式SLIC引擎 Woodblock mode SLIC engine
         - [✅] 钥匙扣挂孔 Keychain loop
-        - [✅] **W+CMYK 341色块模式** 5-color thin mode with variable layers
+        - [✅] **CMYK+W 模式** 5-color thin mode with variable layers
         - [🚧] 漫画模式 Manga mode (Ben-Day dots simulation)
         - [ ] 6色扩展模式 6-color extended mode
         - [ ] 8色专业模式 8-color professional mode

@@ -18,8 +18,8 @@ class I18n:
             'en': '✨ Lumina Studio'
         },
         'app_subtitle': {
-            'zh': '多材料3D打印色彩系统 | v1.4.1',
-            'en': 'Multi-Material 3D Print Color System | v1.4.1'
+            'zh': '多材料3D打印色彩系统 | v1.4.2',
+            'en': 'Multi-Material 3D Print Color System | v1.4.2'
         },
         'lang_btn_zh': {
             'zh': '🌐 中文',
@@ -126,6 +126,10 @@ class I18n:
         'conv_color_mode_rybw': {
             'zh': 'RYBW (红/黄/蓝)',
             'en': 'RYBW (Red/Yellow/Blue)'
+        },
+        'conv_color_mode_cmykw': {
+            'zh': 'CMYK+W',
+            'en': 'CMYK+W'
         },
         'conv_structure': {
             'zh': '结构',
@@ -446,7 +450,7 @@ class I18n:
         
         # ==================== About Page Content ====================
         'about_content': {
-            'zh': """## 🌟 Lumina Studio v1.4.1
+            'zh': """## 🌟 Lumina Studio v1.4.2
 
 **多材料3D打印色彩系统**
 
@@ -456,7 +460,7 @@ class I18n:
 
 ### 📖 使用流程
 
-1. **生成校准板** → 打印1024色校准网格
+1. **生成校准板** → 打印校准网格
 2. **提取颜色** → 拍照并提取打印机实际色彩
 3. **转换图像** → 将图片转为多层3D模型
 
@@ -468,6 +472,9 @@ class I18n:
 |------|------|------|------|------|
 | **RYBW** | ⬜ 白色 | 🟥 红色 | 🟦 蓝色 | 🟨 黄色 |
 | **CMYW** | ⬜ 白色 | 🔵 青色 | 🟣 品红 | 🟨 黄色 |
+| **CMYK+W** | 🟨 黄色 | 🟣 品红 | 🔵 青色 | ⬜ 白色 |
+
+> ⚠️ **注意**: CMYK+W模式的角点顺序是从底面（外观面）观看的结果
 
 ---
 
@@ -480,31 +487,25 @@ class I18n:
 
 ---
 
-### 📝 v1.4.1 更新日志
+### 📝 v1.4.2 更新日志
 
-#### 🚀 建模模式整合
-- **高保真模式取代矢量和版画模式**：统一为两种模式（高保真/像素艺术）
-- **语言切换功能**：点击右上角按钮即可切换中英文界面
+#### 🚀 功能整合与优化
+- ✅ **整合 341 色块模式** - 将 v1.5 的 CMYK+W 核心功能合入 v1.4.1 架构
+- ✅ **保持 1.4.1 核心引擎** - 使用最新的 RLE 高保真建模引擎
+- ✅ **界面布局还原** - 保持 1.4.1 的页面顺序与多语言切换支持
 
-#### 📝 v1.4 更新日志
+---
 
-#### 🚀 核心功能
+### 📝 历史更新日志
 
-- ✅ **高保真模式** - RLE算法，无缝拼接，水密模型（10 px/mm）
-- ✅ **像素艺术模式** - 经典方块美学，像素艺术风格
+#### v1.5 (Local)
+- ✅ **CMYK+W 模式**
+- ✅ **矢量/版画/像素三大建模模式**
+- ✅ **钥匙扣挂孔颜色自动检测**
 
-#### 🔧 架构重构
-
-- 合并Vector和Woodblock为统一的High-Fidelity模式
-- RLE（Run-Length Encoding）几何生成引擎
-- 零间隙、完美边缘对齐（shrink=0.0）
-- 性能优化：支持100k+面片即时生成
-
-#### 🎨 色彩量化架构
-
-- K-Means聚类（8-256色可调，默认64色）
-- "先聚类，后匹配"（速度提升1000×）
-- 双边滤波 + 中值滤波（消除碎片化区域）
+#### v1.4.1 (Upstream)
+- ✅ **高保真（High-Fidelity）模式** - RLE 算法，无缝拼接
+- ✅ **语言切换功能** & **LUT 预设库**
 
 ---
 
@@ -514,9 +515,10 @@ class I18n:
 - [✅] 两种建模模式（高保真/像素艺术）
 - [✅] RLE几何引擎
 - [✅] 钥匙扣挂孔
+- [✅] **CMYK+W 模式**
 - [🚧] 漫画模式（Ben-Day dots模拟）
 - [ ] 6色扩展模式
-- [ ] 8色专业模式
+- [ ] 拼豆模式
 
 ---
 
@@ -539,10 +541,10 @@ class I18n:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.4.1 | 2025
+    v1.4.2 | 2026
 </div>
 """,
-            'en': """## 🌟 Lumina Studio v1.4.1
+            'en': """## 🌟 Lumina Studio v1.4.2
 
 **Multi-Material 3D Print Color System**
 
@@ -552,7 +554,7 @@ Accurate color reproduction for FDM printing
 
 ### 📖 Workflow
 
-1. **Generate Calibration** → Print 1024-color grid
+1. **Generate Calibration** → Print calibration grid
 2. **Extract Colors** → Photo → extract real colors
 3. **Convert Image** → Image → multi-layer 3D model
 
@@ -564,6 +566,7 @@ Accurate color reproduction for FDM printing
 |------|----------|-----------|--------------|-------------|
 | **RYBW** | ⬜ White | 🟥 Red | 🟦 Blue | 🟨 Yellow |
 | **CMYW** | ⬜ White | 🔵 Cyan | 🟣 Magenta | 🟨 Yellow |
+| **CMYK+W** | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
 
 ---
 
@@ -571,36 +574,30 @@ Accurate color reproduction for FDM printing
 
 - **Beer-Lambert Optical Color Mixing**
 - **KD-Tree Color Matching**
-- **RLE Geometry Generation**
+- **RLE Geometry Generation** (High-Fidelity Mode)
 - **K-Means Color Quantization**
 
 ---
 
-### 📝 v1.4.1 Changelog
+### 📝 v1.4.2 Changelog
 
-#### 🚀 Modeling Mode Consolidation
-- **High-Fidelity Mode Replaces Vector & Woodblock**: Unified into two modes (High-Fidelity/Pixel Art)
-- **Language Switching**: Click the button in the top-right corner to switch between Chinese and English
+#### 🚀 Integration & Optimization
+- ✅ **341-Swatch Mode Integration** - Ported CMYK+W core features from v1.5 to v1.4.1 architecture
+- ✅ **Upstream Engine Maintained** - Kept the advanced RLE High-Fidelity modeling engine
+- ✅ **Layout Restored** - Restored v1.4.1 tab order and multi-language support
 
-#### 📝 v1.4 Changelog
+---
 
-#### 🚀 Core Features
+### 📝 Previous Changelogs
 
-- ✅ **High-Fidelity Mode** - RLE algorithm, seamless, watertight (10 px/mm)
-- ✅ **Pixel Art Mode** - Classic blocky aesthetic
+#### v1.5 (Local)
+- ✅ **CMYK+W Mode**
+- ✅ **Vector/Woodblock/Pixel Modeling Modes**
+- ✅ **Auto Loop Color Detection**
 
-#### 🔧 Architecture Refactor
-
-- Merged Vector and Woodblock into unified High-Fidelity mode
-- RLE (Run-Length Encoding) geometry engine
-- Zero gaps, perfect edge alignment (shrink=0.0)
-- Performance: 100k+ faces instant generation
-
-#### 🎨 Color Quantization
-
-- K-Means clustering (8-256 colors, default 64)
-- "Cluster First, Match Second" (1000× speedup)
-- Bilateral + Median filtering (eliminate fragmentation)
+#### v1.4.1 (Upstream)
+- ✅ **High-Fidelity Mode** - RLE algorithm, seamless
+- ✅ **Language Switching** & **LUT Presets**
 
 ---
 
@@ -610,9 +607,9 @@ Accurate color reproduction for FDM printing
 - [✅] Two modeling modes (High-Fidelity/Pixel Art)
 - [✅] RLE geometry engine
 - [✅] Keychain loop
+- [✅] **CMYK+W Mode**
 - [🚧] Manga mode (Ben-Day dots simulation)
 - [ ] 6-color extended mode
-- [ ] 8-color professional mode
 
 ---
 
@@ -635,7 +632,7 @@ Special thanks to:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.4.1 | 2025
+    v1.4.2 | 2026
 </div>
 """
         },

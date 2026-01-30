@@ -16,12 +16,12 @@ from utils import Stats, safe_fix_3mf_names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 341 Sequence Generator for W+CMYK Mode
+# 341 Sequence Generator for CMYK+W Mode
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def generate_341_sequences() -> List[List[int]]:
     """
-    Generate 341 color sequences for W+CMYK mode.
+    Generate 341 color sequences for CMYK+W mode.
     
     Sequences are variable length (0-4 layers):
     - L=0: [] (empty, just white base) -> 1 sequence
@@ -376,7 +376,7 @@ def generate_calibration_board_1024(color_mode: str, block_size_mm: float,
 
 def generate_calibration_board_341(color_mode: str, block_size_mm: float, gap_mm: float):
     """
-    Generate a 341-color calibration board for W+CMYK mode.
+    Generate a 341-color calibration board for CMYK+W mode.
     
     This mode uses:
     - Fixed 1.0mm white base
@@ -496,5 +496,5 @@ def generate_calibration_board_341(color_mode: str, block_size_mm: float, gap_mm
     return (
         output_path, 
         Image.fromarray(preview_arr), 
-        f"✅ W+CMYK 校准板已生成！341色块 (19×18) | 材质: {', '.join(slot_names)}"
+        f"✅ 校准板已生成！341色块 (19×18) | 颜色: {', '.join(slot_names)}"
     )

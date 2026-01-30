@@ -8,6 +8,7 @@ import cv2
 from PIL import Image
 from scipy.spatial import KDTree
 
+
 from config import PrinterConfig, ThinModeConfig, ColorSystem
 from config import THIN_DATA_GRID_W, THIN_DATA_GRID_H
 
@@ -127,8 +128,6 @@ class LuminaImageProcessor:
         print(f"[IMAGE_PROCESSOR] Mode: {mode_name}, Filter: blur={blur_kernel}, sigma={smooth_sigma}")
         
         img = Image.open(image_path).convert('RGBA')
-        img_arr_orig = np.array(img)
-        alpha_arr_orig = img_arr_orig[:, :, 3]
         
         if use_high_fidelity:
             PIXELS_PER_MM = 10

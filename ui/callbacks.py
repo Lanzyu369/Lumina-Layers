@@ -68,14 +68,23 @@ def get_next_hint(mode, pts_count):
 
 def on_extractor_upload(i, mode):
     """Handle image upload"""
+    if i is not None and len(i.shape) == 3 and i.shape[2] == 4:
+        import cv2
+        i = cv2.cvtColor(i, cv2.COLOR_RGBA2RGB)
     hint = get_first_hint(mode)
-    return i, i, [], None, hint
+    ref = generate_simulated_reference(mode)
+    from core.extractor import pad_to_square
+    img = pad_to_square(i)
+    return img, img, [], None, hint, ref
 
 
 def on_extractor_mode_change(img, mode):
     """Handle color mode change"""
     hint = get_first_hint(mode)
-    return [], hint, img
+    ref = generate_simulated_reference(mode)
+    from core.extractor import pad_to_square
+    img_out = pad_to_square(img)
+    return img_out, [], hint, img_out, ref
 
 
 def on_extractor_rotate(i, mode):
@@ -84,7 +93,9 @@ def on_extractor_rotate(i, mode):
     if i is None:
         return None, None, [], get_first_hint(mode)
     r = rotate_image(i, "Rotate Left 90°")
-    return r, r, [], get_first_hint(mode)
+    from core.extractor import pad_to_square
+    r_out = pad_to_square(r)
+    return r_out, r_out, [], get_first_hint(mode)
 
 
 def on_extractor_click(img, pts, mode, evt: gr.SelectData):
