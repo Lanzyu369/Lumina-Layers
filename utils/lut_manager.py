@@ -166,3 +166,4 @@ class LUTManager:
         except Exception as e:
             print(f"[LUT_MANAGER] Error deleting LUT: {e}")
             return False, f"❌ Delete failed: {e}", cls.get_lut_choices()
+

@@ -8,7 +8,7 @@ Physics-Based Multi-Material FDM Color System
 
 ## Project Status
 
-**Current Version**: v1.4.2  
+**Current Version**: CMYK+W_TMP1 base on v1.4.2  
 **License**: CC BY-NC-SA 4.0 (with Commercial Exemption)  
 **Nature**: Non-profit independent implementation, open-source community project
 
@@ -99,7 +99,7 @@ You **do NOT need to ask for permission**. You automatically have the right to:
 
 ---
 
-Lumina Studio v1.4.2 integrates three major modules into a unified interface:
+Lumina Studio CMYK+W_TMP1 base on v1.4.2 integrates three major modules into a unified interface:
 
 ### 📐 Module 1: Calibration Generator
 
@@ -137,7 +137,7 @@ Converts images into printable 3D models using calibrated data.
 
 ---
 
-## What's New in v1.4.2 🚀
+## What's New in CMYK+W_TMP1 base on v1.4.2 🚀
 
 ### CMYK+W Mode
 
@@ -436,3 +436,4 @@ Special thanks to:
 Made with ❤️ by [MIN]
 
 ⭐ Star this repo if you find it useful!
+

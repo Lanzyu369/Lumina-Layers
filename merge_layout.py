@@ -9,3 +9,4 @@ with open('ui/layout.py', 'w', encoding='utf-8') as f:
     f.writelines(lines[:439])
     f.write('\n')
     f.write(final_part)
+

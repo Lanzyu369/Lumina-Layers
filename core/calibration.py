@@ -498,3 +498,4 @@ def generate_calibration_board_341(color_mode: str, block_size_mm: float, gap_mm
         Image.fromarray(preview_arr), 
         f"✅ 校准板已生成！341色块 (19×18) | 颜色: {', '.join(slot_names)}"
     )
+

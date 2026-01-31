@@ -114,3 +114,4 @@ def on_extractor_clear(img, mode):
     """Clear corner points"""
     hint = get_first_hint(mode)
     return img, [], hint
+

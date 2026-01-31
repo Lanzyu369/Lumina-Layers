@@ -4,7 +4,7 @@ def create_about_tab(stats_component):
         with gr.Row():
             with gr.Column(scale=4):
                 gr.Markdown("""
-                ## 🌟 Lumina Studio v1.5
+                ## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
                 
                 **多材料3D打印色彩系统** | Multi-Material 3D Print Color System
                 
@@ -64,7 +64,7 @@ def create_about_tab(stats_component):
         
         ---
         
-        ### 📝 v1.5 更新日志 Changelog
+        ### 📝 CMYK+W_TMP1 base on v1.4.2 更新日志 Changelog
         
         #### 🆕 CMYK+W 模式
         
@@ -156,6 +156,7 @@ def create_about_tab(stats_component):
         
         <div style="text-align:center; color:#888; margin-top:20px;">
             Made with ❤️ by [MIN]<br>
-            v1.5.0 | 2026
+            CMYK+W_TMP1 base on v1.4.2 | 2026
         </div>
         """)
+

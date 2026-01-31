@@ -477,3 +477,4 @@ def manual_fix_cell(coord, color_input, color_mode: str = "RYBW"):
         return prev, "✅ 已修正"
     except Exception as e:
         return None, f"❌ 格式错误: {color_input}"
+

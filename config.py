@@ -259,3 +259,4 @@ THIN_LUT_FILE_PATH = os.path.join(OUTPUT_DIR, "lumina_lut_341.npy")
 # Converter constants
 PREVIEW_SCALE = 2  # 固定预览缩放倍数
 PREVIEW_MARGIN = 30  # 预览图边距（显示坐标轴用）
+

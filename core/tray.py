@@ -1,6 +1,6 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║                          LUMINA STUDIO v1.4.2                                 ║
+║                          LUMINA STUDIO CMYK+W_TMP1 base on v1.4.2             ║
 ║                    Multi-Material 3D Print Color System                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  Author: [MIN]                                                                ║
@@ -104,7 +104,7 @@ class LuminaTray:
         self.icon = pystray.Icon(
             "LuminaStudio",
             image,
-            "Lumina Studio v1.4.2",
+            "Lumina Studio CMYK+W_TMP1 base on v1.4.2",
             menu
         )
 
@@ -119,3 +119,4 @@ class LuminaTray:
         except Exception as e:
             print(f"⚠️ Warning: Failed to start system tray: {e}")
             self.running = False
+

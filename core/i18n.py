@@ -18,8 +18,8 @@ class I18n:
             'en': '✨ Lumina Studio'
         },
         'app_subtitle': {
-            'zh': '多材料3D打印色彩系统 | v1.4.2',
-            'en': 'Multi-Material 3D Print Color System | v1.4.2'
+            'zh': '多材料3D打印色彩系统 | CMYK+W_TMP1 base on v1.4.2',
+            'en': 'Multi-Material 3D Print Color System | CMYK+W_TMP1 base on v1.4.2'
         },
         'lang_btn_zh': {
             'zh': '🌐 中文',
@@ -450,7 +450,7 @@ class I18n:
         
         # ==================== About Page Content ====================
         'about_content': {
-            'zh': """## 🌟 Lumina Studio v1.4.2
+            'zh': """## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
 
 **多材料3D打印色彩系统**
 
@@ -487,14 +487,14 @@ class I18n:
 
 ---
 
-### 📝 v1.4.2 更新日志
+### 📝 CMYK+W_TMP1 base on v1.4.2 更新日志
 
 #### 🐛 Bug修复
 - 修复了一些已知问题
 - 优化了性能和稳定性
 
 #### 🚀 功能整合与优化
-- ✅ **整合 341 色块模式** - 将 v1.5 的 CMYK+W 核心功能合入 v1.4.1 架构
+- ✅ **整合 341 色块模式** - 将 CMYK+W_TMP1 的核心功能合入 v1.4.1 架构
 - ✅ **保持 1.4.1 核心引擎** - 使用最新的 RLE 高保真建模引擎
 - ✅ **界面布局还原** - 保持 1.4.1 的页面顺序与多语言切换支持
 
@@ -502,7 +502,7 @@ class I18n:
 
 ### 📝 历史更新日志
 
-#### v1.5 (Local)
+#### CMYK+W_TMP1 (Local)
 - ✅ **CMYK+W 模式**
 - ✅ **矢量/版画/像素三大建模模式**
 - ✅ **钥匙扣挂孔颜色自动检测**
@@ -545,10 +545,10 @@ class I18n:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.4.2 | 2026
+    CMYK+W_TMP1 base on v1.4.2 | 2026
 </div>
 """,
-            'en': """## 🌟 Lumina Studio v1.4.2
+            'en': """## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
 
 **Multi-Material 3D Print Color System**
 
@@ -583,14 +583,14 @@ Accurate color reproduction for FDM printing
 
 ---
 
-### 📝 v1.4.2 Changelog
+### 📝 CMYK+W_TMP1 base on v1.4.2 Changelog
 
 #### 🐛 Bug Fixes
 - Fixed some known issues
 - Improved performance and stability
 
 #### 🚀 Integration & Optimization
-- ✅ **341-Swatch Mode Integration** - Ported CMYK+W core features from v1.5 to v1.4.1 architecture
+- ✅ **341-Swatch Mode Integration** - Ported core features from CMYK+W_TMP1 to v1.4.1 architecture
 - ✅ **Upstream Engine Maintained** - Kept the advanced RLE High-Fidelity modeling engine
 - ✅ **Layout Restored** - Restored v1.4.1 tab order and multi-language support
 
@@ -598,7 +598,7 @@ Accurate color reproduction for FDM printing
 
 ### 📝 Previous Changelogs
 
-#### v1.5 (Local)
+#### CMYK+W_TMP1 (Local)
 - ✅ **CMYK+W Mode**
 - ✅ **Vector/Woodblock/Pixel Modeling Modes**
 - ✅ **Auto Loop Color Detection**
@@ -640,7 +640,7 @@ Special thanks to:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.4.2 | 2026
+    CMYK+W_TMP1 base on v1.4.2 | 2026
 </div>
 """
         },
@@ -674,3 +674,4 @@ Special thanks to:
             dict: {key: translated_text}
         """
         return {key: I18n.get(key, lang) for key in I18n.TEXTS.keys()}
+

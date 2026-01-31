@@ -46,3 +46,4 @@ class Stats:
                     f.write(f"{k}:{v}\n")
         except:
             pass
+

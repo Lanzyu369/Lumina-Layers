@@ -590,3 +590,4 @@ def generate_final_model(image_path, lut_path, target_width_mm, spacer_thick,
                              structure_mode, auto_bg, bg_tol, color_mode,
                              add_loop, loop_width, loop_length, loop_hole, loop_pos,
                              modeling_mode, quantize_colors)
+

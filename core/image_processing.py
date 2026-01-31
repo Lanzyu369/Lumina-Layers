@@ -243,3 +243,4 @@ class LuminaImageProcessor:
         material_matrix = stacks[:, :max_layers].reshape(target_h, target_w, max_layers)
         seq_lengths = self.ref_seq_lengths[indices].reshape(target_h, target_w)
         return matched_rgb, material_matrix, seq_lengths, rgb_arr
+

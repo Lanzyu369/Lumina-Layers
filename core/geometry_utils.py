@@ -207,3 +207,4 @@ def _connect_rings(outer_indices, hole_indices, vertices_arr, is_top=True):
             hi += 1
     
     return ring_faces
+

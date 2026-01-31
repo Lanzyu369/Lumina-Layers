@@ -8,7 +8,7 @@
 
 ## 项目状态
 
-**当前版本**: v1.4.2  
+**当前版本**: CMYK+W_TMP1 base on v1.4.2  
 **协议**: CC BY-NC-SA 4.0（附商业豁免条款）  
 **性质**: 非营利性独立实现，开源社区项目
 
@@ -89,7 +89,7 @@ Lumina Stuido并未参考任何申请的专利内容，因为该类专利大部�
 
 ---
 
-Lumina Studio v1.4.2整合三大模块，统一界面：
+Lumina Studio CMYK+W_TMP1 base on v1.4.2整合三大模块，统一界面：
 
 ### 📐 模块1：校准板生成器
 
@@ -127,7 +127,7 @@ Lumina Studio v1.4.2整合三大模块，统一界面：
 
 ---
 
-## v1.4.2 核心更新 🚀
+## CMYK+W_TMP1 base on v1.4.2 核心更新 🚀
 
 ### CMYK+W模式
 
@@ -426,3 +426,4 @@ python main.py
 Made with ❤️ by [MIN]
 
 ⭐ 如果觉得有用，请给个Star！
+

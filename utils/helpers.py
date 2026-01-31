@@ -108,3 +108,4 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
 
     except Exception as e:
         print(f"Warning: Could not fix 3MF names: {e}")
+

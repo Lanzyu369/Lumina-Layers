@@ -943,3 +943,4 @@ def create_about_tab_content(lang: str) -> dict:
     components['md_about_content'] = gr.Markdown(I18n.get('about_content', lang))
     
     return components
+
