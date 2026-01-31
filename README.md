@@ -147,6 +147,12 @@ Converts images into printable 3D models using calibrated data.
 - **Fixed 1.0mm White Base**: Similar to print paper, improves translucency and contrast
 - **Dynamic LUT Matching**: Precise matching for all 341 color sequences
 
+### Bug Fixes and Improvements
+
+- Fixed some known issues
+- Improved performance and stability
+- Minor code optimizations
+
 ---
 
 ### Previous Updates (v1.4.1)

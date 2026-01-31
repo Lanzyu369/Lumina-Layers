@@ -489,6 +489,10 @@ class I18n:
 
 ### 📝 v1.4.2 更新日志
 
+#### 🐛 Bug修复
+- 修复了一些已知问题
+- 优化了性能和稳定性
+
 #### 🚀 功能整合与优化
 - ✅ **整合 341 色块模式** - 将 v1.5 的 CMYK+W 核心功能合入 v1.4.1 架构
 - ✅ **保持 1.4.1 核心引擎** - 使用最新的 RLE 高保真建模引擎
@@ -580,6 +584,10 @@ Accurate color reproduction for FDM printing
 ---
 
 ### 📝 v1.4.2 Changelog
+
+#### 🐛 Bug Fixes
+- Fixed some known issues
+- Improved performance and stability
 
 #### 🚀 Integration & Optimization
 - ✅ **341-Swatch Mode Integration** - Ported CMYK+W core features from v1.5 to v1.4.1 architecture

@@ -12,10 +12,10 @@ System Tray Icon Module
 
 import os
 import sys
-import threading
 import webbrowser
 import pystray
 from PIL import Image
+import locale
 
 
 class LuminaTray:
@@ -23,11 +23,43 @@ class LuminaTray:
         self.port = port
         self.icon = None
         self.running = False
+        self.language = self._get_system_language()
+
+    def _get_system_language(self):
+        """Detect system language and return language code."""
+        try:
+            lang, encoding = locale.getdefaultlocale()
+            if lang:
+                return lang.split('_')[0].lower()
+            return 'en'
+        except:
+            return 'en'
+        
+    def _get_text(self, key):
+        """Get localized text based on system language."""
+        texts = {
+            'en': {
+                'open_web_ui': 'Open Web UI',
+                'open_github': 'Open GitHub',
+                'exit': 'Exit'
+            },
+            'zh': {
+                'open_web_ui': '打开WebUI',
+                'open_github': '打开GitHub',
+                'exit': '退出'
+            }
+        }
+        
+        # Return text in detected language, fallback to English
+        return texts.get(self.language, texts['en']).get(key, texts['en'][key])
 
     def open_browser(self, icon=None, item=None):
         """Open web interface in default browser."""
-        url = f"http://127.0.0.1:{self.port}"
-        webbrowser.open(url)
+        webbrowser.open(f"http://127.0.0.1:{self.port}")
+
+    def open_github(self, icon=None, item=None):
+        """Open GitHub repository in default browser."""
+        webbrowser.open("https://github.com/MOVIBALE/Lumina-Layers")
 
     def exit_app(self, icon=None, item=None):
         """Shutdown the application completely."""
@@ -63,9 +95,10 @@ class LuminaTray:
                 image = Image.new('RGB', (64, 64), color='red')
 
         menu = pystray.Menu(
-            pystray.MenuItem("Open Web UI", self.open_browser, default=True),
+            pystray.MenuItem(self._get_text('open_web_ui'), self.open_browser, default=True),
+            pystray.MenuItem(self._get_text('open_github'), self.open_github),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", self.exit_app)
+            pystray.MenuItem(self._get_text('exit'), self.exit_app)
         )
 
         self.icon = pystray.Icon(
