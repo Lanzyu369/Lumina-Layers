@@ -18,8 +18,8 @@ class I18n:
             'en': '✨ Lumina Studio'
         },
         'app_subtitle': {
-            'zh': '多材料3D打印色彩系统 | CMYK+W_TMP1 base on v1.4.2',
-            'en': 'Multi-Material 3D Print Color System | CMYK+W_TMP1 base on v1.4.2'
+            'zh': '多材料3D打印色彩系统 | v1.4.2-cmykw',
+            'en': 'Multi-Material 3D Print Color System | v1.4.2-cmykw'
         },
         'lang_btn_zh': {
             'zh': '🌐 中文',
@@ -64,6 +64,26 @@ class I18n:
         'tab_about': {
             'zh': 'ℹ️ 关于',
             'en': 'ℹ️ About'
+        },
+        'about_clear_cache': {
+            'zh': '🗑️ 清空缓存',
+            'en': '🗑️ Clear Cache'
+        },
+        'about_clear_history': {
+            'zh': '📊 清空历史计数',
+            'en': '📊 Clear History Count'
+        },
+        'about_clear_cache_ok': {
+            'zh': '✅ 缓存已清空',
+            'en': '✅ Cache cleared'
+        },
+        'about_clear_history_ok': {
+            'zh': '✅ 历史计数已清空',
+            'en': '✅ History count cleared'
+        },
+        'about_settings': {
+            'zh': '### ⚙️ 设置',
+            'en': '### ⚙️ Settings'
         },
         
         # ==================== Converter Tab ====================
@@ -450,7 +470,7 @@ class I18n:
         
         # ==================== About Page Content ====================
         'about_content': {
-            'zh': """## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
+            'zh': """## 🌟 Lumina Studio v1.4.2-cmykw
 
 **多材料3D打印色彩系统**
 
@@ -474,7 +494,7 @@ class I18n:
 | **CMYW** | ⬜ 白色 | 🔵 青色 | 🟣 品红 | 🟨 黄色 |
 | **CMYK+W** | 🟨 黄色 | 🟣 品红 | 🔵 青色 | ⬜ 白色 |
 
-> ⚠️ **注意**: CMYK+W模式的角点顺序是从底面（外观面）观看的结果
+> ⚠️ **注意**: CMYK+W模式的角点顺序是从正面（外观面）观看的结果，和其他模式相反。
 
 ---
 
@@ -487,14 +507,14 @@ class I18n:
 
 ---
 
-### 📝 CMYK+W_TMP1 base on v1.4.2 更新日志
+### 📝 v1.4.2-cmykw 更新日志
 
 #### 🐛 Bug修复
 - 修复了一些已知问题
 - 优化了性能和稳定性
 
 #### 🚀 功能整合与优化
-- ✅ **整合 341 色块模式** - 将 CMYK+W_TMP1 的核心功能合入 v1.4.1 架构
+- ✅ **整合 341 色块模式** - 将 v1.4.2-cmykw 的核心功能合入 v1.4.1 架构
 - ✅ **保持 1.4.1 核心引擎** - 使用最新的 RLE 高保真建模引擎
 - ✅ **界面布局还原** - 保持 1.4.1 的页面顺序与多语言切换支持
 
@@ -502,7 +522,7 @@ class I18n:
 
 ### 📝 历史更新日志
 
-#### CMYK+W_TMP1 (Local)
+#### v1.4.2-cmykw (Local)
 - ✅ **CMYK+W 模式**
 - ✅ **矢量/版画/像素三大建模模式**
 - ✅ **钥匙扣挂孔颜色自动检测**
@@ -545,10 +565,10 @@ class I18n:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    CMYK+W_TMP1 base on v1.4.2 | 2026
+    v1.4.2-cmykw | 2026
 </div>
 """,
-            'en': """## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
+            'en': """## 🌟 Lumina Studio v1.4.2-cmykw
 
 **Multi-Material 3D Print Color System**
 
@@ -583,14 +603,14 @@ Accurate color reproduction for FDM printing
 
 ---
 
-### 📝 CMYK+W_TMP1 base on v1.4.2 Changelog
+### 📝 v1.4.2-cmykw Changelog
 
 #### 🐛 Bug Fixes
 - Fixed some known issues
 - Improved performance and stability
 
 #### 🚀 Integration & Optimization
-- ✅ **341-Swatch Mode Integration** - Ported core features from CMYK+W_TMP1 to v1.4.1 architecture
+- ✅ **341-Swatch Mode Integration** - Ported core features from v1.4.2-cmykw to v1.4.1 architecture
 - ✅ **Upstream Engine Maintained** - Kept the advanced RLE High-Fidelity modeling engine
 - ✅ **Layout Restored** - Restored v1.4.1 tab order and multi-language support
 
@@ -598,7 +618,7 @@ Accurate color reproduction for FDM printing
 
 ### 📝 Previous Changelogs
 
-#### CMYK+W_TMP1 (Local)
+#### v1.4.2-cmykw (Local)
 - ✅ **CMYK+W Mode**
 - ✅ **Vector/Woodblock/Pixel Modeling Modes**
 - ✅ **Auto Loop Color Detection**
@@ -640,7 +660,7 @@ Special thanks to:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    CMYK+W_TMP1 base on v1.4.2 | 2026
+    v1.4.2-cmykw | 2026
 </div>
 """
         },

@@ -3,10 +3,12 @@ Lumina Studio - UI Layout (Refactored with i18n)
 UI layout definition - Refactored version with language switching support
 """
 
+import os
+import shutil
 import gradio as gr
 
 from core.i18n import I18n
-from config import ColorSystem
+from config import ColorSystem, OUTPUT_DIR
 from utils import Stats, LUTManager
 from core.calibration import generate_calibration_board
 from core.extractor import (
@@ -77,19 +79,19 @@ def create_app():
             
             # Tab 1: Image Converter
             with gr.TabItem(label=I18n.get('tab_converter', "zh"), id=0) as tab_conv:
-                conv_components = create_converter_tab_content("zh")
+                conv_components = create_converter_tab_content("zh", stats_html=stats_html, lang_state=lang_state)
                 components.update(conv_components)
             tab_components['tab_converter'] = tab_conv
             
             # Tab 2: Calibration Board Generator
             with gr.TabItem(label=I18n.get('tab_calibration', "zh"), id=1) as tab_cal:
-                cal_components = create_calibration_tab_content("zh")
+                cal_components = create_calibration_tab_content("zh", stats_html=stats_html, lang_state=lang_state)
                 components.update(cal_components)
             tab_components['tab_calibration'] = tab_cal
             
             # Tab 3: Color Extractor
             with gr.TabItem(label=I18n.get('tab_extractor', "zh"), id=2) as tab_ext:
-                ext_components = create_extractor_tab_content("zh")
+                ext_components = create_extractor_tab_content("zh", stats_html=stats_html, lang_state=lang_state)
                 components.update(ext_components)
             tab_components['tab_extractor'] = tab_ext
             
@@ -139,17 +141,6 @@ def create_app():
             updates.append(new_lang)
             
             return updates
-            
-            # 5. Update all components
-            updates.extend(_get_all_component_updates(new_lang, components))
-            
-            # 6. Update footer
-            updates.append(gr.update(value=_get_footer_html(new_lang)))
-            
-            # 7. Update language state
-            updates.append(new_lang)
-            
-            return updates
         
         # Bind language switching event
         output_list = [
@@ -172,6 +163,18 @@ def create_app():
             change_language,
             inputs=[lang_state],
             outputs=output_list
+        )
+        
+        # About tab: clear cache & clear history count
+        components['btn_about_clear_cache'].click(
+            _on_clear_cache,
+            inputs=[lang_state],
+            outputs=[components['text_about_status']]
+        )
+        components['btn_about_clear_history'].click(
+            _on_clear_history,
+            inputs=[lang_state],
+            outputs=[components['text_about_status'], stats_html]
         )
     
     return app
@@ -208,6 +211,30 @@ def _get_footer_html(lang: str) -> str:
         <p>{I18n.get('footer_tip', lang)}</p>
     </div>
     """
+
+
+_GRADIO_CACHE_DIR = os.path.join(OUTPUT_DIR, ".gradio_cache")
+
+
+def _on_clear_cache(lang: str) -> str:
+    """Clear Gradio cache directory."""
+    try:
+        if os.path.isdir(_GRADIO_CACHE_DIR):
+            shutil.rmtree(_GRADIO_CACHE_DIR)
+        os.makedirs(_GRADIO_CACHE_DIR, exist_ok=True)
+        return I18n.get('about_clear_cache_ok', lang)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def _on_clear_history(lang: str) -> tuple:
+    """Clear history count (stats) and return message + updated stats HTML."""
+    Stats.reset_all()
+    stats = Stats.get_all()
+    msg = I18n.get('about_clear_history_ok', lang)
+    html = _get_stats_html(lang, stats)
+    # 使用 gr.update 显式更新统计栏，确保界面立即刷新归零
+    return msg, gr.update(value=html)
 
 
 def _get_all_component_updates(lang: str, components: dict) -> list:
@@ -328,12 +355,14 @@ def _get_component_list(components: dict) -> list:
 
 # ==================== Tab Creation Functions ====================
 
-def create_converter_tab_content(lang: str) -> dict:
+def create_converter_tab_content(lang: str, stats_html=None, lang_state=None) -> dict:
     """
     Create image converter tab content
     
     Args:
     lang: Initial language
+    stats_html: Stats bar HTML component (for updating count after conversion)
+    lang_state: Current language state (for stats bar text language)
     
     Returns:
     dict: Component dictionary {key: component}
@@ -618,39 +647,51 @@ def create_converter_tab_content(lang: str) -> dict:
                 outputs=[conv_preview]
             )
     
-    # Generate final model
-    components['btn_conv_generate_btn'].click(
+    # Generate final model (with stats bar update after conversion)
+    _conv_inputs = [
+        components['image_conv_image_label'],
+        conv_lut_path,
+        components['slider_conv_width'],
+        components['slider_conv_thickness'],
+        components['radio_conv_structure'],
+        components['checkbox_conv_auto_bg'],
+        components['slider_conv_tolerance'],
+        components['radio_conv_color_mode'],
+        components['checkbox_conv_loop_enable'],
+        components['slider_conv_loop_width'],
+        components['slider_conv_loop_length'],
+        components['slider_conv_loop_hole'],
+        conv_loop_pos,
+        components['radio_conv_modeling_mode'],
+        components['slider_conv_quantize_colors']
+    ]
+    _conv_outputs = [
+        components['file_conv_download_file'],
+        conv_3d_preview,
+        conv_preview,
+        components['textbox_conv_status']
+    ]
+    if stats_html is not None and lang_state is not None:
+        def _wrap_generate_final_model(lang, img, lut_path, w, th, struct, auto_bg, tol, color_mode, loop_enable, lw, ll, lh, loop_pos, modeling_mode, quantize):
+            result = generate_final_model(img, lut_path, w, th, struct, auto_bg, tol, color_mode, loop_enable, lw, ll, lh, loop_pos, modeling_mode, quantize)
+            return (*result, gr.update(value=_get_stats_html(lang, Stats.get_all())))
+        components['btn_conv_generate_btn'].click(
+            _wrap_generate_final_model,
+            inputs=[lang_state] + _conv_inputs,
+            outputs=_conv_outputs + [stats_html]
+        )
+    else:
+        components['btn_conv_generate_btn'].click(
             generate_final_model,
-            inputs=[
-                components['image_conv_image_label'],
-                conv_lut_path,
-                components['slider_conv_width'],
-                components['slider_conv_thickness'],
-                components['radio_conv_structure'],
-                components['checkbox_conv_auto_bg'],
-                components['slider_conv_tolerance'],
-                components['radio_conv_color_mode'],
-                components['checkbox_conv_loop_enable'],
-                components['slider_conv_loop_width'],
-                components['slider_conv_loop_length'],
-                components['slider_conv_loop_hole'],
-                conv_loop_pos,
-                components['radio_conv_modeling_mode'],
-                components['slider_conv_quantize_colors']
-            ],
-            outputs=[
-                components['file_conv_download_file'],
-                conv_3d_preview,
-                conv_preview,
-                components['textbox_conv_status']
-            ]
-    )
+            inputs=_conv_inputs,
+            outputs=_conv_outputs
+        )
     
     return components
 
 
 
-def create_calibration_tab_content(lang: str) -> dict:
+def create_calibration_tab_content(lang: str, stats_html=None, lang_state=None) -> dict:
     """Create calibration board generation tab content"""
     components = {}
     
@@ -710,26 +751,38 @@ def create_calibration_tab_content(lang: str) -> dict:
                 label=I18n.get('cal_download', lang)
             )
     
-    # Event binding
-    components['btn_cal_generate_btn'].click(
+    # Event binding (with stats bar update after calibration)
+    _cal_inputs = [
+        components['radio_cal_color_mode'],
+        components['slider_cal_block_size'],
+        components['slider_cal_gap'],
+        components['dropdown_cal_backing']
+    ]
+    _cal_outputs = [
+        components['file_cal_download'],
+        cal_preview,
+        components['textbox_cal_status']
+    ]
+    if stats_html is not None and lang_state is not None:
+        def _wrap_calibration(lang, color_mode, block_size_mm, gap_mm, backing_color):
+            result = generate_calibration_board(color_mode, block_size_mm, gap_mm, backing_color)
+            return (*result, gr.update(value=_get_stats_html(lang, Stats.get_all())))
+        components['btn_cal_generate_btn'].click(
+            _wrap_calibration,
+            inputs=[lang_state] + _cal_inputs,
+            outputs=_cal_outputs + [stats_html]
+        )
+    else:
+        components['btn_cal_generate_btn'].click(
             generate_calibration_board,
-            inputs=[
-                components['radio_cal_color_mode'],
-                components['slider_cal_block_size'],
-                components['slider_cal_gap'],
-                components['dropdown_cal_backing']
-            ],
-            outputs=[
-                components['file_cal_download'],
-                cal_preview,
-                components['textbox_cal_status']
-            ]
-    )
+            inputs=_cal_inputs,
+            outputs=_cal_outputs
+        )
     
     return components
 
 
-def create_extractor_tab_content(lang: str) -> dict:
+def create_extractor_tab_content(lang: str, stats_html=None, lang_state=None) -> dict:
     """Create color extractor tab content"""
     components = {}
     
@@ -914,9 +967,19 @@ def create_extractor_tab_content(lang: str) -> dict:
             components['file_ext_download_npy'], components['textbox_ext_status']
     ]
     
-    components['btn_ext_extract_btn'].click(run_extraction, extract_inputs, extract_outputs)
-    
-    for s in [components['slider_ext_offset_x'], components['slider_ext_offset_y'],
+    if stats_html is not None and lang_state is not None:
+        def _wrap_run_extraction(lang, img, pts, ox, oy, zoom, barrel, wb, bright, color_mode):
+            result = run_extraction(img, pts, ox, oy, zoom, barrel, wb, bright, color_mode)
+            return (*result, gr.update(value=_get_stats_html(lang, Stats.get_all())))
+        _ext_inputs = [lang_state] + extract_inputs
+        _ext_outputs = extract_outputs + [stats_html]
+        components['btn_ext_extract_btn'].click(_wrap_run_extraction, _ext_inputs, _ext_outputs)
+        for s in [components['slider_ext_offset_x'], components['slider_ext_offset_y'],
+                  components['slider_ext_zoom'], components['slider_ext_distortion']]:
+            s.release(_wrap_run_extraction, _ext_inputs, _ext_outputs)
+    else:
+        components['btn_ext_extract_btn'].click(run_extraction, extract_inputs, extract_outputs)
+        for s in [components['slider_ext_offset_x'], components['slider_ext_offset_y'],
                   components['slider_ext_zoom'], components['slider_ext_distortion']]:
             s.release(run_extraction, extract_inputs, extract_outputs)
     
@@ -941,6 +1004,13 @@ def create_about_tab_content(lang: str) -> dict:
     
     # About page content (from i18n)
     components['md_about_content'] = gr.Markdown(I18n.get('about_content', lang))
+    
+    # Settings section: clear cache & clear history count
+    components['md_about_settings'] = gr.Markdown(I18n.get('about_settings', lang))
+    with gr.Row():
+        components['btn_about_clear_cache'] = gr.Button(I18n.get('about_clear_cache', lang), variant="secondary", size="sm")
+        components['btn_about_clear_history'] = gr.Button(I18n.get('about_clear_history', lang), variant="secondary", size="sm")
+    components['text_about_status'] = gr.Textbox(label="", value="", interactive=False, visible=True)
     
     return components
 

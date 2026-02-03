@@ -48,7 +48,7 @@ def create_app():
                 gr.HTML("""
                 <div class="header-banner">
                     <h1>✨ Lumina Studio</h1>
-                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | CMYK+W_TMP1 base on v1.4.2</p>
+                    <p>多材料3D打印色彩系统 | Multi-Material 3D Print Color System | v1.4.2-cmykw</p>
                 </div>
                 """)
             with gr.Column(scale=1, min_width=150):
@@ -490,7 +490,7 @@ def create_about_tab(stats_component):
         with gr.Row():
             with gr.Column(scale=4):
                 gr.Markdown("""
-                ## 🌟 Lumina Studio CMYK+W_TMP1 base on v1.4.2
+                ## 🌟 Lumina Studio v1.4.2-cmykw
                 
                 **多材料3D打印色彩系统** | Multi-Material 3D Print Color System
                 
@@ -536,7 +536,7 @@ def create_about_tab(stats_component):
         | **CMYW** | ⬜ White | 🔵 Cyan | 🟣 Magenta | 🟨 Yellow |
         | **W+CMYK (341)** | 🟨 Yellow | 🟣 Magenta | 🔵 Cyan | ⬜ White |
         
-        > ⚠️ **注意**: W+CMYK模式的角点顺序是从底面（外观面）观看的结果
+        > ⚠️ **注意**: CMYK+W模式的角点顺序是从正面（外观面）观看的结果，和其他模式相反。
         
         ---
         
@@ -549,7 +549,7 @@ def create_about_tab(stats_component):
         
         ---
         
-        ### 📝 CMYK+W_TMP1 base on v1.4.2 更新日志 Changelog
+        ### 📝 v1.4.2-cmykw 更新日志 Changelog
         
         #### 🆕 W+CMYK 341色块模式
         
@@ -624,7 +624,7 @@ def create_about_tab(stats_component):
         
         <div style="text-align:center; color:#888; margin-top:20px;">
             Made with ❤️ by [MIN]<br>
-            CMYK+W_TMP1 base on v1.4.2 | 2026
+            v1.4.2-cmykw | 2026
         </div>
         """)
 

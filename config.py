@@ -206,7 +206,7 @@ class ColorSystem:
             4: [30, 30, 30, 255]       # Black
         },
         'map': {"White": 0, "Cyan": 1, "Magenta": 2, "Yellow": 3, "Black": 4},
-        # 定位点顺序: TL, TR, BR, BL (从底面/外观面观看)
+        # 定位点顺序: TL, TR, BR, BL (从正面/外观面观看，与其他模式相反)
         # 打印后翻转观看: 左上=黄, 右上=品红, 右下=青, 左下=白
         'corner_labels': ["黄色 (左上)", "品红 (右上)", "青色 (右下)", "白色 (左下)"],
         'corner_labels_en': ["Yellow (TL)", "Magenta (TR)", "Cyan (BR)", "White (BL)"],
