@@ -640,6 +640,7 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
 
     Skips dynamic status components (md_conv_lut_status, textbox_conv_status)
     so their runtime text is not overwritten.
+    Also skips event objects (Dependency) which are not valid components.
 
     Args:
         lang: Target language code ('zh' or 'en').
@@ -648,8 +649,13 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
     Returns:
         list: One gr.update() per component, in dict iteration order.
     """
+    from gradio.blocks import Block
     updates = []
     for key, component in components.items():
+        # Skip event objects (Dependency)
+        if not isinstance(component, Block):
+            continue
+        
         if key == 'md_conv_lut_status' or key == 'textbox_conv_status':
             updates.append(gr.update())
             continue
