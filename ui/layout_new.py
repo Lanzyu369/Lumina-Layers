@@ -139,10 +139,10 @@ HEADER_CSS = """
 
 /* Left sidebar */
 .left-sidebar {
-    background-color: #f9fafb;
+    background-color: var(--background-fill-secondary, #f9fafb);
     padding: 15px;
     border-radius: 8px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border-color-primary, #e5e7eb);
     height: 100%;
 }
 
@@ -172,9 +172,9 @@ HEADER_CSS = """
     height: 84px !important;
     min-height: 84px !important;
     max-height: 84px !important;
-    background-color: #ffffff !important;
+    background-color: var(--background-fill-primary, #ffffff) !important;
     border-radius: 8px !important;
-    border: 1px dashed #e5e7eb !important;
+    border: 1px dashed var(--border-color-primary, #e5e7eb) !important;
     overflow: hidden !important;
     padding: 0 !important;
 }
@@ -195,7 +195,7 @@ HEADER_CSS = """
 .tall-upload div {
     font-size: 12px !important;
     line-height: 1.3 !important;
-    color: #6b7280 !important;
+    color: var(--body-text-color-subdued, #6b7280) !important;
     text-align: center !important;
     margin: 0 !important;
 }
@@ -204,10 +204,10 @@ HEADER_CSS = """
 .lut-status {
     margin-top: 10px !important;
     padding: 8px 12px !important;
-    background: #ffffff !important;
-    border: 1px solid #e5e7eb !important;
+    background: var(--background-fill-primary, #ffffff) !important;
+    border: 1px solid var(--border-color-primary, #e5e7eb) !important;
     border-radius: 8px !important;
-    color: #4b5563 !important;
+    color: var(--body-text-color, #4b5563) !important;
     font-size: 13px !important;
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     min-height: 36px !important;
@@ -235,7 +235,7 @@ HEADER_CSS = """
 /* Selected state text color */
 .vertical-radio input:checked + span,
 .vertical-radio label.selected span {
-    color: #1f2937 !important;
+    color: var(--body-text-color, #1f2937) !important;
 }
 """
 

@@ -60,10 +60,10 @@ CUSTOM_CSS = """
 
 /* Card Styling */
 .input-card, .output-card {
-    background: #fafafa;
+    background: var(--background-fill-primary, #fafafa);
     border-radius: 12px;
     padding: 15px;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--border-color-primary, #e0e0e0);
 }
 
 /* Button Styling */
@@ -83,7 +83,7 @@ CUSTOM_CSS = """
 
 /* Mode indicator */
 .mode-indicator {
-    background: #f0f0ff;
+    background: var(--background-fill-secondary, #f0f0ff);
     border: 2px solid #667eea;
     border-radius: 8px;
     padding: 10px;
@@ -140,7 +140,7 @@ CUSTOM_CSS = """
     align-items: center !important;
     padding: 8px 12px !important;
     border-radius: 6px !important;
-    background: #f8f8f8 !important;
+    background: var(--background-fill-secondary, #f8f8f8) !important;
     transition: all 0.2s ease !important;
 }
 
@@ -167,16 +167,16 @@ CUSTOM_CSS = """
     min-height: 60px !important;
     max-height: 60px !important;
     height: 60px !important;
-    border: 1.5px dashed #999 !important;
+    border: 1.5px dashed var(--border-color-primary, #999) !important;
     border-radius: 6px !important;
-    background: #fafafa !important;
+    background: var(--background-fill-primary, #fafafa) !important;
     transition: all 0.2s ease !important;
     padding: 0 !important;
 }
 
 .micro-upload > div:hover {
     border-color: #667eea !important;
-    background: #f5f5ff !important;
+    background: var(--background-fill-secondary, #f5f5ff) !important;
 }
 
 /* Center the content */
