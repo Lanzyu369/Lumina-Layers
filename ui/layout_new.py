@@ -1316,7 +1316,7 @@ def create_converter_tab_content(lang: str) -> dict:
         fn=None,
         inputs=None,
         outputs=None,
-        cancels=[generate_event]
+        cancels=[conv_event]
     )
     components['state_conv_lut_path'] = conv_lut_path
     return components
