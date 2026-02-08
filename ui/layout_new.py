@@ -1261,7 +1261,8 @@ def create_converter_tab_content(lang: str, lang_state=None) -> dict:
                     choices=[
                         (I18n.get('conv_color_mode_cmyw', lang), I18n.get('conv_color_mode_cmyw', 'en')),
                         (I18n.get('conv_color_mode_rybw', lang), I18n.get('conv_color_mode_rybw', 'en')),
-                        ("6-Color (Smart 1296)", "6-Color (Smart 1296)")
+                        ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
+                        ("8-Color Max", "8-Color Max")
                     ],
                     value=I18n.get('conv_color_mode_rybw', 'en'),
                     label=I18n.get('conv_color_mode', lang)

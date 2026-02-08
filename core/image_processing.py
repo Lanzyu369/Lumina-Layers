@@ -152,11 +152,12 @@ class LuminaImageProcessor:
     
     def _load_lut(self, lut_path):
         """
-        Load and validate LUT file (Supports 4-Color and 6-Color).
+        Load and validate LUT file (Supports 4-Color, 6-Color, and 8-Color).
         
         Automatically detects LUT type based on size:
         - 1024 colors: 4-Color Standard (CMYW/RYBW)
         - 1296 colors: 6-Color Smart 1296
+        - 2738 colors: 8-Color Max
         """
         try:
             lut_grid = np.load(lut_path)
@@ -170,8 +171,32 @@ class LuminaImageProcessor:
         
         print(f"[IMAGE_PROCESSOR] Loading LUT with {total_colors} points...")
         
-        # Branch 1: 6-Color Smart 1296
-        if "6-Color" in self.color_mode or total_colors == 1296:
+        # Branch 1: 8-Color Max (2738)
+        if "8-Color" in self.color_mode or total_colors == 2738:
+            print("[IMAGE_PROCESSOR] Detected 8-Color Max mode")
+            
+            # Load pre-generated 8-color stacks
+            smart_stacks = np.load('assets/smart_8color_stacks.npy').tolist()
+            
+            # Reverse stacking order for Face-Down printing
+            # Original smart_stacks is [Bottom, ..., Top] (simulation data order)
+            # Converter expects [Top, ..., Bottom] so Z=0 is the viewing surface
+            smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
+            print("[IMAGE_PROCESSOR] Stacks reversed for Face-Down printing compatibility.")
+            
+            if len(smart_stacks) != total_colors:
+                print(f"⚠️ Warning: Stacks count ({len(smart_stacks)}) != LUT count ({total_colors})")
+                min_len = min(len(smart_stacks), total_colors)
+                smart_stacks = smart_stacks[:min_len]
+                measured_colors = measured_colors[:min_len]
+            
+            self.lut_rgb = measured_colors
+            self.ref_stacks = np.array(smart_stacks)
+            
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (8-Color mode)")
+        
+        # Branch 2: 6-Color Smart 1296
+        elif "6-Color" in self.color_mode or total_colors == 1296:
             print("[IMAGE_PROCESSOR] Detected 6-Color Smart 1296 mode")
             
             from core.calibration import get_top_1296_colors
@@ -202,7 +227,7 @@ class LuminaImageProcessor:
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (6-Color mode)")
         
-        # Branch 2: 4-Color Standard (1024)
+        # Branch 3: 4-Color Standard (1024)
         else:
             print("[IMAGE_PROCESSOR] Detected 4-Color Standard mode")
             

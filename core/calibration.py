@@ -460,12 +460,12 @@ def generate_8color_board(page_index=0):
     # Page 1 TR = Cyan(1), Page 2 TR = Magenta(2)
     page_mark = 1 if page_index == 0 else 2
     
-    # 【修复】使用正确的 8色 ID: 5=Black, 4=Yellow
+    # 8色材料ID: 0=White, 1=Cyan, 2=Magenta, 3=Yellow, 4=Black, 5=Red, 6=DeepBlue, 7=Green
     corners = [
-        (0, 0, 0),              # TL: White
-        (0, total_dim-1, page_mark),   # TR: Page ID
-        (total_dim-1, total_dim-1, 5), # BR: Black (Slot 5)
-        (total_dim-1, 0, 4)     # BL: Yellow (Slot 4)
+        (0, 0, 0),              # TL: White (ID=0)
+        (0, total_dim-1, page_mark),   # TR: Page ID (Cyan=1 or Magenta=2)
+        (total_dim-1, total_dim-1, 5), # BR: Red (ID=5) - TODO: Should be Black(4)?
+        (total_dim-1, 0, 4)     # BL: Black (ID=4) - TODO: Should be Yellow(3)?
     ]
     for r, c, mid in corners:
         py, px = r * (px_blk + px_gap), c * (px_blk + px_gap)
