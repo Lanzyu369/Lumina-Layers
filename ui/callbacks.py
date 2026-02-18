@@ -155,7 +155,8 @@ def on_apply_color_replacement(cache, selected_color, replacement_color,
         tuple: (preview_image, updated_cache, palette_html, updated_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", replacement_map, replacement_history, I18n.get('palette_need_preview', lang)
@@ -207,7 +208,8 @@ def on_clear_color_replacements(cache, replacement_map, replacement_history,
         tuple: (preview_image, updated_cache, palette_html, empty_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", {}, [], I18n.get('palette_need_preview', lang)
@@ -237,7 +239,7 @@ def on_preview_generated_update_palette(cache, lang: str = "zh"):
     Returns:
         tuple: (palette_html, selected_color_state)
     """
-    from core.converter import generate_palette_html
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         placeholder = I18n.get('conv_palette_replacements_placeholder', lang)
@@ -482,7 +484,8 @@ def on_undo_color_replacement(cache, replacement_map, replacement_history,
         tuple: (preview_image, updated_cache, palette_html, updated_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", replacement_map, replacement_history, I18n.get('palette_need_preview', lang)

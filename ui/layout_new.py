@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Lumina Studio - UI Layout (Refactored with i18n)
 UI layout definition - Refactored version with language switching support
@@ -604,16 +605,23 @@ def _preview_update(img):
 def process_batch_generation(batch_files, is_batch, single_image, lut_path, target_width_mm,
                              spacer_thick, structure_mode, auto_bg, bg_tol, color_mode,
                              add_loop, loop_width, loop_length, loop_hole, loop_pos,
-                             modeling_mode, quantize_colors, color_replacements=None, progress=gr.Progress()):
+                             modeling_mode, quantize_colors, color_replacements=None,
+                             separate_backing=False, progress=gr.Progress()):
     """Dispatch to single-image or batch generation; batch writes a ZIP of 3MFs.
+
+    Args:
+        separate_backing: Boolean flag to separate backing as individual object (default: False)
 
     Returns:
         tuple: (file_or_zip_path, model3d_value, preview_image, status_text).
     """
     modeling_mode = ModelingMode(modeling_mode)
+    # Use default white color for backing (fixed, not user-selectable)
+    backing_color_name = "White"
     args = (lut_path, target_width_mm, spacer_thick, structure_mode, auto_bg, bg_tol,
             color_mode, add_loop, loop_width, loop_length, loop_hole, loop_pos,
-            modeling_mode, quantize_colors, color_replacements)
+            modeling_mode, quantize_colors, color_replacements, backing_color_name,
+            separate_backing)
 
     if not is_batch:
         out_path, glb_path, preview_img, status = generate_final_model(single_image, *args)
@@ -1405,6 +1413,14 @@ def create_converter_tab_content(lang: str, lang_state=None) -> dict:
                     0.2, 3.5, 1.2, step=0.08,
                     label=I18n.get('conv_thickness', lang)
                 )
+            
+            # Separate backing checkbox
+            components['checkbox_conv_separate_backing'] = gr.Checkbox(
+                label="底板单独一个对象 | Separate Backing as Individual Object",
+                value=False,
+                info="勾选后，底板将作为独立对象导出到3MF文件"
+            )
+            
             conv_target_height_mm = components['slider_conv_height']
 
             with gr.Row(elem_classes=["compact-row"]):
@@ -1887,6 +1903,10 @@ def create_converter_tab_content(lang: str, lang_state=None) -> dict:
             inputs=[conv_lut_path],
             outputs=[components['radio_conv_color_mode']]
     )
+    
+
+    
+
 
     conv_lut_upload.upload(
             on_lut_upload_save,
@@ -2127,7 +2147,8 @@ def create_converter_tab_content(lang: str, lang_state=None) -> dict:
                 conv_loop_pos,
                 components['radio_conv_modeling_mode'],
                 components['slider_conv_quantize_colors'],
-                conv_replacement_map
+                conv_replacement_map,
+                components['checkbox_conv_separate_backing']
             ],
             outputs=[
                 components['file_conv_download_file'],

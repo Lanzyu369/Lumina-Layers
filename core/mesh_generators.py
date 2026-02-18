@@ -37,13 +37,26 @@ class BaseMesher(ABC):
         
         Args:
             voxel_matrix: (Z, H, W) voxel matrix
-            mat_id: Material ID (0-3)
+            mat_id: Material ID (0-7 for regular materials, -2 for backing layer)
             height_px: Image height (pixels)
         
         Returns:
             trimesh.Trimesh or None
         """
         pass
+    
+    def generate_backing_mesh(self, voxel_matrix, height_px):
+        """
+        Generate backing mesh (convenience method)
+        
+        Args:
+            voxel_matrix: (Z, H, W) voxel matrix
+            height_px: Image height (pixels)
+        
+        Returns:
+            trimesh.Trimesh or None
+        """
+        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px)
 
 
 class VoxelMesher(BaseMesher):
@@ -55,7 +68,11 @@ class VoxelMesher(BaseMesher):
     """
     
     def generate_mesh(self, voxel_matrix, mat_id, height_px):
-        """Generate pixel mode mesh (Legacy Voxel Mode)"""
+        """
+        Generate pixel mode mesh (Legacy Voxel Mode)
+        
+        Supports both regular materials (0-7) and backing layer (-2).
+        """
         vertices, faces = [], []
         shrink = 0.05  # Preserve gaps for blocky aesthetic
         
@@ -96,6 +113,10 @@ class VoxelMesher(BaseMesher):
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
         mesh.merge_vertices()
         mesh.update_faces(mesh.unique_faces())
+        
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        print(f"[VOXEL_MESHER] {mesh_type}: Generated {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
+        
         return mesh
 
 
@@ -124,6 +145,8 @@ class HighFidelityMesher(BaseMesher):
         """
         Generate high-fidelity mode mesh (Greedy Rectangle Merging)
         
+        Supports both regular materials (0-7) and backing layer (-2).
+        
         Returns a watertight mesh with optimized face count.
         """
         # Step 1: Vertical layer compression with dilation
@@ -132,7 +155,8 @@ class HighFidelityMesher(BaseMesher):
         if not layer_groups:
             return None
         
-        print(f"[HIGH_FIDELITY] Mat ID {mat_id}: Merged {voxel_matrix.shape[0]} layers → {len(layer_groups)} groups")
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        print(f"[HIGH_FIDELITY] {mesh_type}: Merged {voxel_matrix.shape[0]} layers → {len(layer_groups)} groups")
         
         vertices = []
         faces = []
@@ -178,7 +202,7 @@ class HighFidelityMesher(BaseMesher):
         mesh.merge_vertices()
         mesh.update_faces(mesh.unique_faces())
         
-        print(f"[HIGH_FIDELITY] Mat {mat_id}: {total_rects} rects → {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
+        print(f"[HIGH_FIDELITY] {mesh_type}: {total_rects} rects → {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
         
         return mesh
     

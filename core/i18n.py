@@ -244,6 +244,10 @@ class I18n:
             'zh': '背板 (mm)',
             'en': 'Backing (mm)'
         },
+        'conv_backing_color': {
+            'zh': '底板颜色',
+            'en': 'Backing Color'
+        },
         'conv_preview_btn': {
             'zh': '👁️ 生成预览',
             'en': '👁️ Generate Preview'
