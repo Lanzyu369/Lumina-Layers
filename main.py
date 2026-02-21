@@ -11,6 +11,7 @@ Main Entry Point
 """
 
 import os
+import sys
 
 # Colormath compatibility with numpy 1.20+ (run before other imports).
 import numpy as np
@@ -22,11 +23,20 @@ def patch_asscalar(a):
 
 setattr(np, "asscalar", patch_asscalar)
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-_GRADIO_TEMP = os.path.join(_PROJECT_ROOT, "output", ".gradio_cache")
+# Handle PyInstaller bundled resources
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    _PROJECT_ROOT = sys._MEIPASS
+    # Also set the working directory to where the exe is located
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    # Running as script
+    _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+_GRADIO_TEMP = os.path.join(os.getcwd(), "output", ".gradio_cache")
 os.makedirs(_GRADIO_TEMP, exist_ok=True)
 os.environ["GRADIO_TEMP_DIR"] = _GRADIO_TEMP
-import sys
+
 import time
 import threading
 import webbrowser
@@ -58,55 +68,75 @@ def start_browser(port):
     webbrowser.open(f"http://127.0.0.1:{port}")
 
 if __name__ == "__main__":
-    tray = None
-    PORT = 7860
     try:
-        PORT = find_available_port(7860)
-        tray = LuminaTray(port=PORT)
-    except Exception as e:
-        print(f"⚠️ Warning: Failed to initialize tray: {e}")
-
-    threading.Thread(target=start_browser, args=(PORT,), daemon=True).start()
-    print(f"✨ Lumina Studio is running on http://127.0.0.1:{PORT}")
-    app = create_app()
-
-    try:
-        from ui.layout_new import HEADER_CSS
-        # Import crop extension for head JS injection
-        from ui.crop_extension import get_crop_head_js
-        app.launch(
-            inbrowser=False,
-            server_name="0.0.0.0",
-            server_port=PORT,
-            show_error=True,
-            prevent_thread_lock=True,
-            favicon_path="icon.ico" if os.path.exists("icon.ico") else None,
-            css=CUSTOM_CSS + HEADER_CSS,
-            theme=gr.themes.Soft(),
-            head=get_crop_head_js()
-        )
-    except Exception as e:
-        raise
-    except BaseException as e:
-        raise
-
-    if tray:
+        tray = None
+        PORT = 7860
         try:
-            print("🚀 Starting System Tray...")
-            tray.run()
+            PORT = find_available_port(7860)
+            tray = LuminaTray(port=PORT)
         except Exception as e:
-            print(f"⚠️ Warning: System tray crashed: {e}")
+            print(f"⚠️ Warning: Failed to initialize tray: {e}")
+
+        threading.Thread(target=start_browser, args=(PORT,), daemon=True).start()
+        print(f"✨ Lumina Studio is running on http://127.0.0.1:{PORT}")
+        app = create_app()
+
+        try:
+            from ui.layout_new import HEADER_CSS
+            # Import crop extension for head JS injection
+            from ui.crop_extension import get_crop_head_js
+            
+            # Find icon path (handle both dev and frozen modes)
+            icon_path = None
+            if os.path.exists("icon.ico"):
+                icon_path = "icon.ico"
+            elif getattr(sys, 'frozen', False):
+                # In frozen mode, check in _MEIPASS
+                icon_in_bundle = os.path.join(sys._MEIPASS, "icon.ico")
+                if os.path.exists(icon_in_bundle):
+                    icon_path = icon_in_bundle
+            
+            app.launch(
+                inbrowser=False,
+                server_name="0.0.0.0",
+                server_port=PORT,
+                show_error=True,
+                prevent_thread_lock=True,
+                favicon_path=icon_path,
+                css=CUSTOM_CSS + HEADER_CSS,
+                theme=gr.themes.Soft(),
+                head=get_crop_head_js()
+            )
+        except Exception as e:
+            print(f"❌ Failed to launch Gradio app: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+        if tray:
+            try:
+                print("🚀 Starting System Tray...")
+                tray.run()
+            except Exception as e:
+                print(f"⚠️ Warning: System tray crashed: {e}")
+                try:
+                    while True:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    pass
+        else:
             try:
                 while True:
                     time.sleep(1)
             except KeyboardInterrupt:
                 pass
-    else:
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
 
-    print("Stopping...")
-    os._exit(0)
+        print("Stopping...")
+        os._exit(0)
+        
+    except Exception as e:
+        print(f"❌ FATAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
+        os._exit(1)

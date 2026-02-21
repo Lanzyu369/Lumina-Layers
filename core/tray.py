@@ -72,10 +72,29 @@ class LuminaTray:
     def setup_tray(self):
         """Configure tray icon and menu."""
         # Try to load icon, fallback to red square if missing
-        icon_path = "icon.ico" if os.path.exists("icon.ico") else "gradio.png"
+        import sys
+        
+        # Handle both dev and frozen modes for icon path
+        if getattr(sys, 'frozen', False):
+            # In frozen mode, check both exe directory and _MEIPASS
+            icon_path = None
+            # First try exe directory (where we copy it in the spec file)
+            exe_dir_icon = os.path.join(os.path.dirname(sys.executable), "icon.ico")
+            if os.path.exists(exe_dir_icon):
+                icon_path = exe_dir_icon
+            # Then try _MEIPASS (bundled resources)
+            elif hasattr(sys, '_MEIPASS') and os.path.exists(os.path.join(sys._MEIPASS, "icon.ico")):
+                icon_path = os.path.join(sys._MEIPASS, "icon.ico")
+        else:
+            # Running as script
+            icon_path = "icon.ico" if os.path.exists("icon.ico") else None
 
         try:
-            image = Image.open(icon_path)
+            if icon_path and os.path.exists(icon_path):
+                image = Image.open(icon_path)
+            else:
+                raise FileNotFoundError("Icon not found")
+                
             # On macOS, menu bar icons should be small (16x16 to 22x22)
             # Resize if needed for better display
             if sys.platform == "darwin":

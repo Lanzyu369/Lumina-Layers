@@ -1,9 +1,18 @@
 """Lumina Studio configuration: paths, printer/smart config, and legacy i18n data."""
 
 import os
+import sys
 from enum import Enum
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+# Handle PyInstaller bundled resources
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable - use current working directory
+    _BASE_DIR = os.getcwd()
+else:
+    # Running as script
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+OUTPUT_DIR = os.path.join(_BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 

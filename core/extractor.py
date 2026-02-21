@@ -340,13 +340,21 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         if "temp_8c_page_" in actual_path:
             # Extract page number and ensure it's saved to assets/
             import re
+            import sys
             match = re.search(r'temp_8c_page_(\d+)\.npy', actual_path)
             if match:
                 page_num = match.group(1)
-                assets_path = os.path.join("assets", f"temp_8c_page_{page_num}.npy")
+                # Handle both dev and frozen modes
+                if getattr(sys, 'frozen', False):
+                    assets_dir = os.path.join(os.getcwd(), "assets")
+                else:
+                    assets_dir = "assets"
+                
+                os.makedirs(assets_dir, exist_ok=True)
+                assets_path = os.path.join(assets_dir, f"temp_8c_page_{page_num}.npy")
+                
                 if os.path.abspath(actual_path) != os.path.abspath(assets_path):
                     # If the actual_path is not the assets path, save to assets too
-                    os.makedirs("assets", exist_ok=True)
                     np.save(assets_path, lut)
                     print(f"[MANUAL_FIX] Also saved to assets: {assets_path}")
         

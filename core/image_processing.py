@@ -4,6 +4,8 @@ Lumina Studio - Image Processing Core
 Handles image loading, preprocessing, color quantization and matching.
 """
 
+import os
+import sys
 import numpy as np
 import cv2
 from PIL import Image
@@ -202,7 +204,15 @@ class LuminaImageProcessor:
             print("[IMAGE_PROCESSOR] Detected 8-Color Max mode")
             
             # Load pre-generated 8-color stacks
-            smart_stacks = np.load('assets/smart_8color_stacks.npy').tolist()
+            import sys
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                stacks_path = os.path.join(sys._MEIPASS, 'assets', 'smart_8color_stacks.npy')
+            else:
+                # Running as script
+                stacks_path = 'assets/smart_8color_stacks.npy'
+            
+            smart_stacks = np.load(stacks_path).tolist()
             
             # Reverse stacking order for Face-Down printing
             smart_stacks = [tuple(reversed(s)) for s in smart_stacks]

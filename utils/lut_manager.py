@@ -4,6 +4,7 @@ LUT preset management module
 """
 
 import os
+import sys
 import shutil
 import glob
 from pathlib import Path
@@ -12,8 +13,28 @@ from pathlib import Path
 class LUTManager:
     """LUT preset manager"""
     
-    # LUT preset folder path
-    LUT_PRESET_DIR = "lut-npy预设"
+    # LUT preset folder path - handle both dev and frozen modes
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        # Check multiple possible locations
+        exe_dir = os.path.dirname(sys.executable)
+        
+        # Try exe directory first (where we copy it in the spec file)
+        if os.path.exists(os.path.join(exe_dir, "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-npy预设")
+        # Then try _internal directory (fallback)
+        elif os.path.exists(os.path.join(exe_dir, "_internal", "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(exe_dir, "_internal", "lut-npy预设")
+        # Finally try _MEIPASS (bundled resources)
+        elif hasattr(sys, '_MEIPASS') and os.path.exists(os.path.join(sys._MEIPASS, "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(sys._MEIPASS, "lut-npy预设")
+        else:
+            # Fallback to exe directory (will be created if needed)
+            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-npy预设")
+    else:
+        # Running as script
+        _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-npy预设")
     
     @classmethod
     def get_all_lut_files(cls):

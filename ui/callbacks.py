@@ -514,9 +514,16 @@ def run_extraction_wrapper(img, points, offset_x, offset_y, zoom, barrel, wb, br
     )
     
     if "8-Color" in color_mode and lut_path:
-        os.makedirs("assets", exist_ok=True)
+        import sys
+        # Handle both dev and frozen modes
+        if getattr(sys, 'frozen', False):
+            assets_dir = os.path.join(os.getcwd(), "assets")
+        else:
+            assets_dir = "assets"
+        
+        os.makedirs(assets_dir, exist_ok=True)
         page_idx = 1 if "1" in str(page_choice) else 2
-        temp_path = os.path.join("assets", f"temp_8c_page_{page_idx}.npy")
+        temp_path = os.path.join(assets_dir, f"temp_8c_page_{page_idx}.npy")
         try:
             lut = np.load(lut_path)
             np.save(temp_path, lut)
@@ -532,8 +539,15 @@ def run_extraction_wrapper(img, points, offset_x, offset_y, zoom, barrel, wb, br
 
 def merge_8color_data():
     """Concatenate two 8-color pages and save to LUT_FILE_PATH."""
-    path1 = os.path.join("assets", "temp_8c_page_1.npy")
-    path2 = os.path.join("assets", "temp_8c_page_2.npy")
+    import sys
+    # Handle both dev and frozen modes
+    if getattr(sys, 'frozen', False):
+        assets_dir = os.path.join(os.getcwd(), "assets")
+    else:
+        assets_dir = "assets"
+    
+    path1 = os.path.join(assets_dir, "temp_8c_page_1.npy")
+    path2 = os.path.join(assets_dir, "temp_8c_page_2.npy")
     
     print(f"[MERGE_8COLOR] Looking for page 1: {path1}")
     print(f"[MERGE_8COLOR] Looking for page 2: {path2}")

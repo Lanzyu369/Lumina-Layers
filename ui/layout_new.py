@@ -1059,7 +1059,17 @@ def get_extractor_reference_image(mode_str):
     Returns:
         PIL.Image.Image | None: Reference image or None on error.
     """
-    cache_dir = "assets"
+    import sys
+    
+    # Handle both dev and frozen modes
+    if getattr(sys, 'frozen', False):
+        # In frozen mode, check both _MEIPASS (bundled) and cwd (user data)
+        cache_dir = os.path.join(os.getcwd(), "assets")
+        bundled_assets = os.path.join(sys._MEIPASS, "assets")
+    else:
+        cache_dir = "assets"
+        bundled_assets = None
+    
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -1085,6 +1095,16 @@ def get_extractor_reference_image(mode_str):
         gen_mode = "RYBW"
 
     filepath = os.path.join(cache_dir, filename)
+    
+    # In frozen mode, also check bundled assets
+    if bundled_assets:
+        bundled_filepath = os.path.join(bundled_assets, filename)
+        if os.path.exists(bundled_filepath):
+            try:
+                print(f"[UI] Loading reference from bundle: {bundled_filepath}")
+                return PILImage.open(bundled_filepath)
+            except Exception as e:
+                print(f"Error loading bundled asset: {e}")
 
     if os.path.exists(filepath):
         try:
