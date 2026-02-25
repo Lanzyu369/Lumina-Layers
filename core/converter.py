@@ -263,7 +263,11 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
                          color_replacements=None, backing_color_id=0, separate_backing=False,
                          enable_relief=False, color_height_map=None,
                          enable_cleanup=True,
-                         enable_outline=False, outline_width=2.0):
+                         enable_outline=False, outline_width=2.0,
+                         enable_cloisonne=False, wire_width_mm=0.4,
+                         wire_height_mm=0.4,
+                         free_color_set=None,
+                         enable_coating=False, coating_height_mm=0.08):
     """
     Main conversion function: Convert image to 3D model.
     
@@ -561,8 +565,25 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     # Step 5: Build Voxel Matrix
     # Error handling for backing layer marking (Requirement 8.2)
     try:
+        # ========== Cloisonné (掐丝珐琅) Mode ==========
+        if enable_cloisonne:
+            print(f"[CONVERTER] 🎨 Cloisonné Mode ENABLED")
+            print(f"[CONVERTER] Wire: width={wire_width_mm}mm, height={wire_height_mm}mm")
+            
+            # Force single-sided (face-up)
+            structure_mode = "单面"
+            
+            # Extract wireframe mask from matched colours
+            mask_wireframe = processor._extract_wireframe_mask(
+                matched_rgb, target_w, pixel_scale, wire_width_mm
+            )
+            
+            full_matrix, backing_metadata = _build_cloisonne_voxel_matrix(
+                material_matrix, mask_solid, mask_wireframe,
+                spacer_thick, wire_height_mm, backing_color_id
+            )
         # ========== 2.5D Relief Mode Support ==========
-        if enable_relief and color_height_map:
+        elif enable_relief and color_height_map:
             print(f"[CONVERTER] 🎨 2.5D Relief Mode ENABLED")
             print(f"[CONVERTER] Color height map: {color_height_map}")
             
@@ -676,6 +697,68 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     else:
         print(f"[CONVERTER] Backing merged with first layer (original behavior)")
     
+    # Cloisonné wire mesh (standalone object, mat_id=-3)
+    if enable_cloisonne and backing_metadata.get('is_cloisonne'):
+        print(f"[CONVERTER] Generating cloisonné wire mesh (mat_id=-3)...")
+        try:
+            wire_mesh = mesher.generate_mesh(full_matrix, mat_id=-3, height_px=target_h)
+            if wire_mesh is not None and len(wire_mesh.vertices) > 0:
+                wire_mesh.apply_transform(transform)
+                wire_mesh.visual.face_colors = [218, 165, 32, 255]  # Gold colour
+                wire_name = "Wire"
+                wire_mesh.metadata['name'] = wire_name
+                scene.add_geometry(wire_mesh, node_name=wire_name, geom_name=wire_name)
+                valid_slot_names.append(wire_name)
+                print(f"[CONVERTER] ✅ Added wire mesh as standalone object ({len(wire_mesh.vertices)} verts)")
+            else:
+                print(f"[CONVERTER] Warning: Wire mesh is empty, skipping")
+        except Exception as e:
+            print(f"[CONVERTER] Error generating wire mesh: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Free Color (自由色) mesh extraction
+    if free_color_set:
+        _free_set = {c.lower() for c in free_color_set if c}
+        if _free_set:
+            print(f"[CONVERTER] 🎯 Free Color mode: {len(_free_set)} colors marked")
+            for hex_c in sorted(_free_set):
+                try:
+                    # Parse hex to RGB
+                    r_fc = int(hex_c[1:3], 16)
+                    g_fc = int(hex_c[3:5], 16)
+                    b_fc = int(hex_c[5:7], 16)
+                    # Build mask for this color in matched_rgb
+                    color_mask = (
+                        (matched_rgb[:, :, 0] == r_fc) &
+                        (matched_rgb[:, :, 1] == g_fc) &
+                        (matched_rgb[:, :, 2] == b_fc) &
+                        mask_solid
+                    )
+                    if not np.any(color_mask):
+                        print(f"[CONVERTER]   {hex_c}: no pixels found, skipping")
+                        continue
+                    # Build a sub-voxel matrix: keep only this color's voxels
+                    fc_matrix = np.where(
+                        np.broadcast_to(color_mask[np.newaxis, :, :], full_matrix.shape),
+                        full_matrix, -1
+                    )
+                    # Replace all non-air values with a single ID (0) for meshing
+                    fc_matrix = np.where(fc_matrix >= 0, 0, -1)
+                    fc_mesh = mesher.generate_mesh(fc_matrix, 0, target_h)
+                    if fc_mesh and len(fc_mesh.vertices) > 0:
+                        fc_mesh.apply_transform(transform)
+                        fc_mesh.visual.face_colors = [r_fc, g_fc, b_fc, 255]
+                        fc_name = f"Free_{hex_c[1:]}"
+                        fc_mesh.metadata['name'] = fc_name
+                        scene.add_geometry(fc_mesh, node_name=fc_name, geom_name=fc_name)
+                        valid_slot_names.append(fc_name)
+                        print(f"[CONVERTER]   ✅ {hex_c} → standalone object '{fc_name}' ({np.sum(color_mask)} px)")
+                    else:
+                        print(f"[CONVERTER]   {hex_c}: mesh empty, skipping")
+                except Exception as e:
+                    print(f"[CONVERTER]   Error extracting free color {hex_c}: {e}")
+    
     # Step 7: Add Keychain Loop
     loop_added = False
     
@@ -705,6 +788,40 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
         except Exception as e:
             print(f"[CONVERTER] Loop creation failed: {e}")
     
+    # ========== Step 7.4: Generate Coating Mesh (透明镀层) ==========
+    if enable_coating:
+        try:
+            coating_layers = max(1, int(round(coating_height_mm / PrinterConfig.LAYER_HEIGHT)))
+            print(f"[CONVERTER] 🪟 Generating coating: height={coating_height_mm}mm ({coating_layers} layers), bottom side")
+
+            # Build a small voxel matrix for the coating: coating_layers × H × W
+            coating_matrix = np.full((coating_layers, target_h, target_w), -1, dtype=int)
+            coating_slice = np.where(mask_solid, 0, -1).astype(int)
+            coating_matrix[:] = coating_slice[np.newaxis, :, :]
+
+            coating_mesh = mesher.generate_mesh(coating_matrix, 0, target_h)
+            if coating_mesh and len(coating_mesh.vertices) > 0:
+                # Transform XY same as model, Z same layer height
+                coat_transform = np.eye(4)
+                coat_transform[0, 0] = pixel_scale
+                coat_transform[1, 1] = pixel_scale
+                coat_transform[2, 2] = PrinterConfig.LAYER_HEIGHT
+                # Shift down so coating sits below the model (Z < 0)
+                coat_transform[2, 3] = -coating_layers * PrinterConfig.LAYER_HEIGHT
+                coating_mesh.apply_transform(coat_transform)
+                coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
+                coating_name = "Coating"
+                coating_mesh.metadata['name'] = coating_name
+                scene.add_geometry(coating_mesh, node_name=coating_name, geom_name=coating_name)
+                valid_slot_names.append(coating_name)
+                print(f"[CONVERTER] ✅ Coating added as standalone '{coating_name}' ({coating_layers} layers)")
+            else:
+                print(f"[CONVERTER] Warning: Coating mesh empty, skipping")
+        except Exception as e:
+            print(f"[CONVERTER] Coating generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+
     # ========== Step 7.5: Generate Outline Mesh ==========
     outline_added = False
     if enable_outline:
@@ -1317,6 +1434,77 @@ def _build_relief_voxel_matrix(matched_rgb, material_matrix, mask_solid, color_h
     print(f"[RELIEF] Backing range: Z={backing_z_range[0]} to Z={backing_z_range[1]}")
     print(f"[RELIEF] Mode: Single-sided (viewing surface on top)")
     
+    return full_matrix, backing_metadata
+
+
+def _build_cloisonne_voxel_matrix(material_matrix, mask_solid, mask_wireframe,
+                                  spacer_thick, wire_height_mm,
+                                  backing_color_id=0):
+    """
+    Build voxel matrix for cloisonné (掐丝珐琅) mode.
+
+    Layer structure (bottom → top, Z ascending):
+        Z = 0 … spacer_layers-1   : Base / backing  (backing_color_id)
+        Z = spacer_layers … +4    : Colour layers   (material_matrix, flipped for face-up)
+        Z = spacer_layers+5 … +N  : Wire layers     (-3 marker, separate object)
+
+    Cloisonné is always single-sided (观赏面朝上 / face-up).
+    Wire uses special marker -3 and is generated as a standalone mesh object.
+
+    Args:
+        material_matrix:  (H, W, 5) int – per-pixel material IDs for 5 optical layers.
+        mask_solid:       (H, W) bool – True for non-transparent pixels.
+        mask_wireframe:   (H, W) bool – True for wire pixels.
+        spacer_thick:     float – backing thickness in mm.
+        wire_height_mm:   float – extra wire protrusion above colour surface in mm.
+        backing_color_id: int – material slot ID for the backing (default 0 = white).
+
+    Returns:
+        (full_matrix, backing_metadata)
+        full_matrix:      (Z, H, W) int – voxel matrix (-1 = air, -3 = wire).
+        backing_metadata:  dict with 'backing_color_id', 'backing_z_range', 'is_cloisonne'.
+    """
+    target_h, target_w = material_matrix.shape[:2]
+    OPTICAL = PrinterConfig.COLOR_LAYERS  # 5
+
+    spacer_layers = max(1, int(round(spacer_thick / PrinterConfig.LAYER_HEIGHT)))
+    wire_layers = max(1, int(round(wire_height_mm / PrinterConfig.LAYER_HEIGHT)))
+
+    total_z = spacer_layers + OPTICAL + wire_layers
+    full_matrix = np.full((total_z, target_h, target_w), -1, dtype=int)
+
+    mask_t = ~mask_solid  # transparent
+
+    # --- Base / backing ---
+    spacer_slice = np.where(mask_solid, backing_color_id, -1).astype(int)
+    full_matrix[:spacer_layers] = spacer_slice[np.newaxis, :, :]
+
+    # --- Colour layers (face-up: reverse material order) ---
+    # material_matrix is stored for face-down printing (layer 0 = bottom).
+    # For face-up we flip so layer 0 sits at the lowest colour Z.
+    colour_start = spacer_layers
+    for i in range(OPTICAL):
+        layer = material_matrix[:, :, OPTICAL - 1 - i]
+        z = colour_start + i
+        full_matrix[z] = np.where(mask_solid, layer, -1)
+
+    # --- Wire layers (only where mask_wireframe AND mask_solid) ---
+    # Use -3 as special marker for wire (will be generated as standalone object)
+    wire_mask_2d = mask_wireframe & mask_solid
+    wire_slice = np.where(wire_mask_2d, -3, -1).astype(int)
+    wire_start = colour_start + OPTICAL
+    full_matrix[wire_start:] = wire_slice[np.newaxis, :, :]
+
+    backing_z_range = (0, spacer_layers - 1)
+    backing_metadata = {
+        'backing_color_id': backing_color_id,
+        'backing_z_range': backing_z_range,
+        'is_cloisonne': True,
+        'wire_layers': wire_layers,
+    }
+
+    print(f"[CLOISONNE] Voxel matrix: {full_matrix.shape} "
+          f"(base={spacer_layers}, colour={OPTICAL}, wire={wire_layers})")
     return full_matrix, backing_metadata
 
 
@@ -2121,7 +2309,11 @@ def generate_final_model(image_path, lut_path, target_width_mm, spacer_thick,
                         color_replacements=None, backing_color_name="White",
                         separate_backing=False, enable_relief=False, color_height_map=None,
                         enable_cleanup=True,
-                        enable_outline=False, outline_width=2.0):
+                        enable_outline=False, outline_width=2.0,
+                        enable_cloisonne=False, wire_width_mm=0.4,
+                        wire_height_mm=0.4,
+                        free_color_set=None,
+                        enable_coating=False, coating_height_mm=0.08):
     """
     Wrapper function for generating final model.
     
@@ -2170,7 +2362,13 @@ def generate_final_model(image_path, lut_path, target_width_mm, spacer_thick,
         color_height_map=color_height_map,
         enable_cleanup=enable_cleanup,
         enable_outline=enable_outline,
-        outline_width=outline_width
+        outline_width=outline_width,
+        enable_cloisonne=enable_cloisonne,
+        wire_width_mm=wire_width_mm,
+        wire_height_mm=wire_height_mm,
+        free_color_set=free_color_set,
+        enable_coating=enable_coating,
+        coating_height_mm=coating_height_mm
     )
 
 
@@ -2625,7 +2823,7 @@ def on_preview_click_select_color(cache, evt: gr.SelectData, bed_label=None):
     orig_x = int(img_px_x)
     orig_y = int(img_px_y)
 
-    matched_rgb = cache.get('matched_rgb')
+    matched_rgb = cache.get('original_matched_rgb', cache.get('matched_rgb'))
     mask_solid = cache.get('mask_solid')
     if matched_rgb is None or mask_solid is None:
         return None, "未选择", None, "❌ 缓存无效"
@@ -2698,6 +2896,72 @@ def generate_lut_grid_html(lut_path, lang: str = "zh"):
 
     html += "</div></div>"
     return html
+
+
+def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
+    """
+    Generate a calibration-card-style (色卡) HTML grid for the LUT.
+
+    Colors are displayed in their original LUT order arranged in a square grid,
+    matching the physical calibration board layout.  For 8-color LUTs the two
+    halves are shown side-by-side horizontally.
+
+    Each swatch is clickable (same data-color / class as the swatch grid) so
+    the existing event-delegation click handler picks it up automatically.
+    """
+    if not lut_path:
+        return "<div style='color:orange'>LUT 文件无效或为空</div>"
+
+    try:
+        lut_grid = np.load(lut_path)
+        measured_colors = lut_grid.reshape(-1, 3)
+    except Exception as e:
+        return f"<div style='color:orange'>LUT 加载失败: {e}</div>"
+
+    total = len(measured_colors)
+    import math
+    if total == 2738:
+        half = total // 2
+        remainder = total - half
+        dim1 = int(math.ceil(math.sqrt(half)))
+        dim2 = int(math.ceil(math.sqrt(remainder)))
+        grids = [
+            (measured_colors[:half], dim1, "色卡 A" if lang == "zh" else "Card A"),
+            (measured_colors[half:], dim2, "色卡 B" if lang == "zh" else "Card B"),
+        ]
+    else:
+        dim = int(math.ceil(math.sqrt(total)))
+        label = f"{total} 色色卡" if lang == "zh" else f"{total}-color Card"
+        grids = [(measured_colors, dim, label)]
+
+    cell = 18
+    gap = 1
+
+    html_parts = [
+        "<div style='display:flex; gap:12px; align-items:flex-start; "
+        "overflow-x:auto; padding:4px;'>"
+    ]
+
+    for colors_arr, dim, title in grids:
+        html_parts.append(
+            f"<div style='flex-shrink:0;'>"
+            f"<div style='font-size:11px; color:#666; margin-bottom:4px;'>{title} ({len(colors_arr)})</div>"
+            f"<div style='display:grid; grid-template-columns:repeat({dim}, {cell}px); gap:{gap}px; "
+            f"border:1px solid #eee; border-radius:6px; padding:4px; background:#f9f9f9;'>"
+        )
+        for c in colors_arr:
+            r, g, b = int(c[0]), int(c[1]), int(c[2])
+            hex_val = f"#{r:02x}{g:02x}{b:02x}"
+            html_parts.append(
+                f"<div class='lut-swatch lut-color-swatch' data-color='{hex_val}' "
+                f"style='width:{cell}px;height:{cell}px;background:{hex_val};"
+                f"cursor:pointer;border-radius:2px;' "
+                f"title='{hex_val} (R:{r} G:{g} B:{b})'></div>"
+            )
+        html_parts.append("</div></div>")
+
+    html_parts.append("</div>")
+    return "".join(html_parts)
 
 
 # ========== Auto-detection Functions ==========

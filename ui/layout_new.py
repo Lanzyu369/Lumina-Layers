@@ -36,6 +36,7 @@ from core.converter import (
     generate_final_model,
     on_preview_click_select_color,
     generate_lut_grid_html,
+    generate_lut_card_grid_html,
     detect_lut_color_mode,
     detect_image_type,
     generate_auto_height_map
@@ -894,6 +895,10 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
                              separate_backing=False, enable_relief=False, color_height_map=None,
                              enable_cleanup=True,
                              enable_outline=False, outline_width=2.0,
+                             enable_cloisonne=False, wire_width_mm=0.4,
+                             wire_height_mm=0.4,
+                             free_color_set=None,
+                             enable_coating=False, coating_height_mm=0.08,
                              progress=gr.Progress()):
     """Dispatch to single-image or batch generation; batch writes a ZIP of 3MFs.
 
@@ -921,7 +926,10 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
             color_mode, add_loop, loop_width, loop_length, loop_hole, loop_pos,
             modeling_mode, quantize_colors, color_replacements, backing_color_name,
             separate_backing, enable_relief, color_height_map, enable_cleanup,
-            enable_outline, outline_width)
+            enable_outline, outline_width,
+            enable_cloisonne, wire_width_mm, wire_height_mm,
+            free_color_set,
+            enable_coating, coating_height_mm)
 
     if not is_batch:
         out_path, glb_path, preview_img, status = generate_final_model(single_image, *args)
@@ -970,6 +978,13 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
 
 
 # ========== Advanced Tab Callbacks ==========
+
+
+def _update_lut_grid(lut_path, lang, palette_mode="swatch"):
+    """Wrapper that picks swatch or card grid based on palette_mode setting."""
+    if palette_mode == "card":
+        return generate_lut_card_grid_html(lut_path, lang)
+    return generate_lut_grid_html(lut_path, lang)
 
 
 def create_app():
@@ -1314,8 +1329,8 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             inputs=[components['dropdown_conv_lut_dropdown']],
             outputs=[components['state_conv_lut_path'], components['md_conv_lut_status']]
         ).then(
-            fn=generate_lut_grid_html,
-            inputs=[components['state_conv_lut_path'], lang_state],
+            fn=_update_lut_grid,
+            inputs=[components['state_conv_lut_path'], lang_state, components['state_conv_palette_mode']],
             outputs=[components['conv_lut_grid_view']]
         )
 
@@ -1380,6 +1395,20 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
                 fn=update_stats_bar,
                 inputs=[lang_state],
                 outputs=[stats_html]
+            )
+
+        # Palette mode switch (Advanced tab)
+        if 'radio_palette_mode' in components:
+            def on_palette_mode_change(mode, lut_path, lang):
+                _save_user_setting("palette_mode", mode)
+                return mode, _update_lut_grid(lut_path, lang, mode)
+
+            components['radio_palette_mode'].change(
+                fn=on_palette_mode_change,
+                inputs=[components['radio_palette_mode'],
+                        components['state_conv_lut_path'], lang_state],
+                outputs=[components['state_conv_palette_mode'],
+                         components['conv_lut_grid_view']]
             )
 
     return app
@@ -1724,6 +1753,8 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 elem_classes=["lut-status"]
             )
             conv_lut_path = gr.State(None)
+            conv_palette_mode = gr.State(value=_load_user_settings().get("palette_mode", "swatch"))
+            components['state_conv_palette_mode'] = conv_palette_mode
 
             with gr.Row():
                 components['checkbox_conv_batch_mode'] = gr.Checkbox(
@@ -1973,6 +2004,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                         conv_replacement_map = gr.State({})   # 替换映射表
                         conv_replacement_history = gr.State([])
                         conv_replacement_color_state = gr.State(None)  # 最终确定的 LUT 颜色
+                        conv_free_color_set = gr.State(set())  # 自由色集合
 
                         # 隐藏的交互组件
                         conv_color_selected_hidden = gr.Textbox(
@@ -2070,6 +2102,24 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                             components['btn_conv_palette_undo_btn'] = conv_undo_replacement
                             components['btn_conv_palette_clear_btn'] = conv_clear_replacements
 
+                        # 自由色功能
+                        with gr.Row():
+                            conv_free_color_btn = gr.Button(
+                                I18n.get('conv_free_color_btn', lang),
+                                variant="secondary", size="sm"
+                            )
+                            conv_free_color_clear_btn = gr.Button(
+                                I18n.get('conv_free_color_clear_btn', lang),
+                                size="sm"
+                            )
+                            components['btn_conv_free_color'] = conv_free_color_btn
+                            components['btn_conv_free_color_clear'] = conv_free_color_clear_btn
+                        conv_free_color_html = gr.HTML(
+                            value="",
+                            show_label=False
+                        )
+                        components['html_conv_free_color_list'] = conv_free_color_html
+
                         # 调色板预览 HTML (保持原有逻辑，用于显示已替换列表)
                         components['md_conv_palette_replacements_label'] = gr.Markdown(
                             I18n.get('conv_palette_replacements_label', lang)
@@ -2144,6 +2194,40 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                         label=I18n.get('conv_outline_width', lang)
                     )
                     # ========== END Outline Settings ==========
+
+                    # ========== Cloisonné Settings ==========
+                    components['md_conv_cloisonne_section'] = gr.Markdown(
+                        I18n.get('conv_cloisonne_section', lang)
+                    )
+                    with gr.Row():
+                        components['checkbox_conv_cloisonne_enable'] = gr.Checkbox(
+                            label=I18n.get('conv_cloisonne_enable', lang),
+                            value=False
+                        )
+                    components['slider_conv_wire_width'] = gr.Slider(
+                        0.2, 1.2, 0.4, step=0.1,
+                        label=I18n.get('conv_cloisonne_wire_width', lang)
+                    )
+                    components['slider_conv_wire_height'] = gr.Slider(
+                        0.04, 1.0, 0.4, step=0.04,
+                        label=I18n.get('conv_cloisonne_wire_height', lang)
+                    )
+                    # ========== END Cloisonné Settings ==========
+
+                    # ========== Coating Settings ==========
+                    components['md_conv_coating_section'] = gr.Markdown(
+                        I18n.get('conv_coating_section', lang)
+                    )
+                    with gr.Row():
+                        components['checkbox_conv_coating_enable'] = gr.Checkbox(
+                            label=I18n.get('conv_coating_enable', lang),
+                            value=False
+                        )
+                    components['slider_conv_coating_height'] = gr.Slider(
+                        0.04, 0.12, 0.08, step=0.04,
+                        label=I18n.get('conv_coating_height', lang)
+                    )
+                    # ========== END Coating Settings ==========
 
                     # Action buttons (preview + generate)
                     with gr.Row(elem_classes=["action-buttons"]):
@@ -2441,8 +2525,8 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             inputs=[components['dropdown_conv_lut_dropdown']],
             outputs=None
     ).then(
-            fn=generate_lut_grid_html,
-            inputs=[conv_lut_path, lang_state],
+            fn=_update_lut_grid,
+            inputs=[conv_lut_path, lang_state, conv_palette_mode],
             outputs=[conv_lut_grid_view]
     ).then(
             # 自动检测并切换颜色模式
@@ -2650,6 +2734,48 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             ],
             outputs=[conv_preview, conv_preview_cache, conv_palette_html, conv_replacement_map, conv_replacement_history, components['textbox_conv_status']]
     )
+
+    # ========== Free Color (自由色) Event Handlers ==========
+    def _render_free_color_html(free_set):
+        if not free_set:
+            return ""
+        parts = ["<div style='display:flex; flex-wrap:wrap; gap:6px; padding:4px; align-items:center;'>",
+                 "<span style='font-size:11px; color:#666;'>🎯 自由色:</span>"]
+        for hex_c in sorted(free_set):
+            parts.append(
+                f"<div style='width:24px;height:24px;background:{hex_c};border:2px solid #ff6b6b;"
+                f"border-radius:4px;' title='{hex_c}'></div>"
+            )
+        parts.append("</div>")
+        return "".join(parts)
+
+    def on_mark_free_color(selected_color, free_set):
+        if not selected_color:
+            return free_set, gr.update(), "❌ 请先点击预览图选择一个颜色"
+        new_set = set(free_set) if free_set else set()
+        hex_c = selected_color.lower()
+        if hex_c in new_set:
+            new_set.discard(hex_c)
+            msg = f"↩️ 已取消自由色: {hex_c}"
+        else:
+            new_set.add(hex_c)
+            msg = f"🎯 已标记为自由色: {hex_c} (生成时将作为独立对象)"
+        return new_set, _render_free_color_html(new_set), msg
+
+    def on_clear_free_colors(free_set):
+        return set(), "", "✅ 已清除所有自由色标记"
+
+    conv_free_color_btn.click(
+        on_mark_free_color,
+        inputs=[conv_selected_color, conv_free_color_set],
+        outputs=[conv_free_color_set, conv_free_color_html, components['textbox_conv_status']]
+    )
+    conv_free_color_clear_btn.click(
+        on_clear_free_colors,
+        inputs=[conv_free_color_set],
+        outputs=[conv_free_color_set, conv_free_color_html, components['textbox_conv_status']]
+    )
+    # ========== END Free Color ==========
 
     # [修改] 预览图点击事件同步到 UI
     def on_preview_click_sync_ui(cache, evt: gr.SelectData):
@@ -2869,7 +2995,13 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 conv_color_height_map,
                 components['checkbox_conv_cleanup'],
                 components['checkbox_conv_outline_enable'],
-                components['slider_conv_outline_width']
+                components['slider_conv_outline_width'],
+                components['checkbox_conv_cloisonne_enable'],
+                components['slider_conv_wire_width'],
+                components['slider_conv_wire_height'],
+                conv_free_color_set,
+                components['checkbox_conv_coating_enable'],
+                components['slider_conv_coating_height']
             ],
             outputs=[
                 components['file_conv_download_file'],
@@ -3356,6 +3488,17 @@ def create_advanced_tab_content(lang: str) -> dict:
     
     # Title and description
     components['md_advanced_title'] = gr.Markdown("### 🔬 高级功能 | Advanced Features" if lang == 'zh' else "### 🔬 Advanced Features")
+
+    # Palette display mode
+    palette_label = "调色板样式" if lang == "zh" else "Palette Style"
+    palette_swatch = "色块模式" if lang == "zh" else "Swatch Grid"
+    palette_card = "色卡模式" if lang == "zh" else "Card Layout"
+    saved_mode = _load_user_settings().get("palette_mode", "swatch")
+    components['radio_palette_mode'] = gr.Radio(
+        choices=[(palette_swatch, "swatch"), (palette_card, "card")],
+        value=saved_mode,
+        label=palette_label,
+    )
     
     return components
 

@@ -352,6 +352,46 @@ class I18n:
             'zh': '轮廓宽度(mm)',
             'en': 'Outline Width(mm)'
         },
+        'conv_cloisonne_section': {
+            'zh': '##### 掐丝珐琅特效',
+            'en': '##### Cloisonné Effect'
+        },
+        'conv_cloisonne_enable': {
+            'zh': '启用掐丝珐琅',
+            'en': 'Enable Cloisonné'
+        },
+        'conv_cloisonne_wire_width': {
+            'zh': '丝线宽度(mm)',
+            'en': 'Wire Width(mm)'
+        },
+        'conv_cloisonne_wire_height': {
+            'zh': '丝线高度(mm)',
+            'en': 'Wire Height(mm)'
+        },
+        'conv_cloisonne_wire_color': {
+            'zh': '丝线颜色槽位',
+            'en': 'Wire Color Slot'
+        },
+        'conv_free_color_btn': {
+            'zh': '🎯 标记为自由色',
+            'en': '🎯 Mark as Free Color'
+        },
+        'conv_free_color_clear_btn': {
+            'zh': '清除自由色',
+            'en': 'Clear Free Colors'
+        },
+        'conv_coating_section': {
+            'zh': '##### 透明镀层',
+            'en': '##### Transparent Coating'
+        },
+        'conv_coating_enable': {
+            'zh': '启用透明镀层',
+            'en': 'Enable Coating'
+        },
+        'conv_coating_height': {
+            'zh': '镀层厚度(mm)',
+            'en': 'Coating Height(mm)'
+        },
         'conv_status': {
             'zh': '状态',
             'en': 'Status'
