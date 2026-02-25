@@ -265,3 +265,7 @@ lut-npyԤ��/Custom/*.npy
 
 # Kiro documentation and internal files (personal use only)
 .kiro/
+
+# Reference projects (for development reference only)
+LD_ColorLayering-main/
+ChromaStack-main/
