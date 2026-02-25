@@ -18,8 +18,8 @@ class I18n:
             'en': '✨ Lumina Studio'
         },
         'app_subtitle': {
-            'zh': '多材料3D打印色彩系统 | v1.5.9',
-            'en': 'Multi-Material 3D Print Color System | v1.5.9'
+            'zh': '多材料3D打印色彩系统 | v1.6.0',
+            'en': 'Multi-Material 3D Print Color System | v1.6.0'
         },
         'lang_btn_zh': {
             'zh': '🌐 中文',
@@ -339,6 +339,18 @@ class I18n:
         'conv_loop_info': {
             'zh': '挂孔位置',
             'en': 'Loop Position'
+        },
+        'conv_outline_section': {
+            'zh': '##### 外轮廓设置',
+            'en': '##### Outline Settings'
+        },
+        'conv_outline_enable': {
+            'zh': '启用外轮廓',
+            'en': 'Enable Outline'
+        },
+        'conv_outline_width': {
+            'zh': '轮廓宽度(mm)',
+            'en': 'Outline Width(mm)'
         },
         'conv_status': {
             'zh': '状态',
@@ -676,7 +688,7 @@ class I18n:
         
         # ==================== About Page Content ====================
         'about_content': {
-            'zh': """## 🌟 Lumina Studio v1.5.9
+            'zh': """## 🌟 Lumina Studio v1.6.0
 
 **多材料3D打印色彩系统**
 
@@ -710,7 +722,7 @@ class I18n:
 
 ---
 
-### 📝 v1.5.9 更新日志
+### 📝 v1.6.0 更新日志
 
 #### 🧹 孤立像素清理
 - 新增孤立像素清理功能（高保真模式自动启用）
@@ -839,10 +851,10 @@ class I18n:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.5.9 | 2025
+    v1.6.0 | 2025
 </div>
 """,
-            'en': """## 🌟 Lumina Studio v1.5.9
+            'en': """## 🌟 Lumina Studio v1.6.0
 
 **Multi-Material 3D Print Color System**
 
@@ -876,7 +888,7 @@ Accurate color reproduction for FDM printing
 
 ---
 
-### 📝 v1.5.9 Changelog
+### 📝 v1.6.0 Changelog
 
 #### 🧹 Isolated Pixel Cleanup
 - Added isolated pixel cleanup feature (auto-enabled in High-Fidelity mode)
@@ -1005,7 +1017,7 @@ Special thanks to:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.5.9 | 2025
+    v1.6.0 | 2025
 </div>
 """
         },
