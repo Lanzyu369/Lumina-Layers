@@ -30,9 +30,11 @@ jobs:
       shell: pwsh
       run: |
         # 只打包代码和依赖库，不包含大型数据文件夹
+        # --collect-all "safehttpx" 修复 safehttpx/version.txt 找不到的问题
         pyinstaller --noconfirm --onefile --windowed `
           --icon="icon.ico" `
           --collect-all "gradio" `
+          --collect-all "safehttpx" `
           --name "Lumina-Layers" `
           main.py
 
