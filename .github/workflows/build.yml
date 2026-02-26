@@ -27,21 +27,11 @@ jobs:
       id: vars
       shell: bash
       run: |
-        # 1. 获取版本号：尝试从 git 标签获取，如果没有，则尝试从提交记录中搜索
-        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null)
-        if [ -z "$VERSION" ]; then
-          # 尝试在 git log 中查找最近的包含 "v" 后面跟着数字的提交消息
-          VERSION=$(git log -1 --grep="v[0-9]" --format="%s" | grep -o "v[0-9]\.[0-9]\.[0-9][^ ]*" | head -1)
-        fi
-        if [ -z "$VERSION" ]; then
-          # 默认版本号
-          VERSION="v1.5.5"
-        fi
-        
-        # 2. 获取 7 位短 Hash
+        # 尝试寻找最近的 v* 标签，如果没有则使用 v0.0.0
+        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
+        # 获取 7 位短 Hash
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
-        
-        # 3. 组合完整名称 (例如: Lumina-Layers-v1.4.5-4d23c52)
+        # 组合完整名称
         FULL_NAME="Lumina-Layers-$VERSION-$SHORT_SHA"
         
         echo "VERSION=$VERSION" >> $GITHUB_ENV
