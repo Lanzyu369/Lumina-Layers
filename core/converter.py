@@ -522,8 +522,26 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     if color_replacements:
         from core.color_replacement import ColorReplacementManager
         manager = ColorReplacementManager.from_dict(color_replacements)
+        old_rgb = matched_rgb.copy()
         matched_rgb = manager.apply_to_image(matched_rgb)
         print(f"[CONVERTER] Applied {len(manager)} color replacements")
+        
+        # Update material_matrix: find the replacement color's LUT entry
+        # and use its stacking layers (ref_stacks) for correct multi-layer output
+        for orig_hex, repl_hex in color_replacements.items():
+            orig_rgb_tuple = ColorReplacementManager._hex_to_color(orig_hex)
+            repl_rgb_tuple = ColorReplacementManager._hex_to_color(repl_hex)
+            # Find pixels that were originally this color
+            orig_mask = np.all(old_rgb == orig_rgb_tuple, axis=-1)
+            if not np.any(orig_mask):
+                continue
+            # Query KDTree to find the closest LUT entry for the replacement color
+            _, lut_idx = processor.kdtree.query([repl_rgb_tuple])
+            lut_idx = lut_idx[0]
+            new_stacks = processor.ref_stacks[lut_idx]  # (COLOR_LAYERS,)
+            material_matrix[orig_mask] = new_stacks
+            lut_color = processor.lut_rgb[lut_idx]
+            print(f"[CONVERTER] material_matrix: {orig_hex} → LUT#{lut_idx} rgb({lut_color[0]},{lut_color[1]},{lut_color[2]}) stacks={new_stacks}")
     
     print(f"[CONVERTER] Image processed: {target_w}×{target_h}px, scale={pixel_scale}mm/px")
     
