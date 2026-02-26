@@ -12,13 +12,31 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # 获取完整历史以查找标签
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
         cache: 'pip'
+
+    - name: Get Version and Hash
+      id: vars
+      shell: bash
+      run: |
+        # 尝试寻找最近的 v* 标签，如果没有则使用 v0.0.0
+        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
+        # 获取 7 位短 Hash
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        # 组合完整名称
+        FULL_NAME="Lumina-Layers-$VERSION-$SHORT_SHA"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
+        echo "FULL_NAME=$FULL_NAME" >> $GITHUB_ENV
+        echo "full_name=$FULL_NAME" >> $GITHUB_OUTPUT
 
     - name: Install dependencies
       run: |
@@ -29,8 +47,7 @@ jobs:
     - name: Package with PyInstaller
       shell: pwsh
       run: |
-        # 只打包代码和依赖库，不包含大型数据文件夹
-        # 移除 --windowed 以显示控制台并修复 uvicorn/isatty 报错
+        # 使用动态生成的 FULL_NAME 命名 exe
         pyinstaller --noconfirm --onefile `
           --icon="icon.ico" `
           --collect-all "gradio" `
@@ -38,20 +55,21 @@ jobs:
           --collect-all "groovy" `
           --collect-all "gradio_client" `
           --collect-all "uvicorn" `
-          --name "Lumina-Layers" `
+          --name "${{ env.FULL_NAME }}" `
           main.py
 
     - name: Prepare Artifact Directory
       shell: pwsh
       run: |
-        # 创建一个发布目录，包含 exe 和必要的数据文件夹
-        New-Item -ItemType Directory -Path "release_pkg" -Force
-        Copy-Item "dist/Lumina-Layers.exe" -Destination "release_pkg/"
-        Copy-Item -Path "assets" -Destination "release_pkg/assets" -Recurse
-        Copy-Item -Path "lut-npy预设" -Destination "release_pkg/lut-npy预设" -Recurse
+        # 创建一个发布目录，包含动态命名的 exe 和数据文件夹
+        $targetDir = "${{ env.FULL_NAME }}"
+        New-Item -ItemType Directory -Path "$targetDir" -Force
+        Copy-Item "dist/${{ env.FULL_NAME }}.exe" -Destination "$targetDir/"
+        Copy-Item -Path "assets" -Destination "$targetDir/assets" -Recurse
+        Copy-Item -Path "lut-npy预设" -Destination "$targetDir/lut-npy预设" -Recurse
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Lumina-Layers-Release
-        path: release_pkg/
+        name: ${{ env.FULL_NAME }}
+        path: ${{ env.FULL_NAME }}/
