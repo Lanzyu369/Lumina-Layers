@@ -155,7 +155,8 @@ def on_apply_color_replacement(cache, selected_color, replacement_color,
         tuple: (preview_image, updated_cache, palette_html, updated_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", replacement_map, replacement_history, I18n.get('palette_need_preview', lang)
@@ -207,7 +208,8 @@ def on_clear_color_replacements(cache, replacement_map, replacement_history,
         tuple: (preview_image, updated_cache, palette_html, empty_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", {}, [], I18n.get('palette_need_preview', lang)
@@ -237,7 +239,7 @@ def on_preview_generated_update_palette(cache, lang: str = "zh"):
     Returns:
         tuple: (palette_html, selected_color_state)
     """
-    from core.converter import generate_palette_html
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         placeholder = I18n.get('conv_palette_replacements_placeholder', lang)
@@ -482,7 +484,8 @@ def on_undo_color_replacement(cache, replacement_map, replacement_history,
         tuple: (preview_image, updated_cache, palette_html, updated_replacement_map, 
                 updated_history, status)
     """
-    from core.converter import update_preview_with_replacements, generate_palette_html
+    from core.converter import update_preview_with_replacements
+    from ui.palette_extension import generate_palette_html
     
     if cache is None:
         return None, None, "", replacement_map, replacement_history, I18n.get('palette_need_preview', lang)
@@ -514,23 +517,45 @@ def run_extraction_wrapper(img, points, offset_x, offset_y, zoom, barrel, wb, br
     )
     
     if "8-Color" in color_mode and lut_path:
-        os.makedirs("assets", exist_ok=True)
+        import sys
+        # Handle both dev and frozen modes
+        if getattr(sys, 'frozen', False):
+            assets_dir = os.path.join(os.getcwd(), "assets")
+        else:
+            assets_dir = "assets"
+        
+        os.makedirs(assets_dir, exist_ok=True)
         page_idx = 1 if "1" in str(page_choice) else 2
-        temp_path = os.path.join("assets", f"temp_8c_page_{page_idx}.npy")
+        temp_path = os.path.join(assets_dir, f"temp_8c_page_{page_idx}.npy")
         try:
             lut = np.load(lut_path)
             np.save(temp_path, lut)
+            # Return the assets path, not the original LUT_FILE_PATH
+            # This ensures manual corrections are saved to the correct location
+            print(f"[8-COLOR] Saved page {page_idx} to: {temp_path}")
             lut_path = temp_path
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[8-COLOR] Error saving page {page_idx}: {e}")
     
     return vis, prev, lut_path, status
 
 
 def merge_8color_data():
     """Concatenate two 8-color pages and save to LUT_FILE_PATH."""
-    path1 = os.path.join("assets", "temp_8c_page_1.npy")
-    path2 = os.path.join("assets", "temp_8c_page_2.npy")
+    import sys
+    # Handle both dev and frozen modes
+    if getattr(sys, 'frozen', False):
+        assets_dir = os.path.join(os.getcwd(), "assets")
+    else:
+        assets_dir = "assets"
+    
+    path1 = os.path.join(assets_dir, "temp_8c_page_1.npy")
+    path2 = os.path.join(assets_dir, "temp_8c_page_2.npy")
+    
+    print(f"[MERGE_8COLOR] Looking for page 1: {path1}")
+    print(f"[MERGE_8COLOR] Looking for page 2: {path2}")
+    print(f"[MERGE_8COLOR] Page 1 exists: {os.path.exists(path1)}")
+    print(f"[MERGE_8COLOR] Page 2 exists: {os.path.exists(path2)}")
     
     if not os.path.exists(path1) or not os.path.exists(path2):
         return None, "❌ Missing temp pages. Please extract Page 1 and Page 2 first."
@@ -538,8 +563,18 @@ def merge_8color_data():
     try:
         lut1 = np.load(path1)
         lut2 = np.load(path2)
+        print(f"[MERGE_8COLOR] Page 1 shape: {lut1.shape}")
+        print(f"[MERGE_8COLOR] Page 2 shape: {lut2.shape}")
+        
         merged = np.concatenate([lut1, lut2], axis=0)
+        print(f"[MERGE_8COLOR] Merged shape: {merged.shape}")
+        
         np.save(LUT_FILE_PATH, merged)
+        print(f"[MERGE_8COLOR] Saved merged LUT to: {LUT_FILE_PATH}")
+        
         return LUT_FILE_PATH, "✅ 8-Color LUT merged and saved!"
     except Exception as e:
+        print(f"[MERGE_8COLOR] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return None, f"❌ Merge failed: {e}"

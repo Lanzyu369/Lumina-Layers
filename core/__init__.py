@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Lumina Studio - Core Module (Refactored)
 核心算法模块 - 重构版本
@@ -26,7 +27,8 @@ from .converter import (
     on_preview_click,
     update_preview_with_loop,
     on_remove_loop,
-    generate_final_model
+    generate_final_model,
+    update_preview_with_backing_color
 )
 
 # New refactored modules
@@ -56,6 +58,7 @@ __all__ = [
     'update_preview_with_loop',
     'on_remove_loop',
     'generate_final_model',
+    'update_preview_with_backing_color',
     
     # Refactored modules (for advanced usage)
     'LuminaImageProcessor',

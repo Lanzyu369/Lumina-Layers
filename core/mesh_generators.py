@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import cv2
 import trimesh
+from config import ModelingMode
 
 
 class BaseMesher(ABC):
@@ -36,13 +37,26 @@ class BaseMesher(ABC):
         
         Args:
             voxel_matrix: (Z, H, W) voxel matrix
-            mat_id: Material ID (0-3)
+            mat_id: Material ID (0-7 for regular materials, -2 for backing layer)
             height_px: Image height (pixels)
         
         Returns:
             trimesh.Trimesh or None
         """
         pass
+    
+    def generate_backing_mesh(self, voxel_matrix, height_px):
+        """
+        Generate backing mesh (convenience method)
+        
+        Args:
+            voxel_matrix: (Z, H, W) voxel matrix
+            height_px: Image height (pixels)
+        
+        Returns:
+            trimesh.Trimesh or None
+        """
+        return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px)
 
 
 class VoxelMesher(BaseMesher):
@@ -54,7 +68,11 @@ class VoxelMesher(BaseMesher):
     """
     
     def generate_mesh(self, voxel_matrix, mat_id, height_px):
-        """Generate pixel mode mesh (Legacy Voxel Mode)"""
+        """
+        Generate pixel mode mesh (Legacy Voxel Mode)
+        
+        Supports both regular materials (0-7) and backing layer (-2).
+        """
         vertices, faces = [], []
         shrink = 0.05  # Preserve gaps for blocky aesthetic
         
@@ -95,6 +113,10 @@ class VoxelMesher(BaseMesher):
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
         mesh.merge_vertices()
         mesh.update_faces(mesh.unique_faces())
+        
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        print(f"[VOXEL_MESHER] {mesh_type}: Generated {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
+        
         return mesh
 
 
@@ -123,6 +145,8 @@ class HighFidelityMesher(BaseMesher):
         """
         Generate high-fidelity mode mesh (Greedy Rectangle Merging)
         
+        Supports both regular materials (0-7) and backing layer (-2).
+        
         Returns a watertight mesh with optimized face count.
         """
         # Step 1: Vertical layer compression with dilation
@@ -131,7 +155,8 @@ class HighFidelityMesher(BaseMesher):
         if not layer_groups:
             return None
         
-        print(f"[HIGH_FIDELITY] Mat ID {mat_id}: Merged {voxel_matrix.shape[0]} layers → {len(layer_groups)} groups")
+        mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
+        print(f"[HIGH_FIDELITY] {mesh_type}: Merged {voxel_matrix.shape[0]} layers → {len(layer_groups)} groups")
         
         vertices = []
         faces = []
@@ -177,7 +202,7 @@ class HighFidelityMesher(BaseMesher):
         mesh.merge_vertices()
         mesh.update_faces(mesh.unique_faces())
         
-        print(f"[HIGH_FIDELITY] Mat {mat_id}: {total_rects} rects → {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
+        print(f"[HIGH_FIDELITY] {mesh_type}: {total_rects} rects → {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
         
         return mesh
     
@@ -301,31 +326,34 @@ class HighFidelityMesher(BaseMesher):
 
 # ========== Factory Method ==========
 
-def get_mesher(mode_name):
+def get_mesher(mode_name: ModelingMode):
     """
     Return corresponding Mesher instance based on mode name
     
     Args:
-        mode_name: Mode name string
-            - "high-fidelity" / "高保真" → HighFidelityMesher
-            - "pixel" / "像素" → VoxelMesher
+        mode_name: ModelingMode enum value
+            - ModelingMode.HIGH_FIDELITY → HighFidelityMesher
+            - ModelingMode.PIXEL → VoxelMesher
+            - ModelingMode.VECTOR → HighFidelityMesher (vector uses same algorithm)
     
     Returns:
         BaseMesher instance
     """
-    mode_str = str(mode_name).lower()
-    
     # High-Fidelity mode (replaces Vector and Woodblock)
-    if "high-fidelity" in mode_str or "高保真" in mode_str:
+    if mode_name == ModelingMode.HIGH_FIDELITY:
         print("[MESHER_FACTORY] Selected: HighFidelityMesher (RLE-based with Dilation)")
         return HighFidelityMesher()
     
+    # Vector mode uses same algorithm as High-Fidelity
+    if mode_name == ModelingMode.VECTOR:
+        print("[MESHER_FACTORY] Selected: HighFidelityMesher (Vector mode)")
+        return HighFidelityMesher()
+    
     # Pixel Art mode (legacy voxel)
-    elif "pixel" in mode_str or "像素" in mode_str:
+    if mode_name == ModelingMode.PIXEL:
         print("[MESHER_FACTORY] Selected: VoxelMesher (Blocky)")
         return VoxelMesher()
     
     # Default fallback to High-Fidelity
-    else:
-        print(f"[MESHER_FACTORY] Unknown mode '{mode_name}', defaulting to HighFidelityMesher")
-        return HighFidelityMesher()
+    print(f"[MESHER_FACTORY] Unknown mode '{mode_name}', defaulting to HighFidelityMesher")
+    return HighFidelityMesher()

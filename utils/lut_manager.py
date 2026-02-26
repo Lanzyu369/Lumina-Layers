@@ -4,6 +4,7 @@ LUT preset management module
 """
 
 import os
+import sys
 import shutil
 import glob
 from pathlib import Path
@@ -12,8 +13,28 @@ from pathlib import Path
 class LUTManager:
     """LUT preset manager"""
     
-    # LUT preset folder path
-    LUT_PRESET_DIR = "lut-npy预设"
+    # LUT preset folder path - handle both dev and frozen modes
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        # Check multiple possible locations
+        exe_dir = os.path.dirname(sys.executable)
+        
+        # Try exe directory first (where we copy it in the spec file)
+        if os.path.exists(os.path.join(exe_dir, "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-npy预设")
+        # Then try _internal directory (fallback)
+        elif os.path.exists(os.path.join(exe_dir, "_internal", "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(exe_dir, "_internal", "lut-npy预设")
+        # Finally try _MEIPASS (bundled resources)
+        elif hasattr(sys, '_MEIPASS') and os.path.exists(os.path.join(sys._MEIPASS, "lut-npy预设")):
+            LUT_PRESET_DIR = os.path.join(sys._MEIPASS, "lut-npy预设")
+        else:
+            # Fallback to exe directory (will be created if needed)
+            LUT_PRESET_DIR = os.path.join(exe_dir, "lut-npy预设")
+    else:
+        # Running as script
+        _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-npy预设")
     
     @classmethod
     def get_all_lut_files(cls):
@@ -30,10 +51,11 @@ class LUTManager:
             return lut_files
         
         # Recursively search for all .npy files
-        pattern = os.path.join(cls.LUT_PRESET_DIR, "**", "*.npy")
-        npy_files = glob.glob(pattern, recursive=True)
+        npy_pattern = os.path.join(cls.LUT_PRESET_DIR, "**", "*.npy")
         
-        for file_path in npy_files:
+        all_files = glob.glob(npy_pattern, recursive=True)
+        
+        for file_path in all_files:
             # Generate friendly display name
             rel_path = os.path.relpath(file_path, cls.LUT_PRESET_DIR)
             
@@ -46,7 +68,8 @@ class LUTManager:
                 display_name = f"{brand} - {filename}"
             else:
                 # Root directory file, use filename directly
-                display_name = Path(rel_path).stem
+                filename = Path(rel_path).stem
+                display_name = filename
             
             lut_files[display_name] = file_path
         
@@ -101,8 +124,14 @@ class LUTManager:
             custom_dir = os.path.join(cls.LUT_PRESET_DIR, "Custom")
             os.makedirs(custom_dir, exist_ok=True)
             
-            # Get original filename
-            original_name = Path(uploaded_file.name).stem
+            # Get original filename and extension
+            original_path = Path(uploaded_file.name)
+            original_name = original_path.stem
+            file_extension = original_path.suffix  # .npy
+            
+            # Validate file extension
+            if file_extension != '.npy':
+                return False, f"❌ Invalid file type: {file_extension}. Only .npy is supported.", cls.get_lut_choices()
             
             # Use custom name or original name
             if custom_name and custom_name.strip():
@@ -117,18 +146,19 @@ class LUTManager:
             if not final_name:
                 final_name = "custom_lut"
             
-            # Build target path
-            dest_path = os.path.join(custom_dir, f"{final_name}.npy")
+            # Build target path with correct extension
+            dest_path = os.path.join(custom_dir, f"{final_name}{file_extension}")
             
             # If file exists, add numeric suffix
             counter = 1
             while os.path.exists(dest_path):
-                dest_path = os.path.join(custom_dir, f"{final_name}_{counter}.npy")
+                dest_path = os.path.join(custom_dir, f"{final_name}_{counter}{file_extension}")
                 counter += 1
             
             # Copy file
             shutil.copy2(uploaded_file.name, dest_path)
             
+            # Build display name
             display_name = f"Custom - {Path(dest_path).stem}"
             
             print(f"[LUT_MANAGER] Saved uploaded LUT: {dest_path}")

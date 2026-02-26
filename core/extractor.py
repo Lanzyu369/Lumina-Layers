@@ -64,7 +64,14 @@ def draw_corner_points(img, points, color_mode: str):
     color_conf = ColorSystem.get(color_mode)
     labels = color_conf['corner_labels']
 
-    if "8-Color" in color_mode:
+    if color_mode == "BW (Black & White)" or color_mode == "BW":
+        draw_colors = [
+            (255, 255, 255),  # White (TL)
+            (0, 0, 0),        # Black (TR)
+            (0, 0, 0),        # Black (BR)
+            (0, 0, 0)         # Black (BL)
+        ]
+    elif "8-Color" in color_mode:
         draw_colors = [
             (255, 255, 255),  # White (TL)
             (255, 255, 0),    # Cyan/Magenta (TR)
@@ -161,7 +168,11 @@ def run_extraction(img, points, offset_x, offset_y, zoom, barrel, wb, bright, co
         return None, None, None, "❌ 请点击4个角点"
     
     # 动态确定网格大小
-    if "8-Color" in color_mode:
+    if color_mode == "BW (Black & White)" or color_mode == "BW":
+        grid_size = 6           # Data: 6x6 (32色，只用前32个)
+        physical_grid = 8       # Physical: 8x8 (含边框)
+        total_cells = 32
+    elif "8-Color" in color_mode:
         grid_size = 37          # Data: 37x37 (1369色)
         physical_grid = 39      # Physical: 39x39
         total_cells = 1369
@@ -196,8 +207,19 @@ def run_extraction(img, points, offset_x, offset_y, zoom, barrel, wb, bright, co
     extracted = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
     vis = warped.copy()
 
+    # BW模式特殊处理：只提取前32个色块
+    if color_mode == "BW (Black & White)" or color_mode == "BW":
+        cells_to_extract = 32
+    else:
+        cells_to_extract = grid_size * grid_size
+
+    extracted_count = 0
     for r in range(grid_size):
         for c in range(grid_size):
+            # BW模式：只提取前32个
+            if extracted_count >= cells_to_extract:
+                break
+            
             # 【关键】计算物理位置时的偏移
             # 无论是 4色 还是 6色，因为都有 1 格边框，所以都需要 +1
             phys_r = r + 1
@@ -223,6 +245,11 @@ def run_extraction(img, points, offset_x, offset_y, zoom, barrel, wb, bright, co
             else:
                 avg = [0, 0, 0]
             extracted[r, c] = avg
+            extracted_count += 1
+        
+        # BW模式：提取够32个就退出外层循环
+        if extracted_count >= cells_to_extract:
+            break
 
     np.save(LUT_FILE_PATH, extracted)
     prev = cv2.resize(extracted, (512, 512), interpolation=cv2.INTER_NEAREST)
@@ -247,10 +274,13 @@ def probe_lut_cell(lut_path, evt: gr.SelectData):
     except Exception:
         return "⚠️ 数据损坏", None, None
 
+    # 动态获取LUT的实际大小
+    lut_height, lut_width = lut.shape[:2]
+    
     x, y = evt.index
-    scale = 512 / DATA_GRID_SIZE
-    c = min(max(int(x / scale), 0), DATA_GRID_SIZE - 1)
-    r = min(max(int(y / scale), 0), DATA_GRID_SIZE - 1)
+    scale = 512 / lut_width  # 使用实际宽度计算缩放比例
+    c = min(max(int(x / scale), 0), lut_width - 1)
+    r = min(max(int(y / scale), 0), lut_height - 1)
 
     rgb = lut[r, c]
     hex_c = '#{:02x}{:02x}{:02x}'.format(*rgb)
@@ -275,11 +305,15 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         actual_path = lut_path.name
 
     if not coord or not actual_path or not os.path.exists(actual_path):
+        print(f"[MANUAL_FIX] Error: coord={coord}, actual_path={actual_path}, exists={os.path.exists(actual_path) if actual_path else False}")
         return None, "⚠️ 错误"
 
     try:
+        print(f"[MANUAL_FIX] Loading LUT from: {actual_path}")
         lut = np.load(actual_path)
+        print(f"[MANUAL_FIX] LUT shape: {lut.shape}")
         r, c = coord
+        print(f"[MANUAL_FIX] Fixing cell ({r}, {c})")
         new_color = [0, 0, 0]
 
         color_str = str(color_input)
@@ -294,8 +328,41 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         else:
             new_color = [int(color_str[i:i+2], 16) for i in (0, 2, 4)]
 
+        print(f"[MANUAL_FIX] Old color: {lut[r, c]}, New color: {new_color}")
         lut[r, c] = new_color
+        
+        # Save to the actual path
         np.save(actual_path, lut)
-        return cv2.resize(lut, (512, 512), interpolation=cv2.INTER_NEAREST), "✅ 已修正"
+        print(f"[MANUAL_FIX] Saved to: {actual_path}")
+        
+        # For 8-color mode: also ensure we save to the correct assets path
+        # Check if the path is a temp_8c_page file
+        if "temp_8c_page_" in actual_path:
+            # Extract page number and ensure it's saved to assets/
+            import re
+            import sys
+            match = re.search(r'temp_8c_page_(\d+)\.npy', actual_path)
+            if match:
+                page_num = match.group(1)
+                # Handle both dev and frozen modes
+                if getattr(sys, 'frozen', False):
+                    assets_dir = os.path.join(os.getcwd(), "assets")
+                else:
+                    assets_dir = "assets"
+                
+                os.makedirs(assets_dir, exist_ok=True)
+                assets_path = os.path.join(assets_dir, f"temp_8c_page_{page_num}.npy")
+                
+                if os.path.abspath(actual_path) != os.path.abspath(assets_path):
+                    # If the actual_path is not the assets path, save to assets too
+                    np.save(assets_path, lut)
+                    print(f"[MANUAL_FIX] Also saved to assets: {assets_path}")
+        
+        preview = cv2.resize(lut, (512, 512), interpolation=cv2.INTER_NEAREST)
+        print(f"[MANUAL_FIX] Preview shape: {preview.shape}")
+        return preview, "✅ 已修正"
     except Exception as e:
+        print(f"[MANUAL_FIX] Exception: {e}")
+        import traceback
+        traceback.print_exc()
         return None, f"❌ 格式错误: {color_input}"

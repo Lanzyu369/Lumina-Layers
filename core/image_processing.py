@@ -4,12 +4,14 @@ Lumina Studio - Image Processing Core
 Handles image loading, preprocessing, color quantization and matching.
 """
 
+import os
+import sys
 import numpy as np
 import cv2
 from PIL import Image
 from scipy.spatial import KDTree
 
-from config import PrinterConfig
+from config import PrinterConfig, ModelingMode
 
 # SVG support (optional dependency)
 try:
@@ -40,6 +42,7 @@ class LuminaImageProcessor:
         self.lut_rgb = None
         self.ref_stacks = None
         self.kdtree = None
+        self.enable_cleanup = True  # 默认开启孤立像素清理
         
         self._load_lut(lut_path)
     
@@ -152,11 +155,13 @@ class LuminaImageProcessor:
     
     def _load_lut(self, lut_path):
         """
-        Load and validate LUT file (Supports 4-Color and 6-Color).
+        Load and validate LUT file (Supports 2-Color, 4-Color, 6-Color, and 8-Color).
         
         Automatically detects LUT type based on size:
+        - 32 colors: 2-Color BW (Black & White)
         - 1024 colors: 4-Color Standard (CMYW/RYBW)
         - 1296 colors: 6-Color Smart 1296
+        - 2738 colors: 8-Color Max
         """
         try:
             lut_grid = np.load(lut_path)
@@ -170,23 +175,47 @@ class LuminaImageProcessor:
         
         print(f"[IMAGE_PROCESSOR] Loading LUT with {total_colors} points...")
         
-        # Branch 1: 6-Color Smart 1296
-        if "6-Color" in self.color_mode or total_colors == 1296:
-            print("[IMAGE_PROCESSOR] Detected 6-Color Smart 1296 mode")
+        # Branch 0: 2-Color BW (32)
+        if self.color_mode == "BW (Black & White)" or self.color_mode == "BW" or total_colors == 32:
+            print("[IMAGE_PROCESSOR] Detected 2-Color BW mode")
             
-            from core.calibration import get_top_1296_colors
+            # Generate all 32 combinations (2^5 = 32)
+            for i in range(32):
+                if i >= total_colors:
+                    break
+                
+                # Rebuild 2-base stacking (0..31)
+                digits = []
+                temp = i
+                for _ in range(5):
+                    digits.append(temp % 2)
+                    temp //= 2
+                stack = digits[::-1]  # [顶...底] format
+                
+                valid_rgb.append(measured_colors[i])
+                valid_stacks.append(stack)
             
-            # Retrieve 1296 intelligent stacking order (must match calibration.py logic)
-            # Note: generate_smart_board uses padding to fill 38x38,
-            # but extractor extracts the border-removed 36x36 (1296 cells).
-            # So we directly get the original stacking data here.
+            self.lut_rgb = np.array(valid_rgb)
+            self.ref_stacks = np.array(valid_stacks)
             
-            smart_stacks = get_top_1296_colors()
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (2-Color BW mode)")
+        
+        # Branch 1: 8-Color Max (2738)
+        elif "8-Color" in self.color_mode or total_colors == 2738:
+            print("[IMAGE_PROCESSOR] Detected 8-Color Max mode")
             
-            # Reverse stacking order to make it (Top -> Bottom)
-            # Original smart_stacks is [Bottom, ..., Top] (simulation data order)
-            # But Converter's Face Down logic prints Z=0 as Index=0
-            # So we need to reverse to [Top, ..., Bottom], making Z=0 the viewing surface
+            # Load pre-generated 8-color stacks
+            import sys
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                stacks_path = os.path.join(sys._MEIPASS, 'assets', 'smart_8color_stacks.npy')
+            else:
+                # Running as script
+                stacks_path = 'assets/smart_8color_stacks.npy'
+            
+            smart_stacks = np.load(stacks_path).tolist()
+            
+            # Reverse stacking order for Face-Down printing
             smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
             print("[IMAGE_PROCESSOR] Stacks reversed for Face-Down printing compatibility.")
             
@@ -196,13 +225,33 @@ class LuminaImageProcessor:
                 smart_stacks = smart_stacks[:min_len]
                 measured_colors = measured_colors[:min_len]
             
-            # No "Base Blue" filtering in 6-color mode (colors too complex)
+            self.lut_rgb = measured_colors
+            self.ref_stacks = np.array(smart_stacks)
+            
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (8-Color mode)")
+        
+        # Branch 2: 6-Color Smart 1296
+        elif "6-Color" in self.color_mode or total_colors == 1296:
+            print("[IMAGE_PROCESSOR] Detected 6-Color Smart 1296 mode")
+            
+            from core.calibration import get_top_1296_colors
+            
+            smart_stacks = get_top_1296_colors()
+            smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
+            print("[IMAGE_PROCESSOR] Stacks reversed for Face-Down printing compatibility.")
+            
+            if len(smart_stacks) != total_colors:
+                print(f"⚠️ Warning: Stacks count ({len(smart_stacks)}) != LUT count ({total_colors})")
+                min_len = min(len(smart_stacks), total_colors)
+                smart_stacks = smart_stacks[:min_len]
+                measured_colors = measured_colors[:min_len]
+            
             self.lut_rgb = measured_colors
             self.ref_stacks = np.array(smart_stacks)
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (6-Color mode)")
         
-        # Branch 2: 4-Color Standard (1024)
+        # Branch 3: 4-Color Standard (1024)
         else:
             print("[IMAGE_PROCESSOR] Detected 4-Color Standard mode")
             
@@ -267,22 +316,7 @@ class LuminaImageProcessor:
                 - mode_info: Mode information dictionary
                 - debug_data: Debug data (high-fidelity mode only)
         """
-        # Normalize modeling mode
-        mode_str = str(modeling_mode).lower()
-        use_high_fidelity = "high-fidelity" in mode_str or "高保真" in mode_str
-        use_pixel = "pixel" in mode_str or "像素" in mode_str
-        
-        # Determine mode name
-        if use_high_fidelity:
-            mode_name = "High-Fidelity"
-        elif use_pixel:
-            mode_name = "Pixel Art"
-        else:
-            # Default to High-Fidelity if mode is unclear
-            mode_name = "High-Fidelity"
-            use_high_fidelity = True
-        
-        print(f"[IMAGE_PROCESSOR] Mode: {mode_name}")
+        print(f"[IMAGE_PROCESSOR] Mode: {modeling_mode.get_display_name()}")
         print(f"[IMAGE_PROCESSOR] Filter settings: blur_kernel={blur_kernel}, smooth_sigma={smooth_sigma}")
         
         # ========== Image Loading Logic Branch ==========
@@ -333,7 +367,7 @@ class LuminaImageProcessor:
                 print(f"[IMAGE_PROCESSOR] Transparent pixels (alpha<10): {np.sum(alpha_data < 10)}")
             
             # Calculate target resolution
-            if use_high_fidelity:
+            if modeling_mode == ModelingMode.HIGH_FIDELITY:
                 # High-precision mode: 10 pixels/mm
                 PIXELS_PER_MM = 10
                 target_w = int(target_width_mm * PIXELS_PER_MM)
@@ -371,7 +405,7 @@ class LuminaImageProcessor:
         
         # Color processing and matching
         debug_data = None
-        if use_high_fidelity:
+        if modeling_mode == ModelingMode.HIGH_FIDELITY:
             matched_rgb, material_matrix, bg_reference, debug_data = self._process_high_fidelity_mode(
                 rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
             )
@@ -379,6 +413,16 @@ class LuminaImageProcessor:
             matched_rgb, material_matrix, bg_reference = self._process_pixel_mode(
                 rgb_arr, target_h, target_w
             )
+        
+        # >>> 孤立像素清理（可选后处理）<<<
+        if modeling_mode == ModelingMode.HIGH_FIDELITY and self.enable_cleanup:
+            try:
+                from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+                matched_rgb, material_matrix = cleanup_isolated_pixels(
+                    material_matrix, matched_rgb, self.lut_rgb, self.ref_stacks
+                )
+            except ImportError:
+                print("[IMAGE_PROCESSOR] ⚠️ isolated_pixel_cleanup module not found, skipping")
         
         # Background removal - combine alpha transparency with optional auto-bg
         mask_transparent = mask_transparent_initial.copy()
@@ -398,9 +442,7 @@ class LuminaImageProcessor:
             'dimensions': (target_w, target_h),
             'pixel_scale': pixel_to_mm_scale,
             'mode_info': {
-                'name': mode_name,
-                'use_high_fidelity': use_high_fidelity,
-                'use_pixel': use_pixel
+                'mode': modeling_mode
             }
         }
         
@@ -623,3 +665,49 @@ class LuminaImageProcessor:
         print(f"[IMAGE_PROCESSOR] Direct matching complete!")
         
         return matched_rgb, material_matrix, rgb_arr
+
+    def _extract_wireframe_mask(self, rgb_arr, target_w, pixel_scale, wire_width_mm=0.6):
+        """
+        Extract cloisonné wireframe mask using edge detection + dilation.
+
+        The mask marks pixels that should become raised "gold wire" in the
+        final 3D model.  The dilation kernel is sized so that the wire is
+        physically printable (≥ nozzle width).
+
+        Args:
+            rgb_arr:        (H, W, 3) uint8 – colour-matched or quantised image.
+            target_w:       int – image width in pixels (used only for logging).
+            pixel_scale:    float – mm per pixel.
+            wire_width_mm:  float – desired physical wire width in mm (default 0.6).
+
+        Returns:
+            mask_wireframe: (H, W) bool ndarray – True where wire should be.
+        """
+        import time
+        t0 = time.time()
+
+        # 1. Greyscale + light blur to suppress quantisation noise
+        gray = cv2.cvtColor(rgb_arr.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        # 2. Adaptive Canny thresholds (Otsu-based)
+        otsu_thresh, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        low = max(10, int(otsu_thresh * 0.4))
+        high = max(30, int(otsu_thresh * 0.8))
+        edges = cv2.Canny(gray, low, high)
+
+        # 3. Dilate to physical wire width
+        wire_px = max(1, int(round(wire_width_mm / pixel_scale)))
+        if wire_px % 2 == 0:
+            wire_px += 1  # kernel must be odd
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wire_px, wire_px))
+        dilated = cv2.dilate(edges, kernel, iterations=1)
+
+        mask_wireframe = dilated > 0
+
+        dt = time.time() - t0
+        print(f"[CLOISONNE] Wireframe extracted: Canny({low},{high}), "
+              f"dilate {wire_px}px ({wire_width_mm}mm), "
+              f"{np.sum(mask_wireframe)} wire pixels, {dt:.2f}s")
+
+        return mask_wireframe

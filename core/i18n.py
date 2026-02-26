@@ -18,8 +18,8 @@ class I18n:
             'en': '✨ Lumina Studio'
         },
         'app_subtitle': {
-            'zh': '多材料3D打印色彩系统 | v1.5.5',
-            'en': 'Multi-Material 3D Print Color System | v1.5.5'
+            'zh': '多材料3D打印色彩系统 | v1.6.0',
+            'en': 'Multi-Material 3D Print Color System | v1.6.0'
         },
         'lang_btn_zh': {
             'zh': '🌐 中文',
@@ -244,6 +244,10 @@ class I18n:
             'zh': '背板 (mm)',
             'en': 'Backing (mm)'
         },
+        'conv_backing_color': {
+            'zh': '底板颜色',
+            'en': 'Backing Color'
+        },
         'conv_preview_btn': {
             'zh': '👁️ 生成预览',
             'en': '👁️ Generate Preview'
@@ -335,6 +339,58 @@ class I18n:
         'conv_loop_info': {
             'zh': '挂孔位置',
             'en': 'Loop Position'
+        },
+        'conv_outline_section': {
+            'zh': '##### 外轮廓设置',
+            'en': '##### Outline Settings'
+        },
+        'conv_outline_enable': {
+            'zh': '启用外轮廓',
+            'en': 'Enable Outline'
+        },
+        'conv_outline_width': {
+            'zh': '轮廓宽度(mm)',
+            'en': 'Outline Width(mm)'
+        },
+        'conv_cloisonne_section': {
+            'zh': '##### 掐丝珐琅特效',
+            'en': '##### Cloisonné Effect'
+        },
+        'conv_cloisonne_enable': {
+            'zh': '启用掐丝珐琅',
+            'en': 'Enable Cloisonné'
+        },
+        'conv_cloisonne_wire_width': {
+            'zh': '丝线宽度(mm)',
+            'en': 'Wire Width(mm)'
+        },
+        'conv_cloisonne_wire_height': {
+            'zh': '丝线高度(mm)',
+            'en': 'Wire Height(mm)'
+        },
+        'conv_cloisonne_wire_color': {
+            'zh': '丝线颜色槽位',
+            'en': 'Wire Color Slot'
+        },
+        'conv_free_color_btn': {
+            'zh': '🎯 标记为自由色',
+            'en': '🎯 Mark as Free Color'
+        },
+        'conv_free_color_clear_btn': {
+            'zh': '清除自由色',
+            'en': 'Clear Free Colors'
+        },
+        'conv_coating_section': {
+            'zh': '##### 透明镀层',
+            'en': '##### Transparent Coating'
+        },
+        'conv_coating_enable': {
+            'zh': '启用透明镀层',
+            'en': 'Enable Coating'
+        },
+        'conv_coating_height': {
+            'zh': '镀层厚度(mm)',
+            'en': 'Coating Height(mm)'
         },
         'conv_status': {
             'zh': '状态',
@@ -672,7 +728,7 @@ class I18n:
         
         # ==================== About Page Content ====================
         'about_content': {
-            'zh': """## 🌟 Lumina Studio v1.5.4
+            'zh': """## 🌟 Lumina Studio v1.6.0
 
 **多材料3D打印色彩系统**
 
@@ -706,7 +762,47 @@ class I18n:
 
 ---
 
-### 📝 v1.5.5 更新日志
+### 📝 v1.6.0 更新日志
+
+#### 🧹 孤立像素清理
+- 新增孤立像素清理功能（高保真模式自动启用）
+- 智能检测并合并孤立色块，提升打印质量
+
+#### 🔧 代码质量改进
+- 替换所有裸异常捕获为 `except Exception`
+- 新增 Aliz PLA & PETG 4/6/8色 npy 预设
+
+---
+
+### 📝 v1.5.8 更新日志
+
+#### 🧹 代码清理
+- 移除融合LUT功能（简化用户体验）
+- 保留BW黑白模式功能
+- 清理.npz文件格式支持
+
+---
+
+### 📝 v1.5.7 更新日志
+
+#### 🔧 8色模式叠色效果修复
+- **核心修复**：修复8色模式图像转换时堆叠顺序错误导致的叠色效果不正确
+- **数据一致性**：确保8色模式ref_stacks格式与4色、6色保持一致 [顶...底]
+- **观赏面修复**：修复观赏面(Z=0)和背面颠倒的问题
+
+#### 🎨 完整8色图像转换支持
+- **UI增强**：图像转换TAB新增8色模式支持
+- **自动检测**：8色LUT自动检测(2600-2800色范围)
+- **完整工作流**：校准板生成 → 颜色提取 → 图像转换
+
+#### 🐳 Docker支持
+- **容器化部署**：添加Dockerfile支持
+- **简化安装**：无需手动配置系统依赖
+- **跨平台**：统一的部署体验
+
+---
+
+### 📝 v1.5.5 更新日志 (历史)
 
 #### 🎨 8色校准版算法优化
 - **算法升级**：8色校准版采用与6色一致的智能筛选算法
@@ -715,29 +811,15 @@ class I18n:
 - **数据修复**：修正材料ID映射，确保与config.py完全一致
 - **统计修正**：修复黑色统计代码，使用正确的材料ID
 
-#### 📊 数据质量
-- 表面黑色使用率：0.0% (仅1个方块)
-- 平均ΔE：3.10 (远超人眼JND 2.3)
-- 总颜色数：2738个 (37×37×2双页)
-- 筛选率：8.36% (从32,768个组合中精选)
-
-#### 🔬 色彩感知分析
-- 添加RGB距离与ΔE对应关系分析
-- 验证人眼可分辨性：55.2%的颜色对ΔE在2.5-5.0
-- 冗余极低：仅0.4%的颜色对ΔE < 1.0
-
 ---
 
-### 📝 v1.5.4 更新日志
+### 📝 v1.5.4 更新日志 (历史)
 
 #### 🐛 矢量模式改进
 - 改进矢量模式的布尔运算逻辑
 - 优化SVG颜色顺序处理
 - 添加微Z偏移以保持细节独立性
 - 增强小特征保护机制
-
-#### 🔄 版本更新
-- 更新版本号至 v1.5.4
 
 ---
 
@@ -809,10 +891,10 @@ class I18n:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.5.5 | 2025
+    v1.6.0 | 2025
 </div>
 """,
-            'en': """## 🌟 Lumina Studio v1.5.5
+            'en': """## 🌟 Lumina Studio v1.6.0
 
 **Multi-Material 3D Print Color System**
 
@@ -846,7 +928,47 @@ Accurate color reproduction for FDM printing
 
 ---
 
-### 📝 v1.5.5 Changelog
+### 📝 v1.6.0 Changelog
+
+#### 🧹 Isolated Pixel Cleanup
+- Added isolated pixel cleanup feature (auto-enabled in High-Fidelity mode)
+- Smart detection and merging of isolated color blocks for better print quality
+
+#### 🔧 Code Quality Improvements
+- Replaced all bare except clauses with `except Exception`
+- Added Aliz PLA & PETG 4/6/8 color npy presets
+
+---
+
+### 📝 v1.5.8 Changelog
+
+#### 🧹 Code Cleanup
+- Removed merged LUT feature (simplified UX)
+- Kept BW black & white mode
+- Cleaned up .npz format support
+
+---
+
+### 📝 v1.5.7 Changelog
+
+#### 🔧 8-Color Mode Stacking Fix
+- **Core Fix**: Fixed incorrect stacking order in 8-color image conversion causing wrong color layering
+- **Data Consistency**: Ensured 8-color ref_stacks format matches 4-color and 6-color [Top...Bottom]
+- **Viewing Surface Fix**: Fixed reversed viewing surface (Z=0) and back surface
+
+#### 🎨 Complete 8-Color Image Conversion Support
+- **UI Enhancement**: Added 8-color mode to Image Converter tab
+- **Auto Detection**: 8-color LUT auto-detection (2600-2800 color range)
+- **Complete Workflow**: Calibration → Color Extraction → Image Conversion
+
+#### 🐳 Docker Support
+- **Containerization**: Added Dockerfile support
+- **Simplified Installation**: No manual system dependency configuration needed
+- **Cross-Platform**: Unified deployment experience
+
+---
+
+### 📝 v1.5.5 Changelog (History)
 
 #### 🎨 8-Color Calibration Algorithm Optimization
 - **Algorithm Upgrade**: 8-color calibration now uses the same intelligent selection algorithm as 6-color
@@ -855,29 +977,15 @@ Accurate color reproduction for FDM printing
 - **Data Fix**: Corrected material ID mapping to match config.py
 - **Statistics Fix**: Fixed black color statistics to use correct material ID
 
-#### 📊 Data Quality
-- Surface black usage: 0.0% (only 1 block)
-- Average ΔE: 3.10 (far exceeds human JND 2.3)
-- Total colors: 2738 (37×37×2 dual-page)
-- Selection rate: 8.36% (selected from 32,768 combinations)
-
-#### 🔬 Color Perception Analysis
-- Added RGB distance vs ΔE correlation analysis
-- Verified human distinguishability: 55.2% of color pairs have ΔE 2.5-5.0
-- Minimal redundancy: only 0.4% of color pairs have ΔE < 1.0
-
 ---
 
-### 📝 v1.5.4 Changelog
+### 📝 v1.5.4 Changelog (History)
 
 #### 🐛 Vector Mode Improvements
 - Improved Boolean operation logic in vector mode
 - Optimized SVG color order processing
 - Added micro Z-offset to maintain detail independence
 - Enhanced small feature protection mechanism
-
-#### 🔄 Version Update
-- Updated version number to v1.5.4
 
 ---
 
@@ -949,7 +1057,7 @@ Special thanks to:
 
 <div style="text-align:center; color:#888; margin-top:20px;">
     Made with ❤️ by [MIN]<br>
-    v1.5.5 | 2025
+    v1.6.0 | 2025
 </div>
 """
         },
