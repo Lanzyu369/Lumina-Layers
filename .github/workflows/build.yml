@@ -29,16 +29,24 @@ jobs:
     - name: Package with PyInstaller
       shell: pwsh
       run: |
+        # 只打包代码和依赖库，不包含大型数据文件夹
         pyinstaller --noconfirm --onefile --windowed `
           --icon="icon.ico" `
-          --add-data "assets;assets" `
-          --add-data "lut-npy预设;lut-npy预设" `
           --collect-all "gradio" `
           --name "Lumina-Layers" `
           main.py
 
+    - name: Prepare Artifact Directory
+      shell: pwsh
+      run: |
+        # 创建一个发布目录，包含 exe 和必要的数据文件夹
+        New-Item -ItemType Directory -Path "release_pkg" -Force
+        Copy-Item "dist/Lumina-Layers.exe" -Destination "release_pkg/"
+        Copy-Item -Path "assets" -Destination "release_pkg/assets" -Recurse
+        Copy-Item -Path "lut-npy预设" -Destination "release_pkg/lut-npy预设" -Recurse
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Lumina-Layers-Windows
-        path: dist/Lumina-Layers.exe
+        name: Lumina-Layers-Release
+        path: release_pkg/
