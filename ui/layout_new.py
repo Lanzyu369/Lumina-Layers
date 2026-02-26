@@ -2078,6 +2078,22 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                                     I18n.get('conv_palette_step2', lang)
                                 )
 
+                                # 以色找色 ColorPicker
+                                with gr.Row():
+                                    conv_color_picker_search = gr.ColorPicker(
+                                        label=I18n.get('lut_grid_picker_label', lang),
+                                        value="#ff0000",
+                                        interactive=True,
+                                        info=I18n.get('lut_grid_picker_hint', lang)
+                                    )
+                                    conv_color_picker_btn = gr.Button(
+                                        I18n.get('lut_grid_picker_btn', lang),
+                                        variant="secondary",
+                                        size="sm"
+                                    )
+                                components['color_conv_picker_search'] = conv_color_picker_search
+                                components['btn_conv_picker_search'] = conv_color_picker_btn
+
                                 # LUT 网格 HTML
                                 conv_lut_grid_view = gr.HTML(
                                     value=f"<div style='color:#888; padding:10px;'>{I18n.get('conv_palette_lut_loading', lang)}</div>",
@@ -2662,6 +2678,53 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             fn=on_lut_color_click,
             inputs=[conv_lut_color_selected_hidden],
             outputs=[conv_replacement_color_state, conv_replacement_display]
+    )
+
+    # 以色找色: ColorPicker nearest match via KDTree
+    def on_color_picker_find_nearest(picker_hex, lut_path):
+        """Find the nearest LUT color to the picked color using KDTree."""
+        if not picker_hex or not lut_path:
+            return gr.update(), gr.update()
+        try:
+            from core.converter import extract_lut_available_colors
+            from core.image_processing import LuminaImageProcessor
+            import numpy as np
+            from scipy.spatial import KDTree
+
+            colors = extract_lut_available_colors(lut_path)
+            if not colors:
+                return gr.update(), gr.update()
+
+            # Build KDTree from LUT colors
+            rgb_array = np.array([c['color'] for c in colors], dtype=np.float64)
+            tree = KDTree(rgb_array)
+
+            # Parse picker hex
+            h = picker_hex.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+            dist, idx = tree.query([[r, g, b]])
+            nearest = colors[idx[0]]
+            nearest_hex = nearest['hex']
+
+            print(f"[COLOR_PICKER] {picker_hex} → nearest LUT: {nearest_hex} (dist={dist[0]:.1f})")
+
+            # Return JS call to scroll to the matched swatch + update replacement display
+            gr.Info(f"✅ 最接近: {nearest_hex} (距离: {dist[0]:.1f})")
+            return nearest_hex, nearest_hex
+        except Exception as e:
+            print(f"[COLOR_PICKER] Error: {e}")
+            return gr.update(), gr.update()
+
+    components['btn_conv_picker_search'].click(
+        fn=on_color_picker_find_nearest,
+        inputs=[components['color_conv_picker_search'], conv_lut_path],
+        outputs=[conv_replacement_color_state, conv_replacement_display]
+    ).then(
+        fn=None,
+        inputs=[conv_replacement_color_state],
+        outputs=[],
+        js="(hex) => { if (hex) { setTimeout(() => window.lutScrollToColor && window.lutScrollToColor(hex), 200); } }"
     )
     
     # Color replacement: Apply replacement

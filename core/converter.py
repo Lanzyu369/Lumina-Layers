@@ -2882,9 +2882,10 @@ def on_preview_click_select_color(cache, evt: gr.SelectData, bed_label=None):
 
 def generate_lut_grid_html(lut_path, lang: str = "zh"):
     """
-    生成 LUT 可用颜色的 HTML 网格
+    生成 LUT 可用颜色的 HTML 网格 (with hue filter + smart search)
     """
     from core.i18n import I18n
+    import colorsys
     colors = extract_lut_available_colors(lut_path)
 
     if not colors:
@@ -2892,12 +2893,69 @@ def generate_lut_grid_html(lut_path, lang: str = "zh"):
 
     count = len(colors)
 
+    def _classify_hue(r, g, b):
+        rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
+        h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
+        h360 = h * 360
+        if s < 0.15 or v < 0.10:
+            return 'neutral'
+        if h360 < 15 or h360 >= 345:
+            return 'red'
+        elif h360 < 40:
+            return 'orange'
+        elif h360 < 70:
+            return 'yellow'
+        elif h360 < 160:
+            return 'green'
+        elif h360 < 195:
+            return 'cyan'
+        elif h360 < 260:
+            return 'blue'
+        elif h360 < 345:
+            return 'purple'
+        return 'neutral'
+
+    search_placeholder = I18n.get('lut_grid_search_hex_placeholder', lang)
+    search_clear = I18n.get('lut_grid_search_clear', lang)
+
+    # Hue filter labels
+    hue_labels = [
+        ('all',     I18n.get('lut_grid_hue_all', lang),     '#666'),
+        ('red',     I18n.get('lut_grid_hue_red', lang),     '#e53935'),
+        ('orange',  I18n.get('lut_grid_hue_orange', lang),  '#fb8c00'),
+        ('yellow',  I18n.get('lut_grid_hue_yellow', lang),  '#fdd835'),
+        ('green',   I18n.get('lut_grid_hue_green', lang),   '#43a047'),
+        ('cyan',    I18n.get('lut_grid_hue_cyan', lang),    '#00acc1'),
+        ('blue',    I18n.get('lut_grid_hue_blue', lang),    '#1e88e5'),
+        ('purple',  I18n.get('lut_grid_hue_purple', lang),  '#8e24aa'),
+        ('neutral', I18n.get('lut_grid_hue_neutral', lang), '#9e9e9e'),
+    ]
+
     html = f"""
     <div class="lut-grid-container">
         <div style="margin-bottom: 8px; font-size: 12px; color: #666;">
-            可用颜色: {count} 种
+            {I18n.get('lut_grid_count', lang).format(count=count)}: <span id="lut-color-visible-count">{count}</span>
         </div>
-        <div style="
+        <div style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:#666;">🔍</span>
+            <input type="text" id="lut-color-search" placeholder="{search_placeholder}"
+                   style="flex:1; padding:6px 10px; border:1px solid #ddd; border-radius:6px; font-size:11px; outline:none;"
+                   oninput="window.lutSmartSearch && window.lutSmartSearch(this.value)"
+                   onfocus="this.style.borderColor='#2196F3'"
+                   onblur="this.style.borderColor='#ddd'" />
+            <button onclick="document.getElementById('lut-color-search').value=''; window.lutSmartSearch && window.lutSmartSearch('');"
+                    style="padding:4px 10px; border:1px solid #ddd; border-radius:6px; background:#f5f5f5; cursor:pointer; font-size:10px;">{search_clear}</button>
+        </div>
+        <div id="lut-hue-filter-bar" style="display:flex; flex-wrap:wrap; gap:3px; margin-bottom:8px;">
+    """
+    for hue_key, hue_label, hue_color in hue_labels:
+        active_style = "background:#333; color:#fff; border-color:#333;" if hue_key == 'all' else ""
+        dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};margin-right:2px;"></span>' if hue_key != 'all' else ''
+        html += f'<button class="lut-hue-btn" data-hue="{hue_key}" onclick="window.lutFilterByHue && window.lutFilterByHue(\'{hue_key}\', this)" style="padding:2px 8px; border:1px solid #ccc; border-radius:10px; background:#f5f5f5; cursor:pointer; font-size:10px; {active_style}">{dot}{hue_label}</button>'
+
+    html += """
+        </div>
+        <div id="lut-color-grid-container" style="
             display: flex;
             flex-wrap: wrap;
             gap: 4px;
@@ -2913,12 +2971,15 @@ def generate_lut_grid_html(lut_path, lang: str = "zh"):
         hex_val = entry['hex']
         r, g, b = entry['color']
         rgb_val = f"R:{r} G:{g} B:{b}"
+        hue_cat = _classify_hue(r, g, b)
 
         html += f"""
+        <div class="lut-color-swatch-container" data-hue="{hue_cat}" style="display:flex;">
         <div class="lut-swatch lut-color-swatch"
              data-color="{hex_val}"
              style="background-color: {hex_val}; width:24px; height:24px; cursor:pointer; border:1px solid #ddd; border-radius:3px;"
              title="{hex_val} ({rgb_val})">
+        </div>
         </div>
         """
 
@@ -2934,6 +2995,9 @@ def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
     matching the physical calibration board layout.  For 8-color LUTs the two
     halves are shown side-by-side horizontally.
 
+    Includes search bar (highlight-in-place, no hiding) and hue filter
+    (dims non-matching swatches instead of hiding to preserve grid layout).
+
     Each swatch is clickable (same data-color / class as the swatch grid) so
     the existing event-delegation click handler picks it up automatically.
     """
@@ -2947,6 +3011,47 @@ def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
         return f"<div style='color:orange'>LUT 加载失败: {e}</div>"
 
     total = len(measured_colors)
+
+    from core.i18n import I18n
+    import colorsys
+
+    def _classify_hue(r, g, b):
+        rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
+        h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
+        h360 = h * 360
+        if s < 0.15 or v < 0.10:
+            return 'neutral'
+        if h360 < 15 or h360 >= 345:
+            return 'red'
+        elif h360 < 40:
+            return 'orange'
+        elif h360 < 70:
+            return 'yellow'
+        elif h360 < 160:
+            return 'green'
+        elif h360 < 195:
+            return 'cyan'
+        elif h360 < 260:
+            return 'blue'
+        elif h360 < 345:
+            return 'purple'
+        return 'neutral'
+
+    search_placeholder = I18n.get('lut_grid_search_hex_placeholder', lang)
+    search_clear = I18n.get('lut_grid_search_clear', lang)
+
+    hue_labels = [
+        ('all',     I18n.get('lut_grid_hue_all', lang),     '#666'),
+        ('red',     I18n.get('lut_grid_hue_red', lang),     '#e53935'),
+        ('orange',  I18n.get('lut_grid_hue_orange', lang),  '#fb8c00'),
+        ('yellow',  I18n.get('lut_grid_hue_yellow', lang),  '#fdd835'),
+        ('green',   I18n.get('lut_grid_hue_green', lang),   '#43a047'),
+        ('cyan',    I18n.get('lut_grid_hue_cyan', lang),    '#00acc1'),
+        ('blue',    I18n.get('lut_grid_hue_blue', lang),    '#1e88e5'),
+        ('purple',  I18n.get('lut_grid_hue_purple', lang),  '#8e24aa'),
+        ('neutral', I18n.get('lut_grid_hue_neutral', lang), '#9e9e9e'),
+    ]
+
     import math
     if total == 2738:
         half = total // 2
@@ -2965,10 +3070,37 @@ def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
     cell = 18
     gap = 1
 
+    # Search bar
     html_parts = [
-        "<div style='display:flex; gap:12px; align-items:flex-start; "
-        "overflow-x:auto; padding:4px;'>"
+        f'<div style="margin-bottom:8px; font-size:12px; color:#666;">{I18n.get("lut_grid_count", lang).format(count=total)}: <span id="lut-color-visible-count">{total}</span></div>',
+        f'''<div style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:#666;">🔍</span>
+            <input type="text" id="lut-color-search" placeholder="{search_placeholder}"
+                   style="flex:1; padding:6px 10px; border:1px solid #ddd; border-radius:6px; font-size:11px; outline:none;"
+                   oninput="window.lutCardSearch && window.lutCardSearch(this.value)"
+                   onfocus="this.style.borderColor='#2196F3'"
+                   onblur="this.style.borderColor='#ddd'" />
+            <button onclick="document.getElementById('lut-color-search').value=''; window.lutCardSearch && window.lutCardSearch('');"
+                    style="padding:4px 10px; border:1px solid #ddd; border-radius:6px; background:#f5f5f5; cursor:pointer; font-size:10px;">{search_clear}</button>
+        </div>''',
+        # Hue filter bar
+        '<div id="lut-hue-filter-bar" style="display:flex; flex-wrap:wrap; gap:3px; margin-bottom:8px;">',
     ]
+    for hue_key, hue_label, hue_color in hue_labels:
+        active_style = "background:#333; color:#fff; border-color:#333;" if hue_key == 'all' else ""
+        dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};margin-right:2px;"></span>' if hue_key != 'all' else ''
+        html_parts.append(
+            f'<button class="lut-hue-btn" data-hue="{hue_key}" '
+            f'onclick="window.lutCardFilterByHue && window.lutCardFilterByHue(\'{hue_key}\', this)" '
+            f'style="padding:2px 8px; border:1px solid #ccc; border-radius:10px; background:#f5f5f5; cursor:pointer; font-size:10px; {active_style}">{dot}{hue_label}</button>'
+        )
+    html_parts.append('</div>')
+
+    # Grid
+    html_parts.append(
+        "<div id='lut-color-grid-container' style='display:flex; gap:12px; align-items:flex-start; "
+        "overflow-x:auto; padding:4px;'>"
+    )
 
     for colors_arr, dim, title in grids:
         html_parts.append(
@@ -2980,8 +3112,9 @@ def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
         for c in colors_arr:
             r, g, b = int(c[0]), int(c[1]), int(c[2])
             hex_val = f"#{r:02x}{g:02x}{b:02x}"
+            hue_cat = _classify_hue(r, g, b)
             html_parts.append(
-                f"<div class='lut-swatch lut-color-swatch' data-color='{hex_val}' "
+                f"<div class='lut-swatch lut-color-swatch' data-color='{hex_val}' data-hue='{hue_cat}' "
                 f"style='width:{cell}px;height:{cell}px;background:{hex_val};"
                 f"cursor:pointer;border-radius:2px;' "
                 f"title='{hex_val} (R:{r} G:{g} B:{b})'></div>"

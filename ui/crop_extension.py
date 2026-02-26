@@ -281,6 +281,18 @@ CROP_MODAL_JS = """
     margin: 0 !important;
     border: none !important;
 }
+
+/* LUT swatch breathing highlight animation */
+@keyframes lutBreathing {
+    0%   { outline: 3px solid rgba(255, 87, 34, 0.9); outline-offset: 2px; }
+    50%  { outline: 6px solid rgba(255, 87, 34, 0.3); outline-offset: 4px; }
+    100% { outline: 3px solid rgba(255, 87, 34, 0.9); outline-offset: 2px; }
+}
+.lut-color-swatch.lut-highlight {
+    animation: lutBreathing 0.7s ease-in-out 3;
+    z-index: 10;
+    position: relative;
+}
 </style>
 <script>
 window.cropper = null;
@@ -425,25 +437,208 @@ console.log('Crop modal JS loaded, openCropModal:', typeof window.openCropModal)
 // ═══════════════════════════════════════════════════════════════
 
 (function() {
-    // LUT color search filter function (called from oninput attribute)
-    window.filterLutColors = function(searchValue) {
-        var query = searchValue.toLowerCase().replace('#', '');
+    // LUT color smart search: supports hex (#FF0000), partial hex (ff00), and RGB (255,0,0)
+    window.lutSmartSearch = function(searchValue) {
+        var query = searchValue.trim().toLowerCase();
+        var containers = document.querySelectorAll('.lut-color-swatch-container');
+        var visibleCount = 0;
+        var firstMatch = null;
+
+        // Parse RGB input like "255,0,0" or "255 0 0"
+        var rgbMatch = query.match(/^(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})$/);
+        var rgbHex = null;
+        if (rgbMatch) {
+            var r = Math.min(255, parseInt(rgbMatch[1]));
+            var g = Math.min(255, parseInt(rgbMatch[2]));
+            var b = Math.min(255, parseInt(rgbMatch[3]));
+            rgbHex = ('0'+r.toString(16)).slice(-2) + ('0'+g.toString(16)).slice(-2) + ('0'+b.toString(16)).slice(-2);
+        }
+
+        var hexQuery = query.replace('#', '');
+
+        containers.forEach(function(container) {
+            var swatch = container.querySelector('.lut-color-swatch');
+            if (!swatch) return;
+            var color = swatch.getAttribute('data-color').toLowerCase().replace('#', '');
+            var match = false;
+            if (query === '') {
+                match = true;
+            } else if (rgbHex) {
+                match = color === rgbHex;
+            } else {
+                match = color.includes(hexQuery);
+            }
+            if (match) {
+                container.style.display = 'flex';
+                visibleCount++;
+                if (!firstMatch) firstMatch = swatch;
+            } else {
+                container.style.display = 'none';
+            }
+        });
+
+        var countEl = document.getElementById('lut-color-visible-count');
+        if (countEl) countEl.textContent = visibleCount;
+
+        // Scroll to and highlight first match
+        if (firstMatch && query !== '') {
+            window.lutScrollAndHighlight(firstMatch);
+        }
+    };
+
+    // Keep backward compat
+    window.filterLutColors = window.lutSmartSearch;
+
+    // Scroll to a swatch and add breathing highlight animation
+    window.lutScrollAndHighlight = function(swatchEl) {
+        if (!swatchEl) return;
+        swatchEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Remove previous highlights
+        document.querySelectorAll('.lut-color-swatch.lut-highlight').forEach(function(el) {
+            el.classList.remove('lut-highlight');
+        });
+        swatchEl.classList.add('lut-highlight');
+        // Remove after animation
+        setTimeout(function() { swatchEl.classList.remove('lut-highlight'); }, 2000);
+    };
+
+    // Hue filter: show/hide swatches by data-hue attribute
+    window._lutActiveHue = 'all';
+    window.lutFilterByHue = function(hueKey, btnEl) {
+        window._lutActiveHue = hueKey;
+        // Update button styles
+        document.querySelectorAll('.lut-hue-btn').forEach(function(b) {
+            b.style.background = '#f5f5f5';
+            b.style.color = '#333';
+            b.style.borderColor = '#ccc';
+        });
+        if (btnEl) {
+            btnEl.style.background = '#333';
+            btnEl.style.color = '#fff';
+            btnEl.style.borderColor = '#333';
+        }
+        // Filter containers
         var containers = document.querySelectorAll('.lut-color-swatch-container');
         var visibleCount = 0;
         containers.forEach(function(container) {
-            var swatch = container.querySelector('.lut-color-swatch');
-            if (swatch) {
-                var color = swatch.getAttribute('data-color').toLowerCase().replace('#', '');
-                if (query === '' || color.includes(query)) {
-                    container.style.display = 'flex';
-                    visibleCount++;
-                } else {
-                    container.style.display = 'none';
-                }
+            var containerHue = container.getAttribute('data-hue');
+            if (hueKey === 'all' || containerHue === hueKey) {
+                container.style.display = 'flex';
+                visibleCount++;
+            } else {
+                container.style.display = 'none';
             }
         });
         var countEl = document.getElementById('lut-color-visible-count');
         if (countEl) countEl.textContent = visibleCount;
+        // Clear search box when switching hue
+        var searchBox = document.getElementById('lut-color-search');
+        if (searchBox) searchBox.value = '';
+    };
+
+    // Color picker nearest match: called from Gradio backend, scrolls to matched swatch
+    window.lutScrollToColor = function(hexColor) {
+        if (!hexColor) return;
+        var target = hexColor.toLowerCase();
+        var swatches = document.querySelectorAll('.lut-color-swatch');
+        for (var i = 0; i < swatches.length; i++) {
+            if (swatches[i].getAttribute('data-color').toLowerCase() === target) {
+                // Reset hue filter to show all
+                var allBtn = document.querySelector('.lut-hue-btn[data-hue="all"]');
+                if (allBtn) {
+                    if (window.lutFilterByHue) window.lutFilterByHue('all', allBtn);
+                    else if (window.lutCardFilterByHue) window.lutCardFilterByHue('all', allBtn);
+                }
+                // Clear search
+                var searchBox = document.getElementById('lut-color-search');
+                if (searchBox) searchBox.value = '';
+                // Scroll and highlight
+                window.lutScrollAndHighlight(swatches[i]);
+                // Simulate click to select
+                swatches[i].click();
+                return;
+            }
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // Card mode: search highlights in-place, hue filter dims non-matches
+    // (preserves grid spatial layout)
+    // ═══════════════════════════════════════════════════════════════
+
+    window.lutCardSearch = function(searchValue) {
+        var query = searchValue.trim().toLowerCase().replace('#', '');
+        var swatches = document.querySelectorAll('.lut-color-swatch');
+        var visibleCount = 0;
+        var firstMatch = null;
+
+        // Parse RGB input
+        var rgbMatch = query.match(/^(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})$/);
+        var rgbHex = null;
+        if (rgbMatch) {
+            var r = Math.min(255, parseInt(rgbMatch[1]));
+            var g = Math.min(255, parseInt(rgbMatch[2]));
+            var b = Math.min(255, parseInt(rgbMatch[3]));
+            rgbHex = ('0'+r.toString(16)).slice(-2) + ('0'+g.toString(16)).slice(-2) + ('0'+b.toString(16)).slice(-2);
+        }
+
+        swatches.forEach(function(swatch) {
+            var color = swatch.getAttribute('data-color').toLowerCase().replace('#', '');
+            var match = false;
+            if (query === '') {
+                match = true;
+            } else if (rgbHex) {
+                match = color === rgbHex;
+            } else {
+                match = color.includes(query);
+            }
+            if (match) {
+                swatch.style.opacity = '1';
+                swatch.style.outline = '';
+                visibleCount++;
+                if (!firstMatch && query !== '') firstMatch = swatch;
+            } else {
+                swatch.style.opacity = '0.15';
+            }
+        });
+
+        var countEl = document.getElementById('lut-color-visible-count');
+        if (countEl) countEl.textContent = visibleCount;
+
+        if (firstMatch) {
+            window.lutScrollAndHighlight(firstMatch);
+        }
+    };
+
+    window.lutCardFilterByHue = function(hueKey, btnEl) {
+        // Update button styles
+        document.querySelectorAll('.lut-hue-btn').forEach(function(b) {
+            b.style.background = '#f5f5f5';
+            b.style.color = '#333';
+            b.style.borderColor = '#ccc';
+        });
+        if (btnEl) {
+            btnEl.style.background = '#333';
+            btnEl.style.color = '#fff';
+            btnEl.style.borderColor = '#333';
+        }
+        // Dim non-matching swatches (preserve grid layout)
+        var swatches = document.querySelectorAll('.lut-color-swatch');
+        var visibleCount = 0;
+        swatches.forEach(function(swatch) {
+            var swatchHue = swatch.getAttribute('data-hue');
+            if (hueKey === 'all' || swatchHue === hueKey) {
+                swatch.style.opacity = '1';
+                visibleCount++;
+            } else {
+                swatch.style.opacity = '0.12';
+            }
+        });
+        var countEl = document.getElementById('lut-color-visible-count');
+        if (countEl) countEl.textContent = visibleCount;
+        // Clear search
+        var searchBox = document.getElementById('lut-color-search');
+        if (searchBox) searchBox.value = '';
     };
     
     // Helper function to update Gradio textbox
