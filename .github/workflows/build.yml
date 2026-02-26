@@ -30,13 +30,14 @@ jobs:
       shell: pwsh
       run: |
         # 只打包代码和依赖库，不包含大型数据文件夹
-        # --collect-all 修复 gradio 生态库中 version.txt 丢失的问题
-        pyinstaller --noconfirm --onefile --windowed `
+        # 移除 --windowed 以显示控制台并修复 uvicorn/isatty 报错
+        pyinstaller --noconfirm --onefile `
           --icon="icon.ico" `
           --collect-all "gradio" `
           --collect-all "safehttpx" `
           --collect-all "groovy" `
           --collect-all "gradio_client" `
+          --collect-all "uvicorn" `
           --name "Lumina-Layers" `
           main.py
 
