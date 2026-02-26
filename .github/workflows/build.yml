@@ -1,0 +1,44 @@
+name: Build and Package Lumina Layers
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+
+    - name: Package with PyInstaller
+      shell: pwsh
+      run: |
+        pyinstaller --noconfirm --onefile --windowed `
+          --icon="icon.ico" `
+          --add-data "assets;assets" `
+          --add-data "lut-npy预设;lut-npy预设" `
+          --collect-all "gradio" `
+          --name "Lumina-Layers" `
+          main.py
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Lumina-Layers-Windows
+        path: dist/Lumina-Layers.exe
