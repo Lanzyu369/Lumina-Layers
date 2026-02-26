@@ -32,18 +32,19 @@ def build_hue_filter_bar_html(lang: str = "zh") -> str:
         if hue_key == 'all':
             dot = ''
         elif hue_key == 'neutral':
-            # Neutral dot needs a border to be visible against light backgrounds
-            dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};border:1px solid #666;margin-right:2px;"></span>'
+            # Neutral dot: box-sizing keeps total size at 6px despite border
+            dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};border:1px solid #666;box-sizing:border-box;margin-right:2px;vertical-align:middle;"></span>'
         elif hue_key == 'fav':
-            dot = ''  # The star emoji is already in the label
+            # Star scaled down to match dot size
+            dot = '<span style="font-size:8px;margin-right:1px;vertical-align:middle;">⭐</span>'
         else:
-            dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};margin-right:2px;"></span>'
+            dot = f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{hue_color};margin-right:2px;vertical-align:middle;"></span>'
         # Use a unified JS dispatcher that works for both swatch and card modes
         parts.append(
             f'<button class="lut-hue-btn" data-hue="{hue_key}" '
             f'onclick="window.lutHueDispatch && window.lutHueDispatch(\'{hue_key}\', this)" '
             f'style="padding:2px 8px; border:1px solid #ccc; border-radius:10px; background:#f5f5f5; '
-            f'cursor:pointer; font-size:10px; {active_style}">{dot}{hue_label}</button>'
+            f'cursor:pointer; font-size:10px; height:22px; line-height:16px; {active_style}">{dot}{hue_label}</button>'
         )
     parts.append('</div>')
     return ''.join(parts)

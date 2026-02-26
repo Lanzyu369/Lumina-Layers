@@ -743,8 +743,8 @@ class I18n:
             'en': 'Neutral'
         },
         'lut_grid_hue_fav': {
-            'zh': '⭐ 收藏',
-            'en': '⭐ Favorites'
+            'zh': '收藏',
+            'en': 'Favorites'
         },
         'lut_grid_search_hex_placeholder': {
             'zh': '输入 Hex 或 RGB 搜索定位 (如 #FF0000 或 255,0,0)',
