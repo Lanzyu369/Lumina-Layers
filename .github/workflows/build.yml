@@ -22,24 +22,17 @@ jobs:
       id: vars
       shell: bash
       run: |
-        # 显式拉取所有标签以确保本地可见
-        git fetch --tags --force
+        # 使用 git tag -l 获取最新标签，失败则返回空字符串
+        VERSION=$(git tag -l "v*" --sort=-v:refname | head -n 1 || echo "")
         
-        # 1. 优先尝试使用 git describe (最精确)
-        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null)
-        
-        # 2. 如果 describe 失败，尝试列出最新标签
-        if [ -z "$VERSION" ]; then
-          VERSION=$(git tag -l "v*" --sort=-v:refname | head -n 1)
-        fi
-        
-        # 3. 如果还是没有，默认 v0.0.0
+        # 如果没有找到标签，默认使用 v0.0.0
         if [ -z "$VERSION" ]; then
           VERSION="v0.0.0"
         fi
         
-        # 获取 7 位短 Hash
-        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        # 获取 7 位短 Hash，失败则返回 0000000
+        SHORT_SHA=$(git rev-parse --short=7 HEAD | cut -c1-7 || echo "0000000")
+        
         # 组合完整名称
         FULL_NAME="Lumina-Layers-$VERSION-$SHORT_SHA"
         
