@@ -2855,20 +2855,28 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 ],
                 outputs=[conv_preview]
             )
-    # ========== Relief Mode Event Handlers ==========
+    # ========== Relief / Cloisonné Mutual Exclusion ==========
     def on_relief_mode_toggle(enable_relief, selected_color, height_map, base_thickness):
-        """Toggle relief mode visibility and reset state"""
+        """Toggle relief mode visibility and reset state; auto-disable cloisonné"""
         if not enable_relief:
             # Disable relief mode - hide slider, accordion, and clear state
-            return gr.update(visible=False), gr.update(visible=False), {}, None
+            return gr.update(visible=False), gr.update(visible=False), {}, None, gr.update()
         else:
-            # Enable relief mode - show accordion, show slider if color is selected
+            # Enable relief → disable cloisonné
+            gr.Info("⚠️ 2.5D浮雕模式与掐丝珐琅模式互斥，已自动关闭掐丝珐琅 | Relief and Cloisonné are mutually exclusive, Cloisonné disabled")
             if selected_color:
                 current_height = height_map.get(selected_color, base_thickness)
-                return gr.update(visible=True, value=current_height), gr.update(visible=True), height_map, selected_color
+                return gr.update(visible=True, value=current_height), gr.update(visible=True), height_map, selected_color, gr.update(value=False)
             else:
-                return gr.update(visible=False), gr.update(visible=True), height_map, selected_color
-    
+                return gr.update(visible=False), gr.update(visible=True), height_map, selected_color, gr.update(value=False)
+
+    def on_cloisonne_mode_toggle(enable_cloisonne):
+        """When cloisonné is enabled, auto-disable relief mode"""
+        if enable_cloisonne:
+            gr.Info("⚠️ 掐丝珐琅模式与2.5D浮雕模式互斥，已自动关闭浮雕 | Cloisonné and Relief are mutually exclusive, Relief disabled")
+            return gr.update(value=False), gr.update(visible=False), gr.update(visible=False)
+        return gr.update(), gr.update(), gr.update()
+
     components['checkbox_conv_relief_mode'].change(
         on_relief_mode_toggle,
         inputs=[
@@ -2881,7 +2889,18 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             components['slider_conv_relief_height'],
             components['accordion_conv_auto_height'],
             conv_color_height_map,
-            conv_relief_selected_color
+            conv_relief_selected_color,
+            components['checkbox_conv_cloisonne_enable']
+        ]
+    )
+
+    components['checkbox_conv_cloisonne_enable'].change(
+        on_cloisonne_mode_toggle,
+        inputs=[components['checkbox_conv_cloisonne_enable']],
+        outputs=[
+            components['checkbox_conv_relief_mode'],
+            components['slider_conv_relief_height'],
+            components['accordion_conv_auto_height']
         ]
     )
     
