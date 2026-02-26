@@ -15,20 +15,29 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # 获取完整历史以查找标签和提交记录
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
+        fetch-depth: 0
+        fetch-tags: true
 
     - name: Get Version and Hash
       id: vars
       shell: bash
       run: |
-        # 尝试寻找最近的 v* 标签，如果没有则使用 v0.0.0
-        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
+        # 显式拉取所有标签以确保本地可见
+        git fetch --tags --force
+        
+        # 1. 优先尝试使用 git describe (最精确)
+        VERSION=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null)
+        
+        # 2. 如果 describe 失败，尝试列出最新标签
+        if [ -z "$VERSION" ]; then
+          VERSION=$(git tag -l "v*" --sort=-v:refname | head -n 1)
+        fi
+        
+        # 3. 如果还是没有，默认 v0.0.0
+        if [ -z "$VERSION" ]; then
+          VERSION="v0.0.0"
+        fi
+        
         # 获取 7 位短 Hash
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
         # 组合完整名称
