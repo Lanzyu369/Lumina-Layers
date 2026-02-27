@@ -786,6 +786,104 @@ class I18n:
             'en': '☀️ Day Mode'
         },
         
+        # ==================== LUT Merge Tab ====================
+        'tab_merge': {
+            'zh': '🔀 色卡合并',
+            'en': '🔀 LUT Merge'
+        },
+        'merge_title': {
+            'zh': '### 🔀 色卡合并',
+            'en': '### 🔀 LUT Merge'
+        },
+        'merge_desc': {
+            'zh': '将不同色彩模式的LUT色卡合并为一个，获得更丰富的色彩。',
+            'en': 'Merge LUT cards from different color modes into one for richer colors.'
+        },
+        'merge_lut_primary_label': {
+            'zh': '🎯 主色卡（6色或8色）',
+            'en': '🎯 Primary LUT (6-Color or 8-Color)'
+        },
+        'merge_lut_secondary_label': {
+            'zh': '➕ 副色卡（可多选）',
+            'en': '➕ Secondary LUTs (Multi-select)'
+        },
+        'merge_lut_1_label': {
+            'zh': '选择LUT 1（主色卡）',
+            'en': 'Select LUT 1 (Primary)'
+        },
+        'merge_lut_2_label': {
+            'zh': '选择LUT 2（合并色卡）',
+            'en': 'Select LUT 2 (Secondary)'
+        },
+        'merge_secondary_modes': {
+            'zh': '已选副色卡',
+            'en': 'Selected Secondary LUTs'
+        },
+        'merge_secondary_none': {
+            'zh': '未选择副色卡',
+            'en': 'No secondary LUTs selected'
+        },
+        'merge_primary_hint': {
+            'zh': '💡 请先选择一个6色或8色的主色卡',
+            'en': '💡 Please select a 6-Color or 8-Color primary LUT first'
+        },
+        'merge_primary_not_high': {
+            'zh': '❌ 主色卡必须是6色或8色模式',
+            'en': '❌ Primary LUT must be 6-Color or 8-Color mode'
+        },
+        'merge_error_no_secondary': {
+            'zh': '❌ 请至少选择一个副色卡',
+            'en': '❌ Please select at least one secondary LUT'
+        },
+        'merge_mode_label': {
+            'zh': '检测到的模式',
+            'en': 'Detected Mode'
+        },
+        'merge_mode_unknown': {
+            'zh': '未选择',
+            'en': 'Not selected'
+        },
+        'merge_dedup_label': {
+            'zh': 'Delta-E 去重阈值',
+            'en': 'Delta-E Dedup Threshold'
+        },
+        'merge_dedup_info': {
+            'zh': '值越大去除的相近色越多，0=仅精确去重',
+            'en': 'Higher = remove more similar colors, 0 = exact dedup only'
+        },
+        'merge_btn': {
+            'zh': '🔀 执行合并',
+            'en': '🔀 Merge'
+        },
+        'merge_status_ready': {
+            'zh': '💡 选择两个LUT后点击合并',
+            'en': '💡 Select two LUTs then click Merge'
+        },
+        'merge_status_running': {
+            'zh': '⏳ 合并中...',
+            'en': '⏳ Merging...'
+        },
+        'merge_status_success': {
+            'zh': '✅ 合并完成！合并前: {before} 色 → 合并后: {after} 色（精确去重: {exact}，相近色去除: {similar}）\n保存至: {path}',
+            'en': '✅ Merge complete! Before: {before} → After: {after} (exact dupes: {exact}, similar removed: {similar})\nSaved to: {path}'
+        },
+        'merge_error_no_lut': {
+            'zh': '❌ 请选择至少两个LUT文件',
+            'en': '❌ Please select at least two LUT files'
+        },
+        'merge_error_same_lut': {
+            'zh': '❌ 请选择不同的LUT文件',
+            'en': '❌ Please select different LUT files'
+        },
+        'merge_error_incompatible': {
+            'zh': '❌ 不兼容的LUT组合: {msg}',
+            'en': '❌ Incompatible LUT combination: {msg}'
+        },
+        'merge_error_failed': {
+            'zh': '❌ 合并失败: {msg}',
+            'en': '❌ Merge failed: {msg}'
+        },
+        
         # ==================== About Page Content ====================
         'about_content': {
             'zh': """## 🌟 Lumina Studio v1.6.0

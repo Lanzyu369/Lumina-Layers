@@ -19,6 +19,7 @@ from core.i18n import I18n
 from config import ColorSystem, ModelingMode, BedManager
 from utils import Stats, LUTManager
 from core.calibration import generate_calibration_board, generate_smart_board, generate_8color_batch_zip
+from core.naming import generate_batch_filename
 from core.extractor import (
     rotate_image,
     draw_corner_points,
@@ -59,7 +60,11 @@ from .callbacks import (
     on_highlight_color_change,
     on_clear_highlight,
     run_extraction_wrapper,
-    merge_8color_data
+    merge_8color_data,
+    on_merge_lut_select,
+    on_merge_execute,
+    on_merge_primary_select,
+    on_merge_secondary_change,
 )
 
 # Runtime-injected i18n keys (avoids editing core/i18n.py).
@@ -212,7 +217,9 @@ def save_modeling_mode(modeling_mode):
 
 import subprocess
 import platform
-import winreg
+
+if platform.system() == "Windows":
+    import winreg
 
 # Known slicer identifiers for registry matching
 _SLICER_KEYWORDS = {
@@ -228,7 +235,11 @@ def _scan_registry_for_slicers():
     """Scan Windows registry Uninstall keys to find slicer executables.
     
     Returns dict: {slicer_id: {"name": display_name, "exe": exe_path}}
+    Non-Windows platforms return empty dict.
     """
+    if platform.system() != "Windows":
+        return {}
+
     found = {}
     reg_paths = [
         (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -968,7 +979,7 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
             print(f"Batch error on {filename}: {e}")
 
     if generated_files:
-        zip_path = os.path.join("outputs", f"Lumina_Batch_{int(time.time())}.zip")
+        zip_path = os.path.join("outputs", generate_batch_filename())
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for f in generated_files:
                 zipf.write(f, os.path.basename(f))
@@ -981,7 +992,14 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
 
 
 def _update_lut_grid(lut_path, lang, palette_mode="swatch"):
-    """Wrapper that picks swatch or card grid based on palette_mode setting."""
+    """Wrapper that picks swatch or card grid based on palette_mode setting.
+    
+    For merged LUTs (.npz), always uses swatch mode since card mode
+    requires stack data in a format incompatible with merged LUTs.
+    """
+    # Force swatch mode for merged LUTs
+    if lut_path and lut_path.endswith('.npz'):
+        palette_mode = "swatch"
     if palette_mode == "card":
         return generate_lut_card_grid_html(lut_path, lang)
     return generate_lut_grid_html(lut_path, lang)
@@ -1203,7 +1221,12 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
                 components.update(advanced_components)
             tab_components['tab_advanced'] = tab_advanced
             
-            with gr.TabItem(label=I18n.get('tab_about', "zh"), id=4) as tab_about:
+            with gr.TabItem(label=I18n.get('tab_merge', "zh"), id=4) as tab_merge:
+                merge_components = create_merge_tab_content("zh")
+                components.update(merge_components)
+            tab_components['tab_merge'] = tab_merge
+            
+            with gr.TabItem(label=I18n.get('tab_about', "zh"), id=5) as tab_about:
                 about_components = create_about_tab_content("zh")
                 components.update(about_components)
             tab_components['tab_about'] = tab_about
@@ -1227,6 +1250,7 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             updates.append(gr.update(label=I18n.get('tab_calibration', new_lang)))
             updates.append(gr.update(label=I18n.get('tab_extractor', new_lang)))
             updates.append(gr.update(label="🔬 高级 | Advanced" if new_lang == "zh" else "🔬 Advanced"))
+            updates.append(gr.update(label=I18n.get('tab_merge', new_lang)))
             updates.append(gr.update(label=I18n.get('tab_about', new_lang)))
             updates.extend(_get_all_component_updates(new_lang, components))
             updates.append(gr.update(value=_get_footer_html(new_lang)))
@@ -1242,6 +1266,7 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             tab_components['tab_calibration'],
             tab_components['tab_extractor'],
             tab_components['tab_advanced'],
+            tab_components['tab_merge'],
             tab_components['tab_about'],
         ]
         output_list.extend(_get_component_list(components))
@@ -1372,6 +1397,35 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             outputs=[components['md_settings_status'], stats_html]
         )
 
+        # ═══════ LUT Merge Tab Events ═══════
+        components['dd_merge_primary'].change(
+            fn=on_merge_primary_select,
+            inputs=[components['dd_merge_primary'], lang_state],
+            outputs=[
+                components['md_merge_mode_primary'],
+                components['dd_merge_secondary'],
+            ],
+        )
+        components['dd_merge_secondary'].change(
+            fn=on_merge_secondary_change,
+            inputs=[components['dd_merge_secondary'], lang_state],
+            outputs=[components['md_merge_secondary_info']],
+        )
+        components['btn_merge'].click(
+            fn=on_merge_execute,
+            inputs=[
+                components['dd_merge_primary'],
+                components['dd_merge_secondary'],
+                components['slider_dedup_threshold'],
+                lang_state,
+            ],
+            outputs=[
+                components['md_merge_status'],
+                components['dd_merge_primary'],
+                components['dd_merge_secondary'],
+            ],
+        )
+
         def update_stats_bar(lang):
             stats = Stats.get_all()
             return _get_stats_html(lang, stats)
@@ -1482,6 +1536,37 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
         if key == 'md_settings_status':
             updates.append(gr.update())
             continue
+        # Merge tab: skip dynamic status
+        if key == 'md_merge_status':
+            updates.append(gr.update())
+            continue
+        if key == 'md_merge_title':
+            updates.append(gr.update(value=I18n.get('merge_title', lang)))
+            continue
+        if key == 'md_merge_desc':
+            updates.append(gr.update(value=I18n.get('merge_desc', lang)))
+            continue
+        if key == 'md_merge_mode_primary':
+            updates.append(gr.update())  # dynamic, don't overwrite
+            continue
+        if key == 'md_merge_secondary_info':
+            updates.append(gr.update())  # dynamic, don't overwrite
+            continue
+        if key == 'dd_merge_primary':
+            updates.append(gr.update(label=I18n.get('merge_lut_primary_label', lang)))
+            continue
+        if key == 'dd_merge_secondary':
+            updates.append(gr.update(label=I18n.get('merge_lut_secondary_label', lang)))
+            continue
+        if key == 'slider_dedup_threshold':
+            updates.append(gr.update(
+                label=I18n.get('merge_dedup_label', lang),
+                info=I18n.get('merge_dedup_info', lang),
+            ))
+            continue
+        if key == 'btn_merge':
+            updates.append(gr.update(value=I18n.get('merge_btn', lang)))
+            continue
 
         if key.startswith('md_'):
             updates.append(gr.update(value=I18n.get(key[3:], lang)))
@@ -1492,14 +1577,18 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
         elif key.startswith('radio_'):
             choice_key = key[6:]
             if choice_key == 'conv_color_mode' or choice_key == 'cal_color_mode' or choice_key == 'ext_color_mode':
+                choices = [
+                    ("BW (Black & White)", "BW (Black & White)"),
+                    ("4-Color (1024 colors)", "4-Color"),
+                    ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
+                    ("8-Color Max", "8-Color Max"),
+                ]
+                # Only the converter tab needs the Merged option
+                if choice_key == 'conv_color_mode':
+                    choices.append(("🔀 Merged", "Merged"))
                 updates.append(gr.update(
                     label=I18n.get(choice_key, lang),
-                    choices=[
-                        ("BW (Black & White)", "BW (Black & White)"),
-                        ("4-Color (1024 colors)", "4-Color"),
-                        ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
-                        ("8-Color Max", "8-Color Max")
-                    ]
+                    choices=choices,
                 ))
             elif choice_key == 'conv_structure':
                 updates.append(gr.update(
@@ -1898,10 +1987,13 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                         ("BW (Black & White)", "BW (Black & White)"),
                         ("4-Color (1024 colors)", "4-Color"),
                         ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
-                        ("8-Color Max", "8-Color Max")
+                        ("8-Color Max", "8-Color Max"),
+                        ("🔀 Merged", "Merged"),
                     ],
                     value=saved_color_mode,
-                    label=I18n.get('conv_color_mode', lang)
+                    label=I18n.get('conv_color_mode', lang),
+                    interactive=False,
+                    visible=False,
                 )
                 
                 components['radio_conv_structure'] = gr.Radio(
@@ -3562,6 +3654,54 @@ def create_extractor_tab_content(lang: str) -> dict:
     
     return components
 
+
+
+def create_merge_tab_content(lang: str) -> dict:
+    """Build LUT Merge tab content. Returns component dict.
+
+    Layout: Primary LUT dropdown (single) + Secondary LUTs dropdown (multi-select)
+    Primary must be 6-Color or 8-Color. Secondary options are filtered based on primary mode.
+    """
+    components = {}
+
+    components['md_merge_title'] = gr.Markdown(I18n.get('merge_title', lang))
+    components['md_merge_desc'] = gr.Markdown(I18n.get('merge_desc', lang))
+
+    with gr.Row():
+        with gr.Column():
+            components['dd_merge_primary'] = gr.Dropdown(
+                choices=LUTManager.get_lut_choices(),
+                label=I18n.get('merge_lut_primary_label', lang),
+                interactive=True,
+            )
+            components['md_merge_mode_primary'] = gr.Markdown(
+                I18n.get('merge_primary_hint', lang)
+            )
+        with gr.Column():
+            components['dd_merge_secondary'] = gr.Dropdown(
+                choices=[],
+                label=I18n.get('merge_lut_secondary_label', lang),
+                multiselect=True,
+                interactive=True,
+            )
+            components['md_merge_secondary_info'] = gr.Markdown(
+                I18n.get('merge_secondary_none', lang)
+            )
+
+    components['slider_dedup_threshold'] = gr.Slider(
+        minimum=0, maximum=20, value=3, step=0.5,
+        label=I18n.get('merge_dedup_label', lang),
+        info=I18n.get('merge_dedup_info', lang),
+    )
+
+    components['btn_merge'] = gr.Button(
+        I18n.get('merge_btn', lang),
+        variant="primary",
+    )
+
+    components['md_merge_status'] = gr.Markdown(I18n.get('merge_status_ready', lang))
+
+    return components
 
 
 def create_advanced_tab_content(lang: str) -> dict:
