@@ -18,6 +18,7 @@ from colormath.color_conversions import convert_color
 from colormath.color_diff import delta_e_cie2000
 
 from config import PrinterConfig, ColorSystem, SmartConfig, OUTPUT_DIR
+from core.naming import generate_calibration_filename
 from utils import Stats, safe_fix_3mf_names
 
 
@@ -166,8 +167,7 @@ def generate_calibration_board(color_mode: str, block_size_mm: float,
             scene.add_geometry(mesh, node_name=name, geom_name=name)
 
     # Export
-    mode_tag = color_conf['name']
-    output_path = os.path.join(OUTPUT_DIR, f"Lumina_Calibration_{mode_tag}.3mf")
+    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename(color_mode, "Standard"))
     scene.export(output_path)
 
     safe_fix_3mf_names(output_path, slot_names)
@@ -392,7 +392,7 @@ def generate_smart_board(block_size_mm=5.0, gap_mm=0.8):
             scene.add_geometry(mesh, node_name=name, geom_name=name)
     
     # Export
-    output_path = os.path.join(OUTPUT_DIR, "Lumina_Smart_1296.3mf")
+    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("6-Color", "Smart1296"))
     scene.export(output_path)
     
     safe_fix_3mf_names(output_path, slot_names)
@@ -489,7 +489,7 @@ def generate_8color_board(page_index=0):
             m.metadata['name'] = conf['slots'][mid]
             scene.add_geometry(m, geom_name=conf['slots'][mid])
             
-    out_name = f"Lumina_8Color_Page{page_index+1}.3mf"
+    out_name = generate_calibration_filename("8-Color", f"Page{page_index+1}")
     out_path = os.path.join(OUTPUT_DIR, out_name)
     scene.export(out_path)
     safe_fix_3mf_names(out_path, conf['slots'])
@@ -524,7 +524,7 @@ def generate_8color_batch_zip():
     
     if not f1 or not f2: return None, None, "❌ Generation failed"
     
-    zip_path = os.path.join(OUTPUT_DIR, "Lumina_8Color_Kit.zip")
+    zip_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("8-Color", "Kit", ".zip"))
     with zipfile.ZipFile(zip_path, 'w') as zf:
         zf.write(f1, os.path.basename(f1))
         zf.write(f2, os.path.basename(f2))
@@ -652,7 +652,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
             scene.add_geometry(mesh, node_name=name, geom_name=name)
     
     # Export
-    output_path = os.path.join(OUTPUT_DIR, "Lumina_BW_Calibration.3mf")
+    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("BW", "Standard"))
     scene.export(output_path)
     
     safe_fix_3mf_names(output_path, slot_names)

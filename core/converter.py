@@ -18,6 +18,7 @@ from utils import Stats, safe_fix_3mf_names
 from core.image_processing import LuminaImageProcessor
 from core.mesh_generators import get_mesher
 from core.geometry_utils import create_keychain_loop
+from core.naming import generate_model_filename, generate_preview_filename
 
 # Try to import SVG rendering libraries
 try:
@@ -56,10 +57,16 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         return []
     
     try:
-        # Standard .npy format
-        lut_grid = np.load(lut_path)
-        measured_colors = lut_grid.reshape(-1, 3)
-        print(f"[LUT_COLORS] Loading standard LUT (.npy) with {len(measured_colors)} colors")
+        # Handle .npz (merged LUT) format
+        if lut_path.endswith('.npz'):
+            data = np.load(lut_path)
+            measured_colors = data['rgb']
+            print(f"[LUT_COLORS] Loading merged LUT (.npz) with {len(measured_colors)} colors")
+        else:
+            # Standard .npy format
+            lut_grid = np.load(lut_path)
+            measured_colors = lut_grid.reshape(-1, 3)
+            print(f"[LUT_COLORS] Loading standard LUT (.npy) with {len(measured_colors)} colors")
         
         # Get unique colors
         unique_colors = np.unique(measured_colors, axis=0)
@@ -360,7 +367,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             
             # 2. Export 3MF
             base_name = os.path.splitext(os.path.basename(image_path))[0]
-            out_path = os.path.join(OUTPUT_DIR, f"{base_name}_Lumina_Vector.3mf")
+            out_path = os.path.join(OUTPUT_DIR, generate_model_filename(base_name, modeling_mode, color_mode))
             scene.export(out_path)
             
             # [CRITICAL FIX] Disable safe_fix_3mf_names for Vector Mode
@@ -373,7 +380,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             # 4. Generate GLB Preview
             glb_path = None
             try:
-                glb_path = os.path.join(OUTPUT_DIR, f"{base_name}_Preview.glb")
+                glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
                 scene.export(glb_path)
                 print(f"[CONVERTER] ✅ Preview GLB exported: {glb_path}")
             except Exception as e:
@@ -897,7 +904,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             scene.geometry[geom_name].apply_transform(mirror_transform)
     
     base_name = os.path.splitext(os.path.basename(image_path))[0]
-    out_path = os.path.join(OUTPUT_DIR, f"{base_name}_Lumina.3mf")
+    out_path = os.path.join(OUTPUT_DIR, generate_model_filename(base_name, modeling_mode, color_mode))
     
     # Check if scene has any geometry before exporting (Requirement 8.1)
     if len(scene.geometry) == 0:
@@ -959,7 +966,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
                 print(f"[CONVERTER] Preview outline failed: {e}")
     
     if preview_mesh:
-        glb_path = os.path.join(OUTPUT_DIR, f"{base_name}_Preview.glb")
+        glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
 
         # Add physical bed platform to 3D preview
         model_w_mm = target_w * pixel_scale
@@ -3077,12 +3084,17 @@ def detect_lut_color_mode(lut_path):
         lut_path: LUT文件路径
     
     Returns:
-        str: 颜色模式 ("BW (Black & White)", "CMYW (Cyan/Magenta/Yellow)", "RYBW (Red/Yellow/Blue)", "6-Color (Smart 1296)", "8-Color Max")
+        str: 颜色模式 ("BW (Black & White)", "Merged", "6-Color (Smart 1296)", "8-Color Max", etc.)
     """
     if not lut_path or not os.path.exists(lut_path):
         return None
     
     try:
+        # .npz 格式直接识别为合并模式
+        if lut_path.endswith('.npz'):
+            print(f"[AUTO_DETECT] Detected Merged LUT (.npz format)")
+            return "Merged"
+        
         # Standard .npy format
         lut_data = np.load(lut_path)
         
@@ -3120,12 +3132,13 @@ def detect_lut_color_mode(lut_path):
         
         # 4色模式：900-1200色
         elif total_colors >= 900 and total_colors < 1200:
-            print(f"[AUTO_DETECT] Detected 4-Color mode ({total_colors} colors) - keeping current selection")
-            return None  # 不自动切换4色模式，保持用户选择
+            print(f"[AUTO_DETECT] Detected 4-Color mode ({total_colors} colors)")
+            return "4-Color"
         
         else:
-            print(f"[AUTO_DETECT] Unknown LUT format with {total_colors} colors")
-            return None
+            # 非标准尺寸：识别为合并色卡
+            print(f"[AUTO_DETECT] Non-standard LUT size ({total_colors} colors), detected as Merged")
+            return "Merged"
             
     except Exception as e:
         print(f"[AUTO_DETECT] Error detecting LUT mode: {e}")
