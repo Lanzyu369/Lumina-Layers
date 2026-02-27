@@ -1957,7 +1957,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 )
                 
                 components['slider_conv_auto_height_max'] = gr.Slider(
-                    minimum=2.0,
+                    minimum=0.08,
                     maximum=15.0,
                     value=5.0,
                     step=0.1,
