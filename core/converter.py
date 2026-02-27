@@ -1111,14 +1111,27 @@ def _generate_outline_mesh(mask_solid, pixel_scale, outline_width_mm, outline_th
     
     print(f"[OUTLINE] Width: {outline_width_mm}mm = {outline_width_px}px, Thickness: {outline_thickness_mm}mm = {outline_layers} layers")
     
-    # Dilate the mask outward
-    kernel = np.ones((3, 3), np.uint8)
+    # [FIX] Pad the mask before dilation so edges touching image boundaries
+    # can still expand outward. Without padding, cv2.dilate treats the border
+    # as zeros and the outline ring is missing on boundary-touching sides.
+    pad = outline_width_px + 1
     mask_uint8 = mask_solid.astype(np.uint8) * 255
-    dilated = cv2.dilate(mask_uint8, kernel, iterations=outline_width_px)
-    dilated_mask = dilated > 0
+    padded_mask = cv2.copyMakeBorder(mask_uint8, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
     
-    # Ring = dilated minus original
-    ring_mask = dilated_mask & ~mask_solid
+    # Dilate the padded mask outward
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(padded_mask, kernel, iterations=outline_width_px)
+    
+    # Also pad the original mask for subtraction
+    padded_original = cv2.copyMakeBorder(mask_uint8, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
+    
+    # Ring = dilated minus original (in padded space, preserving outline beyond image edges)
+    ring_mask = (dilated > 0) & ~(padded_original > 0)
+    
+    # Use padded dimensions for mesh generation; offset coordinates by -pad later
+    h, w = ring_mask.shape
+    # h_original is needed for Y-flip coordinate conversion
+    h_original = mask_solid.shape[0]
     
     if not np.any(ring_mask):
         print(f"[OUTLINE] Ring mask is empty, skipping")
@@ -1128,7 +1141,7 @@ def _generate_outline_mesh(mask_solid, pixel_scale, outline_width_mm, outline_th
     print(f"[OUTLINE] Ring mask: {ring_pixel_count} pixels")
     
     # Use greedy rectangle merging to generate optimized mesh
-    h, w = ring_mask.shape
+    # Note: h, w are padded dimensions; use pad offset for world coordinates
     processed = np.zeros_like(ring_mask, dtype=bool)
     vertices = []
     faces = []
@@ -1161,10 +1174,11 @@ def _generate_outline_mesh(mask_solid, pixel_scale, outline_width_mm, outline_th
             processed[y:y_end, x_start:x_end] = True
             
             # Convert to world coordinates (flip Y, apply scale)
-            world_x0 = float(x_start) * pixel_scale
-            world_x1 = float(x_end) * pixel_scale
-            world_y0 = float(h - y_end) * pixel_scale
-            world_y1 = float(h - y) * pixel_scale
+            # Subtract pad offset so coordinates align with the original (unpadded) model
+            world_x0 = float(x_start - pad) * pixel_scale
+            world_x1 = float(x_end - pad) * pixel_scale
+            world_y0 = float(h_original - (y_end - pad)) * pixel_scale
+            world_y1 = float(h_original - (y - pad)) * pixel_scale
             z_bot = 0.0
             z_tp = float(outline_layers) * PrinterConfig.LAYER_HEIGHT
             
