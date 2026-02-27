@@ -1348,8 +1348,8 @@ def generate_auto_height_map(color_list, mode, base_thickness, max_relief_height
             # Keep the ratio as is: 0 -> 0, 1 -> 1
             ratio = normalized
         
-        # Calculate final height
-        height = base_thickness + ratio * delta_z
+        # Calculate final height (minimum 0.08mm = 1 layer height)
+        height = max(0.08, base_thickness + ratio * delta_z)
         
         # Round to 0.1mm precision
         color_height_map[color] = round(height, 1)
@@ -1432,8 +1432,8 @@ def _build_relief_voxel_matrix(matched_rgb, material_matrix, mask_solid, color_h
             if not mask_solid[y, x]:
                 continue
             
-            # Get target height for this pixel
-            target_height_mm = height_matrix[y, x]
+            # Get target height for this pixel (minimum 0.08mm = 1 layer)
+            target_height_mm = max(0.08, height_matrix[y, x])
             target_z_layers = int(np.ceil(target_height_mm / PrinterConfig.LAYER_HEIGHT))
             target_z_layers = max(OPTICAL_LAYERS, min(target_z_layers, max_z_layers))
             
