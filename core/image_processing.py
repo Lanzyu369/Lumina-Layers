@@ -206,8 +206,57 @@ class LuminaImageProcessor:
 
         try:
             lut_grid = np.load(lut_path)
-            measured_colors = lut_grid.reshape(-1, 3)
+            
+            # 处理不同的数组形状
+            if lut_grid.ndim == 1:
+                # 一维数组，尝试 reshape 为 (N, 3)
+                if lut_grid.size % 3 == 0:
+                    measured_colors = lut_grid.reshape(-1, 3)
+                else:
+                    raise ValueError(
+                        f"一维数组大小 {lut_grid.size} 不能被 3 整除，"
+                        f"无法解析为 RGB 颜色数据"
+                    )
+            elif lut_grid.ndim == 2:
+                if lut_grid.shape[1] == 3:
+                    measured_colors = lut_grid
+                elif lut_grid.shape[1] == 4:
+                    # RGBA 格式，取前 3 通道
+                    print(f"[IMAGE_PROCESSOR] LUT 文件为 RGBA 格式 {lut_grid.shape}，自动取 RGB 通道")
+                    measured_colors = lut_grid[:, :3]
+                else:
+                    raise ValueError(
+                        f"LUT 数组形状 {lut_grid.shape} 不支持，"
+                        f"第二维应为 3(RGB) 或 4(RGBA)"
+                    )
+            elif lut_grid.ndim == 3:
+                if lut_grid.shape[2] == 3:
+                    measured_colors = lut_grid.reshape(-1, 3)
+                elif lut_grid.shape[2] == 4:
+                    # (H, W, 4) RGBA 图片格式
+                    print(f"[IMAGE_PROCESSOR] LUT 文件为 RGBA 图片格式 {lut_grid.shape}，自动取 RGB 通道")
+                    measured_colors = lut_grid[:, :, :3].reshape(-1, 3)
+                else:
+                    raise ValueError(
+                        f"LUT 数组形状 {lut_grid.shape} 不支持，"
+                        f"最后一维应为 3(RGB) 或 4(RGBA)"
+                    )
+            else:
+                raise ValueError(
+                    f"LUT 数组维度 {lut_grid.ndim} 不支持，"
+                    f"应为 1-3 维"
+                )
+            
+            # 确保 uint8 类型
+            if measured_colors.dtype != np.uint8:
+                if measured_colors.max() <= 1.0:
+                    measured_colors = (measured_colors * 255).astype(np.uint8)
+                else:
+                    measured_colors = measured_colors.astype(np.uint8)
+            
             total_colors = measured_colors.shape[0]
+        except ValueError:
+            raise
         except Exception as e:
             raise ValueError(f"❌ LUT file corrupted: {e}")
         
@@ -215,6 +264,51 @@ class LuminaImageProcessor:
         valid_stacks = []
         
         print(f"[IMAGE_PROCESSOR] Loading LUT with {total_colors} points...")
+        
+        # === 优先检查同目录下的 _stacks.npy 文件 ===
+        # K/S 生成器会为 3/5/6/7/8 色模式输出 *_KS_stacks.npy
+        # 如果存在，直接使用它（最准确的 stacks 映射）
+        base_path, ext = os.path.splitext(lut_path)
+        companion_stacks_path = base_path + "_stacks.npy"
+        print(f"[DEBUG] lut_path: {lut_path}")
+        print(f"[DEBUG] companion_stacks_path: {companion_stacks_path}")
+        print(f"[DEBUG] companion exists: {os.path.exists(companion_stacks_path)}")
+        
+        if os.path.exists(companion_stacks_path):
+            print(f"[IMAGE_PROCESSOR] Found companion stacks file: {companion_stacks_path}")
+            try:
+                companion_stacks = np.load(companion_stacks_path)
+                if len(companion_stacks) == total_colors:
+                    self.lut_rgb = measured_colors
+                    self.ref_stacks = np.array(companion_stacks)
+                    # === DEBUG: companion stacks 加载详情 ===
+                    print(f"[DEBUG] companion stacks shape: {self.ref_stacks.shape}")
+                    print(f"[DEBUG] companion stacks dtype: {self.ref_stacks.dtype}")
+                    print(f"[DEBUG] LUT RGB shape: {self.lut_rgb.shape}, dtype: {self.lut_rgb.dtype}")
+                    print(f"[DEBUG] 前5个颜色 (RGB): {self.lut_rgb[:5].tolist()}")
+                    print(f"[DEBUG] 前5个stacks: {self.ref_stacks[:5].tolist()}")
+                    print(f"[DEBUG] 最后5个颜色 (RGB): {self.lut_rgb[-5:].tolist()}")
+                    print(f"[DEBUG] 最后5个stacks: {self.ref_stacks[-5:].tolist()}")
+                    # 统计 stacks 中使用的耗材索引范围
+                    unique_indices = np.unique(self.ref_stacks)
+                    print(f"[DEBUG] stacks 中使用的耗材索引: {unique_indices.tolist()} (共{len(unique_indices)}种)")
+                    print(f"[DEBUG] stacks 每层的索引范围: ", end="")
+                    for layer in range(self.ref_stacks.shape[1]):
+                        layer_unique = np.unique(self.ref_stacks[:, layer])
+                        print(f"L{layer}={layer_unique.tolist()} ", end="")
+                    print()
+                    # === END DEBUG ===
+                    print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (with companion stacks, {companion_stacks.shape[1]} layers)")
+                    # Build KD-Tree in CIELAB space
+                    self.lut_lab = self._rgb_to_lab(self.lut_rgb)
+                    self.kdtree = KDTree(self.lut_lab)
+                    return
+                else:
+                    print(f"⚠️ Stacks count mismatch ({len(companion_stacks)} vs {total_colors}), falling back to auto-detect")
+            except Exception as e:
+                print(f"⚠️ Failed to load companion stacks: {e}, falling back to auto-detect")
+        
+        # === 无 companion stacks，按颜色数量自动检测模式 ===
         
         # Branch 0: 2-Color BW (32)
         if self.color_mode == "BW (Black & White)" or self.color_mode == "BW" or total_colors == 32:
@@ -667,6 +761,20 @@ class LuminaImageProcessor:
         unique_lab = self._rgb_to_lab(unique_colors)
         _, unique_indices = self.kdtree.query(unique_lab)
         print(f"[IMAGE_PROCESSOR] ⏱️ LUT matching: {time.time() - t0:.2f}s")
+        
+        # === DEBUG: 颜色匹配结果 ===
+        print(f"[DEBUG] unique_colors 数量: {len(unique_colors)}")
+        print(f"[DEBUG] LUT 总颜色数: {len(self.lut_rgb)}")
+        print(f"[DEBUG] ref_stacks shape: {self.ref_stacks.shape}")
+        # 显示前10个匹配结果
+        for i in range(min(10, len(unique_colors))):
+            src_rgb = unique_colors[i].tolist()
+            lut_idx = unique_indices[i]
+            matched_rgb_val = self.lut_rgb[lut_idx].tolist()
+            matched_stack = self.ref_stacks[lut_idx].tolist()
+            dist = np.linalg.norm(unique_colors[i].astype(float) - self.lut_rgb[lut_idx].astype(float))
+            print(f"[DEBUG] 匹配 #{i}: 输入RGB={src_rgb} → LUT[{lut_idx}] RGB={matched_rgb_val} stack={matched_stack} 距离={dist:.1f}")
+        # === END DEBUG ===
         
         # 🚀 优化：构建颜色编码查找表
         # 把 RGB 编码成单个整数：R*65536 + G*256 + B
