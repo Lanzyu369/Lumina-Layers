@@ -132,6 +132,23 @@ class ColorSystem:
         'corner_labels_en': ["White (TL)", "Black (TR)", "Black (BR)", "Black (BL)"]
     }
 
+    FIVE_COLOR_EXTENDED = {
+        'name': '5-Color Extended',
+        'base': 5,
+        'layer_count': 6,
+        'slots': ["White", "Red", "Yellow", "Blue", "Black"],
+        'preview': {
+            0: [255, 255, 255, 255],  # White
+            1: [220, 20, 60, 255],    # Red
+            2: [255, 230, 0, 255],    # Yellow
+            3: [0, 100, 240, 255],    # Blue
+            4: [20, 20, 20, 255]      # Black
+        },
+        'map': {"White": 0, "Red": 1, "Yellow": 2, "Blue": 3, "Black": 4},
+        'corner_labels': ["白色 (左上)", "红色 (右上)", "蓝色 (右下)", "黄色 (左下)", "黑色 (外层)"],
+        'corner_labels_en': ["White (TL)", "Red (TR)", "Blue (BR)", "Yellow (BL)", "Black (Outer)"]
+    }
+
     @staticmethod
     def get(mode: str):
         """
@@ -173,6 +190,10 @@ class ColorSystem:
         # Check BW last to avoid matching RYBW
         if mode == "BW" or mode == "BW (Black & White)":
             return ColorSystem.BW
+        
+        # 5-Color Extended mode
+        if "5-Color Extended" in mode or "5-Color (Extended)" in mode:
+            return ColorSystem.FIVE_COLOR_EXTENDED
         
         return ColorSystem.RYBW  # Default fallback
 

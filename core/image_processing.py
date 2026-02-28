@@ -245,7 +245,28 @@ class LuminaImageProcessor:
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (8-Color mode)")
         
-        # Branch 2: 6-Color Smart 1296
+        # Branch 2: 5-Color (1444) - 5/6-layer mixed
+        elif "5-Color" in self.color_mode and "Extended" not in self.color_mode and total_colors == 1444:
+            print("[IMAGE_PROCESSOR] Detected 5-Color (1444) mode")
+            
+            from core.calibration import get_top_1444_colors
+            
+            stacks_1444 = get_top_1444_colors()
+            # Convert to top-to-bottom convention
+            stacks_1444 = [tuple(reversed(s)) for s in stacks_1444]
+            
+            if len(stacks_1444) != total_colors:
+                print(f"⚠️ Warning: Stacks count ({len(stacks_1444)}) != LUT count ({total_colors})")
+                min_len = min(len(stacks_1444), total_colors)
+                stacks_1444 = stacks_1444[:min_len]
+                measured_colors = measured_colors[:min_len]
+            
+            self.lut_rgb = measured_colors
+            self.ref_stacks = np.array(stacks_1444)
+            
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color mode)")
+        
+        # Branch 3: 6-Color Smart 1296
         elif "6-Color" in self.color_mode or total_colors == 1296:
             print("[IMAGE_PROCESSOR] Detected 6-Color Smart 1296 mode")
             
@@ -268,8 +289,60 @@ class LuminaImageProcessor:
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (6-Color mode)")
         
-        # Branch 3: Merged LUT (non-standard size or "Merged" mode)
-        elif self.color_mode == "Merged" or total_colors not in (32, 1024, 1296, 2738):
+        # Branch 4: 5-Color Extended (2468)
+        elif "5-Color Extended" in self.color_mode or total_colors == 2468:
+            print("[IMAGE_PROCESSOR] Detected 5-Color Extended (2468) mode")
+            
+            # For .npz files, load stacks directly
+            if lut_path.endswith('.npz'):
+                try:
+                    data = np.load(lut_path)
+                    stacks = data['stacks']
+                    # Ensure 6-layer stacks and convert to top-to-bottom convention
+                    if stacks.shape[1] == 6:
+                        self.ref_stacks = np.array([tuple(reversed(s)) for s in stacks])
+                        self.lut_rgb = measured_colors
+                        print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended, 6-layer stacks)")
+                        return
+                except Exception as e:
+                    print(f"⚠️ Failed to load stacks from .npz: {e}")
+            
+            # Fallback: generate stacks from index
+            # First 1024: base 5-layer (4^5 combinations)
+            # Next 1444: extended 6-layer
+            ref_stacks = []
+            for i in range(total_colors):
+                if i < 1024:
+                    # Base 1024: 5-layer
+                    digits = []
+                    temp = i
+                    for _ in range(5):
+                        digits.append(temp % 4)
+                        temp //= 4
+                    stack = tuple(reversed(digits))
+                else:
+                    # Extended 1444: 6-layer
+                    ext_idx = i - 1024
+                    if ext_idx == 0:
+                        stack = (4, 0, 0, 0, 0, 0)  # KWWWWW
+                    else:
+                        base_idx = (ext_idx - 1) % 1024
+                        layer6 = ((ext_idx - 1) // 1024) + 1  # 1, 2, or 3 (R, Y, B)
+                        digits = []
+                        temp = base_idx
+                        for _ in range(5):
+                            digits.append(temp % 4)
+                            temp //= 4
+                        stack = tuple(reversed(digits)) + (layer6,)
+                ref_stacks.append(stack)
+            
+            self.lut_rgb = measured_colors
+            self.ref_stacks = np.array(ref_stacks)
+            
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended)")
+        
+        # Branch 5: Merged LUT (non-standard size or "Merged" mode)
+        elif self.color_mode == "Merged" or total_colors not in (32, 1024, 1296, 1444, 2468, 2738):
             print(f"[IMAGE_PROCESSOR] Detected non-standard LUT size ({total_colors}), trying companion .npz...")
             
             # 尝试查找同名 .npz 文件
@@ -293,7 +366,7 @@ class LuminaImageProcessor:
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (Merged mode, placeholder stacks)")
         
-        # Branch 4: 4-Color Standard (1024)
+        # Branch 6: 4-Color Standard (1024)
         else:
             print("[IMAGE_PROCESSOR] Detected 4-Color Standard mode")
             

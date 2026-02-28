@@ -21,6 +21,7 @@ _SIZE_TO_MODE = {
     32: "BW",
     1024: "4-Color",
     1296: "6-Color",
+    2468: "5-Color Extended",
     2738: "8-Color",
 }
 
@@ -42,6 +43,7 @@ _MODE_PRIORITY = {
     "Merged": -1,
     "BW": 0,
     "4-Color": 1,
+    "5-Color Extended": 1,
     "6-Color": 2,
     "8-Color": 3,
 }
@@ -51,6 +53,7 @@ _MODE_MAX_MATERIAL = {
     "BW": 1,
     "4-Color": 3,
     "6-Color": 5,
+    "5-Color Extended": 4,
     "8-Color": 7,
     "Merged": 7,
 }
@@ -62,6 +65,7 @@ _REMAP_TO_8COLOR = {
     "4-Color-RYBW": {0: 0, 1: 5, 2: 3, 3: 6},  # White→White, Red→Red, Yellow→Yellow, Blue→DeepBlue
     "4-Color-CMYW": {0: 0, 1: 1, 2: 2, 3: 3},   # White→White, Cyan→Cyan, Magenta→Magenta, Yellow→Yellow
     "6-Color": {0: 0, 1: 1, 2: 2, 3: 7, 4: 3, 5: 4},  # White→White, Cyan→Cyan, Magenta→Magenta, Green→Green, Yellow→Yellow, Black→Black
+    "5-Color Extended": {0: 0, 1: 5, 2: 3, 3: 6, 4: 4},  # White→White, Red→Red, Yellow→Yellow, Blue→DeepBlue, Black→Black
 }
 
 
@@ -249,6 +253,46 @@ class LUTMerger:
             stacks = [tuple(reversed(s)) for s in raw_stacks]
             min_len = min(len(stacks), count)
             return (rgb[:min_len], np.array(stacks[:min_len]))
+
+        elif color_mode == "5-Color Extended":
+            # 5-Color Extended: 2468 colors (1024 base + 1444 extended)
+            # Load from .npz file with 6-layer stacks
+            if lut_path.endswith('.npz'):
+                data = np.load(lut_path)
+                stacks = data['stacks']
+                # Ensure 6-layer stacks
+                if stacks.shape[1] == 6:
+                    # 约定转换：底到顶 → 顶到底
+                    stacks = np.array([tuple(reversed(s)) for s in stacks])
+                    return (rgb, _remap_stacks(stacks, color_mode, lut_path))
+            # Fallback: generate stacks from index
+            stacks = []
+            for i in range(count):
+                if i < 1024:
+                    # Base 1024: 5-layer (4^5 combinations)
+                    digits = []
+                    temp = i
+                    for _ in range(5):
+                        digits.append(temp % 4)
+                        temp //= 4
+                    stack = tuple(reversed(digits)) + (0,)  # Pad to 6 layers with White
+                else:
+                    # Extended 1444: 6-layer
+                    ext_idx = i - 1024
+                    if ext_idx == 0:
+                        stack = (4, 0, 0, 0, 0, 0)  # KWWWWW
+                    else:
+                        base_idx = (ext_idx - 1) % 1024
+                        layer6 = ((ext_idx - 1) // 1024) + 1  # 1, 2, or 3 (R, Y, B)
+                        digits = []
+                        temp = base_idx
+                        for _ in range(5):
+                            digits.append(temp % 4)
+                            temp //= 4
+                        stack = tuple(reversed(digits)) + (layer6,)
+                stacks.append(stack)
+            stacks_arr = np.array(stacks)
+            return (rgb, _remap_stacks(stacks_arr, color_mode, lut_path))
 
         else:
             # Non-standard mode (e.g. "Merged" from non-standard .npy sizes)

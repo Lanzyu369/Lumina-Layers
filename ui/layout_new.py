@@ -18,7 +18,7 @@ from PIL import Image as PILImage
 from core.i18n import I18n
 from config import ColorSystem, ModelingMode, BedManager
 from utils import Stats, LUTManager
-from core.calibration import generate_calibration_board, generate_smart_board, generate_8color_batch_zip
+from core.calibration import generate_calibration_board, generate_smart_board, generate_8color_batch_zip, generate_5color1444_board
 from core.naming import generate_batch_filename
 from core.extractor import (
     rotate_image,
@@ -3346,6 +3346,7 @@ def create_calibration_tab_content(lang: str) -> dict:
                 choices=[
                     ("BW (Black & White)", "BW (Black & White)"),
                     ("4-Color (1024 colors)", "4-Color"),
+                    ("5-Color Extended (2468)", "5-Color Extended"),
                     ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
                     ("8-Color Max", "8-Color Max")
                 ],
@@ -3397,6 +3398,9 @@ def create_calibration_tab_content(lang: str) -> dict:
         """Wrapper function to call appropriate generator based on mode"""
         if color_mode == "8-Color Max":
             return generate_8color_batch_zip()
+        if "5-Color Extended" in color_mode:
+            from core.calibration import generate_5color_extended_board
+            return generate_5color_extended_board(block_size, gap)
         if "6-Color" in color_mode:
             # Call Smart 1296 generator
             return generate_smart_board(block_size, gap)

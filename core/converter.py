@@ -1606,6 +1606,69 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
     return full_matrix, backing_metadata
 
 
+def _build_voxel_matrix_6layer(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
+    """
+    Build complete voxel matrix for 6-layer structures (5-Color Extended mode).
+    
+    Args:
+        material_matrix: (H, W, 6) material matrix for 6 layers
+        mask_solid: (H, W) solid pixel mask
+        spacer_thick: backing thickness (mm)
+        structure_mode: "双面" or "单面" (Double-sided or Single-sided)
+        backing_color_id: backing material ID (0-7), default is 0 (White)
+    
+    Returns:
+        tuple: (full_matrix, backing_metadata)
+            - full_matrix: (Z, H, W) voxel matrix
+            - backing_metadata: dict with keys:
+                - 'backing_color_id': int
+                - 'backing_z_range': tuple (start_z, end_z)
+    """
+    target_h, target_w = material_matrix.shape[:2]
+    mask_transparent = ~mask_solid
+    
+    bottom_voxels = np.transpose(material_matrix, (2, 0, 1))
+    
+    spacer_layers = max(1, int(round(spacer_thick / PrinterConfig.LAYER_HEIGHT)))
+    
+    if "双面" in structure_mode or "Double" in structure_mode:
+        top_voxels = np.transpose(material_matrix[..., ::-1], (2, 0, 1))
+        total_layers = 6 + spacer_layers + 6
+        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        
+        full_matrix[0:6] = bottom_voxels
+        
+        # Use backing_color_id parameter to mark backing layer
+        spacer = np.full((target_h, target_w), -1, dtype=int)
+        spacer[~mask_transparent] = backing_color_id
+        for z in range(6, 6 + spacer_layers):
+            full_matrix[z] = spacer
+        
+        full_matrix[6 + spacer_layers:] = top_voxels
+        
+        backing_z_range = (6, 6 + spacer_layers - 1)
+    else:
+        total_layers = 6 + spacer_layers
+        full_matrix = np.full((total_layers, target_h, target_w), -1, dtype=int)
+        
+        full_matrix[0:6] = bottom_voxels
+        
+        # Use backing_color_id parameter to mark backing layer
+        spacer = np.full((target_h, target_w), -1, dtype=int)
+        spacer[~mask_transparent] = backing_color_id
+        for z in range(6, total_layers):
+            full_matrix[z] = spacer
+        
+        backing_z_range = (6, total_layers - 1)
+    
+    backing_metadata = {
+        'backing_color_id': backing_color_id,
+        'backing_z_range': backing_z_range
+    }
+    
+    return full_matrix, backing_metadata
+
+
 def _create_bed_mesh(bed_w_mm, bed_h_mm, is_dark=True):
     """Create a realistic print bed mesh with UV-mapped texture.
     
