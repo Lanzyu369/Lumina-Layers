@@ -374,11 +374,15 @@ def generate_smart_board(block_size_mm=5.0, gap_mm=0.8):
         (total_dim-1, 0, 4)             # BL = Yellow
     ]
     
+    # Set corner alignment markers (in outermost ring)
+    # TL: White (0), TR: Cyan (1), BR: Magenta (2), BL: Yellow (4)
+    # Place markers on viewing surface (Z=0) for visual identification after printing
+    # Face-Down mode: viewing surface is at Z=0 (first printed layer)
+    viewing_surface_z = 0  # Z index of viewing surface (first printed layer in Face-Down mode)
     for r, c, mat_id in corners:
         px = c * (pixels_per_block + pixels_gap)
         py = r * (pixels_per_block + pixels_gap)
-        for z in range(color_layers):
-            full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
+        full_matrix[viewing_surface_z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
     
     # Generate 3MF scene
     scene = trimesh.Scene()
@@ -541,7 +545,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
     - 8x8 physical grid (6x6 data + 2 border protection)
     - 32 exhaustive color combinations (2^5 = 32)
     - Corner alignment markers in outermost ring
-    - Face Up printing (same as 4-color mode)
+    - Face Down printing (same as 4-color mode)
     
     Args:
         block_size_mm: Size of each color block in mm
@@ -714,9 +718,9 @@ def select_extended_1444_colors(base_1024_stacks):
         alphas[fid] = min(1.0, LAYER_HEIGHT / bd) if bd > 0 else 1.0
 
     def simulate_color(stack):
-        """Simulate final color from a stack"""
+        """Simulate final color from a stack (Bottom-to-Top alpha blending)"""
         curr = BACKING.astype(float)
-        for fid in stack:
+        for fid in reversed(stack):  # Iterate from Bottom to Top for correct reflection simulation
             rgb = np.array(FILAMENTS[fid]['rgb'])
             a = alphas[fid]
             curr = rgb * a + curr * (1.0 - a)
@@ -756,20 +760,27 @@ def select_extended_1444_colors(base_1024_stacks):
     target = 1444
 
     print(f"[5C_EXT] Round 1: Greedy selection (RGB distance > 8)...")
+    selected_rgbs = np.array([s['rgb'] for s in selected], dtype=int)
+    
     for c in candidates:
         if len(selected) >= target:
             break
+        
+        # Check if already selected (by stack)
         if any(c['stack'] == s['stack'] for s in selected):
             continue
 
         is_distinct = True
-        for s in selected:
-            if np.linalg.norm(c['rgb'].astype(int) - s['rgb'].astype(int)) < 8:
+        if len(selected_rgbs) > 0:
+            c_rgb = c['rgb'].astype(int)
+            # Vectorized distance check
+            dists = np.linalg.norm(selected_rgbs - c_rgb, axis=1)
+            if np.any(dists < 8):
                 is_distinct = False
-                break
 
         if is_distinct:
             selected.append(c)
+            selected_rgbs = np.vstack([selected_rgbs, c['rgb'].astype(int)])
 
     print(f"[5C_EXT] Round 1 selected: {len(selected)}")
 
@@ -968,6 +979,9 @@ def generate_5color1444_board(block_size_mm=5.0, gap_mm=0.8):
             if mat_id < 4:
                 full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
 
+    # Set corner alignment markers (in outermost ring)
+    # TL: White (0), TR: Red (1), BR: Yellow (2), BL: Blue (3)
+    # Place markers on viewing surface (topmost layer) for visual identification after printing
     corners = [
         (0, 0, 0),
         (0, total_dim-1, 1),
@@ -975,11 +989,11 @@ def generate_5color1444_board(block_size_mm=5.0, gap_mm=0.8):
         (total_dim-1, 0, 3)
     ]
 
+    viewing_surface_z = total_layers - 1  # Viewing surface is the last printed layer (top)
     for r, c, mat_id in corners:
         px = c * (pixels_per_block + pixels_gap)
         py = r * (pixels_per_block + pixels_gap)
-        for z in range(color_layers):
-            full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
+        full_matrix[viewing_surface_z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
 
     scene = trimesh.Scene()
 
@@ -1012,51 +1026,88 @@ def generate_5color1444_board(block_size_mm=5.0, gap_mm=0.8):
     )
 
 
-def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8):
+def merge_5color_extended(base_lut_path, extended_lut_path, output_path=None):
     """
-    Generate 5-Color Extended (2468) calibration board with 38x38 border layout.
-
-    Features:
-    - 38x38 physical grid (36x36 data + 2 border protection)
-    - 2468 color blocks (1024 base 5-layer + 1444 extended 6-layer)
-    - Corner alignment markers in outermost ring
-    - Face Down printing (white base first, then color layers)
-
+    Merge 4-Color base LUT (1024) and 5-Color Extended LUT (1444) into a single 2468-color LUT.
+    
     Args:
-        block_size_mm: Size of each color block in mm
-        gap_mm: Gap between blocks in mm
-
+        base_lut_path: Path to base 1024-color LUT (.npy file)
+        extended_lut_path: Path to extended 1444-color LUT (.npy file)
+        output_path: Optional output path for merged LUT (.npz file)
+    
     Returns:
-        Tuple of (output_path, preview_image, status_message)
+        Tuple of (rgb_array, stacks_array, output_path)
     """
-    print("[5C_EXT] Generating 5-Color Extended (2468) calibration board...")
-
-    # Get base 1024 stacks (4-color mode, 5-layer)
+    print("[5C_EXT] Merging 5-Color Extended LUT...")
+    
+    # Load base LUT (1024 colors, 5-layer)
+    print(f"  Loading base LUT: {base_lut_path}")
+    base_rgb = np.load(base_lut_path).reshape(-1, 3)
+    print(f"    Base RGB: {len(base_rgb)} colors")
+    
+    # Load extended LUT (1444 colors, 6-layer)
+    print(f"  Loading extended LUT: {extended_lut_path}")
+    extended_rgb = np.load(extended_lut_path).reshape(-1, 3)
+    print(f"    Extended RGB: {len(extended_rgb)} colors")
+    
+    # Merge RGB arrays
+    merged_rgb = np.vstack([base_rgb, extended_rgb])
+    print(f"  Merged RGB: {len(merged_rgb)} colors")
+    
+    # Generate stacks
+    # Base 1024: 5-layer stacks, pad with air(-1) at top for 6-layer uniformity.
+    # Air at position 0 keeps base/extended viewing surfaces on separate Z levels.
     base_stacks = []
-    for i in range(1024):
+    for i in range(len(base_rgb)):
         digits = []
         temp = i
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = tuple(reversed(digits))
+        stack = (-1,) + tuple(reversed(digits))
         base_stacks.append(stack)
+    
+    # Extended 1444: 6-layer stacks
+    base_5layer = [tuple(reversed([i//4**j%4 for j in range(5)])) for i in range(1024)]
+    extended_stacks = select_extended_1444_colors(base_5layer)
+    
+    # Merge stacks
+    merged_stacks = base_stacks + extended_stacks
+    print(f"  Merged stacks: {len(merged_stacks)} stacks")
+    
+    # Convert to numpy arrays
+    rgb_array = np.array(merged_rgb, dtype=np.uint8)
+    stacks_array = np.array(merged_stacks, dtype=np.int32)
+    
+    # Save to .npz file
+    if output_path is None:
+        output_path = "output/merged_5color_extended_2468.npz"
+    
+    np.savez(output_path, rgb=rgb_array, stacks=stacks_array)
+    print(f"  Saved merged LUT: {output_path}")
+    
+    return rgb_array, stacks_array, output_path
 
-    # Get extended 1444 stacks (6-layer)
-    extended_stacks = select_extended_1444_colors(base_stacks)
 
-    # 1444 = 38², use 38x38 data area + 1 block padding = 40x40 total
-    data_dim = 38
-    padding = 1
-    total_dim = data_dim + 2 * padding
-    block_w = float(block_size_mm)
-    gap = float(gap_mm)
-    margin = 5.0
-
-    board_w = margin * 2 + total_dim * block_w + (total_dim - 1) * gap
-    board_h = board_w
-
-    print(f"[5C_EXT] Board size: {board_w:.1f} x {board_h:.1f} mm (Grid: {total_dim}x{total_dim})")
+def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0):
+    """
+    Generate 5-Color Extended calibration board with dual-page support.
+    
+    Features:
+    - Page 0: Base 1024 colors (5-layer, 32x32 grid)
+    - Page 1: Extended 1444 colors (6-layer, 38x38 grid)
+    - Corner alignment markers with page ID
+    - Face Down printing for both pages (viewing surface at Z=0)
+    
+    Args:
+        block_size_mm: Size of each color block in mm
+        gap_mm: Gap between blocks in mm
+        page_index: 0 for base 1024, 1 for extended 1444
+    
+    Returns:
+        Tuple of (output_path, preview_image, status_message)
+    """
+    print(f"[5C_EXT] Generating 5-Color Extended calibration board - Page {page_index + 1}...")
 
     # Color configuration (5 slots: W, R, Y, B, K)
     preview_colors = {
@@ -1068,23 +1119,157 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8):
     }
     slot_names = ["White", "Red", "Yellow", "Blue", "Black"]
 
+    if page_index == 0:
+        # Page 1: Base 1024 colors (5-layer, similar to 4-color mode)
+        return _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names)
+    else:
+        # Page 2: Extended 1444 colors (6-layer)
+        return _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names)
+
+
+def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names):
+    """Generate Page 1: Base 1024 colors (5-layer RYBW combinations)."""
+    print("[5C_EXT] Generating Base Page (1024 colors, 5-layer)...")
+    
+    # 32x32 grid for 1024 colors
+    data_dim = 32
+    padding = 1
+    total_dim = data_dim + 2 * padding  # 34x34 physical
+    block_w = float(block_size_mm)
+    gap = float(gap_mm)
+    margin = 5.0
+    
+    board_w = margin * 2 + total_dim * block_w + (total_dim - 1) * gap
+    
     pixels_per_block = max(1, int(block_w / PrinterConfig.NOZZLE_WIDTH))
     pixels_gap = max(1, int(gap / PrinterConfig.NOZZLE_WIDTH))
-
+    
     voxel_w = total_dim * (pixels_per_block + pixels_gap)
     voxel_h = total_dim * (pixels_per_block + pixels_gap)
+    
+    # 5 color layers + white backing (Face-Down mode, same as 4-color mode)
+    color_layers = 5
+    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    total_layers = color_layers + backing_layers
+    
+    full_matrix = np.full((total_layers, voxel_h, voxel_w), 0, dtype=int)  # 0 = White backing
+    
+    # Generate 1024 base stacks (4^5 combinations of RYBW)
+    # Face-Down mode: Z=0 is viewing surface (top), Z=4 is bottom
+    for i in range(1024):
+        digits = []
+        temp = i
+        for _ in range(5):
+            digits.append(temp % 4)
+            temp //= 4
+        stack = digits[::-1]  # [top...bottom] for Face-Down mode (Z=0 is viewing surface)
+        
+        row = (i // data_dim) + padding
+        col = (i % data_dim) + padding
+        
+        px = col * (pixels_per_block + pixels_gap)
+        py = row * (pixels_per_block + pixels_gap)
+        
+        # Fill 5 color layers (Face-Down mode: Z=0 is viewing surface)
+        for z in range(color_layers):
+            mat_id = stack[z]
+            if mat_id < 4:
+                full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
+    
+    # Corner markers for Page 1: TL=White, TR=Red(Page1 ID), BR=Blue, BL=Yellow
+    corners = [
+        (0, 0, 0),                      # TL = White
+        (0, total_dim-1, 1),            # TR = Red (Page 1 ID)
+        (total_dim-1, total_dim-1, 3),  # BR = Blue
+        (total_dim-1, 0, 2)             # BL = Yellow
+    ]
+    
+    for r, c, mat_id in corners:
+        px = c * (pixels_per_block + pixels_gap)
+        py = r * (pixels_per_block + pixels_gap)
+        for z in range(color_layers):
+            full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
+    
+    # Generate 3MF
+    scene = trimesh.Scene()
+    for mat_id, rgba in preview_colors.items():
+        if mat_id < 4:  # Only 4 colors for base page
+            mesh = _generate_voxel_mesh(full_matrix, mat_id, voxel_h, voxel_w)
+            if mesh:
+                mesh.visual.face_colors = rgba
+                name = slot_names[mat_id]
+                mesh.metadata['name'] = name
+                scene.add_geometry(mesh, node_name=name, geom_name=name)
+    
+    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Page1"))
+    scene.export(output_path)
+    safe_fix_3mf_names(output_path, slot_names[:4])
+    
+    # Preview
+    bottom_layer = full_matrix[0].astype(np.uint8)
+    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
+    for mat_id, rgba in preview_colors.items():
+        if mat_id < 4:
+            preview_arr[bottom_layer == mat_id] = rgba[:3]
+    
+    Stats.increment("calibrations")
+    
+    return (
+        output_path,
+        Image.fromarray(preview_arr),
+        f"✅ 5-Color Extended Page 1 (1024 colors) 生成完毕 | 尺寸：{board_w:.1f}mm"
+    )
 
-    # 6 color layers + backing
+
+def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names):
+    """Generate Page 2: Extended 1444 colors (6-layer with Black).
+    
+    Features:
+    - 1444 extended colors (6-layer stacks)
+    - 38x38 grid with padding
+    - Face Down printing (viewing surface at Z=0, first printed layer)
+    - Corner markers: TL=Blue, TR=Red(Page2 ID), BR=Black, BL=Yellow
+    """
+    print("[5C_EXT] Generating Extended Page (1444 colors, 6-layer)...")
+    
+    # Get base 1024 stacks for extended color selection
+    base_stacks = []
+    for i in range(1024):
+        digits = []
+        temp = i
+        for _ in range(5):
+            digits.append(temp % 4)
+            temp //= 4
+        stack = tuple(reversed(digits))
+        base_stacks.append(stack)
+    
+    # Get extended 1444 stacks (6-layer)
+    extended_stacks = select_extended_1444_colors(base_stacks)
+    
+    # 38x38 grid for 1444 colors
+    data_dim = 38
+    padding = 1
+    total_dim = data_dim + 2 * padding  # 40x40 physical
+    block_w = float(block_size_mm)
+    gap = float(gap_mm)
+    margin = 5.0
+    
+    board_w = margin * 2 + total_dim * block_w + (total_dim - 1) * gap
+    
+    pixels_per_block = max(1, int(block_w / PrinterConfig.NOZZLE_WIDTH))
+    pixels_gap = max(1, int(gap / PrinterConfig.NOZZLE_WIDTH))
+    
+    voxel_w = total_dim * (pixels_per_block + pixels_gap)
+    voxel_h = total_dim * (pixels_per_block + pixels_gap)
+    
+    # 6 color layers + white backing (Face-Down mode, viewing surface at Z=0)
     color_layers = 6
     backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
     total_layers = color_layers + backing_layers
-
-    full_matrix = np.full((total_layers, voxel_h, voxel_w), 0, dtype=int)
-
-    print(f"[5C_EXT] Voxel matrix: {total_layers} x {voxel_h} x {voxel_w}")
-
+    
+    full_matrix = np.full((total_layers, voxel_h, voxel_w), 0, dtype=int)  # 0 = White backing
+    
     # Fill 1444 extended colors (6-layer)
-    # Stack format: [top...bottom] where top=viewing_surface (Z=5), bottom=first_layer (Z=0)
     for idx in range(1444):
         stack = extended_stacks[idx]
         r_data = idx // data_dim
@@ -1096,30 +1281,27 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8):
         px = col * (pixels_per_block + pixels_gap)
         py = row * (pixels_per_block + pixels_gap)
         
-        # Map stack to physical layers (reverse order for Face-Down printing)
-        for z in range(6):
-            mat_id = stack[5 - z]
+        # Map stack to physical layers (Face-Down mode: Z=0 is viewing surface)
+        for z in range(color_layers):
+            mat_id = stack[z]  # Direct mapping: stack[0] at Z=0 (viewing surface)
             if mat_id < 5:
                 full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
     
-    # Set corner alignment markers (in outermost ring)
-    # TL: White (0), TR: Red (1), BR: Yellow (2), BL: Blue (3)
     corners = [
-        (0, 0, 0),
-        (0, total_dim-1, 1),
-        (total_dim-1, total_dim-1, 2),
-        (total_dim-1, 0, 3)
+        (0, 0, 3),                      # TL = Blue
+        (0, total_dim-1, 1),            # TR = Red (Page 2 ID)
+        (total_dim-1, total_dim-1, 4),  # BR = Black
+        (total_dim-1, 0, 2)             # BL = Yellow
     ]
-
+    
+    viewing_surface_z = 0  # Face-Down mode: viewing surface is the first printed layer (Z=0)
     for r, c, mat_id in corners:
         px = c * (pixels_per_block + pixels_gap)
         py = r * (pixels_per_block + pixels_gap)
-        for z in range(color_layers):
-            full_matrix[z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
-
-    # Generate 3MF scene
+        full_matrix[viewing_surface_z, py:py+pixels_per_block, px:px+pixels_per_block] = mat_id
+    
+    # Generate 3MF
     scene = trimesh.Scene()
-
     for mat_id, rgba in preview_colors.items():
         mesh = _generate_voxel_mesh(full_matrix, mat_id, voxel_h, voxel_w)
         if mesh:
@@ -1127,23 +1309,38 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8):
             name = slot_names[mat_id]
             mesh.metadata['name'] = name
             scene.add_geometry(mesh, node_name=name, geom_name=name)
-
-    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Standard"))
+    
+    output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Page2"))
     scene.export(output_path)
-
     safe_fix_3mf_names(output_path, slot_names)
-
+    
+    # Preview
     bottom_layer = full_matrix[0].astype(np.uint8)
     preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
     for mat_id, rgba in preview_colors.items():
         preview_arr[bottom_layer == mat_id] = rgba[:3]
-
+    
     Stats.increment("calibrations")
-
-    print(f"[5C_EXT] ✅ Calibration board generated: {output_path}")
-
+    
     return (
         output_path,
         Image.fromarray(preview_arr),
-        f"✅ 5-Color Extended (2468) 生成完毕 | 尺寸：{board_w:.1f}mm | 颜色：{', '.join(slot_names)}"
+        f"✅ 5-Color Extended Page 2 (1444 colors) 生成完毕 | 尺寸：{board_w:.1f}mm"
     )
+
+
+def generate_5color_extended_batch_zip():
+    """Generates both pages and zips them."""
+    f1, _, _ = generate_5color_extended_board(page_index=0)
+    f2, _, _ = generate_5color_extended_board(page_index=1)
+    
+    if not f1 or not f2:
+        return None, None, "❌ Generation failed"
+    
+    zip_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Kit", ".zip"))
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.write(f1, os.path.basename(f1))
+        zf.write(f2, os.path.basename(f2))
+    
+    _, prev, _ = generate_5color_extended_board(page_index=0)  # Show Page 1 as preview
+    return zip_path, prev, "✅ 5-Color Extended Kit (Page 1 & 2) Generated!"

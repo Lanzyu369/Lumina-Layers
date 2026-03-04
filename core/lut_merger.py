@@ -15,6 +15,24 @@ from colormath.color_objects import sRGBColor, LabColor
 from colormath.color_conversions import convert_color
 from colormath.color_diff import delta_e_cie2000
 
+# Try to import color selection for 5-Color Extended mode reconstruction
+try:
+    from .calibration import select_extended_1444_colors
+except ImportError:
+    try:
+        from core.calibration import select_extended_1444_colors
+    except ImportError:
+        select_extended_1444_colors = None
+
+# Try to import ColorSystem for layer_count
+try:
+    from .config import ColorSystem
+except ImportError:
+    try:
+        from config import ColorSystem
+    except ImportError:
+        ColorSystem = None
+
 
 # Color mode size mapping
 _SIZE_TO_MODE = {
@@ -196,7 +214,7 @@ class LUTMerger:
             color_mode: 色彩模式字符串
 
         Returns:
-            (rgb_array[N,3], stacks_array[N,5])
+            (rgb_array[N,3], stacks_array[N,L]) where L is layer_count (5 or 6)
         """
         # .npz 格式直接读取
         if lut_path.endswith('.npz'):
@@ -260,45 +278,56 @@ class LUTMerger:
             if lut_path.endswith('.npz'):
                 data = np.load(lut_path)
                 stacks = data['stacks']
-                # Ensure 6-layer stacks
-                if stacks.shape[1] == 6:
-                    # 约定转换：底到顶 → 顶到底
-                    stacks = np.array([tuple(reversed(s)) for s in stacks])
-                    return (rgb, _remap_stacks(stacks, color_mode, lut_path))
+                return (rgb, _remap_stacks(stacks, color_mode, lut_path))
+            
             # Fallback: generate stacks from index
-            stacks = []
-            for i in range(count):
-                if i < 1024:
-                    # Base 1024: 5-layer (4^5 combinations)
-                    digits = []
-                    temp = i
-                    for _ in range(5):
-                        digits.append(temp % 4)
-                        temp //= 4
-                    stack = tuple(reversed(digits)) + (0,)  # Pad to 6 layers with White
-                else:
-                    # Extended 1444: 6-layer
-                    ext_idx = i - 1024
+            base_stacks = []
+            for i in range(1024):
+                digits = []
+                temp = i
+                for _ in range(5):
+                    digits.append(temp % 4)
+                    temp //= 4
+                base_stacks.append(tuple(reversed(digits)))
+            
+            if select_extended_1444_colors:
+                # Use the same greedy selection algorithm as the board generator
+                ext_stacks = select_extended_1444_colors(base_stacks)
+            else:
+                # Emergency fallback: use the old (imperfect) linear logic
+                # WARNING: This may result in stack-index mismatch if greedy selection was used
+                print("⚠️ [LUT_MERGER] Warning: select_extended_1444_colors not found. Using linear fallback for 5C-EXT.")
+                ext_stacks = []
+                for ext_idx in range(1444):
                     if ext_idx == 0:
-                        stack = (4, 0, 0, 0, 0, 0)  # KWWWWW
+                        stack = (4, 0, 0, 0, 0, 0)
                     else:
-                        base_idx = (ext_idx - 1) % 1024
-                        layer6 = ((ext_idx - 1) // 1024) + 1  # 1, 2, or 3 (R, Y, B)
+                        b_idx = (ext_idx - 1) % 1024
+                        l6 = ((ext_idx - 1) // 1024) + 1
                         digits = []
-                        temp = base_idx
+                        temp = b_idx
                         for _ in range(5):
                             digits.append(temp % 4)
                             temp //= 4
-                        stack = tuple(reversed(digits)) + (layer6,)
-                stacks.append(stack)
-            stacks_arr = np.array(stacks)
+                        stack = (l6,) + tuple(reversed(digits))
+                    ext_stacks.append(stack)
+            
+            # Pad base 1024 stacks to 6 layers with air(-1) at viewing end
+            padded_base = [(-1,) + s for s in base_stacks]
+            stacks = padded_base + ext_stacks
+            
+            stacks_arr = np.array(stacks[:count])
             return (rgb, _remap_stacks(stacks_arr, color_mode, lut_path))
 
         else:
             # Non-standard mode (e.g. "Merged" from non-standard .npy sizes)
             # Generate dummy stacks: all zeros (white-only base)
             # The RGB data is still valid for merging
-            stacks = np.zeros((count, 5), dtype=np.int32)
+            # Determine layer count from color_mode if possible
+            layer_count = 5  # default
+            if ColorSystem:
+                layer_count = ColorSystem.get(color_mode).get('layer_count', 5)
+            stacks = np.zeros((count, layer_count), dtype=np.int32)
             return (rgb, stacks)
 
     @staticmethod
@@ -310,7 +339,7 @@ class LUTMerger:
             dedup_threshold: Delta-E阈值，0表示仅精确去重
 
         Returns:
-            (merged_rgb[M,3], merged_stacks[M,5], stats_dict)
+            (merged_rgb[M,3], merged_stacks[M,L], stats_dict) where L is layer_count
         """
         if not lut_entries:
             raise ValueError("No LUT entries to merge")
