@@ -11,7 +11,7 @@ import cv2
 from PIL import Image
 from scipy.spatial import KDTree
 
-from config import PrinterConfig, ModelingMode
+from config import PrinterConfig, ModelingMode, ColorSystem
 
 # SVG support (optional dependency)
 try:
@@ -60,6 +60,7 @@ class LuminaImageProcessor:
             color_mode: Color mode string (CMYW/RYBW/6-Color)
         """
         self.color_mode = color_mode
+        self.layer_count = ColorSystem.get(color_mode).get('layer_count', PrinterConfig.COLOR_LAYERS)
         self.lut_rgb = None
         self.lut_lab = None  # CIELAB 空间的 LUT 颜色（用于 KDTree 匹配）
         self.ref_stacks = None
@@ -193,6 +194,8 @@ class LuminaImageProcessor:
                 data = np.load(lut_path)
                 self.lut_rgb = data['rgb']
                 self.ref_stacks = data['stacks']
+                if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                    self.layer_count = int(self.ref_stacks.shape[1])
                 self.lut_lab = self._rgb_to_lab(self.lut_rgb)
                 self.kdtree = KDTree(self.lut_lab)
                 print(f"✅ Merged LUT loaded: {len(self.lut_rgb)} colors (.npz format, Lab KDTree)")
@@ -234,6 +237,8 @@ class LuminaImageProcessor:
             
             self.lut_rgb = np.array(valid_rgb)
             self.ref_stacks = np.array(valid_stacks)
+            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                self.layer_count = int(self.ref_stacks.shape[1])
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (2-Color BW mode)")
         
@@ -265,6 +270,8 @@ class LuminaImageProcessor:
             
             self.lut_rgb = measured_colors
             self.ref_stacks = np.array(smart_stacks)
+            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                self.layer_count = int(self.ref_stacks.shape[1])
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (8-Color mode)")
         
@@ -288,11 +295,66 @@ class LuminaImageProcessor:
             
             self.lut_rgb = measured_colors
             self.ref_stacks = np.array(smart_stacks)
+            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                self.layer_count = int(self.ref_stacks.shape[1])
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (6-Color mode)")
         
-        # Branch 3: Merged LUT (non-standard size or "Merged" mode)
-        elif self.color_mode == "Merged" or total_colors not in (32, 1024, 1296, 2738):
+        # Branch 3: 5-Color Extended (2468)
+        elif "5-Color Extended" in self.color_mode or total_colors == 2468:
+            print("[IMAGE_PROCESSOR] Detected 5-Color Extended (2468) mode")
+            
+            # For .npz files, load stacks directly
+            if lut_path.endswith('.npz'):
+                try:
+                    data = np.load(lut_path)
+                    stacks = data['stacks']
+                    # Ensure 6-layer stacks and convert to top-to-bottom convention
+                    if stacks.shape[1] == 6:
+                        self.ref_stacks = np.array([tuple(reversed(s)) for s in stacks])
+                        self.layer_count = int(self.ref_stacks.shape[1])
+                        self.lut_rgb = measured_colors
+                        print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended, 6-layer stacks)")
+                        return
+                except Exception as e:
+                    print(f"⚠️ Failed to load stacks from .npz: {e}")
+            
+            # Fallback: generate stacks from index
+            # First 1024: base 5-layer (4^5 combinations), pad to 6 layers
+            # Next 1444: extended 6-layer from select_extended_1444_colors()
+            ref_stacks = []
+            
+            # Generate base 1024 stacks (5-layer, pad with air(-1) at viewing end)
+            # Air at index 0 offsets the base viewing surface by 1 Z level
+            # so it doesn't share the same Z as extended viewing surfaces.
+            for i in range(min(1024, total_colors)):
+                digits = []
+                temp = i
+                for _ in range(5):
+                    digits.append(temp % 4)
+                    temp //= 4
+                stack = (-1,) + tuple(reversed(digits))
+                ref_stacks.append(stack)
+            
+            # Generate extended 1444 stacks using select_extended_1444_colors
+            if total_colors > 1024:
+                from core.calibration import select_extended_1444_colors
+                base_5layer = [tuple(reversed([i//4**j%4 for j in range(5)])) for i in range(1024)]
+                extended_stacks = select_extended_1444_colors(base_5layer)
+                
+                # Add extended stacks (already in correct 6-layer format)
+                for i in range(min(len(extended_stacks), total_colors - 1024)):
+                    ref_stacks.append(extended_stacks[i])
+            
+            self.lut_rgb = measured_colors
+            self.ref_stacks = np.array(ref_stacks)
+            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                self.layer_count = int(self.ref_stacks.shape[1])
+            
+            print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (5-Color Extended)")
+        
+        # Branch 4: Merged LUT (non-standard size or "Merged" mode)
+        elif self.color_mode == "Merged" or total_colors not in (32, 1024, 1296, 2468, 2738):
             print(f"[IMAGE_PROCESSOR] Detected non-standard LUT size ({total_colors}), trying companion .npz...")
             
             # 尝试查找同名 .npz 文件
@@ -302,6 +364,8 @@ class LuminaImageProcessor:
                     data = np.load(npz_path)
                     self.lut_rgb = data['rgb']
                     self.ref_stacks = data['stacks']
+                    if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                        self.layer_count = int(self.ref_stacks.shape[1])
                     self.lut_lab = self._rgb_to_lab(self.lut_rgb)
                     self.kdtree = KDTree(self.lut_lab)
                     print(f"✅ Merged LUT loaded from companion .npz: {len(self.lut_rgb)} colors (Lab KDTree)")
@@ -313,11 +377,11 @@ class LuminaImageProcessor:
             # 生成占位堆叠（全0）
             print(f"⚠️ No companion .npz found, using placeholder stacks")
             self.lut_rgb = measured_colors
-            self.ref_stacks = np.zeros((total_colors, 5), dtype=np.int32)
+            self.ref_stacks = np.zeros((total_colors, self.layer_count), dtype=np.int32)
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (Merged mode, placeholder stacks)")
         
-        # Branch 4: 4-Color Standard (1024)
+        # Branch 5: 4-Color Standard (1024)
         else:
             print("[IMAGE_PROCESSOR] Detected 4-Color Standard mode")
             
@@ -350,6 +414,8 @@ class LuminaImageProcessor:
             
             self.lut_rgb = np.array(valid_rgb)
             self.ref_stacks = np.array(valid_stacks)
+            if isinstance(self.ref_stacks, np.ndarray) and self.ref_stacks.ndim == 2:
+                self.layer_count = int(self.ref_stacks.shape[1])
             
             print(f"✅ LUT loaded: {len(self.lut_rgb)} colors (filtered {dropped} outliers)")
         
@@ -697,7 +763,7 @@ class LuminaImageProcessor:
         # 一次性映射所有像素
         matched_rgb = self.lut_rgb[lut_indices_for_pixels].reshape(target_h, target_w, 3)
         material_matrix = self.ref_stacks[lut_indices_for_pixels].reshape(
-            target_h, target_w, PrinterConfig.COLOR_LAYERS
+            target_h, target_w, self.layer_count
         )
         print(f"[IMAGE_PROCESSOR] ⏱️ Color mapping (optimized): {time.time() - t0:.2f}s")
         
@@ -730,7 +796,7 @@ class LuminaImageProcessor:
         
         matched_rgb = self.lut_rgb[indices].reshape(target_h, target_w, 3)
         material_matrix = self.ref_stacks[indices].reshape(
-            target_h, target_w, PrinterConfig.COLOR_LAYERS
+            target_h, target_w, self.layer_count
         )
         
         print(f"[IMAGE_PROCESSOR] Direct matching complete!")

@@ -20,7 +20,7 @@ from PIL import Image as PILImage
 from core.i18n import I18n
 from config import ColorSystem, ModelingMode, BedManager
 from utils import Stats, LUTManager
-from core.calibration import generate_calibration_board, generate_smart_board, generate_8color_batch_zip
+from core.calibration import generate_calibration_board, generate_smart_board, generate_8color_batch_zip, generate_5color1444_board
 from core.naming import generate_batch_filename
 from core.extractor import (
     rotate_image,
@@ -57,6 +57,7 @@ from .callbacks import (
     on_extractor_rotate,
     on_extractor_click,
     on_extractor_clear,
+    on_extractor_page_change,
     on_lut_select,
     on_lut_upload_save,
     on_apply_color_replacement,
@@ -68,6 +69,7 @@ from .callbacks import (
     on_clear_highlight,
     run_extraction_wrapper,
     merge_8color_data,
+    merge_5color_extended_data,
     on_merge_lut_select,
     on_merge_execute,
     on_merge_primary_select,
@@ -1052,6 +1054,23 @@ def _update_lut_grid(lut_path, lang, palette_mode="swatch"):
     return generate_lut_grid_html(lut_path, lang)
 
 
+def _detect_and_enforce_structure(lut_path):
+    """Detect color mode from LUT, and enforce structure constraints for 5-Color Extended.
+
+    Returns (color_mode_update, structure_update) for two component outputs.
+    """
+    mode = detect_lut_color_mode(lut_path)
+    if mode and "5-Color Extended" in mode:
+        gr.Info("5-Color Extended 模式：自动切换为单面模式")
+        return mode, gr.update(
+            value=I18n.get('conv_structure_single', 'en'),
+            interactive=False,
+        )
+    if mode:
+        return mode, gr.update(interactive=True)
+    return gr.update(), gr.update(interactive=True)
+
+
 def create_app():
     """Build the Gradio app (tabs, i18n, events) and return the Blocks instance."""
     with gr.Blocks(title="Lumina Studio") as app:
@@ -1404,6 +1423,10 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             fn=_update_lut_grid,
             inputs=[components['state_conv_lut_path'], lang_state, components['state_conv_palette_mode']],
             outputs=[components['conv_lut_grid_view']]
+        ).then(
+            fn=_detect_and_enforce_structure,
+            inputs=[components['state_conv_lut_path']],
+            outputs=[components['radio_conv_color_mode'], components['radio_conv_structure']]
         )
 
         # Settings: cache clearing and counter reset
@@ -1627,6 +1650,7 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
                 choices = [
                     ("BW (Black & White)", "BW (Black & White)"),
                     ("4-Color (1024 colors)", "4-Color"),
+                    ("5-Color Extended (2468)", "5-Color Extended"),
                     ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
                     ("8-Color Max", "8-Color Max"),
                 ]
@@ -1724,11 +1748,12 @@ def _get_component_list(components: dict) -> list:
     return result
 
 
-def get_extractor_reference_image(mode_str):
+def get_extractor_reference_image(mode_str, page_choice="Page 1"):
     """Load or generate reference image for color extractor (disk-cached).
 
     Uses assets/ with filenames ref_bw_standard.png, ref_cmyw_standard.png,
-    ref_rybw_standard.png, ref_6color_smart.png, or ref_8color_smart.png.
+    ref_rybw_standard.png, ref_5color_ext_page1.png, ref_5color_ext_page2.png,
+    ref_6color_smart.png, or ref_8color_smart.png.
     Generates via calibration board logic if missing.
 
     Args:
@@ -1752,9 +1777,15 @@ def get_extractor_reference_image(mode_str):
         os.makedirs(cache_dir, exist_ok=True)
 
     # Determine filename and generation mode based on color system
+    gen_page_idx = 0
     if "8-Color" in mode_str:
         filename = "ref_8color_smart.png"
         gen_mode = "8-Color"
+    elif "5-Color Extended" in mode_str:
+        is_page2 = page_choice is not None and "2" in str(page_choice)
+        filename = "ref_5color_ext_page2.png" if is_page2 else "ref_5color_ext_page1.png"
+        gen_mode = "5-Color Extended"
+        gen_page_idx = 1 if is_page2 else 0
     elif "6-Color" in mode_str or "1296" in mode_str:
         filename = "ref_6color_smart.png"
         gen_mode = "6-Color"
@@ -1804,6 +1835,9 @@ def get_extractor_reference_image(mode_str):
         if gen_mode == "8-Color":
             from core.calibration import generate_8color_board
             _, img, _ = generate_8color_board(0)  # Page 1
+        elif gen_mode == "5-Color Extended":
+            from core.calibration import generate_5color_extended_board
+            _, img, _ = generate_5color_extended_board(block_size, gap, page_index=gen_page_idx)
         elif gen_mode == "6-Color":
             from core.calibration import generate_smart_board
             _, img, _ = generate_smart_board(block_size, gap)
@@ -2054,6 +2088,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                     choices=[
                         ("BW (Black & White)", "BW (Black & White)"),
                         ("4-Color (1024 colors)", "4-Color"),
+                        ("5-Color Extended (2468)", "5-Color Extended"),
                         ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
                         ("8-Color Max", "8-Color Max"),
                         ("🔀 Merged", "Merged"),
@@ -2960,12 +2995,11 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             inputs=[conv_lut_path, lang_state, conv_palette_mode],
             outputs=[conv_lut_grid_view]
     ).then(
-            # 自动检测并切换颜色模式
-            fn=detect_lut_color_mode,
+            fn=_detect_and_enforce_structure,
             inputs=[conv_lut_path],
-            outputs=[components['radio_conv_color_mode']]
+            outputs=[components['radio_conv_color_mode'], components['radio_conv_structure']]
     )
-    
+
 
     
 
@@ -2978,10 +3012,9 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             fn=lambda: gr.update(),
             outputs=[components['dropdown_conv_lut_dropdown']]
     ).then(
-            # 自动检测并切换颜色模式
-            fn=lambda lut_file: detect_lut_color_mode(lut_file.name if lut_file else None) or gr.update(),
+            fn=lambda lut_file: _detect_and_enforce_structure(lut_file.name if lut_file else None),
             inputs=[conv_lut_upload],
-            outputs=[components['radio_conv_color_mode']]
+            outputs=[components['radio_conv_color_mode'], components['radio_conv_structure']]
     )
     
     components['image_conv_image_label'].change(
@@ -3114,6 +3147,21 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
         fn=save_color_mode,
         inputs=[components['radio_conv_color_mode']],
         outputs=None
+    )
+
+    def _on_color_mode_update_structure(color_mode):
+        """5-Color Extended requires single-sided face-up (max 4 materials per Z layer)."""
+        if color_mode and "5-Color Extended" in color_mode:
+            return gr.update(
+                value=I18n.get('conv_structure_single', 'en'),
+                interactive=False,
+            )
+        return gr.update(interactive=True)
+
+    components['radio_conv_color_mode'].change(
+        fn=_on_color_mode_update_structure,
+        inputs=[components['radio_conv_color_mode']],
+        outputs=[components['radio_conv_structure']],
     )
 
     preview_event = components['btn_conv_preview_btn'].click(
@@ -4327,6 +4375,7 @@ def create_calibration_tab_content(lang: str) -> dict:
                 choices=[
                     ("BW (Black & White)", "BW (Black & White)"),
                     ("4-Color (1024 colors)", "4-Color"),
+                    ("5-Color Extended (Dual Page)", "5-Color Extended (Dual Page)"),
                     ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
                     ("8-Color Max", "8-Color Max")
                 ],
@@ -4378,6 +4427,12 @@ def create_calibration_tab_content(lang: str) -> dict:
         """Wrapper function to call appropriate generator based on mode"""
         if color_mode == "8-Color Max":
             return generate_8color_batch_zip()
+        if color_mode == "5-Color Extended (Dual Page)":
+            from core.calibration import generate_5color_extended_batch_zip
+            return generate_5color_extended_batch_zip()
+        if "5-Color Extended" in color_mode:
+            from core.calibration import generate_5color_extended_board
+            return generate_5color_extended_board(block_size, gap)
         if "6-Color" in color_mode:
             # Call Smart 1296 generator
             return generate_smart_board(block_size, gap)
@@ -4429,11 +4484,20 @@ def create_extractor_tab_content(lang: str) -> dict:
                 choices=[
                     ("BW (Black & White)", "BW (Black & White)"),
                     ("4-Color (1024 colors)", "4-Color"),
+                    ("5-Color Extended (2468)", "5-Color Extended"),
                     ("6-Color (Smart 1296)", "6-Color (Smart 1296)"),
                     ("8-Color Max", "8-Color Max")
                 ],
                 value="4-Color",
                 label=I18n.get('ext_color_mode', lang)
+            )
+            
+            # Page selection for dual-page modes (8-Color and 5-Color Extended)
+            components['radio_ext_page'] = gr.Radio(
+                choices=["Page 1", "Page 2"],
+                value="Page 1",
+                label="Page Selection",
+                visible=False
             )
                 
             ext_img_in = gr.Image(
@@ -4484,11 +4548,7 @@ def create_extractor_tab_content(lang: str) -> dict:
                 label=I18n.get('ext_offset_y', lang)
             )
             
-            components['radio_ext_page'] = gr.Radio(
-                choices=["Page 1", "Page 2"],
-                value="Page 1",
-                label="8-Color Page"
-            )
+            # Page selection moved above, controlled by color mode
                 
             components['btn_ext_extract_btn'] = gr.Button(
                 I18n.get('ext_extract_btn', lang),
@@ -4497,7 +4557,8 @@ def create_extractor_tab_content(lang: str) -> dict:
             )
             
             components['btn_ext_merge_btn'] = gr.Button(
-                "Merge 8-Color",
+                "Merge Dual Pages",
+                visible=False  # Hidden by default, shown when dual-page mode selected
             )
                 
             components['textbox_ext_status'] = gr.Textbox(
@@ -4562,38 +4623,48 @@ def create_extractor_tab_content(lang: str) -> dict:
     
     ext_img_in.upload(
             on_extractor_upload,
-            [ext_img_in, components['radio_ext_color_mode']],
+            [ext_img_in, components['radio_ext_color_mode'], components['radio_ext_page']],
             [ext_state_img, ext_work_img, ext_state_pts, ext_curr_coord, ext_hint]
     )
     
     components['radio_ext_color_mode'].change(
             on_extractor_mode_change,
-            [ext_state_img, components['radio_ext_color_mode']],
-            [ext_state_pts, ext_hint, ext_work_img]
+            [ext_state_img, components['radio_ext_color_mode'], components['radio_ext_page']],
+            [ext_state_pts, ext_hint, ext_work_img, components['radio_ext_page'], components['btn_ext_merge_btn']]
     )
 
     components['radio_ext_color_mode'].change(
         fn=get_extractor_reference_image,
-        inputs=[components['radio_ext_color_mode']],
+        inputs=[components['radio_ext_color_mode'], components['radio_ext_page']],
         outputs=[ext_ref_view]
     )
 
     components['btn_ext_rotate_btn'].click(
             on_extractor_rotate,
-            [ext_state_img, components['radio_ext_color_mode']],
+            [ext_state_img, components['radio_ext_color_mode'], components['radio_ext_page']],
             [ext_state_img, ext_work_img, ext_state_pts, ext_hint]
     )
     
     ext_work_img.select(
             on_extractor_click,
-            [ext_state_img, ext_state_pts, components['radio_ext_color_mode']],
+            [ext_state_img, ext_state_pts, components['radio_ext_color_mode'], components['radio_ext_page']],
             [ext_work_img, ext_state_pts, ext_hint]
     )
     
     components['btn_ext_reset_btn'].click(
             on_extractor_clear,
-            [ext_state_img, components['radio_ext_color_mode']],
+            [ext_state_img, components['radio_ext_color_mode'], components['radio_ext_page']],
             [ext_work_img, ext_state_pts, ext_hint]
+    )
+
+    components['radio_ext_page'].change(
+            on_extractor_page_change,
+            [ext_state_img, components['radio_ext_color_mode'], components['radio_ext_page']],
+            [ext_state_pts, ext_hint, ext_work_img]
+    ).then(
+        fn=get_extractor_reference_image,
+        inputs=[components['radio_ext_color_mode'], components['radio_ext_page']],
+        outputs=[ext_ref_view]
     )
     
     extract_inputs = [
@@ -4612,9 +4683,17 @@ def create_extractor_tab_content(lang: str) -> dict:
     ext_event = components['btn_ext_extract_btn'].click(run_extraction_wrapper, extract_inputs, extract_outputs)
     components['ext_event'] = ext_event
 
+    # Dynamic merge button handler based on color mode
+    def merge_dual_pages_wrapper(color_mode):
+        """Route to correct merge function based on color mode."""
+        if "5-Color Extended" in color_mode:
+            return merge_5color_extended_data()
+        else:
+            return merge_8color_data()
+
     components['btn_ext_merge_btn'].click(
-            merge_8color_data,
-            inputs=[],
+            merge_dual_pages_wrapper,
+            inputs=[components['radio_ext_color_mode']],
             outputs=[components['file_ext_download_npy'], components['textbox_ext_status']]
     )
     
