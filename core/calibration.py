@@ -21,7 +21,6 @@ from config import PrinterConfig, ColorSystem, SmartConfig, OUTPUT_DIR, get_asse
 from core.naming import generate_calibration_filename
 from utils import Stats
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
-from utils.helpers import safe_fix_3mf_names
 
 
 def _generate_voxel_mesh(voxel_matrix: np.ndarray, material_index: int,
@@ -413,9 +412,22 @@ def generate_smart_board(block_size_mm=5.0, gap_mm=0.8):
     
     # Export
     output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("6-Color", "Smart1296"))
-    scene.export(output_path)
-    
-    safe_fix_3mf_names(output_path, slot_names)
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=output_path,
+        slot_names=slot_names,
+        preview_colors=preview_colors,
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="6-Color"
+    )
     
     # Generate preview image
     bottom_layer = full_matrix[0].astype(np.uint8)
@@ -510,8 +522,22 @@ def generate_8color_board(page_index=0):
             
     out_name = generate_calibration_filename("8-Color", f"Page{page_index+1}")
     out_path = os.path.join(OUTPUT_DIR, out_name)
-    scene.export(out_path)
-    safe_fix_3mf_names(out_path, conf['slots'])
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=out_path,
+        slot_names=conf['slots'],
+        preview_colors=conf['preview'],
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="8-Color"
+    )
     
     # Simple preview generation
     prev = np.zeros((v_w, v_w, 3), dtype=np.uint8)
@@ -672,9 +698,22 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
     
     # Export
     output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("BW", "Standard"))
-    scene.export(output_path)
-    
-    safe_fix_3mf_names(output_path, slot_names)
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=output_path,
+        slot_names=slot_names,
+        preview_colors=preview_colors,
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="BW"
+    )
     
     # Generate preview image
     bottom_layer = full_matrix[0].astype(np.uint8)
@@ -1021,9 +1060,22 @@ def generate_5color1444_board(block_size_mm=5.0, gap_mm=0.8):
             scene.add_geometry(mesh, node_name=name, geom_name=name)
 
     output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color", "Standard"))
-    scene.export(output_path)
-
-    safe_fix_3mf_names(output_path, slot_names)
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=output_path,
+        slot_names=slot_names,
+        preview_colors=preview_colors,
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="RYBW"
+    )
 
     bottom_layer = full_matrix[0].astype(np.uint8)
     preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
@@ -1217,8 +1269,22 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
                 scene.add_geometry(mesh, node_name=name, geom_name=name)
     
     output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Page1"))
-    scene.export(output_path)
-    safe_fix_3mf_names(output_path, slot_names[:4])
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=output_path,
+        slot_names=slot_names[:4],
+        preview_colors=preview_colors,
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="5-Color Extended"
+    )
     
     # Preview
     bottom_layer = full_matrix[0].astype(np.uint8)
@@ -1326,8 +1392,22 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
             scene.add_geometry(mesh, node_name=name, geom_name=name)
     
     output_path = os.path.join(OUTPUT_DIR, generate_calibration_filename("5-Color Extended", "Page2"))
-    scene.export(output_path)
-    safe_fix_3mf_names(output_path, slot_names)
+    export_scene_with_bambu_metadata(
+        scene=scene,
+        output_path=output_path,
+        slot_names=slot_names,
+        preview_colors=preview_colors,
+        settings={
+            'layer_height': '0.08',
+            'initial_layer_height': '0.08',
+            'wall_loops': '1',
+            'top_shell_layers': '0',
+            'bottom_shell_layers': '0',
+            'sparse_infill_density': '100%',
+            'sparse_infill_pattern': 'zig-zag',
+        },
+        color_mode="5-Color Extended"
+    )
     
     # Preview
     bottom_layer = full_matrix[0].astype(np.uint8)

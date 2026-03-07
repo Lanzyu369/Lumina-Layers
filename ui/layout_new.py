@@ -994,6 +994,7 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
             structure_mode=structure_mode,
             auto_bg=auto_bg,
             bg_tol=bg_tol,
+            progress=progress,
             color_mode=color_mode,
             add_loop=add_loop,
             loop_width=loop_width,
@@ -1467,6 +1468,16 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             new_cache_size = I18n.get('settings_cache_size', lang).format(_format_bytes(cache_size_after))
             return status_msg, new_cache_size
 
+        def on_clear_output(lang):
+            output_size_before = Stats.get_output_size()
+            _, _ = Stats.clear_output()
+            output_size_after = Stats.get_output_size()
+            freed_size = max(output_size_before - output_size_after, 0)
+
+            status_msg = I18n.get('settings_output_cleared', lang).format(_format_bytes(freed_size))
+            new_output_size = I18n.get('settings_output_size', lang).format(_format_bytes(output_size_after))
+            return status_msg, new_output_size
+
         def on_reset_counters(lang):
             Stats.reset_all()
             new_stats = Stats.get_all()
@@ -1495,6 +1506,12 @@ console.log('[CROP] Global scripts loaded, openCropModal:', typeof window.openCr
             fn=on_clear_cache,
             inputs=[lang_state],
             outputs=[components['md_settings_status'], components['md_cache_size']]
+        )
+
+        components['btn_clear_output'].click(
+            fn=on_clear_output,
+            inputs=[lang_state],
+            outputs=[components['md_settings_status'], components['md_output_size']]
         )
 
         components['btn_reset_counters'].click(
@@ -1635,6 +1652,13 @@ def _get_all_component_updates(lang: str, components: dict) -> list:
             continue
         if key == 'btn_clear_cache':
             updates.append(gr.update(value=I18n.get('settings_clear_cache', lang)))
+            continue
+        if key == 'md_output_size':
+            output_size = Stats.get_output_size()
+            updates.append(gr.update(value=I18n.get('settings_output_size', lang).format(_format_bytes(output_size))))
+            continue
+        if key == 'btn_clear_output':
+            updates.append(gr.update(value=I18n.get('settings_clear_output', lang)))
             continue
         if key == 'btn_reset_counters':
             updates.append(gr.update(value=I18n.get('settings_reset_counters', lang)))
@@ -2012,7 +2036,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 image_mode=None,  # Auto-detect mode to support both JPEG and PNG
                 height=400,
                 visible=True,
-                elem_id="conv-image-input"
+                elem_id="conv-image-input",
             )
             components['file_conv_batch_input'] = gr.File(
                 label=I18n.get('conv_batch_input', lang),
@@ -2097,7 +2121,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                         visible=True,
                         height=200,
                         sources=["upload"],
-                        interactive=True
+                        interactive=True,
                     )
                     components['image_conv_heightmap_preview'] = gr.Image(
                         label="高度图预览 | Heightmap Preview",
@@ -3906,7 +3930,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
         """
         if not heightmap_path:
             return on_heightmap_clear()
-        
+
         # Convert HEIC/HEIF to PNG so the browser can display it
         display_update = gr.update()
         if isinstance(heightmap_path, str):
@@ -3918,7 +3942,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                     display_update = converted
                 except Exception as e:
                     print(f"[HEIC] Heightmap conversion failed: {e}")
-        
+
         result = HeightmapLoader.load_and_validate(heightmap_path)
         
         if result['success']:
@@ -4140,7 +4164,7 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
     )
     # ========== END Relief Mode Event Handlers ==========
     
-    # Wrapper function to auto-generate preview if needed before generating 3MF
+    # Wrapper function for 3MF generation
     def generate_with_auto_preview(batch_files, is_batch, single_image, lut_path, target_width_mm,
                                    spacer_thick, structure_mode, auto_bg, bg_tol, color_mode,
                                    add_loop, loop_width, loop_length, loop_hole, loop_pos,
@@ -4152,30 +4176,18 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                                    free_color_set, enable_coating, coating_height_mm,
                                    radio_height_mode: str,
                                    preview_cache, theme_is_dark, progress=gr.Progress()):
-        """Generate 3MF with auto-preview if cache is missing."""
+        """Generate 3MF directly; preview is generated internally by convert_image_to_3d.
         
+        Auto-preview pre-run is intentionally removed: it caused a full duplicate
+        image-processing pass (4-35s) with no cache reuse, since preview_cache was
+        never forwarded into process_batch_generation. Lower-level caches (O-3
+        parse+clip, O-4 SVG raster) already prevent redundant work when the user
+        runs preview before clicking this button.
+        """
         # Resolve UI radio value to backend height_mode parameter
         height_mode = resolve_height_mode(radio_height_mode)
 
-        # Check if preview cache exists
-        if preview_cache is None or not preview_cache:
-            print("[AUTO-PREVIEW] No preview cache found, generating preview first...")
-            progress(0.1, desc="生成预览中... | Generating preview...")
-            
-            # Generate preview first
-            try:
-                preview_img, cache, status, glb = generate_preview_cached_with_fit(
-                    single_image, lut_path, target_width_mm, auto_bg, bg_tol,
-                    color_mode, modeling_mode, quantize_colors, enable_cleanup, theme_is_dark
-                )
-                preview_cache = cache
-                print(f"[AUTO-PREVIEW] Preview generated: {status}")
-            except Exception as e:
-                print(f"[AUTO-PREVIEW] Failed to generate preview: {e}")
-                return None, None, None, f"[ERROR] 预览生成失败: {e}"
-        
-        # Now generate 3MF with the cache
-        progress(0.3, desc="生成3MF模型中... | Generating 3MF model...")
+        progress(0.0, desc="开始生成... | Starting...")
         return process_batch_generation(
             batch_files, is_batch, single_image, lut_path, target_width_mm,
             spacer_thick, structure_mode, auto_bg, bg_tol, color_mode,
@@ -4671,7 +4683,7 @@ def create_extractor_tab_content(lang: str) -> dict:
             ext_img_in = gr.Image(
                 label=I18n.get('ext_photo', lang),
                 type="numpy",
-                interactive=True
+                interactive=True,
             )
                 
             with gr.Row():
@@ -4991,6 +5003,18 @@ def create_about_tab_content(lang: str) -> dict:
             variant="secondary",
             size="sm"
         )
+    
+    output_size = Stats.get_output_size()
+    output_size_str = _format_bytes(output_size)
+    components['md_output_size'] = gr.Markdown(
+        I18n.get('settings_output_size', lang).format(output_size_str)
+    )
+    components['btn_clear_output'] = gr.Button(
+        I18n.get('settings_clear_output', lang),
+        variant="secondary",
+        size="sm"
+    )
+    
     components['md_settings_status'] = gr.Markdown("")
     
     # About page content (from i18n)

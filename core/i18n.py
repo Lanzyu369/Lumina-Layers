@@ -863,6 +863,10 @@ class I18n:
             'zh': '🗑️ 清空缓存',
             'en': '🗑️ Clear Cache'
         },
+        'settings_clear_output': {
+            'zh': '🗑️ 清空输出',
+            'en': '🗑️ Clear Output'
+        },
         'settings_reset_counters': {
             'zh': '🔢 使用计数归零',
             'en': '🔢 Reset Counters'
@@ -871,6 +875,10 @@ class I18n:
             'zh': '✅ 缓存已清空，释放了 {} 空间',
             'en': '✅ Cache cleared, freed {} of space'
         },
+        'settings_output_cleared': {
+            'zh': '✅ 输出已清空，释放了 {} 空间',
+            'en': '✅ Output cleared, freed {} of space'
+        },
         'settings_counters_reset': {
             'zh': '✅ 计数器已归零：校准板: {} | 颜色提取: {} | 模型转换: {}',
             'en': '✅ Counters reset: Calibrations: {} | Extractions: {} | Conversions: {}'
@@ -878,6 +886,10 @@ class I18n:
         'settings_cache_size': {
             'zh': '📦 缓存大小: {}',
             'en': '📦 Cache size: {}'
+        },
+        'settings_output_size': {
+            'zh': '📦 输出大小: {}',
+            'en': '📦 Output size: {}'
         },
 
         'theme_toggle_night': {

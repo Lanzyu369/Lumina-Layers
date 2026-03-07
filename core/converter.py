@@ -6,6 +6,7 @@ Coordinates modules to complete image-to-3D model conversion.
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 import numpy as np
 import cv2
@@ -474,7 +475,8 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
                          enable_cloisonne=False, wire_width_mm=0.4,
                          wire_height_mm=0.4,
                          free_color_set=None,
-                         enable_coating=False, coating_height_mm=0.08):
+                         enable_coating=False, coating_height_mm=0.08,
+                         progress=None):
     """
     Main conversion function: Convert image to 3D model.
     
@@ -512,6 +514,10 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message)
     """
+    def _prog(val: float, desc: str = ""):
+        if progress is not None:
+            progress(val, desc=desc)
+
     # Input validation
     if image_path is None:
         return None, None, None, "[ERROR] Please upload an image", None
@@ -563,13 +569,14 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             vec_processor = VectorProcessor(actual_lut_path, color_mode)
 
             # Convert SVG to 3D scene
+            _prog(0.05, "SVG 解析与几何处理中... | Parsing & extruding SVG...")
             mesh_t0 = time.perf_counter()
             scene = vec_processor.svg_to_mesh(
                 svg_path=image_path,
                 target_width_mm=target_width_mm,
                 thickness_mm=spacer_thick,
                 structure_mode=structure_mode,
-                color_replacements=vector_replacements
+                color_replacements=vector_replacements,
             )
             vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
             if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
@@ -581,6 +588,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
                 return None, None, None, "[ERROR] Vector mesh generation failed: no valid geometry generated", None
             
             # 2. Export 3MF (unified Bambu metadata path)
+            _prog(0.72, "导出 3MF 中... | Exporting 3MF...")
             base_name = os.path.splitext(os.path.basename(image_path))[0]
             out_path = os.path.join(OUTPUT_DIR, generate_model_filename(base_name, modeling_mode, color_mode))
 
@@ -638,6 +646,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
             
             # 4. Generate GLB Preview
+            _prog(0.82, "生成 3D 预览中... | Generating 3D preview...")
             glb_path = None
             glb_t0 = time.perf_counter()
             try:
@@ -649,6 +658,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             vector_timing["export_glb_s"] = time.perf_counter() - glb_t0
             
             # 5. [FIX] Generate 2D Preview Image from SVG
+            _prog(0.90, "生成 2D 预览中... | Generating 2D preview...")
             preview_img = None
             preview_t0 = time.perf_counter()
             skip_heavy_preview = os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
@@ -657,7 +667,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             elif HAS_SVG_LIB:
                 try:
                     # Use SVG-safe rasterization with bounds normalization
-                    preview_rgba = vec_processor.img_processor._load_svg(image_path, target_width_mm)
+                    preview_rgba = vec_processor.img_processor._load_svg(image_path, target_width_mm, pixels_per_mm=10.0)
 
                     # Apply color replacements to preview if provided
                     if vector_replacements:
@@ -786,6 +796,12 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
         backing_color_id = 0
     
     # Step 1: Image Processing
+    _prog(0.05, "图像处理与 LUT 匹配中... | Processing image...")
+    # Always enable HiFi timing for better observability (zero-overhead when not printing)
+    _bench_enabled = True
+    _hifi_timings = {}
+    _hifi_t0 = time.perf_counter()
+    
     try:
         processor = LuminaImageProcessor(actual_lut_path, color_mode)
         processor.enable_cleanup = enable_cleanup
@@ -799,6 +815,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             blur_kernel=blur_kernel,
             smooth_sigma=smooth_sigma
         )
+        _hifi_timings['image_proc_s'] = time.perf_counter() - _hifi_t0
     except Exception as e:
         return None, None, None, f"[ERROR] Image processing failed: {e}", None
     
@@ -1005,6 +1022,9 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             return None, None, None, f"[ERROR] Voxel matrix generation failed: {fallback_error}", None
     
     # Step 6: Generate 3D Meshes
+    _prog(0.30, "生成 3D 网格中... | Generating meshes...")
+    _mesh_t0 = time.perf_counter() if _bench_enabled else None
+    
     scene = trimesh.Scene()
     
     transform = np.eye(4)
@@ -1021,27 +1041,48 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     num_materials = len(slot_names)
     print(f"[CONVERTER] Generating meshes for {num_materials} materials...")
 
+    max_workers = min(4, num_materials)
+    parallel_enabled = max_workers > 1 and os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") != "1"
+    mesh_results = {}
+    mesh_errors = {}
+    if parallel_enabled:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_map = {
+                pool.submit(mesher.generate_mesh, full_matrix, mat_id, target_h): mat_id
+                for mat_id in range(num_materials)
+            }
+            for future in as_completed(future_map):
+                mat_id = future_map[future]
+                try:
+                    mesh_results[mat_id] = future.result()
+                except Exception as e:
+                    mesh_errors[mat_id] = e
+    else:
+        for mat_id in range(num_materials):
+            try:
+                mesh_results[mat_id] = mesher.generate_mesh(full_matrix, mat_id, target_h)
+            except Exception as e:
+                mesh_errors[mat_id] = e
+
     for mat_id in range(num_materials):
-        try:
-            mesh = mesher.generate_mesh(full_matrix, mat_id, target_h)
-            if mesh:
-                # [ROLLBACK] Removed smart simplification as per user request
-                # Warning: Large models may produce huge 3MF files
-                mesh.apply_transform(transform)
-                mesh.visual.face_colors = preview_colors[mat_id]
-                name = slot_names[mat_id]
-                mesh.metadata['name'] = name
-                scene.add_geometry(
-                    mesh, 
-                    node_name=name, 
-                    geom_name=name
-                )
-                valid_slot_names.append(name)
-                print(f"[CONVERTER] Added mesh for {name}")
-        except Exception as e:
-            # Log error and continue with other materials (Requirement 8.1)
+        if mat_id in mesh_errors:
+            e = mesh_errors[mat_id]
             print(f"[CONVERTER] Error generating mesh for material {mat_id} ({slot_names[mat_id]}): {e}")
             print(f"[CONVERTER] Continuing with other materials...")
+            continue
+        mesh = mesh_results.get(mat_id)
+        if mesh:
+            mesh.apply_transform(transform)
+            mesh.visual.face_colors = preview_colors[mat_id]
+            name = slot_names[mat_id]
+            mesh.metadata['name'] = name
+            scene.add_geometry(
+                mesh, 
+                node_name=name, 
+                geom_name=name
+            )
+            valid_slot_names.append(name)
+            print(f"[CONVERTER] Added mesh for {name}")
     
     # Conditionally generate backing mesh (only when separate_backing=True)
     # Error handling for backing mesh generation (Requirement 8.1, 8.3)
@@ -1141,6 +1182,8 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
                         print(f"[CONVERTER]   {hex_c}: mesh empty, skipping")
                 except Exception as e:
                     print(f"[CONVERTER]   Error extracting free color {hex_c}: {e}")
+    
+    _hifi_timings['mesh_gen_s'] = time.perf_counter() - _mesh_t0
     
     # Step 7: Add Keychain Loop
     loop_added = False
@@ -1306,6 +1349,9 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
         for geom_name in list(scene.geometry.keys()):
             scene.geometry[geom_name].apply_transform(x_mirror_again)
 
+    _prog(0.50, "导出 3MF 中... | Exporting 3MF...")
+    _export_t0 = time.perf_counter() if _bench_enabled else None
+    
     base_name = os.path.splitext(os.path.basename(image_path))[0]
     out_path = os.path.join(OUTPUT_DIR, generate_model_filename(base_name, modeling_mode, color_mode))
     
@@ -1343,6 +1389,7 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
             settings=print_settings,
             color_mode=color_mode
         )
+        _hifi_timings['export_3mf_s'] = time.perf_counter() - _export_t0
         print(f"[CONVERTER] 3MF exported with embedded settings: {out_path}")
     except Exception as e:
         print(f"[CONVERTER] Error exporting 3MF: {e}")
@@ -1350,22 +1397,38 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     
     # Step 8.5: Generate Color Recipe Report
     color_recipe_path = None
+    recipe_policy = os.getenv("LUMINA_COLOR_RECIPE_POLICY", "auto").strip().lower()
     try:
-        from utils.color_recipe_logger import ColorRecipeLogger
-        
-        model_filename = os.path.basename(out_path)
-        color_recipe_path = ColorRecipeLogger.create_from_processor(
-            processor=processor,
-            output_dir=OUTPUT_DIR,
-            model_filename=model_filename,
-            matched_rgb=matched_rgb,
-            material_matrix=material_matrix,
-            mask_solid=mask_solid
+        recipe_auto_max_pixels = int(os.getenv("LUMINA_COLOR_RECIPE_AUTO_MAX_PIXELS", "1200000"))
+    except Exception:
+        recipe_auto_max_pixels = 1200000
+    solid_pixels = int(np.count_nonzero(mask_solid))
+    enable_recipe = recipe_policy == "on" or (
+        recipe_policy == "auto" and solid_pixels <= recipe_auto_max_pixels
+    )
+    if enable_recipe:
+        try:
+            from utils.color_recipe_logger import ColorRecipeLogger
+
+            model_filename = os.path.basename(out_path)
+            color_recipe_path = ColorRecipeLogger.create_from_processor(
+                processor=processor,
+                output_dir=OUTPUT_DIR,
+                model_filename=model_filename,
+                matched_rgb=matched_rgb,
+                material_matrix=material_matrix,
+                mask_solid=mask_solid
+            )
+        except Exception as e:
+            print(f"[CONVERTER] Warning: Failed to generate color recipe report: {e}")
+    else:
+        print(
+            f"[CONVERTER] Skipping color recipe report: policy={recipe_policy}, "
+            f"solid_pixels={solid_pixels}, auto_max={recipe_auto_max_pixels}"
         )
-    except Exception as e:
-        print(f"[CONVERTER] Warning: Failed to generate color recipe report: {e}")
     
     # Step 9: Generate 3D Preview
+    _prog(0.90, "生成 3D 预览中... | Generating 3D preview...")
     preview_mesh = _create_preview_mesh(
         matched_rgb, mask_solid, total_layers,
         backing_color_id=backing_color_id,
@@ -1446,6 +1509,20 @@ def convert_image_to_3d(image_path, lut_path, target_width_mm, spacer_thick,
     
     # Step 10: Generate Status Message
     Stats.increment("conversions")
+    
+    # Output detailed timing for HiFi mode
+    if _hifi_timings:
+        image_proc_s = _hifi_timings.get('image_proc_s', 0.0)
+        mesh_gen_s = _hifi_timings.get('mesh_gen_s', 0.0)
+        export_3mf_s = _hifi_timings.get('export_3mf_s', 0.0)
+        total_s = image_proc_s + mesh_gen_s + export_3mf_s
+        print(
+            "[CONVERTER] HiFi timings (s): "
+            f"image_proc={image_proc_s:.3f}, "
+            f"mesh_gen={mesh_gen_s:.3f}, "
+            f"export_3mf={export_3mf_s:.3f}, "
+            f"total={total_s:.3f}"
+        )
     
     mode_name = mode_info['mode'].get_display_name()
     msg = f"✅ Conversion complete ({mode_name})! Resolution: {target_w}×{target_h}px"
@@ -2904,7 +2981,8 @@ def generate_final_model(image_path, lut_path, target_width_mm, spacer_thick,
                         enable_cloisonne=False, wire_width_mm=0.4,
                         wire_height_mm=0.4,
                         free_color_set=None,
-                        enable_coating=False, coating_height_mm=0.08):
+                        enable_coating=False, coating_height_mm=0.08,
+                        progress=None):
     """
     Wrapper function for generating final model.
     
@@ -2964,7 +3042,8 @@ def generate_final_model(image_path, lut_path, target_width_mm, spacer_thick,
         wire_height_mm=wire_height_mm,
         free_color_set=free_color_set,
         enable_coating=enable_coating,
-        coating_height_mm=coating_height_mm
+        coating_height_mm=coating_height_mm,
+        progress=progress,
     )
 
 
@@ -3819,4 +3898,4 @@ def detect_image_type(image_path):
             
     except Exception as e:
         print(f"[AUTO_DETECT] Error detecting image type: {e}")
-        return gr.update()
+        return None

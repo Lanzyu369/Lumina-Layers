@@ -4,12 +4,17 @@ Enhanced 3MF export with BambuStudio-compatible metadata and configurations
 """
 
 import os
+import io
 import zipfile
 import xml.etree.ElementTree as ET
+import json
+import copy
 from datetime import datetime
 from typing import List, Dict, Optional
 import trimesh
 import numpy as np
+
+_CONFIG_TEMPLATE_CACHE = None
 
 
 class BambuStudio3MFWriter:
@@ -115,14 +120,11 @@ class BambuStudio3MFWriter:
             # 5. Write 3D/_rels/3dmodel.model.rels
             self._write_model_rels(tmpdir)
             
-            # 6. Write individual object files (3D/Objects/object_N.model)
-            self._write_object_files(tmpdir)
-            
-            # 7. Write Metadata files
+            # 6. Write Metadata files
             self._write_metadata_files(tmpdir)
             
-            # 8. Package everything into a ZIP file
-            self._create_zip(tmpdir)
+            # 7. Package everything into a ZIP file
+            self._create_zip(tmpdir, include_object_model=True)
         
         print(f"[BAMBU_3MF] [OK] Export complete: {self.output_path}")
         return self.output_path
@@ -200,7 +202,7 @@ class BambuStudio3MFWriter:
             f.write(rels_content)
     
     def _write_object_files(self, tmpdir: str):
-        """Write object_1.model using streaming I/O to handle large meshes."""
+        """Write object_1.model - matching LD format (no UUIDs), streaming I/O for large meshes."""
         output_path = os.path.join(tmpdir, '3D', 'Objects', 'object_1.model')
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
@@ -211,19 +213,10 @@ class BambuStudio3MFWriter:
                 f.write(f'  <object id="{idx}" type="model">\n')
                 f.write('   <mesh>\n')
                 f.write('    <vertices>\n')
-
-                # Stream vertices using vectorized formatting
-                verts = mesh.vertices
-                for i in range(len(verts)):
-                    f.write(f'     <vertex x="{verts[i, 0]:.6f}" y="{verts[i, 1]:.6f}" z="{verts[i, 2]:.6f}"/>\n')
-
+                self._write_vertices_stream(f, mesh.vertices)
                 f.write('    </vertices>\n')
                 f.write('    <triangles>\n')
-
-                # Stream faces
-                fa = mesh.faces
-                for i in range(len(fa)):
-                    f.write(f'     <triangle v1="{fa[i, 0]}" v2="{fa[i, 1]}" v3="{fa[i, 2]}"/>\n')
+                self._write_triangles_stream(f, mesh.faces)
 
                 f.write('    </triangles>\n')
                 f.write('   </mesh>\n')
@@ -232,7 +225,109 @@ class BambuStudio3MFWriter:
             f.write(' </resources>\n')
             f.write(' <build/>\n')
             f.write('</model>\n')
-    
+
+    @staticmethod
+    def _write_vertices_stream(stream, vertices):
+        if len(vertices) == 0:
+            return
+        verts = np.asarray(vertices, dtype=np.float64)
+        x = np.char.mod('%.4f', verts[:, 0])
+        y = np.char.mod('%.4f', verts[:, 1])
+        z = np.char.mod('%.4f', verts[:, 2])
+        chunk = 200000
+        total = len(verts)
+        for i in range(0, total, chunk):
+            j = min(i + chunk, total)
+            lines = '     <vertex x="' + x[i:j] + '" y="' + y[i:j] + '" z="' + z[i:j] + '"/>\n'
+            stream.writelines(lines.tolist())
+
+    @staticmethod
+    def _write_triangles_stream(stream, faces):
+        if len(faces) == 0:
+            return
+        f = np.asarray(faces, dtype=np.int64)
+        v1 = np.char.mod('%d', f[:, 0])
+        v2 = np.char.mod('%d', f[:, 1])
+        v3 = np.char.mod('%d', f[:, 2])
+        chunk = 200000
+        total = len(f)
+        for i in range(0, total, chunk):
+            j = min(i + chunk, total)
+            lines = '     <triangle v1="' + v1[i:j] + '" v2="' + v2[i:j] + '" v3="' + v3[i:j] + '"/>\n'
+            stream.writelines(lines.tolist())
+
+    @staticmethod
+    def _write_vertices_bytes(raw, vertices):
+        """Write vertices as ASCII bytes directly to a binary stream (no TextIOWrapper).
+        Uses %.2f (0.01 mm precision) — safe since printer resolution is 0.1 mm.
+        Batches chunks into one encode() call to minimise Python overhead."""
+        if len(vertices) == 0:
+            return
+        verts = np.asarray(vertices, dtype=np.float64)
+        x = np.char.mod('%.2f', verts[:, 0])
+        y = np.char.mod('%.2f', verts[:, 1])
+        z = np.char.mod('%.2f', verts[:, 2])
+        chunk = 100_000
+        total = len(verts)
+        for i in range(0, total, chunk):
+            j = min(i + chunk, total)
+            lines = '     <vertex x="' + x[i:j] + '" y="' + y[i:j] + '" z="' + z[i:j] + '"/>\n'
+            raw.write(''.join(lines.tolist()).encode('ascii'))
+
+    @staticmethod
+    def _write_triangles_bytes(raw, faces):
+        """Write triangles as ASCII bytes directly to a binary stream."""
+        if len(faces) == 0:
+            return
+        f = np.asarray(faces, dtype=np.int64)
+        v1 = np.char.mod('%d', f[:, 0])
+        v2 = np.char.mod('%d', f[:, 1])
+        v3 = np.char.mod('%d', f[:, 2])
+        chunk = 100_000
+        total = len(f)
+        for i in range(0, total, chunk):
+            j = min(i + chunk, total)
+            lines = '     <triangle v1="' + v1[i:j] + '" v2="' + v2[i:j] + '" v3="' + v3[i:j] + '"/>\n'
+            raw.write(''.join(lines.tolist()).encode('ascii'))
+
+    @staticmethod
+    def _format_vertices(vertices):
+        if len(vertices) == 0:
+            return []
+        verts = np.asarray(vertices, dtype=np.float64)
+        x = np.char.mod('%.6f', verts[:, 0])
+        y = np.char.mod('%.6f', verts[:, 1])
+        z = np.char.mod('%.6f', verts[:, 2])
+        lines = (
+            '     <vertex x="'
+            + x
+            + '" y="'
+            + y
+            + '" z="'
+            + z
+            + '"/>'
+        )
+        return lines.tolist()
+
+    @staticmethod
+    def _format_triangles(faces):
+        if len(faces) == 0:
+            return []
+        f = np.asarray(faces, dtype=np.int64)
+        v1 = np.char.mod('%d', f[:, 0])
+        v2 = np.char.mod('%d', f[:, 1])
+        v3 = np.char.mod('%d', f[:, 2])
+        lines = (
+            '     <triangle v1="'
+            + v1
+            + '" v2="'
+            + v2
+            + '" v3="'
+            + v3
+            + '"/>'
+        )
+        return lines.tolist()
+
     def _write_single_object(self, tmpdir: str, obj_id: int, mesh: trimesh.Trimesh, name: str, color_rgb: tuple):
         """Write a single object .model file - matching BambuStudio format exactly"""
         
@@ -349,10 +444,12 @@ class BambuStudio3MFWriter:
         # Load the reference configuration template
         template_path = os.path.join(os.path.dirname(__file__), '..', 'bambu_config_template.json')
         
+        global _CONFIG_TEMPLATE_CACHE
         if os.path.exists(template_path):
-            import json
-            with open(template_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            if _CONFIG_TEMPLATE_CACHE is None:
+                with open(template_path, 'r', encoding='utf-8') as f:
+                    _CONFIG_TEMPLATE_CACHE = json.load(f)
+            return copy.deepcopy(_CONFIG_TEMPLATE_CACHE)
         else:
             # Fallback: return minimal config if template not found
             print("[WARNING] bambu_config_template.json not found, using minimal config")
@@ -423,7 +520,6 @@ class BambuStudio3MFWriter:
     
     def _write_project_settings(self, tmpdir: str):
         """Write project_settings.config with complete configuration."""
-        import json
         from config import ColorSystem
         
         # Get color configuration
@@ -523,14 +619,37 @@ class BambuStudio3MFWriter:
             f.write(b'<?xml version="1.0" encoding="utf-8"?>\n')
             tree.write(f, encoding='utf-8', xml_declaration=False)
     
-    def _create_zip(self, tmpdir: str):
+    def _write_object_file_to_zip(self, zf: zipfile.ZipFile):
+        # Write bytes directly to the raw zip entry — avoids TextIOWrapper per-string
+        # encoding overhead (significant for meshes with millions of vertices).
+        with zf.open('3D/Objects/object_1.model', 'w') as raw:
+            raw.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
+            raw.write(b'<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" unit="millimeter" xml:lang="en-US" requiredextensions="p">\n')
+            raw.write(b' <resources>\n')
+
+            for idx, (mesh, name, color_rgb) in enumerate(self.objects, start=1):
+                raw.write(f'  <object id="{idx}" type="model">\n'.encode())
+                raw.write(b'   <mesh>\n    <vertices>\n')
+                self._write_vertices_bytes(raw, mesh.vertices)
+                raw.write(b'    </vertices>\n    <triangles>\n')
+                self._write_triangles_bytes(raw, mesh.faces)
+                raw.write(b'    </triangles>\n   </mesh>\n  </object>\n')
+
+            raw.write(b' </resources>\n <build/>\n</model>\n')
+
+    def _create_zip(self, tmpdir: str, include_object_model: bool = False):
         """Package all files into a ZIP archive (.3mf)"""
-        with zipfile.ZipFile(self.output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(self.output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(tmpdir):
                 for file in files:
+                    if include_object_model and file == 'object_1.model':
+                        continue
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, tmpdir)
-                    zf.write(file_path, arcname)
+                    with open(file_path, 'rb') as f:
+                        zf.writestr(arcname, f.read())
+            if include_object_model:
+                self._write_object_file_to_zip(zf)
     
     @staticmethod
     def _generate_uuid() -> str:
