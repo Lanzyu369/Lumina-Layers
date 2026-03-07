@@ -79,6 +79,13 @@ from .callbacks import (
     on_merge_revert,
 )
 
+# Supported image file types for Gradio upload components.
+# Centralized list so that adding a new format only requires one change.
+SUPPORTED_IMAGE_FILE_TYPES: list[str] = [
+    ".jpg", ".jpeg", ".png", ".bmp",
+    ".gif", ".webp", ".heic", ".heif",
+]
+
 # Runtime-injected i18n keys (avoids editing core/i18n.py).
 if hasattr(I18n, 'TEXTS'):
     I18n.TEXTS.update({
@@ -2005,12 +2012,13 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 image_mode=None,  # Auto-detect mode to support both JPEG and PNG
                 height=400,
                 visible=True,
-                elem_id="conv-image-input"
+                elem_id="conv-image-input",
+                file_types=SUPPORTED_IMAGE_FILE_TYPES,
             )
             components['file_conv_batch_input'] = gr.File(
                 label=I18n.get('conv_batch_input', lang),
                 file_count="multiple",
-                file_types=["image"],
+                file_types=SUPPORTED_IMAGE_FILE_TYPES,
                 visible=False
             )
             components['md_conv_params_section'] = gr.Markdown(I18n.get('conv_params_section', lang))
@@ -2086,11 +2094,12 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
                 with gr.Row(visible=False) as conv_heightmap_row:
                     components['image_conv_heightmap'] = gr.Image(
                         type="filepath",
-                        label="上传高度图 | Upload Heightmap (PNG/JPG/BMP)",
+                        label="上传高度图 | Upload Heightmap (PNG/JPG/BMP/HEIC)",
                         visible=True,
                         height=200,
                         sources=["upload"],
-                        interactive=True
+                        interactive=True,
+                        file_types=SUPPORTED_IMAGE_FILE_TYPES,
                     )
                     components['image_conv_heightmap_preview'] = gr.Image(
                         label="高度图预览 | Heightmap Preview",
@@ -4638,7 +4647,8 @@ def create_extractor_tab_content(lang: str) -> dict:
             ext_img_in = gr.Image(
                 label=I18n.get('ext_photo', lang),
                 type="numpy",
-                interactive=True
+                interactive=True,
+                file_types=SUPPORTED_IMAGE_FILE_TYPES,
             )
                 
             with gr.Row():
