@@ -3062,6 +3062,11 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
             fn=detect_image_type,
             inputs=[components['image_conv_image_label']],
             outputs=[components['radio_conv_modeling_mode']]
+    ).then(
+            # 清空已生成的 3MF 文件，强制下次点击切片按钮时重新生成
+            fn=lambda: None,
+            inputs=None,
+            outputs=[components['file_conv_download_file']]
     )
     components['slider_conv_width'].input(
             fn=calc_height_from_width,
@@ -4253,6 +4258,46 @@ def create_converter_tab_content(lang: str, lang_state=None, theme_state=None) -
         inputs=[conv_slicer_dropdown_vis],
         outputs=[components['dropdown_conv_slicer'], conv_slicer_dropdown_vis]
     )
+
+    # ========== Invalidate cached 3MF when any generation parameter changes ==========
+    # When user changes image, dimensions, color mode, modeling mode, or any other
+    # parameter that affects the output, clear the cached 3MF file so the slicer
+    # button will trigger a fresh generation instead of opening the stale model.
+    _invalidate_fn = lambda: None  # Returns None to clear file component
+
+    _param_components_change = [
+        components['slider_conv_width'],
+        components['slider_conv_thickness'],
+        components['radio_conv_structure'],
+        components['checkbox_conv_auto_bg'],
+        components['slider_conv_tolerance'],
+        components['radio_conv_color_mode'],
+        components['radio_conv_modeling_mode'],
+        components['slider_conv_quantize_colors'],
+        components['checkbox_conv_loop_enable'],
+        components['slider_conv_loop_width'],
+        components['slider_conv_loop_length'],
+        components['slider_conv_loop_hole'],
+        components['checkbox_conv_separate_backing'],
+        components['checkbox_conv_relief_mode'],
+        components['checkbox_conv_cleanup'],
+        components['checkbox_conv_outline_enable'],
+        components['slider_conv_outline_width'],
+        components['checkbox_conv_cloisonne_enable'],
+        components['slider_conv_wire_width'],
+        components['slider_conv_wire_height'],
+        components['checkbox_conv_coating_enable'],
+        components['slider_conv_coating_height'],
+        components['slider_conv_auto_height_max'],
+        components['radio_conv_auto_height_mode'],
+    ]
+
+    for comp in _param_components_change:
+        comp.change(
+            fn=_invalidate_fn,
+            inputs=None,
+            outputs=[components['file_conv_download_file']]
+        )
 
     def on_open_slicer_click(file_obj, slicer_id, batch_files, is_batch, single_image, lut_path, 
                             target_width_mm, spacer_thick, structure_mode, auto_bg, bg_tol, color_mode,
