@@ -955,7 +955,7 @@ def process_batch_generation(batch_files, is_batch, single_image, lut_path, targ
         tuple: (file_or_zip_path, model3d_value, preview_image, status_text).
     """
     # Handle None modeling_mode (use default)
-    if modeling_mode is None:
+    if modeling_mode is None or modeling_mode == "none":
         modeling_mode = ModelingMode.HIGH_FIDELITY
     else:
         modeling_mode = ModelingMode(modeling_mode)

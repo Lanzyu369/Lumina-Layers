@@ -2546,7 +2546,7 @@ def generate_preview_cached(image_path, lut_path, target_width_mm,
         return None, None, "[ERROR] Invalid LUT file format"
 
     # Handle None modeling_mode with default
-    if modeling_mode is None:
+    if modeling_mode is None or modeling_mode == "none":
         modeling_mode = ModelingMode.HIGH_FIDELITY
         print("[CONVERTER] Warning: modeling_mode was None, using default HIGH_FIDELITY")
     else:
@@ -3794,28 +3794,29 @@ def detect_lut_color_mode(lut_path):
 
 def detect_image_type(image_path):
     """
-    自动检测图像类型并返回推荐的建模模式
-    
+    Detect image type and return recommended modeling mode.
+    自动检测图像类型并返回推荐的建模模式。
+
     Args:
-        image_path: 图像文件路径
-    
+        image_path (str): Image file path. (图像文件路径)
+
     Returns:
-        ModelingMode or None: 推荐的建模模式枚举值，或 None（不切换）
+        gr.update: Gradio update object with new mode, or no-op update. (Gradio 更新对象)
     """
+    import gradio as gr
     if not image_path:
-        return None
+        return gr.update()
     
     try:
-        # 检查文件扩展名
         ext = os.path.splitext(image_path)[1].lower()
         
         if ext == '.svg':
             print(f"[AUTO_DETECT] SVG file detected, recommending SVG Mode")
-            return ModelingMode.VECTOR
+            return gr.update(value=ModelingMode.VECTOR)
         else:
             print(f"[AUTO_DETECT] Raster image detected ({ext}), keeping current mode")
-            return None  # 不自动切换光栅图像模式
+            return gr.update()  # 不改变当前选择
             
     except Exception as e:
         print(f"[AUTO_DETECT] Error detecting image type: {e}")
-        return None
+        return gr.update()
