@@ -5,6 +5,7 @@ Enhanced 3MF export with BambuStudio-compatible metadata and configurations
 
 import os
 import io
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 import json
@@ -442,7 +443,11 @@ class BambuStudio3MFWriter:
             dict: Complete configuration template
         """
         # Load the reference configuration template
-        template_path = os.path.join(os.path.dirname(__file__), '..', 'bambu_config_template.json')
+        # In frozen mode (PyInstaller), use sys._MEIPASS as base directory
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            template_path = os.path.join(sys._MEIPASS, 'bambu_config_template.json')
+        else:
+            template_path = os.path.join(os.path.dirname(__file__), '..', 'bambu_config_template.json')
         
         global _CONFIG_TEMPLATE_CACHE
         if os.path.exists(template_path):
