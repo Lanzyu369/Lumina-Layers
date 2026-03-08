@@ -505,6 +505,7 @@ class VectorProcessor:
                     else:
                         z_bot = run_start * layer_h
                         height = (run_end - run_start + 1) * layer_h
+
                     new_meshes = VectorProcessor._extrude_geometry(
                         geom, height=height, z_offset=z_bot, scale=scale_factor,
                         extrude_cache=extrude_cache,
@@ -614,8 +615,13 @@ class VectorProcessor:
             except Exception:
                 subpaths = []
 
-            # Parse subpaths independently to avoid "bridging" disjoint contours
-            # into one invalidly large polygon.
+            # Collect all valid subpath polygons first, then combine using the
+            # even-odd fill rule (XOR / symmetric_difference chain).  This correctly
+            # handles paths with interior holes: a subpath contained inside another
+            # produces a ring (filled outer minus transparent inner) rather than two
+            # independent solid polygons — which would create spurious geometry where
+            # there should be transparent cutouts.
+            subpath_polys = []
             for subpath in subpaths:
                 try:
                     sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
@@ -624,8 +630,24 @@ class VectorProcessor:
                     continue
                 if poly is None:
                     continue
-                raw_shapes.append({"poly": poly, "color": rgb})
+                subpath_polys.append(poly)
+
+            if len(subpath_polys) == 1:
+                raw_shapes.append({"poly": subpath_polys[0], "color": rgb})
                 sampled_any = True
+            elif len(subpath_polys) > 1:
+                combined = subpath_polys[0]
+                for sp in subpath_polys[1:]:
+                    try:
+                        combined = combined.symmetric_difference(sp)
+                    except Exception:
+                        pass  # keep accumulated result if XOR fails for this step
+                if combined is not None and not combined.is_empty:
+                    if not combined.is_valid:
+                        combined = combined.buffer(0)
+                    if not combined.is_empty:
+                        raw_shapes.append({"poly": combined, "color": rgb})
+                        sampled_any = True
 
             if sampled_any:
                 continue
