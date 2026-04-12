@@ -62,6 +62,86 @@ def _linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     return np.clip(np.round(srgb * 255.0), 0, 255).astype(np.uint8)
 
 
+_ROI_FRAC = 0.6
+_MIN_HALF_ROI = 4
+
+
+def _compute_sampling_geometry(
+    grid_size: int,
+    physical_grid: int,
+    zoom: float,
+    barrel: float,
+    offset_x: float,
+    offset_y: float,
+    roi_frac: float = _ROI_FRAC,
+    min_half_roi: int = _MIN_HALF_ROI,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pre-compute corrected cell centers and per-cell adaptive ROI sizes.
+    预计算校正后的色块中心坐标和逐色块自适应 ROI 尺寸。
+
+    The ROI for each cell is bounded by both a fraction of the nominal grid
+    pitch and the local post-warp center-to-center spacing, preventing
+    overlap under zoom / barrel-distortion extremes.
+
+    Args:
+        grid_size: Data cells per side (e.g. 32 for 4-color).
+            (每边数据色块数)
+        physical_grid: Physical grid dimension including borders.
+            (包含边框的物理网格维度)
+        zoom: Zoom correction factor. (缩放校正因子)
+        barrel: Barrel distortion coefficient. (桶形畸变系数)
+        offset_x: Global X pixel offset. (全局 X 像素偏移)
+        offset_y: Global Y pixel offset. (全局 Y 像素偏移)
+        roi_frac: Fraction of nominal cell size to sample (default 0.6).
+            (采样区域占名义色块尺寸的比例)
+        min_half_roi: Desired minimum half-ROI in pixels for nominal
+            sizing (default 4).  The actual per-cell value may be smaller
+            when local spacing requires it; the absolute floor is 1 px.
+            (名义半 ROI 期望下限；实际值受局部间距约束，绝对下限为 1px)
+
+    Returns:
+        Tuple of (centers_x, centers_y, half_roi_map), each shaped
+        (grid_size, grid_size).
+        (中心 X 坐标、中心 Y 坐标、逐色块半 ROI 尺寸)
+    """
+    cell_px = DST_SIZE / physical_grid
+    nominal_half_roi = max(min_half_roi, int(cell_px * roi_frac / 2))
+
+    rs = np.arange(grid_size)
+    cs = np.arange(grid_size)
+    rr, cc = np.meshgrid(rs, cs, indexing="ij")
+
+    phys_r = rr + 1.0
+    phys_c = cc + 1.0
+    nx = (phys_c + 0.5) / physical_grid * 2 - 1
+    ny = (phys_r + 0.5) / physical_grid * 2 - 1
+
+    rad = np.sqrt(nx**2 + ny**2)
+    k = 1 + barrel * (rad**2)
+    dx = nx * k * zoom
+    dy = ny * k * zoom
+
+    centers_x = (dx + 1) / 2 * DST_SIZE + offset_x
+    centers_y = (dy + 1) / 2 * DST_SIZE + offset_y
+
+    half_roi_map = np.full((grid_size, grid_size), float(nominal_half_roi))
+
+    if grid_size > 1:
+        h_gaps = np.abs(np.diff(centers_x, axis=1))
+        half_roi_map[:, 1:] = np.minimum(half_roi_map[:, 1:], h_gaps / 2)
+        half_roi_map[:, :-1] = np.minimum(half_roi_map[:, :-1], h_gaps / 2)
+
+        v_gaps = np.abs(np.diff(centers_y, axis=0))
+        half_roi_map[1:, :] = np.minimum(half_roi_map[1:, :], v_gaps / 2)
+        half_roi_map[:-1, :] = np.minimum(half_roi_map[:-1, :], v_gaps / 2)
+
+    # Gap bound is the hard physical constraint; absolute floor is 1px
+    # to guarantee a valid (≥2×2) ROI even under extreme compression.
+    half_roi_map = np.maximum(half_roi_map, 1).astype(int)
+
+    return centers_x, centers_y, half_roi_map
+
+
 def _draw_dashed_rect(
     img: np.ndarray,
     pt1: tuple[int, int],
@@ -497,14 +577,14 @@ def run_extraction(
     if bright:
         warped = apply_brightness_correction(warped)
 
-    # Sampling
+    # Sampling — pre-compute corrected centers and per-cell adaptive ROI
     extracted = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
     vis = warped.copy()
 
-    # ROI 自适应：取色块中心 60%，避免边框污染同时充分采样
-    _ROI_FRAC = 0.6
+    centers_x, centers_y, half_roi_map = _compute_sampling_geometry(
+        grid_size, physical_grid, zoom, barrel, offset_x, offset_y,
+    )
     cell_px = DST_SIZE / physical_grid
-    half_roi = max(4, int(cell_px * _ROI_FRAC / 2))
     marker_size = max(8, int(cell_px * 0.3))
 
     # BW模式特殊处理：只提取前 32 个色块
@@ -516,31 +596,18 @@ def run_extraction(
     extracted_count = 0
     for r in range(grid_size):
         for c in range(grid_size):
-            # BW模式：只提取前 32 个
             if extracted_count >= cells_to_extract:
                 break
 
-            # 【关键】计算物理位置时的偏移
-            # 无论是 4色 还是 6色，因为都有 1 格边框，所以都需要 +1
-            phys_r = r + 1
-            phys_c = c + 1
-
-            # 归一化坐标 [-1, 1] (基于 physical_grid)
-            nx = (phys_c + 0.5) / physical_grid * 2 - 1
-            ny = (phys_r + 0.5) / physical_grid * 2 - 1
-
-            rad = np.sqrt(nx**2 + ny**2)
-            k = 1 + barrel * (rad**2)
-            dx, dy = nx * k * zoom, ny * k * zoom
-
-            cx = (dx + 1) / 2 * DST_SIZE + offset_x
-            cy = (dy + 1) / 2 * DST_SIZE + offset_y
+            cx = float(centers_x[r, c])
+            cy = float(centers_y[r, c])
+            hr = int(half_roi_map[r, c])
 
             if 0 <= cx < DST_SIZE and 0 <= cy < DST_SIZE:
-                x0 = int(max(0, cx - half_roi))
-                y0 = int(max(0, cy - half_roi))
-                x1 = int(min(DST_SIZE, cx + half_roi))
-                y1 = int(min(DST_SIZE, cy + half_roi))
+                x0 = int(max(0, cx - hr))
+                y0 = int(max(0, cy - hr))
+                x1 = int(min(DST_SIZE, cx + hr))
+                y1 = int(min(DST_SIZE, cy + hr))
                 reg = warped[y0:y1, x0:x1]
                 if reg.size > 0:
                     avg = _linear_to_srgb(_srgb_to_linear(reg).mean(axis=(0, 1)))
@@ -553,7 +620,6 @@ def run_extraction(
             extracted[r, c] = avg
             extracted_count += 1
 
-        # BW模式：提取够 32 个就退出外层循环
         if extracted_count >= cells_to_extract:
             break
 
