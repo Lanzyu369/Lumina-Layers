@@ -1,5 +1,11 @@
 import apiClient from "./client";
-import type { BaseColorsResponse, FiveColorQueryResponse, FiveColorQueryRequest } from "./types";
+import type {
+  BaseColorsResponse,
+  FiveColorQueryResponse,
+  FiveColorQueryRequest,
+  RecipeSwatchRequest,
+  RecipeSwatchResponse,
+} from "./types";
 
 /** 获取指定 LUT 的基础颜色列表 */
 export async function fetchBaseColors(lutName: string): Promise<BaseColorsResponse> {
@@ -23,6 +29,15 @@ export async function queryFiveColor(request: FiveColorQueryRequest): Promise<Fi
 export async function clearFiveColorCache(): Promise<{ success: boolean; message: string }> {
   const response = await apiClient.post<{ success: boolean; message: string }>(
     "/five-color/clear-cache"
+  );
+  return response.data;
+}
+
+/** 生成配方色块验证 3MF */
+export async function generateRecipeSwatch(request: RecipeSwatchRequest): Promise<RecipeSwatchResponse> {
+  const response = await apiClient.post<RecipeSwatchResponse>(
+    "/five-color/generate-swatch",
+    request
   );
   return response.data;
 }
