@@ -31,6 +31,19 @@ export enum StructureMode {
 export type PuzzleStyle = "regular" | "irregular";
 export type PuzzleSizingMode = "piece_size" | "grid" | "piece_count";
 export type PuzzleConnectorStyle = "classic" | "easy_cut";
+export type FridgeMagnetShape = "round" | "rect";
+
+export interface FridgeMagnetItem {
+  id: string;
+  shape: FridgeMagnetShape;
+  preset_key: string;
+  diameter_mm: number | null;
+  width_mm: number | null;
+  height_mm: number | null;
+  thickness_mm: number;
+  center_x_mm: number;
+  center_y_mm: number;
+}
 
 // ========== Request Models ==========
 
@@ -74,6 +87,8 @@ export interface ConvertGenerateRequest extends ConvertPreviewRequest {
   coating_height_mm: number;
   replacement_regions?: ColorReplacementItem[];
   free_color_set?: string[];
+  enable_fridge_magnet: boolean;
+  fridge_magnets: FridgeMagnetItem[];
   printer_id?: string;
   slicer?: string;
   use_cached_matched_rgb?: boolean;

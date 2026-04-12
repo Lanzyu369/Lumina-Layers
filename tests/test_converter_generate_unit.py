@@ -144,6 +144,30 @@ class TestGenerateParameterCompleteness:
 
     def test_generate_passes_all_advanced_params(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
+        expected_fridge_magnets = [
+            {
+                "id": "magnet-round",
+                "shape": "round",
+                "preset_key": "round-18",
+                "diameter_mm": 18.0,
+                "width_mm": None,
+                "height_mm": None,
+                "thickness_mm": 2.0,
+                "center_x_mm": 20.0,
+                "center_y_mm": 25.0,
+            },
+            {
+                "id": "magnet-rect",
+                "shape": "rect",
+                "preset_key": "rect-20x10",
+                "diameter_mm": None,
+                "width_mm": 20.0,
+                "height_mm": 10.0,
+                "thickness_mm": 2.5,
+                "center_x_mm": 40.0,
+                "center_y_mm": 15.0,
+            },
+        ]
 
         payload = {
             "session_id": sid,
@@ -164,6 +188,8 @@ class TestGenerateParameterCompleteness:
                 "loop_length": 10.0,
                 "loop_hole": 3.0,
                 "loop_pos": [50.0, 50.0],
+                "enable_fridge_magnet": True,
+                "fridge_magnets": expected_fridge_magnets,
                 "enable_relief": True,
                 "color_height_map": {"#ff0000": 2.0},
                 "heightmap_max_height": 8.0,
@@ -234,6 +260,8 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["loop_length"] == 10.0
         assert submitted_params["loop_hole"] == 3.0
         assert submitted_params["loop_pos"] == (50.0, 50.0)
+        assert submitted_params["enable_fridge_magnet"] is True
+        assert submitted_params["fridge_magnets"] == expected_fridge_magnets
 
         # Verify relief parameters
         assert submitted_params["enable_relief"] is True
@@ -342,3 +370,63 @@ class TestGenerateWorkerException:
 
         assert response.status_code == 500
         assert "Worker crashed" in response.json()["detail"]
+
+
+class TestLargeFormatFridgeMagnetValidation:
+    """Verify unsupported fridge-magnet combinations fail deterministically."""
+
+    def test_large_format_rejects_fridge_magnet_mode(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 80.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "enable_fridge_magnet": True,
+                    "fridge_magnets": [
+                        {
+                            "id": "magnet-round",
+                            "shape": "round",
+                            "preset_key": "round-18",
+                            "diameter_mm": 18.0,
+                            "width_mm": None,
+                            "height_mm": None,
+                            "thickness_mm": 2.0,
+                            "center_x_mm": 0.0,
+                            "center_y_mm": 0.0,
+                        }
+                    ],
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "fridge magnet" in response.json()["detail"].lower()
+
+    def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 80.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "enable_fridge_magnet": True,
+                    "fridge_magnets": [],
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "fridge magnet" in response.json()["detail"].lower()

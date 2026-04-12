@@ -6,6 +6,8 @@
  * V1: 全站统一配方 schema，首批仅接入 converter。
  */
 
+import type { FridgeMagnetItem } from "../api/types";
+
 // ========== Asset ==========
 
 /** Embedded asset entry (original file bytes preserved). */
@@ -118,6 +120,11 @@ export interface ConverterRecipeDevice {
   slicer: string;
 }
 
+export interface ConverterRecipeFridgeMagnet {
+  enable_fridge_magnet: boolean;
+  fridge_magnets: FridgeMagnetItem[];
+}
+
 // ========== Converter Recipe (combined) ==========
 
 export interface ConverterRecipe {
@@ -130,6 +137,7 @@ export interface ConverterRecipe {
   color_ops: ConverterRecipeColorOps;
   large_format: ConverterRecipeLargeFormat;
   puzzle: ConverterRecipePuzzle;
+  fridge_magnet?: ConverterRecipeFridgeMagnet;
   device: ConverterRecipeDevice;
 }
 

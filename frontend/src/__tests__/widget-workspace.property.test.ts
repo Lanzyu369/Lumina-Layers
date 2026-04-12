@@ -108,7 +108,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 
@@ -142,7 +142,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 
@@ -150,10 +150,10 @@ describe('Widget Workspace Property-Based Tests', () => {
       // **Validates: Requirements 3.3, 4.5**
       fc.assert(
         fc.property(
-          fc.integer({ min: 1, max: 12 }),  // number of widgets
+          fc.integer({ min: 1, max: 14 }),  // number of widgets
           fc.constantFrom('left' as const, 'right' as const),
           fc.integer({ min: 500, max: 5000 }), // containerWidth
-          fc.array(fc.boolean(), { minLength: 12, maxLength: 12 }), // collapsed states
+          fc.array(fc.boolean(), { minLength: 14, maxLength: 14 }), // collapsed states
           (count, edge, containerWidth, collapsedStates) => {
             const widgets: WidgetLayoutState[] = WIDGET_IDS.slice(0, count).map((id, i) => ({
               id,
@@ -191,7 +191,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 
@@ -260,6 +260,8 @@ describe('Widget Workspace Property-Based Tests', () => {
             'cloisonne-settings': widgetStateArb,
             'coating-settings': widgetStateArb,
             'keychain-loop': widgetStateArb,
+            'fridge-magnet-settings': widgetStateArb,
+            'puzzle-settings': widgetStateArb,
             'action-bar': widgetStateArb,
             'calibration': widgetStateArb,
             'extractor': widgetStateArb,
@@ -284,7 +286,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 
@@ -320,7 +322,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 
@@ -328,8 +330,8 @@ describe('Widget Workspace Property-Based Tests', () => {
       // **Validates: Requirements 3.6**
       fc.assert(
         fc.property(
-          fc.array(fc.boolean(), { minLength: 12, maxLength: 12 }), // which widgets are free-floating
-          fc.array(fc.boolean(), { minLength: 12, maxLength: 12 }), // which widgets are visible
+          fc.array(fc.boolean(), { minLength: 14, maxLength: 14 }), // which widgets are free-floating
+          fc.array(fc.boolean(), { minLength: 14, maxLength: 14 }), // which widgets are visible
           (freeFloating, visibleStates) => {
             // Build initial state with some widgets free-floating
             const widgets = { ...DEFAULT_LAYOUT };
@@ -366,7 +368,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
     ];
 

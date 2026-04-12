@@ -14,6 +14,7 @@ Instead we inspect function metadata and verify picklability.
 import inspect
 import pickle
 import types
+from unittest.mock import patch
 
 import pytest
 
@@ -174,3 +175,65 @@ class TestTopLevelFunctions:
     def test_model_qualname_is_module_level(self) -> None:
         """__qualname__ should equal __name__ for top-level functions."""
         assert "." not in worker_generate_model.__qualname__
+
+
+def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
+    """worker_generate_model should pass fridge-magnet params through untouched."""
+
+    expected_fridge_magnets = [
+        {
+            "id": "magnet-round",
+            "shape": "round",
+            "preset_key": "round-18",
+            "diameter_mm": 18.0,
+            "width_mm": None,
+            "height_mm": None,
+            "thickness_mm": 2.0,
+            "center_x_mm": 20.0,
+            "center_y_mm": 25.0,
+        },
+        {
+            "id": "magnet-rect",
+            "shape": "rect",
+            "preset_key": "rect-20x10",
+            "diameter_mm": None,
+            "width_mm": 20.0,
+            "height_mm": 10.0,
+            "thickness_mm": 2.5,
+            "center_x_mm": 40.0,
+            "center_y_mm": 15.0,
+        },
+    ]
+    params = {
+        "target_width_mm": 80.0,
+        "spacer_thick": 1.5,
+        "structure_mode": "Single-sided",
+        "auto_bg": True,
+        "bg_tol": 60,
+        "color_mode": "4-Color (RYBW)",
+        "add_loop": True,
+        "loop_width": 5.0,
+        "loop_length": 10.0,
+        "loop_hole": 3.0,
+        "loop_pos": (50.0, 50.0),
+        "enable_fridge_magnet": True,
+        "fridge_magnets": expected_fridge_magnets,
+        "modeling_mode": "high-fidelity",
+    }
+
+    with patch(
+        "core.converter.generate_final_model",
+        return_value=("out.3mf", "out.glb", None, "OK", None),
+    ) as generate_final_model_mock:
+        result = worker_generate_model("image.png", "lut.npy", params)
+
+    assert result == {
+        "threemf_path": "out.3mf",
+        "glb_path": "out.glb",
+        "status_msg": "OK",
+    }
+    generate_final_model_mock.assert_called_once_with(
+        image_path="image.png",
+        lut_path="lut.npy",
+        **params,
+    )

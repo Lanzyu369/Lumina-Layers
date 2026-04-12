@@ -3,6 +3,7 @@ import fc from "fast-check";
 import { fileToBase64, base64ToFile, sha256Hex, sha256String } from "../recipe/utils";
 import { exportConverterRecipe } from "../recipe/exportRecipe";
 import { restoreConverterRecipe } from "../recipe/importRecipe";
+import { resolveFridgeMagnetSpacerThick } from "../constants/fridgeMagnets";
 import { DEFAULT_STATE } from "../stores/converter";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { ConverterState } from "../stores/converter/store";
@@ -104,6 +105,35 @@ describe("recipe round-trip properties", () => {
       connectorStyle: fc.constantFrom("classic", "easy_cut" as const),
       labelsEnabled: fc.boolean(),
       engraveBackLabels: fc.boolean(),
+      enable_fridge_magnet: fc.boolean(),
+      base_spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
+      fridge_magnets: fc.array(
+        fc.oneof(
+          fc.record({
+            id: fc.uuid(),
+            shape: fc.constant("round" as const),
+            preset_key: fc.constantFrom("round-d6x2", "round-d8x3", "round-d10x3", "round-d12x3"),
+            diameter_mm: fc.constantFrom(6, 8, 10, 12),
+            width_mm: fc.constant(null),
+            height_mm: fc.constant(null),
+            thickness_mm: fc.constantFrom(2, 3),
+            center_x_mm: fc.double({ min: -200, max: 200, noNaN: true }),
+            center_y_mm: fc.double({ min: -200, max: 200, noNaN: true }),
+          }),
+          fc.record({
+            id: fc.uuid(),
+            shape: fc.constant("rect" as const),
+            preset_key: fc.constantFrom("rect-10x5x1", "rect-15x5x2", "rect-20x10x2"),
+            diameter_mm: fc.constant(null),
+            width_mm: fc.constantFrom(10, 15, 20),
+            height_mm: fc.constantFrom(5, 10),
+            thickness_mm: fc.constantFrom(1, 2),
+            center_x_mm: fc.double({ min: -200, max: 200, noNaN: true }),
+            center_y_mm: fc.double({ min: -200, max: 200, noNaN: true }),
+          }),
+        ),
+        { maxLength: 4 },
+      ),
     });
 
     const localLuts: LutInfo[] = [
@@ -115,7 +145,18 @@ describe("recipe round-trip properties", () => {
 
     fc.assert(
       fc.property(arbState, (overrides) => {
-        const state = { ...DEFAULT_STATE, ...overrides } as ConverterState;
+        const state = {
+          ...DEFAULT_STATE,
+          ...overrides,
+          spacer_thick: resolveFridgeMagnetSpacerThick(
+            overrides.base_spacer_thick,
+            overrides.enable_fridge_magnet,
+            overrides.fridge_magnets,
+          ),
+          structure_mode: overrides.enable_fridge_magnet
+            ? "Single-sided"
+            : DEFAULT_STATE.structure_mode,
+        } as ConverterState;
         const recipe = exportConverterRecipe(state, DEFAULT_SETTINGS, fpForLut[overrides.lut_name]);
         expect(recipe.puzzle.engrave_back_labels).toBe(false);
 
@@ -149,10 +190,25 @@ describe("recipe round-trip properties", () => {
         const { state: restored } = restoreConverterRecipe(fullRecipe, localLuts, localFP);
         const expectedLargeFormatEnabled = overrides.puzzleEnabled
           ? false
-          : overrides.largeFormatEnabled;
+          : overrides.enable_fridge_magnet
+            ? false
+            : overrides.largeFormatEnabled;
         const expectedAddLoop = overrides.puzzleEnabled
           ? false
-          : overrides.add_loop;
+          : overrides.enable_fridge_magnet
+            ? false
+            : overrides.add_loop;
+        const expectedPuzzleEnabled = overrides.enable_fridge_magnet
+          ? false
+          : overrides.puzzleEnabled;
+        const expectedStructureMode = overrides.enable_fridge_magnet
+          ? "Single-sided"
+          : state.structure_mode;
+        const expectedSpacerThick = resolveFridgeMagnetSpacerThick(
+          overrides.base_spacer_thick,
+          overrides.enable_fridge_magnet,
+          overrides.fridge_magnets,
+        );
 
         // Key parameters must survive round-trip
         expect(restored.lut_name).toBe(overrides.lut_name);
@@ -173,7 +229,7 @@ describe("recipe round-trip properties", () => {
         expect(restored.largeFormatEnabled).toBe(expectedLargeFormatEnabled);
         expect(restored.tileWidthMm).toBe(overrides.tileWidthMm);
         expect(restored.tileHeightMm).toBe(overrides.tileHeightMm);
-        expect(restored.puzzleEnabled).toBe(overrides.puzzleEnabled);
+        expect(restored.puzzleEnabled).toBe(expectedPuzzleEnabled);
         expect(restored.puzzleStyle).toBe(overrides.puzzleStyle);
         expect(restored.puzzleSizingMode).toBe(overrides.puzzleSizingMode);
         expect(restored.puzzleRows).toBe(overrides.puzzleRows);
@@ -182,6 +238,12 @@ describe("recipe round-trip properties", () => {
         expect(restored.connectorStyle).toBe(overrides.connectorStyle);
         expect(restored.labelsEnabled).toBe(overrides.labelsEnabled);
         expect(restored.engraveBackLabels).toBe(false);
+        expect(recipe.geometry.spacer_thick).toBe(overrides.base_spacer_thick);
+        expect(restored.enable_fridge_magnet).toBe(overrides.enable_fridge_magnet);
+        expect(restored.fridge_magnets).toEqual(overrides.fridge_magnets);
+        expect(restored.base_spacer_thick).toBe(overrides.base_spacer_thick);
+        expect(restored.spacer_thick).toBe(expectedSpacerThick);
+        expect(restored.structure_mode).toBe(expectedStructureMode);
       }),
       { numRuns: 50 },
     );

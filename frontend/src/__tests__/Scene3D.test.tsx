@@ -22,6 +22,13 @@ vi.mock("../components/InteractiveModelViewer", () => ({
 }));
 vi.mock("../components/BedPlatform", () => ({ default: () => null }));
 vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
+let capturedFridgeMagnet3DProps: Record<string, unknown> | null = null;
+vi.mock("../components/FridgeMagnet3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedFridgeMagnet3DProps = props;
+    return <div data-testid="mock-fridge-magnet-3d" />;
+  },
+}));
 
 // Mock @react-three/drei — Environment renders a queryable DOM element
 // Boolean false is dropped by React DOM, so we explicitly map props to data-* attributes
@@ -101,6 +108,7 @@ describe("Scene3D", () => {
     capturedCanvasProps = {};
     capturedInteractiveViewerProps = null;
     capturedOrbitControlsProps = null;
+    capturedFridgeMagnet3DProps = null;
     // Reset store to defaults
       useConverterStore.setState({
         isLoading: false,
@@ -115,6 +123,9 @@ describe("Scene3D", () => {
         layerImagesOpen: false,
         layerImagesSourceKey: null,
         add_loop: false,
+        enable_fridge_magnet: false,
+        fridge_magnets: [],
+        selectedFridgeMagnetId: null,
         modelBounds: null,
       });
   });
@@ -175,6 +186,50 @@ describe("Scene3D", () => {
       });
 
       expect(useConverterStore.getState().selectedColor).toBeNull();
+    });
+
+    it("clears selected fridge magnet on empty-canvas clicks while fridge mode is enabled", () => {
+      useConverterStore.setState({
+        enable_fridge_magnet: true,
+        selectedFridgeMagnetId: "magnet-1",
+      });
+      render(<Scene3D />);
+
+      act(() => {
+        (capturedCanvasProps.onPointerMissed as () => void)();
+      });
+
+      expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+    });
+
+    it("preserves the underlying color selection store state while clearing fridge selection", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        selectedColor: "ff0000",
+      });
+      render(<Scene3D />);
+
+      act(() => {
+        useConverterStore.getState().setEnableFridgeMagnet(true);
+        useConverterStore.getState().selectFridgeMagnet("magnet-1");
+      });
+
+      expect(useConverterStore.getState().selectedColor).toBe("ff0000");
+      expect(useConverterStore.getState().selectedFridgeMagnetId).toBe("magnet-1");
+      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
+
+      act(() => {
+        (capturedCanvasProps.onPointerMissed as () => void)();
+      });
+
+      expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+      expect(useConverterStore.getState().selectedColor).toBe("ff0000");
+
+      act(() => {
+        useConverterStore.getState().setEnableFridgeMagnet(false);
+      });
+
+      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
     });
   });
 
@@ -337,6 +392,153 @@ describe("Scene3D", () => {
           buildLayerImagesSourceKey(useConverterStore.getState()),
         );
       });
+    });
+  });
+
+  describe("fridge magnet proxy wiring", () => {
+    it("does not render the proxy layer when fridge mode is disabled", () => {
+      useConverterStore.setState({
+        enable_fridge_magnet: false,
+        fridge_magnets: [{
+          id: "magnet-1",
+          shape: "round",
+          preset_key: "round-d12x3",
+          diameter_mm: 12,
+          width_mm: null,
+          height_mm: null,
+          thickness_mm: 3,
+          center_x_mm: 0,
+          center_y_mm: 0,
+        }],
+        modelBounds: {
+          minX: -10,
+          maxX: 10,
+          minY: -10,
+          maxY: 10,
+          maxZ: 5,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(screen.queryByTestId("mock-fridge-magnet-3d")).not.toBeInTheDocument();
+      expect(capturedFridgeMagnet3DProps).toBeNull();
+    });
+
+    it("does not render the proxy layer without model bounds", () => {
+      useConverterStore.setState({
+        enable_fridge_magnet: true,
+        fridge_magnets: [{
+          id: "magnet-1",
+          shape: "round",
+          preset_key: "round-d12x3",
+          diameter_mm: 12,
+          width_mm: null,
+          height_mm: null,
+          thickness_mm: 3,
+          center_x_mm: 0,
+          center_y_mm: 0,
+        }],
+        modelBounds: null,
+      });
+
+      render(<Scene3D />);
+
+      expect(screen.queryByTestId("mock-fridge-magnet-3d")).not.toBeInTheDocument();
+      expect(capturedFridgeMagnet3DProps).toBeNull();
+    });
+
+    it("passes fridge magnet state and actions into the proxy layer", () => {
+      const fridgeMagnets = [{
+        id: "magnet-1",
+        shape: "round" as const,
+        preset_key: "round-d12x3",
+        diameter_mm: 12,
+        width_mm: null,
+        height_mm: null,
+        thickness_mm: 3,
+        center_x_mm: 2,
+        center_y_mm: -1,
+      }];
+      const modelBounds = {
+        minX: -10,
+        maxX: 10,
+        minY: -10,
+        maxY: 10,
+        maxZ: 5,
+      };
+
+      useConverterStore.setState({
+        enable_fridge_magnet: true,
+        fridge_magnets: fridgeMagnets,
+        selectedFridgeMagnetId: "magnet-1",
+        modelBounds,
+        target_width_mm: 120,
+        target_height_mm: 80,
+        preview_width_mm: 60,
+        preview_height_mm: 40,
+      });
+
+      render(<Scene3D />);
+
+      expect(screen.getByTestId("mock-fridge-magnet-3d")).toBeInTheDocument();
+      expect(capturedFridgeMagnet3DProps).toMatchObject({
+        enabled: true,
+        magnets: fridgeMagnets,
+        selectedMagnetId: "magnet-1",
+        modelBounds,
+        scaleX: 2,
+        scaleY: 2,
+      });
+      expect(capturedFridgeMagnet3DProps?.onSelectMagnet).toBe(
+        useConverterStore.getState().selectFridgeMagnet,
+      );
+      expect(capturedFridgeMagnet3DProps?.onUpdateMagnetCenter).toBe(
+        useConverterStore.getState().updateFridgeMagnetCenter,
+      );
+    });
+
+    it("suppresses stale selection visuals in InteractiveModelViewer while fridge mode is enabled", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        enable_fridge_magnet: true,
+        selectedColor: "ff0000",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(false);
+      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
+      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(false);
+    });
+
+    it("restores the pre-existing viewer selection props after a fridge mode enable-disable round trip", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        selectedColor: "ff0000",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(true);
+      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
+      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(true);
+
+      act(() => {
+        useConverterStore.getState().setEnableFridgeMagnet(true);
+      });
+
+      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(false);
+      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
+      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(false);
+
+      act(() => {
+        useConverterStore.getState().setEnableFridgeMagnet(false);
+      });
+
+      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(true);
+      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
+      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(true);
     });
   });
 

@@ -24,6 +24,8 @@ from api.schemas.converter import (
     ConvertBatchRequest,
     ConvertGenerateRequest,
     ConvertPreviewRequest,
+    FridgeMagnetItem,
+    FridgeMagnetShape,
     PuzzleConnectorStyle,
     PuzzleGenerateRequest,
     PuzzleLayoutPreviewRequest,
@@ -79,6 +81,8 @@ __all__ = [
     "AutoHeightMode",
     # --- Converter models ---
     "ColorReplacementItem",
+    "FridgeMagnetShape",
+    "FridgeMagnetItem",
     "ConvertPreviewRequest",
     "ConvertGenerateRequest",
     "ConvertBatchRequest",

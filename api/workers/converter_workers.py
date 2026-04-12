@@ -243,8 +243,9 @@ def worker_generate_model(
         params (dict): Dict of scalar parameters forwarded to
             ``generate_final_model`` via **kwargs. Keys must match the
             function signature (e.g. target_width_mm, spacer_thick,
-            color_mode, modeling_mode, etc.). (标量参数字典，通过 **kwargs
-            转发给 generate_final_model)
+            color_mode, modeling_mode, fridge-magnet metadata, etc.).
+            (标量参数字典，通过 **kwargs 转发给 generate_final_model，
+            包括冰箱贴磁铁槽元数据等字段)
 
     Returns:
         dict: Result dictionary with keys: (结果字典，包含以下键)

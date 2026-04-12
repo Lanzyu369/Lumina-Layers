@@ -1197,6 +1197,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "挂件环设置",
     en: "Keychain Loop",
   },
+  "widget.fridgeMagnetSettings": {
+    zh: "冰箱贴磁铁槽",
+    en: "Fridge Magnet",
+  },
   "widget.actionBar": {
     zh: "操作栏",
     en: "Actions",
@@ -1215,6 +1219,126 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== 2D Color Overlay ====================
+  fridge_magnet_enable: {
+    zh: "启用冰箱贴磁铁槽",
+    en: "Enable Fridge Magnet Mode",
+  },
+  fridge_magnet_mode_hint: {
+    zh: "冰箱贴模式会强制切换为单面结构，并禁用拼图、大画幅和挂件环。",
+    en: "Fridge magnet mode forces single-sided structure and disables puzzle, large-format, and keychain loop modes.",
+  },
+  fridge_magnet_summary_structure: {
+    zh: "当前结构",
+    en: "Structure",
+  },
+  fridge_magnet_summary_spacer: {
+    zh: "当前底板厚度",
+    en: "Spacer Thickness",
+  },
+  fridge_magnet_add: {
+    zh: "添加磁铁",
+    en: "Add Magnet",
+  },
+  fridge_magnet_reset_layout: {
+    zh: "自动布局",
+    en: "Auto Layout",
+  },
+  fridge_magnet_remove_selected: {
+    zh: "删除当前磁铁",
+    en: "Remove Selected",
+  },
+  fridge_magnet_list_title: {
+    zh: "磁铁列表",
+    en: "Magnet List",
+  },
+  fridge_magnet_item_label: {
+    zh: "磁铁 {index}",
+    en: "Magnet {index}",
+  },
+  fridge_magnet_empty_state: {
+    zh: "当前没有磁铁槽，请先添加一个磁铁。",
+    en: "No magnet cavities are configured yet. Add a magnet first.",
+  },
+  fridge_magnet_select_hint: {
+    zh: "从上方列表选择一个磁铁以编辑尺寸和位置。",
+    en: "Select a magnet above to edit its size and position.",
+  },
+  fridge_magnet_clear_selection: {
+    zh: "清除选中",
+    en: "Clear Selection",
+  },
+  fridge_magnet_shape: {
+    zh: "形状",
+    en: "Shape",
+  },
+  fridge_magnet_shape_round: {
+    zh: "圆形",
+    en: "Round",
+  },
+  fridge_magnet_shape_rect: {
+    zh: "矩形",
+    en: "Rectangular",
+  },
+  fridge_magnet_preset: {
+    zh: "官方预设",
+    en: "Official Preset",
+  },
+  fridge_magnet_preset_custom: {
+    zh: "自定义",
+    en: "Custom",
+  },
+  fridge_magnet_preset_round_d6x2: {
+    zh: "圆形 D6×2 mm",
+    en: "Round D6×2 mm",
+  },
+  fridge_magnet_preset_round_d12x3: {
+    zh: "圆形 D12×3 mm",
+    en: "Round D12×3 mm",
+  },
+  fridge_magnet_preset_round_d8x3: {
+    zh: "圆形 D8×3 mm",
+    en: "Round D8×3 mm",
+  },
+  fridge_magnet_preset_round_d10x3: {
+    zh: "圆形 D10×3 mm",
+    en: "Round D10×3 mm",
+  },
+  fridge_magnet_preset_rect_10x5x1: {
+    zh: "矩形 10×5×1 mm",
+    en: "Rect 10×5×1 mm",
+  },
+  fridge_magnet_preset_rect_15x5x2: {
+    zh: "矩形 15×5×2 mm",
+    en: "Rect 15×5×2 mm",
+  },
+  fridge_magnet_preset_rect_20x10x2: {
+    zh: "矩形 20×10×2 mm",
+    en: "Rect 20×10×2 mm",
+  },
+  fridge_magnet_diameter: {
+    zh: "直径",
+    en: "Diameter",
+  },
+  fridge_magnet_width: {
+    zh: "宽度",
+    en: "Width",
+  },
+  fridge_magnet_height: {
+    zh: "高度",
+    en: "Height",
+  },
+  fridge_magnet_thickness: {
+    zh: "厚度",
+    en: "Thickness",
+  },
+  fridge_magnet_center_x: {
+    zh: "中心 X",
+    en: "Center X",
+  },
+  fridge_magnet_center_y: {
+    zh: "中心 Y",
+    en: "Center Y",
+  },
   puzzle_enable: {
     zh: "启用拼图模式",
     en: "Enable Puzzle Mode",
@@ -3388,5 +3512,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_asset_corrupt: {
     zh: "素材数据损坏，无法恢复原始文件",
     en: "Asset data is corrupted — unable to restore original file",
+  },
+  recipe_import_warning_fridge_conflict_puzzle: {
+    zh: "导入的配方同时启用了冰箱贴模式和拼图模式。为保持状态有效，拼图模式已被禁用。",
+    en: "Imported recipe enabled both fridge magnet mode and puzzle mode. Puzzle mode was disabled to keep the state valid.",
+  },
+  recipe_import_warning_fridge_conflict_large_format: {
+    zh: "导入的配方同时启用了冰箱贴模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
+    en: "Imported recipe enabled both fridge magnet mode and large-format tiling. Large Format was disabled to keep the state valid.",
+  },
+  recipe_import_warning_fridge_conflict_loop: {
+    zh: "导入的配方同时启用了冰箱贴模式和挂件环。为保持状态有效，挂件环已被禁用。",
+    en: "Imported recipe enabled both fridge magnet mode and keychain loop generation. Keychain Loop was disabled to keep the state valid.",
+  },
+  recipe_import_warning_puzzle_conflict_large_format: {
+    zh: "导入的配方同时启用了拼图模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
+    en: "Imported recipe enabled both puzzle mode and large-format tiling. Large Format was disabled to keep the state valid.",
+  },
+  recipe_import_warning_puzzle_conflict_loop: {
+    zh: "导入的配方同时启用了拼图模式和挂件环。为保持状态有效，挂件环已被禁用。",
+    en: "Imported recipe enabled both puzzle mode and keychain loop generation. Keychain Loop was disabled to keep the state valid.",
+  },
+  recipe_import_warning_back_labels_unavailable: {
+    zh: "导入的配方请求了背面标签雕刻，但该功能当前不可用。背面标签雕刻已被禁用。",
+    en: "Imported recipe requested back-label engraving, but this feature is currently unavailable. Back-label engraving was disabled.",
   },
 };

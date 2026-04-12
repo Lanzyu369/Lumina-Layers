@@ -646,6 +646,8 @@ async def generate_puzzle(
 
     request = body.params
     generate_params = request.params
+    if generate_params.enable_fridge_magnet:
+        raise HTTPException(status_code=422, detail="Puzzle mode does not support fridge magnet cavities.")
     if generate_params.add_loop:
         raise HTTPException(status_code=422, detail="Puzzle mode does not support keychain loop generation.")
     if request.engrave_back_labels:
@@ -726,6 +728,8 @@ async def generate_puzzle(
             "loop_length": generate_params.loop_length,
             "loop_hole": generate_params.loop_hole,
             "loop_pos": None,
+            "enable_fridge_magnet": generate_params.enable_fridge_magnet,
+            "fridge_magnets": [item.model_dump(mode="json") for item in generate_params.fridge_magnets],
             "loop_angle": 0.0,
             "loop_offset_x": 0.0,
             "loop_offset_y": 0.0,
