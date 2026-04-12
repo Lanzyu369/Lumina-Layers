@@ -154,6 +154,71 @@ class TestBoundaryClamp:
                     f"[{x0}:{x1}, {y0}:{y1}]"
                 )
 
+    @pytest.mark.parametrize(
+        "zoom,barrel",
+        [(1.2, 0.2), (1.3, 0.1)],
+    )
+    def test_out_of_bounds_center_still_sampled_when_roi_overlaps(
+        self, zoom: float, barrel: float
+    ) -> None:
+        """Cells whose center is outside DST_SIZE but whose clamped ROI
+        still overlaps the image must be counted as sampleable, not dropped."""
+        grid_size, physical_grid = 32, 34
+        cx, cy, hr = _compute_sampling_geometry(
+            grid_size, physical_grid, zoom=zoom, barrel=barrel,
+            offset_x=0, offset_y=0,
+        )
+        recovered = 0
+        for r in range(grid_size):
+            for c in range(grid_size):
+                cxv, cyv = float(cx[r, c]), float(cy[r, c])
+                hrv = int(hr[r, c])
+                center_in = 0 <= cxv < DST_SIZE and 0 <= cyv < DST_SIZE
+                x0 = int(max(0, cxv - hrv))
+                y0 = int(max(0, cyv - hrv))
+                x1 = int(min(DST_SIZE, cxv + hrv))
+                y1 = int(min(DST_SIZE, cyv + hrv))
+                roi_valid = x1 > x0 and y1 > y0
+                if not center_in and roi_valid:
+                    recovered += 1
+        # Under zoom=1.2 + barrel=0.2 several corner/edge cells have
+        # out-of-bounds centers but ROIs that still overlap the image.
+        # With the old strict center check these would all be black;
+        # now they must be recovered.
+        assert recovered > 0, (
+            f"Expected some recovered out-of-bounds cells for "
+            f"zoom={zoom}, barrel={barrel}, got 0"
+        )
+
+    @pytest.mark.parametrize(
+        "zoom,barrel",
+        [(1.2, 0.2), (1.0, -0.2)],
+    )
+    @pytest.mark.parametrize("grid_size,physical_grid", _MODE_GRIDS[:3])
+    def test_all_sampleable_cells_have_positive_area(
+        self,
+        grid_size: int,
+        physical_grid: int,
+        zoom: float,
+        barrel: float,
+    ) -> None:
+        """Every cell whose clamped ROI has positive area is sampleable."""
+        cx, cy, hr = _compute_sampling_geometry(
+            grid_size, physical_grid, zoom=zoom, barrel=barrel,
+            offset_x=0, offset_y=0,
+        )
+        for r in range(grid_size):
+            for c in range(grid_size):
+                cxv, cyv = float(cx[r, c]), float(cy[r, c])
+                hrv = int(hr[r, c])
+                x0 = int(max(0, cxv - hrv))
+                y0 = int(max(0, cyv - hrv))
+                x1 = int(min(DST_SIZE, cxv + hrv))
+                y1 = int(min(DST_SIZE, cyv + hrv))
+                if x1 > x0 and y1 > y0:
+                    assert x0 >= 0 and y0 >= 0
+                    assert x1 <= DST_SIZE and y1 <= DST_SIZE
+
 
 class TestCenterConsistency:
     """Vectorised centers must match the original scalar computation."""

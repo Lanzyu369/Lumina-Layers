@@ -603,17 +603,21 @@ def run_extraction(
             cy = float(centers_y[r, c])
             hr = int(half_roi_map[r, c])
 
-            if 0 <= cx < DST_SIZE and 0 <= cy < DST_SIZE:
-                x0 = int(max(0, cx - hr))
-                y0 = int(max(0, cy - hr))
-                x1 = int(min(DST_SIZE, cx + hr))
-                y1 = int(min(DST_SIZE, cy + hr))
+            # Clamp ROI to image; sample whenever the clamped region has area
+            x0 = int(max(0, cx - hr))
+            y0 = int(max(0, cy - hr))
+            x1 = int(min(DST_SIZE, cx + hr))
+            y1 = int(min(DST_SIZE, cy + hr))
+
+            if x1 > x0 and y1 > y0:
                 reg = warped[y0:y1, x0:x1]
                 if reg.size > 0:
                     avg = _linear_to_srgb(_srgb_to_linear(reg).mean(axis=(0, 1)))
                 else:
                     avg = [0, 0, 0]
-                cv2.drawMarker(vis, (int(cx), int(cy)), (0, 255, 0), cv2.MARKER_CROSS, marker_size, 1)
+                draw_cx = int(np.clip(cx, 0, DST_SIZE - 1))
+                draw_cy = int(np.clip(cy, 0, DST_SIZE - 1))
+                cv2.drawMarker(vis, (draw_cx, draw_cy), (0, 255, 0), cv2.MARKER_CROSS, marker_size, 1)
                 _draw_dashed_rect(vis, (x0, y0), (x1, y1), (0, 255, 0), 1, 4)
             else:
                 avg = [0, 0, 0]
