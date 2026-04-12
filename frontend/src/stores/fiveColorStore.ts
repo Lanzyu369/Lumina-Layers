@@ -82,11 +82,15 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       ...DEFAULT_STATE,
 
       loadBaseColors: async (lutName: string) => {
+        const hasLutChanged = get().lutName !== lutName;
         set({
           lutName,
           selectedIndices: [],
           queryResult: null,
           combinations: null, // 先清空旧组合，强制拉取最新的
+          collectedRecipes: hasLutChanged ? [] : get().collectedRecipes,
+          swatchDownloadUrl: null,
+          swatchPreviewUrl: null,
           isLoading: true,
           error: null,
         });

@@ -7,6 +7,7 @@ performing five-color combination lookups.
 """
 
 import threading
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -20,6 +21,7 @@ from api.schemas.five_color import (
     RecipeSwatchRequest,
     RecipeSwatchResponse,
 )
+from api.structured_logging import get_request_id
 from core.five_color_combination import (
     ColorCountDetector,
     ColorQueryEngine,
@@ -237,15 +239,32 @@ def generate_swatch(
     from api.file_bridge import pil_to_png_bytes
     from core.recipe_swatch import RecipeSwatchItem, generate_recipe_swatch
 
-    items = [
-        RecipeSwatchItem(
-            selected_indices=r.selected_indices,
-            result_hex=r.result_hex,
-            base_color_names=r.base_color_names,
-            base_color_hexes=r.base_color_hexes,
+    engine, _ = _load_engine(request.lut_name)
+    base_color_names = engine.get_color_names()
+    base_color_hexes = [rgb_to_hex(rgb) for rgb in engine.get_base_colors()]
+
+    items: list[RecipeSwatchItem] = []
+    for recipe_request in request.recipes:
+        for idx in recipe_request.selected_indices:
+            if idx < 0 or idx >= engine.color_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Index {idx} out of range [0, {engine.color_count})",
+                )
+        query_result = engine.query(recipe_request.selected_indices)
+        if not query_result.found or query_result.result_rgb is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No LUT match for selected indices: {recipe_request.selected_indices}",
+            )
+        items.append(
+            RecipeSwatchItem(
+                selected_indices=recipe_request.selected_indices,
+                result_hex=rgb_to_hex(query_result.result_rgb),
+                base_color_names=base_color_names,
+                base_color_hexes=base_color_hexes,
+            )
         )
-        for r in request.recipes
-    ]
 
     output_path, legend_img, status_msg = generate_recipe_swatch(
         recipes=items,
@@ -260,7 +279,13 @@ def generate_swatch(
     if not output_path:
         raise HTTPException(status_code=500, detail=status_msg or "Swatch generation failed")
 
-    sid = "recipe-swatch"
+    request_id = get_request_id()
+    unique_suffix = uuid.uuid4().hex
+    sid = (
+        f"recipe-swatch:{request_id}:{unique_suffix}"
+        if request_id
+        else f"recipe-swatch:{unique_suffix}"
+    )
     download_id = registry.register_path(sid, output_path)
 
     preview_url: str | None = None

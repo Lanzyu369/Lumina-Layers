@@ -56,8 +56,8 @@ class RecipeSwatchItemRequest(BaseModel):
         ..., min_length=5, max_length=5, description="5 个颜色索引序列"
     )
     result_hex: str = Field(..., description="混合结果 Hex 颜色")
-    base_color_names: list[str] = Field(..., description="各基础色名称")
-    base_color_hexes: list[str] = Field(..., description="各基础色 Hex")
+    base_color_names: list[str] = Field(default_factory=list, description="各基础色名称（可省略，服务端将从 LUT 推导）")
+    base_color_hexes: list[str] = Field(default_factory=list, description="各基础色 Hex（可省略，服务端将从 LUT 推导）")
 
 
 class RecipeSwatchRequest(BaseModel):
