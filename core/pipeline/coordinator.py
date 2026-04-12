@@ -11,6 +11,7 @@ Provides:
 import os
 import time
 import logging
+import inspect
 
 import cv2
 import numpy as np
@@ -364,6 +365,8 @@ def _run_vector_branch(ctx: dict) -> dict:
     structure_mode = ctx["structure_mode"]
     color_replacements = ctx.get("color_replacements")
     replacement_regions = ctx.get("replacement_regions")
+    enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
+    fridge_magnets = ctx.get("fridge_magnets") or []
 
     log.info("[COORDINATOR] Using Native Vector Engine (Shapely/Clipper)...")
     vector_timing = {}
@@ -378,6 +381,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         from core.vector_engine import VectorProcessor
 
         vec_processor = VectorProcessor(actual_lut_path, color_mode)
+        vec_processor.enable_fridge_magnet = bool(enable_fridge_magnet)
+        vec_processor.fridge_magnets = list(fridge_magnets)
 
         # 1. Unified analysis: parse → clip → match (shared by preview + mesh)
         _report_progress(ctx, 0.05, "SVG 解析与几何处理中... | Parsing & extruding SVG...")
@@ -389,11 +394,24 @@ def _run_vector_branch(ctx: dict) -> dict:
         )
 
         # 1b. Build 3D mesh from analysis
-        scene = vec_processor.build_mesh(
-            analysis=analysis,
-            thickness_mm=spacer_thick,
-            structure_mode=structure_mode,
-        )
+        build_mesh_kwargs = {
+            "analysis": analysis,
+            "thickness_mm": spacer_thick,
+            "structure_mode": structure_mode,
+        }
+        try:
+            build_mesh_signature = inspect.signature(vec_processor.build_mesh)
+        except (TypeError, ValueError):
+            build_mesh_signature = None
+        if build_mesh_signature is not None:
+            parameters = build_mesh_signature.parameters
+            accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+            if accepts_var_kwargs or "enable_fridge_magnet" in parameters:
+                build_mesh_kwargs["enable_fridge_magnet"] = enable_fridge_magnet
+            if accepts_var_kwargs or "fridge_magnets" in parameters:
+                build_mesh_kwargs["fridge_magnets"] = fridge_magnets
+
+        scene = vec_processor.build_mesh(**build_mesh_kwargs)
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)

@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from "react";
+import { useMemo, useEffect } from "react";
 import { useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
@@ -12,6 +12,7 @@ import {
   getLatestResourceTiming,
   summarizeObjectTree,
 } from "../utils/threeDebug";
+import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
 
@@ -60,15 +61,7 @@ function ModelViewer({ url }: ModelViewerProps) {
   const { scene } = useGLTF(url);
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
-  const previousUrlRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const previousUrl = previousUrlRef.current;
-    previousUrlRef.current = url;
-    if (previousUrl && previousUrl !== url) {
-      useGLTF.clear(previousUrl);
-    }
-  }, [url]);
+  useGltfCacheLifecycle(url, useGLTF.clear);
 
   useEffect(() => {
     debugThreeLog("ModelViewer.lifecycle", {

@@ -170,6 +170,30 @@ def _merge_layers_no_dilation(voxel_matrix, mat_id):
     return layer_groups
 
 
+def _dilate_mask_preserving_enclosed_voids(mask, kernel):
+    """Dilate into exterior background while keeping enclosed voids open."""
+    if not np.any(mask):
+        return mask
+
+    mask_uint8 = mask.astype(np.uint8)
+    dilated_mask = cv2.dilate(mask_uint8, kernel, iterations=1).astype(bool)
+
+    background = (~mask).astype(np.uint8)
+    if not np.any(background):
+        return dilated_mask
+
+    _, labels = cv2.connectedComponents(background, connectivity=8)
+    border_labels = np.unique(
+        np.concatenate((labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]))
+    )
+    exterior_background = np.isin(labels, border_labels)
+    enclosed_voids = background.astype(bool) & ~exterior_background
+    if not np.any(enclosed_voids):
+        return dilated_mask
+
+    return dilated_mask & ~enclosed_voids
+
+
 if HAS_NUMBA:
 
     @numba.njit(cache=True)
@@ -634,7 +658,7 @@ class HighFidelityMesher(BaseMesher):
                     prev_mask = None
                 continue
 
-            dilated_mask = cv2.dilate(curr_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+            dilated_mask = _dilate_mask_preserving_enclosed_voids(curr_mask, kernel)
 
             if prev_mask is None:
                 start_z = z

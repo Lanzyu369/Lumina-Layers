@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useMemo, useEffect, useRef, useCallback } from "react";
 import { useThree, useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
@@ -18,6 +19,7 @@ import {
   summarizeObjectTree,
 } from "../utils/threeDebug";
 import PuzzleOverlay3D from "./PuzzleOverlay3D";
+import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 
 // ========== Exported pure utility functions (testable without Three.js) ==========
 
@@ -68,6 +70,93 @@ export function isClickWithoutDrag(
   return Math.hypot(endX - startX, endY - startY) <= thresholdPx;
 }
 
+/**
+ * Determine whether native canvas color-picking handlers should process an event.
+ * 判断原生画布取色处理器是否应处理当前事件。
+ *
+ * @param button - Pointer button identifier from the native event. (原生事件中的按键编号)
+ * @param colorPickingEnabled - Whether InteractiveModelViewer is allowed to pick colors. (是否允许取色)
+ * @returns True only for enabled left-click interactions. (仅在启用且为左键时返回 true)
+ */
+export function shouldHandleColorPickingEvent(
+  button: number,
+  colorPickingEnabled: boolean,
+): boolean {
+  return colorPickingEnabled && button === 0;
+}
+
+interface SelectionVisualModelBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  maxZ: number;
+}
+
+interface SelectionVisualRegionData {
+  contours?: number[][][];
+}
+
+interface SelectionVisualRegion {
+  colorHex: string;
+  contours?: number[][][];
+}
+
+interface ResolveSelectionOutlineTargetsArgs {
+  selectionVisualsEnabled: boolean;
+  modelBounds: SelectionVisualModelBounds | null;
+  selectionMode: string;
+  selectedColor: string | null;
+  selectedColors: Set<string>;
+  selectedRegions: SelectionVisualRegion[];
+  regionData: SelectionVisualRegionData | null;
+  colorContours: Record<string, number[][][]>;
+}
+
+export function resolveSelectionOutlineTargets({
+  selectionVisualsEnabled,
+  modelBounds,
+  selectionMode,
+  selectedColor,
+  selectedColors,
+  selectedRegions,
+  regionData,
+  colorContours,
+}: ResolveSelectionOutlineTargetsArgs): Array<{ hex: string; polygons: number[][][] }> {
+  if (!selectionVisualsEnabled || !modelBounds) {
+    return [];
+  }
+
+  if (
+    (selectionMode === "current" || selectionMode === "region")
+    && selectedColor
+    && regionData?.contours
+    && regionData.contours.length > 0
+  ) {
+    return [{ hex: selectedColor, polygons: regionData.contours }];
+  }
+
+  if (selectionMode === "multi-select" && selectedRegions.length > 0) {
+    return selectedRegions.flatMap((region) => (
+      region.contours && region.contours.length > 0
+        ? [{ hex: region.colorHex.replace(/^#/, ""), polygons: region.contours }]
+        : []
+    ));
+  }
+
+  if (selectionMode === "select-all" && selectedColors.size > 0) {
+    return Array.from(selectedColors).flatMap((hex) => (
+      colorContours[hex] ? [{ hex, polygons: colorContours[hex] }] : []
+    ));
+  }
+
+  if (selectedColor && colorContours[selectedColor]) {
+    return [{ hex: selectedColor, polygons: colorContours[selectedColor] }];
+  }
+
+  return [];
+}
+
 // ========== Component ==========
 
 export interface InteractiveModelViewerProps {
@@ -91,6 +180,8 @@ export interface InteractiveModelViewerProps {
   puzzleOverlayUrl?: string | null;
   onHoverSample?: (sample: ViewerHoverSample | null) => void;
   hoverEnabled?: boolean;
+  colorPickingEnabled?: boolean;
+  selectionVisualsEnabled?: boolean;
 }
 
 export interface ViewerHoverSample {
@@ -154,28 +245,14 @@ function InteractiveModelViewer({
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
   hoverEnabled = true,
+  colorPickingEnabled = true,
+  selectionVisualsEnabled = true,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
   const camera = useThree((state) => state.camera);
   const gl = useThree((state) => state.gl);
-  const previousUrlRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const previousUrl = previousUrlRef.current;
-    previousUrlRef.current = url;
-    if (previousUrl && previousUrl !== url) {
-      useGLTF.clear(previousUrl);
-    }
-  }, [url]);
-
-  useEffect(() => {
-    return () => {
-      if (previousUrlRef.current) {
-        useGLTF.clear(previousUrlRef.current);
-      }
-    };
-  }, []);
+  useGltfCacheLifecycle(url, useGLTF.clear);
 
   useEffect(() => {
     debugThreeLog("InteractiveModelViewer.lifecycle", {
@@ -595,6 +672,9 @@ function InteractiveModelViewer({
 
   const getColorHitAtPointerPosition = useCallback(
     (clientX: number, clientY: number) => {
+      if (!colorPickingEnabled) {
+        return null;
+      }
       const canvas = gl.domElement;
       const rect = canvas.getBoundingClientRect();
       pointerRef.current.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -616,11 +696,14 @@ function InteractiveModelViewer({
         previewPixel: mapWorldToPreviewPixel(intersects[0].point),
       };
     },
-    [gl, camera, colorMeshes, mapWorldToPreviewPixel],
+    [gl, camera, colorMeshes, mapWorldToPreviewPixel, colorPickingEnabled],
   );
 
   const selectColorAtPointerPosition = useCallback(
     (clientX: number, clientY: number) => {
+      if (!colorPickingEnabled) {
+        return false;
+      }
       const hit = getColorHitAtPointerPosition(clientX, clientY);
       if (!hit) {
         return false;
@@ -660,6 +743,7 @@ function InteractiveModelViewer({
       selectionMode,
       detectRegion,
       detectAndAccumulateRegion,
+      colorPickingEnabled,
     ],
   );
 
@@ -668,7 +752,9 @@ function InteractiveModelViewer({
       if (onHoverSample) {
         cancelHoverSampling();
       }
-      if (event.button !== 0) return; // Only left click
+      if (!shouldHandleColorPickingEvent(event.button, colorPickingEnabled)) {
+        return;
+      }
       colorHitRef.current = false;
       const startHit = getColorHitAtPointerPosition(event.clientX, event.clientY);
       colorHitRef.current = startHit !== null;
@@ -684,12 +770,13 @@ function InteractiveModelViewer({
       onHoverSample,
       cancelHoverSampling,
       getColorHitAtPointerPosition,
+      colorPickingEnabled,
     ],
   );
 
   const handlePointerUp = useCallback(
     (event: PointerEvent) => {
-      if (event.button !== 0) {
+      if (!shouldHandleColorPickingEvent(event.button, colorPickingEnabled)) {
         return;
       }
 
@@ -716,7 +803,7 @@ function InteractiveModelViewer({
       }
       selectColorAtPointerPosition(gesture.startClientX, gesture.startClientY);
     },
-    [selectColorAtPointerPosition],
+    [selectColorAtPointerPosition, colorPickingEnabled],
   );
 
   const processHoverPointer = useCallback(() => {
@@ -851,6 +938,14 @@ function InteractiveModelViewer({
   }, [cancelHoverSampling]);
 
   useEffect(() => {
+    if (colorPickingEnabled) {
+      return;
+    }
+    clickGestureRef.current = null;
+    colorHitRef.current = false;
+  }, [colorPickingEnabled]);
+
+  useEffect(() => {
     if (hoverEnabled) {
       return;
     }
@@ -923,7 +1018,11 @@ function InteractiveModelViewer({
     outlineObjsRef.current = [];
     outlineArcRef.current = [];
 
-    if (groupRef.current && !groupRef.current.children.includes(outlineGroup)) {
+    if (
+      groupRef.current
+      && typeof (groupRef.current as { add?: unknown }).add === "function"
+      && !Array.from(groupRef.current.children).includes(outlineGroup)
+    ) {
       groupRef.current.add(outlineGroup);
     }
 
@@ -994,37 +1093,16 @@ function InteractiveModelViewer({
     // - current/region: regionData.contours (single connected region)
     // - select-all: colorContours[selectedColor] (all regions of that color)
     // - multi-select: each selectedRegion's own contours (individual connected regions)
-    const currentRegionData = regionData;
-    const currentSelectionMode = selectionMode;
-
-    const outlineTargets: Array<{ hex: string; polygons: number[][][] }> = [];
-
-    if (modelBounds) {
-      if (
-        (currentSelectionMode === "current" || currentSelectionMode === "region") &&
-        selectedColor &&
-        currentRegionData?.contours &&
-        currentRegionData.contours.length > 0
-      ) {
-        outlineTargets.push({ hex: selectedColor, polygons: currentRegionData.contours });
-      } else if (currentSelectionMode === "multi-select" && selectedRegions.length > 0) {
-        for (const region of selectedRegions) {
-          if (region.contours && region.contours.length > 0) {
-            const hex = region.colorHex.replace(/^#/, "");
-            outlineTargets.push({ hex, polygons: region.contours });
-          }
-        }
-      } else if (currentSelectionMode === "select-all" && selectedColors.size > 0) {
-        // select-all 多选模式：为每个已选颜色绘制轮廓
-        for (const hex of selectedColors) {
-          if (colorContours[hex]) {
-            outlineTargets.push({ hex, polygons: colorContours[hex] });
-          }
-        }
-      } else if (selectedColor && colorContours[selectedColor]) {
-        outlineTargets.push({ hex: selectedColor, polygons: colorContours[selectedColor] });
-      }
-    }
+    const outlineTargets = resolveSelectionOutlineTargets({
+      selectionVisualsEnabled,
+      modelBounds,
+      selectionMode,
+      selectedColor,
+      selectedColors,
+      selectedRegions,
+      regionData,
+      colorContours,
+    });
 
     const offsetX = -sceneCenter.x;
     const offsetY = -sceneCenter.y;
@@ -1081,7 +1159,7 @@ function InteractiveModelViewer({
         outlineArcRef.current.push(arcPairs);
       }
     }
-  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, selectedColor, selectedColors, selectedRegions, enableRelief, baseHeight, colorContours, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, regionData, selectionMode]);
+  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, selectedColor, selectedColors, selectedRegions, enableRelief, baseHeight, colorContours, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, regionData, selectionMode, selectionVisualsEnabled]);
 
   // Flowing RGB animation with flash-on-select and brightness pulse.
   const tmpColorAnim = useRef(new THREE.Color());

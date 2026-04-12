@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
+import { DEFAULT_STATE } from '../../stores/converter';
+import { StructureMode } from '../../api/types';
 
 /**
  * Converter_Store 单元测试
@@ -15,6 +17,49 @@ function resetStore(): void {
     palette: [],
     previewGlbUrl: null,
   });
+}
+
+function resetConverterState(overrides?: Record<string, unknown>): void {
+  useConverterStore.setState({
+    ...DEFAULT_STATE,
+    ...overrides,
+  });
+}
+
+function expectMagnetsToNotOverlap(
+  magnets: Array<{
+    shape: 'round' | 'rect';
+    diameter_mm: number | null;
+    width_mm: number | null;
+    height_mm: number | null;
+    center_x_mm: number;
+    center_y_mm: number;
+  }>,
+  gapMm: number = 1,
+): void {
+  const getSize = (magnet: (typeof magnets)[number]) => ({
+    width: magnet.shape === 'round'
+      ? magnet.diameter_mm ?? 0
+      : magnet.width_mm ?? 0,
+    height: magnet.shape === 'round'
+      ? magnet.diameter_mm ?? 0
+      : magnet.height_mm ?? 0,
+  });
+
+  for (let leftIndex = 0; leftIndex < magnets.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < magnets.length; rightIndex += 1) {
+      const left = magnets[leftIndex];
+      const right = magnets[rightIndex];
+      const leftSize = getSize(left);
+      const rightSize = getSize(right);
+      const minSeparationX = leftSize.width / 2 + rightSize.width / 2 + gapMm;
+      const minSeparationY = leftSize.height / 2 + rightSize.height / 2 + gapMm;
+      const deltaX = Math.abs(left.center_x_mm - right.center_x_mm);
+      const deltaY = Math.abs(left.center_y_mm - right.center_y_mm);
+
+      expect(deltaX >= minSeparationX || deltaY >= minSeparationY).toBe(true);
+    }
+  }
 }
 
 describe('Converter_Store 默认值', () => {
@@ -246,6 +291,277 @@ describe('setEnableRelief auto-initialization', () => {
     useConverterStore.getState().setEnableRelief(true);
 
     expect(useConverterStore.getState().enable_cloisonne).toBe(false);
+  });
+});
+
+describe('fridge magnet mode', () => {
+  beforeEach(() => {
+    resetConverterState({
+      modelBounds: { minX: 0, maxX: 100, minY: 0, maxY: 40, maxZ: 5 },
+      spacer_thick: 1.2,
+      base_spacer_thick: 1.2,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      largeFormatEnabled: true,
+      puzzleEnabled: true,
+      add_loop: true,
+      puzzleOverlayUrl: '/api/files/overlay',
+      puzzleWarnings: ['warning'],
+      puzzleResolvedRows: 2,
+      puzzleResolvedCols: 3,
+      puzzleResolvedPieceCount: 6,
+      puzzleDerivedPieceWidthMm: 12,
+      puzzleDerivedPieceHeightMm: 10,
+      enable_fridge_magnet: false,
+      fridge_magnets: [],
+      selectedFridgeMagnetId: null,
+    });
+  });
+
+  it('enabling fridge mode forces single-sided mode, clears mutually exclusive modes, and seeds a default layout once', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+
+    const state = useConverterStore.getState();
+    expect(state.enable_fridge_magnet).toBe(true);
+    expect(state.structure_mode).toBe(StructureMode.SINGLE_SIDED);
+    expect(state.largeFormatEnabled).toBe(false);
+    expect(state.puzzleEnabled).toBe(false);
+    expect(state.add_loop).toBe(false);
+    expect(state.puzzleOverlayUrl).toBeNull();
+    expect(state.puzzleWarnings).toEqual([]);
+    expect(state.fridge_magnets).toHaveLength(1);
+    expect(state.fridge_magnets[0]).toMatchObject({
+      shape: 'round',
+      preset_key: 'round-d12x3',
+      center_x_mm: 50,
+      center_y_mm: 20,
+      diameter_mm: 12,
+      thickness_mm: 3,
+    });
+
+    store.setEnableFridgeMagnet(false);
+    store.setEnableFridgeMagnet(true);
+
+    expect(useConverterStore.getState().fridge_magnets).toHaveLength(1);
+    expect(useConverterStore.getState().fridge_magnets[0].id).toBe(
+      state.fridge_magnets[0].id,
+    );
+  });
+
+  it('chooses default layout count from model area thresholds', () => {
+    useConverterStore.setState({
+      enable_fridge_magnet: false,
+      fridge_magnets: [],
+      modelBounds: { minX: 10, maxX: 60, minY: 10, maxY: 110, maxZ: 5 },
+    });
+    useConverterStore.getState().setEnableFridgeMagnet(true);
+    expect(useConverterStore.getState().fridge_magnets).toHaveLength(1);
+
+    useConverterStore.setState({
+      enable_fridge_magnet: false,
+      fridge_magnets: [],
+      modelBounds: { minX: 0, maxX: 100, minY: 0, maxY: 100, maxZ: 5 },
+    });
+    useConverterStore.getState().setEnableFridgeMagnet(true);
+    expect(useConverterStore.getState().fridge_magnets).toHaveLength(2);
+    expect(
+      useConverterStore.getState().fridge_magnets.map((item) => item.center_x_mm),
+    ).toEqual([30, 70]);
+
+    useConverterStore.setState({
+      enable_fridge_magnet: false,
+      fridge_magnets: [],
+      modelBounds: { minX: -50, maxX: 150, minY: -20, maxY: 100, maxZ: 5 },
+    });
+    useConverterStore.getState().setEnableFridgeMagnet(true);
+    expect(useConverterStore.getState().fridge_magnets).toHaveLength(4);
+    expect(
+      useConverterStore.getState().fridge_magnets.map((item) => [
+        item.center_x_mm,
+        item.center_y_mm,
+      ]),
+    ).toEqual([
+      [10, 16],
+      [90, 16],
+      [10, 64],
+      [90, 64],
+    ]);
+  });
+
+  it('setSpacerThick tracks a base spacer thickness while fridge magnets raise and lower the visible spacer thickness', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+    store.setSpacerThick(0.8);
+
+    let state = useConverterStore.getState();
+    expect(state.base_spacer_thick).toBe(0.8);
+    expect(state.spacer_thick).toBe(3.44);
+
+    const magnetId = state.fridge_magnets[0].id;
+    store.updateFridgeMagnet(magnetId, { thickness_mm: 1.5 });
+
+    state = useConverterStore.getState();
+    expect(state.spacer_thick).toBe(1.92);
+
+    store.removeFridgeMagnet(magnetId);
+    state = useConverterStore.getState();
+    expect(state.spacer_thick).toBe(0.8);
+
+    store.addFridgeMagnet();
+    const addedId = useConverterStore.getState().fridge_magnets[0].id;
+    store.updateFridgeMagnet(addedId, { thickness_mm: 2.2 });
+    expect(useConverterStore.getState().spacer_thick).toBe(2.64);
+
+    store.setEnableFridgeMagnet(false);
+    expect(useConverterStore.getState().spacer_thick).toBe(0.8);
+  });
+
+  it('accounts for 0.08mm layer quantization when auto-raising spacer thickness for fridge magnets', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+
+    const state = useConverterStore.getState();
+    expect(state.fridge_magnets).toHaveLength(1);
+    expect(state.fridge_magnets[0].thickness_mm).toBe(3);
+    expect(state.spacer_thick).toBe(3.44);
+  });
+
+  it('adds, updates, selects, repositions, resets, and removes fridge magnets', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+    store.addFridgeMagnet();
+
+    let state = useConverterStore.getState();
+    expect(state.fridge_magnets).toHaveLength(2);
+    const addedMagnet = state.fridge_magnets[1];
+    expectMagnetsToNotOverlap(state.fridge_magnets);
+
+    store.selectFridgeMagnet(addedMagnet.id);
+    expect(useConverterStore.getState().selectedFridgeMagnetId).toBe(addedMagnet.id);
+
+    store.updateFridgeMagnet(addedMagnet.id, {
+      shape: 'rect',
+      preset_key: 'rect-20x10x2',
+      diameter_mm: null,
+      width_mm: 20,
+      height_mm: 10,
+      thickness_mm: 2,
+    });
+    store.updateFridgeMagnetCenter(addedMagnet.id, 40, 12);
+
+    state = useConverterStore.getState();
+    expect(
+      state.fridge_magnets.find((item) => item.id === addedMagnet.id),
+    ).toMatchObject({
+      shape: 'rect',
+      preset_key: 'rect-20x10x2',
+      width_mm: 20,
+      height_mm: 10,
+      diameter_mm: null,
+      center_x_mm: 40,
+      center_y_mm: 12,
+    });
+
+    store.resetFridgeMagnetLayout();
+    state = useConverterStore.getState();
+    expect(state.fridge_magnets).toHaveLength(2);
+    expect(state.selectedFridgeMagnetId).toBeNull();
+    expectMagnetsToNotOverlap(state.fridge_magnets);
+    expect(
+      state.fridge_magnets.find((item) => item.id === addedMagnet.id),
+    ).toMatchObject({
+      shape: 'rect',
+      preset_key: 'rect-20x10x2',
+      width_mm: 20,
+      height_mm: 10,
+    });
+
+    const remainingId = state.fridge_magnets[0].id;
+    store.selectFridgeMagnet(remainingId);
+    store.removeFridgeMagnet(remainingId);
+    expect(useConverterStore.getState().fridge_magnets).toHaveLength(1);
+    expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+
+    store.removeFridgeMagnet(addedMagnet.id);
+    expect(useConverterStore.getState().fridge_magnets).toEqual([]);
+
+    store.clearSelectedFridgeMagnet();
+    expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+  });
+
+  it('sanitizes manual fridge magnet center edits by preserving finite values and clamping to bounds', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+
+    const state = useConverterStore.getState();
+    const magnet = state.fridge_magnets[0];
+
+    store.updateFridgeMagnetCenter(magnet.id, Number.NaN, Number.POSITIVE_INFINITY);
+    expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
+      center_x_mm: magnet.center_x_mm,
+      center_y_mm: magnet.center_y_mm,
+    });
+
+    store.updateFridgeMagnetCenter(magnet.id, -500, 500);
+    expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
+      center_x_mm: 6,
+      center_y_mm: 34,
+    });
+  });
+
+  it('re-clamps existing fridge magnets when model bounds change after preview regeneration', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+
+    const magnetId = useConverterStore.getState().fridge_magnets[0].id;
+    store.updateFridgeMagnetCenter(magnetId, 94, 34);
+
+    store.setModelBounds({
+      minX: 0,
+      maxX: 20,
+      minY: 0,
+      maxY: 20,
+      maxZ: 5,
+    });
+
+    expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
+      center_x_mm: 14,
+      center_y_mm: 14,
+    });
+  });
+
+  it('keeps auto layout as a pure reposition action when no magnets exist', () => {
+    const store = useConverterStore.getState();
+
+    expect(useConverterStore.getState().fridge_magnets).toEqual([]);
+
+    store.resetFridgeMagnetLayout();
+
+    expect(useConverterStore.getState().fridge_magnets).toEqual([]);
+  });
+
+  it('uses size-aware placement on tall narrow models so added magnets do not overlap', () => {
+    resetConverterState({
+      modelBounds: { minX: 0, maxX: 20, minY: 0, maxY: 200, maxZ: 5 },
+      enable_fridge_magnet: false,
+      fridge_magnets: [],
+      selectedFridgeMagnetId: null,
+    });
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+    store.addFridgeMagnet();
+
+    const state = useConverterStore.getState();
+    expect(state.fridge_magnets).toHaveLength(2);
+    expectMagnetsToNotOverlap(state.fridge_magnets);
+    expect(new Set(state.fridge_magnets.map((item) => item.center_y_mm)).size).toBeGreaterThan(1);
   });
 });
 

@@ -32,6 +32,7 @@ from api.schemas import (
     ConvertGenerateRequest,
     ConvertPreviewRequest,
     ExtractorExtractRequest,
+    FridgeMagnetItem,
     ExtractorManualFixRequest,
 )
 
@@ -86,6 +87,34 @@ def st_color_replacement_item(draw: st.DrawFn) -> ColorReplacementItem:
 
 
 @st.composite
+def st_fridge_magnet_item(draw: st.DrawFn) -> FridgeMagnetItem:
+    """Generate a valid FridgeMagnetItem instance."""
+    shape = draw(st.sampled_from(["round", "rect"]))
+    common_kwargs = {
+        "id": draw(st_non_empty_str),
+        "shape": shape,
+        "preset_key": draw(st_non_empty_str),
+        "thickness_mm": draw(st.floats(min_value=0.1, max_value=20.0, allow_nan=False)),
+        "center_x_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
+        "center_y_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
+    }
+    if shape == "round":
+        return FridgeMagnetItem(
+            **common_kwargs,
+            diameter_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+            width_mm=None,
+            height_mm=None,
+        )
+
+    return FridgeMagnetItem(
+        **common_kwargs,
+        diameter_mm=None,
+        width_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+        height_mm=draw(st.floats(min_value=0.1, max_value=100.0, allow_nan=False)),
+    )
+
+
+@st.composite
 def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
     """Generate a valid ConvertGenerateRequest instance."""
     return ConvertGenerateRequest(
@@ -111,6 +140,8 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
                 st.floats(allow_nan=False, allow_infinity=False),
             )
         ),
+        enable_fridge_magnet=draw(st.booleans()),
+        fridge_magnets=draw(st.lists(st_fridge_magnet_item(), max_size=3)),
         enable_relief=draw(st.booleans()),
         color_height_map=draw(
             st.none()
@@ -225,6 +256,7 @@ st_any_schema = (
     | st_extractor_manual_fix_request()
     | st_calibration_generate_request()
     | st_color_replacement_item()
+    | st_fridge_magnet_item()
 )
 
 
@@ -433,6 +465,8 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_length", 8.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_hole", 2.5),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_pos", None),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "enable_fridge_magnet", False),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "fridge_magnets", []),
     (ConvertGenerateRequest, {"lut_name": "x"}, "enable_relief", False),
     (ConvertGenerateRequest, {"lut_name": "x"}, "heightmap_max_height", 5.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "enable_outline", False),
@@ -480,3 +514,122 @@ def test_optional_field_default_values(data: st.DataObject) -> None:
     actual = getattr(instance, field_name)
 
     assert actual == expected, f"{model_cls.__name__}.{field_name}: expected default {expected!r}, " f"got {actual!r}"
+
+
+def test_fridge_magnet_item_accepts_round_shape() -> None:
+    """Round fridge magnets should accept only the round-specific diameter field."""
+
+    item = FridgeMagnetItem(
+        id="round-1",
+        shape="round",
+        preset_key="round-18",
+        diameter_mm=18.0,
+        width_mm=None,
+        height_mm=None,
+        thickness_mm=2.0,
+        center_x_mm=12.5,
+        center_y_mm=8.0,
+    )
+
+    assert item.shape == "round"
+    assert item.diameter_mm == 18.0
+    assert item.width_mm is None
+    assert item.height_mm is None
+
+
+def test_fridge_magnet_item_accepts_rect_shape() -> None:
+    """Rect fridge magnets should accept only the rect-specific width/height fields."""
+
+    item = FridgeMagnetItem(
+        id="rect-1",
+        shape="rect",
+        preset_key="rect-20x10",
+        diameter_mm=None,
+        width_mm=20.0,
+        height_mm=10.0,
+        thickness_mm=2.0,
+        center_x_mm=3.0,
+        center_y_mm=4.0,
+    )
+
+    assert item.shape == "rect"
+    assert item.diameter_mm is None
+    assert item.width_mm == 20.0
+    assert item.height_mm == 10.0
+
+
+def test_fridge_magnet_item_rejects_round_without_diameter() -> None:
+    """Round fridge magnets should reject missing diameter values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-missing",
+            shape="round",
+            preset_key="round-missing",
+            diameter_mm=None,
+            width_mm=None,
+            height_mm=None,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_round_with_rect_dimensions() -> None:
+    """Round fridge magnets should reject width/height values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-with-rect-dims",
+            shape="round",
+            preset_key="round-invalid",
+            diameter_mm=18.0,
+            width_mm=20.0,
+            height_mm=10.0,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_rect_without_width_and_height() -> None:
+    """Rect fridge magnets should reject missing width/height values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="rect-missing",
+            shape="rect",
+            preset_key="rect-missing",
+            diameter_mm=None,
+            width_mm=None,
+            height_mm=None,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_fridge_magnet_item_rejects_rect_with_round_diameter() -> None:
+    """Rect fridge magnets should reject diameter values."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="rect-with-round-diameter",
+            shape="rect",
+            preset_key="rect-invalid",
+            diameter_mm=18.0,
+            width_mm=20.0,
+            height_mm=10.0,
+            thickness_mm=2.0,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+def test_convert_generate_request_defaults_fridge_magnet_fields() -> None:
+    """ConvertGenerateRequest should keep fridge-magnet fields backward compatible by default."""
+
+    request = ConvertGenerateRequest(lut_name="test-lut")
+
+    assert request.enable_fridge_magnet is False
+    assert request.fridge_magnets == []

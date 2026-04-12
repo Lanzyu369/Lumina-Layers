@@ -43,6 +43,22 @@ def test_high_fidelity_mesher_disable_material_dilation_keeps_shared_edge_exact(
     assert default_right.bounds[0, 0] < 3.0
 
 
+def test_high_fidelity_mesher_preserves_enclosed_blind_cavity_during_dilation() -> None:
+    """Default dilation should thicken outward without collapsing an enclosed cavity."""
+
+    voxel_matrix = np.full((1, 9, 9), -1, dtype=int)
+    voxel_matrix[0, 2:7, 2:7] = 0
+    voxel_matrix[0, 3:6, 3:6] = -1
+    mesher = HighFidelityMesher()
+
+    mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=9)
+
+    assert mesh is not None
+    assert mesh.volume == pytest.approx(40.0)
+    assert mesh.bounds[0, 0] == pytest.approx(1.0)
+    assert mesh.bounds[1, 0] == pytest.approx(8.0)
+
+
 def test_high_fidelity_mesher_boundary_geometry_clips_to_polygon() -> None:
     """Boundary geometry should clip boundary-touching rectangles instead of inflating them."""
 

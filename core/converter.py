@@ -199,9 +199,19 @@ def convert_image_to_3d(
     slicer: str = "BambuStudio",
     relief_global_max_height: Optional[float] = None,
     progress=None,
+    enable_fridge_magnet: bool = False,
+    fridge_magnets: Optional[List[Dict]] = None,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
+
+    Args:
+        enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
+            handling in downstream raster/vector geometry stages.
+            (是否在下游光栅/矢量几何阶段启用可选的冰箱贴磁铁槽处理)
+        fridge_magnets: Serialized fridge-magnet item list forwarded through
+            the backend contract. (通过后端契约向下游透传的冰箱贴磁铁槽列表)
+
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
     """
@@ -329,12 +339,21 @@ def generate_final_model(
     slicer: str = "BambuStudio",
     relief_global_max_height: Optional[float] = None,
     progress=None,
+    enable_fridge_magnet: bool = False,
+    fridge_magnets: Optional[List[Dict]] = None,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
     Directly calls main conversion function with smart defaults:
     - blur_kernel=0 (disable median filter, preserve details)
     - smooth_sigma=10 (gentle bilateral filter, preserve edges)
+
+    Args:
+        enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
+            handling for supported generation flows. (是否为受支持的生成流程
+            启用可选的冰箱贴磁铁槽处理)
+        fridge_magnets: Serialized fridge-magnet item list forwarded to the
+            main converter entry point. (转发到主转换入口的冰箱贴磁铁槽列表)
     """
     # Convert backing color name to ID or use special marker for separate backing
     try:
@@ -421,6 +440,8 @@ def generate_final_model(
         slicer=slicer,
         relief_global_max_height=relief_global_max_height,
         progress=progress,
+        enable_fridge_magnet=enable_fridge_magnet,
+        fridge_magnets=fridge_magnets,
     )
 
 

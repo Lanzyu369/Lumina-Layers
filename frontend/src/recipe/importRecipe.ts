@@ -5,10 +5,14 @@
 
 import type { LuminaRecipe } from "./types";
 import type { ConverterState } from "../stores/converter/store";
-import type { ColorReplacementItem, LutInfo } from "../api/types";
+import type { ColorReplacementItem, FridgeMagnetItem, LutInfo } from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
 import { base64ToFile } from "./utils";
+import {
+  normalizeFridgeMagnetItems,
+  resolveFridgeMagnetSpacerThick,
+} from "../constants/fridgeMagnets";
 
 // ========== Hex normalization ==========
 
@@ -20,6 +24,23 @@ function stripHash(hex: string): string {
 // ========== Source detection ==========
 
 export type RecipeFileSource = "png" | "json";
+
+export const RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_PUZZLE =
+  "recipe_import_warning_fridge_conflict_puzzle";
+export const RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LARGE_FORMAT =
+  "recipe_import_warning_fridge_conflict_large_format";
+export const RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LOOP =
+  "recipe_import_warning_fridge_conflict_loop";
+export const RECIPE_IMPORT_WARNING_LUT_DEGRADED =
+  "recipe_import_lut_degraded";
+export const RECIPE_IMPORT_WARNING_LUT_MISSING =
+  "recipe_import_lut_missing";
+export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT =
+  "recipe_import_warning_puzzle_conflict_large_format";
+export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP =
+  "recipe_import_warning_puzzle_conflict_loop";
+export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
+  "recipe_import_warning_back_labels_unavailable";
 
 /**
  * Detect whether a file is a Lumina share card PNG or a .lumina.json sidecar.
@@ -170,14 +191,10 @@ export function restoreConverterRecipe(
   if (lutMatch.matched) {
     lutName = lutMatch.lutName;
     if (lutMatch.matchType === "name") {
-      warnings.push(
-        `LUT matched by name ("${lutName}") but fingerprint differs. Colors may not be identical.`,
-      );
+      warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
     }
   } else {
-    warnings.push(
-      `LUT "${lutMatch.originalName}" not found locally. Please select a compatible LUT manually.`,
-    );
+    warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
   }
 
   // --- Normalize hex values (strip '#' for store) ---
@@ -214,26 +231,52 @@ export function restoreConverterRecipe(
     min_neck_width_mm: 1.2,
   };
 
-  const puzzleEnabled = Boolean(puzzle.puzzle_enabled);
-  const largeFormatEnabled = puzzleEnabled
+  const fridgeMagnet = conv.fridge_magnet ?? {
+    enable_fridge_magnet: false,
+    fridge_magnets: [],
+  };
+  const normalizedFridgeMagnets = normalizeFridgeMagnetItems(
+    fridgeMagnet.fridge_magnets as FridgeMagnetItem[],
+  );
+
+  const fridgeMagnetEnabled = Boolean(fridgeMagnet.enable_fridge_magnet);
+  const puzzleEnabled = fridgeMagnetEnabled
     ? false
-    : conv.large_format.large_format_enabled;
-  const addLoop = puzzleEnabled ? false : conv.geometry.add_loop;
+    : Boolean(puzzle.puzzle_enabled);
+  const largeFormatEnabled = fridgeMagnetEnabled
+    ? false
+    : puzzleEnabled
+      ? false
+      : conv.large_format.large_format_enabled;
+  const addLoop = fridgeMagnetEnabled
+    ? false
+    : puzzleEnabled
+      ? false
+      : conv.geometry.add_loop;
   const engraveBackLabels = false;
 
+  if (fridgeMagnetEnabled && puzzle.puzzle_enabled) {
+    warnings.push(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_PUZZLE);
+  }
+  if (fridgeMagnetEnabled && conv.large_format.large_format_enabled) {
+    warnings.push(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LARGE_FORMAT);
+  }
+  if (fridgeMagnetEnabled && conv.geometry.add_loop) {
+    warnings.push(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LOOP);
+  }
   if (puzzleEnabled && conv.large_format.large_format_enabled) {
     warnings.push(
-      "Imported recipe enabled both puzzle mode and large-format tiling. Large Format was disabled to keep the state valid.",
+      RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT,
     );
   }
   if (puzzleEnabled && conv.geometry.add_loop) {
     warnings.push(
-      "Imported recipe enabled both puzzle mode and keychain loop generation. Keychain Loop was disabled to keep the state valid.",
+      RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP,
     );
   }
   if (puzzle.engrave_back_labels) {
     warnings.push(
-      "Imported recipe requested back-label engraving, but this feature is currently unavailable. Back-label engraving was disabled.",
+      RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE,
     );
   }
 
@@ -253,8 +296,17 @@ export function restoreConverterRecipe(
     chroma_gate: conv.base.chroma_gate,
 
     // Geometry
-    spacer_thick: conv.geometry.spacer_thick,
-    structure_mode: conv.geometry.structure_mode as ConverterState["structure_mode"],
+    spacer_thick: resolveFridgeMagnetSpacerThick(
+      conv.geometry.spacer_thick,
+      fridgeMagnetEnabled,
+      normalizedFridgeMagnets,
+    ),
+    base_spacer_thick: conv.geometry.spacer_thick,
+    structure_mode: (
+      fridgeMagnetEnabled
+        ? "Single-sided"
+        : conv.geometry.structure_mode
+    ) as ConverterState["structure_mode"],
     separate_backing: conv.geometry.separate_backing,
     add_loop: addLoop,
     loop_width: conv.geometry.loop_width,
@@ -308,6 +360,9 @@ export function restoreConverterRecipe(
     engraveBackLabels,
     irregularityStrength: puzzle.irregularity_strength,
     minNeckWidthMm: puzzle.min_neck_width_mm,
+    enable_fridge_magnet: fridgeMagnetEnabled,
+    fridge_magnets: normalizedFridgeMagnets,
+    selectedFridgeMagnetId: null,
 
     // Clear session/preview state (will be rebuilt on next preview)
     sessionId: null,

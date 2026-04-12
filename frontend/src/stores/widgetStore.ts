@@ -30,6 +30,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
     "cloisonne-settings",
     "coating-settings",
     "keychain-loop",
+    "fridge-magnet-settings",
     "puzzle-settings",
     "action-bar",
   ],
@@ -75,13 +76,22 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     stackOrder: 1,
     expandedHeight: EXPANDED_HEIGHT,
   },
+  "fridge-magnet-settings": {
+    id: "fridge-magnet-settings",
+    position: { x: 0, y: 0 },
+    collapsed: true,
+    visible: true,
+    snapEdge: "right",
+    stackOrder: 2,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
   "puzzle-settings": {
     id: "puzzle-settings",
     position: { x: 0, y: 0 },
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 2,
+    stackOrder: 3,
     expandedHeight: EXPANDED_HEIGHT,
   },
   "coating-settings": {
@@ -90,7 +100,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 3,
+    stackOrder: 4,
     expandedHeight: EXPANDED_HEIGHT,
   },
   "cloisonne-settings": {
@@ -99,7 +109,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 4,
+    stackOrder: 5,
     expandedHeight: EXPANDED_HEIGHT,
   },
   "outline-settings": {
@@ -108,7 +118,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 5,
+    stackOrder: 6,
     expandedHeight: EXPANDED_HEIGHT,
   },
   "relief-settings": {
@@ -117,7 +127,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 6,
+    stackOrder: 7,
     expandedHeight: EXPANDED_HEIGHT,
   },
   "advanced-settings": {
@@ -126,7 +136,7 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     collapsed: true,
     visible: true,
     snapEdge: "right",
-    stackOrder: 7,
+    stackOrder: 8,
     expandedHeight: EXPANDED_HEIGHT,
   },
   // --- 其他 4 个页面：各 1 个 Widget，左侧吸附，stackOrder 0 ---
@@ -218,6 +228,13 @@ export const WIDGET_REGISTRY: Omit<WidgetConfig, "component">[] = [
     id: "keychain-loop",
     titleKey: "widget.keychainLoop",
     icon: "link",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
+  {
+    id: "fridge-magnet-settings",
+    titleKey: "widget.fridgeMagnetSettings",
+    icon: "circle",
     defaultWidth: 350,
     minWidth: 300,
   },
@@ -544,7 +561,7 @@ export const useWidgetStore = create<WidgetStore>()(
     }),
     {
       name: "lumina-widget-layout",
-      version: 5,
+      version: 6,
       migrate: (persistedState, version) => {
         type PersistedWidgetState = {
           widgets?: Record<WidgetId, WidgetLayoutState>;
@@ -556,7 +573,7 @@ export const useWidgetStore = create<WidgetStore>()(
         if (version < 3) {
           return { widgets: { ...DEFAULT_LAYOUT }, activeTab: "converter" };
         }
-        if (version === 3 || version === 4) {
+        if (version === 3 || version === 4 || version === 5) {
           const state =
             typeof persistedState === "object" && persistedState !== null
               ? (persistedState as PersistedWidgetState)
@@ -566,22 +583,37 @@ export const useWidgetStore = create<WidgetStore>()(
           };
           delete widgets["palette-panel"];
           delete widgets["lut-color-grid"];
+          if (!widgets["fridge-magnet-settings"]) {
+            widgets["fridge-magnet-settings"] = {
+              ...DEFAULT_LAYOUT["fridge-magnet-settings"],
+            };
+          }
           if (!widgets["puzzle-settings"]) {
             widgets["puzzle-settings"] = { ...DEFAULT_LAYOUT["puzzle-settings"] };
           }
-          // Recalculate stackOrder for converter widgets on left edge
+          // Recalculate stackOrder for converter widgets on both dock edges.
           const converterIds = TAB_WIDGET_MAP.converter;
-          const leftConverterWidgets = converterIds
-            .filter((id) => widgets[id]?.snapEdge === "left")
-            .sort(
-              (a, b) =>
-                (widgets[a]?.stackOrder ?? 0) - (widgets[b]?.stackOrder ?? 0),
-            );
-          leftConverterWidgets.forEach((id, index) => {
-            if (widgets[id]) {
-              widgets[id] = { ...widgets[id], stackOrder: index };
-            }
-          });
+          const reorderConverterEdge = (edge: "left" | "right") => {
+            const edgeWidgets = converterIds
+              .filter((id) => widgets[id]?.snapEdge === edge)
+              .sort((a, b) => {
+                const orderDiff =
+                  (widgets[a]?.stackOrder ?? 0) - (widgets[b]?.stackOrder ?? 0);
+                if (orderDiff !== 0) {
+                  return orderDiff;
+                }
+                return converterIds.indexOf(a) - converterIds.indexOf(b);
+              });
+
+            edgeWidgets.forEach((id, index) => {
+              if (widgets[id]) {
+                widgets[id] = { ...widgets[id], stackOrder: index };
+              }
+            });
+          };
+
+          reorderConverterEdge("left");
+          reorderConverterEdge("right");
           return {
             ...state,
             widgets,

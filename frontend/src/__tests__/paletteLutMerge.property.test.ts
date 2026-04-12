@@ -170,7 +170,7 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
     const allWidgetIds = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'action-bar',
+      'keychain-loop', 'fridge-magnet-settings', 'action-bar',
       'calibration', 'extractor', 'lut-manager', 'five-color',
       'palette-panel', 'lut-color-grid',
     ] as const;
@@ -208,11 +208,11 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
     it('migration result never contains palette-panel or lut-color-grid keys', () => {
       // **Validates: Requirements 5.1, 5.2, 5.3**
       //
-      // For any version (0-3) and any persisted state containing old WidgetIds,
+      // For any version (0-5) and any persisted state containing old WidgetIds,
       // the migrate function must produce a result without 'palette-panel' or 'lut-color-grid'.
       fc.assert(
         fc.property(
-          fc.integer({ min: 0, max: 3 }),
+          fc.integer({ min: 0, max: 5 }),
           persistedStateArb,
           (version: number, persistedState: Record<string, unknown>) => {
             const result = migrate(persistedState, version);
@@ -254,26 +254,35 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       );
     });
 
-    it('version === 3 preserves other widgets and removes only old WidgetIds', () => {
+    it('version 3-5 preserves other widgets and injects the fridge widget when missing', () => {
       // **Validates: Requirements 5.1**
       //
-      // When version === 3, migration should keep all widgets except
-      // 'palette-panel' and 'lut-color-grid', and add colorWorkstationCollapsed.
+      // When version is 3-5, migration should keep all widgets except
+      // 'palette-panel' and 'lut-color-grid', and add missing migrated widgets.
       fc.assert(
         fc.property(
+          fc.constantFrom(3, 4, 5),
           persistedStateArb,
-          (persistedState: Record<string, unknown>) => {
+          (version: number, persistedState: Record<string, unknown>) => {
             const inputWidgets = asRecord(persistedState.widgets);
             const inputKeysWithoutOld = Object.keys(inputWidgets)
               .filter((k) => k !== 'palette-panel' && k !== 'lut-color-grid')
               .sort();
 
-            const result = migrate(persistedState, 3);
+            const result = migrate(persistedState, version);
             const resultWidgets = asRecord(asRecord(result).widgets);
             const resultKeys = Object.keys(resultWidgets).sort();
+            const expectedKeys = Array.from(
+              new Set([
+                ...inputKeysWithoutOld,
+                'fridge-magnet-settings',
+                'puzzle-settings',
+              ])
+            ).sort();
 
-            // All non-old widgets should be preserved
-            expect(resultKeys).toEqual(inputKeysWithoutOld);
+            // All non-old widgets should be preserved, plus the migrated fridge widget
+            expect(resultKeys).toEqual(expectedKeys);
+            expect(resultWidgets).toHaveProperty('fridge-magnet-settings');
 
             // colorWorkstationCollapsed should be set to true
             expect(asRecord(result).colorWorkstationCollapsed).toBe(true);
@@ -281,6 +290,31 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
         ),
         { numRuns: 100 }
       );
+    });
+
+    it('version 3-5 reorders right-dock converter widgets to unique stack orders', () => {
+      const persistedState = {
+        widgets: {
+          'action-bar': { ...DEFAULT_LAYOUT['action-bar'], stackOrder: 0, snapEdge: 'right' as const },
+          'keychain-loop': { ...DEFAULT_LAYOUT['keychain-loop'], stackOrder: 1, snapEdge: 'right' as const },
+          'advanced-settings': { ...DEFAULT_LAYOUT['advanced-settings'], stackOrder: 2, snapEdge: 'right' as const },
+        },
+        activeTab: 'converter',
+        colorWorkstationCollapsed: false,
+      };
+
+      for (const version of [3, 4, 5] as const) {
+        const result = migrate(persistedState, version);
+        const widgets = asRecord(asRecord(result).widgets) as Record<string, { stackOrder: number; snapEdge: string | null }>;
+        const rightOrders = ['action-bar', 'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'advanced-settings']
+          .map((id) => widgets[id])
+          .filter((widget) => widget?.snapEdge === 'right')
+          .map((widget) => widget.stackOrder);
+        const sortedRightOrders = [...rightOrders].sort((a, b) => a - b);
+
+        expect(sortedRightOrders).toEqual(Array.from({ length: rightOrders.length }, (_, index) => index));
+        expect(new Set(rightOrders).size).toBe(rightOrders.length);
+      }
     });
   });
 });

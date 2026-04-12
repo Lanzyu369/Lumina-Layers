@@ -11,6 +11,7 @@ import type {
   PuzzleConnectorStyle,
   PuzzleSizingMode,
   PuzzleStyle,
+  FridgeMagnetItem,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -48,6 +49,12 @@ import {
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { useSettingsStore } from "../settingsStore";
 import { uploadImagePreview } from "../../api/system";
+import {
+  createFridgeMagnetFromPreset,
+  getDefaultFridgeMagnetPresetKey,
+  normalizeFridgeMagnetItem,
+  resolveFridgeMagnetSpacerThick,
+} from "../../constants/fridgeMagnets";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
 
@@ -102,6 +109,378 @@ export interface PendingReplacement {
 
 export function clampValue(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function getFallbackModelBounds(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+): NonNullable<ConverterState["modelBounds"]> {
+  if (state.modelBounds) {
+    return state.modelBounds;
+  }
+
+  return {
+    minX: -state.target_width_mm / 2,
+    maxX: state.target_width_mm / 2,
+    minY: -state.target_height_mm / 2,
+    maxY: state.target_height_mm / 2,
+    maxZ: 0,
+  };
+}
+
+function getModelCenter(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+): { x: number; y: number } {
+  const bounds = getFallbackModelBounds(state);
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  };
+}
+
+function getDefaultFridgeMagnetCount(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+): number {
+  const bounds = getFallbackModelBounds(state);
+  const width = Math.max(bounds.maxX - bounds.minX, 0);
+  const height = Math.max(bounds.maxY - bounds.minY, 0);
+  const area = width * height;
+
+  if (area <= 5000) {
+    return 1;
+  }
+  if (area <= 15000) {
+    return 2;
+  }
+  return 4;
+}
+
+const FRIDGE_MAGNET_LAYOUT_GAP_MM = 1;
+
+function buildFridgeMagnetLayoutRatios(count: number): Array<[number, number]> {
+  if (count <= 1) {
+    return [[0.5, 0.5]];
+  }
+  if (count === 2) {
+    return [[0.3, 0.5], [0.7, 0.5]];
+  }
+  if (count === 3) {
+    return [[0.3, 0.35], [0.7, 0.35], [0.5, 0.72]];
+  }
+  if (count === 4) {
+    return [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]];
+  }
+  if (count === 5) {
+    return [[0.25, 0.3], [0.75, 0.3], [0.25, 0.7], [0.75, 0.7], [0.5, 0.5]];
+  }
+  if (count === 6) {
+    return [
+      [0.22, 0.3],
+      [0.5, 0.3],
+      [0.78, 0.3],
+      [0.22, 0.7],
+      [0.5, 0.7],
+      [0.78, 0.7],
+    ];
+  }
+
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const marginX = 0.18;
+  const marginY = 0.18;
+  const usableWidth = 1 - marginX * 2;
+  const usableHeight = 1 - marginY * 2;
+  const ratios: Array<[number, number]> = [];
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if (ratios.length >= count) {
+        break;
+      }
+      const xRatio = cols === 1 ? 0.5 : marginX + (usableWidth * col) / (cols - 1);
+      const yRatio = rows === 1 ? 0.5 : marginY + (usableHeight * row) / (rows - 1);
+      ratios.push([xRatio, yRatio]);
+    }
+  }
+
+  return ratios;
+}
+
+function buildSuggestedFridgeMagnetCenters(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+  count: number,
+): Array<{ x: number; y: number }> {
+  const bounds = getFallbackModelBounds(state);
+  const interpolate = (min: number, max: number, ratio: number) =>
+    min + (max - min) * ratio;
+
+  return buildFridgeMagnetLayoutRatios(Math.max(1, count)).map(([xRatio, yRatio]) => ({
+    x: interpolate(bounds.minX, bounds.maxX, xRatio),
+    y: interpolate(bounds.minY, bounds.maxY, yRatio),
+  }));
+}
+
+function getFridgeMagnetLayoutSize(
+  magnet: FridgeMagnetItem,
+): { width: number; height: number } {
+  if (magnet.shape === "round") {
+    const diameter = magnet.diameter_mm ?? 0;
+    return {
+      width: diameter,
+      height: diameter,
+    };
+  }
+
+  return {
+    width: magnet.width_mm ?? 0,
+    height: magnet.height_mm ?? 0,
+  };
+}
+
+function clampFridgeMagnetLayoutCenter(
+  center: { x: number; y: number },
+  magnet: FridgeMagnetItem,
+  bounds: NonNullable<ConverterState["modelBounds"]>,
+): { x: number; y: number } {
+  const { width, height } = getFridgeMagnetLayoutSize(magnet);
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+
+  const clampAxis = (value: number, min: number, max: number) =>
+    min > max ? (min + max) / 2 : clampValue(value, min, max);
+
+  return {
+    x: clampAxis(center.x, bounds.minX + halfWidth, bounds.maxX - halfWidth),
+    y: clampAxis(center.y, bounds.minY + halfHeight, bounds.maxY - halfHeight),
+  };
+}
+
+function sanitizeFiniteNumber(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function sanitizeOptionalFiniteNumber(
+  value: number | null | undefined,
+  fallback: number | null,
+): number | null | undefined {
+  if (value == null) {
+    return value;
+  }
+
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function canonicalizeFridgeMagnets(
+  state: Pick<
+    ConverterState,
+    | "modelBounds"
+    | "target_width_mm"
+    | "target_height_mm"
+    | "base_spacer_thick"
+    | "enable_fridge_magnet"
+    | "fridge_magnets"
+  >,
+  magnets: FridgeMagnetItem[],
+  options?: { resolveCollisions?: boolean },
+): FridgeMagnetItem[] {
+  if (magnets.length === 0) {
+    return [];
+  }
+
+  const normalizedMagnets = magnets.map(normalizeFridgeMagnetItem);
+  const fallbackCenter = getModelCenter(state);
+  const bounds = getFallbackModelBounds(state);
+  const sanitizedCenters = normalizedMagnets.map((magnet) => ({
+    x: sanitizeFiniteNumber(magnet.center_x_mm, fallbackCenter.x),
+    y: sanitizeFiniteNumber(magnet.center_y_mm, fallbackCenter.y),
+  }));
+
+  if (options?.resolveCollisions) {
+    return layoutFridgeMagnetsByCenters(state, normalizedMagnets, sanitizedCenters);
+  }
+
+  return normalizedMagnets.map((magnet, index) => {
+    const center = clampFridgeMagnetLayoutCenter(
+      sanitizedCenters[index],
+      magnet,
+      bounds,
+    );
+
+    return {
+      ...magnet,
+      center_x_mm: center.x,
+      center_y_mm: center.y,
+    };
+  });
+}
+
+function layoutFridgeMagnetsByCenters(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+  magnets: FridgeMagnetItem[],
+  initialCenters?: Array<{ x: number; y: number }>,
+): FridgeMagnetItem[] {
+  if (magnets.length === 0) {
+    return [];
+  }
+
+  const bounds = getFallbackModelBounds(state);
+  const fallbackCenter = getModelCenter(state);
+  const positioned = magnets.map((magnet, index) => ({
+    ...magnet,
+    ...clampFridgeMagnetLayoutCenter(
+      initialCenters?.[index] ?? fallbackCenter,
+      magnet,
+      bounds,
+    ),
+  }));
+
+  for (let iteration = 0; iteration < 48; iteration += 1) {
+    let moved = false;
+
+    for (let leftIndex = 0; leftIndex < positioned.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < positioned.length; rightIndex += 1) {
+        const left = positioned[leftIndex];
+        const right = positioned[rightIndex];
+        const leftSize = getFridgeMagnetLayoutSize(left);
+        const rightSize = getFridgeMagnetLayoutSize(right);
+        const minSeparationX =
+          leftSize.width / 2 + rightSize.width / 2 + FRIDGE_MAGNET_LAYOUT_GAP_MM;
+        const minSeparationY =
+          leftSize.height / 2 + rightSize.height / 2 + FRIDGE_MAGNET_LAYOUT_GAP_MM;
+        const deltaX = right.center_x_mm - left.center_x_mm;
+        const deltaY = right.center_y_mm - left.center_y_mm;
+        const overlapX = minSeparationX - Math.abs(deltaX);
+        const overlapY = minSeparationY - Math.abs(deltaY);
+
+        if (overlapX <= 0 || overlapY <= 0) {
+          continue;
+        }
+
+        const leftRoomX = left.center_x_mm - (bounds.minX + leftSize.width / 2);
+        const rightRoomX = (bounds.maxX - rightSize.width / 2) - right.center_x_mm;
+        const leftRoomY = left.center_y_mm - (bounds.minY + leftSize.height / 2);
+        const rightRoomY = (bounds.maxY - rightSize.height / 2) - right.center_y_mm;
+        const roomX = Math.max(0, leftRoomX) + Math.max(0, rightRoomX);
+        const roomY = Math.max(0, leftRoomY) + Math.max(0, rightRoomY);
+        const separateOnX = roomX >= overlapX && (roomX >= roomY || roomY < overlapY);
+        const directionX = deltaX === 0 ? (leftIndex % 2 === 0 ? -1 : 1) : Math.sign(deltaX);
+        const directionY = deltaY === 0 ? (leftIndex % 2 === 0 ? -1 : 1) : Math.sign(deltaY);
+
+        if (separateOnX) {
+          const shift = overlapX / 2 + 0.01;
+          left.center_x_mm -= directionX * shift;
+          right.center_x_mm += directionX * shift;
+        } else {
+          const shift = overlapY / 2 + 0.01;
+          left.center_y_mm -= directionY * shift;
+          right.center_y_mm += directionY * shift;
+        }
+
+        const clampedLeft = clampFridgeMagnetLayoutCenter(
+          { x: left.center_x_mm, y: left.center_y_mm },
+          left,
+          bounds,
+        );
+        const clampedRight = clampFridgeMagnetLayoutCenter(
+          { x: right.center_x_mm, y: right.center_y_mm },
+          right,
+          bounds,
+        );
+        left.center_x_mm = clampedLeft.x;
+        left.center_y_mm = clampedLeft.y;
+        right.center_x_mm = clampedRight.x;
+        right.center_y_mm = clampedRight.y;
+        moved = true;
+      }
+    }
+
+    if (!moved) {
+      break;
+    }
+  }
+
+  return positioned;
+}
+
+function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
+  const maxId = fridgeMagnets.reduce((max, item) => {
+    const match = item.id.match(/^fridge-magnet-(\d+)$/);
+    if (!match) {
+      return max;
+    }
+    return Math.max(max, Number(match[1]));
+  }, 0);
+
+  return `fridge-magnet-${maxId + 1}`;
+}
+
+function buildDefaultFridgeMagnetLayout(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm">,
+): FridgeMagnetItem[] {
+  const magnets = buildSuggestedFridgeMagnetCenters(
+    state,
+    getDefaultFridgeMagnetCount(state),
+  ).map(({ x, y }, index) =>
+    createFridgeMagnetFromPreset(
+      `fridge-magnet-${index + 1}`,
+      getDefaultFridgeMagnetPresetKey("round"),
+      x,
+      y,
+    ),
+  );
+
+  return layoutFridgeMagnetsByCenters(state, magnets, magnets.map((magnet) => ({
+    x: magnet.center_x_mm,
+    y: magnet.center_y_mm,
+  })));
+}
+
+function autoLayoutFridgeMagnets(
+  state: Pick<ConverterState, "modelBounds" | "target_width_mm" | "target_height_mm" | "fridge_magnets">,
+): FridgeMagnetItem[] {
+  const currentMagnets = state.fridge_magnets.map(normalizeFridgeMagnetItem);
+  if (currentMagnets.length === 0) {
+    return [];
+  }
+
+  const centers = buildSuggestedFridgeMagnetCenters(state, currentMagnets.length);
+  return layoutFridgeMagnetsByCenters(state, currentMagnets, centers);
+}
+
+function buildFridgeMagnetState(
+  state: Pick<
+    ConverterState,
+    | "modelBounds"
+    | "target_width_mm"
+    | "target_height_mm"
+    | "base_spacer_thick"
+    | "enable_fridge_magnet"
+    | "fridge_magnets"
+  >,
+  overrides?: Partial<
+    Pick<ConverterState, "enable_fridge_magnet" | "fridge_magnets" | "base_spacer_thick">
+  >,
+): Pick<
+  ConverterState,
+  "enable_fridge_magnet" | "fridge_magnets" | "base_spacer_thick" | "spacer_thick"
+> {
+  const baseSpacerThick = overrides?.base_spacer_thick ?? state.base_spacer_thick;
+  const enableFridgeMagnet =
+    overrides?.enable_fridge_magnet ?? state.enable_fridge_magnet;
+  const fridgeMagnets = canonicalizeFridgeMagnets(
+    state,
+    overrides?.fridge_magnets ?? state.fridge_magnets,
+  );
+
+  return {
+    enable_fridge_magnet: enableFridgeMagnet,
+    fridge_magnets: fridgeMagnets,
+    base_spacer_thick: baseSpacerThick,
+    spacer_thick: resolveFridgeMagnetSpacerThick(
+      baseSpacerThick,
+      enableFridgeMagnet,
+      fridgeMagnets,
+    ),
+  };
 }
 
 function getLastSelectedRegion(regions: RegionData[]): RegionData | null {
@@ -214,6 +593,10 @@ export interface ConverterState {
   loop_offset_x: number; // -20 到 20 mm，默认 0
   loop_offset_y: number; // -20 到 20 mm，默认 0
   loop_position_preset: string; // 默认 "top-center"
+  enable_fridge_magnet: boolean;
+  fridge_magnets: FridgeMagnetItem[];
+  selectedFridgeMagnetId: string | null;
+  base_spacer_thick: number;
 
   // 浮雕
   enable_relief: boolean;
@@ -392,6 +775,21 @@ export interface ConverterActions {
   setLoopOffsetX: (x: number) => void;
   setLoopOffsetY: (y: number) => void;
   setLoopPositionPreset: (preset: string) => void;
+  setEnableFridgeMagnet: (enabled: boolean) => void;
+  resetFridgeMagnetLayout: () => void;
+  addFridgeMagnet: () => void;
+  removeFridgeMagnet: (id: string) => void;
+  updateFridgeMagnet: (
+    id: string,
+    updates: Partial<Omit<FridgeMagnetItem, "id">>,
+  ) => void;
+  updateFridgeMagnetCenter: (
+    id: string,
+    centerX: number,
+    centerY: number,
+  ) => void;
+  selectFridgeMagnet: (id: string | null) => void;
+  clearSelectedFridgeMagnet: () => void;
   setEnableRelief: (enabled: boolean) => void;
   setColorHeightMap: (map: Record<string, number>) => void;
   setHeightmapMaxHeight: (height: number) => void;
@@ -573,6 +971,10 @@ export const DEFAULT_STATE: ConverterState = {
   loop_offset_x: 0,
   loop_offset_y: 0,
   loop_position_preset: "top-center",
+  enable_fridge_magnet: false,
+  fridge_magnets: [],
+  selectedFridgeMagnetId: null,
+  base_spacer_thick: 1.2,
   enable_relief: false,
   color_height_map: {},
   heightmap_max_height: 3.0,
@@ -905,20 +1307,43 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(width, 10, max);
+        const nextDimensions = state.aspectRatio
+          ? {
+              target_width_mm: clamped,
+              target_height_mm: clampValue(
+                Math.round(clamped / state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : {
+              target_width_mm: clamped,
+            };
+        const nextState = {
+          ...state,
+          ...nextDimensions,
+        };
+        const nextFridgeMagnets = canonicalizeFridgeMagnets(
+          nextState,
+          state.fridge_magnets,
+          { resolveCollisions: true },
+        );
+
         if (state.aspectRatio) {
           return {
-            target_width_mm: clamped,
-            target_height_mm: clampValue(
-              Math.round(clamped / state.aspectRatio),
-              10,
-              max,
-            ),
+            ...nextDimensions,
+            ...buildFridgeMagnetState(nextState, {
+              fridge_magnets: nextFridgeMagnets,
+            }),
             threemfDiskPath: null,
             downloadUrl: null,
           };
         }
         return {
-          target_width_mm: clamped,
+          ...nextDimensions,
+          ...buildFridgeMagnetState(nextState, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -928,34 +1353,66 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(height, 10, max);
+        const nextDimensions = state.aspectRatio
+          ? {
+              target_height_mm: clamped,
+              target_width_mm: clampValue(
+                Math.round(clamped * state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : {
+              target_height_mm: clamped,
+            };
+        const nextState = {
+          ...state,
+          ...nextDimensions,
+        };
+        const nextFridgeMagnets = canonicalizeFridgeMagnets(
+          nextState,
+          state.fridge_magnets,
+          { resolveCollisions: true },
+        );
+
         if (state.aspectRatio) {
           return {
-            target_height_mm: clamped,
-            target_width_mm: clampValue(
-              Math.round(clamped * state.aspectRatio),
-              10,
-              max,
-            ),
+            ...nextDimensions,
+            ...buildFridgeMagnetState(nextState, {
+              fridge_magnets: nextFridgeMagnets,
+            }),
             threemfDiskPath: null,
             downloadUrl: null,
           };
         }
         return {
-          target_height_mm: clamped,
+          ...nextDimensions,
+          ...buildFridgeMagnetState(nextState, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
           threemfDiskPath: null,
           downloadUrl: null,
         };
       }),
 
     setSpacerThick: (thick: number) =>
-      set({
-        spacer_thick: clampValue(thick, 0.2, 3.5),
+      set((state) => ({
+        ...buildFridgeMagnetState(state, {
+          base_spacer_thick: clampValue(thick, 0.2, 3.5),
+        }),
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
+      })),
 
     setStructureMode: (mode: StructureMode) =>
-      set({ structure_mode: mode, threemfDiskPath: null, downloadUrl: null }),
+      set((state) => ({
+        structure_mode:
+          state.enable_fridge_magnet
+            ? StructureModeEnum.SINGLE_SIDED
+            : mode,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      })),
     setColorMode: (mode: ColorMode) =>
       set({ color_mode: mode, threemfDiskPath: null, downloadUrl: null }),
     setModelingMode: (mode: ModelingMode) =>
@@ -1002,6 +1459,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set((state) => ({
         add_loop: enabled,
         puzzleEnabled: enabled ? false : state.puzzleEnabled,
+        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
+        spacer_thick: enabled
+          ? state.base_spacer_thick
+          : state.spacer_thick,
+        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
         threemfDiskPath: null,
         downloadUrl: null,
@@ -1020,6 +1482,159 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setLoopPositionPreset: (preset: string) => {
       set({ loop_position_preset: preset });
     },
+    setEnableFridgeMagnet: (enabled: boolean) =>
+      set((state) => {
+        const shouldSeedDefaults =
+          enabled &&
+          !state.enable_fridge_magnet &&
+          state.fridge_magnets.length === 0;
+        const fridgeMagnets = shouldSeedDefaults
+          ? buildDefaultFridgeMagnetLayout(state)
+          : state.fridge_magnets;
+
+        return {
+          ...buildFridgeMagnetState(state, {
+            enable_fridge_magnet: enabled,
+            fridge_magnets: fridgeMagnets,
+          }),
+          structure_mode: enabled
+            ? StructureModeEnum.SINGLE_SIDED
+            : state.structure_mode,
+          largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
+          puzzleEnabled: enabled ? false : state.puzzleEnabled,
+          add_loop: enabled ? false : state.add_loop,
+          selectedFridgeMagnetId: enabled
+            ? state.selectedFridgeMagnetId
+            : null,
+          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
+    resetFridgeMagnetLayout: () =>
+      set((state) => ({
+        ...buildFridgeMagnetState(state, {
+          fridge_magnets: autoLayoutFridgeMagnets(state),
+        }),
+        selectedFridgeMagnetId: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      })),
+    addFridgeMagnet: () =>
+      set((state) => {
+        const nextFridgeMagnets = autoLayoutFridgeMagnets({
+          ...state,
+          fridge_magnets: [
+            ...state.fridge_magnets,
+            createFridgeMagnetFromPreset(
+              createNextFridgeMagnetId(state.fridge_magnets),
+              getDefaultFridgeMagnetPresetKey("round"),
+              getModelCenter(state).x,
+              getModelCenter(state).y,
+            ),
+          ],
+        });
+
+        return {
+          ...buildFridgeMagnetState(state, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
+          selectedFridgeMagnetId: nextFridgeMagnets[nextFridgeMagnets.length - 1].id,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
+    removeFridgeMagnet: (id: string) =>
+      set((state) => {
+        const nextFridgeMagnets = state.fridge_magnets.filter(
+          (item) => item.id !== id,
+        );
+
+        return {
+          ...buildFridgeMagnetState(state, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
+          selectedFridgeMagnetId:
+            state.selectedFridgeMagnetId === id
+              ? null
+              : state.selectedFridgeMagnetId,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
+    updateFridgeMagnet: (id: string, updates: Partial<Omit<FridgeMagnetItem, "id">>) =>
+      set((state) => {
+        const nextFridgeMagnets = state.fridge_magnets.map((item) =>
+          item.id === id
+            ? normalizeFridgeMagnetItem({
+                ...item,
+                ...updates,
+                diameter_mm: sanitizeOptionalFiniteNumber(
+                  updates.diameter_mm,
+                  item.diameter_mm,
+                ),
+                width_mm: sanitizeOptionalFiniteNumber(
+                  updates.width_mm,
+                  item.width_mm,
+                ),
+                height_mm: sanitizeOptionalFiniteNumber(
+                  updates.height_mm,
+                  item.height_mm,
+                ),
+                thickness_mm: updates.thickness_mm == null
+                  ? item.thickness_mm
+                  : sanitizeFiniteNumber(
+                      updates.thickness_mm,
+                      item.thickness_mm,
+                    ),
+                center_x_mm: updates.center_x_mm == null
+                  ? item.center_x_mm
+                  : sanitizeFiniteNumber(
+                      updates.center_x_mm,
+                      item.center_x_mm,
+                    ),
+                center_y_mm: updates.center_y_mm == null
+                  ? item.center_y_mm
+                  : sanitizeFiniteNumber(
+                      updates.center_y_mm,
+                      item.center_y_mm,
+                    ),
+              })
+            : item,
+        );
+
+        return {
+          ...buildFridgeMagnetState(state, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
+    updateFridgeMagnetCenter: (id: string, centerX: number, centerY: number) =>
+      set((state) => {
+        const nextFridgeMagnets = state.fridge_magnets.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                center_x_mm: sanitizeFiniteNumber(centerX, item.center_x_mm),
+                center_y_mm: sanitizeFiniteNumber(centerY, item.center_y_mm),
+              }
+            : item,
+        );
+
+        return {
+          ...buildFridgeMagnetState(state, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
+    selectFridgeMagnet: (id: string | null) =>
+      set({ selectedFridgeMagnetId: id }),
+    clearSelectedFridgeMagnet: () =>
+      set({ selectedFridgeMagnetId: null }),
 
     // --- 浮雕（互斥） ---
     setEnableRelief: (enabled: boolean) => {
@@ -1114,6 +1729,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set((state) => ({
         largeFormatEnabled: enabled,
         puzzleEnabled: enabled ? false : state.puzzleEnabled,
+        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
+        spacer_thick: enabled
+          ? state.base_spacer_thick
+          : state.spacer_thick,
+        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
         threemfDiskPath: null,
         downloadUrl: null,
@@ -1135,6 +1755,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         puzzleEnabled: enabled && !state.batchMode,
         largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
         add_loop: enabled ? false : state.add_loop,
+        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
+        spacer_thick: enabled
+          ? state.base_spacer_thick
+          : state.spacer_thick,
+        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
         ...(!enabled ? DEFAULT_PUZZLE_PREVIEW_STATE : {}),
         threemfDiskPath: null,
         downloadUrl: null,
@@ -1798,7 +2423,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
     // --- 模型边界 ---
     setModelBounds: (bounds: ConverterState["modelBounds"]) =>
-      set({ modelBounds: bounds }),
+      set((state) => {
+        const nextState = {
+          ...state,
+          modelBounds: bounds,
+        };
+        const nextFridgeMagnets = canonicalizeFridgeMagnets(
+          nextState,
+          state.fridge_magnets,
+          { resolveCollisions: true },
+        );
+
+        return {
+          modelBounds: bounds,
+          ...buildFridgeMagnetState(nextState, {
+            fridge_magnets: nextFridgeMagnets,
+          }),
+        };
+      }),
 
     fetchBedSizes: async () => {
       set({ bedSizesLoading: true });
@@ -2056,6 +2698,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           loop_offset_x: state.loop_offset_x,
           loop_offset_y: state.loop_offset_y,
           loop_position_preset: state.loop_position_preset,
+          enable_fridge_magnet: state.enable_fridge_magnet,
+          fridge_magnets: state.fridge_magnets,
           enable_relief: state.enable_relief,
           height_mode: state.enable_relief
             ? state.autoHeightMode === "use-heightmap"
@@ -2709,7 +3353,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     importRecipeState: (partial: Partial<ConverterState>, imageFile: File, heightmapFile?: File | null) => {
       // 1. Apply restored parameters (without triggering crop modal)
       const prevEnableCrop = _get().enableCrop;
-      set({ ...partial, engraveBackLabels: false, enableCrop: false });
+      const baseState = _get();
+      const nextState = {
+        ...baseState,
+        ...partial,
+        modelBounds: null,
+      };
+      const fridgeMagnetState = buildFridgeMagnetState(nextState, {
+        enable_fridge_magnet: partial.enable_fridge_magnet,
+        fridge_magnets: partial.fridge_magnets,
+        base_spacer_thick: partial.base_spacer_thick,
+      });
+      set({
+        ...partial,
+        modelBounds: null,
+        ...fridgeMagnetState,
+        engraveBackLabels: false,
+        enableCrop: false,
+      });
 
       // 2. Set image file (creates blob URL, triggers preview flow)
       _get().setImageFile(imageFile);

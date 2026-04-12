@@ -22,6 +22,10 @@ export default function ImportConfirmDialog({
   isLoading,
 }: ImportConfirmDialogProps) {
   const { t } = useI18n();
+  const localizeWarning = (warning: string) => {
+    const localized = t(warning);
+    return localized === warning ? warning : localized;
+  };
 
   if (!open || !preview) return null;
 
@@ -30,11 +34,16 @@ export default function ImportConfirmDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm"
+      style={{ background: "var(--surface-scrim)" }}
       onClick={onCancel}
     >
       <div
-        className="relative mx-4 flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        className="relative mx-4 flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
+        style={{
+          borderColor: "var(--surface-outline)",
+          background: "var(--surface-panel-strong)",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -128,7 +137,7 @@ export default function ImportConfirmDialog({
                   {t("recipe_import_size_label")}
                 </dt>
                 <dd className="text-slate-800 dark:text-slate-200">
-                  {conv.base.target_width_mm} × {conv.base.target_height_mm} mm
+                  {conv.base.target_width_mm} × {conv.base.target_height_mm} {t("common_unit_mm")}
                 </dd>
               </>
             )}
@@ -146,7 +155,7 @@ export default function ImportConfirmDialog({
                     key={i}
                     className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
                   >
-                    {w}
+                    {localizeWarning(w)}
                   </li>
                 ))}
               </ul>

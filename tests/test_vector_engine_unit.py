@@ -11,6 +11,7 @@ import sys
 import os
 import types
 import importlib.util
+import inspect
 from unittest.mock import patch
 
 import pytest
@@ -51,6 +52,11 @@ def _make_parse_only_processor(sampling_precision=0.05):
     """Create a VectorProcessor instance without running heavy __init__."""
     vp = object.__new__(VectorProcessor)
     vp.sampling_precision = sampling_precision
+    vp.color_mode = "4-Color"
+    vp.last_stage_timings = {}
+    vp.parse_warnings = []
+    vp.enable_fridge_magnet = False
+    vp.fridge_magnets = []
     return vp
 
 
@@ -325,6 +331,167 @@ class TestExtrudeGeometry:
         assert len(meshes1) == 1
         assert len(meshes2) == 1
         assert call_count["n"] == 1
+
+
+# =====================================================================
+# 5. Fridge magnet cavity helpers
+# =====================================================================
+
+
+class TestFridgeMagnetCavityHelpers:
+
+    def test_centered_mm_to_vector_coords_uses_bbox_and_flips_y(self):
+        x, y = VectorProcessor._centered_mm_to_vector_coords(
+            center_x_mm=10.0,
+            center_y_mm=-5.0,
+            bbox=(0.0, 0.0, 40.0, 20.0),
+            scale_factor=2.0,
+        )
+
+        assert x == pytest.approx(25.0)
+        assert y == pytest.approx(12.5)
+
+    def test_build_backing_cavity_slabs_keeps_blind_shell_for_high_outer_side(self):
+        backing = box(0, 0, 20, 10)
+        cavity = box(8, 3, 12, 7)
+
+        slabs = VectorProcessor._build_backing_cavity_slabs(
+            backing_sil=backing,
+            backing_z_start=1.0,
+            backing_height=2.0,
+            cavity_specs=[{"geometry": cavity, "depth_mm": 0.8}],
+            outer_side="high",
+            shell_thickness_mm=0.4,
+        )
+
+        assert [(round(s["z_offset"], 3), round(s["height"], 3)) for s in slabs] == [
+            (1.0, 0.8),
+            (1.8, 0.8),
+            (2.6, 0.4),
+        ]
+        assert slabs[0]["geometry"].area == pytest.approx(backing.area)
+        assert slabs[1]["geometry"].area < backing.area
+        assert slabs[2]["geometry"].area == pytest.approx(backing.area)
+
+    def test_build_backing_cavity_slabs_splits_multiple_cavity_depth_bands(self):
+        backing = box(0, 0, 20, 10)
+        shallow = box(2, 2, 6, 6)
+        deep = box(12, 2, 18, 8)
+
+        slabs = VectorProcessor._build_backing_cavity_slabs(
+            backing_sil=backing,
+            backing_z_start=0.0,
+            backing_height=2.0,
+            cavity_specs=[
+                {"geometry": shallow, "depth_mm": 0.8},
+                {"geometry": deep, "depth_mm": 1.2},
+            ],
+            outer_side="high",
+            shell_thickness_mm=0.4,
+        )
+
+        reduced_slabs = [slab for slab in slabs if slab["geometry"].area < backing.area]
+        assert len(reduced_slabs) == 2
+        reduced_areas = [slab["geometry"].area for slab in reduced_slabs]
+        assert reduced_areas == pytest.approx(
+            [
+                backing.difference(deep).area,
+                backing.difference(shallow.union(deep)).area,
+            ]
+        )
+
+    def test_build_vector_fridge_cavity_specs_centers_on_backing_bounds_not_svg_viewbox(self):
+        backing = box(5, 5, 15, 15)
+
+        specs = VectorProcessor._build_vector_fridge_cavity_specs(
+            backing_sil=backing,
+            fridge_magnets=[
+                {
+                    "id": "magnet-round",
+                    "shape": "round",
+                    "preset_key": "round-4",
+                    "diameter_mm": 4.0,
+                    "width_mm": None,
+                    "height_mm": None,
+                    "thickness_mm": 1.2,
+                    "center_x_mm": 0.0,
+                    "center_y_mm": 0.0,
+                }
+            ],
+            bbox=(0.0, 0.0, 40.0, 20.0),
+            scale_factor=1.0,
+            backing_height=2.0,
+        )
+
+        assert len(specs) == 1
+        assert specs[0]["geometry"].centroid.x == pytest.approx(10.0)
+        assert specs[0]["geometry"].centroid.y == pytest.approx(10.0)
+
+
+class TestVectorPublicApiCompatibility:
+
+    def test_build_mesh_signature_remains_backward_compatible(self):
+        params = inspect.signature(VectorProcessor.build_mesh).parameters
+        assert list(params) == ["self", "analysis", "thickness_mm", "structure_mode", "progress_fn"]
+
+    def test_svg_to_mesh_signature_remains_backward_compatible(self):
+        params = inspect.signature(VectorProcessor.svg_to_mesh).parameters
+        assert list(params) == [
+            "self",
+            "svg_path",
+            "target_width_mm",
+            "thickness_mm",
+            "structure_mode",
+            "color_replacements",
+            "progress_fn",
+        ]
+
+
+class TestVectorFridgeMagnetBuildMeshRegression:
+
+    def test_build_mesh_reduces_board_volume_when_fridge_magnet_mode_enabled(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[{"geometry": box(0, 0, 20, 20), "color": (255, 0, 0), "draw_order": 0}],
+            matched_shapes=[{"geometry": box(0, 0, 20, 20), "recipe": [1, 1, 1, 1, 1], "color": (255, 0, 0)}],
+            silhouette=box(0, 0, 20, 20),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        processor.enable_fridge_magnet = False
+        processor.fridge_magnets = []
+        scene_without_cavity = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        board_without_cavity = scene_without_cavity.geometry["Board"]
+
+        processor.enable_fridge_magnet = True
+        processor.fridge_magnets = [
+            {
+                "id": "magnet-round",
+                "shape": "round",
+                "preset_key": "round-8",
+                "diameter_mm": 8.0,
+                "width_mm": None,
+                "height_mm": None,
+                "thickness_mm": 0.4,
+                "center_x_mm": 0.0,
+                "center_y_mm": 0.0,
+            }
+        ]
+        scene_with_cavity = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        board_with_cavity = scene_with_cavity.geometry["Board"]
+
+        assert board_with_cavity.volume < board_without_cavity.volume
+        assert board_with_cavity.bounds[0][0] == pytest.approx(board_without_cavity.bounds[0][0])
+        assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
 
 
 # =====================================================================
