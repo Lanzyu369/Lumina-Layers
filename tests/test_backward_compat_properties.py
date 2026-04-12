@@ -181,9 +181,31 @@ class TestProperty5ConvertImageTo3dSignature:
             "loop_offset_y",
             "loop_position_preset",
             "progress",
+            "enable_fridge_magnet",
+            "fridge_magnets",
         ]
         for param in optional_params:
             assert param in param_names, f"convert_image_to_3d 签名缺少可选参数: {param}"
+
+
+class TestProperty5GenerateFinalModelSignature:
+    """验证 generate_final_model 保持兼容签名并暴露新的冰箱贴参数。"""
+
+    def test_function_exists_and_callable(self):
+        """generate_final_model 函数存在且可调用。"""
+        from core.converter import generate_final_model
+
+        assert callable(generate_final_model)
+
+    def test_signature_contains_fridge_magnet_params(self):
+        """generate_final_model 签名包含新的冰箱贴可选参数。"""
+        from core.converter import generate_final_model
+
+        sig = inspect.signature(generate_final_model)
+        param_names = list(sig.parameters.keys())
+
+        for param in ["enable_fridge_magnet", "fridge_magnets"]:
+            assert param in param_names, f"generate_final_model 签名缺少可选参数: {param}"
 
 
 # ===========================================================================

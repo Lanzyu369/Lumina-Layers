@@ -250,7 +250,6 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     session_id, preview_cache = _make_session()
     submitted_params: list[dict[str, Any]] = []
     assembled_calls: list[dict[str, Any]] = []
-
     async def _submit_stub(
         func: object,
         piece_image_path: str,
@@ -307,6 +306,8 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert all(os.path.exists(params["piece_boundary_geometry_path"]) for params in submitted_params)
     assert all(params["disable_material_dilation"] is True for params in submitted_params)
     assert all(params["add_loop"] is False for params in submitted_params)
+    assert all(params["enable_fridge_magnet"] is False for params in submitted_params)
+    assert all(params["fridge_magnets"] == [] for params in submitted_params)
     assert len(assembled_calls) == 1
     assert assembled_calls[0]["piece_count"] == 6
     assert assembled_calls[0]["printer_id"] == "bambu-h2d"
@@ -367,6 +368,46 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     ]
     assert max(point[0] for point in boundary["polygon_px"]) <= expected_worker_w + 1e-6
     assert max(point[1] for point in boundary["polygon_px"]) <= expected_worker_h + 1e-6
+
+
+def test_generate_puzzle_rejects_fridge_magnet_mode() -> None:
+    """Puzzle generation should reject fridge-magnet mode instead of duplicating cavities per piece."""
+
+    session_id, _preview_cache = _make_session()
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["enable_fridge_magnet"] = True
+    body["params"]["params"]["fridge_magnets"] = [
+        {
+            "id": "magnet-round",
+            "shape": "round",
+            "preset_key": "round-18",
+            "diameter_mm": 18.0,
+            "width_mm": None,
+            "height_mm": None,
+            "thickness_mm": 2.0,
+            "center_x_mm": 0.0,
+            "center_y_mm": 0.0,
+        }
+    ]
+
+    response = client.post("/api/convert/generate-puzzle", json=body)
+
+    assert response.status_code == 422
+    assert "fridge magnet" in response.json()["detail"].lower()
+
+
+def test_generate_puzzle_rejects_fridge_magnet_flag_even_with_empty_list() -> None:
+    """Puzzle generation should reject the opt-in flag even when no cavity list is supplied."""
+
+    session_id, _preview_cache = _make_session()
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["enable_fridge_magnet"] = True
+    body["params"]["params"]["fridge_magnets"] = []
+
+    response = client.post("/api/convert/generate-puzzle", json=body)
+
+    assert response.status_code == 422
+    assert "fridge magnet" in response.json()["detail"].lower()
 
 
 def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:

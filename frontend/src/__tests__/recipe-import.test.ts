@@ -3,6 +3,14 @@ import {
   detectRecipeFileType,
   matchLut,
   restoreConverterRecipe,
+  RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE,
+  RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LARGE_FORMAT,
+  RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LOOP,
+  RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_PUZZLE,
+  RECIPE_IMPORT_WARNING_LUT_DEGRADED,
+  RECIPE_IMPORT_WARNING_LUT_MISSING,
+  RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT,
+  RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP,
 } from "../recipe/importRecipe";
 import { migrateRecipe } from "../recipe/migration";
 import type { LuminaRecipe } from "../recipe/types";
@@ -88,6 +96,10 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
           engrave_back_labels: false,
           irregularity_strength: 0.35,
           min_neck_width_mm: 1.2,
+        },
+        fridge_magnet: {
+          enable_fridge_magnet: false,
+          fridge_magnets: [],
         },
         device: { printer_id: "bambu-h2d", slicer: "BambuStudio" },
       },
@@ -200,6 +212,9 @@ describe("recipe/importRecipe", () => {
       expect(state.puzzleCols).toBe(5);
       expect(state.connectorStyle).toBe("classic");
       expect(state.labelsEnabled).toBe(true);
+      expect(state.enable_fridge_magnet).toBe(false);
+      expect(state.fridge_magnets).toEqual([]);
+      expect(state.base_spacer_thick).toBe(0.6);
 
       // Asset
       expect(assetFile).toBeInstanceOf(File);
@@ -228,20 +243,12 @@ describe("recipe/importRecipe", () => {
       expect(state.labelsEnabled).toBe(false);
       expect(state.engraveBackLabels).toBe(false);
       expect(
-        warnings.some((warning) =>
-          warning.includes("puzzle mode and large-format tiling"),
-        ),
-      ).toBe(true);
+        warnings,
+      ).toContain(RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT);
       expect(
-        warnings.some((warning) =>
-          warning.includes("puzzle mode and keychain loop generation"),
-        ),
-      ).toBe(true);
-      expect(
-        warnings.some((warning) =>
-          warning.includes("feature is currently unavailable"),
-        ),
-      ).toBe(true);
+        warnings,
+      ).toContain(RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE);
     });
 
     it("disables imported back-label engraving even when piece labels are enabled", () => {
@@ -257,11 +264,115 @@ describe("recipe/importRecipe", () => {
 
       expect(state.labelsEnabled).toBe(true);
       expect(state.engraveBackLabels).toBe(false);
-      expect(
-        warnings.some((warning) =>
-          warning.includes("feature is currently unavailable"),
-        ),
-      ).toBe(true);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE);
+    });
+
+    it("keeps fridge magnet mode and disables puzzle, large format, and loop conflicts from imported recipes", () => {
+      const recipe = createTestRecipe();
+      recipe.recipe.converter!.geometry.structure_mode = "Double-sided";
+      recipe.recipe.converter!.geometry.spacer_thick = 1.1;
+      recipe.recipe.converter!.geometry.add_loop = true;
+      recipe.recipe.converter!.large_format.large_format_enabled = true;
+      recipe.recipe.converter!.puzzle!.puzzle_enabled = true;
+      recipe.recipe.converter!.fridge_magnet = {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-d12x3",
+            diameter_mm: 12,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 3,
+            center_x_mm: 40,
+            center_y_mm: 20,
+          },
+        ],
+      };
+
+      const { state, warnings } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.enable_fridge_magnet).toBe(true);
+      expect(state.fridge_magnets).toHaveLength(1);
+      expect(state.puzzleEnabled).toBe(false);
+      expect(state.largeFormatEnabled).toBe(false);
+      expect(state.add_loop).toBe(false);
+      expect(state.structure_mode).toBe("Single-sided");
+      expect(state.base_spacer_thick).toBe(1.1);
+      expect(state.spacer_thick).toBe(3.44);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_PUZZLE);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LARGE_FORMAT);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LOOP);
+    });
+
+    it("normalizes imported fridge magnets before restoring them", () => {
+      const recipe = createTestRecipe();
+      recipe.recipe.converter!.geometry.spacer_thick = 0.7;
+      recipe.recipe.converter!.fridge_magnet = {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "bad-round",
+            shape: "round",
+            preset_key: "rect-20x10x2",
+            diameter_mm: 0.2,
+            width_mm: 8,
+            height_mm: 9,
+            thickness_mm: 9,
+            center_x_mm: 5,
+            center_y_mm: 6,
+          },
+          {
+            id: "bad-rect",
+            shape: "rect",
+            preset_key: "round-d6x2",
+            diameter_mm: 7,
+            width_mm: 0.2,
+            height_mm: 0.1,
+            thickness_mm: 0.05,
+            center_x_mm: -2,
+            center_y_mm: -3,
+          },
+        ],
+      };
+
+      const { state } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.fridge_magnets).toEqual([
+        {
+          id: "bad-round",
+          shape: "round",
+          preset_key: "custom",
+          diameter_mm: 1,
+          width_mm: null,
+          height_mm: null,
+          thickness_mm: 3.1,
+          center_x_mm: 5,
+          center_y_mm: 6,
+        },
+        {
+          id: "bad-rect",
+          shape: "rect",
+          preset_key: "custom",
+          diameter_mm: null,
+          width_mm: 1,
+          height_mm: 1,
+          thickness_mm: 0.1,
+          center_x_mm: -2,
+          center_y_mm: -3,
+        },
+      ]);
+      expect(state.base_spacer_thick).toBe(0.7);
+      expect(state.spacer_thick).toBe(3.5);
     });
 
     it("adds warning for name-only LUT match", () => {
@@ -270,7 +381,7 @@ describe("recipe/importRecipe", () => {
       const { warnings, state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
 
       expect(state.lut_name).toBe("MyLUT"); // Still matches by name
-      expect(warnings.some((w) => w.includes("fingerprint differs"))).toBe(true);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
     });
 
     it("adds warning for missing LUT", () => {
@@ -280,7 +391,7 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
 
       expect(state.lut_name).toBe(""); // Empty — user must select manually
-      expect(warnings.some((w) => w.includes("not found"))).toBe(true);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
     });
 
     it("clears session and preview state", () => {

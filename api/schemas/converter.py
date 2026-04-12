@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ========== Enums ==========
 
@@ -97,6 +97,19 @@ class AutoHeightMode(str, Enum):
     USE_HEIGHTMAP = "根据高度图"
 
 
+class FridgeMagnetShape(str, Enum):
+    """Supported fridge-magnet cavity presets.
+    冰箱贴磁铁槽支持的形状预设。
+
+    Attributes:
+        ROUND: Circular magnet cavity. (圆形磁铁槽)
+        RECT: Rectangular magnet cavity. (矩形磁铁槽)
+    """
+
+    ROUND = "round"
+    RECT = "rect"
+
+
 # ========== Models ==========
 
 
@@ -120,6 +133,56 @@ class ColorReplacementItem(BaseModel):
     quantized_hex: str = Field(..., description="量化后的原色 (#rrggbb)")
     matched_hex: str = Field(..., description="LUT 匹配色 (#rrggbb)")
     replacement_hex: str = Field(..., description="替换目标色 (#rrggbb)")
+
+
+class FridgeMagnetItem(BaseModel):
+    """A single fridge-magnet cavity descriptor.
+    单个冰箱贴磁铁槽描述。
+
+    Attributes:
+        id: Stable frontend/client item identifier. (前端或调用方的稳定 ID)
+        shape: Magnet shape preset family. (磁铁形状预设)
+        preset_key: Preset key chosen by the client. (客户端选择的预设键)
+        diameter_mm: Circular diameter in millimeters for round magnets.
+            (圆形磁铁直径，单位毫米)
+        width_mm: Width in millimeters for rectangular magnets.
+            (矩形磁铁宽度，单位毫米)
+        height_mm: Height in millimeters for rectangular magnets.
+            (矩形磁铁高度，单位毫米)
+        thickness_mm: Magnet thickness in millimeters. (磁铁厚度，单位毫米)
+        center_x_mm: Cavity center X coordinate in millimeters.
+            (磁铁槽中心 X 坐标，单位毫米)
+        center_y_mm: Cavity center Y coordinate in millimeters.
+            (磁铁槽中心 Y 坐标，单位毫米)
+    """
+
+    id: str = Field(..., description="磁铁槽项 ID")
+    shape: FridgeMagnetShape = Field(..., description="磁铁形状: round | rect")
+    preset_key: str = Field(..., description="磁铁预设键")
+    diameter_mm: float | None = Field(None, gt=0, description="圆形磁铁直径 (mm)")
+    width_mm: float | None = Field(None, gt=0, description="矩形磁铁宽度 (mm)")
+    height_mm: float | None = Field(None, gt=0, description="矩形磁铁高度 (mm)")
+    thickness_mm: float = Field(..., gt=0, description="磁铁厚度 (mm)")
+    center_x_mm: float = Field(..., description="磁铁槽中心 X (mm)")
+    center_y_mm: float = Field(..., description="磁铁槽中心 Y (mm)")
+
+    @model_validator(mode="after")
+    def validate_shape_dimensions(self) -> "FridgeMagnetItem":
+        """Validate shape-specific dimension requirements.
+        校验形状特定的尺寸必填项。
+        """
+
+        if self.shape == FridgeMagnetShape.ROUND:
+            if self.diameter_mm is None:
+                raise ValueError("Round fridge magnets require diameter_mm.")
+            if self.width_mm is not None or self.height_mm is not None:
+                raise ValueError("Round fridge magnets reject width_mm and height_mm.")
+        if self.shape == FridgeMagnetShape.RECT:
+            if self.width_mm is None or self.height_mm is None:
+                raise ValueError("Rect fridge magnets require width_mm and height_mm.")
+            if self.diameter_mm is not None:
+                raise ValueError("Rect fridge magnets reject diameter_mm.")
+        return self
 
 
 class ConvertPreviewRequest(BaseModel):
@@ -205,6 +268,10 @@ class ConvertGenerateRequest(BaseModel):
             环孔直径 (mm)。
         loop_pos: Keychain loop position as (x, y) coordinates.
             环位置 (x, y)。
+        enable_fridge_magnet: Whether to enable fridge magnet cavity processing.
+            是否启用冰箱贴磁铁槽。
+        fridge_magnets: Fridge magnet cavity descriptors.
+            冰箱贴磁铁槽参数列表。
         loop_angle: Keychain loop rotation angle in degrees (-180 to 180).
             环旋转角度 (度)。
         loop_offset_x: Keychain loop X offset in millimeters (-20 to 20).
@@ -257,6 +324,8 @@ class ConvertGenerateRequest(BaseModel):
     loop_length: float = Field(8.0, ge=4, le=15, description="环长度 (mm)")
     loop_hole: float = Field(2.5, ge=1, le=5, description="环孔直径 (mm)")
     loop_pos: Optional[Tuple[float, float]] = Field(None, description="环位置 (x, y)")
+    enable_fridge_magnet: bool = Field(False, description="启用冰箱贴磁铁槽")
+    fridge_magnets: List[FridgeMagnetItem] = Field(default_factory=list, description="冰箱贴磁铁槽列表")
     loop_angle: float = Field(0.0, ge=-180, le=180, description="环旋转角度 (度)")
     loop_offset_x: float = Field(0.0, ge=-200, le=200, description="环 X 偏移 (mm)")
     loop_offset_y: float = Field(0.0, ge=-200, le=200, description="环 Y 偏移 (mm)")

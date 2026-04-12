@@ -27,7 +27,7 @@ import trimesh
 import cv2
 from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Color
-from shapely.geometry import Polygon, MultiPolygon, LineString
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
 from shapely import affinity
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -312,6 +312,8 @@ class VectorProcessor:
         self.sampling_precision = 0.02  # mm
         self.last_stage_timings = {}
         self.parse_warnings: list[str] = []
+        self.enable_fridge_magnet = False
+        self.fridge_magnets: list = []
 
         _log.info("[VECTOR] Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
 
@@ -355,6 +357,166 @@ class VectorProcessor:
                 polys.append(Polygon(p.exterior, kept))
             return MultiPolygon(polys)
         return geom
+
+    @staticmethod
+    def _centered_mm_to_vector_coords(center_x_mm, center_y_mm, bbox, scale_factor):
+        """Convert centered preview-space mm into normalized vector coordinates."""
+        if scale_factor <= 0:
+            raise ValueError("scale_factor must be positive")
+
+        min_x = float(bbox[0])
+        min_y = float(bbox[1])
+        width = float(bbox[2])
+        height = float(bbox[3])
+        center_x_svg = min_x + (width / 2.0) + (float(center_x_mm) / float(scale_factor))
+        center_y_svg = min_y + (height / 2.0) - (float(center_y_mm) / float(scale_factor))
+        return (center_x_svg, center_y_svg)
+
+    @staticmethod
+    def _build_vector_fridge_magnet_footprint(magnet, bbox, scale_factor):
+        """Build one fridge-magnet footprint in normalized vector polygon space."""
+        center_x, center_y = VectorProcessor._centered_mm_to_vector_coords(
+            magnet.get("center_x_mm", 0.0),
+            magnet.get("center_y_mm", 0.0),
+            bbox,
+            scale_factor,
+        )
+
+        shape = str(magnet.get("shape", "") or "").lower()
+        if shape == "round":
+            diameter_mm = float(magnet.get("diameter_mm") or 0.0)
+            if diameter_mm <= 0:
+                return None
+            radius_svg = (diameter_mm / 2.0) / float(scale_factor)
+            return Point(center_x, center_y).buffer(radius_svg, resolution=32)
+
+        if shape == "rect":
+            width_mm = float(magnet.get("width_mm") or 0.0)
+            height_mm = float(magnet.get("height_mm") or 0.0)
+            if width_mm <= 0 or height_mm <= 0:
+                return None
+            half_width_svg = (width_mm / 2.0) / float(scale_factor)
+            half_height_svg = (height_mm / 2.0) / float(scale_factor)
+            return box(
+                center_x - half_width_svg,
+                center_y - half_height_svg,
+                center_x + half_width_svg,
+                center_y + half_height_svg,
+            )
+
+        return None
+
+    @staticmethod
+    def _build_vector_fridge_cavity_specs(
+        backing_sil,
+        fridge_magnets,
+        bbox,
+        scale_factor,
+        backing_height,
+        shell_thickness_mm=0.4,
+    ):
+        """Build clipped cavity footprint geometries with per-magnet depths."""
+        if not fridge_magnets or backing_sil is None or backing_sil.is_empty:
+            return []
+
+        specs = []
+        backing_bounds = backing_sil.bounds
+        backing_bbox = (
+            float(backing_bounds[0]),
+            float(backing_bounds[1]),
+            float(backing_bounds[2] - backing_bounds[0]),
+            float(backing_bounds[3] - backing_bounds[1]),
+        )
+        for magnet in fridge_magnets:
+            depth_mm = float(magnet.get("thickness_mm") or 0.0)
+            if depth_mm <= 0 or depth_mm + shell_thickness_mm > backing_height + 1e-9:
+                continue
+
+            footprint = VectorProcessor._build_vector_fridge_magnet_footprint(magnet, backing_bbox, scale_factor)
+            if footprint is None or footprint.is_empty:
+                continue
+
+            try:
+                clipped = backing_sil.intersection(footprint)
+            except VECTOR_HANDLED_ERRORS:
+                clipped = footprint
+
+            clipped = VectorProcessor._extract_polygonal_geometry(make_valid(clipped))
+            if clipped is None or clipped.is_empty:
+                continue
+            specs.append({"geometry": clipped, "depth_mm": depth_mm})
+
+        return specs
+
+    @staticmethod
+    def _build_backing_cavity_slabs(
+        backing_sil,
+        backing_z_start,
+        backing_height,
+        cavity_specs,
+        outer_side="high",
+        shell_thickness_mm=0.4,
+    ):
+        """Split backing into full-shell, cavity, and inner slabs without mesh booleans."""
+        if backing_sil is None or backing_sil.is_empty or backing_height <= 0:
+            return []
+
+        if shell_thickness_mm <= 0 or shell_thickness_mm >= backing_height:
+            return [{"geometry": backing_sil, "z_offset": backing_z_start, "height": backing_height, "kind": "full"}]
+
+        valid_specs = [
+            spec
+            for spec in (cavity_specs or [])
+            if spec.get("geometry") is not None
+            and not spec["geometry"].is_empty
+            and float(spec.get("depth_mm", 0.0) or 0.0) > 0.0
+            and float(spec.get("depth_mm", 0.0) or 0.0) + shell_thickness_mm <= backing_height + 1e-9
+        ]
+        if not valid_specs:
+            return [{"geometry": backing_sil, "z_offset": backing_z_start, "height": backing_height, "kind": "full"}]
+
+        cut_positions = [0.0, shell_thickness_mm, backing_height]
+        for spec in valid_specs:
+            cut_positions.append(min(backing_height, shell_thickness_mm + float(spec["depth_mm"])))
+        cut_positions = sorted({round(pos, 6) for pos in cut_positions})
+
+        slabs = []
+        for inward_start, inward_end in zip(cut_positions, cut_positions[1:]):
+            band_height = inward_end - inward_start
+            if band_height <= 1e-9:
+                continue
+
+            if inward_start < shell_thickness_mm - 1e-9:
+                band_geom = backing_sil
+                band_kind = "outer_shell"
+            else:
+                active_geoms = [
+                    spec["geometry"]
+                    for spec in valid_specs
+                    if shell_thickness_mm + float(spec["depth_mm"]) > inward_start + 1e-9
+                ]
+                if active_geoms:
+                    cavity_union = unary_union(active_geoms)
+                    cavity_union = VectorProcessor._extract_polygonal_geometry(make_valid(cavity_union))
+                    band_geom = backing_sil.difference(cavity_union) if cavity_union is not None else backing_sil
+                    band_kind = "cavity_band"
+                else:
+                    band_geom = backing_sil
+                    band_kind = "inner_backing"
+
+                band_geom = VectorProcessor._extract_polygonal_geometry(make_valid(band_geom))
+                if band_geom is None or band_geom.is_empty:
+                    continue
+
+            if outer_side == "high":
+                z_offset = backing_z_start + (backing_height - inward_end)
+            else:
+                z_offset = backing_z_start + inward_start
+
+            slabs.append({"geometry": band_geom, "z_offset": z_offset, "height": band_height, "kind": band_kind})
+
+        slabs.sort(key=lambda slab: slab["z_offset"])
+        return slabs
 
     @staticmethod
     def _split_disconnected_shapes(shape_data):
@@ -910,6 +1072,8 @@ class VectorProcessor:
         num_channels = analysis.num_channels
         num_layers = analysis.num_layers
         preview_colors = analysis.preview_colors
+        enable_fridge_magnet = bool(getattr(self, "enable_fridge_magnet", False))
+        fridge_magnets = list(getattr(self, "fridge_magnets", []) or [])
 
         # === Stage 5: Run-length extrude per channel ===
         layer_h = PrinterConfig.LAYER_HEIGHT
@@ -971,18 +1135,36 @@ class VectorProcessor:
                 backing_sil = backing_sil.buffer(0.15, join_style="mitre", mitre_limit=2.0)
             except VECTOR_HANDLED_ERRORS:
                 pass
-            backing_meshes = []
             backing_height = backing_layer_count * layer_h
             gap_offset = BASE_COLOR_GAP_MM if not is_5color else 0.0
-            backing_meshes.extend(
-                self._extrude_geometry(
-                    backing_sil,
-                    height=backing_height,
-                    z_offset=backing_z_start + gap_offset,
-                    scale=scale_factor,
-                    extrude_cache=extrude_cache,
+            outer_side = "low" if is_5color else "high"
+            cavity_specs = []
+            if enable_fridge_magnet:
+                cavity_specs = self._build_vector_fridge_cavity_specs(
+                    backing_sil=backing_sil,
+                    fridge_magnets=fridge_magnets or [],
+                    bbox=bbox,
+                    scale_factor=scale_factor,
+                    backing_height=backing_height,
                 )
+            backing_slabs = self._build_backing_cavity_slabs(
+                backing_sil=backing_sil,
+                backing_z_start=backing_z_start,
+                backing_height=backing_height,
+                cavity_specs=cavity_specs,
+                outer_side=outer_side,
             )
+            backing_meshes = []
+            for slab in backing_slabs:
+                backing_meshes.extend(
+                    self._extrude_geometry(
+                        slab["geometry"],
+                        height=slab["height"],
+                        z_offset=slab["z_offset"] + gap_offset,
+                        scale=scale_factor,
+                        extrude_cache=extrude_cache,
+                    )
+                )
             if backing_meshes:
                 backing_name = "Board"
                 if backing_name not in meshes_by_slot:
@@ -1080,7 +1262,12 @@ class VectorProcessor:
             ``ColorSystem`` configuration.
         """
         analysis = self.analyze_svg(svg_path, target_width_mm, color_replacements, progress_fn)
-        return self.build_mesh(analysis, thickness_mm, structure_mode, progress_fn)
+        return self.build_mesh(
+            analysis,
+            thickness_mm,
+            structure_mode,
+            progress_fn=progress_fn,
+        )
 
     # ── 2D preview from analyzed geometry ─────────────────────────────────
 

@@ -41,6 +41,204 @@ def _normalize_color_height_map(color_height_map: dict[str, float]) -> dict[str,
     return normalized
 
 
+def _mask_solid_bounds_mm(mask_solid: np.ndarray, pixel_scale: float) -> tuple[float, float, float, float] | None:
+    """Return solid silhouette bounds in model-space millimeters."""
+    if pixel_scale <= 0:
+        return None
+
+    solid_rows = np.any(mask_solid, axis=1)
+    solid_cols = np.any(mask_solid, axis=0)
+    if not np.any(solid_rows) or not np.any(solid_cols):
+        return None
+
+    row_indices = np.where(solid_rows)[0]
+    col_indices = np.where(solid_cols)[0]
+    min_row = int(row_indices[0])
+    max_row = int(row_indices[-1])
+    min_col = int(col_indices[0])
+    max_col = int(col_indices[-1])
+    target_h = mask_solid.shape[0]
+
+    min_x_mm = min_col * pixel_scale
+    max_x_mm = (max_col + 1) * pixel_scale
+    min_y_mm = (target_h - (max_row + 1)) * pixel_scale
+    max_y_mm = (target_h - min_row) * pixel_scale
+    return (min_x_mm, min_y_mm, max_x_mm, max_y_mm)
+
+
+def _convert_centered_fridge_coords_to_raw_mm(
+    mask_solid: np.ndarray,
+    pixel_scale: float,
+    center_x_mm: float,
+    center_y_mm: float,
+) -> tuple[float, float]:
+    """Convert centered preview-space magnet coordinates to raw model-space mm."""
+    bounds = _mask_solid_bounds_mm(mask_solid, pixel_scale)
+    if bounds is None:
+        target_h, target_w = mask_solid.shape
+        center_raw_x = (target_w / 2.0) * pixel_scale
+        center_raw_y = (target_h / 2.0) * pixel_scale
+    else:
+        min_x_mm, min_y_mm, max_x_mm, max_y_mm = bounds
+        center_raw_x = (min_x_mm + max_x_mm) / 2.0
+        center_raw_y = (min_y_mm + max_y_mm) / 2.0
+
+    return (center_raw_x + float(center_x_mm), center_raw_y + float(center_y_mm))
+
+
+def _build_fridge_magnet_footprint_mask(mask_solid: np.ndarray, pixel_scale: float, magnet: dict) -> np.ndarray:
+    """Build a 2D raster mask for a fridge-magnet cavity footprint."""
+    target_h, target_w = mask_solid.shape
+    footprint_mask = np.zeros((target_h, target_w), dtype=bool)
+    if pixel_scale <= 0:
+        return footprint_mask
+
+    center_raw_x, center_raw_y = _convert_centered_fridge_coords_to_raw_mm(
+        mask_solid,
+        pixel_scale,
+        float(magnet.get("center_x_mm", 0.0) or 0.0),
+        float(magnet.get("center_y_mm", 0.0) or 0.0),
+    )
+
+    xs_mm = (np.arange(target_w, dtype=np.float64) + 0.5) * pixel_scale
+    ys_mm = (target_h - np.arange(target_h, dtype=np.float64) - 0.5) * pixel_scale
+    grid_x_mm, grid_y_mm = np.meshgrid(xs_mm, ys_mm)
+
+    shape = str(magnet.get("shape", "") or "").lower()
+    if shape == "round":
+        diameter_mm = float(magnet.get("diameter_mm") or 0.0)
+        if diameter_mm <= 0:
+            return footprint_mask
+        radius_mm = diameter_mm / 2.0
+        footprint_mask = (grid_x_mm - center_raw_x) ** 2 + (grid_y_mm - center_raw_y) ** 2 <= radius_mm**2 + 1e-12
+    elif shape == "rect":
+        width_mm = float(magnet.get("width_mm") or 0.0)
+        height_mm = float(magnet.get("height_mm") or 0.0)
+        if width_mm <= 0 or height_mm <= 0:
+            return footprint_mask
+        half_width_mm = width_mm / 2.0
+        half_height_mm = height_mm / 2.0
+        footprint_mask = (
+            (np.abs(grid_x_mm - center_raw_x) <= half_width_mm + 1e-9)
+            & (np.abs(grid_y_mm - center_raw_y) <= half_height_mm + 1e-9)
+        )
+
+    return footprint_mask & mask_solid
+
+
+def _resolve_fridge_cavity_z_range(
+    backing_z_range: tuple[int, int],
+    shell_layers: int,
+    cavity_layers: int,
+) -> tuple[int, int] | None:
+    """Resolve the blind cavity Z range inside the backing block."""
+    backing_z_start, backing_z_end = backing_z_range
+    if cavity_layers <= 0 or shell_layers <= 0:
+        return None
+
+    backing_layer_count = backing_z_end - backing_z_start + 1
+    if backing_layer_count <= 0 or shell_layers + cavity_layers > backing_layer_count:
+        return None
+
+    if backing_z_start == 0:
+        cavity_z_start = backing_z_start + shell_layers
+        cavity_z_end = cavity_z_start + cavity_layers - 1
+    else:
+        cavity_z_end = backing_z_end - shell_layers
+        cavity_z_start = cavity_z_end - cavity_layers + 1
+
+    if cavity_z_start < backing_z_start or cavity_z_end > backing_z_end:
+        return None
+    return (cavity_z_start, cavity_z_end)
+
+
+def _resolve_min_fridge_spacer_thick(fridge_magnets: list[dict] | None) -> float:
+    """Return the minimum backing thickness required after layer quantization."""
+    if not fridge_magnets:
+        return 0.0
+
+    shell_layers = max(1, int(round(0.4 / PrinterConfig.LAYER_HEIGHT)))
+    required_layers = shell_layers
+    for magnet in fridge_magnets:
+        thickness_mm = float(magnet.get("thickness_mm") or 0.0)
+        if thickness_mm <= 0:
+            continue
+        cavity_layers = max(1, int(round(thickness_mm / PrinterConfig.LAYER_HEIGHT)))
+        required_layers = max(required_layers, shell_layers + cavity_layers)
+
+    return required_layers * PrinterConfig.LAYER_HEIGHT
+
+
+def _build_uniform_backing_z_maps(
+    mask_solid: np.ndarray,
+    backing_z_start: int,
+    backing_z_end: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build per-pixel backing Z bounds for uniform-thickness backing."""
+    backing_z_min_map = np.full(mask_solid.shape, -1, dtype=int)
+    backing_z_max_map = np.full(mask_solid.shape, -1, dtype=int)
+    if backing_z_end < backing_z_start:
+        return backing_z_min_map, backing_z_max_map
+
+    backing_z_min_map[mask_solid] = backing_z_start
+    backing_z_max_map[mask_solid] = backing_z_end
+    return backing_z_min_map, backing_z_max_map
+
+
+def _carve_fridge_magnet_cavities(
+    full_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+    pixel_scale: float,
+    backing_metadata: dict,
+    fridge_magnets: list[dict] | None,
+) -> np.ndarray:
+    """Carve blind fridge-magnet cavities into backing voxels only."""
+    if not fridge_magnets:
+        return full_matrix
+
+    shell_layers = max(1, int(round(0.4 / PrinterConfig.LAYER_HEIGHT)))
+    backing_z_min_map = backing_metadata.get("backing_z_min_map")
+    backing_z_max_map = backing_metadata.get("backing_z_max_map")
+    if backing_z_min_map is None or backing_z_max_map is None:
+        backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
+            mask_solid,
+            int(backing_metadata["backing_z_range"][0]),
+            int(backing_metadata["backing_z_range"][1]),
+        )
+
+    for magnet in fridge_magnets:
+        thickness_mm = float(magnet.get("thickness_mm") or 0.0)
+        cavity_layers = max(1, int(round(thickness_mm / PrinterConfig.LAYER_HEIGHT)))
+        cavity_z_range = _resolve_fridge_cavity_z_range(
+            backing_metadata["backing_z_range"],
+            shell_layers,
+            cavity_layers,
+        )
+        if cavity_z_range is None:
+            continue
+
+        footprint_mask = _build_fridge_magnet_footprint_mask(mask_solid, pixel_scale, magnet)
+        if not np.any(footprint_mask):
+            continue
+
+        cavity_z_start, cavity_z_end = cavity_z_range
+        backing_slice = full_matrix[cavity_z_start : cavity_z_end + 1]
+        z_indices = np.arange(cavity_z_start, cavity_z_end + 1, dtype=int)[:, np.newaxis, np.newaxis]
+        carve_mask = (
+            footprint_mask[np.newaxis, :, :]
+            & (backing_z_min_map[np.newaxis, :, :] >= 0)
+            & (z_indices >= backing_z_min_map[np.newaxis, :, :])
+            & (z_indices <= backing_z_max_map[np.newaxis, :, :])
+        )
+        full_matrix[cavity_z_start : cavity_z_end + 1] = np.where(
+            carve_mask,
+            -1,
+            backing_slice,
+        )
+
+    return full_matrix
+
+
 def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
     """Build complete voxel matrix with backing layer marked using special material_id.
     构建带底板标记的完整体素矩阵。
@@ -99,7 +297,17 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
 
         backing_z_range = (optical_layers, total_layers - 1)
 
-    backing_metadata = {"backing_color_id": backing_color_id, "backing_z_range": backing_z_range}
+    backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
+        mask_solid,
+        backing_z_range[0],
+        backing_z_range[1],
+    )
+    backing_metadata = {
+        "backing_color_id": backing_color_id,
+        "backing_z_range": backing_z_range,
+        "backing_z_min_map": backing_z_min_map,
+        "backing_z_max_map": backing_z_max_map,
+    }
 
     return full_matrix, backing_metadata
 
@@ -169,9 +377,16 @@ def _build_voxel_matrix_faceup(material_matrix, mask_solid, spacer_thick, backin
         full_matrix[z] = np.where(mask_solid, layer, -1)
 
     backing_z_range = (0, spacer_layers - 1)
+    backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
+        mask_solid,
+        backing_z_range[0],
+        backing_z_range[1],
+    )
     return full_matrix, {
         "backing_color_id": backing_color_id,
         "backing_z_range": backing_z_range,
+        "backing_z_min_map": backing_z_min_map,
+        "backing_z_max_map": backing_z_max_map,
     }
 
 
@@ -267,6 +482,10 @@ def _build_relief_voxel_matrix(
         max_z_layers,
     )
     optical_start_z = target_z_layers - OPTICAL_LAYERS
+    backing_z_min_map = np.full((target_h, target_w), -1, dtype=int)
+    backing_z_max_map = np.full((target_h, target_w), -1, dtype=int)
+    backing_z_min_map[mask_solid] = 0
+    backing_z_max_map[mask_solid] = optical_start_z[mask_solid] - 1
 
     # Fill backing layers
     for z in range(max_z_layers):
@@ -288,6 +507,8 @@ def _build_relief_voxel_matrix(
     backing_metadata = {
         "backing_color_id": backing_color_id,
         "backing_z_range": backing_z_range,
+        "backing_z_min_map": backing_z_min_map,
+        "backing_z_max_map": backing_z_max_map,
         "is_relief": True,
         "max_height_mm": max_height_mm,
     }
@@ -353,9 +574,16 @@ def _build_cloisonne_voxel_matrix(
     full_matrix[wire_start:] = wire_slice[np.newaxis, :, :]
 
     backing_z_range = (0, spacer_layers - 1)
+    backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
+        mask_solid,
+        backing_z_range[0],
+        backing_z_range[1],
+    )
     backing_metadata = {
         "backing_color_id": backing_color_id,
         "backing_z_range": backing_z_range,
+        "backing_z_min_map": backing_z_min_map,
+        "backing_z_max_map": backing_z_max_map,
         "is_cloisonne": True,
         "wire_layers": wire_layers,
     }
@@ -413,6 +641,17 @@ def run(ctx: dict) -> dict:
     matched_rgb = ctx["matched_rgb"]
     pixel_scale = ctx["pixel_scale"]
     relief_global_max_height = ctx.get("relief_global_max_height")
+    enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
+    fridge_magnets = ctx.get("fridge_magnets") or []
+    if enable_fridge_magnet and fridge_magnets:
+        min_fridge_spacer_thick = _resolve_min_fridge_spacer_thick(fridge_magnets)
+        if spacer_thick + 1e-9 < min_fridge_spacer_thick:
+            _log.info(
+                "[S06] Raising spacer_thick from %.3fmm to %.3fmm so fridge cavity fits after layer quantization",
+                spacer_thick,
+                min_fridge_spacer_thick,
+            )
+            spacer_thick = min_fridge_spacer_thick
 
     heightmap_stats = None
 
@@ -516,6 +755,15 @@ def run(ctx: dict) -> dict:
                     material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id
                 )
 
+        if enable_fridge_magnet:
+            full_matrix = _carve_fridge_magnet_cavities(
+                full_matrix,
+                mask_solid,
+                pixel_scale,
+                backing_metadata,
+                fridge_magnets,
+            )
+
         total_layers = full_matrix.shape[0]
         _log.info(f"[S06] Voxel matrix: {full_matrix.shape} (ZxHxW)")
         _log.info(
@@ -544,6 +792,7 @@ def run(ctx: dict) -> dict:
     ctx["heightmap_stats"] = heightmap_stats
     # Update structure_mode in case it was forced
     ctx["structure_mode"] = structure_mode
+    ctx["spacer_thick"] = spacer_thick
 
     _elapsed = time.perf_counter() - _t0
     _log.info(f"[S06] voxel_build done: {_elapsed:.3f}s")

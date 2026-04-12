@@ -149,6 +149,45 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.puzzle.engrave_back_labels).toBe(false);
     });
 
+    it("exports fridge magnet parameters and omits the frontend-only base spacer thickness", () => {
+      const state = makeState({
+        spacer_thick: 3.4,
+        enable_fridge_magnet: true,
+        base_spacer_thick: 1.1,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-d12x3",
+            diameter_mm: 12,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 3,
+            center_x_mm: 10,
+            center_y_mm: 12,
+          },
+          {
+            id: "magnet-rect",
+            shape: "rect",
+            preset_key: "rect-20x10x2",
+            diameter_mm: null,
+            width_mm: 20,
+            height_mm: 10,
+            thickness_mm: 2,
+            center_x_mm: 40,
+            center_y_mm: 18,
+          },
+        ],
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.geometry.spacer_thick).toBe(1.1);
+      expect(recipe.fridge_magnet.enable_fridge_magnet).toBe(true);
+      expect(recipe.fridge_magnet.fridge_magnets).toEqual(state.fridge_magnets);
+      expect(JSON.stringify(recipe)).not.toContain("base_spacer_thick");
+    });
+
     it("does NOT include UI-only state fields", () => {
       const state = makeState();
       const recipe = exportConverterRecipe(state, makeSettings(), "fp");
@@ -161,6 +200,7 @@ describe("recipe/exportRecipe", () => {
       expect(json).not.toContain("previewGlbUrl");
       expect(json).not.toContain("batchMode");
       expect(json).not.toContain("cropModalOpen");
+      expect(json).not.toContain("base_spacer_thick");
     });
   });
 });

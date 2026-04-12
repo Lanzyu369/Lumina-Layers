@@ -138,11 +138,12 @@ describe('Widget Workspace Unit Tests', () => {
       expect(state.widgets['five-color'].collapsed).toBe(false);
     });
 
-    it('has all 13 widgets in default layout', () => {
+    it('has all 14 widgets in default layout', () => {
       const state = useWidgetStore.getState();
       const widgetIds = Object.keys(state.widgets);
-      expect(widgetIds).toHaveLength(13);
+      expect(widgetIds).toHaveLength(14);
       expect(widgetIds).toContain('basic-settings');
+      expect(widgetIds).toContain('fridge-magnet-settings');
       expect(widgetIds).toContain('puzzle-settings');
       expect(widgetIds).toContain('calibration');
       expect(widgetIds).toContain('extractor');

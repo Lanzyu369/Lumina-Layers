@@ -100,7 +100,9 @@ export function exportConverterRecipe(
       chroma_gate: state.chroma_gate,
     },
     geometry: {
-      spacer_thick: state.spacer_thick,
+      spacer_thick: state.enable_fridge_magnet
+        ? state.base_spacer_thick
+        : state.spacer_thick,
       structure_mode: state.structure_mode,
       separate_backing: state.separate_backing,
       add_loop: state.add_loop,
@@ -155,6 +157,12 @@ export function exportConverterRecipe(
       engrave_back_labels: false,
       irregularity_strength: state.irregularityStrength,
       min_neck_width_mm: state.minNeckWidthMm,
+    },
+    fridge_magnet: {
+      enable_fridge_magnet: state.enable_fridge_magnet,
+      fridge_magnets: state.fridge_magnets.map((item) => ({
+        ...item,
+      })),
     },
     device: {
       printer_id: settings.printerModel,

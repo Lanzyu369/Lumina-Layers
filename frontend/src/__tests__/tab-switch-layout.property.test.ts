@@ -22,7 +22,7 @@ const ALL_TAB_IDS: TabId[] = ['converter', 'calibration', 'extractor', 'lut-mana
 const ALL_WIDGET_IDS: WidgetId[] = [
   'basic-settings', 'advanced-settings', 'relief-settings',
   'outline-settings', 'cloisonne-settings', 'coating-settings',
-  'keychain-loop', 'action-bar', 'calibration', 'extractor',
+  'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar', 'calibration', 'extractor',
   'lut-manager', 'five-color',
 ];
 

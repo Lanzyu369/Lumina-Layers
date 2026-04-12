@@ -7,6 +7,7 @@ import ModelViewer from "./ModelViewer";
 import InteractiveModelViewer, { type ViewerHoverSample } from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
+import FridgeMagnet3D from "./FridgeMagnet3D";
 import { buildLayerImagesSourceKey, useConverterStore } from "../stores/converter";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
@@ -308,7 +309,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const loopOffsetX = useConverterStore((s) => s.loop_offset_x);
   const loopOffsetY = useConverterStore((s) => s.loop_offset_y);
   const loopPositionPreset = useConverterStore((s) => s.loop_position_preset);
+  const enableFridgeMagnet = useConverterStore((s) => s.enable_fridge_magnet);
+  const fridgeMagnets = useConverterStore((s) => s.fridge_magnets);
+  const selectedFridgeMagnetId = useConverterStore((s) => s.selectedFridgeMagnetId);
+  const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
+  const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const modelBounds = useConverterStore((s) => s.modelBounds);
+  const viewerSelectedColor = enableFridgeMagnet ? null : selectedColor;
 
   // Listen to fullscreenchange event
   useEffect(() => {
@@ -759,7 +766,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             sceneHoverPerfStatsRef.current.timerCancelCount += 1;
           }
           pendingHoverSampleRef.current = null;
-          setSelectedColor(null);
+          if (enableFridgeMagnet) {
+            selectFridgeMagnet(null);
+          } else {
+            setSelectedColor(null);
+          }
           setHoverSample((previous) => {
             if (previous !== null) {
               sceneHoverPerfStatsRef.current.hoverHideCount += 1;
@@ -814,7 +825,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               url={previewGlbUrl}
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
-              selectedColor={selectedColor}
+              selectedColor={viewerSelectedColor}
               baseHeight={baseHeight}
               enableRelief={enableRelief}
               onColorClick={handleColorClick}
@@ -830,6 +841,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
               hoverEnabled={!isOrbiting}
+              colorPickingEnabled={!enableFridgeMagnet}
+              selectionVisualsEnabled={!enableFridgeMagnet}
               onHoverSample={handleHoverSample}
             />
           </Suspense>
@@ -845,6 +858,18 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
             modelBounds={modelBounds}
+          />
+        )}
+        {enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
+          <FridgeMagnet3D
+            enabled={enableFridgeMagnet}
+            magnets={fridgeMagnets}
+            selectedMagnetId={selectedFridgeMagnetId}
+            modelBounds={modelBounds}
+            scaleX={scaleX}
+            scaleY={scaleY}
+            onSelectMagnet={selectFridgeMagnet}
+            onUpdateMagnetCenter={updateFridgeMagnetCenter}
           />
         )}
 

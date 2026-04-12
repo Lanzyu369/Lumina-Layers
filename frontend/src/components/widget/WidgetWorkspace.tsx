@@ -34,6 +34,7 @@ import OutlineSettingsWidgetContent from './OutlineSettingsWidgetContent';
 import CloisonneSettingsWidgetContent from './CloisonneSettingsWidgetContent';
 import CoatingSettingsWidgetContent from './CoatingSettingsWidgetContent';
 import KeychainLoopWidgetContent from './KeychainLoopWidgetContent';
+import FridgeMagnetSettingsWidgetContent from './FridgeMagnetSettingsWidgetContent';
 import PuzzleSettingsWidgetContent from './PuzzleSettingsWidgetContent';
 import ActionBarWidgetContent from './ActionBarWidgetContent';
 import CalibrationWidgetContent from './CalibrationWidgetContent';
@@ -61,6 +62,7 @@ const WIDGET_CONTENT_MAP: Record<WidgetId, ComponentType> = {
   'cloisonne-settings': CloisonneSettingsWidgetContent,
   'coating-settings': CoatingSettingsWidgetContent,
   'keychain-loop': KeychainLoopWidgetContent,
+  'fridge-magnet-settings': FridgeMagnetSettingsWidgetContent,
   'puzzle-settings': PuzzleSettingsWidgetContent,
   'action-bar': ActionBarWidgetContent,
   'calibration': CalibrationWidgetContent,

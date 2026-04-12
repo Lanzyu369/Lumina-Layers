@@ -230,6 +230,69 @@ class TestVectorBranchExport:
         assert "no valid geometry" in msg.lower()
         mock_bambu_export.assert_not_called()
 
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_fridge_magnet_params_forwarded_to_build_mesh(self, MockVP, mock_bambu_export, tmp_path):
+        """Vector branch should forward fridge-magnet params into build_mesh."""
+        from config import ModelingMode
+
+        svg_file = tmp_path / "fridge.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<circle cx="25" cy="25" r="20" fill="#0000ff"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=[5, 5, 0.5])
+        mesh.metadata["name"] = "White"
+        fake_scene.add_geometry(mesh, geom_name="White")
+
+        fake_processor = _build_fake_processor(fake_scene)
+        MockVP.return_value = fake_processor
+
+        expected_fridge_magnets = [
+            {
+                "id": "magnet-round",
+                "shape": "round",
+                "preset_key": "round-18",
+                "diameter_mm": 18.0,
+                "width_mm": None,
+                "height_mm": None,
+                "thickness_mm": 2.0,
+                "center_x_mm": 20.0,
+                "center_y_mm": 25.0,
+            }
+        ]
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-fridge.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=30.0,
+            spacer_thick=1.6,
+            structure_mode="Single-sided",
+            auto_bg=False,
+            bg_tol=30,
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            enable_fridge_magnet=True,
+            fridge_magnets=expected_fridge_magnets,
+        )
+
+        _, kwargs = fake_processor.build_mesh.call_args
+        assert kwargs["enable_fridge_magnet"] is True
+        assert kwargs["fridge_magnets"] == expected_fridge_magnets
+
 
 class TestBambuExportGuardrails:
 

@@ -49,6 +49,20 @@ class _GenerateBody(BaseModel):
     params: ConvertGenerateRequest
 
 
+def _serialize_fridge_magnets(request: ConvertGenerateRequest) -> list[dict]:
+    """Serialize fridge-magnet items into plain JSON-compatible dicts.
+    将冰箱贴磁铁槽项序列化为纯 JSON 兼容字典。
+    """
+
+    return [item.model_dump(mode="json") for item in request.fridge_magnets]
+
+
+def _has_requested_fridge_magnet_cavities(request: ConvertGenerateRequest) -> bool:
+    """Return whether fridge-magnet cavities are explicitly requested."""
+
+    return bool(request.enable_fridge_magnet)
+
+
 @router.post("/generate")
 async def convert_generate(
     body: _GenerateBody,
@@ -150,6 +164,8 @@ async def convert_generate(
         "loop_length": request.loop_length,
         "loop_hole": request.loop_hole,
         "loop_pos": request.loop_pos,
+        "enable_fridge_magnet": request.enable_fridge_magnet,
+        "fridge_magnets": _serialize_fridge_magnets(request),
         "loop_angle": request.loop_angle,
         "loop_offset_x": request.loop_offset_x,
         "loop_offset_y": request.loop_offset_y,
@@ -262,6 +278,12 @@ async def convert_generate_large_format(
     lf = body.params
     request = lf.params
 
+    if _has_requested_fridge_magnet_cavities(request):
+        raise HTTPException(
+            status_code=422,
+            detail="Large-format tiled generation does not support fridge magnet cavities.",
+        )
+
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
     if not image_path or not os.path.exists(image_path):
@@ -321,6 +343,8 @@ async def convert_generate_large_format(
         "loop_length": request.loop_length,
         "loop_hole": request.loop_hole,
         "loop_pos": request.loop_pos,
+        "enable_fridge_magnet": request.enable_fridge_magnet,
+        "fridge_magnets": _serialize_fridge_magnets(request),
         "loop_angle": request.loop_angle,
         "loop_offset_x": request.loop_offset_x,
         "loop_offset_y": request.loop_offset_y,
