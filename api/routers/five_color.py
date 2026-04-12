@@ -8,13 +8,17 @@ performing five-color combination lookups.
 
 import threading
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from api.dependencies import get_file_registry
+from api.file_registry import FileRegistry
 from api.schemas.five_color import (
     BaseColorEntry,
     BaseColorsResponse,
     FiveColorQueryRequest,
     FiveColorQueryResponse,
+    RecipeSwatchRequest,
+    RecipeSwatchResponse,
 )
 from core.five_color_combination import (
     ColorCountDetector,
@@ -219,4 +223,56 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
         row_index=result.row_index,
         message=result.message,
         source=result.source,
+    )
+
+
+@router.post("/generate-swatch")
+def generate_swatch(
+    request: RecipeSwatchRequest,
+    registry: FileRegistry = Depends(get_file_registry),
+) -> RecipeSwatchResponse:
+    """Generate a 3MF swatch file from collected recipes.
+    根据收集的配方列表生成 3MF 色块验证文件。
+    """
+    from api.file_bridge import pil_to_png_bytes
+    from core.recipe_swatch import RecipeSwatchItem, generate_recipe_swatch
+
+    items = [
+        RecipeSwatchItem(
+            selected_indices=r.selected_indices,
+            result_hex=r.result_hex,
+            base_color_names=r.base_color_names,
+            base_color_hexes=r.base_color_hexes,
+        )
+        for r in request.recipes
+    ]
+
+    output_path, legend_img, status_msg = generate_recipe_swatch(
+        recipes=items,
+        block_size_mm=request.block_size_mm,
+        gap_mm=request.gap_mm,
+        cols=request.cols,
+        structure_mode=request.structure_mode,
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+    )
+
+    if not output_path:
+        raise HTTPException(status_code=500, detail=status_msg or "Swatch generation failed")
+
+    sid = "recipe-swatch"
+    download_id = registry.register_path(sid, output_path)
+
+    preview_url: str | None = None
+    if legend_img is not None:
+        preview_bytes = pil_to_png_bytes(legend_img)
+        preview_id = registry.register_bytes(sid, preview_bytes, "swatch_legend.png")
+        preview_url = f"/api/files/{preview_id}"
+
+    return RecipeSwatchResponse(
+        status="ok",
+        message=status_msg,
+        download_url=f"/api/files/{download_id}",
+        preview_url=preview_url,
+        recipe_count=len(items),
     )

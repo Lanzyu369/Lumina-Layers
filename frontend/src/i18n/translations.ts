@@ -3284,6 +3284,76 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Gray options indicate invalid combinations at that position.",
   },
 
+  // ==================== Five Color Recipe Collection ====================
+  five_color_add_to_list: {
+    zh: "加入列表",
+    en: "Add to List",
+  },
+  five_color_already_in_list: {
+    zh: "已在列表中",
+    en: "Already in List",
+  },
+  five_color_collection_title: {
+    zh: "配方验证列表",
+    en: "Recipe Verification List",
+  },
+  five_color_collection_empty: {
+    zh: "查询配方后点击「加入列表」收集待验证配方",
+    en: "Query a recipe then click 'Add to List' to collect recipes for verification",
+  },
+  five_color_collection_count: {
+    zh: "{count} 个配方",
+    en: "{count} recipe(s)",
+  },
+  five_color_collection_clear: {
+    zh: "清空列表",
+    en: "Clear List",
+  },
+  five_color_swatch_block_size: {
+    zh: "色块尺寸 (mm)",
+    en: "Block Size (mm)",
+  },
+  five_color_swatch_gap: {
+    zh: "网格线宽 (mm)",
+    en: "Grid Width (mm)",
+  },
+  five_color_swatch_cols: {
+    zh: "每行列数 (0=自动)",
+    en: "Columns (0=auto)",
+  },
+  five_color_swatch_structure: {
+    zh: "结构模式",
+    en: "Structure",
+  },
+  five_color_swatch_single_sided: {
+    zh: "单面",
+    en: "Single-sided",
+  },
+  five_color_swatch_double_sided: {
+    zh: "双面",
+    en: "Double-sided",
+  },
+  five_color_generate_swatch: {
+    zh: "生成验证 3MF",
+    en: "Generate Verification 3MF",
+  },
+  five_color_generating_swatch: {
+    zh: "生成中...",
+    en: "Generating...",
+  },
+  five_color_download_swatch: {
+    zh: "下载 3MF",
+    en: "Download 3MF",
+  },
+  five_color_remove_recipe: {
+    zh: "移除",
+    en: "Remove",
+  },
+  five_color_swatch_legend_alt: {
+    zh: "色卡图",
+    en: "Swatch legend",
+  },
+
   // ==================== Recipe Share Card ====================
   recipe_export_btn: {
     zh: "导出分享卡",

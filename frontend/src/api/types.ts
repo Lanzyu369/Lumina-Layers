@@ -498,6 +498,32 @@ export interface FiveColorQueryResponse {
   source: string;
 }
 
+export interface RecipeSwatchItemRequest {
+  selected_indices: number[];
+  result_hex: string;
+  base_color_names: string[];
+  base_color_hexes: string[];
+}
+
+export interface RecipeSwatchRequest {
+  lut_name: string;
+  recipes: RecipeSwatchItemRequest[];
+  block_size_mm: number;
+  gap_mm: number;
+  cols?: number;
+  structure_mode?: string;
+  printer_id?: string;
+  slicer?: string;
+}
+
+export interface RecipeSwatchResponse {
+  status: string;
+  message: string;
+  download_url: string;
+  preview_url: string | null;
+  recipe_count: number;
+}
+
 // ========== Color Replace Models ==========
 
 export interface ColorReplaceResponse {

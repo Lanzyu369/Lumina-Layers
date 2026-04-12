@@ -1,5 +1,5 @@
-import { motion } from "framer-motion"
-import { useEffect, useMemo } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { useEffect, useMemo, useCallback } from "react"
 import { useFiveColorStore } from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
 import Dropdown from "./ui/Dropdown"
@@ -23,6 +23,10 @@ export default function FiveColorQueryPanel() {
     isLoading, error,
     loadBaseColors, addSelection, removeLastSelection,
     clearSelection, reverseSelection, submitQuery, clearError,
+    collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode,
+    isGeneratingSwatch, swatchDownloadUrl, swatchPreviewUrl,
+    addToCollection, removeFromCollection, clearCollection,
+    setSwatchBlockSize, setSwatchGap, setSwatchCols, setSwatchStructureMode, generateSwatch,
   } = useFiveColorStore()
 
   const lutList = useConverterStore((s) => s.lutList)
@@ -41,6 +45,23 @@ export default function FiveColorQueryPanel() {
 
   const hasSelection = selectedIndices.length > 0
   const isFull = selectedIndices.length === 5
+
+  const canAddToCollection = queryResult?.found && queryResult.result_hex
+  const isAlreadyCollected = useMemo(() => {
+    if (!queryResult?.found || !queryResult.result_hex) return false
+    return collectedRecipes.some(
+      (r) =>
+        r.selectedIndices.join(",") === selectedIndices.join(",") &&
+        r.resultHex === queryResult.result_hex
+    )
+  }, [collectedRecipes, selectedIndices, queryResult])
+
+  const handleDownloadSwatch = useCallback(() => {
+    if (swatchDownloadUrl) {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || ""
+      window.open(`${baseUrl}${swatchDownloadUrl}`, "_blank")
+    }
+  }, [swatchDownloadUrl])
 
   const validNextIndices = useMemo(() => {
     if (isFull) return null
@@ -170,6 +191,15 @@ export default function FiveColorQueryPanel() {
                 label={isLoading ? t("five_color_query_loading") : t("five_color_query")}
                 className={workspace.isCompact ? "" : "col-span-2"}
               />
+              {canAddToCollection && (
+                <Button
+                  onClick={addToCollection}
+                  disabled={isAlreadyCollected}
+                  label={isAlreadyCollected ? t("five_color_already_in_list") : t("five_color_add_to_list")}
+                  variant={isAlreadyCollected ? "secondary" : "primary"}
+                  className={workspace.isCompact ? "" : "col-span-2"}
+                />
+              )}
               <Button
                 onClick={removeLastSelection}
                 disabled={!hasSelection}
@@ -190,6 +220,172 @@ export default function FiveColorQueryPanel() {
                 className={workspace.isCompact ? "" : "col-span-2"}
               />
             </div>
+          </section>
+
+          {/* Recipe Collection Section */}
+          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                {t("five_color_collection_title")}
+              </h3>
+              {collectedRecipes.length > 0 && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {t("five_color_collection_count").replace("{count}", String(collectedRecipes.length))}
+                </span>
+              )}
+            </div>
+
+            {collectedRecipes.length === 0 ? (
+              <p className="py-4 text-center text-xs text-slate-400 dark:text-slate-500">
+                {t("five_color_collection_empty")}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
+                <AnimatePresence initial={false}>
+                  {collectedRecipes.map((recipe) => (
+                    <motion.div
+                      key={recipe.id}
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="group flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 p-2 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70"
+                    >
+                      <div
+                        className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm"
+                        style={{ backgroundColor: recipe.resultHex }}
+                      />
+                      <div className="flex flex-1 flex-col min-w-0">
+                        <span className="truncate text-xs font-medium text-slate-700 dark:text-slate-200">
+                          {recipe.label}
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
+                          {recipe.resultHex}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => removeFromCollection(recipe.id)}
+                        className="shrink-0 rounded-full p-1 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-500 dark:text-slate-500 dark:hover:text-red-400"
+                        aria-label={t("five_color_remove_recipe")}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {collectedRecipes.length > 0 && (
+              <div className="flex flex-col gap-3 pt-1">
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_block_size")}</span>
+                    <input
+                      type="number"
+                      min={5}
+                      max={50}
+                      step={1}
+                      value={swatchBlockSize}
+                      onChange={(e) => setSwatchBlockSize(Number(e.target.value))}
+                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_gap")}</span>
+                    <input
+                      type="number"
+                      min={0.5}
+                      max={10}
+                      step={0.5}
+                      value={swatchGap}
+                      onChange={(e) => setSwatchGap(Number(e.target.value))}
+                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_cols")}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={20}
+                      step={1}
+                      value={swatchCols}
+                      onChange={(e) => setSwatchCols(Number(e.target.value))}
+                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_structure")}</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(["Single-sided", "Double-sided"] as const).map((mode) => {
+                      const isActive = swatchStructureMode === mode
+                      const labelKey = mode === "Single-sided" ? "five_color_swatch_single_sided" : "five_color_swatch_double_sided"
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setSwatchStructureMode(mode)}
+                          className={`h-9 rounded-lg border text-xs font-medium transition-all ${
+                            isActive
+                              ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                              : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
+                          }`}
+                        >
+                          {t(labelKey)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    onClick={() => void generateSwatch()}
+                    disabled={isGeneratingSwatch}
+                    loading={isGeneratingSwatch}
+                    label={isGeneratingSwatch ? t("five_color_generating_swatch") : t("five_color_generate_swatch")}
+                  />
+                  {swatchDownloadUrl && (
+                    <Button
+                      onClick={handleDownloadSwatch}
+                      label={t("five_color_download_swatch")}
+                      variant="secondary"
+                    />
+                  )}
+                  {!swatchDownloadUrl && (
+                    <Button
+                      onClick={clearCollection}
+                      label={t("five_color_collection_clear")}
+                      variant="secondary"
+                    />
+                  )}
+                </div>
+
+                {swatchPreviewUrl && (
+                  <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
+                    <img
+                      src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
+                      alt={t("five_color_swatch_legend_alt")}
+                      className="w-full h-auto"
+                    />
+                  </div>
+                )}
+
+                {swatchDownloadUrl && (
+                  <Button
+                    onClick={clearCollection}
+                    label={t("five_color_collection_clear")}
+                    variant="secondary"
+                  />
+                )}
+              </div>
+            )}
           </section>
         </div>
       </aside>
