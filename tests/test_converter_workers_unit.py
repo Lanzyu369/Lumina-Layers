@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 
 from api.workers.converter_workers import (
+    worker_generate_large_format_svg_native,
     worker_generate_model,
     worker_generate_preview,
 )
@@ -42,6 +43,10 @@ class TestWorkerImportability:
         """worker_generate_model should be importable from the module."""
         assert worker_generate_model is not None
 
+    def test_worker_generate_large_format_svg_native_is_importable(self) -> None:
+        """worker_generate_large_format_svg_native should be importable from the module."""
+        assert worker_generate_large_format_svg_native is not None
+
     def test_worker_generate_preview_is_function(self) -> None:
         """worker_generate_preview must be a plain function, not a method."""
         assert isinstance(worker_generate_preview, types.FunctionType)
@@ -49,6 +54,10 @@ class TestWorkerImportability:
     def test_worker_generate_model_is_function(self) -> None:
         """worker_generate_model must be a plain function, not a method."""
         assert isinstance(worker_generate_model, types.FunctionType)
+
+    def test_worker_generate_large_format_svg_native_is_function(self) -> None:
+        """worker_generate_large_format_svg_native must be a plain function."""
+        assert isinstance(worker_generate_large_format_svg_native, types.FunctionType)
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +76,11 @@ class TestWorkerPicklability:
         """pickle.dumps/loads round-trip should return the same function."""
         restored = pickle.loads(pickle.dumps(worker_generate_model))
         assert restored is worker_generate_model
+
+    def test_worker_generate_large_format_svg_native_is_picklable(self) -> None:
+        """pickle.dumps/loads round-trip should return the same function."""
+        restored = pickle.loads(pickle.dumps(worker_generate_large_format_svg_native))
+        assert restored is worker_generate_large_format_svg_native
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +118,15 @@ class TestParameterAnnotations:
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
+    def test_large_format_svg_native_params_are_serializable(self) -> None:
+        """All worker_generate_large_format_svg_native params must be serializable."""
+        annotations = self._get_param_annotations(worker_generate_large_format_svg_native)
+        assert len(annotations) > 0, "Function should have type annotations"
+        for name, ann in annotations.items():
+            assert ann in SERIALIZABLE_TYPES, (
+                f"Parameter '{name}' has non-serializable type {ann}"
+            )
+
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should have 12 parameters."""
         sig = inspect.signature(worker_generate_preview)
@@ -112,6 +135,11 @@ class TestParameterAnnotations:
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
         sig = inspect.signature(worker_generate_model)
+        assert len(sig.parameters) == 3
+
+    def test_large_format_svg_native_has_expected_param_count(self) -> None:
+        """worker_generate_large_format_svg_native should have 3 parameters."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
         assert len(sig.parameters) == 3
 
     def test_preview_param_names(self) -> None:
@@ -127,6 +155,12 @@ class TestParameterAnnotations:
     def test_model_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_model."""
         sig = inspect.signature(worker_generate_model)
+        expected = {"image_path", "lut_path", "params"}
+        assert set(sig.parameters.keys()) == expected
+
+    def test_large_format_svg_native_param_names(self) -> None:
+        """Verify expected parameter names for worker_generate_large_format_svg_native."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
         expected = {"image_path", "lut_path", "params"}
         assert set(sig.parameters.keys()) == expected
 
@@ -146,6 +180,11 @@ class TestReturnAnnotations:
     def test_model_returns_dict(self) -> None:
         """worker_generate_model return annotation should be dict."""
         hints = inspect.signature(worker_generate_model).return_annotation
+        assert hints is dict
+
+    def test_large_format_svg_native_returns_dict(self) -> None:
+        """worker_generate_large_format_svg_native return annotation should be dict."""
+        hints = inspect.signature(worker_generate_large_format_svg_native).return_annotation
         assert hints is dict
 
 
@@ -168,6 +207,12 @@ class TestTopLevelFunctions:
         assert "self" not in sig.parameters
         assert "cls" not in sig.parameters
 
+    def test_large_format_svg_native_has_no_self_param(self) -> None:
+        """Top-level functions should not have 'self' or 'cls' parameter."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
+        assert "self" not in sig.parameters
+        assert "cls" not in sig.parameters
+
     def test_preview_qualname_is_module_level(self) -> None:
         """__qualname__ should equal __name__ for top-level functions."""
         assert "." not in worker_generate_preview.__qualname__
@@ -175,6 +220,10 @@ class TestTopLevelFunctions:
     def test_model_qualname_is_module_level(self) -> None:
         """__qualname__ should equal __name__ for top-level functions."""
         assert "." not in worker_generate_model.__qualname__
+
+    def test_large_format_svg_native_qualname_is_module_level(self) -> None:
+        """__qualname__ should equal __name__ for top-level functions."""
+        assert "." not in worker_generate_large_format_svg_native.__qualname__
 
 
 def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:

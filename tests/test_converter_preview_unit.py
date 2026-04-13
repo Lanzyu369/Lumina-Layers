@@ -256,6 +256,56 @@ class TestResponseContainsPaletteAndDimensions:
         assert "dimensions" in body
         assert body["dimensions"]["width"] == 120
         assert body["dimensions"]["height"] == 80
+        assert body["warnings"] == []
+
+
+class TestSvgLargeFormatWarnings:
+    """Verify preview records SVG native large-format compatibility warnings."""
+
+    def test_preview_returns_and_stores_svg_large_format_warnings(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<text x="10" y="30">Risky text</text>'
+                '<rect x="0" y="40" width="120" height="40" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("risky.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "warnings" in body
+        assert any("native vector large-format" in warning.lower() for warning in body["warnings"])
+        assert any("text" in warning.lower() for warning in body["warnings"])
+
+        session_data = _test_store.get(body["session_id"])
+        assert session_data is not None
+        policy = session_data["svg_large_format_policy"]
+        assert policy["native_tiling_supported"] is False
+        assert any("text" in warning.lower() for warning in policy["warnings"])
 
 
 # =========================================================================

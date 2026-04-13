@@ -271,3 +271,139 @@ def worker_generate_model(
         "glb_path": glb_path,
         "status_msg": status_msg,
     }
+
+
+def worker_generate_large_format_svg_native(
+    image_path: str,
+    lut_path: str,
+    params: dict,
+) -> dict:
+    """Generate a large-format ZIP from one globally analyzed SVG in a worker."""
+    import math
+    import os
+    import tempfile
+    import zipfile
+
+    import trimesh
+
+    from config import TEMP_DIR
+    from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
+    from core.vector_engine import VectorProcessor
+    from core.vector_large_format import slice_vector_analysis_into_tiles
+    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+
+    total_width_mm = float(params["total_width_mm"])
+    total_height_mm = float(params["total_height_mm"])
+    tile_width_mm = float(params["tile_width_mm"])
+    tile_height_mm = float(params["tile_height_mm"])
+    replacement_regions = params.get("replacement_regions")
+    vector_replacements = _normalize_color_replacements_input(replacement_regions)
+
+    vector_processor = VectorProcessor(lut_path, params["color_mode"])
+    analysis = vector_processor.analyze_svg(
+        svg_path=image_path,
+        target_width_mm=total_width_mm,
+        color_replacements=vector_replacements,
+    )
+    tile_analyses = slice_vector_analysis_into_tiles(
+        analysis=analysis,
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
+        tile_width_mm=tile_width_mm,
+        tile_height_mm=tile_height_mm,
+    )
+
+    successful_paths: list[tuple[str, str]] = []
+
+    for tile in tile_analyses:
+        tile_processor = VectorProcessor(lut_path, params["color_mode"])
+        scene = tile_processor.build_mesh(
+            analysis=tile.analysis,
+            thickness_mm=float(params["spacer_thick"]),
+            structure_mode=params["structure_mode"],
+        )
+        if len(scene.geometry) == 0:
+            continue
+
+        preview_colors = dict(tile.analysis.preview_colors)
+        slot_names = list(tile.analysis.slot_names)
+        for material_id, rgba in list(preview_colors.items()):
+            if isinstance(material_id, int) and material_id < len(slot_names):
+                preview_colors[slot_names[material_id]] = rgba
+
+        separate_backing = bool(params.get("separate_backing", False))
+        board_geom = scene.geometry.get("Board")
+        if board_geom is not None and not separate_backing:
+            first_slot = slot_names[0] if slot_names else None
+            first_geom = scene.geometry.get(first_slot) if first_slot else None
+            if first_geom is not None:
+                merged = trimesh.util.concatenate([first_geom, board_geom])
+                merged.visual.face_colors = first_geom.visual.face_colors
+                merged.metadata["name"] = first_slot
+                scene.geometry[first_slot] = merged
+                del scene.geometry["Board"]
+        elif board_geom is not None and separate_backing:
+            preview_colors["Board"] = preview_colors.get(0, [255, 255, 255, 255])
+
+        slot_export_names: list[str] = []
+        for geom_name, geom in scene.geometry.items():
+            vertices = getattr(geom, "vertices", None)
+            faces = getattr(geom, "faces", None)
+            if vertices is None or faces is None or len(vertices) == 0 or len(faces) == 0:
+                continue
+            slot_export_names.append(geom_name)
+        if not slot_export_names:
+            continue
+
+        fd, tile_3mf_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
+        os.close(fd)
+        export_scene_with_bambu_metadata(
+            scene=scene,
+            output_path=tile_3mf_path,
+            slot_names=slot_export_names,
+            preview_colors=preview_colors,
+            settings={
+                "layer_height": "0.08",
+                "initial_layer_height": "0.08",
+                "wall_loops": "1",
+                "top_shell_layers": "0",
+                "bottom_shell_layers": "0",
+                "sparse_infill_density": "100%",
+                "sparse_infill_pattern": "zig-zag",
+                "nozzle_temperature": ["220"] * 8,
+                "bed_temperature": ["60"] * 8,
+                "filament_type": ["PLA"] * 8,
+                "print_speed": "100",
+                "travel_speed": "150",
+                "enable_support": "0",
+                "brim_width": "5",
+                "brim_type": "auto_brim",
+            },
+            color_mode=tile_processor.color_mode,
+            printer_id=params.get("printer_id", "bambu-h2d"),
+            slicer=params.get("slicer", "BambuStudio"),
+        )
+        successful_paths.append((tile.label, tile_3mf_path))
+
+    if not successful_paths:
+        raise ValueError("All SVG large-format tiles were empty after slicing.")
+
+    fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
+    os.close(fd)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for label, path_3mf in successful_paths:
+            zf.write(path_3mf, f"{label}.3mf")
+    for _label, path_3mf in successful_paths:
+        if os.path.exists(path_3mf):
+            os.unlink(path_3mf)
+
+    grid_cols = max(1, math.ceil(total_width_mm / tile_width_mm))
+    grid_rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+
+    return {
+        "zip_path": zip_path,
+        "tile_count": len(successful_paths),
+        "grid_cols": grid_cols,
+        "grid_rows": grid_rows,
+        "warnings": [],
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import tempfile
 import time
@@ -27,8 +28,19 @@ from api.schemas.responses import (
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
-from api.workers.converter_workers import worker_batch_convert_item, worker_generate_model
+from api.workers.converter_workers import (
+    worker_batch_convert_item,
+    worker_generate_large_format_svg_native,
+    worker_generate_model,
+)
 from config import TEMP_DIR, ModelingMode as CoreModelingMode
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+from core.vector_large_format import (
+    SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
+    SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
+    choose_svg_raster_fallback_density,
+    inspect_svg_large_format_support,
+)
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -259,54 +271,42 @@ class _LargeFormatBody(BaseModel):
     params: LargeFormatGenerateRequest
 
 
-@router.post("/generate-large-format")
-async def convert_generate_large_format(
-    body: _LargeFormatBody,
-    store: SessionStore = Depends(get_session_store),
-    registry: FileRegistry = Depends(get_file_registry),
-    pool: WorkerPoolManager = Depends(get_worker_pool),
-) -> LargeFormatGenerateResponse:
-    """Split image into tiles, generate a 3MF per tile, and package into ZIP.
-    将图片切割为网格切片，每片生成 3MF，打包为 ZIP。
-    """
-    import math
+def _resolve_large_format_dimensions(
+    cache: dict,
+    request,
+    target_height_mm: float | None,
+) -> tuple[float, float]:
+    ratio_w = float(cache.get("target_w") or 0.0)
+    ratio_h = float(cache.get("target_h") or 0.0)
+    if ratio_w <= 0 or ratio_h <= 0:
+        raise HTTPException(status_code=409, detail="Preview cache is missing valid aspect ratio data.")
 
-    # 1. Session validation
-    session_data = _require_session(store, body.session_id)
-    _require_preview_cache(session_data)
+    aspect_ratio = ratio_w / ratio_h
+    requested_width = request.target_width_mm
+    requested_height = target_height_mm
 
-    lf = body.params
-    request = lf.params
-
-    if _has_requested_fridge_magnet_cavities(request):
+    if requested_width is None and requested_height is None:
         raise HTTPException(
             status_code=422,
-            detail="Large-format tiled generation does not support fridge magnet cavities.",
+            detail="Large-format generation requires width or height. Provide at least one dimension.",
         )
 
-    image_path: str | None = session_data.get("image_path")
-    lut_path: str | None = session_data.get("lut_path")
-    if not image_path or not os.path.exists(image_path):
-        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
-    if not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+    if requested_width is None:
+        requested_width = round(float(requested_height) * aspect_ratio, 4)
+    elif requested_height is None:
+        requested_height = round(float(requested_width) / aspect_ratio, 4)
+    else:
+        expected_height = float(requested_width) / aspect_ratio
+        if abs(float(requested_height) - expected_height) > 1.0:
+            raise HTTPException(
+                status_code=422,
+                detail="Provided width and height do not match the preview aspect ratio.",
+            )
 
-    # 2. Compute tile grid
-    with Image.open(image_path) as img:
-        px_w, px_h = img.size
+    return float(requested_width), float(requested_height)
 
-    total_w_mm = request.target_width_mm
-    total_h_mm = lf.target_height_mm
-    tile_w_mm = lf.tile_width_mm
-    tile_h_mm = lf.tile_height_mm
 
-    cols = max(1, math.ceil(total_w_mm / tile_w_mm))
-    rows = max(1, math.ceil(total_h_mm / tile_h_mm))
-
-    px_per_mm_x = px_w / total_w_mm
-    px_per_mm_y = px_h / total_h_mm
-
-    # 3. Pre-compute global relief max height for 2.5D consistency
+def _resolve_relief_global_max_height(session_data: dict, request) -> float | None:
     relief_global_max_height: float | None = None
     if request.enable_relief:
         height_mode = request.height_mode or "color"
@@ -317,11 +317,10 @@ async def convert_generate_large_format(
             if hm_gray is not None:
                 hm_max_cfg = request.heightmap_max_height if request.heightmap_max_height else 5.0
                 relief_global_max_height = float(hm_max_cfg)
+    return relief_global_max_height
 
-    # 4. Build shared worker params (same as /generate, minus per-tile fields)
-    core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
-    height_mode = request.height_mode or "color"
 
+def _resolve_large_format_shared_params(session_data: dict, request, relief_global_max_height: float | None) -> dict:
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
         replacement_regions = [
@@ -332,7 +331,7 @@ async def convert_generate_large_format(
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
 
-    base_params: dict = {
+    return {
         "spacer_thick": request.spacer_thick,
         "structure_mode": request.structure_mode.value,
         "auto_bg": request.auto_bg,
@@ -349,12 +348,12 @@ async def convert_generate_large_format(
         "loop_offset_x": request.loop_offset_x,
         "loop_offset_y": request.loop_offset_y,
         "loop_position_preset": request.loop_position_preset,
-        "modeling_mode": core_modeling_mode,
+        "modeling_mode": CoreModelingMode(request.modeling_mode.value),
         "quantize_colors": request.quantize_colors,
         "replacement_regions": replacement_regions,
         "separate_backing": request.separate_backing,
         "enable_relief": request.enable_relief,
-        "height_mode": height_mode,
+        "height_mode": request.height_mode or "color",
         "color_height_map": request.color_height_map,
         "heightmap_max_height": request.heightmap_max_height,
         "enable_cleanup": request.enable_cleanup,
@@ -373,34 +372,106 @@ async def convert_generate_large_format(
         "relief_global_max_height": relief_global_max_height,
     }
 
-    # 5. Crop tiles and submit workers
-    sid = body.session_id
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    full_img = Image.open(image_path)
+
+async def _generate_large_format_svg_native(
+    *,
+    image_path: str,
+    lut_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    tile_width_mm: float,
+    tile_height_mm: float,
+    request,
+    session_data: dict,
+    sid: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    pool: WorkerPoolManager,
+    warnings: list[str] | None = None,
+) -> dict:
+    shared_params = _resolve_large_format_shared_params(
+        session_data,
+        request,
+        _resolve_relief_global_max_height(session_data, request),
+    )
+    result = await pool.submit(
+        worker_generate_large_format_svg_native,
+        image_path,
+        lut_path,
+        {
+            **shared_params,
+            "total_width_mm": total_width_mm,
+            "total_height_mm": total_height_mm,
+            "tile_width_mm": tile_width_mm,
+            "tile_height_mm": tile_height_mm,
+        },
+    )
+    zip_path = result["zip_path"]
+    store.register_temp_file(sid, zip_path)
+    download_id = registry.register_path(sid, zip_path)
+    return {
+        "status": "ok",
+        "message": f"Generated {result['tile_count']}/{result['grid_cols'] * result['grid_rows']} tiles ({result['grid_cols']}×{result['grid_rows']})",
+        "download_url": f"/api/files/{download_id}",
+        "tile_count": result["tile_count"],
+        "grid_cols": result["grid_cols"],
+        "grid_rows": result["grid_rows"],
+        "warnings": list(warnings or []) + list(result.get("warnings", [])),
+    }
+
+
+async def _generate_large_format_raster(
+    *,
+    image_path: str,
+    lut_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    tile_width_mm: float,
+    tile_height_mm: float,
+    request,
+    session_data: dict,
+    sid: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    pool: WorkerPoolManager,
+    warnings: list[str] | None = None,
+) -> dict:
+    with Image.open(image_path) as img:
+        px_w, px_h = img.size
+        full_img = img.copy()
+
+    px_per_mm_x = px_w / total_width_mm
+    px_per_mm_y = px_h / total_height_mm
+    cols = max(1, math.ceil(total_width_mm / tile_width_mm))
+    rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    shared_params = _resolve_large_format_shared_params(
+        session_data,
+        request,
+        _resolve_relief_global_max_height(session_data, request),
+    )
+    if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
+        shared_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
     hm_gray = (
-        session_data.get("heightmap_grayscale") if (request.enable_relief and height_mode == "heightmap") else None
+        session_data.get("heightmap_grayscale")
+        if (request.enable_relief and (request.height_mode or "color") == "heightmap")
+        else None
     )
 
     futures = []
     tile_labels: list[str] = []
-
+    base_name = os.path.splitext(os.path.basename(image_path))[0]
     for r in range(rows):
         for c in range(cols):
-            # mm bounds
-            x0_mm = c * tile_w_mm
-            y0_mm = r * tile_h_mm
-            x1_mm = min(x0_mm + tile_w_mm, total_w_mm)
-            y1_mm = min(y0_mm + tile_h_mm, total_h_mm)
+            x0_mm = c * tile_width_mm
+            y0_mm = r * tile_height_mm
+            x1_mm = min(x0_mm + tile_width_mm, total_width_mm)
+            y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
             cur_tile_w = x1_mm - x0_mm
-            cur_tile_h = y1_mm - y0_mm
 
-            # pixel bounds
             px_x0 = int(round(x0_mm * px_per_mm_x))
             px_y0 = int(round(y0_mm * px_per_mm_y))
-            px_x1 = int(round(x1_mm * px_per_mm_x))
-            px_y1 = int(round(y1_mm * px_per_mm_y))
-            px_x1 = min(px_x1, px_w)
-            px_y1 = min(px_y1, px_h)
+            px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+            px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
             tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
             fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
@@ -408,9 +479,7 @@ async def convert_generate_large_format(
             tile_img.save(tile_path)
             store.register_temp_file(sid, tile_path)
 
-            tile_params = dict(base_params, target_width_mm=cur_tile_w)
-
-            # Tile-specific heightmap
+            tile_params = dict(shared_params, target_width_mm=cur_tile_w)
             if hm_gray is not None:
                 hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
                 fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
@@ -423,9 +492,6 @@ async def convert_generate_large_format(
             tile_labels.append(label)
             futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
 
-    full_img.close()
-
-    # 6. Collect results
     successful_paths: list[tuple[str, str]] = []
     errors: list[str] = []
     for label, fut in zip(tile_labels, futures):
@@ -445,29 +511,149 @@ async def convert_generate_large_format(
             detail += ": " + "; ".join(errors[:5])
         raise HTTPException(status_code=500, detail=detail)
 
-    # 7. Package into ZIP
     fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
     os.close(fd)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for label, tp in successful_paths:
             zf.write(tp, f"{label}.3mf")
-
+    store.register_temp_file(sid, zip_path)
     download_id = registry.register_path(sid, zip_path)
 
-    total_tiles = cols * rows
-    ok_count = len(successful_paths)
-    msg = f"Generated {ok_count}/{total_tiles} tiles ({cols}×{rows})"
+    msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"
     if errors:
         msg += f" — {len(errors)} failed"
+    return {
+        "status": "ok",
+        "message": msg,
+        "download_url": f"/api/files/{download_id}",
+        "tile_count": len(successful_paths),
+        "grid_cols": cols,
+        "grid_rows": rows,
+        "warnings": list(warnings or []),
+    }
 
-    return LargeFormatGenerateResponse(
-        status="ok",
-        message=msg,
-        download_url=f"/api/files/{download_id}",
-        tile_count=ok_count,
-        grid_cols=cols,
-        grid_rows=rows,
+
+def _rasterize_svg_for_large_format_fallback(
+    *,
+    svg_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    sid: str,
+    store: SessionStore,
+) -> tuple[str, list[str]]:
+    density, density_warnings = choose_svg_raster_fallback_density(
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
     )
+    raster_rgba = rasterize_svg(svg_path, total_width_mm, pixels_per_mm=density)
+    fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+    os.close(fd)
+    Image.fromarray(raster_rgba).save(png_path)
+    store.register_temp_file(sid, png_path)
+    return png_path, density_warnings
+
+
+@router.post("/generate-large-format")
+async def convert_generate_large_format(
+    body: _LargeFormatBody,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+    pool: WorkerPoolManager = Depends(get_worker_pool),
+) -> LargeFormatGenerateResponse:
+    """Split image into tiles, generate a 3MF per tile, and package into ZIP.
+    将图片切割为网格切片，每片生成 3MF，打包为 ZIP。
+    """
+    # 1. Session validation
+    session_data = _require_session(store, body.session_id)
+    cache = _require_preview_cache(session_data)
+
+    lf = body.params
+    request = lf.params
+
+    if _has_requested_fridge_magnet_cavities(request):
+        raise HTTPException(
+            status_code=422,
+            detail="Large-format tiled generation does not support fridge magnet cavities.",
+        )
+
+    image_path: str | None = session_data.get("image_path")
+    lut_path: str | None = session_data.get("lut_path")
+    if not image_path or not os.path.exists(image_path):
+        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
+    if not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+
+    sid = body.session_id
+    total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
+    tile_w_mm = lf.tile_width_mm
+    tile_h_mm = lf.tile_height_mm
+
+    warnings: list[str] = []
+    is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
+    if is_svg_vector:
+        policy = session_data.get("svg_large_format_policy")
+        if not isinstance(policy, dict):
+            policy = inspect_svg_large_format_support(image_path)
+            session_data["svg_large_format_policy"] = policy
+        warnings.extend(list(policy.get("warnings", [])))
+
+        if bool(policy.get("native_tiling_supported", False)):
+            result = await _generate_large_format_svg_native(
+                image_path=image_path,
+                lut_path=lut_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                tile_width_mm=tile_w_mm,
+                tile_height_mm=tile_h_mm,
+                request=request,
+                session_data=session_data,
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=pool,
+                warnings=warnings,
+            )
+        else:
+            fallback_png_path, density_warnings = _rasterize_svg_for_large_format_fallback(
+                svg_path=image_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                sid=sid,
+                store=store,
+            )
+            result = await _generate_large_format_raster(
+                image_path=fallback_png_path,
+                lut_path=lut_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                tile_width_mm=tile_w_mm,
+                tile_height_mm=tile_h_mm,
+                request=request,
+                session_data=session_data,
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=pool,
+                warnings=warnings + [SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING] + density_warnings,
+            )
+    else:
+        result = await _generate_large_format_raster(
+            image_path=image_path,
+            lut_path=lut_path,
+            total_width_mm=total_w_mm,
+            total_height_mm=total_h_mm,
+            tile_width_mm=tile_w_mm,
+            tile_height_mm=tile_h_mm,
+            request=request,
+            session_data=session_data,
+            sid=sid,
+            store=store,
+            registry=registry,
+            pool=pool,
+            warnings=warnings,
+        )
+
+    return LargeFormatGenerateResponse(**result)
 
 
 @router.post("/batch")

@@ -24,9 +24,11 @@ beforeEach(() => {
     target_width_mm: 80,
     target_height_mm: 80,
     spacer_thick: 0.64,
-    structure_mode: StructureModeEnum.TOP_ONLY,
+    structure_mode: StructureModeEnum.SINGLE_SIDED,
     modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
     enable_relief: false,
+    previewWarnings: [],
+    largeFormatWarnings: [],
   });
 });
 
@@ -71,5 +73,26 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
     expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
+  });
+
+  it("renders large-format warnings when present", () => {
+    useConverterStore.setState({
+      largeFormatEnabled: false,
+      previewWarnings: [
+        "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling. Unsupported features: text.",
+      ],
+      largeFormatWarnings: [
+        "Raster fallback was used for this large-format SVG request.",
+      ],
+    });
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.getByText(/Native vector large-format is unavailable/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Raster fallback was used/i),
+    ).toBeInTheDocument();
   });
 });

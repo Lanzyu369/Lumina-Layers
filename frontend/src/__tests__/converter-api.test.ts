@@ -3,6 +3,7 @@ import apiClient from "../api/client";
 import {
   convertPreview,
   convertGenerate,
+  convertGenerateLargeFormat,
   convertGeneratePuzzle,
   convertPuzzleLayoutPreview,
   fetchLutList,
@@ -16,6 +17,7 @@ import {
   StructureMode,
   type ConvertPreviewRequest,
   type ConvertGenerateRequest,
+  type LargeFormatGenerateRequest,
 } from "../api/types";
 
 vi.mock("../api/client", () => ({
@@ -42,6 +44,9 @@ describe("convertPreview", () => {
     modeling_mode: ModelingMode.HIGH_FIDELITY,
     quantize_colors: 48,
     enable_cleanup: true,
+    hue_weight: 0,
+    chroma_gate: 0,
+    is_dark: false,
   };
 
   it("builds correct FormData and calls POST /convert/preview", async () => {
@@ -104,6 +109,9 @@ describe("convertGenerate", () => {
     modeling_mode: ModelingMode.PIXEL,
     quantize_colors: 64,
     enable_cleanup: false,
+    hue_weight: 0,
+    chroma_gate: 0,
+    is_dark: false,
     spacer_thick: 1.2,
     structure_mode: StructureMode.DOUBLE_SIDED,
     separate_backing: true,
@@ -120,6 +128,8 @@ describe("convertGenerate", () => {
     wire_height_mm: 0.4,
     enable_coating: true,
     coating_height_mm: 0.08,
+    enable_fridge_magnet: false,
+    fridge_magnets: [],
   };
 
   it("sends JSON body with session_id and params", async () => {
@@ -204,6 +214,64 @@ describe("convertGenerate", () => {
   });
 });
 
+describe("convertGenerateLargeFormat", () => {
+  it("sends large-format body and returns warnings", async () => {
+    const params: LargeFormatGenerateRequest = {
+      tile_width_mm: 40,
+      tile_height_mm: 40,
+      params: {
+        lut_name: "gen-lut",
+        auto_bg: false,
+        bg_tol: 30,
+        color_mode: ColorMode.EIGHT_COLOR,
+        modeling_mode: ModelingMode.VECTOR,
+        quantize_colors: 64,
+        enable_cleanup: false,
+        hue_weight: 0,
+        chroma_gate: 0,
+        is_dark: false,
+        spacer_thick: 1.2,
+        structure_mode: StructureMode.DOUBLE_SIDED,
+        separate_backing: true,
+        add_loop: false,
+        loop_width: 4,
+        loop_length: 8,
+        loop_hole: 2.5,
+        enable_relief: false,
+        heightmap_max_height: 5.0,
+        enable_outline: false,
+        outline_width: 2.0,
+        enable_cloisonne: false,
+        wire_width_mm: 0.4,
+        wire_height_mm: 0.4,
+        enable_coating: false,
+        coating_height_mm: 0.08,
+        enable_fridge_magnet: false,
+        fridge_magnets: [],
+      },
+    };
+    const fakeResponse = {
+      status: "ok",
+      message: "Generated 4 tiles",
+      download_url: "/api/files/zip-123",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["Raster fallback was used for this large-format SVG request."],
+    };
+    mockPost.mockResolvedValueOnce({ data: fakeResponse });
+
+    const result = await convertGenerateLargeFormat("sess-large", params);
+
+    expect(mockPost).toHaveBeenCalledOnce();
+    const [url, body, config] = mockPost.mock.calls[0];
+    expect(url).toBe("/convert/generate-large-format");
+    expect(body).toEqual({ session_id: "sess-large", params });
+    expect(config).toMatchObject({ timeout: 0 });
+    expect(result.warnings).toEqual(fakeResponse.warnings);
+  });
+});
+
 describe("convertPuzzleLayoutPreview", () => {
   it("sends session_id with puzzle preview params", async () => {
     const params: PuzzleLayoutPreviewRequest = {
@@ -272,6 +340,9 @@ describe("convertGeneratePuzzle", () => {
         modeling_mode: ModelingMode.PIXEL,
         quantize_colors: 64,
         enable_cleanup: false,
+        hue_weight: 0,
+        chroma_gate: 0,
+        is_dark: false,
         spacer_thick: 1.2,
         structure_mode: StructureMode.DOUBLE_SIDED,
         separate_backing: true,
@@ -288,6 +359,8 @@ describe("convertGeneratePuzzle", () => {
         wire_height_mm: 0.4,
         enable_coating: false,
         coating_height_mm: 0.08,
+        enable_fridge_magnet: false,
+        fridge_magnets: [],
       },
     };
     const fakeResponse = {

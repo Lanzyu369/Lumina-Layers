@@ -14,6 +14,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -57,12 +58,70 @@ client: TestClient = TestClient(app)
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()
-    store.put(sid, "preview_cache", {"some": "data"})
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "some": "data",
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+        },
+    )
     store.put(sid, "image_path", "/tmp/test_image.png")
     store.put(sid, "lut_path", "/tmp/test_lut.npy")
     store.put(sid, "replacement_regions", [])
     store.put(sid, "free_color_set", set())
     return sid
+
+
+def _create_svg_session(
+    store: SessionStore,
+    *,
+    native_tiling_supported: bool,
+    warnings: list[str] | None = None,
+) -> tuple[str, str, str]:
+    """Create a session for SVG large-format tests with real temp files."""
+    fd_svg, svg_path = tempfile.mkstemp(suffix=".svg")
+    fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+    try:
+        with open(fd_svg, "w", encoding="utf-8", closefd=False) as svg_file:
+            svg_file.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<rect x="0" y="0" width="120" height="80" fill="#ff0000"/>'
+                "</svg>"
+            )
+        with open(fd_lut, "wb", closefd=False) as lut_file:
+            lut_file.write(b"lut")
+    finally:
+        import os
+
+        os.close(fd_svg)
+        os.close(fd_lut)
+
+    sid = store.create()
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+        },
+    )
+    store.put(sid, "image_path", svg_path)
+    store.put(sid, "lut_path", lut_path)
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "free_color_set", set())
+    store.put(
+        sid,
+        "svg_large_format_policy",
+        {
+            "native_tiling_supported": native_tiling_supported,
+            "warnings": list(warnings or []),
+        },
+    )
+    return sid, svg_path, lut_path
 
 
 # =========================================================================
@@ -408,6 +467,182 @@ class TestLargeFormatFridgeMagnetValidation:
 
         assert response.status_code == 422
         assert "fridge magnet" in response.json()["detail"].lower()
+
+
+class TestLargeFormatDimensionsAndRouting:
+    """Verify large-format ratio resolution and SVG routing behavior."""
+
+    def test_large_format_svg_width_only_derives_height_and_uses_native_path(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with (
+            patch("api.routers.converter.generate.Image.open", side_effect=AssertionError("raster path should not open SVG")),
+            patch("api.routers.converter.generate._generate_large_format_svg_native", return_value=native_response) as native_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["warnings"] == []
+        native_helper.assert_called_once()
+        assert native_helper.call_args.kwargs["image_path"] == svg_path
+        assert native_helper.call_args.kwargs["lut_path"] == lut_path
+        assert native_helper.call_args.kwargs["total_width_mm"] == 90.0
+        assert native_helper.call_args.kwargs["total_height_mm"] == 60.0
+
+    def test_large_format_svg_height_only_derives_width(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 100.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 6,
+            "grid_cols": 3,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_svg_native",
+            return_value=native_response,
+        ) as native_helper:
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        assert native_helper.call_args.kwargs["total_width_mm"] == 150.0
+        assert native_helper.call_args.kwargs["total_height_mm"] == 100.0
+
+    def test_large_format_rejects_missing_both_dimensions(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "width" in response.json()["detail"].lower()
+        assert "height" in response.json()["detail"].lower()
+
+    def test_large_format_rejects_dimensions_inconsistent_with_preview_ratio(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 90.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 100.0,
+                },
+            },
+        }
+
+        with patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper:
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "aspect ratio" in response.json()["detail"].lower()
+        native_helper.assert_not_called()
+
+    def test_large_format_svg_unsupported_falls_back_to_raster_with_warning(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=False,
+            warnings=["Native vector large-format is unavailable because the SVG uses text elements."],
+        )
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        fallback_response = {
+            "status": "ok",
+            "message": "fallback",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [
+                "Native vector large-format is unavailable because the SVG uses text elements.",
+                "Raster fallback was used for this large-format SVG request.",
+            ],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=fallback_response,
+            ) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert native_helper.call_count == 0
+        raster_helper.assert_called_once()
+        assert any("raster fallback" in warning.lower() for warning in body["warnings"])
 
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)

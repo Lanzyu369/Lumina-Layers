@@ -261,8 +261,11 @@ function sanitizeFiniteNumber(value: number, fallback: number): number {
 function sanitizeOptionalFiniteNumber(
   value: number | null | undefined,
   fallback: number | null,
-): number | null | undefined {
-  if (value == null) {
+): number | null {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null) {
     return value;
   }
 
@@ -669,6 +672,8 @@ export interface ConverterState {
   preview_spacer_thick: number | null; // 预览时的原始厚度
   previewPixelWidth: number | null; // 预览图像像素宽度（用于 3D→像素坐标转换）
   previewPixelHeight: number | null; // 预览图像像素高度（用于 3D→像素坐标转换）
+  previewWarnings: string[];
+  largeFormatWarnings: string[];
 
   // 模型边界（供 KeychainRing3D 定位）
   modelBounds: {
@@ -1024,6 +1029,8 @@ export const DEFAULT_STATE: ConverterState = {
   preview_spacer_thick: null,
   previewPixelWidth: null,
   previewPixelHeight: null,
+  previewWarnings: [],
+  largeFormatWarnings: [],
   modelBounds: null,
   enableCrop: loadEnableCrop(),
   cropModalOpen: false,
@@ -2567,6 +2574,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         isLoading: true,
         error: null,
         hasManualPreview: false,
+        previewWarnings: [],
+        largeFormatWarnings: [],
         ...DEFAULT_LAYER_IMAGES_STATE,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
@@ -2619,6 +2628,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           preview_spacer_thick: state.spacer_thick,
           previewPixelWidth: response.dimensions?.width ?? null,
           previewPixelHeight: response.dimensions?.height ?? null,
+          previewWarnings: response.warnings ?? [],
+          largeFormatWarnings: [],
           hasManualPreview: true,
           ...DEFAULT_LAYER_IMAGES_STATE,
           ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -2768,6 +2779,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             downloadUrl: lfResponse.download_url
               ? `${lfResponse.download_url}`
               : null,
+            largeFormatWarnings: lfResponse.warnings ?? [],
           });
           return null;
         }
@@ -2787,6 +2799,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
+          largeFormatWarnings: [],
         });
         _logGenerateTimer('UI unlocked (isGenerating=false, modelUrl set)');
         _clientLog('generate: UI unlocked');
@@ -2996,6 +3009,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         puzzleEnabled: false,
         threemfDiskPath: null,
         downloadUrl: null,
+        previewWarnings: [],
+        largeFormatWarnings: [],
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
       }),
 
@@ -3041,6 +3056,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             modelUrl: null,
             threemfDiskPath: null,
             downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: state.enableCrop,
@@ -3081,6 +3098,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             modelUrl: null,
             threemfDiskPath: null,
             downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
@@ -3106,6 +3125,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             modelUrl: null,
             threemfDiskPath: null,
             downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
@@ -3139,6 +3160,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         modelUrl: null,
         threemfDiskPath: null,
         downloadUrl: null,
+        previewWarnings: [],
+        largeFormatWarnings: [],
         batchMode: true,
         puzzleEnabled: false,
         hasManualPreview: false,
