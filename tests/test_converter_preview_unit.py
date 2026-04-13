@@ -303,6 +303,7 @@ class TestSvgLargeFormatWarnings:
 
         session_data = _test_store.get(body["session_id"])
         assert session_data is not None
+        assert session_data["source_basename"] == "risky"
         policy = session_data["svg_large_format_policy"]
         assert policy["native_tiling_supported"] is False
         assert policy["inspection_source"] == "preview-vector-svg"
@@ -347,6 +348,7 @@ class TestSvgLargeFormatWarnings:
 
         session_data = _test_store.get(body["session_id"])
         assert session_data is not None
+        assert session_data["source_basename"] == "risky"
         assert session_data.get("svg_large_format_policy") is None
 
 

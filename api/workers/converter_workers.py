@@ -289,9 +289,10 @@ def worker_generate_large_format_svg_native(
     from config import TEMP_DIR
     from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
     from core.vector_engine import VectorProcessor
-    from core.vector_large_format import slice_vector_analysis_into_tiles
+    from core.vector_large_format import format_large_format_tile_label, slice_vector_analysis_into_tiles
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
+    tile_name_prefix = params.get("tile_name_prefix")
     total_width_mm = float(params["total_width_mm"])
     total_height_mm = float(params["total_height_mm"])
     tile_width_mm = float(params["tile_width_mm"])
@@ -383,7 +384,12 @@ def worker_generate_large_format_svg_native(
             printer_id=params.get("printer_id", "bambu-h2d"),
             slicer=params.get("slicer", "BambuStudio"),
         )
-        successful_paths.append((tile.label, tile_3mf_path))
+        successful_paths.append(
+            (
+                format_large_format_tile_label(source_basename=tile_name_prefix, tile_label=tile.label),
+                tile_3mf_path,
+            )
+        )
 
     if not successful_paths:
         raise ValueError("All SVG large-format tiles were empty after slicing.")

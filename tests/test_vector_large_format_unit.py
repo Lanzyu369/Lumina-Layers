@@ -10,6 +10,7 @@ from core.vector_large_format import (
     VectorAnalysisTiler,
     build_tile_specs,
     choose_svg_raster_fallback_density,
+    format_large_format_tile_label,
     inspect_svg_large_format_support,
     slice_vector_analysis_into_tiles,
 )
@@ -304,6 +305,17 @@ def test_vector_analysis_tiler_build_tile_specs_matches_wrapper() -> None:
         tile_width_mm=50.0,
         tile_height_mm=30.0,
     )
+
+
+def test_format_large_format_tile_label_uses_source_basename_when_present() -> None:
+    assert (
+        format_large_format_tile_label(source_basename="poster-art", tile_label="R1C2")
+        == "poster-art_R1C2"
+    )
+
+
+def test_format_large_format_tile_label_falls_back_to_tile_id_without_basename() -> None:
+    assert format_large_format_tile_label(source_basename="", tile_label="R1C2") == "R1C2"
 
 
 def test_svg_large_format_support_inspector_matches_wrapper(tmp_path) -> None:

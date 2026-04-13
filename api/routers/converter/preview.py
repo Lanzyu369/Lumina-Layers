@@ -288,6 +288,10 @@ async def convert_preview(
     bind_session_id(session_id)
     store.put(session_id, "preview_cache", cache_data)
     store.put(session_id, "image_path", temp_path)
+    source_basename = os.path.splitext(os.path.basename(image.filename or ""))[0].strip()
+    if not source_basename:
+        source_basename = os.path.splitext(os.path.basename(temp_path))[0]
+    store.put(session_id, "source_basename", source_basename)
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", lut_name)
     store.put(session_id, "replacement_regions", [])

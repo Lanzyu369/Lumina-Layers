@@ -69,6 +69,7 @@ def _create_session_with_preview_and_files(store: SessionStore) -> str:
         },
     )
     store.put(sid, "image_path", "/tmp/test_image.png")
+    store.put(sid, "source_basename", "test-image")
     store.put(sid, "lut_path", "/tmp/test_lut.npy")
     store.put(sid, "replacement_regions", [])
     store.put(sid, "free_color_set", set())
@@ -110,6 +111,7 @@ def _create_svg_session(
         },
     )
     store.put(sid, "image_path", svg_path)
+    store.put(sid, "source_basename", "source-artwork")
     store.put(sid, "lut_path", lut_path)
     store.put(sid, "replacement_regions", [])
     store.put(sid, "free_color_set", set())
@@ -510,6 +512,7 @@ class TestLargeFormatDimensionsAndRouting:
         native_helper.assert_called_once()
         assert native_helper.call_args.kwargs["image_path"] == svg_path
         assert native_helper.call_args.kwargs["lut_path"] == lut_path
+        assert native_helper.call_args.kwargs["source_basename"] == "source-artwork"
         assert native_helper.call_args.kwargs["total_width_mm"] == 90.0
         assert native_helper.call_args.kwargs["total_height_mm"] == 60.0
 
@@ -546,6 +549,7 @@ class TestLargeFormatDimensionsAndRouting:
             response = client.post("/api/convert/generate-large-format", json=payload)
 
         assert response.status_code == 200
+        assert native_helper.call_args.kwargs["source_basename"] == "source-artwork"
         assert native_helper.call_args.kwargs["total_width_mm"] == 150.0
         assert native_helper.call_args.kwargs["total_height_mm"] == 100.0
 
@@ -643,6 +647,7 @@ class TestLargeFormatDimensionsAndRouting:
         body = response.json()
         assert native_helper.call_count == 0
         raster_helper.assert_called_once()
+        assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
         assert any("raster fallback" in warning.lower() for warning in body["warnings"])
 
     def test_large_format_reinspects_unmarked_svg_policy_before_using_native_path(self) -> None:
@@ -707,6 +712,7 @@ class TestLargeFormatDimensionsAndRouting:
         inspect_helper.assert_called_once()
         native_helper.assert_not_called()
         raster_helper.assert_called_once()
+        assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
         updated_policy = _test_store.get(sid)["svg_large_format_policy"]
         assert updated_policy["inspection_source"] == "generate-large-format"
         assert updated_policy["native_tiling_supported"] is False

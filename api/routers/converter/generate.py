@@ -39,6 +39,7 @@ from core.vector_large_format import (
     SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
     choose_svg_raster_fallback_density,
+    format_large_format_tile_label,
     inspect_svg_large_format_support,
 )
 from utils.lut_manager import LUTManager
@@ -373,10 +374,18 @@ def _resolve_large_format_shared_params(session_data: dict, request, relief_glob
     }
 
 
+def _resolve_large_format_source_basename(session_data: dict, image_path: str) -> str:
+    source_basename = str(session_data.get("source_basename") or "").strip()
+    if source_basename:
+        return source_basename
+    return os.path.splitext(os.path.basename(image_path))[0]
+
+
 async def _generate_large_format_svg_native(
     *,
     image_path: str,
     lut_path: str,
+    source_basename: str,
     total_width_mm: float,
     total_height_mm: float,
     tile_width_mm: float,
@@ -401,6 +410,7 @@ async def _generate_large_format_svg_native(
             lut_path,
             {
                 **shared_params,
+                "tile_name_prefix": source_basename,
                 "total_width_mm": total_width_mm,
                 "total_height_mm": total_height_mm,
                 "tile_width_mm": tile_width_mm,
@@ -429,6 +439,7 @@ async def _generate_large_format_raster(
     *,
     image_path: str,
     lut_path: str,
+    source_basename: str,
     total_width_mm: float,
     total_height_mm: float,
     tile_width_mm: float,
@@ -464,7 +475,6 @@ async def _generate_large_format_raster(
 
     futures = []
     tile_labels: list[str] = []
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
     for r in range(rows):
         for c in range(cols):
             x0_mm = c * tile_width_mm
@@ -493,7 +503,10 @@ async def _generate_large_format_raster(
                 store.register_temp_file(sid, hm_tile_path)
                 tile_params["heightmap_path"] = hm_tile_path
 
-            label = f"{base_name}_R{r + 1}C{c + 1}"
+            label = format_large_format_tile_label(
+                source_basename=source_basename,
+                tile_label=f"R{r + 1}C{c + 1}",
+            )
             tile_labels.append(label)
             futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
 
@@ -590,6 +603,7 @@ async def convert_generate_large_format(
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
+    source_basename = _resolve_large_format_source_basename(session_data, image_path)
     tile_w_mm = lf.tile_width_mm
     tile_h_mm = lf.tile_height_mm
 
@@ -612,6 +626,7 @@ async def convert_generate_large_format(
             result = await _generate_large_format_svg_native(
                 image_path=image_path,
                 lut_path=lut_path,
+                source_basename=source_basename,
                 total_width_mm=total_w_mm,
                 total_height_mm=total_h_mm,
                 tile_width_mm=tile_w_mm,
@@ -635,6 +650,7 @@ async def convert_generate_large_format(
             result = await _generate_large_format_raster(
                 image_path=fallback_png_path,
                 lut_path=lut_path,
+                source_basename=source_basename,
                 total_width_mm=total_w_mm,
                 total_height_mm=total_h_mm,
                 tile_width_mm=tile_w_mm,
@@ -651,6 +667,7 @@ async def convert_generate_large_format(
         result = await _generate_large_format_raster(
             image_path=image_path,
             lut_path=lut_path,
+            source_basename=source_basename,
             total_width_mm=total_w_mm,
             total_height_mm=total_h_mm,
             tile_width_mm=tile_w_mm,

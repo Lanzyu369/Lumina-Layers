@@ -330,6 +330,13 @@ def choose_svg_raster_fallback_density(
     return planner.choose_density()
 
 
+def format_large_format_tile_label(*, source_basename: str | None, tile_label: str) -> str:
+    """Build a stable, user-facing tile label from source name and tile id."""
+
+    base = str(source_basename or "").strip()
+    return f"{base}_{tile_label}" if base else tile_label
+
+
 def build_tile_specs(
     *,
     total_width_mm: float,
