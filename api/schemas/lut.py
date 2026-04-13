@@ -9,7 +9,9 @@ including merge parameters, merge statistics, and LUT info queries.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 # ========== Models ==========
@@ -30,6 +32,97 @@ class PaletteEntrySchema(BaseModel):
     material: str = Field("PLA Basic", description="材料名称")
     hex_color: str | None = Field(None, description="十六进制颜色值，如 #FF0000")
     color_name: str | None = Field(None, description="厂商提供的颜色名称")
+
+
+class LutCatalogItem(BaseModel):
+    """Single catalog item for legacy LUT sources.
+    传统 LUT 源的单条目录项。
+    """
+
+    name: str = Field(..., description="LUT 显示名称")
+    color_mode: str = Field(..., description="颜色模式")
+    path: str = Field(..., description="文件路径")
+    fingerprint: str = Field("", description="文件指纹")
+
+
+class LutCatalogGroup(BaseModel):
+    """Grouped legacy LUT catalog entries.
+    分组后的传统 LUT 目录。
+    """
+
+    group_name: str = Field(..., description="分组名称")
+    items: list[LutCatalogItem] = Field(default_factory=list, description="分组条目")
+
+
+class NativeDbOption(BaseModel):
+    """One native ColorDB option exposed in the source catalog.
+    原生 ColorDB 目录中的单个可选项。
+    """
+
+    name: str = Field(..., description="DB 文件名")
+    path: str = Field(..., description="DB 文件路径")
+    color_mode: str = Field(..., description="颜色模式")
+    fingerprint: str = Field("", description="文件指纹")
+
+
+class NativeBrandCatalogGroup(BaseModel):
+    """Native source catalog entry grouped by vendor/material.
+    按厂商/材料分组的原生源目录项。
+    """
+
+    brand_key: str = Field(..., description="品牌键")
+    material_type: str = Field(..., description="材料类型")
+    vendor: str = Field(..., description="厂商")
+    display_name: str = Field(..., description="显示名称")
+    db_options: list[NativeDbOption] = Field(default_factory=list, description="可选 DB 列表")
+    default_db_names: list[str] = Field(default_factory=list, description="默认 DB 名称列表")
+    package_name: str | None = Field(None, description="同范围模型包文件名")
+    model_name: str | None = Field(None, description="同范围前向模型文件名")
+    supported_modes: list[dict[str, Any]] = Field(default_factory=list, description="支持的模式列表")
+
+
+class LutSourceCatalogResponse(BaseModel):
+    """Source catalog response containing legacy and native selections.
+    同时包含传统源和原生品牌分组的目录响应。
+    """
+
+    legacy_groups: list[LutCatalogGroup] = Field(default_factory=list, description="传统 LUT 分组")
+    native_brand_groups: list[NativeBrandCatalogGroup] = Field(default_factory=list, description="原生品牌分组")
+
+
+class LutSourceSelection(BaseModel):
+    """Shared LUT source selection contract.
+    LUT 源选择共享契约。
+    """
+
+    source_kind: Literal["legacy_single", "native_bundle"] = Field(
+        "legacy_single",
+        description="源类型：legacy_single | native_bundle",
+    )
+    lut_name: str | None = Field(None, description="传统 LUT 名称")
+    material_type: str | None = Field(None, description="原生材料类型")
+    vendor: str | None = Field(None, description="原生厂商")
+    db_names: list[str] = Field(default_factory=list, description="原生 DB 文件名列表")
+
+    @model_validator(mode="after")
+    def validate_source_selection(self) -> "LutSourceSelection":
+        """Validate the source selection contract.
+        校验源选择契约。
+        """
+
+        if self.source_kind == "legacy_single":
+            if not self.lut_name:
+                raise ValueError("legacy_single requires lut_name")
+            return self
+
+        if self.source_kind == "native_bundle":
+            if not self.material_type or not self.vendor:
+                raise ValueError("native_bundle requires material_type and vendor")
+            if not self.db_names:
+                raise ValueError("native_bundle requires at least one db_names entry")
+            return self
+
+        raise ValueError(f"Unsupported source_kind: {self.source_kind}")
 
 
 class MergeStats(BaseModel):
@@ -199,6 +292,28 @@ class CompareResponse(BaseModel):
     worst_diffs: list[CompareDiffItem] = Field(default_factory=list, description="差异最大的共享配方条目")
 
 
+class LutInfoResponseV2(BaseModel):
+    """Extended LUT info response with LUT V2 capability fields."""
+
+    name: str = Field(..., description="LUT 显示名称")
+    color_mode: str = Field(..., description="颜色模式")
+    color_count: int = Field(..., ge=0, description="颜色数量")
+    palette: list[PaletteEntrySchema] = Field(default_factory=list, description="调色板数组")
+    max_color_layers: int = Field(5, description="最大颜色层数")
+    layer_height_mm: float = Field(0.08, description="层高 (mm)")
+    line_width_mm: float = Field(0.42, description="线宽 (mm)")
+    base_layers: int = Field(10, description="底板层数")
+    base_channel_idx: int = Field(0, description="底板通道索引")
+    layer_order: str = Field("Top2Bottom", description="打印顺序")
+    schema_version: str = Field("1.0", description="LUT schema 版本")
+    capabilities: list[str] = Field(default_factory=list, description="LUT 能力列表")
+    supports_predictive_match: bool = Field(False, description="是否支持预测式匹配")
+    supports_dynamic_layer_height: bool = Field(False, description="是否支持动态层高")
+    supports_dynamic_layer_count: bool = Field(False, description="是否支持动态叠色层数")
+    supports_custom_recipe: bool = Field(False, description="是否支持自定义配方")
+    source_kind: str = Field("legacy_lookup", description="颜色源类型")
+    supported_modes: list[dict] = Field(default_factory=list, description="可用模式列表")
+
 class LutInfoResponse(BaseModel):
     """Response model for LUT information queries.
     LUT 信息查询的响应模型。
@@ -227,3 +342,52 @@ class LutInfoResponse(BaseModel):
     base_layers: int = Field(10, description="底板层数")
     base_channel_idx: int = Field(0, description="底板通道索引")
     layer_order: str = Field("Top2Bottom", description="打印顺序")
+
+
+class RecipeColorPredictRequest(BaseModel):
+    """Predictive source custom recipe color request."""
+
+    recipe: list[int] = Field(..., min_length=1, max_length=20, description="通道索引配方")
+    color_layers: int = Field(..., ge=1, le=20, description="叠色层数")
+    layer_height_mm: float = Field(..., gt=0.0, le=1.0, description="层高 (mm)")
+    layer_order: str = Field("Top2Bottom", description="配方层序")
+
+
+class RecipeColorPredictResponse(BaseModel):
+    """Predicted color response for a custom recipe."""
+
+    status: str = Field(..., description="状态")
+    rgb: list[int] = Field(..., min_length=3, max_length=3, description="预测 RGB")
+    lab: list[float] = Field(..., min_length=3, max_length=3, description="预测 Lab")
+    runtime_mode_key: str = Field(..., description="命中的运行时模式")
+    source: str = Field(..., description="预测来源")
+
+
+class RecipeSearchRequest(BaseModel):
+    """Search candidate recipes by a layer pattern."""
+
+    pattern: str = Field(..., description="层序搜索模式")
+    color_layers: int = Field(..., ge=1, le=20, description="叠色层数")
+    layer_height_mm: float = Field(..., gt=0.0, le=1.0, description="层高 (mm)")
+    layer_order: str = Field("Top2Bottom", description="层序约定")
+    limit: int = Field(32, ge=1, le=128, description="返回候选数量上限")
+
+
+class RecipeSearchItem(BaseModel):
+    recipe: list[int] = Field(..., description="匹配到的配方")
+    rgb: list[int] = Field(..., description="预测 RGB")
+    lab: list[float] = Field(..., description="预测 Lab")
+
+
+class RecipeSearchResponse(BaseModel):
+    status: str = Field(..., description="状态")
+    runtime_mode_key: str = Field(..., description="命中的运行时模式")
+    items: list[RecipeSearchItem] = Field(default_factory=list, description="匹配到的候选配方")
+    schema_version: str = Field("1.0", description="LUT schema 版本")
+    capabilities: list[str] = Field(default_factory=list, description="LUT 能力列表")
+    source_kind: str = Field("legacy_lookup", description="source 类型")
+    supported_modes: list[dict] = Field(default_factory=list, description="支持的叠色层数/层高模式")
+    supports_predictive_match: bool = Field(False, description="是否支持预测式匹配")
+    supports_dynamic_layer_height: bool = Field(False, description="是否支持动态层高")
+    supports_dynamic_layer_count: bool = Field(False, description="是否支持动态叠色层数")
+    supports_custom_recipe: bool = Field(False, description="是否支持自定义配方")

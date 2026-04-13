@@ -1,32 +1,27 @@
 """
 LUT 颜色匹配模块（LUT Color Matcher）
 
-从 image_processing.py 的 _process_high_fidelity_mode Step 5 搬入。
-包含 CIELAB KDTree 查询和颜色编码映射逻辑。
-
-LUT color matching using CIELAB KDTree query and color encoding mapping.
-Extracted from _process_high_fidelity_mode Step 5.
+支持传统 DB 匹配、预测式运行时匹配，以及原生 reference source 的
+DB-first + model fallback 语义。
 """
 
-import time
+from __future__ import annotations
+
 import logging
-import numpy as np
+import time
+
 import cv2
+import numpy as np
 from scipy.spatial import KDTree
+
+from core.native_reference import SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL
+from core.predictive_lut import _rgb_to_runtime_opencv_lab, match_unique_colors_with_runtime
 
 _log = logging.getLogger(__name__)
 
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
-    """将 RGB 数组转换为 CIELAB 空间。
-    Convert RGB array to CIELAB color space.
-
-    Args:
-        rgb_array: numpy array, shape (N, 3) 或 (H, W, 3), dtype uint8
-
-    Returns:
-        numpy array, 同 shape, dtype float64, Lab 值
-    """
+    """将 RGB 数组转换为 CIELAB 空间。"""
     original_shape = rgb_array.shape
     if rgb_array.ndim == 2:
         rgb_3d = rgb_array.reshape(1, -1, 3).astype(np.uint8)
@@ -39,81 +34,193 @@ def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     return lab
 
 
-def match_colors_to_lut(
-    unique_colors: np.ndarray, lut_rgb: np.ndarray, lut_lab: np.ndarray, kdtree: "KDTree", hue_matcher=None
-) -> np.ndarray:
-    """LUT 颜色匹配：将唯一颜色匹配到 LUT 条目。
-    Match unique colors to LUT entries using CIELAB KDTree or hue-aware matcher.
+def _match_colors_to_db(
+    unique_colors: np.ndarray,
+    lut_lab: np.ndarray,
+    kdtree: KDTree | None,
+    hue_matcher=None,
+    *,
+    lut_rgb: np.ndarray | None = None,
+    predictive_runtime=None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return DB LUT indices and their Lab-space distances."""
+    if unique_colors.size == 0:
+        return np.zeros((0,), dtype=np.int32), np.zeros((0,), dtype=np.float32)
 
-    Args:
-        unique_colors: (N, 3) uint8 唯一颜色数组
-        lut_rgb: (M, 3) uint8 LUT RGB 数组
-        lut_lab: (M, 3) float64 LUT CIELAB 数组
-        kdtree: scipy.spatial.KDTree 基于 CIELAB 的 KDTree
-        hue_matcher: 可选的 HueAwareColorMatcher 实例
+    if predictive_runtime is not None:
+        if lut_rgb is None or lut_rgb.size == 0:
+            raise ValueError("lut_rgb is required for native DB matching in runtime Lab space")
+        unique_lab = _rgb_to_runtime_opencv_lab(unique_colors, predictive_runtime.pred_lab)
+        db_lab = _rgb_to_runtime_opencv_lab(lut_rgb, predictive_runtime.pred_lab).astype(np.float32, copy=False)
+        db_tree = KDTree(db_lab)
+        distances, indices = db_tree.query(unique_lab)
+        return np.asarray(indices, dtype=np.int32), np.asarray(distances, dtype=np.float32)
 
-    Returns:
-        (N,) int 数组，每个唯一颜色在 LUT 中的最佳匹配索引
-    """
-    t0 = time.time()
+    unique_lab = _rgb_to_lab(unique_colors)
     if hue_matcher is not None:
-        _log.info(f"[IMAGE_PROCESSOR] 🎨 Hue-aware matching enabled")
-        unique_indices = hue_matcher.match_colors_batch(unique_colors, k=32)
+        _log.info("[IMAGE_PROCESSOR] Hue-aware matching enabled")
+        indices = np.asarray(hue_matcher.match_colors_batch(unique_colors, k=32), dtype=np.int32)
+        selected_lab = lut_lab[indices].astype(np.float64, copy=False)
+        distances = np.linalg.norm(unique_lab - selected_lab, axis=1).astype(np.float32, copy=False)
+        return indices, distances
+
+    if kdtree is None:
+        raise ValueError("KDTree is required for DB LUT matching")
+
+    distances, indices = kdtree.query(unique_lab)
+    return np.asarray(indices, dtype=np.int32), np.asarray(distances, dtype=np.float32)
+
+
+def _native_model_assisted_match(
+    unique_colors: np.ndarray,
+    lut_rgb: np.ndarray,
+    lut_lab: np.ndarray,
+    ref_stacks: np.ndarray | None,
+    kdtree: KDTree | None,
+    predictive_runtime,
+    *,
+    hue_matcher=None,
+    model_enable: bool = False,
+    model_only: bool = False,
+) -> np.ndarray | dict[str, object]:
+    """Apply DB-first + model fallback semantics for native predictive sources."""
+    if predictive_runtime is None:
+        return _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher)[0]
+
+    model_result = match_unique_colors_with_runtime(unique_colors, predictive_runtime)
+
+    if model_only:
+        return model_result
+
+    has_db_baseline = (
+        lut_rgb is not None
+        and lut_rgb.size > 0
+        and ref_stacks is not None
+        and isinstance(ref_stacks, np.ndarray)
+        and ref_stacks.ndim == 2
+        and ref_stacks.shape[0] == lut_rgb.reshape(-1, 3).shape[0]
+    )
+    if not has_db_baseline:
+        runtime_only = dict(model_result)
+        runtime_only["db_baseline_available"] = False
+        return runtime_only
+
+    db_indices, db_distances = _match_colors_to_db(
+        unique_colors,
+        lut_lab,
+        kdtree,
+        hue_matcher,
+        lut_rgb=lut_rgb,
+        predictive_runtime=predictive_runtime,
+    )
+    if not model_enable:
+        return db_indices
+
+    model_distances = np.asarray(model_result["distances"], dtype=np.float32)
+    threshold = float(model_result["threshold"])
+    margin = float(model_result["margin"])
+    use_model = (db_distances > threshold) & ((model_distances + margin) < db_distances)
+    if not np.any(use_model):
+        return db_indices
+
+    matched_rgb = lut_rgb[db_indices].astype(np.uint8, copy=True)
+    recipes = ref_stacks[db_indices].astype(np.int32, copy=True)
+    matched_rgb[use_model] = np.asarray(model_result["matched_rgb"], dtype=np.uint8)[use_model]
+    recipes[use_model] = np.asarray(model_result["recipes"], dtype=np.int32)[use_model]
+
+    return {
+        "match_mode": "predictive",
+        "runtime_mode_key": model_result.get("runtime_mode_key"),
+        "matched_rgb": matched_rgb,
+        "recipes": recipes,
+        "distances": np.where(use_model, model_distances, db_distances).astype(np.float32, copy=False),
+        "db_distances": db_distances,
+        "model_distances": model_distances,
+        "db_overrides": use_model.tolist(),
+        "db_baseline_available": True,
+        "threshold": threshold,
+        "margin": margin,
+        "within_threshold": np.where(use_model, model_distances <= threshold, db_distances <= threshold),
+    }
+
+
+def match_colors_to_lut(
+    unique_colors: np.ndarray,
+    lut_rgb: np.ndarray,
+    lut_lab: np.ndarray,
+    kdtree: KDTree | None,
+    hue_matcher=None,
+    predictive_runtime=None,
+    *,
+    source_kind: str = "legacy_lookup",
+    native_reference_source: bool = False,
+    model_enable: bool = False,
+    model_only: bool = False,
+    ref_stacks: np.ndarray | None = None,
+) -> np.ndarray | dict[str, object]:
+    """Match unique colors using legacy DB lookup or native model-assisted fallback."""
+    t0 = time.time()
+    native_predictive_source = native_reference_source and source_kind in (SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL)
+
+    if native_predictive_source:
+        result = _native_model_assisted_match(
+            unique_colors,
+            lut_rgb,
+            lut_lab,
+            ref_stacks,
+            kdtree,
+            predictive_runtime,
+            hue_matcher=hue_matcher,
+            model_enable=model_enable,
+            model_only=model_only,
+        )
+    elif predictive_runtime is not None:
+        result = match_unique_colors_with_runtime(unique_colors, predictive_runtime)
     else:
-        unique_lab = _rgb_to_lab(unique_colors)
-        _, unique_indices = kdtree.query(unique_lab)
-    _log.info(f"[IMAGE_PROCESSOR] ⏱️ LUT matching: {time.time() - t0:.2f}s")
-    return unique_indices
+        result = _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher)[0]
+
+    if isinstance(result, dict):
+        _log.info(
+            "[IMAGE_PROCESSOR] Predictive LUT matching: %.2fs, mode=%s",
+            time.time() - t0,
+            result.get("runtime_mode_key", "unknown"),
+        )
+    else:
+        _log.info("[IMAGE_PROCESSOR] LUT matching: %.2fs", time.time() - t0)
+    return result
 
 
 def map_pixels_to_lut(
     quantized_image: np.ndarray,
     unique_colors: np.ndarray,
-    unique_indices: np.ndarray,
+    unique_match: np.ndarray | dict[str, object],
     lut_rgb: np.ndarray,
     ref_stacks: np.ndarray,
     target_h: int,
     target_w: int,
     layer_count: int,
-) -> tuple:
-    """像素映射：将所有像素映射到 LUT。
-    Map all pixels to LUT entries using optimized color encoding lookup.
-
-    Args:
-        quantized_image: (H, W, 3) uint8 量化后的图像
-        unique_colors: (N, 3) uint8 唯一颜色数组
-        unique_indices: (N,) int 每个唯一颜色对应的 LUT 索引
-        lut_rgb: (M, 3) uint8 LUT RGB 数组
-        ref_stacks: (M, L) int 材料堆叠配方数组
-        target_h: 目标高度
-        target_w: 目标宽度
-        layer_count: 材料层数
-
-    Returns:
-        tuple: (matched_rgb, material_matrix)
-            - matched_rgb: (H, W, 3) uint8 匹配后的 RGB 图像
-            - material_matrix: (H, W, L) int 材料矩阵
-    """
-    # 🚀 优化：构建颜色编码查找表
-    # 把 RGB 编码成单个整数：R*65536 + G*256 + B
-    # 这样可以用 NumPy 向量化操作一次性完成映射
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map all pixels to LUT or predictive/runtime-derived recipes."""
     t0 = time.time()
-    _log.info(f"[IMAGE_PROCESSOR] Building color lookup table...")
+    _log.info("[IMAGE_PROCESSOR] Building color lookup table...")
 
-    # 为每个 unique_color 计算编码
+    is_predictive = isinstance(unique_match, dict) and unique_match.get("match_mode") == "predictive"
+
     unique_codes = (
         unique_colors[:, 0].astype(np.int32) * 65536
         + unique_colors[:, 1].astype(np.int32) * 256
         + unique_colors[:, 2].astype(np.int32)
     )
 
-    # 构建编码 → 索引的映射数组（用于 np.searchsorted）
     sort_idx = np.argsort(unique_codes)
     sorted_codes = unique_codes[sort_idx]
-    sorted_lut_indices = unique_indices[sort_idx]
+    if is_predictive:
+        matched_rgb_unique = np.asarray(unique_match["matched_rgb"], dtype=np.uint8)[sort_idx]
+        recipe_unique = np.asarray(unique_match["recipes"], dtype=np.int32)[sort_idx]
+        layer_count = int(recipe_unique.shape[1]) if recipe_unique.ndim == 2 else int(layer_count)
+    else:
+        sorted_lut_indices = np.asarray(unique_match, dtype=np.int32)[sort_idx]
 
-    # 计算所有像素的颜色编码
-    _log.info(f"[IMAGE_PROCESSOR] Mapping to full image (optimized)...")
     flat_quantized = quantized_image.reshape(-1, 3)
     pixel_codes = (
         flat_quantized[:, 0].astype(np.int32) * 65536
@@ -121,14 +228,14 @@ def map_pixels_to_lut(
         + flat_quantized[:, 2].astype(np.int32)
     )
 
-    # 使用 searchsorted 找到每个像素对应的 unique_color 索引
     insert_positions = np.searchsorted(sorted_codes, pixel_codes)
-    # 获取对应的 LUT 索引
-    lut_indices_for_pixels = sorted_lut_indices[insert_positions]
+    if is_predictive:
+        matched_rgb = matched_rgb_unique[insert_positions].reshape(target_h, target_w, 3)
+        material_matrix = recipe_unique[insert_positions].reshape(target_h, target_w, layer_count)
+    else:
+        lut_indices_for_pixels = sorted_lut_indices[insert_positions]
+        matched_rgb = lut_rgb[lut_indices_for_pixels].reshape(target_h, target_w, 3)
+        material_matrix = ref_stacks[lut_indices_for_pixels].reshape(target_h, target_w, layer_count)
 
-    # 一次性映射所有像素
-    matched_rgb = lut_rgb[lut_indices_for_pixels].reshape(target_h, target_w, 3)
-    material_matrix = ref_stacks[lut_indices_for_pixels].reshape(target_h, target_w, layer_count)
-    _log.info(f"[IMAGE_PROCESSOR] ⏱️ Color mapping (optimized): {time.time() - t0:.2f}s")
-
+    _log.info("[IMAGE_PROCESSOR] Color mapping: %.2fs", time.time() - t0)
     return matched_rgb, material_matrix

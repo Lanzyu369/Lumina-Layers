@@ -20,6 +20,10 @@ import type {
   ColorHighlightResponse,
   RegionDetectResponse,
   RegionReplaceResponse,
+  RecipePredictRequest,
+  RecipePredictResponse,
+  RecipeOverrideApplyRequest,
+  RecipeOverrideApplyResponse,
   AutoDetectColorsResponse,
 } from "./types";
 
@@ -32,6 +36,13 @@ export async function convertPreview(
   const fd = new FormData();
   fd.append("image", image);
   for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      fd.append(key, JSON.stringify(value));
+      continue;
+    }
     fd.append(key, String(value));
   }
 
@@ -206,6 +217,9 @@ export async function convertBatch(
     fd.append("images", file);
   }
   for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
     fd.append(key, String(value));
   }
   const response = await apiClient.post<BatchResponse>("/convert/batch", fd, {
@@ -290,6 +304,48 @@ export async function regionReplace(
   const response = await apiClient.post<RegionReplaceResponse>(
     "/convert/region-replace",
     { session_id: sessionId, replacement_color: replacementColor },
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+/** Predict a custom recipe color against the active preview session/source. */
+export async function predictCustomRecipe(
+  request: RecipeOverrideApplyRequest | RecipePredictRequest,
+): Promise<RecipePredictResponse> {
+  const response = await apiClient.post<RecipePredictResponse>(
+    "/convert/predict-recipe",
+    {
+      session_id: request.session_id,
+      recipe: request.recipe,
+      layer_order: request.layer_order,
+      color_layers: request.color_layers,
+      layer_height_mm: request.layer_height_mm,
+    },
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+/** Apply a custom recipe override to one or more selected regions. */
+export async function applyRecipeOverride(
+  request: RecipeOverrideApplyRequest,
+): Promise<RecipeOverrideApplyResponse> {
+  const response = await apiClient.post<RecipeOverrideApplyResponse>(
+    "/convert/apply-recipe-override",
+    request,
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+/** 预测任意配方的显示颜色 */
+export async function predictRecipe(
+  payload: RecipePredictRequest,
+): Promise<RecipePredictResponse> {
+  const response = await apiClient.post<RecipePredictResponse>(
+    "/convert/predict-recipe",
+    payload,
     { timeout: 30_000 },
   );
   return response.data;

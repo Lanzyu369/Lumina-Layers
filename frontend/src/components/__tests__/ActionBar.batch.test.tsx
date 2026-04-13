@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { buildLayerImagesSourceKey, useConverterStore } from "../../stores/converter";
+import { useConverterStore } from "../../stores/converter";
+import { buildLayerImagesSourceKey } from "../../stores/converter/store";
 import ActionBar from "../sections/ActionBar";
 
 let capturedZoomableImageProps: Record<string, unknown> | null = null;
@@ -41,7 +42,12 @@ describe("ActionBar — auto batch mode", () => {
       batchLoading: false,
       batchResult: null,
       imageFile: null,
+      source_version: "legacy",
       lut_name: "",
+      nativeBrandGroups: [],
+      nativeBrandGroupsLoading: false,
+      selectedNativeBrandKey: "",
+      selectedNativeDbNames: [],
       isLoading: false,
       error: null,
       previewImageUrl: null,
@@ -151,6 +157,39 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
     const btn = screen.getByText("批量生成").closest("button")!;
     expect(btn).not.toBeDisabled();
+  });
+
+  it("enables preview but keeps generate disabled before a native bundle session exists even when lut_name is empty", () => {
+    useConverterStore.setState({
+      batchMode: false,
+      batchFiles: [],
+      imageFile: makeFile("native.png"),
+      source_version: "native",
+      lut_name: "",
+      selectedNativeBrandKey: "bambulab_pla",
+      selectedNativeDbNames: ["DB-A", "DB-B"],
+      nativeBrandGroups: [
+        {
+          brand_key: "bambulab_pla",
+          material_type: "PLA",
+          vendor: "Bambu Lab",
+          display_name: "Bambu PLA",
+          db_options: [
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-DB-A" },
+            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max", fingerprint: "fp-DB-B" },
+          ],
+          default_db_names: ["DB-A", "DB-B"],
+          supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
+        },
+      ],
+    } as never);
+
+    render(<ActionBar />);
+
+    const previewBtn = screen.getByText("预览").closest("button")!;
+    const generateBtn = screen.getByText("生成").closest("button")!;
+    expect(previewBtn).not.toBeDisabled();
+    expect(generateBtn).toBeDisabled();
   });
 
   // --- BatchResultSummary ---

@@ -9,6 +9,7 @@ with Delta-E (CIE2000) based deduplication.
 import os
 import sys
 import itertools
+import json
 import numpy as np
 
 from colormath.color_objects import sRGBColor, LabColor
@@ -135,6 +136,69 @@ def _apply_stack_id_remap(stacks, remap):
     for src_id, dst_id in remap.items():
         remapped[stacks == src_id] = dst_id
     return remapped
+
+
+_PREDICTIVE_EXTENSION_KEYS = ("measured_db", "stage_model", "runtime_package")
+
+
+def _predictive_extension_payload(metadata):
+    if metadata is None:
+        return {}
+    return {
+        key: metadata.extensions[key]
+        for key in _PREDICTIVE_EXTENSION_KEYS
+        if key in getattr(metadata, "extensions", {})
+    }
+
+
+def _predictive_metadata_signature(metadata):
+    payload = _predictive_extension_payload(metadata)
+    if not payload:
+        return None
+    return (
+        tuple(entry.color for entry in metadata.palette),
+        round(float(metadata.layer_height_mm), 6),
+        round(float(metadata.line_width_mm), 6),
+        int(metadata.base_layers),
+        int(metadata.base_channel_idx),
+        str(metadata.layer_order),
+        str(metadata.get_schema_version()),
+        tuple(metadata.get_capabilities()),
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def _resolve_predictive_merge_payload(metadata_list, merged_palette):
+    predictive_indices = [
+        idx for idx, meta in enumerate(metadata_list or [])
+        if _predictive_extension_payload(meta)
+    ]
+    if not predictive_indices:
+        return None, []
+
+    warnings = []
+    merged_palette_signature = tuple(entry.color for entry in merged_palette)
+    predictive_metas = [metadata_list[idx] for idx in predictive_indices]
+    signatures = [_predictive_metadata_signature(meta) for meta in predictive_metas]
+
+    if any(sig is None for sig in signatures):
+        warnings.append("predictive metadata dropped: source predictive payload is incomplete")
+        return None, warnings
+
+    if len(set(signatures)) > 1:
+        warnings.append("predictive metadata dropped: incompatible predictive payloads across source LUTs")
+        return None, warnings
+
+    source_meta = predictive_metas[0]
+    if tuple(entry.color for entry in source_meta.palette) != merged_palette_signature:
+        warnings.append("predictive metadata dropped: merged palette differs from predictive source LUT")
+        return None, warnings
+
+    return {
+        "schema_version": source_meta.get_schema_version(),
+        "capabilities": source_meta.get_capabilities(),
+        "extensions": dict(source_meta.extensions),
+    }, warnings
 
 # Material ID remapping tables: source mode → 8-Color material IDs
 # 8-Color slots: 0=White, 1=Cyan, 2=Magenta, 3=Yellow, 4=Black, 5=Red, 6=DeepBlue, 7=Green
@@ -292,13 +356,13 @@ class LUTMerger:
                 return ("Merged", count)
             raise ValueError("Invalid .npz: missing 'rgb' or 'stacks' key")
 
-        if ext == ".json":
+        if ext in {".json", ".msgpack"}:
             from utils.lut_manager import LUTManager
 
             rgb, stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
             count = len(rgb)
-            mode = _detect_mode_by_size(count)
-            return (mode or "Merged", count)
+            mode = metadata.color_mode or _detect_mode_by_size(count) or "Merged"
+            return (mode, count)
 
         # .npy file
         lut_data = np.load(lut_path)
@@ -892,6 +956,9 @@ class LUTMerger:
             best_meta = metadata_list[best_idx]
             merged_metadata = LUTMetadata(
                 palette=merged_palette,
+                manufacturer=best_meta.manufacturer,
+                type=best_meta.type,
+                color_mode=best_meta.color_mode,
                 max_color_layers=best_meta.max_color_layers,
                 layer_height_mm=best_meta.layer_height_mm,
                 line_width_mm=best_meta.line_width_mm,
@@ -899,6 +966,15 @@ class LUTMerger:
                 base_channel_idx=best_meta.base_channel_idx,
                 layer_order=best_meta.layer_order,
             )
+            predictive_payload, predictive_warnings = _resolve_predictive_merge_payload(
+                metadata_list,
+                merged_palette,
+            )
+            warnings_list.extend(predictive_warnings)
+            if predictive_payload is not None:
+                merged_metadata.schema_version = predictive_payload["schema_version"]
+                merged_metadata.capabilities = list(predictive_payload["capabilities"])
+                merged_metadata.extensions = dict(predictive_payload["extensions"])
 
         # 1. 按色彩模式优先级排序（高优先级在前）
         # 同时保持 source_names 的对应关系

@@ -1,10 +1,13 @@
+import { useState } from "react";
 import { useConverterStore } from "../../stores/converter";
 import type { PaletteEntry } from "../../api/types";
 import Slider from "../ui/Slider";
 import Button from "../ui/Button";
 import Switch from "../ui/Switch";
+import CustomRecipeDialog from "../ui/CustomRecipeDialog";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
+import { normalizeResourceUrl } from "../../utils/resourceUrl";
 
 // ========== PaletteItem ==========
 
@@ -161,7 +164,12 @@ export default function PalettePanel({
   onToggleHoverLayerDetails,
 }: PalettePanelProps) {
   const { t } = useI18n();
+  const [recipeDialogOpen, setRecipeDialogOpen] = useState(false);
   const palette = useConverterStore((s) => s.palette);
+  const selectedLutInfo = useConverterStore((s) => s.selectedLutInfo);
+  const sessionId = useConverterStore((s) => s.sessionId);
+  const color_layers = useConverterStore((s) => s.color_layers);
+  const layer_height_mm = useConverterStore((s) => s.layer_height_mm);
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
@@ -177,11 +185,15 @@ export default function PalettePanel({
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const setSelectionMode = useConverterStore((s) => s.setSelectionMode);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
+  const regionData = useConverterStore((s) => s.regionData);
   const removeRegionFromSelection = useConverterStore((s) => s.removeRegionFromSelection);
   const free_color_set = useConverterStore((s) => s.free_color_set);
   const toggleFreeColor = useConverterStore((s) => s.toggleFreeColor);
   const clearFreeColors = useConverterStore((s) => s.clearFreeColors);
   const regionReplacementCount = useConverterStore((s) => s.regionReplacementCount);
+  const canUseCustomRecipe =
+    !!selectedLutInfo?.supports_custom_recipe &&
+    (selectedRegions.length > 0 || !!regionData?.regionId);
 
   const hasRemaps = Object.keys(colorRemapMap).length > 0 || regionReplacementCount > 0;
   const hasHistory = remapHistory.length > 0;
@@ -313,6 +325,12 @@ export default function PalettePanel({
               onClick={clearFreeColors}
               disabled={free_color_set.size === 0}
             />
+            <Button
+              label={t("recipe_custom_button")}
+              variant="secondary"
+              onClick={() => setRecipeDialogOpen(true)}
+              disabled={!canUseCustomRecipe}
+            />
             <div className={cx(workstationInsetCardClass, "w-full flex flex-wrap items-center gap-2 px-2 py-1.5")}>
               <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
                 {t("viewer_hover_toggle_group")}
@@ -415,6 +433,57 @@ export default function PalettePanel({
           </div>
         </div>
       )}
+      <CustomRecipeDialog
+        open={recipeDialogOpen}
+        sessionId={sessionId ?? ""}
+        palette={(selectedLutInfo?.palette ?? []).map((entry) => ({
+          color: entry.color_name ?? entry.color,
+          material: entry.material,
+        }))}
+        regionIds={
+          selectedRegions.length > 0
+            ? selectedRegions.map((region) => region.regionId)
+            : (regionData?.regionId ? [regionData.regionId] : [])
+        }
+        colorLayers={color_layers ?? selectedLutInfo?.max_color_layers ?? 5}
+        layerHeightMm={layer_height_mm ?? selectedLutInfo?.layer_height_mm ?? 0.08}
+        layerOrder={selectedLutInfo?.layer_order ?? "Top2Bottom"}
+        baseChannelIdx={selectedLutInfo?.base_channel_idx ?? 0}
+        onClose={() => setRecipeDialogOpen(false)}
+        onApplied={(response, recipe, nextLayers, nextLayerHeightMm) => {
+          const activeRegionIds =
+            selectedRegions.length > 0
+              ? selectedRegions.map((region) => region.regionId)
+              : (regionData?.regionId ? [regionData.regionId] : []);
+          useConverterStore.setState((state) => ({
+            previewImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
+            previewBaseImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
+            previewGlbUrl: response.preview_glb_url
+              ? normalizeResourceUrl(response.preview_glb_url)
+              : state.previewGlbUrl,
+            color_layers: Math.max(state.color_layers ?? 0, nextLayers),
+            layer_height_mm: nextLayerHeightMm,
+            recipe_overrides: [
+              ...state.recipe_overrides.filter(
+                (item) => !activeRegionIds.includes(item.region_id),
+              ),
+              ...activeRegionIds.map((regionId) => ({
+                region_id: regionId,
+                recipe: [...recipe],
+                layer_order: selectedLutInfo?.layer_order ?? "Top2Bottom",
+              })),
+            ],
+            lutMatchMode: "predictive",
+            lutMatchInfo: {
+              ...(state.lutMatchInfo ?? {}),
+              match_mode: "predictive",
+              runtime_mode_key: response.runtime_mode_key ?? null,
+              source: response.source,
+              override: true,
+            },
+          }));
+        }}
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Suspense, useRef, useState, useEffect, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
@@ -8,11 +9,13 @@ import InteractiveModelViewer, { type ViewerHoverSample } from "./InteractiveMod
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
+import PreviewHoverInspector from "./ui/PreviewHoverInspector";
 import { buildLayerImagesSourceKey, useConverterStore } from "../stores/converter";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
+import { computeHoverInspectorStyle } from "./ui/previewHoverInspectorUtils";
 
 declare global {
   interface Window {
@@ -102,9 +105,6 @@ interface LayerCanvasBuffer {
 
 const MAGNIFIER_SIZE_PX = 152;
 const MAGNIFIER_ZOOM = 3;
-const MAGNIFIER_OFFSET_PX = 18;
-const INSPECTOR_WIDTH_PX = 248;
-const INSPECTOR_HEIGHT_PX = 310;
 const HOVER_POPOVER_DELAY_MS = 180;
 
 type HoverPerfWindow = Window & { __luminaHoverPerfDebug?: boolean };
@@ -166,6 +166,13 @@ function areHoverSamplesEqual(
   if (left === right) return true;
   if (!left || !right) return false;
   return (
+    left.containerX === right.containerX
+    && left.containerY === right.containerY
+    && left.containerWidth === right.containerWidth
+    && left.containerHeight === right.containerHeight
+    && left.containerLeft === right.containerLeft
+    && left.containerTop === right.containerTop
+    &&
     left.canvasX === right.canvasX
     && left.canvasY === right.canvasY
     && left.pixelX === right.pixelX
@@ -698,25 +705,30 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     ? (colorRemapMap[hoverSample.hitColorHex] || hoverSample.hitColorHex).toUpperCase()
     : null;
   const hoverInspectorStyle = (() => {
-    if (!hoverSample || !containerRef.current) {
+    if (!hoverSample) {
       return null;
     }
-    const rect = containerRef.current.getBoundingClientRect();
-    const left = clampNumber(
-      hoverSample.canvasX + MAGNIFIER_OFFSET_PX,
-      8,
-      Math.max(8, rect.width - INSPECTOR_WIDTH_PX - 8),
-    );
-    const top = clampNumber(
-      hoverSample.canvasY + MAGNIFIER_OFFSET_PX,
-      8,
-      Math.max(8, rect.height - INSPECTOR_HEIGHT_PX - 8),
-    );
-    return {
-      left: `${left}px`,
-      top: `${top}px`,
-    };
+    return computeHoverInspectorStyle(hoverSample, {
+      layerCount: hoverLayerColors.length,
+      showMagnifier: true,
+      showLayerDetails: true,
+    });
   })();
+  const hoverInspectorOverlay = hoverSample && hoverInspectorStyle && typeof document !== "undefined"
+    ? createPortal(
+      <PreviewHoverInspector
+        dataTestId="viewer-hover-inspector"
+        style={hoverInspectorStyle}
+        magnifierCanvasRef={magnifierCanvasRef}
+        pixelX={hoverSample.pixelX}
+        pixelY={hoverSample.pixelY}
+        surfaceHex={surfaceHex}
+        hoverLayerColors={hoverLayerColors}
+        layerImagesLoading={layerImagesLoading}
+      />,
+      document.body,
+    )
+    : null;
 
   return (
     <div
@@ -896,105 +908,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         )}
       </Canvas>
 
-      {hoverSample && hoverInspectorStyle && (
-        <div
-          className="pointer-events-none absolute z-10"
-          style={hoverInspectorStyle}
-          data-testid="viewer-hover-inspector"
-        >
-          <div
-            className="w-[248px] rounded-xl border p-2 shadow-xl backdrop-blur-sm"
-            style={{
-              borderColor: "var(--surface-outline)",
-              background: "var(--surface-panel-strong)",
-              color: "var(--surface-text-muted)",
-            }}
-          >
-            <div
-              className="relative overflow-hidden rounded-md border"
-              style={{ borderColor: "var(--surface-outline)" }}
-            >
-              <canvas
-                ref={magnifierCanvasRef}
-                width={MAGNIFIER_SIZE_PX}
-                height={MAGNIFIER_SIZE_PX}
-                className="h-[152px] w-[152px]"
-                aria-label={t("viewer_hover_magnifier")}
-              />
-              <span
-                className="absolute left-2 top-2 rounded border px-1.5 py-0.5 text-[10px]"
-                style={{
-                  borderColor: "var(--surface-outline)",
-                  background: "var(--surface-section-muted)",
-                }}
-              >
-                {t("viewer_hover_magnifier")}
-              </span>
-            </div>
-
-            <div className="mt-2 space-y-1 text-[11px]">
-              <div className="flex items-center justify-between">
-                <span>{t("viewer_hover_pixel")}</span>
-                <span className="font-mono">({hoverSample.pixelX}, {hoverSample.pixelY})</span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span>{t("viewer_hover_surface_color")}</span>
-                <span className="inline-flex items-center gap-1.5 font-mono">
-                  <span
-                    className="h-3 w-3 rounded border"
-                    style={{
-                      borderColor: "var(--surface-outline)",
-                      backgroundColor: surfaceHex ? `#${surfaceHex}` : "transparent",
-                    }}
-                  />
-                  {surfaceHex ? `#${surfaceHex}` : t("viewer_hover_transparent")}
-                </span>
-              </div>
-            </div>
-
-            <div
-              className="mt-2 border-t pt-2"
-              style={{ borderColor: "var(--surface-outline)" }}
-            >
-              <div className="mb-1 text-[11px] font-semibold">
-                {t("viewer_hover_layers_title")}
-              </div>
-              {layerImagesLoading && hoverLayerColors.length === 0 ? (
-                <p className="text-[11px]">
-                  {t("viewer_hover_loading_layers")}
-                </p>
-              ) : hoverLayerColors.length > 0 ? (
-                <ul className="max-h-28 space-y-1 overflow-y-auto pr-1 text-[11px]">
-                  {hoverLayerColors.map((layer) => (
-                    <li
-                      key={`${layer.displayIndex}-${layer.layerName}`}
-                      className="flex items-center justify-between gap-2"
-                    >
-                      <span className="truncate">
-                        {t("action_layer_nth")}{layer.displayIndex}{t("action_layer_unit")}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 font-mono">
-                        <span
-                          className="h-2.5 w-2.5 rounded border"
-                          style={{
-                            borderColor: "var(--surface-outline)",
-                            backgroundColor: layer.colorHex ? `#${layer.colorHex}` : "transparent",
-                          }}
-                        />
-                        {layer.colorHex ? `#${layer.colorHex}` : t("viewer_hover_transparent")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-[11px]">
-                  {t("viewer_hover_no_layer_data")}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {hoverInspectorOverlay}
     </div>
   );
 }

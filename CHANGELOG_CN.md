@@ -10,6 +10,9 @@ Lumina Studio 所有重要变更记录。
 
 ### 新功能
 - **拼图模式收尾** - 在 converter 工作区补齐拼图叠线预览、独立拼图设置 Widget、2D/3D 叠线显示、配方导入导出，以及“逐块生成后组合为单个 3MF”的导出流程
+- **Native Source Bundle 选择** - 增加旧版/新版来源切换、原生品牌 + DB bundle 选择器，以及参考 bundle 的后端目录与请求归一化能力
+- **Single-Stage 工作流** - 增加 single-stage 数据集提取、Stage A 拟合端点、前端 store 接线，以及对应 UI / 测试覆盖
+- **预测式配方工作流** - 增加预测式配方颜色查询/应用、native 自定义配方编辑，以及预测式 / 原生 LUT 所需的运行时元数据支持
 
 ### 修复
 - **拼图预览可靠性** - 修复旧失败请求覆盖新成功叠线的问题，并允许同参数在临时失败后继续重试拼图叠线预览
@@ -19,6 +22,10 @@ Lumina Studio 所有重要变更记录。
 - **SVG 拼图片块稳定性** - SVG 拼图生成现在会把每块辅助栅格和 boundary JSON 对齐到 worker 实际重建网格，并将浮点尾差宽度改为四舍五入而不是截断，避免出现空网格导出
 - **未实现背刻保护** - 背面刻号现在被视为预留能力；生成时会明确拒绝，而不是静默导出一个没有背刻几何的 3MF
 - **Smoke 覆盖补齐** - 将拼图相关的后端/前端用例加入快速 smoke gate
+- **Native / Puzzle 契约加固** - 恢复拼图响应摘要字段，重新接通前端拼图生成分支，补回冰箱贴参数透传，并统一 preview / apply / generate / large-format 之间的 recipe override 形状
+- **预览与会话安全** - 来源切换时清空陈旧预览会话，避免 native bundle 复用旧的 legacy session，并补齐 native preview 失败时的 pre-session 临时文件清理
+- **治理与编码清理** - 移除治理路径中新引入的 catch-all 异常回退，修复 vector engine 中误触发 `print(` 规则的命名问题，并清理 `.gitignore` 中真实存在的乱码
+- **Single-Stage ZIP 安全** - 加固 ZIP 解压路径校验，阻止路径穿越，并让损坏 ZIP 上传稳定返回 422，同时在 pre-session 失败时清理临时上传文件
 
 ---
 

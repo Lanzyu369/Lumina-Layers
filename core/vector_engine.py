@@ -373,7 +373,7 @@ class VectorProcessor:
         return (center_x_svg, center_y_svg)
 
     @staticmethod
-    def _build_vector_fridge_magnet_footprint(magnet, bbox, scale_factor):
+    def _build_vector_fridge_magnet_outline(magnet, bbox, scale_factor):
         """Build one fridge-magnet footprint in normalized vector polygon space."""
         center_x, center_y = VectorProcessor._centered_mm_to_vector_coords(
             magnet.get("center_x_mm", 0.0),
@@ -432,7 +432,7 @@ class VectorProcessor:
             if depth_mm <= 0 or depth_mm + shell_thickness_mm > backing_height + 1e-9:
                 continue
 
-            footprint = VectorProcessor._build_vector_fridge_magnet_footprint(magnet, backing_bbox, scale_factor)
+            footprint = VectorProcessor._build_vector_fridge_magnet_outline(magnet, backing_bbox, scale_factor)
             if footprint is None or footprint.is_empty:
                 continue
 

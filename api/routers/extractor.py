@@ -15,14 +15,25 @@ from PIL import Image
 
 from api.dependencies import get_file_registry, get_session_store
 from api.errors import to_http_exception
-from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes, upload_to_ndarray
+from api.file_bridge import (
+    ndarray_to_png_bytes,
+    pil_to_png_bytes,
+    upload_to_ndarray,
+    upload_to_tempfile,
+)
 from api.file_registry import FileRegistry
 from api.schemas.extractor import ConfirmPaletteRequest, ExtractorManualFixRequest
-from api.schemas.responses import ExtractResponse, ManualFixResponse
+from api.schemas.responses import (
+    ExtractResponse,
+    ManualFixResponse,
+    SingleStageExtractResponse,
+    StageAFitResponse,
+)
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import ColorSystem, LUTMetadata, PaletteEntry
 from core.extractor import apply_auto_white_balance, manual_fix_cell, rotate_image, run_extraction
+from core.single_stage import extract_single_stage_dataset, fit_stage_a_from_stage_json
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])

@@ -14,6 +14,7 @@ import time
 import logging
 
 from config import ModelingMode, ColorSystem
+from core.pipeline.preview_color_utils import build_palette_preview_colors
 from utils.lut_manager import LUTManager
 
 _log = logging.getLogger(__name__)
@@ -82,22 +83,27 @@ def run(ctx: dict) -> dict:
     # Use material names as keys (not indices) for direct lookup
     preview_colors = None
     slot_names = None
+    if "color_layers" not in ctx:
+        ctx["color_layers"] = None
+    if "layer_height_mm" not in ctx:
+        ctx["layer_height_mm"] = None
 
-    if color_mode == "Merged" and actual_lut_path.endswith(".json"):
+    if actual_lut_path.endswith((".json", ".msgpack")):
         try:
             _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
+            if ctx.get("color_layers") is None:
+                ctx["color_layers"] = getattr(lut_metadata, "max_color_layers", None)
+            if ctx.get("layer_height_mm") is None:
+                ctx["layer_height_mm"] = getattr(lut_metadata, "layer_height_mm", None)
             if lut_metadata.palette:
-                slot_names = [e.color for e in lut_metadata.palette]
-                _log.info(f"[P01] Merged LUT: Using palette order: {slot_names}")
-
-                preview_colors = {}
+                slot_names, preview_colors = build_palette_preview_colors(lut_metadata.palette, color_conf)
+                _log.info(f"[P01] LUT/source: Using palette order: {slot_names}")
                 for idx, entry in enumerate(lut_metadata.palette):
-                    hex_color = entry.hex_color or "#FFFFFF"
-                    r = int(hex_color[1:3], 16)
-                    g = int(hex_color[3:5], 16)
-                    b = int(hex_color[5:7], 16)
-                    preview_colors[idx] = [r, g, b, 255]
-                    _log.info(f"[P01] Material '{entry.color}' -> RGB{[r,g,b]} ({hex_color})")
+                    rgba = preview_colors[idx]
+                    if entry.hex_color:
+                        _log.info(f"[P01] Material '{entry.color}' -> RGB{rgba[:3]} ({entry.hex_color})")
+                    else:
+                        _log.info(f"[P01] Material '{entry.color}' -> RGB{rgba[:3]} (derived from color_conf)")
             else:
                 _log.warning("[P01] Merged LUT has no palette, using default color_conf")
         except (OSError, ValueError, TypeError, KeyError) as e:

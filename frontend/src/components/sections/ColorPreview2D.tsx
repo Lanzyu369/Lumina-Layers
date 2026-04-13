@@ -793,7 +793,11 @@ export default function ColorPreview2D({
     previewPixelHeight,
   ]);
 
-  const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample) : null;
+  const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample, {
+    layerCount: hoverLayerColors.length,
+    showMagnifier,
+    showLayerDetails,
+  }) : null;
   const hoverInspectorOverlay = hoverInspectorEnabled && hoverSample && hoverInspectorStyle && typeof document !== 'undefined'
     ? createPortal(
       <PreviewHoverInspector

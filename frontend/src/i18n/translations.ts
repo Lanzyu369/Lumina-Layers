@@ -468,8 +468,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Backing Color",
   },
   cal_generate_btn: {
-    zh: "🚀 生成",
-    en: "🚀 Generate",
+    zh: "生成",
+    en: "Generate",
   },
   cal_status: {
     zh: "状态",
@@ -602,6 +602,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   viewer_hover_magnifier: {
     zh: "放大镜",
     en: "Magnifier",
+  },
+  viewer_hover_toggle_group: {
+    zh: "悬停显示",
+    en: "Hover Display",
+  },
+  viewer_hover_toggle_magnifier: {
+    zh: "放大镜",
+    en: "Magnifier",
+  },
+  viewer_hover_toggle_layers: {
+    zh: "分层颜色",
+    en: "Layer Colors",
   },
   viewer_hover_pixel: {
     zh: "像素坐标",
@@ -802,10 +814,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   merge_status_applied: {
     zh: "✅ 已应用: {merged} 种颜色被合并",
     en: "✅ Applied: {merged} colors merged",
-  },
-  converter_preview_2d_alt: {
-    zh: "2D 颜色预览",
-    en: "2D color preview",
   },
   merge_status_reverted: {
     zh: "↩️ 已恢复到原始颜色",
@@ -1199,15 +1207,15 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   "widget.fridgeMagnetSettings": {
     zh: "冰箱贴磁铁槽",
-    en: "Fridge Magnet",
-  },
-  "widget.actionBar": {
-    zh: "操作栏",
-    en: "Actions",
+    en: "Fridge Magnet Settings",
   },
   "widget.puzzleSettings": {
     zh: "拼图设置",
     en: "Puzzle Settings",
+  },
+  "widget.actionBar": {
+    zh: "操作栏",
+    en: "Actions",
   },
   "widget.colorWorkstation": {
     zh: "颜色工作站",
@@ -1339,6 +1347,42 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "中心 Y",
     en: "Center Y",
   },
+  color_2d_overlay_title: {
+    zh: "颜色工作站",
+    en: "Color Workstation",
+  },
+  color_2d_overlay_close: {
+    zh: "关闭",
+    en: "Close",
+  },
+  color_2d_tab_preview: {
+    zh: "2D 预览",
+    en: "2D Preview",
+  },
+  color_2d_tab_palette: {
+    zh: "调色板",
+    en: "Palette",
+  },
+  color_2d_tab_lut_grid: {
+    zh: "LUT 颜色",
+    en: "LUT Colors",
+  },
+  color_2d_no_preview: {
+    zh: "暂无预览图，请先完成预览",
+    en: "No preview available. Please generate a preview first.",
+  },
+  color_2d_generating_preview: {
+    zh: "正在生成预览…",
+    en: "Generating preview…",
+  },
+  preview_debug_main_2d: {
+    zh: "主 2D 预览",
+    en: "Main 2D Preview",
+  },
+  preview_debug_action_2d: {
+    zh: "操作栏 2D 小预览",
+    en: "ActionBar Mini Preview",
+  },
   puzzle_enable: {
     zh: "启用拼图模式",
     en: "Enable Puzzle Mode",
@@ -1466,54 +1510,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   puzzle_loop_disabled_hint: {
     zh: "拼图模式开启时，挂件环会被禁用。",
     en: "Keychain Loop is disabled while puzzle mode is enabled.",
-  },
-  color_2d_overlay_title: {
-    zh: "颜色工作站",
-    en: "Color Workstation",
-  },
-  color_2d_overlay_close: {
-    zh: "关闭",
-    en: "Close",
-  },
-  viewer_hover_toggle_group: {
-    zh: "悬停信息",
-    en: "Hover Info",
-  },
-  viewer_hover_toggle_magnifier: {
-    zh: "放大镜",
-    en: "Magnifier",
-  },
-  viewer_hover_toggle_layers: {
-    zh: "查看分层",
-    en: "Layers",
-  },
-  color_2d_tab_preview: {
-    zh: "2D 预览",
-    en: "2D Preview",
-  },
-  color_2d_tab_palette: {
-    zh: "调色板",
-    en: "Palette",
-  },
-  color_2d_tab_lut_grid: {
-    zh: "LUT 颜色",
-    en: "LUT Colors",
-  },
-  color_2d_no_preview: {
-    zh: "暂无预览图，请先完成预览",
-    en: "No preview available. Please generate a preview first.",
-  },
-  color_2d_generating_preview: {
-    zh: "正在生成预览…",
-    en: "Generating preview…",
-  },
-  preview_debug_main_2d: {
-    zh: "主 2D 预览",
-    en: "Main 2D Preview",
-  },
-  preview_debug_action_2d: {
-    zh: "操作栏 2D 小预览",
-    en: "ActionBar Mini Preview",
   },
 
   // ==================== TAB Navigation Titles ====================
@@ -2135,6 +2131,110 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_color_mode_label: {
     zh: "色彩模式",
     en: "Color Mode",
+  },
+  basic_source_version_label: {
+    zh: "来源类型",
+    en: "Source Type",
+  },
+  basic_source_version_legacy: {
+    zh: "传统 LUT",
+    en: "Legacy LUT",
+  },
+  basic_source_version_native: {
+    zh: "反推LUT",
+    en: "Inferred LUT",
+  },
+  basic_source_kind_label: {
+    zh: "颜色源类型",
+    en: "Source Kind",
+  },
+  basic_brand_label: {
+    zh: "品牌",
+    en: "Brand",
+  },
+  basic_brand_loading: {
+    zh: "品牌目录加载中…",
+    en: "Loading brands…",
+  },
+  basic_brand_placeholder: {
+    zh: "请选择品牌",
+    en: "Select a brand",
+  },
+  basic_native_brand_placeholder: {
+    zh: "请选择品牌",
+    en: "Select a brand",
+  },
+  basic_native_brand_summary_label: {
+    zh: "品牌信息",
+    en: "Brand Info",
+  },
+  basic_native_material_label: {
+    zh: "材质类型",
+    en: "Material Type",
+  },
+  basic_native_vendor_label: {
+    zh: "供应商",
+    en: "Vendor",
+  },
+  basic_native_db_label: {
+    zh: "数据库",
+    en: "Databases",
+  },
+  basic_native_db_placeholder: {
+    zh: "未选择数据库",
+    en: "No databases selected",
+  },
+  basic_native_mode_label: {
+    zh: "动态层模式",
+    en: "Layer Mode",
+  },
+  basic_native_layer_count_label: {
+    zh: "层数",
+    en: "Layer Count",
+  },
+  basic_native_mode_placeholder: {
+    zh: "请选择支持模式",
+    en: "Select a supported mode",
+  },
+  basic_color_layers_label: {
+    zh: "叠色层数",
+    en: "Color Layers",
+  },
+  basic_layer_height_label: {
+    zh: "叠色层高",
+    en: "Layer Height",
+  },
+  basic_supported_modes_label: {
+    zh: "支持模式",
+    en: "Supported Modes",
+  },
+  basic_model_gate_label: {
+    zh: "模型辅助匹配",
+    en: "Model-Assisted Matching",
+  },
+  basic_model_enable: {
+    zh: "模型辅助匹配",
+    en: "Model-Assisted Matching",
+  },
+  basic_model_only: {
+    zh: "仅模型匹配",
+    en: "Model only",
+  },
+  basic_model_threshold: {
+    zh: "模型阈值",
+    en: "Model Threshold",
+  },
+  basic_model_margin: {
+    zh: "模型边距",
+    en: "Model Margin",
+  },
+  basic_model_runtime_defaults_hint: {
+    zh: "留空则使用运行时默认值。",
+    en: "Leave blank to use runtime defaults.",
+  },
+  basic_dynamic_layers_legacy_hint: {
+    zh: "当前为旧 LUT，不支持动态层数或自定义配方。",
+    en: "This legacy LUT does not support dynamic layers or custom recipes.",
   },
   basic_width: {
     zh: "宽度",
@@ -3408,76 +3508,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Gray options indicate invalid combinations at that position.",
   },
 
-  // ==================== Five Color Recipe Collection ====================
-  five_color_add_to_list: {
-    zh: "加入列表",
-    en: "Add to List",
-  },
-  five_color_already_in_list: {
-    zh: "已在列表中",
-    en: "Already in List",
-  },
-  five_color_collection_title: {
-    zh: "配方验证列表",
-    en: "Recipe Verification List",
-  },
-  five_color_collection_empty: {
-    zh: "查询配方后点击「加入列表」收集待验证配方",
-    en: "Query a recipe then click 'Add to List' to collect recipes for verification",
-  },
-  five_color_collection_count: {
-    zh: "{count} 个配方",
-    en: "{count} recipe(s)",
-  },
-  five_color_collection_clear: {
-    zh: "清空列表",
-    en: "Clear List",
-  },
-  five_color_swatch_block_size: {
-    zh: "色块尺寸 (mm)",
-    en: "Block Size (mm)",
-  },
-  five_color_swatch_gap: {
-    zh: "网格线宽 (mm)",
-    en: "Grid Width (mm)",
-  },
-  five_color_swatch_cols: {
-    zh: "每行列数 (0=自动)",
-    en: "Columns (0=auto)",
-  },
-  five_color_swatch_structure: {
-    zh: "结构模式",
-    en: "Structure",
-  },
-  five_color_swatch_single_sided: {
-    zh: "单面",
-    en: "Single-sided",
-  },
-  five_color_swatch_double_sided: {
-    zh: "双面",
-    en: "Double-sided",
-  },
-  five_color_generate_swatch: {
-    zh: "生成验证 3MF",
-    en: "Generate Verification 3MF",
-  },
-  five_color_generating_swatch: {
-    zh: "生成中...",
-    en: "Generating...",
-  },
-  five_color_download_swatch: {
-    zh: "下载 3MF",
-    en: "Download 3MF",
-  },
-  five_color_remove_recipe: {
-    zh: "移除",
-    en: "Remove",
-  },
-  five_color_swatch_legend_alt: {
-    zh: "色卡图",
-    en: "Swatch legend",
-  },
-
   // ==================== Recipe Share Card ====================
   recipe_export_btn: {
     zh: "导出分享卡",
@@ -3563,6 +3593,106 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "同时导出 JSON",
     en: "Also export JSON",
   },
+  recipe_custom_button: {
+    zh: "自定义配方",
+    en: "Custom Recipe",
+  },
+  recipe_custom_title: {
+    zh: "自定义配方编辑器",
+    en: "Custom Recipe Editor",
+  },
+  recipe_custom_close: {
+    zh: "关闭",
+    en: "Close",
+  },
+  recipe_custom_layer_count: {
+    zh: "{count} 层",
+    en: "{count} layers",
+  },
+  recipe_custom_layer_label: {
+    zh: "第 {index} 层",
+    en: "Layer {index}",
+  },
+  recipe_custom_add_layer: {
+    zh: "添加层",
+    en: "Add Layer",
+  },
+  recipe_custom_remove_layer: {
+    zh: "删除层",
+    en: "Remove Layer",
+  },
+  recipe_custom_move_up: {
+    zh: "上移",
+    en: "Move Up",
+  },
+  recipe_custom_move_down: {
+    zh: "下移",
+    en: "Move Down",
+  },
+  recipe_custom_predict: {
+    zh: "预测颜色",
+    en: "Predict Color",
+  },
+  recipe_custom_predicting: {
+    zh: "正在预测…",
+    en: "Predicting…",
+  },
+  recipe_custom_predict_hint: {
+    zh: "点击“预测颜色”查看当前配方的预览颜色。",
+    en: "Use Predict Color to preview the current recipe.",
+  },
+  recipe_custom_preview_color: {
+    zh: "预览颜色",
+    en: "Preview Color",
+  },
+  recipe_custom_rgb_label: {
+    zh: "RGB",
+    en: "RGB",
+  },
+  recipe_custom_lab_label: {
+    zh: "Lab",
+    en: "Lab",
+  },
+  recipe_custom_apply: {
+    zh: "应用到选区",
+    en: "Apply to Selection",
+  },
+  recipe_custom_applying: {
+    zh: "正在应用…",
+    en: "Applying…",
+  },
+  recipe_custom_region_required: {
+    zh: "请先选中至少一个区域，再应用自定义配方。",
+    en: "Select at least one region before applying a custom recipe.",
+  },
+  recipe_custom_region_count: {
+    zh: "目标区域：{count}",
+    en: "Target Regions: {count}",
+  },
+  recipe_custom_pattern_placeholder: {
+    zh: "层色搜索，例如 WRYB?",
+    en: "Pattern search, e.g. WRYB?",
+  },
+  recipe_custom_pattern_hint: {
+    zh: "按层颜色快速填充。字母=颜色首字母，?=保留当前层，-=可选分隔。",
+    en: "Quick-fill by layer pattern. Letter=color initial, ?=keep current, -=optional separator.",
+  },
+  recipe_custom_pattern_apply: {
+    zh: "应用模式",
+    en: "Apply Pattern",
+  },
+  recipe_custom_pattern_invalid: {
+    zh: "无法识别的字符：{char}",
+    en: "Unrecognized character: {char}",
+  },
+  recipe_custom_predict_failed: {
+    zh: "颜色预测失败",
+    en: "Color prediction failed",
+  },
+  recipe_custom_apply_failed: {
+    zh: "应用自定义配方失败",
+    en: "Failed to apply custom recipe",
+  },
   recipe_import_lut_missing: {
     zh: "LUT 未找到，请手动选择兼容的 LUT",
     en: "LUT not found, please select a compatible LUT manually",
@@ -3583,28 +3713,289 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "素材数据损坏，无法恢复原始文件",
     en: "Asset data is corrupted — unable to restore original file",
   },
-  recipe_import_warning_fridge_conflict_puzzle: {
-    zh: "导入的配方同时启用了冰箱贴模式和拼图模式。为保持状态有效，拼图模式已被禁用。",
-    en: "Imported recipe enabled both fridge magnet mode and puzzle mode. Puzzle mode was disabled to keep the state valid.",
+
+  lut_info_schema_label: {
+    zh: "Schema",
+    en: "Schema",
   },
-  recipe_import_warning_fridge_conflict_large_format: {
-    zh: "导入的配方同时启用了冰箱贴模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
-    en: "Imported recipe enabled both fridge magnet mode and large-format tiling. Large Format was disabled to keep the state valid.",
+  lut_info_capabilities_label: {
+    zh: "能力",
+    en: "Capabilities",
   },
-  recipe_import_warning_fridge_conflict_loop: {
-    zh: "导入的配方同时启用了冰箱贴模式和挂件环。为保持状态有效，挂件环已被禁用。",
-    en: "Imported recipe enabled both fridge magnet mode and keychain loop generation. Keychain Loop was disabled to keep the state valid.",
+  lut_info_predictive_enabled: {
+    zh: "支持预测式匹配",
+    en: "Predictive match enabled",
   },
-  recipe_import_warning_puzzle_conflict_large_format: {
-    zh: "导入的配方同时启用了拼图模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
-    en: "Imported recipe enabled both puzzle mode and large-format tiling. Large Format was disabled to keep the state valid.",
+  lut_info_predictive_disabled: {
+    zh: "仅传统查表",
+    en: "Legacy lookup only",
   },
-  recipe_import_warning_puzzle_conflict_loop: {
-    zh: "导入的配方同时启用了拼图模式和挂件环。为保持状态有效，挂件环已被禁用。",
-    en: "Imported recipe enabled both puzzle mode and keychain loop generation. Keychain Loop was disabled to keep the state valid.",
+  lut_info_dynamic_enabled: {
+    zh: "支持动态层高",
+    en: "Dynamic layer height enabled",
   },
-  recipe_import_warning_back_labels_unavailable: {
-    zh: "导入的配方请求了背面标签雕刻，但该功能当前不可用。背面标签雕刻已被禁用。",
-    en: "Imported recipe requested back-label engraving, but this feature is currently unavailable. Back-label engraving was disabled.",
+  lut_info_dynamic_disabled: {
+    zh: "固定层高",
+    en: "Fixed layer height",
+  },
+  lut_info_dynamic_count_enabled: {
+    zh: "支持动态层数",
+    en: "Dynamic layer count enabled",
+  },
+  lut_info_dynamic_count_disabled: {
+    zh: "固定层数",
+    en: "Fixed layer count",
+  },
+  lut_info_custom_recipe_enabled: {
+    zh: "支持自定义配方",
+    en: "Custom recipe enabled",
+  },
+  lut_info_custom_recipe_disabled: {
+    zh: "不支持自定义配方",
+    en: "Custom recipe unavailable",
+  },
+  lut_info_source_kind_label: {
+    zh: "来源类型",
+    en: "Source Kind",
+  },
+  lut_info_supported_modes_label: {
+    zh: "支持模式",
+    en: "Supported Modes",
+  },
+  lut_info_capability_legacy_lookup: {
+    zh: "传统查表",
+    en: "Legacy lookup",
+  },
+  lut_info_capability_predictive_match: {
+    zh: "预测式匹配",
+    en: "Predictive match",
+  },
+  lut_info_capability_predictive_model: {
+    zh: "预测模型",
+    en: "Predictive model",
+  },
+  lut_info_capability_dynamic_layer_height: {
+    zh: "动态层高",
+    en: "Dynamic layer height",
+  },
+  lut_info_capability_dynamic_layer_count: {
+    zh: "动态层数",
+    en: "Dynamic layer count",
+  },
+  lut_info_capability_custom_recipe: {
+    zh: "自定义配方",
+    en: "Custom recipe",
+  },
+  lut_info_capability_native_reference: {
+    zh: "原生参考源",
+    en: "Native reference",
+  },
+  lut_compare_warning_schema_mismatch: {
+    zh: "Schema 版本不一致：{schemaA} vs {schemaB}",
+    en: "Schema versions differ: {schemaA} vs {schemaB}",
+  },
+  lut_compare_warning_predictive_mismatch: {
+    zh: "预测式匹配支持不一致：{valueA} vs {valueB}",
+    en: "Predictive match support differs: {valueA} vs {valueB}",
+  },
+  lut_compare_warning_dynamic_mismatch: {
+    zh: "动态层高支持不一致：{valueA} vs {valueB}",
+    en: "Dynamic layer height support differs: {valueA} vs {valueB}",
+  },
+  action_lut_match_label: {
+    zh: "LUT 匹配",
+    en: "LUT Match",
+  },
+  action_lut_match_legacy: {
+    zh: "传统查表",
+    en: "Legacy KD-tree",
+  },
+  action_lut_match_predictive: {
+    zh: "预测式运行时",
+    en: "Predictive Runtime",
+  },
+  action_lut_match_mode_key: {
+    zh: "模式 {mode}",
+    en: "Mode {mode}",
+  },
+  recipe_editor_button: {
+    zh: "自定义配方",
+    en: "Custom Recipe",
+  },
+  recipe_editor_title: {
+    zh: "自定义配方编辑器",
+    en: "Custom Recipe Editor",
+  },
+  recipe_editor_layers_label: {
+    zh: "按层编辑当前选区的配方，并可直接预测颜色。",
+    en: "Edit the per-layer recipe for the current selection and predict its color.",
+  },
+  recipe_editor_layer_n: {
+    zh: "第 {n} 层",
+    en: "Layer {n}",
+  },
+  recipe_editor_add_layer: {
+    zh: "添加层",
+    en: "Add Layer",
+  },
+  recipe_editor_remove_layer: {
+    zh: "删除层",
+    en: "Remove Layer",
+  },
+  recipe_editor_move_up: {
+    zh: "上移",
+    en: "Move Up",
+  },
+  recipe_editor_move_down: {
+    zh: "下移",
+    en: "Move Down",
+  },
+  recipe_editor_predict: {
+    zh: "预测颜色",
+    en: "Predict Color",
+  },
+  recipe_editor_predict_loading: {
+    zh: "预测中...",
+    en: "Predicting...",
+  },
+  recipe_editor_predict_failed: {
+    zh: "颜色预测失败",
+    en: "Color prediction failed",
+  },
+  recipe_editor_search: {
+    zh: "搜索候选",
+    en: "Search Recipes",
+  },
+  recipe_editor_search_loading: {
+    zh: "搜索中...",
+    en: "Searching...",
+  },
+  recipe_editor_search_placeholder: {
+    zh: "按层搜索，如 W?BK*",
+    en: "Search by layer pattern, e.g. W?BK*",
+  },
+  recipe_editor_search_results: {
+    zh: "候选配方",
+    en: "Candidate Recipes",
+  },
+  recipe_editor_search_failed: {
+    zh: "配方搜索失败",
+    en: "Recipe search failed",
+  },
+  recipe_editor_apply: {
+    zh: "应用到选区",
+    en: "Apply to Selection",
+  },
+  recipe_editor_apply_failed: {
+    zh: "配方应用失败",
+    en: "Failed to apply recipe override",
+  },
+  recipe_editor_clear: {
+    zh: "清除覆盖",
+    en: "Clear Override",
+  },
+  recipe_editor_no_region: {
+    zh: "请先选择一个区域或选区。",
+    en: "Select a region or active selection first.",
+  },
+  recipe_editor_upgrade_confirm: {
+    zh: "当前全局层数为 {old}，应用该配方后会升到 {new} 层。继续吗？",
+    en: "The current global layer count is {old}. Applying this recipe will upgrade it to {new}. Continue?",
+  },
+  cal_workflow_label: {
+    zh: "工作流模式",
+    en: "Workflow",
+  },
+  cal_substrate_id_label: {
+    zh: "基板 ID",
+    en: "Substrate ID",
+  },
+  cal_substrate_name_label: {
+    zh: "基板名称",
+    en: "Substrate Name",
+  },
+  cal_material_default_label: {
+    zh: "默认材料",
+    en: "Default Material",
+  },
+  cal_generate_single_stage_btn: {
+    zh: "生成 Single-Stage Kit",
+    en: "Generate Single-Stage Kit",
+  },
+  cal_download_kit: {
+    zh: "下载 Kit ZIP",
+    en: "Download Kit ZIP",
+  },
+  cal_download_manifest: {
+    zh: "下载 Manifest",
+    en: "Download Manifest",
+  },
+  cal_single_stage_jobs_title: {
+    zh: "Single-Stage 任务",
+    en: "Single-Stage Jobs",
+  },
+  cal_single_stage_jobs_desc: {
+    zh: "每个颜色都会生成一个可打印的 3MF 任务",
+    en: "One printable 3MF job is generated per color",
+  },
+  ext_workflow_label: {
+    zh: "工作流模式",
+    en: "Workflow",
+  },
+  ext_single_stage_upload_title: {
+    zh: "Single-Stage 数据集上传",
+    en: "Single-Stage Dataset Upload",
+  },
+  ext_single_stage_upload_desc: {
+    zh: "上传按 {substrate}/{color}/ 结构打包的 ZIP 数据集",
+    en: "Upload a ZIP dataset organized as {substrate}/{color}/",
+  },
+  ext_single_stage_zip_label: {
+    zh: "数据集 ZIP",
+    en: "Dataset ZIP",
+  },
+  ext_single_stage_extract_btn: {
+    zh: "提取 1_single_stage.json",
+    en: "Extract 1_single_stage.json",
+  },
+  ext_single_stage_download_json: {
+    zh: "下载 1_single_stage.json",
+    en: "Download 1_single_stage.json",
+  },
+  ext_single_stage_fit_btn: {
+    zh: "继续拟合 Stage A",
+    en: "Fit Stage A",
+  },
+  ext_single_stage_download_stage_a: {
+    zh: "下载 stage_A_parameters.json",
+    en: "Download stage_A_parameters.json",
+  },
+  ext_single_stage_summary_title: {
+    zh: "数据集摘要",
+    en: "Dataset Summary",
+  },
+  ext_single_stage_fit_summary_title: {
+    zh: "Stage A 拟合摘要",
+    en: "Stage A Fit Summary",
+  },
+  ext_single_stage_warnings_title: {
+    zh: "提取警告",
+    en: "Extraction Warnings",
+  },
+  cal_workflow_legacy: {
+    zh: "传统 LUT",
+    en: "Legacy LUT",
+  },
+  cal_workflow_single_stage: {
+    zh: "梯度卡",
+    en: "Gradient Card",
+  },
+  ext_workflow_legacy: {
+    zh: "传统 LUT",
+    en: "Legacy LUT",
+  },
+  ext_workflow_single_stage: {
+    zh: "梯度卡",
+    en: "Gradient Card",
   },
 };

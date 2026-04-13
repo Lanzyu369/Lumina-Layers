@@ -16,6 +16,8 @@ from api.schemas.converter import (
     ColorHighlightResponse,
     ColorMergePreviewRequest,
     ColorReplaceRequest,
+    RecipeOverrideApplyRequest,
+    RecipePredictRequest,
     RegionDetectRequest,
     RegionDetectResponse,
     RegionReplaceRequest,
@@ -25,6 +27,8 @@ from api.schemas.converter import (
 from api.schemas.responses import (
     ColorReplaceResponse,
     MergePreviewResponse,
+    RecipeOverrideApplyResponse,
+    RecipePredictResponse,
     ResetReplacementsResponse,
 )
 from api.session_store import SessionStore
@@ -35,6 +39,9 @@ from core.converter import (
     generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
+from core.predictive_lut import predict_recipe_color
+from core.recipe_order import pad_recipe_to_layer_count
+from utils.lut_manager import LUTManager
 from api.structured_logging import get_logger
 
 from .common import (
@@ -81,6 +88,32 @@ def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes
     cache["preview_rgba"] = preview_rgba.copy()
 
     return _image_to_png_bytes(preview_rgba)
+
+
+def _get_region_mask_items_for_ids(
+    session_data: dict,
+    region_ids: list[str],
+) -> list[tuple[str, np.ndarray]]:
+    region_masks = session_data.get("selected_region_masks") or {}
+    if not isinstance(region_masks, dict):
+        region_masks = {}
+
+    masks: list[tuple[str, np.ndarray]] = []
+    seen_region_ids: set[str] = set()
+    for region_id in region_ids:
+        mask = region_masks.get(region_id)
+        if isinstance(region_id, str) and isinstance(mask, np.ndarray) and region_id not in seen_region_ids:
+            masks.append((region_id, mask))
+            seen_region_ids.add(region_id)
+
+    if not masks:
+        fallback_mask = session_data.get("selected_region_mask")
+        fallback_id = session_data.get("selected_region_id")
+        if isinstance(fallback_id, str) and isinstance(fallback_mask, np.ndarray) and (
+            not region_ids or fallback_id in region_ids
+        ):
+            masks.append((fallback_id, fallback_mask))
+    return masks
 
 # Extend base tuple with IndexError for array-index operations
 # in region-detect / region-replace endpoints.
@@ -427,6 +460,20 @@ def region_detect(
         region_id: str = str(uuid.uuid4())
         store.put(request.session_id, "selected_region_mask", region_mask)
         store.put(request.session_id, "selected_region_id", region_id)
+        existing_masks = session_data.get("selected_region_masks") or {}
+        if not isinstance(existing_masks, dict):
+            existing_masks = {}
+        existing_masks[region_id] = region_mask
+        store.put(request.session_id, "selected_region_masks", existing_masks)
+        region_masks = dict(session_data.get("region_masks") or {})
+        region_masks[region_id] = region_mask
+        store.put(request.session_id, "region_masks", region_masks)
+        region_masks = session_data.get("selected_region_masks") or {}
+        if not isinstance(region_masks, dict):
+            region_masks = {}
+        region_masks = dict(region_masks)
+        region_masks[region_id] = region_mask
+        store.put(request.session_id, "selected_region_masks", region_masks)
 
         # Generate highlighted preview: overlay region with semi-transparent highlight
         highlight_color = np.array([0, 200, 255], dtype=np.uint8)  # cyan highlight
@@ -569,6 +616,180 @@ def region_replace(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message="Region color replaced successfully",
+    )
+
+
+@router.post("/predict-recipe", response_model=RecipePredictResponse)
+def predict_recipe(
+    request: RecipePredictRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> RecipePredictResponse:
+    """Predict the display color of a custom recipe for the active source."""
+    session_data = _require_session(store, request.session_id)
+    lut_path: str | None = session_data.get("lut_path")
+    if not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(status_code=409, detail="LUT/source file missing. Preview again first.")
+
+    try:
+        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
+        prediction = predict_recipe_color(
+            metadata,
+            recipe=request.recipe,
+            layer_height_mm=request.layer_height_mm,
+            color_layers=request.color_layers,
+            layer_order=request.layer_order,
+        )
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return RecipePredictResponse(
+        status="ok",
+        message="Recipe color predicted",
+        rgb=[int(v) for v in prediction.get("rgb", [])],
+        lab=[float(v) for v in prediction.get("lab", [])],
+        source=str(prediction.get("source", "unknown")),
+        runtime_mode_key=(
+            str(prediction["runtime_mode_key"])
+            if prediction.get("runtime_mode_key") is not None
+            else None
+        ),
+    )
+
+
+@router.post("/apply-recipe-override", response_model=RecipeOverrideApplyResponse)
+def apply_recipe_override(
+    request: RecipeOverrideApplyRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> RecipeOverrideApplyResponse:
+    """Apply a custom recipe override to the selected regions and update preview cache."""
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+    lut_path: str | None = session_data.get("lut_path")
+    if not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(status_code=409, detail="LUT/source file missing. Preview again first.")
+
+    matched_rgb: np.ndarray | None = cache.get("matched_rgb")
+    material_matrix: np.ndarray | None = cache.get("material_matrix")
+    if matched_rgb is None or material_matrix is None:
+        raise HTTPException(status_code=409, detail="Preview cache missing matched_rgb or material_matrix.")
+
+    region_mask_items = _get_region_mask_items_for_ids(session_data, request.region_ids)
+    if not region_mask_items:
+        raise HTTPException(status_code=409, detail="No selected regions available for recipe override.")
+
+    try:
+        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
+        prediction = predict_recipe_color(
+            metadata,
+            recipe=request.recipe,
+            layer_height_mm=request.layer_height_mm,
+            color_layers=request.color_layers,
+            layer_order=request.layer_order,
+        )
+        predicted_rgb = np.asarray(prediction.get("rgb", []), dtype=np.uint8)
+        if predicted_rgb.shape != (3,):
+            raise ValueError("Predicted RGB payload is invalid")
+
+        current_layers = int(material_matrix.shape[2])
+        target_layers = int(request.color_layers)
+        if target_layers > current_layers:
+            pad_count = target_layers - current_layers
+            base_fill = int(metadata.base_channel_idx)
+            if metadata.layer_order == "Bottom2Top":
+                pad_shape = ((0, 0), (0, 0), (pad_count, 0))
+            else:
+                pad_shape = ((0, 0), (0, 0), (0, pad_count))
+            material_matrix = np.pad(
+                material_matrix,
+                pad_shape,
+                mode="constant",
+                constant_values=base_fill,
+            )
+
+        recipe_full = np.asarray(
+            pad_recipe_to_layer_count(
+                request.recipe,
+                int(material_matrix.shape[2]),
+                int(metadata.base_channel_idx),
+                request.layer_order,
+            ),
+            dtype=np.int32,
+        )
+
+        updated_rgb = matched_rgb.copy()
+        for _region_id, region_mask in region_mask_items:
+            effective_mask = np.asarray(region_mask, dtype=bool)
+            updated_rgb[effective_mask] = predicted_rgb
+            material_matrix[effective_mask] = recipe_full
+
+        cache["matched_rgb"] = updated_rgb
+        cache["material_matrix"] = material_matrix
+        cache["color_layers"] = int(material_matrix.shape[2])
+        cache["layer_height_mm"] = float(request.layer_height_mm)
+        cache["lut_match_info"] = {
+            "match_mode": "predictive",
+            "runtime_mode_key": prediction.get("runtime_mode_key"),
+            "override": True,
+            "source": prediction.get("source"),
+        }
+        store.put(request.session_id, "preview_cache", cache)
+
+        existing_overrides = list(session_data.get("recipe_overrides") or [])
+        existing_overrides.extend(
+            {
+                "region_id": region_id,
+                "recipe": list(request.recipe),
+                "layer_order": request.layer_order,
+                "color_layers": int(material_matrix.shape[2]),
+                "layer_height_mm": float(request.layer_height_mm),
+            }
+            for region_id, _region_mask in region_mask_items
+        )
+        store.put(request.session_id, "recipe_overrides", existing_overrides)
+        store.put(request.session_id, "recipe_override_count", len(existing_overrides))
+
+        preview_bytes = _render_styled_preview_bytes(updated_rgb, cache)
+        preview_id = registry.register_bytes(
+            request.session_id,
+            preview_bytes,
+            "preview_recipe_override.png",
+        )
+
+        glb_url: str | None = None
+        try:
+            glb_path = generate_segmented_glb(cache)
+            if glb_path and os.path.exists(glb_path):
+                glb_id = registry.register_path(request.session_id, glb_path)
+                glb_url = f"/api/files/{glb_id}"
+        except NON_FATAL_GLB_ERRORS as glb_err:
+            log.warning(
+                "Recipe-override GLB regeneration failed",
+                extra={
+                    "event": "converter_recipe_override_glb_failed",
+                    "error_type": type(glb_err).__name__,
+                    "error_message": str(glb_err),
+                },
+            )
+    except HTTPException:
+        raise
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return RecipeOverrideApplyResponse(
+        status="ok",
+        message="Recipe override applied",
+        preview_url=f"/api/files/{preview_id}",
+        preview_glb_url=glb_url,
+        rgb=[int(v) for v in predicted_rgb.tolist()],
+        lab=[float(v) for v in prediction.get("lab", [])],
+        source=str(prediction.get("source", "unknown")),
+        runtime_mode_key=(
+            str(prediction["runtime_mode_key"])
+            if prediction.get("runtime_mode_key") is not None
+            else None
+        ),
+        override_count=len(existing_overrides),
     )
 
 

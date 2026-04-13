@@ -34,6 +34,7 @@ from colormath.color_diff import delta_e_cie2000
 
 from config import PrinterConfig, ColorSystem, SmartConfig, MODELS_DIR, get_asset_path
 from core.naming import generate_calibration_filename
+from core.recipe_order import convert_recipe_between_orders, normalize_recipe_to_internal_order
 from utils import Stats
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
@@ -165,7 +166,7 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = digits[::-1]
+        stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
 
         row = (i // grid_dim) + padding
         col = (i % grid_dim) + padding
@@ -406,7 +407,7 @@ def generate_smart_board(
 
     # 约定转换：get_top_1296_colors() 返回底到顶约定 (stack[0]=背面，stack[4]=观赏面)
     # 转换为顶到底约定 (stack[0]=观赏面，stack[4]=背面)，与 4 色模式统一
-    stacks = [tuple(reversed(s)) for s in stacks]
+    stacks = [tuple(convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom")) for s in stacks]
 
     # Fill 1296 intelligent color blocks (with padding offset)
     for idx, stack in enumerate(stacks):
@@ -560,7 +561,9 @@ def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_m
 
         # 约定转换：smart_8color_stacks.npy 存储底到顶约定 (stack[0]=背面，stack[4]=观赏面)
         # 转换为顶到底约定 (stack[0]=观赏面，stack[4]=背面)，与 4 色模式统一
-        all_stacks = np.array([s[::-1] for s in all_stacks])
+        all_stacks = np.array(
+            [convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom") for s in all_stacks]
+        )
 
         # Debug: Check surface black count (转换后 stack[0] 为观赏面)
         surface_black = sum(1 for s in all_stacks if s[0] == 5)
@@ -766,7 +769,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
         for _ in range(5):
             digits.append(temp % 2)
             temp //= 2
-        stack = digits[::-1]  # [顶...底] format
+        stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")  # [顶...底] format
         stacks.append(stack)
 
     # Fill 32 blocks in 6x6 data area (with padding offset)
@@ -892,7 +895,7 @@ def select_extended_1444_colors(base_1024_stacks):
     def simulate_color(stack):
         """Simulate final color from a stack (Bottom-to-Top alpha blending)"""
         curr = BACKING.astype(float)
-        for fid in reversed(stack):  # Iterate from Bottom to Top for correct reflection simulation
+        for fid in normalize_recipe_to_internal_order(stack, "Top2Bottom", "Bottom2Top"):
             rgb = np.array(FILAMENTS[fid]["rgb"])
             a = alphas[fid]
             curr = rgb * a + curr * (1.0 - a)
@@ -1100,11 +1103,14 @@ def merge_5color_extended(base_lut_path, extended_lut_path, output_path=None):
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = (-1,) + tuple(reversed(digits))
+        stack = (-1,) + tuple(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
         base_stacks.append(stack)
 
     # Extended 1444: 6-layer stacks
-    base_5layer = [tuple(reversed([i // 4**j % 4 for j in range(5)])) for i in range(1024)]
+    base_5layer = [
+        tuple(convert_recipe_between_orders([i // 4**j % 4 for j in range(5)], "Bottom2Top", "Top2Bottom"))
+        for i in range(1024)
+    ]
     extended_stacks = select_extended_1444_colors(base_5layer)
 
     # Merge stacks
@@ -1198,7 +1204,7 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = digits[::-1]  # [top...bottom] for Face-Down mode (Z=0 is viewing surface)
+        stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")  # [top...bottom] for Face-Down mode (Z=0 is viewing surface)
 
         row = (i // data_dim) + padding
         col = (i % data_dim) + padding
@@ -1290,7 +1296,7 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = tuple(reversed(digits))
+        stack = tuple(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
         base_stacks.append(stack)
 
     # Get extended 1444 stacks (6-layer)

@@ -11,6 +11,11 @@ import {
   workstationInputClass,
 } from "../ui/panelPrimitives";
 
+const NOOP_BOOL: (value: boolean) => void = () => {};
+const NOOP_NUMBER: (value: number) => void = () => {};
+const NOOP_STRING: (value: string) => void = () => {};
+const EMPTY_WARNINGS: string[] = [];
+
 interface NumberFieldProps {
   label: string;
   value: number;
@@ -58,48 +63,48 @@ function NumberField({
 
 export default function PuzzleSettings() {
   const { t } = useI18n();
-  const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
-  const puzzleStyle = useConverterStore((s) => s.puzzleStyle);
-  const puzzleSizingMode = useConverterStore((s) => s.puzzleSizingMode);
-  const pieceWidthMm = useConverterStore((s) => s.pieceWidthMm);
-  const pieceHeightMm = useConverterStore((s) => s.pieceHeightMm);
-  const puzzleRows = useConverterStore((s) => s.puzzleRows);
-  const puzzleCols = useConverterStore((s) => s.puzzleCols);
-  const targetPieceCount = useConverterStore((s) => s.targetPieceCount);
-  const connectorStyle = useConverterStore((s) => s.connectorStyle);
-  const labelsEnabled = useConverterStore((s) => s.labelsEnabled);
-  const engraveBackLabels = useConverterStore((s) => s.engraveBackLabels);
-  const irregularityStrength = useConverterStore((s) => s.irregularityStrength);
-  const minNeckWidthMm = useConverterStore((s) => s.minNeckWidthMm);
-  const puzzleWarnings = useConverterStore((s) => s.puzzleWarnings);
-  const puzzleResolvedRows = useConverterStore((s) => s.puzzleResolvedRows);
-  const puzzleResolvedCols = useConverterStore((s) => s.puzzleResolvedCols);
+  const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled ?? false);
+  const puzzleStyle = useConverterStore((s) => s.puzzleStyle ?? "regular");
+  const puzzleSizingMode = useConverterStore((s) => s.puzzleSizingMode ?? "piece_size");
+  const pieceWidthMm = useConverterStore((s) => s.pieceWidthMm ?? 20);
+  const pieceHeightMm = useConverterStore((s) => s.pieceHeightMm ?? 20);
+  const puzzleRows = useConverterStore((s) => s.puzzleRows ?? 3);
+  const puzzleCols = useConverterStore((s) => s.puzzleCols ?? 3);
+  const targetPieceCount = useConverterStore((s) => s.targetPieceCount ?? 12);
+  const connectorStyle = useConverterStore((s) => s.connectorStyle ?? "classic");
+  const labelsEnabled = useConverterStore((s) => s.labelsEnabled ?? false);
+  const engraveBackLabels = useConverterStore((s) => s.engraveBackLabels ?? false);
+  const irregularityStrength = useConverterStore((s) => s.irregularityStrength ?? 0.35);
+  const minNeckWidthMm = useConverterStore((s) => s.minNeckWidthMm ?? 1.2);
+  const puzzleWarnings = useConverterStore((s) => s.puzzleWarnings ?? EMPTY_WARNINGS);
+  const puzzleResolvedRows = useConverterStore((s) => s.puzzleResolvedRows ?? null);
+  const puzzleResolvedCols = useConverterStore((s) => s.puzzleResolvedCols ?? null);
   const puzzleResolvedPieceCount = useConverterStore(
-    (s) => s.puzzleResolvedPieceCount,
+    (s) => s.puzzleResolvedPieceCount ?? null,
   );
   const puzzleDerivedPieceWidthMm = useConverterStore(
-    (s) => s.puzzleDerivedPieceWidthMm,
+    (s) => s.puzzleDerivedPieceWidthMm ?? null,
   );
   const puzzleDerivedPieceHeightMm = useConverterStore(
-    (s) => s.puzzleDerivedPieceHeightMm,
+    (s) => s.puzzleDerivedPieceHeightMm ?? null,
   );
-  const batchMode = useConverterStore((s) => s.batchMode);
+  const batchMode = useConverterStore((s) => s.batchMode ?? false);
 
-  const setPuzzleEnabled = useConverterStore((s) => s.setPuzzleEnabled);
-  const setPuzzleStyle = useConverterStore((s) => s.setPuzzleStyle);
-  const setPuzzleSizingMode = useConverterStore((s) => s.setPuzzleSizingMode);
-  const setPieceWidthMm = useConverterStore((s) => s.setPieceWidthMm);
-  const setPieceHeightMm = useConverterStore((s) => s.setPieceHeightMm);
-  const setPuzzleRows = useConverterStore((s) => s.setPuzzleRows);
-  const setPuzzleCols = useConverterStore((s) => s.setPuzzleCols);
-  const setTargetPieceCount = useConverterStore((s) => s.setTargetPieceCount);
-  const setConnectorStyle = useConverterStore((s) => s.setConnectorStyle);
-  const setLabelsEnabled = useConverterStore((s) => s.setLabelsEnabled);
-  const setEngraveBackLabels = useConverterStore((s) => s.setEngraveBackLabels);
+  const setPuzzleEnabled = useConverterStore((s) => s.setPuzzleEnabled ?? NOOP_BOOL);
+  const setPuzzleStyle = useConverterStore((s) => s.setPuzzleStyle ?? NOOP_STRING);
+  const setPuzzleSizingMode = useConverterStore((s) => s.setPuzzleSizingMode ?? NOOP_STRING);
+  const setPieceWidthMm = useConverterStore((s) => s.setPieceWidthMm ?? NOOP_NUMBER);
+  const setPieceHeightMm = useConverterStore((s) => s.setPieceHeightMm ?? NOOP_NUMBER);
+  const setPuzzleRows = useConverterStore((s) => s.setPuzzleRows ?? NOOP_NUMBER);
+  const setPuzzleCols = useConverterStore((s) => s.setPuzzleCols ?? NOOP_NUMBER);
+  const setTargetPieceCount = useConverterStore((s) => s.setTargetPieceCount ?? NOOP_NUMBER);
+  const setConnectorStyle = useConverterStore((s) => s.setConnectorStyle ?? NOOP_STRING);
+  const setLabelsEnabled = useConverterStore((s) => s.setLabelsEnabled ?? NOOP_BOOL);
+  const setEngraveBackLabels = useConverterStore((s) => s.setEngraveBackLabels ?? NOOP_BOOL);
   const setIrregularityStrength = useConverterStore(
-    (s) => s.setIrregularityStrength,
+    (s) => s.setIrregularityStrength ?? NOOP_NUMBER,
   );
-  const setMinNeckWidthMm = useConverterStore((s) => s.setMinNeckWidthMm);
+  const setMinNeckWidthMm = useConverterStore((s) => s.setMinNeckWidthMm ?? NOOP_NUMBER);
 
   const styleOptions = useMemo(
     () => [
