@@ -164,7 +164,7 @@ class TestPrintableFeatureOptimizer:
         assert thin_items[0].merge_target_index == 0
         assert result.action_counts["merge"] == 1
 
-    def test_thin_shape_merges_when_widening_would_overlap_later_shape(self):
+    def test_thin_shape_merges_when_surviving_later_occluders_still_overlap_after_clipping(self):
         optimizer = PrintableFeatureOptimizer(
             [
                 _shape(box(0, 0, 10.0, 0.2), [0, 0, 0], draw_order=0),
@@ -180,9 +180,71 @@ class TestPrintableFeatureOptimizer:
         assert thin_items[0].action == "merge"
         assert thin_items[0].merge_target_index == 1
         assert result.action_counts["merge"] == 1
+        assert result.action_counts["widen"] == 0
         assert len(result.records) == 2
         assert result.records[0]["recipe"] == [1, 1, 1]
         assert result.records[1]["recipe"] == [2, 2, 2]
+
+    def test_thin_shape_widens_before_later_block_merges_into_it(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0, 0, 10.0, 0.2), [0], draw_order=0),
+                _shape(box(0, 0.21, 0.3, 0.51), [1], draw_order=1),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+        thin_items = [item for item in result.items if item.classification == "thin"]
+
+        assert thin_items[0].action == "widen"
+        assert thin_items[0].widened_to_normal is True
+        assert result.action_counts["widen"] == 1
+        assert result.action_counts["merge"] == 1
+        assert len(result.records) == 1
+        assert result.records[0]["recipe"] == [0]
+
+    def test_thin_shape_widening_uses_simulated_live_geometry_for_ownership_veto(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0, 0, 10.0, 0.2), [0], draw_order=0),
+                _shape(box(0, 0.4, 0.3, 0.7), [1], draw_order=1),
+                _shape(box(0, 0.8, 1.0, 1.8), [2], draw_order=2),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+
+        assert [record["recipe"] for record in result.records] == [[0], [2]]
+        assert result.action_counts["widen"] == 1
+        assert result.action_counts["merge"] == 1
+        assert result.items[0].action == "widen"
+        assert result.items[1].action == "merge"
+        assert result.items[1].merge_target_index == 0
+        assert result.items[2].action == "keep"
+
+    def test_thin_shape_ignores_later_occluder_that_merges_below_current_draw_order(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0, 0.21, 1.0, 1.21), [0], draw_order=0),
+                _shape(box(0, 0.0, 10.0, 0.2), [1], draw_order=1),
+                _shape(box(0, 0.21, 0.3, 0.51), [2], draw_order=2),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+
+        assert result.items[1].classification == "thin"
+        assert result.items[1].action == "widen"
+        assert result.items[1].reason == "widened-to-core"
+        assert result.items[1].widened_to_normal is True
+        assert result.items[2].action == "merge"
+        assert result.items[2].merge_target_index == 0
+        assert result.action_counts["widen"] == 1
+        assert result.action_counts["merge"] == 1
+        assert [record["recipe"] for record in result.records] == [[0], [1]]
 
     def test_thin_shape_can_widen_when_it_only_touches_later_geometry_boundary(self):
         thin_geometry = box(0, 0, 10.0, 0.2)

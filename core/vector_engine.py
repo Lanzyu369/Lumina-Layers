@@ -34,7 +34,11 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, ColorSystem
-from core.feature_printability import PrintableFeatureOptimizer, _difference_polygonal_geometry
+from core.feature_printability import (
+    PrintableFeatureOptimizer,
+    _STABLE_INPUT_INDEX_KEY,
+    _difference_polygonal_geometry,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -1032,7 +1036,11 @@ class VectorProcessor:
             scale_factor=scale_factor,
         )
         printability_result = printability_optimizer.optimize()
-        matched_shapes = VectorProcessor._clip_matched_shapes_occlusion(printability_result.records)
+        matched_shapes = VectorProcessor._stabilize_matched_shapes_printability(
+            printability_result.records,
+            scale_factor=scale_factor,
+            optimization_items=printability_result.items,
+        )
         silhouette_geoms = [
             shape["geometry"]
             for shape in matched_shapes
@@ -1705,6 +1713,56 @@ class VectorProcessor:
 
         result.reverse()
         return result
+
+    @staticmethod
+    def _stabilize_matched_shapes_printability(matched_shapes, scale_factor, optimization_items=None):
+        """Revalidate visible matched shapes after the first final clip.
+
+        A widened thin feature can become sub-printable again after final
+        occlusion trimming. Re-run printability on the visible shapes and clip
+        once more so the returned matched shapes stay stable.
+        """
+        visible_shapes = VectorProcessor._clip_matched_shapes_occlusion(
+            VectorProcessor._seed_printability_stable_indices(
+                matched_shapes,
+                optimization_items=optimization_items,
+            )
+        )
+        if not visible_shapes:
+            return []
+
+        stabilized = PrintableFeatureOptimizer(
+            visible_shapes,
+            scale_factor=scale_factor,
+        ).optimize()
+        return VectorProcessor._strip_printability_internal_keys(
+            VectorProcessor._clip_matched_shapes_occlusion(stabilized.records)
+        )
+
+    @staticmethod
+    def _strip_printability_internal_keys(matched_shapes):
+        """Remove internal printability bookkeeping before returning records."""
+        return [{key: value for key, value in shape.items() if key != _STABLE_INPUT_INDEX_KEY} for shape in matched_shapes]
+
+    @staticmethod
+    def _seed_printability_stable_indices(matched_shapes, optimization_items=None):
+        """Attach stable optimizer indices to survivor records for later passes."""
+        seeded_shapes = [dict(shape) for shape in matched_shapes]
+        if not seeded_shapes or any(_STABLE_INPUT_INDEX_KEY in shape for shape in seeded_shapes):
+            return seeded_shapes
+        if optimization_items is None:
+            return seeded_shapes
+
+        survivor_items = sorted(
+            (item for item in optimization_items if item.action in {"keep", "widen"}),
+            key=lambda item: (item.draw_order, item.index),
+        )
+        if len(survivor_items) != len(seeded_shapes):
+            return seeded_shapes
+
+        for shape, item in zip(seeded_shapes, survivor_items):
+            shape[_STABLE_INPUT_INDEX_KEY] = item.index
+        return seeded_shapes
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 

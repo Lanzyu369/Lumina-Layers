@@ -27,6 +27,7 @@ _THIN_MAX_COMPACTNESS = 0.32
 _MITRE_LIMIT = 2.0
 _WIDEN_ATTEMPTS = 4
 _WIDEN_STEP_RATIO = 0.12
+_STABLE_INPUT_INDEX_KEY = "_printability_stable_input_index"
 
 
 def _as_float(value: Any, default: float) -> float:
@@ -224,14 +225,28 @@ class PrintableFeatureOptimizer:
         self._source_records: list[dict[str, Any]] = []
         for index, record in enumerate(shape_records):
             copied = dict(record)
-            copied["_input_index"] = index
+            stable_input_index = int(copied.get(_STABLE_INPUT_INDEX_KEY, index))
+            copied["_input_index"] = stable_input_index
+            copied[_STABLE_INPUT_INDEX_KEY] = stable_input_index
             copied["_original_geometry"] = copied.get("geometry")
             copied["geometry"] = _normalize_polygonal_geometry(copied.get("geometry"))
+            if "recipe" in copied:
+                copied["recipe"] = self._recipe_copy(copied.get("recipe"))
+            if "_received_merge_source_indices" in copied:
+                copied["_received_merge_source_indices"] = [
+                    int(source_index) for source_index in copied.get("_received_merge_source_indices", ())
+                ]
+            if "_received_merge_source_recipes" in copied:
+                copied["_received_merge_source_recipes"] = [
+                    tuple(recipe or ())
+                    for recipe in copied.get("_received_merge_source_recipes", ())
+                ]
             self._source_records.append(copied)
 
         self._live_index_dirty = True
         self._live_index_records: list[dict[str, Any]] = []
         self._live_tree: STRtree | None = None
+        self._live_index_owner_id: int | None = None
 
     @property
     def printable_core_width_mm(self) -> float:
@@ -471,10 +486,12 @@ class PrintableFeatureOptimizer:
     def _mark_live_index_dirty(self) -> None:
         """Mark the live STRtree snapshot dirty after geometry mutations."""
         self._live_index_dirty = True
+        self._live_index_owner_id = None
 
     def _ensure_live_index(self, live_records: Mapping[int, dict[str, Any]]) -> None:
         """Build a fresh STRtree snapshot when the live geometry set changes."""
-        if not self._live_index_dirty and self._live_tree is not None:
+        live_records_owner_id = id(live_records)
+        if not self._live_index_dirty and self._live_index_owner_id == live_records_owner_id:
             return
 
         snapshot_records = sorted(
@@ -489,6 +506,7 @@ class PrintableFeatureOptimizer:
         geoms = [record["geometry"] for record in snapshot_records]
         self._live_tree = STRtree(geoms) if geoms else None
         self._live_index_dirty = False
+        self._live_index_owner_id = live_records_owner_id
 
     @staticmethod
     def _resolve_tree_ref(ref) -> int:
@@ -540,15 +558,25 @@ class PrintableFeatureOptimizer:
         record: Mapping[str, Any],
         live_records: Mapping[int, dict[str, Any]],
     ) -> tuple[Optional[object], bool]:
-        """Trim widened geometry against later draw-order live records."""
+        """Trim widened geometry against later draw-order records that still occlude it.
+
+        对扩展后的几何按后续绘制顺序记录做可见性裁剪，仅忽略那些最终会并入当前形状的后续记录。
+        """
         normalized = _normalize_polygonal_geometry(geometry)
         if normalized is None:
             return None, False
 
+        current_index = int(record["_input_index"])
         current_draw_order = int(record.get("draw_order", record["_input_index"]))
+        simulated_live_records = dict(live_records)
+        simulated_current = dict(record)
+        simulated_current["geometry"] = normalized
+        simulated_live_records[current_index] = simulated_current
+
         occluders = []
         for candidate in self._query_live_records(normalized, live_records):
-            if int(candidate["_input_index"]) == int(record["_input_index"]):
+            candidate_index = int(candidate["_input_index"])
+            if candidate_index == current_index:
                 continue
             candidate_draw_order = int(candidate.get("draw_order", candidate["_input_index"]))
             if candidate_draw_order <= current_draw_order:
@@ -558,10 +586,29 @@ class PrintableFeatureOptimizer:
                 continue
             try:
                 overlap = candidate_geometry.intersection(normalized)
-                if float(getattr(overlap, "area", 0.0)) > _MIN_AREA_EPSILON:
-                    occluders.append(candidate_geometry)
+                if float(getattr(overlap, "area", 0.0)) <= _MIN_AREA_EPSILON:
+                    continue
             except Exception:
                 continue
+
+            candidate_classification = self.classify(candidate_geometry)
+            if candidate_classification == "normal":
+                occluders.append(candidate_geometry)
+                continue
+
+            if candidate_classification == "thin":
+                candidate_widened = self._widen_to_printable_core(candidate_geometry)
+                if candidate_widened is not None and self.classify(candidate_widened) == "normal":
+                    occluders.append(candidate_geometry)
+                    continue
+
+            target = self._select_best_neighbor(candidate, simulated_live_records)
+            if target is not None:
+                target_draw_order = int(target.get("draw_order", target["_input_index"]))
+                if target_draw_order <= current_draw_order:
+                    continue
+
+            occluders.append(candidate_geometry)
 
         if not occluders:
             return normalized, False
@@ -734,4 +781,5 @@ class PrintableFeatureOptimizer:
         public = dict(record)
         public.pop("_input_index", None)
         public.pop("_original_geometry", None)
+        public.pop(_STABLE_INPUT_INDEX_KEY, None)
         return public

@@ -215,3 +215,55 @@ class TestVectorPrintabilityIntegration:
         assert analysis.matched_shapes == []
         assert analysis.silhouette is None
         assert analysis.bbox == (0.0, 0.0, 0.0, 0.0)
+
+    def test_analyze_svg_revalidates_printability_after_final_occlusion(self, tmp_path, monkeypatch):
+        svg_path = tmp_path / "post_occlusion_revalidate.svg"
+        svg_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+
+        processor = object.__new__(VectorProcessor)
+        processor.sampling_precision = 0.02
+        processor.color_mode = "4-Color"
+        processor.last_stage_timings = {}
+        processor.parse_warnings = []
+        processor.enable_fridge_magnet = False
+        processor.fridge_magnets = []
+        processor.img_processor = SimpleNamespace(
+            lut_rgb=[(0, 0, 0)],
+            lut_path=str(tmp_path / "dummy.lut"),
+        )
+
+        shape_data = [
+            {"poly": box(0.0, 0.0, 10.0, 0.2), "color": (220, 20, 60)},
+            {"poly": box(0.0, 0.63, 10.0, 0.83), "color": (0, 0, 0)},
+        ]
+
+        monkeypatch.setattr(
+            processor,
+            "_parse_svg",
+            lambda svg_file, target_width_mm: (shape_data, 1.0, (0.0, 0.0, 10.0, 0.83)),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_match_colors",
+            lambda clipped_shapes, replacement_manager, num_channels, num_layers=None: [
+                {
+                    "geometry": shape["geometry"],
+                    "recipe": [index],
+                    "color": shape["color"],
+                    "matched_rgb": shape["color"],
+                    "lut_idx": index,
+                    "draw_order": shape["draw_order"],
+                }
+                for index, shape in enumerate(clipped_shapes)
+            ],
+        )
+
+        analysis = processor.analyze_svg(str(svg_path), target_width_mm=10.0)
+        classifier = vector_engine_module.PrintableFeatureOptimizer([], scale_factor=1.0)
+
+        assert analysis.matched_shapes
+        assert all(
+            classifier.classify(shape["geometry"]) != "thin"
+            for shape in analysis.matched_shapes
+        )
+        assert all("matched_rgb" in shape and "lut_idx" in shape for shape in analysis.matched_shapes)

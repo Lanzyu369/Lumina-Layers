@@ -7,8 +7,9 @@ Covers:
     4. Public API: analyze_svg, build_mesh, render_preview, svg_to_mesh backward compat
 """
 
-import sys
 import os
+import sys
+from copy import deepcopy
 import types
 import importlib.util
 import inspect
@@ -219,6 +220,44 @@ class TestClipMatchedShapesOcclusion:
         assert [item["draw_order"] for item in clipped] == [0, 1]
         assert clipped[0]["geometry"].intersection(clipped[1]["geometry"]).area == pytest.approx(0.0)
         assert clipped[1]["geometry"].area == pytest.approx(100.0)
+
+
+class TestStabilizeMatchedShapesPrintability:
+    def test_second_pass_preserves_original_merge_provenance_without_mutating_inputs(self):
+        first_pass_records = [
+            {
+                "geometry": box(0.0, 0.0, 0.3, 0.3),
+                "recipe": [10],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+                "lut_idx": 10,
+                "draw_order": 0,
+                "_received_merge_source_indices": [4],
+                "_received_merge_source_recipes": [(40,)],
+                "_printability_stable_input_index": 7,
+            },
+            {
+                "geometry": box(0.3, 0.0, 1.0, 1.0),
+                "recipe": [20],
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "lut_idx": 20,
+                "draw_order": 1,
+                "_received_merge_source_indices": [6],
+                "_received_merge_source_recipes": [(60,)],
+                "_printability_stable_input_index": 9,
+            },
+        ]
+        original_records = deepcopy(first_pass_records)
+
+        stabilized = VectorProcessor._stabilize_matched_shapes_printability(first_pass_records, scale_factor=1.0)
+
+        assert len(stabilized) == 1
+        assert stabilized[0]["recipe"] == [20]
+        assert stabilized[0]["_received_merge_source_indices"] == [6, 4, 7]
+        assert stabilized[0]["_received_merge_source_recipes"] == [(60,), (40,), (10,)]
+        assert "_printability_stable_input_index" not in stabilized[0]
+        assert first_pass_records == original_records
 
 
 # =====================================================================
