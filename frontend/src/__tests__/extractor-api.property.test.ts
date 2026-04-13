@@ -104,7 +104,7 @@ const arbExtractResponse = fc.record({
   lut_download_url: fc.string({ minLength: 1, maxLength: 80 }),
   warp_view_url: fc.string({ minLength: 1, maxLength: 80 }),
   lut_preview_url: fc.string({ minLength: 1, maxLength: 80 }),
-  default_palette: fc.constant([]),
+  default_palette: fc.constantFrom([] as ExtractResponse["default_palette"]),
 });
 
 const arbPaletteEntry = fc.record({

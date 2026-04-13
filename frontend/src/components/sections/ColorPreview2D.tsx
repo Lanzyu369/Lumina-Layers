@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * ColorPreview2D — 2D preview image with click-to-select color/region support.
  * ColorPreview2D — 2D 预览图组件，支持点击选色/选区域。

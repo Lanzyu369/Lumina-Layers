@@ -1355,6 +1355,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "关闭",
     en: "Close",
   },
+  color_2d_overlay_close_shortcut: {
+    zh: "ESC",
+    en: "ESC",
+  },
   color_2d_tab_preview: {
     zh: "2D 预览",
     en: "2D Preview",

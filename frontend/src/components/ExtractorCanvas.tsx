@@ -144,7 +144,7 @@ export default function ExtractorCanvas() {
 
   // ---------- Manual fix state: selected cell + color picker ----------
   const [selectedCell, setSelectedCell] = useState<[number, number] | null>(null);
-  const [fixColor, setFixColor] = useState(UI_COLOR_TOKENS.extractorFixColorDefault);
+  const [fixColor, setFixColor] = useState<string>(UI_COLOR_TOKENS.extractorFixColorDefault);
   const [renderedRect, setRenderedRect] = useState<RenderedImageRect | null>(null);
   const lutPreviewRef = useRef<HTMLImageElement>(null);
 

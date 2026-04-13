@@ -123,7 +123,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                 {isActive && (
                   <motion.div
                     layoutId="active-primary-tab-indicator"
-                    className="absolute inset-0 rounded-xl border border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-800"
+                    className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
                     transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
                     style={{ zIndex: -1 }}
                   />
@@ -158,7 +158,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                   {isActive && (
                     <motion.div
                       layoutId="active-secondary-tab-indicator"
-                      className="absolute inset-0 rounded-xl border border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-800"
+                      className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
                       transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
                       style={{ zIndex: -1 }}
                     />
