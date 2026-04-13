@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BaseColorEntry, FiveColorQueryResponse } from "../api/types";
-import { fetchBaseColors, queryFiveColor, generateRecipeSwatch } from "../api/fiveColor";
+import {
+  fetchBaseColors,
+  queryFiveColor,
+  generateRecipeSwatch,
+} from "../api/fiveColor";
 
 // ========== Collected Recipe ==========
 
@@ -96,10 +100,10 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
         });
         try {
           const response = await fetchBaseColors(lutName);
-          set({ 
-            baseColors: response.colors, 
-            combinations: response.combinations ?? null, 
-            isLoading: false 
+          set({
+            baseColors: response.colors,
+            combinations: response.combinations ?? null,
+            isLoading: false,
           });
         } catch (err) {
           set({
@@ -161,18 +165,26 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       addToCollection: () => {
-        const { queryResult, selectedIndices, baseColors, lutName, collectedRecipes } = get();
+        const {
+          queryResult,
+          selectedIndices,
+          baseColors,
+          lutName,
+          collectedRecipes,
+        } = get();
         if (!queryResult?.found || !queryResult.result_hex) return;
 
         const isDuplicate = collectedRecipes.some(
           (r) =>
             r.selectedIndices.join(",") === selectedIndices.join(",") &&
-            r.resultHex === queryResult.result_hex
+            r.resultHex === queryResult.result_hex,
         );
         if (isDuplicate) return;
 
         const label = selectedIndices
-          .map((idx) => baseColors.find((c) => c.index === idx)?.name ?? `#${idx}`)
+          .map(
+            (idx) => baseColors.find((c) => c.index === idx)?.name ?? `#${idx}`,
+          )
           .join(" → ");
 
         const recipe: CollectedRecipe = {
@@ -183,7 +195,11 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
           baseColorHexes: baseColors.map((c) => c.hex),
           label,
         };
-        set({ collectedRecipes: [...collectedRecipes, recipe] });
+        set({
+          collectedRecipes: [...collectedRecipes, recipe],
+          selectedIndices: [],
+          queryResult: null,
+        });
       },
 
       removeFromCollection: (id: string) => {
@@ -192,7 +208,11 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       clearCollection: () => {
-        set({ collectedRecipes: [], swatchDownloadUrl: null, swatchPreviewUrl: null });
+        set({
+          collectedRecipes: [],
+          swatchDownloadUrl: null,
+          swatchPreviewUrl: null,
+        });
       },
 
       setSwatchBlockSize: (size: number) => {
@@ -212,9 +232,21 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       generateSwatch: async () => {
-        const { collectedRecipes, lutName, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode } = get();
+        const {
+          collectedRecipes,
+          lutName,
+          swatchBlockSize,
+          swatchGap,
+          swatchCols,
+          swatchStructureMode,
+        } = get();
         if (collectedRecipes.length === 0) return;
-        set({ isGeneratingSwatch: true, error: null, swatchDownloadUrl: null, swatchPreviewUrl: null });
+        set({
+          isGeneratingSwatch: true,
+          error: null,
+          swatchDownloadUrl: null,
+          swatchPreviewUrl: null,
+        });
         try {
           const response = await generateRecipeSwatch({
             lut_name: lutName,
@@ -236,7 +268,8 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
           });
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : "Swatch generation failed",
+            error:
+              err instanceof Error ? err.message : "Swatch generation failed",
             isGeneratingSwatch: false,
           });
         }
