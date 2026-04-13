@@ -236,6 +236,8 @@ class TestPrintableFeatureOptimizer:
 
         survivor = result.records[0]
         assert survivor["recipe"] == [2]
+        assert survivor["_received_merge_source_indices"] == [0, 1]
+        assert survivor["_received_merge_source_recipes"] == [(0,), (1,)]
         assert result.items[0].merge_source_index == 0
         assert result.items[1].merge_source_index == 1
         assert result.items[2].received_merge_source_indices == (0, 1)

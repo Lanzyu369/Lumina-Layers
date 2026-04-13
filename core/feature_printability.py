@@ -576,6 +576,4 @@ class PrintableFeatureOptimizer:
         public = dict(record)
         public.pop("_input_index", None)
         public.pop("_original_geometry", None)
-        public.pop("_received_merge_source_indices", None)
-        public.pop("_received_merge_source_recipes", None)
         return public
