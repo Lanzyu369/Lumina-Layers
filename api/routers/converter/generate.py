@@ -394,18 +394,23 @@ async def _generate_large_format_svg_native(
         request,
         _resolve_relief_global_max_height(session_data, request),
     )
-    result = await pool.submit(
-        worker_generate_large_format_svg_native,
-        image_path,
-        lut_path,
-        {
-            **shared_params,
-            "total_width_mm": total_width_mm,
-            "total_height_mm": total_height_mm,
-            "tile_width_mm": tile_width_mm,
-            "tile_height_mm": tile_height_mm,
-        },
-    )
+    try:
+        result = await pool.submit(
+            worker_generate_large_format_svg_native,
+            image_path,
+            lut_path,
+            {
+                **shared_params,
+                "total_width_mm": total_width_mm,
+                "total_height_mm": total_height_mm,
+                "tile_width_mm": tile_width_mm,
+                "tile_height_mm": tile_height_mm,
+            },
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
+    except ROUTER_HANDLED_ERRORS as e:
+        raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
     zip_path = result["zip_path"]
     store.register_temp_file(sid, zip_path)
     download_id = registry.register_path(sid, zip_path)

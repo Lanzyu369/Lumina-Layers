@@ -711,6 +711,53 @@ class TestLargeFormatDimensionsAndRouting:
         assert updated_policy["inspection_source"] == "generate-large-format"
         assert updated_policy["native_tiling_supported"] is False
 
+    def test_large_format_svg_native_timeout_returns_504(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 504
+        assert "timed out" in response.json()["detail"].lower()
+
+    def test_large_format_svg_native_worker_error_returns_500(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        _mock_pool.submit = AsyncMock(side_effect=ValueError("tile analysis failed"))
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 500
+        assert "large-format svg generation failed" in response.json()["detail"].lower()
+        assert "tile analysis failed" in response.json()["detail"].lower()
+
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
 
