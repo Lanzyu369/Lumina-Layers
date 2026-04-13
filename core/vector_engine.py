@@ -34,6 +34,7 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, ColorSystem
+from core.feature_printability import PrintableFeatureOptimizer
 
 _log = logging.getLogger(__name__)
 
@@ -1025,6 +1026,22 @@ class VectorProcessor:
         stage_timings["color_match_s"] = time.perf_counter() - t0
         _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
 
+        t0 = time.perf_counter()
+        printability_optimizer = PrintableFeatureOptimizer(
+            matched_shapes,
+            scale_factor=scale_factor,
+        )
+        printability_result = printability_optimizer.optimize()
+        matched_shapes = printability_result.records
+        stage_timings["printability_filter_s"] = time.perf_counter() - t0
+        _log.info(
+            "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",
+            len(matched_shapes),
+            printability_result.classification_counts,
+            printability_result.action_counts,
+            printability_result.timings_ms,
+        )
+
         return VectorAnalysis(
             shape_data=shape_data,
             clipped_shapes=clipped_shapes,
@@ -1635,6 +1652,7 @@ class VectorProcessor:
                     "color": rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
+                    "draw_order": int(item.get("draw_order", len(matched))),
                 }
             )
 

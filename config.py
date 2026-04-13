@@ -434,6 +434,9 @@ class VectorConfig:
     # Boolean operation tolerance
     BUFFER_TOLERANCE: float = 0.0  # Shapely buffer precision
 
+    # Printable-core optimizer
+    PRINTABLE_CORE_NOZZLE_MULTIPLIER: float = 2.0
+
     # Coordinate system
     FLIP_Y_AXIS: bool = False  # SVG Y-down → 3D Y-up (disabled by default)
 
