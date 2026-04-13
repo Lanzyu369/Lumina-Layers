@@ -8,6 +8,7 @@ from shapely import affinity
 from shapely.geometry import box
 from shapely.validation import make_valid
 
+from core.naming import _sanitize, _strip_temp_prefix
 from core.vector_engine import VectorAnalysis, VectorProcessor
 
 SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING = (
@@ -330,10 +331,19 @@ def choose_svg_raster_fallback_density(
     return planner.choose_density()
 
 
+def normalize_large_format_source_basename(source_basename: str | None) -> str:
+    """Normalize a source basename for safe cross-platform tile filenames."""
+
+    base = str(source_basename or "").strip()
+    if not base:
+        return ""
+    return _strip_temp_prefix(_sanitize(base)).strip(" ._")
+
+
 def format_large_format_tile_label(*, source_basename: str | None, tile_label: str) -> str:
     """Build a stable, user-facing tile label from source name and tile id."""
 
-    base = str(source_basename or "").strip()
+    base = normalize_large_format_source_basename(source_basename)
     return f"{base}_{tile_label}" if base else tile_label
 
 

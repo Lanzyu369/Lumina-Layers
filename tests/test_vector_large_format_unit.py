@@ -12,6 +12,7 @@ from core.vector_large_format import (
     choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
+    normalize_large_format_source_basename,
     slice_vector_analysis_into_tiles,
 )
 
@@ -316,6 +317,10 @@ def test_format_large_format_tile_label_uses_source_basename_when_present() -> N
 
 def test_format_large_format_tile_label_falls_back_to_tile_id_without_basename() -> None:
     assert format_large_format_tile_label(source_basename="", tile_label="R1C2") == "R1C2"
+
+
+def test_normalize_large_format_source_basename_sanitizes_unsafe_characters() -> None:
+    assert normalize_large_format_source_basename("bad:name*") == "bad_name"
 
 
 def test_svg_large_format_support_inspector_matches_wrapper(tmp_path) -> None:

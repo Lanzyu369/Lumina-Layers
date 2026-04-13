@@ -41,6 +41,7 @@ from core.vector_large_format import (
     choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
+    normalize_large_format_source_basename,
 )
 from utils.lut_manager import LUTManager
 
@@ -375,10 +376,10 @@ def _resolve_large_format_shared_params(session_data: dict, request, relief_glob
 
 
 def _resolve_large_format_source_basename(session_data: dict, image_path: str) -> str:
-    source_basename = str(session_data.get("source_basename") or "").strip()
+    source_basename = normalize_large_format_source_basename(session_data.get("source_basename"))
     if source_basename:
         return source_basename
-    return os.path.splitext(os.path.basename(image_path))[0]
+    return normalize_large_format_source_basename(os.path.splitext(os.path.basename(image_path))[0])
 
 
 async def _generate_large_format_svg_native(

@@ -30,7 +30,7 @@ from config import BedManager, PrinterConfig
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
-from core.vector_large_format import inspect_svg_large_format_support
+from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -53,10 +53,13 @@ def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str
     candidate = str(filename or "").strip()
     if candidate:
         normalized_filename = candidate.replace("\\", "/")
-        source_basename = os.path.splitext(os.path.basename(normalized_filename))[0].strip()
+        source_basename = normalize_large_format_source_basename(
+            os.path.splitext(os.path.basename(normalized_filename))[0]
+        )
         if source_basename:
             return source_basename
-    return os.path.splitext(os.path.basename(temp_path))[0]
+    fallback_basename = os.path.splitext(os.path.basename(temp_path))[0]
+    return normalize_large_format_source_basename(fallback_basename) or fallback_basename
 
 
 @router.get("/bed-sizes", response_model=BedSizeListResponse)

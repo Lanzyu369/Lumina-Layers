@@ -388,6 +388,43 @@ class TestSvgLargeFormatWarnings:
         assert session_data is not None
         assert session_data["source_basename"] == "poster"
 
+    def test_preview_sanitizes_unsafe_upload_basename_characters(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<rect x="0" y="0" width="120" height="80" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": (r"C:\\art\\bad:name*.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 200
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        assert session_data["source_basename"] == "bad_name"
+
 
 # =========================================================================
 # 4. Timeout returns HTTP 504 - Requirement 2.3
