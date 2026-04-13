@@ -164,6 +164,47 @@ class TestPrintableFeatureOptimizer:
         assert thin_items[0].merge_target_index == 0
         assert result.action_counts["merge"] == 1
 
+    def test_thin_shape_merges_when_widening_would_overlap_later_shape(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0, 0, 10.0, 0.2), [0, 0, 0], draw_order=0),
+                _shape(box(0, 0.3, 10.0, 10.3), [1, 1, 1], draw_order=1),
+                _shape(box(0, -10.2, 10.0, -0.2), [2, 2, 2], draw_order=2),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+        thin_items = [item for item in result.items if item.classification == "thin"]
+
+        assert thin_items[0].action == "merge"
+        assert thin_items[0].merge_target_index == 1
+        assert result.action_counts["merge"] == 1
+        assert len(result.records) == 2
+        assert result.records[0]["recipe"] == [1, 1, 1]
+        assert result.records[1]["recipe"] == [2, 2, 2]
+
+    def test_thin_shape_can_widen_when_it_only_touches_later_geometry_boundary(self):
+        thin_geometry = box(0, 0, 10.0, 0.2)
+        probe = PrintableFeatureOptimizer([_shape(thin_geometry, [0, 0, 0], draw_order=0)], scale_factor=1.0)
+        touching_y = probe._widen_to_printable_core(thin_geometry).bounds[3]
+
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(thin_geometry, [0, 0, 0], draw_order=0),
+                _shape(box(0, touching_y, 10.0, touching_y + 10.0), [1, 1, 1], draw_order=1),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+        thin_items = [item for item in result.items if item.classification == "thin"]
+
+        assert thin_items[0].action == "widen"
+        assert thin_items[0].widened_to_normal is True
+        assert result.action_counts["widen"] == 1
+        assert len(result.records) == 2
+
     def test_draw_order_ties_are_deterministic(self):
         optimizer = PrintableFeatureOptimizer(
             [
@@ -206,6 +247,22 @@ class TestPrintableFeatureOptimizer:
         assert len(merged) == 1
         assert merged[0].merge_target_index == 1
 
+    def test_shared_boundary_candidate_outranks_non_touching_zero_distance_candidate(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0.0, 0.0, 0.3, 0.3), [0], draw_order=0),
+                _shape(box(-0.1, -0.1, 0.4, 0.4), [9], draw_order=1),
+                _shape(box(0.3, 0.0, 1.3, 1.0), [1], draw_order=2),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+        source_item = next(item for item in result.items if item.index == 0)
+
+        assert source_item.action == "merge"
+        assert source_item.merge_target_index == 2
+
     def test_chain_merge_preserves_geometry_in_the_live_survivor(self):
         shapes = [
             _shape(box(0.0, 0.0, 0.3, 0.3), [0], draw_order=0),
@@ -220,6 +277,27 @@ class TestPrintableFeatureOptimizer:
         assert result.records[0]["geometry"].area == pytest.approx(unary_union([shape["geometry"] for shape in shapes]).area)
         assert result.action_counts["merge"] == 2
         assert [item.action for item in result.items].count("keep") == 1
+
+    def test_merge_refreshes_candidate_index_after_target_geometry_grows(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0.7, 0.0, 1.0, 0.3), [1], draw_order=0),
+                _shape(box(1.0, 0.0, 2.0, 1.0), [1], draw_order=1),
+                _shape(box(0.4, 0.0, 0.7, 0.3), [2], draw_order=2),
+                _shape(box(0.1, 0.0, 0.4, 1.0), [9], draw_order=3),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+
+        merged = [item for item in result.items if item.action == "merge"]
+        assert len(merged) == 3
+        assert merged[0].merge_target_index == 1
+        assert merged[1].merge_target_index == 1
+        assert merged[2].merge_target_index == 1
+        assert len(result.records) == 1
+        assert result.records[0]["recipe"] == [1]
 
     def test_transitive_merge_provenance_survives_later_merge(self, monkeypatch):
         optimizer = PrintableFeatureOptimizer(

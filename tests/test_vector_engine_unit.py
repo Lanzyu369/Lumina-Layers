@@ -162,6 +162,65 @@ class TestClipOcclusion:
         assert len(reds) == 0, "small feature should be fully occluded"
 
 
+class TestClipMatchedShapesOcclusion:
+    """Verify final matched-shape occlusion preserves metadata."""
+
+    def test_preserves_metadata_while_removing_xy_overlap(self):
+        matched_shapes = [
+            {
+                "geometry": box(0, 0, 10, 10),
+                "recipe": [0, 0, 0],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+                "lut_idx": 0,
+                "draw_order": 0,
+            },
+            {
+                "geometry": box(5, 0, 15, 10),
+                "recipe": [1, 1, 1],
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "lut_idx": 1,
+                "draw_order": 1,
+            },
+        ]
+
+        clipped = VectorProcessor._clip_matched_shapes_occlusion(matched_shapes)
+
+        assert len(clipped) == 2
+        assert clipped[0]["draw_order"] == 0
+        assert clipped[1]["draw_order"] == 1
+        assert clipped[0]["geometry"].intersection(clipped[1]["geometry"]).area == pytest.approx(0.0)
+        assert clipped[0]["matched_rgb"] == (255, 0, 0)
+        assert clipped[1]["lut_idx"] == 1
+
+    def test_respects_draw_order_even_when_input_is_unsorted(self):
+        matched_shapes = [
+            {
+                "geometry": box(5, 0, 15, 10),
+                "recipe": [1, 1, 1],
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "lut_idx": 1,
+                "draw_order": 1,
+            },
+            {
+                "geometry": box(0, 0, 10, 10),
+                "recipe": [0, 0, 0],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+                "lut_idx": 0,
+                "draw_order": 0,
+            },
+        ]
+
+        clipped = VectorProcessor._clip_matched_shapes_occlusion(matched_shapes)
+
+        assert [item["draw_order"] for item in clipped] == [0, 1]
+        assert clipped[0]["geometry"].intersection(clipped[1]["geometry"]).area == pytest.approx(0.0)
+        assert clipped[1]["geometry"].area == pytest.approx(100.0)
+
+
 # =====================================================================
 # 2. Run-length extrusion
 # =====================================================================
@@ -492,6 +551,29 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.volume < board_without_cavity.volume
         assert board_with_cavity.bounds[0][0] == pytest.approx(board_without_cavity.bounds[0][0])
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
+
+    def test_build_mesh_does_not_revive_board_when_final_analysis_geometry_is_empty(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[{"geometry": box(0, 0, 20, 20), "color": (255, 0, 0), "draw_order": 0}],
+            matched_shapes=[],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 0.0, 0.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+
+        assert "Board" not in scene.geometry
+        assert len(scene.geometry) == 0
 
 
 # =====================================================================

@@ -34,7 +34,7 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, ColorSystem
-from core.feature_printability import PrintableFeatureOptimizer
+from core.feature_printability import PrintableFeatureOptimizer, _difference_polygonal_geometry
 
 _log = logging.getLogger(__name__)
 
@@ -1032,7 +1032,7 @@ class VectorProcessor:
             scale_factor=scale_factor,
         )
         printability_result = printability_optimizer.optimize()
-        matched_shapes = printability_result.records
+        matched_shapes = VectorProcessor._clip_matched_shapes_occlusion(printability_result.records)
         silhouette_geoms = [
             shape["geometry"]
             for shape in matched_shapes
@@ -1072,6 +1072,8 @@ class VectorProcessor:
                 max_x += offset_x
                 max_y += offset_y
             bbox = (max(0.0, min_x), max(0.0, min_y), max_x - min_x, max_y - min_y)
+        else:
+            bbox = (0.0, 0.0, 0.0, 0.0)
         stage_timings["printability_filter_s"] = time.perf_counter() - t0
         _log.info(
             "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",
@@ -1170,7 +1172,7 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
-        if silhouette is None and clipped_shapes:
+        if silhouette is None and matched_shapes and clipped_shapes:
             all_geoms = [
                 s["geometry"] for s in clipped_shapes if s["geometry"] is not None and not s["geometry"].is_empty
             ]
@@ -1628,6 +1630,80 @@ class VectorProcessor:
             except Exception:
                 silhouette = None
             return result, silhouette
+        return result
+
+    @staticmethod
+    def _clip_matched_shapes_occlusion(matched_shapes):
+        """Clip matched-shape records after printability optimization.
+
+        Preserves all non-geometry metadata while ensuring the final records are
+        non-overlapping in draw-order order.
+        """
+        ordered_shapes = [
+            item
+            for _, item in sorted(
+                enumerate(matched_shapes),
+                key=lambda pair: (int(pair[1].get("draw_order", pair[0])), pair[0]),
+            )
+        ]
+        n = len(ordered_shapes)
+        if n == 0:
+            return []
+
+        valid = []
+        for i, item in enumerate(ordered_shapes):
+            geom = item.get("geometry")
+            if geom is None or geom.is_empty:
+                continue
+            valid.append((i, geom))
+
+        if not valid:
+            return []
+
+        orders = [v[0] for v in valid]
+        geoms = [v[1] for v in valid]
+        tree = STRtree(geoms)
+        result = []
+
+        for i in range(n - 1, -1, -1):
+            item = ordered_shapes[i]
+            geom = item.get("geometry")
+            if geom is None or geom.is_empty:
+                continue
+
+            occluders = []
+            try:
+                candidate_refs = tree.query(geom)
+            except Exception:
+                candidate_refs = []
+
+            for ref in candidate_refs:
+                if isinstance(ref, (int, np.integer)):
+                    idx = int(ref)
+                else:
+                    idx = -1
+                if idx < 0:
+                    continue
+                if orders[idx] <= i:
+                    continue
+                cand = geoms[idx]
+                try:
+                    if cand.intersects(geom):
+                        occluders.append(cand)
+                except Exception:
+                    continue
+
+            if not occluders:
+                clipped = geom
+            else:
+                occ = occluders[0] if len(occluders) == 1 else unary_union(occluders)
+                clipped = _difference_polygonal_geometry(geom, occ)
+            if clipped is None or clipped.is_empty:
+                continue
+
+            result.append({**item, "geometry": clipped})
+
+        result.reverse()
         return result
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────

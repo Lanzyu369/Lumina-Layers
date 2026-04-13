@@ -7,7 +7,9 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from shapely.geometry import box
 
+import core.vector_engine as vector_engine_module
 from core.pipeline.coordinator import _log_vector_timings
 from core.vector_engine import VectorProcessor
 
@@ -79,13 +81,45 @@ class _FakePrintableFeatureOptimizer:
         )
 
 
+class _FakeOverlappingPrintableFeatureOptimizer:
+    def __init__(self, shape_records, scale_factor, printable_core_nozzle_multiplier=None, nozzle_width_mm=None):
+        self.shape_records = [dict(record) for record in shape_records]
+
+    def optimize(self):
+        first = dict(self.shape_records[0])
+        second = dict(self.shape_records[1])
+        first["geometry"] = box(0.0, 0.0, 10.0, 1.0)
+        second["geometry"] = box(0.0, 0.5, 10.0, 10.5)
+        return SimpleNamespace(
+            records=[first, second],
+            items=[],
+            classification_counts={"normal": 1, "isolated": 0, "thin": 1, "skip": 0},
+            action_counts={"keep": 1, "widen": 1, "merge": 0, "skip": 0},
+            timings_ms={"classify": 1.0, "action": 1.0, "total": 2.0},
+        )
+
+
+class _FakeEmptyPrintableFeatureOptimizer:
+    def __init__(self, shape_records, scale_factor, printable_core_nozzle_multiplier=None, nozzle_width_mm=None):
+        self.shape_records = [dict(record) for record in shape_records]
+
+    def optimize(self):
+        return SimpleNamespace(
+            records=[],
+            items=[],
+            classification_counts={"normal": 0, "isolated": 0, "thin": 0, "skip": len(self.shape_records)},
+            action_counts={"keep": 0, "widen": 0, "merge": 0, "skip": len(self.shape_records)},
+            timings_ms={"classify": 0.5, "action": 0.5, "total": 1.0},
+        )
+
+
 class TestVectorPrintabilityIntegration:
     def test_analyze_svg_uses_optimizer_output_and_records_printability_timing(self, tmp_path, monkeypatch, caplog):
         lut_path = _write_merged_lut(tmp_path)
         svg_path = _write_simple_svg(tmp_path)
         processor = VectorProcessor(lut_path, "Merged")
 
-        monkeypatch.setattr("core.vector_engine.PrintableFeatureOptimizer", _FakePrintableFeatureOptimizer, raising=False)
+        monkeypatch.setattr(vector_engine_module, "PrintableFeatureOptimizer", _FakePrintableFeatureOptimizer)
         caplog.set_level(logging.INFO, logger="core.vector_engine")
 
         analysis = processor.analyze_svg(svg_path, target_width_mm=50.0)
@@ -143,3 +177,41 @@ class TestVectorPrintabilityIntegration:
         assert analysis.bbox[1] == pytest.approx(0.0)
         assert analysis.bbox[2] == pytest.approx(analysis.silhouette.bounds[2] - analysis.silhouette.bounds[0])
         assert analysis.bbox[3] == pytest.approx(analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1])
+
+    def test_analyze_svg_reclips_optimizer_output_before_returning_final_shapes(self, tmp_path, monkeypatch):
+        lut_path = _write_merged_lut(tmp_path)
+        svg_path = _write_simple_svg(tmp_path)
+        processor = VectorProcessor(lut_path, "Merged")
+
+        monkeypatch.setattr(
+            vector_engine_module,
+            "PrintableFeatureOptimizer",
+            _FakeOverlappingPrintableFeatureOptimizer,
+        )
+
+        analysis = processor.analyze_svg(svg_path, target_width_mm=50.0)
+
+        assert len(analysis.matched_shapes) == 2
+        overlap_area = analysis.matched_shapes[0]["geometry"].intersection(analysis.matched_shapes[1]["geometry"]).area
+        assert overlap_area == pytest.approx(0.0)
+        assert analysis.matched_shapes[0]["draw_order"] == 0
+        assert analysis.matched_shapes[1]["draw_order"] == 1
+        assert "matched_rgb" in analysis.matched_shapes[0]
+        assert "lut_idx" in analysis.matched_shapes[1]
+
+    def test_analyze_svg_resets_bbox_when_final_geometry_is_empty(self, tmp_path, monkeypatch):
+        lut_path = _write_merged_lut(tmp_path)
+        svg_path = _write_simple_svg(tmp_path)
+        processor = VectorProcessor(lut_path, "Merged")
+
+        monkeypatch.setattr(
+            vector_engine_module,
+            "PrintableFeatureOptimizer",
+            _FakeEmptyPrintableFeatureOptimizer,
+        )
+
+        analysis = processor.analyze_svg(svg_path, target_width_mm=50.0)
+
+        assert analysis.matched_shapes == []
+        assert analysis.silhouette is None
+        assert analysis.bbox == (0.0, 0.0, 0.0, 0.0)
