@@ -15,7 +15,12 @@ describe("useAutoPreview", () => {
     vi.clearAllMocks();
     useConverterStore.setState({
       imageFile: null,
+      source_version: "legacy",
       lut_name: "",
+      selectedNativeBrandKey: "",
+      selectedNativeDbNames: [],
+      color_layers: null,
+      layer_height_mm: null,
       cropModalOpen: false,
       hasManualPreview: false,
       hue_enable: false,
@@ -139,5 +144,43 @@ describe("useAutoPreview", () => {
     });
 
     expect(mockSubmitPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not trigger sync-external-store loops for native bundle state", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => {
+      renderHook(() => useAutoPreview());
+
+      act(() => {
+        useConverterStore.setState({
+          imageFile: fakeFile(),
+          source_version: "native",
+          lut_name: "",
+          selectedNativeBrandKey: "brand-a",
+          selectedNativeDbNames: ["db-1"],
+          color_layers: 5,
+          layer_height_mm: 0.08,
+          hasManualPreview: true,
+        });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+    }).not.toThrow();
+
+    expect(
+      consoleErrorSpy.mock.calls.some(
+        ([message]) =>
+          typeof message === "string" &&
+          (
+            message.includes("getSnapshot should be cached") ||
+            message.includes("Maximum update depth exceeded")
+          ),
+      ),
+    ).toBe(false);
+
+    consoleErrorSpy.mockRestore();
   });
 });

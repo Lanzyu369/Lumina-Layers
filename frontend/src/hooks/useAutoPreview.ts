@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { resolveConverterSourceSelection, useConverterStore } from "../stores/converter";
+import { useConverterStore } from "../stores/converter";
 
 /**
  * Auto-trigger preview when preconditions are met.
@@ -10,7 +10,12 @@ import { resolveConverterSourceSelection, useConverterStore } from "../stores/co
  */
 export function useAutoPreview(): void {
   const imageFile = useConverterStore((s) => s.imageFile);
-  const sourceSelection = useConverterStore(resolveConverterSourceSelection);
+  const source_version = useConverterStore((s) => s.source_version);
+  const lut_name = useConverterStore((s) => s.lut_name);
+  const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey);
+  const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames);
+  const color_layers = useConverterStore((s) => s.color_layers);
+  const layer_height_mm = useConverterStore((s) => s.layer_height_mm);
   const cropModalOpen = useConverterStore((s) => s.cropModalOpen);
   const hue_enable = useConverterStore((s) => s.hue_enable);
   const chroma_gate = useConverterStore((s) => s.chroma_gate);
@@ -30,15 +35,19 @@ export function useAutoPreview(): void {
     chroma_gate: 15,
   });
 
-  const sourceKey = sourceSelection.source_kind === "native_bundle"
+  const sourceKey = source_version === "native"
     ? [
-        sourceSelection.source_kind,
-        sourceSelection.native.brand?.brand_key ?? "",
-        sourceSelection.native.db_names.join("|"),
-        sourceSelection.color_layers ?? "",
-        sourceSelection.layer_height_mm ?? "",
+        "native_bundle",
+        selectedNativeBrandKey,
+        selectedNativeDbNames.join("|"),
+        color_layers ?? "",
+        layer_height_mm ?? "",
       ].join("::")
-    : `${sourceSelection.source_kind}::${sourceSelection.lut_name}`;
+    : `legacy_single::${lut_name}`;
+
+  const isSourceReady = source_version === "native"
+    ? selectedNativeBrandKey.length > 0 && selectedNativeDbNames.length > 0
+    : lut_name.length > 0;
 
   useEffect(() => {
     // Clear any pending timer on every dependency change
@@ -48,7 +57,7 @@ export function useAutoPreview(): void {
     }
 
     // Check preconditions: 必须有图片、源选择已就绪、裁剪弹窗关闭、且已手动预览过
-    if (!imageFile || !sourceSelection.isReady || cropModalOpen || !hasManualPreview) {
+    if (!imageFile || !isSourceReady || cropModalOpen || !hasManualPreview) {
       return;
     }
 
@@ -91,7 +100,7 @@ export function useAutoPreview(): void {
   }, [
     imageFile,
     sourceKey,
-    sourceSelection.isReady,
+    isSourceReady,
     cropModalOpen,
     hue_enable,
     chroma_gate,
