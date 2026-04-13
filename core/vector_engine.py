@@ -1054,7 +1054,24 @@ class VectorProcessor:
 
         if silhouette is not None and not silhouette.is_empty:
             min_x, min_y, max_x, max_y = silhouette.bounds
-            bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
+            offset_x = -min(0.0, min_x)
+            offset_y = -min(0.0, min_y)
+            if offset_x != 0.0 or offset_y != 0.0:
+                matched_shapes = [
+                    {
+                        **shape,
+                        "geometry": affinity.translate(shape["geometry"], xoff=offset_x, yoff=offset_y)
+                        if shape.get("geometry") is not None and not shape["geometry"].is_empty
+                        else shape.get("geometry"),
+                    }
+                    for shape in matched_shapes
+                ]
+                silhouette = affinity.translate(silhouette, xoff=offset_x, yoff=offset_y)
+                min_x += offset_x
+                min_y += offset_y
+                max_x += offset_x
+                max_y += offset_y
+            bbox = (max(0.0, min_x), max(0.0, min_y), max_x - min_x, max_y - min_y)
         stage_timings["printability_filter_s"] = time.perf_counter() - t0
         _log.info(
             "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",

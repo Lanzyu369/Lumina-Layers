@@ -492,10 +492,15 @@ class PrintableFeatureOptimizer:
 
         在目标记录上登记入站合并来源。
         """
+        source_chain_indices = tuple(int(index) for index in source.get("_received_merge_source_indices", ()))
+        source_chain_recipes = tuple(source.get("_received_merge_source_recipes", ()))
         source_index = int(merge_info["source_index"])
         source_recipe = tuple(merge_info["source_recipe"] or ())
         target.setdefault("_received_merge_source_indices", [])
         target.setdefault("_received_merge_source_recipes", [])
+        for index, recipe in zip(source_chain_indices, source_chain_recipes):
+            target["_received_merge_source_indices"].append(index)
+            target["_received_merge_source_recipes"].append(tuple(recipe or ()))
         target["_received_merge_source_indices"].append(source_index)
         target["_received_merge_source_recipes"].append(source_recipe)
 

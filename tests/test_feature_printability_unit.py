@@ -220,3 +220,22 @@ class TestPrintableFeatureOptimizer:
         assert result.records[0]["geometry"].area == pytest.approx(unary_union([shape["geometry"] for shape in shapes]).area)
         assert result.action_counts["merge"] == 2
         assert [item.action for item in result.items].count("keep") == 1
+
+    def test_transitive_merge_provenance_survives_later_merge(self, monkeypatch):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0.0, 0.0, 0.3, 0.3), [0], draw_order=0),
+                _shape(box(0.3, 0.0, 1.0, 1.0), [1], draw_order=1),
+                _shape(box(1.0, 0.0, 1.3, 1.0), [2], draw_order=2),
+            ],
+            scale_factor=1.0,
+        )
+
+        monkeypatch.setattr(optimizer, "_widen_to_printable_core", lambda geometry: None)
+        result = optimizer.optimize()
+
+        survivor = result.records[0]
+        assert survivor["recipe"] == [2]
+        assert result.items[0].merge_source_index == 0
+        assert result.items[1].merge_source_index == 1
+        assert result.items[2].received_merge_source_indices == (0, 1)

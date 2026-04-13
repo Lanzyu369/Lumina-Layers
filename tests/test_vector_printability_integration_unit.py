@@ -134,9 +134,12 @@ class TestVectorPrintabilityIntegration:
 
         assert analysis.matched_shapes
         widened = analysis.matched_shapes[0]["geometry"]
-        widened_height = widened.bounds[3] - widened.bounds[1]
-
-        assert widened_height > 0.2
+        assert widened.bounds[0] == pytest.approx(0.0)
+        assert widened.bounds[1] == pytest.approx(0.0)
         assert analysis.silhouette is not None
-        assert analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1] == pytest.approx(widened_height)
+        assert analysis.silhouette.bounds[0] == pytest.approx(0.0)
+        assert analysis.silhouette.bounds[1] == pytest.approx(0.0)
+        assert analysis.bbox[0] == pytest.approx(0.0)
+        assert analysis.bbox[1] == pytest.approx(0.0)
+        assert analysis.bbox[2] == pytest.approx(analysis.silhouette.bounds[2] - analysis.silhouette.bounds[0])
         assert analysis.bbox[3] == pytest.approx(analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1])
