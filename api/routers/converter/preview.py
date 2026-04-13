@@ -47,6 +47,18 @@ router = APIRouter()
 log = get_logger(__name__)
 
 
+def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str:
+    """Resolve a stable source basename from upload metadata across path styles."""
+
+    candidate = str(filename or "").strip()
+    if candidate:
+        normalized_filename = candidate.replace("\\", "/")
+        source_basename = os.path.splitext(os.path.basename(normalized_filename))[0].strip()
+        if source_basename:
+            return source_basename
+    return os.path.splitext(os.path.basename(temp_path))[0]
+
+
 @router.get("/bed-sizes", response_model=BedSizeListResponse)
 def get_bed_sizes() -> BedSizeListResponse:
     """Return all available printer bed sizes including printer models and custom sizes.
@@ -288,9 +300,7 @@ async def convert_preview(
     bind_session_id(session_id)
     store.put(session_id, "preview_cache", cache_data)
     store.put(session_id, "image_path", temp_path)
-    source_basename = os.path.splitext(os.path.basename(image.filename or ""))[0].strip()
-    if not source_basename:
-        source_basename = os.path.splitext(os.path.basename(temp_path))[0]
+    source_basename = _resolve_upload_source_basename(image.filename, temp_path)
     store.put(session_id, "source_basename", source_basename)
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", lut_name)
