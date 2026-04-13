@@ -119,6 +119,7 @@ def _create_svg_session(
         {
             "native_tiling_supported": native_tiling_supported,
             "warnings": list(warnings or []),
+            "inspection_source": "preview-vector-svg",
         },
     )
     return sid, svg_path, lut_path
@@ -643,6 +644,72 @@ class TestLargeFormatDimensionsAndRouting:
         assert native_helper.call_count == 0
         raster_helper.assert_called_once()
         assert any("raster fallback" in warning.lower() for warning in body["warnings"])
+
+    def test_large_format_reinspects_unmarked_svg_policy_before_using_native_path(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        session_data = _test_store.get(sid)
+        assert session_data is not None
+        session_data["svg_large_format_policy"] = {
+            "native_tiling_supported": True,
+            "warnings": [],
+            "unsupported_features": [],
+        }
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        fallback_response = {
+            "status": "ok",
+            "message": "fallback",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [
+                "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling. Unsupported features: text.",
+                "Raster fallback was used for this large-format SVG request.",
+            ],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate.inspect_svg_large_format_support",
+                return_value={
+                    "native_tiling_supported": False,
+                    "warnings": [
+                        "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling. Unsupported features: text."
+                    ],
+                    "unsupported_features": ["text"],
+                },
+            ) as inspect_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=fallback_response,
+            ) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        inspect_helper.assert_called_once()
+        native_helper.assert_not_called()
+        raster_helper.assert_called_once()
+        updated_policy = _test_store.get(sid)["svg_large_format_policy"]
+        assert updated_policy["inspection_source"] == "generate-large-format"
+        assert updated_policy["native_tiling_supported"] is False
 
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)

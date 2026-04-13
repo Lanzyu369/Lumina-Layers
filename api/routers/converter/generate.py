@@ -592,8 +592,14 @@ async def convert_generate_large_format(
     is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
     if is_svg_vector:
         policy = session_data.get("svg_large_format_policy")
-        if not isinstance(policy, dict):
-            policy = inspect_svg_large_format_support(image_path)
+        if not isinstance(policy, dict) or policy.get("inspection_source") not in {
+            "preview-vector-svg",
+            "generate-large-format",
+        }:
+            policy = {
+                **inspect_svg_large_format_support(image_path),
+                "inspection_source": "generate-large-format",
+            }
             session_data["svg_large_format_policy"] = policy
         warnings.extend(list(policy.get("warnings", [])))
 

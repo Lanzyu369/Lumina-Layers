@@ -220,8 +220,12 @@ async def convert_preview(
     temp_path = await ensure_png_tempfile(image)
     _t_upload = time.perf_counter() - _t
     svg_large_format_policy = None
-    if modeling_mode == "vector" and str(temp_path).lower().endswith(".svg"):
-        svg_large_format_policy = inspect_svg_large_format_support(temp_path)
+    is_svg_upload = str(temp_path).lower().endswith(".svg")
+    if modeling_mode == "vector" and is_svg_upload:
+        svg_large_format_policy = {
+            **inspect_svg_large_format_support(temp_path),
+            "inspection_source": "preview-vector-svg",
+        }
 
     # 2. CPU computation offloaded to process pool (only paths and scalars)
     try:
@@ -289,16 +293,8 @@ async def convert_preview(
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())
-    store.put(
-        session_id,
-        "svg_large_format_policy",
-        svg_large_format_policy
-        or {
-            "native_tiling_supported": True,
-            "warnings": [],
-            "unsupported_features": [],
-        },
-    )
+    if svg_large_format_policy is not None:
+        store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
     # Save a pristine copy of matched_rgb for reset-replacements
     if cache_data and "matched_rgb" in cache_data:
         store.put(session_id, "original_matched_rgb", cache_data["matched_rgb"].copy())
