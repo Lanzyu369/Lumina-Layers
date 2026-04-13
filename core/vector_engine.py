@@ -1033,6 +1033,28 @@ class VectorProcessor:
         )
         printability_result = printability_optimizer.optimize()
         matched_shapes = printability_result.records
+        silhouette_geoms = [
+            shape["geometry"]
+            for shape in matched_shapes
+            if shape.get("geometry") is not None and not shape["geometry"].is_empty
+        ]
+        if silhouette_geoms:
+            try:
+                silhouette = unary_union(silhouette_geoms)
+            except Exception:
+                silhouette = silhouette_geoms[0] if len(silhouette_geoms) == 1 else None
+            if silhouette is not None:
+                if not silhouette.is_valid:
+                    silhouette = make_valid(silhouette)
+                silhouette = VectorProcessor._extract_polygonal_geometry(silhouette)
+                if silhouette is None or silhouette.is_empty:
+                    silhouette = None
+        else:
+            silhouette = None
+
+        if silhouette is not None and not silhouette.is_empty:
+            min_x, min_y, max_x, max_y = silhouette.bounds
+            bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
         stage_timings["printability_filter_s"] = time.perf_counter() - t0
         _log.info(
             "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",

@@ -43,6 +43,18 @@ def _write_simple_svg(tmp_path):
     return str(path)
 
 
+def _write_thin_svg(tmp_path):
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 10">'
+        '  <rect x="0" y="0" width="10" height="0.2" fill="#dc143c"/>'
+        "</svg>"
+    )
+    path = tmp_path / "thin.svg"
+    path.write_text(svg, encoding="utf-8")
+    return str(path)
+
+
 class _FakePrintableFeatureOptimizer:
     captured_records = None
 
@@ -112,3 +124,19 @@ class TestVectorPrintabilityIntegration:
         )
 
         assert any("printability_filter=0.400" in record.message for record in caplog.records)
+
+    def test_analyze_svg_recomputes_silhouette_and_bbox_after_printability_widening(self, tmp_path):
+        lut_path = _write_merged_lut(tmp_path)
+        svg_path = _write_thin_svg(tmp_path)
+        processor = VectorProcessor(lut_path, "Merged")
+
+        analysis = processor.analyze_svg(svg_path, target_width_mm=50.0)
+
+        assert analysis.matched_shapes
+        widened = analysis.matched_shapes[0]["geometry"]
+        widened_height = widened.bounds[3] - widened.bounds[1]
+
+        assert widened_height > 0.2
+        assert analysis.silhouette is not None
+        assert analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1] == pytest.approx(widened_height)
+        assert analysis.bbox[3] == pytest.approx(analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1])

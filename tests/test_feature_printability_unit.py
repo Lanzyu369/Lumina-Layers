@@ -5,6 +5,7 @@ import os
 
 import pytest
 from shapely.geometry import box
+from shapely.ops import unary_union
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -204,3 +205,18 @@ class TestPrintableFeatureOptimizer:
         merged = [item for item in result.items if item.action == "merge"]
         assert len(merged) == 1
         assert merged[0].merge_target_index == 1
+
+    def test_chain_merge_preserves_geometry_in_the_live_survivor(self):
+        shapes = [
+            _shape(box(0.0, 0.0, 0.3, 0.3), [0], draw_order=0),
+            _shape(box(0.3, 0.0, 1.0, 1.0), [1], draw_order=1),
+            _shape(box(0.0, 0.3, 0.3, 0.6), [2], draw_order=2),
+        ]
+        optimizer = PrintableFeatureOptimizer(shapes, scale_factor=1.0)
+
+        result = optimizer.optimize()
+
+        assert len(result.records) == 1
+        assert result.records[0]["geometry"].area == pytest.approx(unary_union([shape["geometry"] for shape in shapes]).area)
+        assert result.action_counts["merge"] == 2
+        assert [item.action for item in result.items].count("keep") == 1

@@ -230,7 +230,7 @@ class PrintableFeatureOptimizer:
             self._source_records,
             key=lambda item: (int(item.get("draw_order", item["_input_index"])), item["_input_index"]),
         )
-        records_by_index = {record["_input_index"]: record for record in sorted_records if record.get("geometry") is not None}
+        live_records = {record["_input_index"]: record for record in sorted_records if record.get("geometry") is not None}
         active_records: list[dict[str, Any]] = []
 
         items_by_input_index: dict[int, PrintableFeatureOptimizationItem] = {}
@@ -276,13 +276,14 @@ class PrintableFeatureOptimizer:
             if classification == "normal":
                 active_records.append(record)
             elif classification == "isolated":
-                target = self._select_best_neighbor(record, records_by_index.values())
+                target = self._select_best_neighbor(record, live_records.values())
                 if target is not None:
                     merge_info = self._merge_record_into_target(record, target)
                     merged_into_index = int(target["_input_index"])
                     action = "merge"
                     reason = "isolated"
                     output_area = 0.0
+                    live_records.pop(int(record["_input_index"]), None)
                     self._update_target_receipt(target, record, merge_info)
                 else:
                     active_records.append(record)
@@ -297,13 +298,14 @@ class PrintableFeatureOptimizer:
                     widened_to_normal = True
                     active_records.append(record)
                 else:
-                    target = self._select_best_neighbor(record, records_by_index.values())
+                    target = self._select_best_neighbor(record, live_records.values())
                     if target is not None:
                         merge_info = self._merge_record_into_target(record, target)
                         merged_into_index = int(target["_input_index"])
                         action = "merge"
                         reason = "thin-fallback-merge"
                         output_area = 0.0
+                        live_records.pop(int(record["_input_index"]), None)
                         self._update_target_receipt(target, record, merge_info)
                     else:
                         active_records.append(record)
