@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import pickle
 import time
 import uuid
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
+from pydantic import ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile, ndarray_to_png_bytes
 from api.file_registry import FileRegistry
 from api.schemas.converter import BedSizeItem, BedSizeListResponse
+from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
     AutoDetectColorsResponse,
     CropResponse,
@@ -26,7 +30,7 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
-from config import BedManager, PrinterConfig
+from config import BedManager, PrinterConfig, TEMP_DIR
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
@@ -44,6 +48,63 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+
+
+def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
+    """Best-effort cleanup for temp files created before a session exists."""
+
+    seen: set[str] = set()
+    for path in paths:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+        except OSError as exc:
+            log.warning(
+                "Failed to clean pre-session temp file",
+                extra={
+                    "event": "converter_preview_temp_cleanup_failed",
+                    "temp_path": path,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+
+
+def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
+    """Normalize native DB names from form inputs.
+
+    Accepts repeated form fields, JSON-stringified arrays, and plain strings.
+    """
+    if db_names is None:
+        return []
+
+    if isinstance(db_names, str):
+        value = db_names.strip()
+        if not value:
+            return []
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return [db_names]
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, str)]
+        return [db_names]
+
+    normalized = list(db_names)
+    if len(normalized) == 1 and isinstance(normalized[0], str):
+        value = normalized[0].strip()
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return normalized
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, str)]
+    return normalized
 
 
 @router.get("/bed-sizes", response_model=BedSizeListResponse)
@@ -184,12 +245,22 @@ async def crop_image(
 @router.post("/preview")
 async def convert_preview(
     image: UploadFile = File(..., description="输入图像"),
-    lut_name: str = Form(..., description="LUT 名称"),
+    source_kind: str = Form("legacy_single", description="源类型: legacy_single | native_bundle"),
+    lut_name: str | None = Form(None, description="LUT 名称"),
+    material_type: str | None = Form(None, description="原生材料类型"),
+    vendor: str | None = Form(None, description="原生厂商"),
+    db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
     auto_bg: bool = Form(False, description="自动去背景"),
     bg_tol: int = Form(40, description="背景容差"),
     color_mode: str = Form("4-Color (RYBW)", description="颜色模式"),
     modeling_mode: str = Form("high-fidelity", description="建模模式"),
+    color_layers: int | None = Form(None, description="叠色层数"),
+    layer_height_mm: float | None = Form(None, description="叠色层高 (mm)"),
+    model_enable: bool = Form(False, description="启用模型辅助匹配"),
+    model_only: bool = Form(False, description="仅使用模型匹配"),
+    model_threshold: float | None = Form(None, description="模型回退阈值"),
+    model_margin: float | None = Form(None, description="模型回退边距"),
     quantize_colors: int = Form(48, description="K-Means 色彩细节"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     hue_weight: float = Form(0.0, description="色相保护权重"),
@@ -208,26 +279,69 @@ async def convert_preview(
     CPU 密集型预览生成卸载到工作进程池。
     """
     _api_t0 = time.perf_counter()
+    temp_path: str | None = None
+    temp_native_bundle_path: str | None = None
+    worker_preview_png_path: str | None = None
+    worker_cache_data_path: str | None = None
 
-    # Resolve LUT path
-    lut_path = LUTManager.get_lut_path(lut_name)
-    if lut_path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
-
-    # 1. File upload (I/O, main thread)
-    _t = time.perf_counter()
-    temp_path = await ensure_png_tempfile(image)
-    _t_upload = time.perf_counter() - _t
-
-    # 2. CPU computation offloaded to process pool (only paths and scalars)
     try:
+        normalized_db_names = _normalize_db_names(db_names)
+        request = LutSourceSelection.model_validate(
+            {
+                "source_kind": source_kind,
+                "lut_name": lut_name,
+                "material_type": material_type,
+                "vendor": vendor,
+                "db_names": normalized_db_names,
+            }
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
+
+    try:
+        lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
+            source_kind=request.source_kind,
+            lut_name=request.lut_name,
+            material_type=request.material_type,
+            vendor=request.vendor,
+            db_names=request.db_names,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail.startswith("LUT not found:") else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    resolved_lut_path = os.path.abspath(lut_path)
+    if request.source_kind == "native_bundle":
+        try:
+            Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
+        except ValueError:
+            temp_native_bundle_path = None
+        else:
+            temp_native_bundle_path = resolved_lut_path
+
+    worker_completed = False
+    try:
+        # 1. File upload (I/O, main thread)
+        _t = time.perf_counter()
+        temp_path = await ensure_png_tempfile(image)
+        _t_upload = time.perf_counter() - _t
+
+        # 2. CPU computation offloaded to process pool (only paths and scalars)
         log.info(
             "Submitting preview worker task",
             extra={
                 "event": "converter_preview_submit",
                 "hue_weight": hue_weight,
-                "lut_name": lut_name,
+                "lut_name": resolved_lut_name,
+                "source_kind": request.source_kind,
                 "color_mode": color_mode,
+                "color_layers": color_layers,
+                "layer_height_mm": layer_height_mm,
+                "model_enable": model_enable,
+                "model_only": model_only,
+                "model_threshold": model_threshold,
+                "model_margin": model_margin,
             },
         )
         _t = time.perf_counter()
@@ -240,13 +354,20 @@ async def convert_preview(
             bg_tol,
             color_mode,
             modeling_mode,
+            color_layers,
+            layer_height_mm,
             quantize_colors,
             enable_cleanup,
             is_dark,
+            model_enable,
+            model_only,
+            model_threshold,
+            model_margin,
             hue_weight,
             chroma_gate,
         )
         _t_worker = time.perf_counter() - _t
+        worker_completed = True
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
@@ -259,19 +380,35 @@ async def convert_preview(
             },
         )
         raise HTTPException(status_code=500, detail=f"Preview generation failed: {str(e)}")
+    finally:
+        if not worker_completed:
+            _cleanup_pre_session_temp_paths(temp_path, temp_native_bundle_path)
 
     # 3. Result processing (I/O + Session, main thread)
-    if result["preview_png_path"] is None:
-        raise HTTPException(status_code=500, detail=result["status_msg"] or "Preview generation failed")
+    result_loaded = False
+    try:
+        worker_preview_png_path = result["preview_png_path"]
+        worker_cache_data_path = result["cache_data_path"]
+        if worker_preview_png_path is None:
+            raise HTTPException(status_code=500, detail=result["status_msg"] or "Preview generation failed")
 
-    # Load cache_data from disk (worker serialized to .pkl)
-    _t = time.perf_counter()
-    with open(result["cache_data_path"], "rb") as f:
-        cache_data = pickle.load(f)
-    _t_pickle_load = time.perf_counter() - _t
+        # Load cache_data from disk (worker serialized to .pkl)
+        _t = time.perf_counter()
+        with open(worker_cache_data_path, "rb") as f:
+            cache_data = pickle.load(f)
+        _t_pickle_load = time.perf_counter() - _t
 
-    # Load preview image from disk (worker saved as .png)
-    preview_img = Image.open(result["preview_png_path"])
+        # Load preview image from disk (worker saved as .png)
+        preview_img = Image.open(worker_preview_png_path)
+        result_loaded = True
+    finally:
+        if not result_loaded:
+            _cleanup_pre_session_temp_paths(
+                temp_path,
+                temp_native_bundle_path,
+                worker_preview_png_path,
+                worker_cache_data_path,
+            )
 
     status_msg: str = result["status_msg"]
 
@@ -281,7 +418,17 @@ async def convert_preview(
     store.put(session_id, "preview_cache", cache_data)
     store.put(session_id, "image_path", temp_path)
     store.put(session_id, "lut_path", lut_path)
-    store.put(session_id, "lut_name", lut_name)
+    store.put(session_id, "lut_name", resolved_lut_name)
+    store.put(session_id, "lut_source_kind", request.source_kind)
+    store.put(session_id, "lut_material_type", request.material_type)
+    store.put(session_id, "lut_vendor", request.vendor)
+    store.put(session_id, "lut_db_names", list(request.db_names))
+    store.put(session_id, "color_layers", color_layers)
+    store.put(session_id, "layer_height_mm", layer_height_mm)
+    store.put(session_id, "model_enable", model_enable)
+    store.put(session_id, "model_only", model_only)
+    store.put(session_id, "model_threshold", model_threshold)
+    store.put(session_id, "model_margin", model_margin)
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())
@@ -289,9 +436,11 @@ async def convert_preview(
     if cache_data and "matched_rgb" in cache_data:
         store.put(session_id, "original_matched_rgb", cache_data["matched_rgb"].copy())
     store.register_temp_file(session_id, temp_path)
+    if temp_native_bundle_path is not None:
+        store.register_temp_file(session_id, temp_native_bundle_path)
     # Register worker temp files for cleanup
-    store.register_temp_file(session_id, result["preview_png_path"])
-    store.register_temp_file(session_id, result["cache_data_path"])
+    store.register_temp_file(session_id, worker_preview_png_path)
+    store.register_temp_file(session_id, worker_cache_data_path)
 
     # Register preview image (bed-rendered, for general display)
     preview_bytes = _image_to_png_bytes(preview_img)
@@ -418,10 +567,14 @@ async def convert_preview(
         message=status_msg or "Preview generated",
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=preview_glb_url,
+        lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
+        lut_match_info=cache_data.get("lut_match_info"),
         palette=palette,
         dimensions=dimensions,
         contours=contours_data,
     )
+
+
 
 
 @router.get("/layer-images/{session_id}")

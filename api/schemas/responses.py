@@ -5,7 +5,7 @@ All API endpoint response schemas are defined here.
 所有 API 端点的响应 Schema 均在此定义。
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,115 @@ class CalibrationResponse(BaseModel):
     preview_url: Optional[str] = None
 
 
+class SingleStageJobResponse(BaseModel):
+    """Single-stage job summary."""
+
+    color: str
+    color_name: str
+    material: str
+    substrate_id: str
+    substrate_display_name: str
+    filename: str
+
+
+class SingleStageCoverageResponse(BaseModel):
+    """Coverage summary per substrate."""
+
+    substrate_id: str
+    colors: list[str]
+
+
+class SingleStageDatasetItemResponse(BaseModel):
+    """Dataset summary for a single substrate/color pair."""
+
+    substrate_id: str
+    color_name: str
+    image_count: int = 0
+    label_count: Optional[int] = None
+    calibration: Optional[dict[str, Any]] = None
+
+
+class SingleStageDatasetSummaryResponse(BaseModel):
+    """Aggregate single-stage dataset summary."""
+
+    substrate_count: int
+    color_count: int
+    dataset_count: int
+    image_count: int
+    label_count: Optional[int] = None
+    substrates: list[str] = Field(default_factory=list)
+    coverage: list[SingleStageCoverageResponse] = Field(default_factory=list)
+    datasets: list[SingleStageDatasetItemResponse] = Field(default_factory=list)
+    uploaded_dataset: Optional[dict[str, Any]] = None
+
+
+class StageAFitSummaryResponse(BaseModel):
+    """Summary of a completed Stage A fit."""
+
+    substrate_count: int
+    channel_count: int
+    substrates: list[str] = Field(default_factory=list)
+    colors: list[str] = Field(default_factory=list)
+    overall_validation: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SingleStageKitResponse(BaseModel):
+    """Single-stage kit generation response."""
+
+    status: str
+    message: str
+    kit_download_url: str
+    preview_url: Optional[str] = None
+    manifest_url: str
+    jobs: list[SingleStageJobResponse] = Field(default_factory=list)
+
+
+class SingleStageExtractResponse(BaseModel):
+    """Single-stage dataset extraction response."""
+
+    session_id: str
+    status: str
+    message: str
+    stage_json_url: str
+    warnings: list[str] = Field(default_factory=list)
+    dataset_summary: SingleStageDatasetSummaryResponse
+
+
+class StageAFitResponse(BaseModel):
+    """Stage A fitting response."""
+
+    status: str
+    message: str
+    stage_a_params_url: str
+    fit_summary: StageAFitSummaryResponse
+
+
+class RecipePredictResponse(BaseModel):
+    """Recipe color prediction response."""
+
+    status: str
+    message: str
+    rgb: list[int] = Field(default_factory=list)
+    lab: list[float] = Field(default_factory=list)
+    source: str
+    runtime_mode_key: str | None = None
+
+
+class RecipeOverrideApplyResponse(BaseModel):
+    """Recipe override apply response."""
+
+    status: str
+    message: str
+    preview_url: str
+    preview_glb_url: str | None = None
+    rgb: list[int] = Field(default_factory=list)
+    lab: list[float] = Field(default_factory=list)
+    source: str
+    runtime_mode_key: str | None = None
+    override_count: int = 0
+
+
 class PreviewResponse(BaseModel):
     """预览生成响应。"""
 
@@ -29,6 +138,8 @@ class PreviewResponse(BaseModel):
     message: str
     preview_url: str
     preview_glb_url: Optional[str] = None
+    lut_match_mode: Optional[str] = None
+    lut_match_info: Optional[dict[str, Any]] = None
     palette: list[dict]
     dimensions: dict
     contours: Optional[dict[str, list[list[list[float]]]]] = None
@@ -66,15 +177,16 @@ class GenerateResponse(BaseModel):
     threemf_disk_path: Optional[str] = None
 
 
-class LargeFormatGenerateResponse(BaseModel):
-    """大画幅切片生成响应。"""
+class RecipePredictionResponse(BaseModel):
+    """Predictive custom recipe color response."""
 
     status: str
     message: str
-    download_url: str
-    tile_count: int
-    grid_cols: int
-    grid_rows: int
+    rgb: list[int] = Field(default_factory=list)
+    hex: str = ""
+    lab: list[float] = Field(default_factory=list)
+    source: str = ""
+    runtime_mode_key: Optional[str] = None
 
 
 class PuzzleLayoutPreviewResponse(BaseModel):
@@ -86,9 +198,10 @@ class PuzzleLayoutPreviewResponse(BaseModel):
     piece_count: int
     grid_cols: int
     grid_rows: int
-    derived_piece_width_mm: float
-    derived_piece_height_mm: float
+    derived_piece_width_mm: float | None = None
+    derived_piece_height_mm: float | None = None
     warnings: list[str] = Field(default_factory=list)
+    piece_areas_mm2: list[float] = Field(default_factory=list)
 
 
 class PuzzleGenerateResponse(BaseModel):
@@ -102,6 +215,17 @@ class PuzzleGenerateResponse(BaseModel):
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
+
+
+class LargeFormatGenerateResponse(BaseModel):
+    """大画幅切片生成响应。"""
+
+    status: str
+    message: str
+    download_url: str
+    tile_count: int
+    grid_cols: int
+    grid_rows: int
 
 
 class BatchItemResult(BaseModel):

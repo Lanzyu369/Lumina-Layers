@@ -10,7 +10,9 @@ from api.dependencies import get_file_registry
 from api.file_bridge import pil_to_png_bytes
 from api.file_registry import FileRegistry
 from api.schemas.calibration import CalibrationGenerateRequest
-from api.schemas.responses import CalibrationResponse
+from api.schemas.responses import CalibrationResponse, SingleStageKitResponse
+from api.schemas.single_stage import SingleStageKitGenerateRequest
+from config import PaletteEntry
 from core.calibration import (
     generate_5color_extended_batch_zip,
     generate_8color_batch_zip,
@@ -19,6 +21,7 @@ from core.calibration import (
     generate_smart_board,
     generate_smart_board_rybw,
 )
+from core.single_stage import generate_single_stage_kit
 
 router = APIRouter(prefix="/api/calibration", tags=["Calibration"])
 
@@ -99,4 +102,47 @@ def calibration_generate(
         message=status,
         download_url=f"/api/files/{download_id}",
         preview_url=f"/api/files/{preview_id}",
+    )
+
+
+@router.post("/generate-single-stage-kit")
+def calibration_generate_single_stage_kit(
+    request: SingleStageKitGenerateRequest,
+    registry: FileRegistry = Depends(get_file_registry),
+) -> SingleStageKitResponse:
+    """Generate a ChromaPrint3D-compatible single-stage kit."""
+    try:
+        palette = [
+            PaletteEntry(
+                color=entry.color,
+                material=entry.material,
+                hex_color=entry.hex_color,
+                color_name=entry.color_name,
+            )
+            for entry in request.palette
+        ]
+        result = generate_single_stage_kit(
+            palette=palette,
+            substrate_id=request.substrate_id,
+            substrate_display_name=request.substrate_display_name,
+            material_default=request.material_default,
+        )
+    except Exception as e:
+        _handle_core_error(e, "Single-stage kit generation")
+
+    sid = "calibration"
+    kit_id = registry.register_path(sid, result.zip_path)
+    manifest_id = registry.register_path(sid, result.manifest_path)
+    preview_id = registry.register_bytes(
+        sid,
+        pil_to_png_bytes(result.preview_image),
+        "single_stage_preview.png",
+    )
+    return SingleStageKitResponse(
+        status="ok",
+        message=result.message,
+        kit_download_url=f"/api/files/{kit_id}",
+        preview_url=f"/api/files/{preview_id}",
+        manifest_url=f"/api/files/{manifest_id}",
+        jobs=result.jobs,
     )

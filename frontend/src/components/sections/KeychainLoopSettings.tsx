@@ -7,6 +7,7 @@ export default function KeychainLoopSettings() {
   const { t } = useI18n();
   const add_loop = useConverterStore((s) => s.add_loop);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
+  const enableFridgeMagnet = useConverterStore((s) => s.enable_fridge_magnet);
   const loop_width = useConverterStore((s) => s.loop_width);
   const loop_length = useConverterStore((s) => s.loop_length);
   const loop_hole = useConverterStore((s) => s.loop_hole);
@@ -27,11 +28,16 @@ export default function KeychainLoopSettings() {
         label={t("loop_enable")}
         checked={add_loop}
         onChange={setAddLoop}
-        disabled={puzzleEnabled}
+        disabled={puzzleEnabled || enableFridgeMagnet}
       />
       {puzzleEnabled && !add_loop && (
         <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
           {t("puzzle_loop_disabled_hint")}
+        </p>
+      )}
+      {enableFridgeMagnet && !add_loop && (
+        <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+          {t("fridge_magnet_mode_hint")}
         </p>
       )}
       {add_loop && (

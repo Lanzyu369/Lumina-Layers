@@ -94,12 +94,12 @@ interface SelectionVisualModelBounds {
 }
 
 interface SelectionVisualRegionData {
-  contours?: number[][][];
+  contours?: number[][][] | null;
 }
 
 interface SelectionVisualRegion {
   colorHex: string;
-  contours?: number[][][];
+  contours?: number[][][] | null;
 }
 
 interface ResolveSelectionOutlineTargetsArgs {
@@ -185,6 +185,12 @@ export interface InteractiveModelViewerProps {
 }
 
 export interface ViewerHoverSample {
+  containerX: number;
+  containerY: number;
+  containerWidth: number;
+  containerHeight: number;
+  containerLeft: number;
+  containerTop: number;
   canvasX: number;
   canvasY: number;
   pixelX: number;
@@ -867,6 +873,12 @@ function InteractiveModelViewer({
     }
 
     emitHoverSample({
+      containerX: Math.round(relativeX),
+      containerY: Math.round(relativeY),
+      containerWidth: rect.width,
+      containerHeight: rect.height,
+      containerLeft: rect.left,
+      containerTop: rect.top,
       canvasX: Math.round(relativeX),
       canvasY: Math.round(relativeY),
       pixelX: previewPixel.x,

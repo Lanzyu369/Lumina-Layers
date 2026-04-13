@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useConverterStore, ACCEPT_IMAGE_FORMATS } from "../../stores/converter";
+import { useConverterStore, ACCEPT_IMAGE_FORMATS, resolveConverterSourceSelection } from "../../stores/converter";
 import {
   ColorMode,
   ModelingMode,
@@ -82,9 +82,19 @@ export default function BasicSettings() {
   const {
     imageFile,
     imagePreviewUrl,
+    source_version,
     lut_name,
     lutList,
+    nativeBrandGroups,
+    nativeBrandGroupsLoading,
+    selectedNativeBrandKey,
+    selectedNativeDbNames,
     color_mode,
+    color_layers,
+    layer_height_mm,
+    model_enable,
+    model_only,
+    selectedLutInfo,
     target_width_mm,
     target_height_mm,
     spacer_thick,
@@ -97,16 +107,35 @@ export default function BasicSettings() {
     batchMode,
     batchFiles,
     largeFormatEnabled,
+    enable_fridge_magnet,
     puzzleEnabled,
     tileWidthMm,
     tileHeightMm,
     previewImageUrl,
+    setColorLayers,
+    setLayerHeightMm,
+    setModelEnable,
+    setModelOnly,
+    setSourceVersion,
+    setNativeBrandKey,
+    setNativeSupportedMode,
+    setNativeDbNames,
   } = useConverterStore(useShallow((s) => ({
     imageFile: s.imageFile,
     imagePreviewUrl: s.imagePreviewUrl,
+    source_version: s.source_version,
     lut_name: s.lut_name,
     lutList: s.lutList,
+    nativeBrandGroups: s.nativeBrandGroups,
+    nativeBrandGroupsLoading: s.nativeBrandGroupsLoading,
+    selectedNativeBrandKey: s.selectedNativeBrandKey,
+    selectedNativeDbNames: s.selectedNativeDbNames,
     color_mode: s.color_mode,
+    color_layers: s.color_layers,
+    layer_height_mm: s.layer_height_mm,
+    model_enable: s.model_enable,
+    model_only: s.model_only,
+    selectedLutInfo: s.selectedLutInfo,
     target_width_mm: s.target_width_mm,
     target_height_mm: s.target_height_mm,
     spacer_thick: s.spacer_thick,
@@ -119,11 +148,42 @@ export default function BasicSettings() {
     batchMode: s.batchMode,
     batchFiles: s.batchFiles,
     largeFormatEnabled: s.largeFormatEnabled,
+    enable_fridge_magnet: s.enable_fridge_magnet,
     puzzleEnabled: s.puzzleEnabled,
     tileWidthMm: s.tileWidthMm,
     tileHeightMm: s.tileHeightMm,
     previewImageUrl: s.previewImageUrl,
+    setColorLayers: s.setColorLayers,
+    setLayerHeightMm: s.setLayerHeightMm,
+    setModelEnable: s.setModelEnable,
+    setModelOnly: s.setModelOnly,
+    setSourceVersion: s.setSourceVersion,
+    setNativeBrandKey: s.setNativeBrandKey,
+    setNativeSupportedMode: s.setNativeSupportedMode,
+    setNativeDbNames: s.setNativeDbNames,
   })));
+
+  const sourceSelection = useMemo(
+    () =>
+      resolveConverterSourceSelection({
+        source_version,
+        lut_name,
+        nativeBrandGroups,
+        selectedNativeBrandKey,
+        selectedNativeDbNames,
+        color_layers,
+        layer_height_mm,
+      }),
+    [
+      source_version,
+      lut_name,
+      nativeBrandGroups,
+      selectedNativeBrandKey,
+      selectedNativeDbNames,
+      color_layers,
+      layer_height_mm,
+    ],
+  );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
 
@@ -189,11 +249,49 @@ export default function BasicSettings() {
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
 
   const lutOptions = lutList.map((name) => ({ label: name, value: name }));
+  const sourceVersionOptions = [
+    { label: t("basic_source_version_legacy"), value: "legacy" },
+    { label: t("basic_source_version_native"), value: "native" },
+  ];
+  const nativeBrandOptions = nativeBrandGroups
+    .map((group) => ({
+      label: group.display_name,
+      value: group.brand_key,
+    }));
+  const selectedNativeBrand = sourceSelection.native.brand;
+  const selectedNativeSupportedModes = sourceSelection.native.supported_modes;
+  const selectedNativeMode = sourceSelection.native.supported_mode;
+  const selectedNativePredictiveModelAvailable = sourceSelection.native.predictive_model_available;
+  const selectedNativeDbSet = useMemo(() => new Set(sourceSelection.native.db_names), [sourceSelection.native.db_names]);
+  const nativeLayerCount = selectedNativeMode?.color_layers ?? color_layers ?? 5;
+  const nativeLayerHeightMm = layer_height_mm ?? selectedNativeMode?.layer_height_mm ?? 0.08;
 
   const lutFileRef = useRef<HTMLInputElement>(null);
 
   // 5-Color Extended 模式下强制锁定为单面（浮雕）
   const isFiveColorExt = color_mode === ColorMode.FIVE_COLOR_EXT;
+  const supportsDynamicLayers = !!selectedLutInfo?.supports_dynamic_layer_count;
+  const supportedModes = useMemo(
+    () => selectedLutInfo?.supported_modes ?? [],
+    [selectedLutInfo?.supported_modes],
+  );
+  const supportedLayerHeightOptions = useMemo(() => {
+    const heights = Array.from(
+      new Set(
+        supportedModes
+          .map((mode) => mode.layer_height_mm)
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value)),
+      ),
+    ).sort((left, right) => left - right);
+    const fallback = layer_height_mm ?? selectedLutInfo?.layer_height_mm ?? 0.08;
+    if (heights.length === 0) {
+      return [{ label: `${fallback.toFixed(2)} mm`, value: String(fallback) }];
+    }
+    return heights.map((value) => ({
+      label: `${value.toFixed(2)} mm`,
+      value: String(value),
+    }));
+  }, [layer_height_mm, selectedLutInfo?.layer_height_mm, supportedModes]);
   useEffect(() => {
     if (isFiveColorExt && structure_mode === StructureMode.DOUBLE_SIDED) {
       setStructureMode(StructureMode.SINGLE_SIDED);
@@ -210,6 +308,32 @@ export default function BasicSettings() {
 
   const handleCropConfirm = (data: CropData) => {
     void submitCrop(data.x, data.y, data.width, data.height);
+  };
+
+  const handleNativeDbToggle = (dbName: string) => {
+    if (!selectedNativeBrand) return;
+    const nextNames = selectedNativeDbSet.has(dbName)
+      ? sourceSelection.native.db_names.filter((name) => name !== dbName)
+      : [...sourceSelection.native.db_names, dbName];
+    const allowedNames = new Set(selectedNativeBrand.db_options.map((option) => option.name));
+    const ordered = selectedNativeBrand.db_options
+      .map((option) => option.name)
+      .filter((name) => allowedNames.has(name) && nextNames.includes(name));
+    setNativeDbNames(ordered);
+  };
+
+  const handleNativeLayerCountChange = (count: number) => {
+    const mode =
+      resolveNativeSupportedModeByCount(
+        selectedNativeSupportedModes,
+        count,
+        nativeLayerHeightMm,
+      ) ?? selectedNativeMode;
+    if (!mode) return;
+    setNativeSupportedMode({
+      color_layers: mode.color_layers,
+      layer_height_mm: mode.layer_height_mm,
+    });
   };
 
   const dimMax = largeFormatEnabled ? 9999 : 400;
@@ -276,37 +400,182 @@ export default function BasicSettings() {
         </>
       )}
 
-      <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
-        <div className="min-w-0 flex-1">
-          <Dropdown
-            label={t("basic_lut_label")}
-            value={lut_name}
-            options={lutOptions}
-            onChange={setLutName}
-            placeholder={t("basic_lut_placeholder")}
-          />
-        </div>
-        <input
-          ref={lutFileRef}
-          type="file"
-          accept=".npy,.json,.npz"
-          className="hidden"
-          onChange={(e) => void handleLutUpload(e)}
-        />
-        <Button
-          label={`+ ${t("basic_lut_upload")}`}
-          variant="secondary"
-          onClick={() => lutFileRef.current?.click()}
-          className={workspace.isCompact ? "w-full px-3" : "shrink-0 whitespace-nowrap px-3"}
-        />
-      </div>
+      <RadioGroup
+        label={t("basic_source_version_label")}
+        value={source_version}
+        options={sourceVersionOptions}
+        onChange={(value) => setSourceVersion(value as "legacy" | "native")}
+      />
 
-      {lut_name && (
-        <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-          <span>{t("basic_color_mode_label")}:</span>
-          <ColorModeDots mode={color_mode} />
-          <span>{color_mode}</span>
-        </div>
+      {source_version === "legacy" ? (
+        <>
+          <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
+            <div className="min-w-0 flex-1">
+              <Dropdown
+                label={t("basic_lut_label")}
+                value={lut_name}
+                options={lutOptions}
+                onChange={setLutName}
+                placeholder={t("basic_lut_placeholder")}
+              />
+            </div>
+            <input
+              ref={lutFileRef}
+              type="file"
+              accept=".npy,.json,.npz,.msgpack"
+              className="hidden"
+              onChange={(e) => void handleLutUpload(e)}
+            />
+            <Button
+              label={`+ ${t("basic_lut_upload")}`}
+              variant="secondary"
+              onClick={() => lutFileRef.current?.click()}
+              className={workspace.isCompact ? "w-full px-3" : "shrink-0 whitespace-nowrap px-3"}
+            />
+          </div>
+
+          {lut_name && (
+            <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <span>{t("basic_color_mode_label")}:</span>
+              <ColorModeDots mode={color_mode} />
+              <span>{color_mode}</span>
+            </div>
+          )}
+
+          {lut_name && selectedLutInfo && (
+            <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {t("basic_source_kind_label")}: {selectedLutInfo.source_kind ?? "legacy_lookup"}
+              </div>
+              {supportsDynamicLayers ? (
+                <>
+                  <Slider
+                    label={t("basic_color_layers_label")}
+                    value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
+                    min={1}
+                    max={10}
+                    step={1}
+                    onChange={(value) => setColorLayers(Math.round(value))}
+                  />
+                  <Dropdown
+                    label={t("basic_layer_height_label")}
+                    value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
+                    options={supportedLayerHeightOptions}
+                    onChange={(value) => setLayerHeightMm(Number(value))}
+                  />
+                  {supportedModes.length > 0 && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {t("basic_supported_modes_label")}:{" "}
+                      {supportedModes
+                        .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
+                        .join(", ")}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {t("basic_dynamic_layers_legacy_hint")}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
+            <div className="min-w-0 flex-1">
+              <Dropdown
+                label={t("basic_brand_label")}
+                value={selectedNativeBrand?.brand_key ?? ""}
+                options={nativeBrandOptions}
+                onChange={setNativeBrandKey}
+                placeholder={nativeBrandGroupsLoading ? t("basic_brand_loading") : t("basic_brand_placeholder")}
+                disabled={nativeBrandGroupsLoading || nativeBrandOptions.length === 0}
+              />
+            </div>
+          </div>
+
+          {selectedNativeBrand ? (
+            <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {t("basic_native_brand_summary_label")}:
+                <span className="ml-1 text-slate-700 dark:text-slate-200">
+                  {selectedNativeBrand.display_name}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {t("basic_native_material_label")}: {selectedNativeBrand.material_type}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {t("basic_native_vendor_label")}: {selectedNativeBrand.vendor}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {t("basic_native_db_label")}:
+                <span className="ml-1 text-slate-700 dark:text-slate-200">
+                  {sourceSelection.native.db_names.length > 0
+                    ? sourceSelection.native.db_names.join(", ")
+                    : t("basic_native_db_placeholder")}
+                </span>
+              </div>
+
+              <div className="grid gap-2">
+                {selectedNativeBrand.db_options.map((dbOption) => (
+                  <Checkbox
+                    key={dbOption.name}
+                    label={dbOption.name}
+                    checked={selectedNativeDbSet.has(dbOption.name)}
+                    onChange={() => handleNativeDbToggle(dbOption.name)}
+                  />
+                ))}
+              </div>
+
+              <Slider
+                label={t("basic_native_layer_count_label")}
+                value={nativeLayerCount}
+                min={1}
+                max={15}
+                step={1}
+                onChange={(value) => handleNativeLayerCountChange(Math.round(value))}
+                disabled={selectedNativeSupportedModes.length === 0}
+              />
+              {selectedNativeSupportedModes.length > 0 && (
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {t("basic_supported_modes_label")}:{" "}
+                  {selectedNativeSupportedModes
+                    .map((mode) => `${mode.color_layers}L @ ${mode.layer_height_mm.toFixed(2)}mm`)
+                    .join(", ")}
+                </div>
+              )}
+
+              {selectedNativePredictiveModelAvailable && (
+                <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-slate-700/40 dark:bg-slate-950/30">
+                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                    {t("basic_model_gate_label")}
+                  </div>
+                  <div className="grid gap-2">
+                    <Checkbox
+                      label={t("basic_model_enable")}
+                      checked={model_enable}
+                      onChange={setModelEnable}
+                    />
+                    <Checkbox
+                      label={t("basic_model_only")}
+                      checked={model_only}
+                      onChange={setModelOnly}
+                    />
+                  </div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t("basic_model_runtime_defaults_hint")}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="-mt-1 rounded-lg border border-dashed border-slate-300/70 bg-slate-100/35 p-3 text-xs text-slate-500 dark:border-slate-700/60 dark:bg-slate-900/25 dark:text-slate-400">
+              {t("basic_native_brand_placeholder")}
+            </div>
+          )}
+        </>
       )}
 
       <Slider
@@ -333,7 +602,7 @@ export default function BasicSettings() {
         label={t("basic_large_format")}
         checked={largeFormatEnabled}
         onChange={setLargeFormatEnabled}
-        disabled={puzzleEnabled}
+        disabled={puzzleEnabled || enable_fridge_magnet}
         tooltip={t("basic_large_format_hint")}
       />
 
@@ -389,7 +658,7 @@ export default function BasicSettings() {
         value={structure_mode}
         options={structureModeOptions}
         onChange={(v) => setStructureMode(v as StructureMode)}
-        disabled={enable_relief}
+        disabled={enable_relief || enable_fridge_magnet}
         disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
       />
 
@@ -410,4 +679,36 @@ export default function BasicSettings() {
       />
     </div>
   );
+}
+
+function resolveNativeSupportedModeByCount(
+  modes: { color_layers: number; layer_height_mm: number }[],
+  colorLayers: number,
+  preferredLayerHeightMm: number,
+): { color_layers: number; layer_height_mm: number } | null {
+  if (modes.length === 0) {
+    return null;
+  }
+
+  const matchingLayers = modes.filter((mode) => mode.color_layers === colorLayers);
+  if (matchingLayers.length === 0) {
+    return null;
+  }
+
+  const exactHeight = matchingLayers.find((mode) => mode.layer_height_mm === preferredLayerHeightMm);
+  if (exactHeight) {
+    return exactHeight;
+  }
+
+  let preferred = matchingLayers[0];
+  let smallestDistance = Math.abs(preferred.layer_height_mm - preferredLayerHeightMm);
+  for (const mode of matchingLayers.slice(1)) {
+    const distance = Math.abs(mode.layer_height_mm - preferredLayerHeightMm);
+    if (distance < smallestDistance) {
+      preferred = mode;
+      smallestDistance = distance;
+    }
+  }
+
+  return preferred;
 }

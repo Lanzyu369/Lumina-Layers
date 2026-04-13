@@ -4,14 +4,18 @@ import type {
   ModelingMode,
   StructureMode,
   ColorReplacementItem,
+  RecipeOverrideItem,
   BedSizeItem,
   PaletteEntry,
   AutoHeightMode,
   BatchResponse,
+  LutInfoResponse,
+  FridgeMagnetItem,
   PuzzleConnectorStyle,
   PuzzleSizingMode,
   PuzzleStyle,
-  FridgeMagnetItem,
+  NativeBrandGroup,
+  LutSupportedMode,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -35,6 +39,7 @@ import {
   colorHighlight as apiColorHighlight,
   detectRegion as apiDetectRegion,
   regionReplace as apiRegionReplace,
+  applyRecipeOverride as apiApplyRecipeOverride,
   resetReplacements as apiResetReplacements,
   autoDetectColors as apiAutoDetectColors,
   cleanupSessionFiles as apiCleanupSessionFiles,
@@ -42,19 +47,20 @@ import {
   uploadLut as apiUploadLut,
 } from "../../api/converter";
 import type { LutColorEntry, LutInfo } from "../../api/types";
+import { fetchLutInfo as apiFetchLutInfo, fetchLutCatalog as apiFetchLutCatalog } from "../../api/lut";
 import {
   computeAutoHeightMap,
   colorRemapToReplacementRegions,
 } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
-import { useSettingsStore } from "../settingsStore";
-import { uploadImagePreview } from "../../api/system";
 import {
   createFridgeMagnetFromPreset,
   getDefaultFridgeMagnetPresetKey,
   normalizeFridgeMagnetItem,
   resolveFridgeMagnetSpacerThick,
 } from "../../constants/fridgeMagnets";
+import { useSettingsStore } from "../settingsStore";
+import { uploadImagePreview } from "../../api/system";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
 
@@ -85,6 +91,8 @@ export type SelectionMode =
   | "multi-select"
   | "region";
 
+export type SourceVersion = "legacy" | "native";
+
 export interface RegionData {
   regionId: string;
   colorHex: string;
@@ -98,7 +106,7 @@ export interface RegionData {
 // ========== Pending Replacement Types ==========
 
 export interface PendingReplacement {
-  sourceHex: string; // 原色 hex（不带 #）
+  sourceHex: string; // 原色 hex锛堜笉甯?#锛?
   targetHex: string; // 目标色 hex（不带 #）
   mode: SelectionMode; // 触发时的选择模式
   sourceColors?: string[]; // select-all 批量模式下的多个源色
@@ -109,6 +117,23 @@ export interface PendingReplacement {
 
 export function clampValue(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+export function buildLayerImagesSourceKey(
+  state: Pick<
+    ConverterState,
+    "sessionId" | "previewGlbUrl" | "previewBaseImageUrl" | "previewImageUrl"
+  >,
+): string | null {
+  if (!state.sessionId) {
+    return null;
+  }
+
+  return [
+    state.sessionId,
+    state.previewGlbUrl ?? "",
+    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+  ].join("|");
 }
 
 function getFallbackModelBounds(
@@ -169,19 +194,6 @@ function buildFridgeMagnetLayoutRatios(count: number): Array<[number, number]> {
   if (count === 4) {
     return [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]];
   }
-  if (count === 5) {
-    return [[0.25, 0.3], [0.75, 0.3], [0.25, 0.7], [0.75, 0.7], [0.5, 0.5]];
-  }
-  if (count === 6) {
-    return [
-      [0.22, 0.3],
-      [0.5, 0.3],
-      [0.78, 0.3],
-      [0.22, 0.7],
-      [0.5, 0.7],
-      [0.78, 0.7],
-    ];
-  }
 
   const cols = Math.ceil(Math.sqrt(count));
   const rows = Math.ceil(count / cols);
@@ -224,10 +236,7 @@ function getFridgeMagnetLayoutSize(
 ): { width: number; height: number } {
   if (magnet.shape === "round") {
     const diameter = magnet.diameter_mm ?? 0;
-    return {
-      width: diameter,
-      height: diameter,
-    };
+    return { width: diameter, height: diameter };
   }
 
   return {
@@ -244,7 +253,6 @@ function clampFridgeMagnetLayoutCenter(
   const { width, height } = getFridgeMagnetLayoutSize(magnet);
   const halfWidth = width / 2;
   const halfHeight = height / 2;
-
   const clampAxis = (value: number, min: number, max: number) =>
     min > max ? (min + max) / 2 : clampValue(value, min, max);
 
@@ -261,56 +269,15 @@ function sanitizeFiniteNumber(value: number, fallback: number): number {
 function sanitizeOptionalFiniteNumber(
   value: number | null | undefined,
   fallback: number | null,
-): number | null | undefined {
-  if (value == null) {
-    return value;
+): number | null {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null) {
+    return null;
   }
 
   return Number.isFinite(value) ? value : fallback;
-}
-
-function canonicalizeFridgeMagnets(
-  state: Pick<
-    ConverterState,
-    | "modelBounds"
-    | "target_width_mm"
-    | "target_height_mm"
-    | "base_spacer_thick"
-    | "enable_fridge_magnet"
-    | "fridge_magnets"
-  >,
-  magnets: FridgeMagnetItem[],
-  options?: { resolveCollisions?: boolean },
-): FridgeMagnetItem[] {
-  if (magnets.length === 0) {
-    return [];
-  }
-
-  const normalizedMagnets = magnets.map(normalizeFridgeMagnetItem);
-  const fallbackCenter = getModelCenter(state);
-  const bounds = getFallbackModelBounds(state);
-  const sanitizedCenters = normalizedMagnets.map((magnet) => ({
-    x: sanitizeFiniteNumber(magnet.center_x_mm, fallbackCenter.x),
-    y: sanitizeFiniteNumber(magnet.center_y_mm, fallbackCenter.y),
-  }));
-
-  if (options?.resolveCollisions) {
-    return layoutFridgeMagnetsByCenters(state, normalizedMagnets, sanitizedCenters);
-  }
-
-  return normalizedMagnets.map((magnet, index) => {
-    const center = clampFridgeMagnetLayoutCenter(
-      sanitizedCenters[index],
-      magnet,
-      bounds,
-    );
-
-    return {
-      ...magnet,
-      center_x_mm: center.x,
-      center_y_mm: center.y,
-    };
-  });
 }
 
 function layoutFridgeMagnetsByCenters(
@@ -399,6 +366,50 @@ function layoutFridgeMagnetsByCenters(
   }
 
   return positioned;
+}
+
+function canonicalizeFridgeMagnets(
+  state: Pick<
+    ConverterState,
+    | "modelBounds"
+    | "target_width_mm"
+    | "target_height_mm"
+    | "base_spacer_thick"
+    | "enable_fridge_magnet"
+    | "fridge_magnets"
+  >,
+  magnets: FridgeMagnetItem[],
+  options?: { resolveCollisions?: boolean },
+): FridgeMagnetItem[] {
+  if (magnets.length === 0) {
+    return [];
+  }
+
+  const normalizedMagnets = magnets.map(normalizeFridgeMagnetItem);
+  const fallbackCenter = getModelCenter(state);
+  const bounds = getFallbackModelBounds(state);
+  const sanitizedCenters = normalizedMagnets.map((magnet) => ({
+    x: sanitizeFiniteNumber(magnet.center_x_mm, fallbackCenter.x),
+    y: sanitizeFiniteNumber(magnet.center_y_mm, fallbackCenter.y),
+  }));
+
+  if (options?.resolveCollisions) {
+    return layoutFridgeMagnetsByCenters(state, normalizedMagnets, sanitizedCenters);
+  }
+
+  return normalizedMagnets.map((magnet, index) => {
+    const center = clampFridgeMagnetLayoutCenter(
+      sanitizedCenters[index],
+      magnet,
+      bounds,
+    );
+
+    return {
+      ...magnet,
+      center_x_mm: center.x,
+      center_y_mm: center.y,
+    };
+  });
 }
 
 function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
@@ -501,6 +512,308 @@ function getPreviewBaseUrl(
   return state.previewBaseImageUrl ?? state.originalPreviewUrl ?? state.previewImageUrl;
 }
 
+function normalizeStringArray(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+function getNativeBrandGroupByKey(
+  groups: NativeBrandGroup[],
+  brandKey: string,
+): NativeBrandGroup | null {
+  return groups.find((group) => group.brand_key === brandKey) ?? null;
+}
+
+function filterNativeBrandGroups(groups: NativeBrandGroup[]): NativeBrandGroup[] {
+  return groups.filter((group) => group.brand_key === "bambulab_pla");
+}
+
+function getNativeDbOptionNames(group: NativeBrandGroup | null): string[] {
+  return group ? normalizeStringArray(group.db_options.map((option) => option.name)) : [];
+}
+
+function hasNativePredictiveModel(group: NativeBrandGroup | null): boolean {
+  return Boolean(group?.package_name?.trim() || group?.model_name?.trim());
+}
+
+function buildNativeModelDefaults(group: NativeBrandGroup | null): Pick<
+  ConverterState,
+  "model_enable" | "model_only" | "model_threshold" | "model_margin"
+> {
+  return hasNativePredictiveModel(group)
+    ? {
+        model_enable: true,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+      }
+    : {
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+      };
+}
+
+function buildNativeModelState(
+  group: NativeBrandGroup | null,
+  currentState?: Pick<
+    ConverterState,
+    "selectedNativeBrandKey" | "model_enable" | "model_only" | "model_threshold" | "model_margin"
+  >,
+): Pick<ConverterState, "model_enable" | "model_only" | "model_threshold" | "model_margin"> {
+  if (!group) {
+    return buildNativeModelDefaults(null);
+  }
+  if (
+    currentState &&
+    currentState.selectedNativeBrandKey === group.brand_key &&
+    hasNativePredictiveModel(group)
+  ) {
+    return {
+      model_enable: currentState.model_enable,
+      model_only: currentState.model_only,
+      model_threshold: currentState.model_threshold,
+      model_margin: currentState.model_margin,
+    };
+  }
+  return buildNativeModelDefaults(group);
+}
+
+function getSelectedNativeBrandGroup(
+  state: Pick<ConverterState, "nativeBrandGroups" | "selectedNativeBrandKey">,
+): NativeBrandGroup | null {
+  if (state.selectedNativeBrandKey) {
+    const byKey = getNativeBrandGroupByKey(state.nativeBrandGroups, state.selectedNativeBrandKey);
+    if (byKey) {
+      return byKey;
+    }
+  }
+  return state.nativeBrandGroups[0] ?? null;
+}
+
+function getNativeDbNamesForGroup(group: NativeBrandGroup | null): string[] {
+  if (!group) {
+    return [];
+  }
+
+  const allowed = new Set(getNativeDbOptionNames(group));
+  return normalizeStringArray(group.default_db_names.filter((name) => allowed.has(name)));
+}
+
+function getSupportedModeByPair(
+  modes: LutSupportedMode[],
+  colorLayers: number | null,
+  layerHeightMm: number | null,
+): LutSupportedMode | null {
+  if (colorLayers == null || layerHeightMm == null) {
+    return null;
+  }
+  return (
+    modes.find(
+      (mode) =>
+        mode.color_layers === colorLayers &&
+        mode.layer_height_mm === layerHeightMm,
+    ) ?? null
+  );
+}
+
+function resolvePreferredSupportedMode(
+  modes: LutSupportedMode[],
+): LutSupportedMode | null {
+  if (modes.length === 0) return null;
+  const exactFive = modes.find((mode) => mode.color_layers === 5);
+  if (exactFive) return exactFive;
+  let preferred = modes[0];
+  for (const mode of modes) {
+    if (mode.color_layers > preferred.color_layers) {
+      preferred = mode;
+    }
+  }
+  return preferred;
+}
+
+function resolveNativeSupportedModeForBrand(
+  brand: NativeBrandGroup,
+  colorLayers: number | null,
+  layerHeightMm: number | null,
+): LutSupportedMode | null {
+  const supported_modes = brand.supported_modes ?? [];
+  const exactMode = getSupportedModeByPair(supported_modes, colorLayers, layerHeightMm);
+  if (exactMode) {
+    return exactMode;
+  }
+  const preferredFive = supported_modes.find((mode) => mode.color_layers === 5);
+  if (preferredFive) {
+    return preferredFive;
+  }
+  if (layerHeightMm != null) {
+    const matchingHeight = supported_modes.filter((mode) => mode.layer_height_mm === layerHeightMm);
+    if (matchingHeight.length > 0) {
+      if (colorLayers != null) {
+        let preferred = matchingHeight[0];
+        let smallestDistance = Math.abs(preferred.color_layers - colorLayers);
+        for (const mode of matchingHeight.slice(1)) {
+          const distance = Math.abs(mode.color_layers - colorLayers);
+          if (distance < smallestDistance) {
+            preferred = mode;
+            smallestDistance = distance;
+          }
+        }
+        return preferred;
+      }
+      return matchingHeight[0];
+    }
+  }
+  return resolvePreferredSupportedMode(supported_modes);
+}
+
+function resolveNativeBrandSelection(
+  state: Pick<
+    ConverterState,
+    | "nativeBrandGroups"
+    | "selectedNativeBrandKey"
+    | "selectedNativeDbNames"
+    | "color_layers"
+    | "layer_height_mm"
+  >,
+): {
+  brand: NativeBrandGroup | null;
+  db_names: string[];
+  supported_mode: LutSupportedMode | null;
+  supported_modes: LutSupportedMode[];
+  predictive_model_available: boolean;
+  isReady: boolean;
+} {
+  const brand = getSelectedNativeBrandGroup(state);
+  if (!brand) {
+    return {
+      brand: null,
+      db_names: [],
+      supported_mode: null,
+      supported_modes: [],
+      predictive_model_available: false,
+      isReady: false,
+    };
+  }
+
+  const allowedNames = new Set(getNativeDbOptionNames(brand));
+  const db_names = normalizeStringArray(
+    state.selectedNativeDbNames.length > 0
+      ? state.selectedNativeDbNames.filter((name) => allowedNames.has(name))
+      : brand.default_db_names.filter((name) => allowedNames.has(name)),
+  );
+  const supported_modes = brand.supported_modes ?? [];
+  const supported_mode = resolveNativeSupportedModeForBrand(
+    brand,
+    state.color_layers,
+    state.layer_height_mm,
+  );
+
+  return {
+    brand,
+    db_names,
+    supported_mode,
+    supported_modes,
+    predictive_model_available: hasNativePredictiveModel(brand),
+    isReady: db_names.length > 0 && supported_mode != null,
+  };
+}
+
+export function resolveConverterSourceSelection(
+  state: Pick<
+    ConverterState,
+    | "source_version"
+    | "lut_name"
+    | "nativeBrandGroups"
+    | "selectedNativeBrandKey"
+    | "selectedNativeDbNames"
+    | "color_layers"
+    | "layer_height_mm"
+  >,
+): {
+  source_kind: "legacy_single" | "native_bundle";
+  isReady: boolean;
+  lut_name: string;
+  native: ReturnType<typeof resolveNativeBrandSelection>;
+  color_layers: number | null;
+  layer_height_mm: number | null;
+} {
+  if (state.source_version === "legacy") {
+    return {
+      source_kind: "legacy_single",
+      isReady: state.lut_name.length > 0,
+      lut_name: state.lut_name,
+      native: {
+        brand: null,
+        db_names: [],
+        supported_mode: null,
+        supported_modes: [],
+        predictive_model_available: false,
+        isReady: false,
+      },
+      color_layers: null,
+      layer_height_mm: null,
+    };
+  }
+
+  const native = resolveNativeBrandSelection(state);
+  return {
+    source_kind: "native_bundle",
+    isReady: native.isReady,
+    lut_name: "",
+    native,
+    color_layers: native.supported_mode?.color_layers ?? null,
+    layer_height_mm: native.supported_mode?.layer_height_mm ?? null,
+  };
+}
+
+function buildLegacySourceParams(lutName: string) {
+  return {
+    source_kind: "legacy_single" as const,
+    lut_name: lutName,
+  };
+}
+
+function buildNativeSourceParams(
+  selection: ReturnType<typeof resolveConverterSourceSelection>,
+  modelState?: Pick<
+    ConverterState,
+    "model_enable" | "model_only" | "model_threshold" | "model_margin"
+  >,
+) {
+  if (
+    selection.source_kind !== "native_bundle" ||
+    !selection.native.brand
+  ) {
+    return null;
+  }
+  const supportedMode = selection.native.supported_mode;
+
+  return {
+    source_kind: "native_bundle" as const,
+    material_type: selection.native.brand.material_type,
+    vendor: selection.native.brand.vendor,
+    db_names: selection.native.db_names,
+    color_layers: supportedMode?.color_layers ?? undefined,
+    layer_height_mm: supportedMode?.layer_height_mm ?? undefined,
+    ...(selection.native.predictive_model_available
+      ? {
+          model_enable: modelState?.model_enable ?? false,
+          model_only: modelState?.model_only ?? false,
+        }
+      : {}),
+  };
+}
+
 function extractFileIdFromApiUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   const match = url.match(/\/api\/files\/([^/?#]+)/);
@@ -567,13 +880,25 @@ export interface ConverterState {
   sessionId: string | null;
 
   // 基础参数
+  source_version: SourceVersion;
   lut_name: string;
+  nativeBrandGroups: NativeBrandGroup[];
+  nativeBrandGroupsLoading: boolean;
+  selectedNativeBrandKey: string;
+  selectedNativeDbNames: string[];
   target_width_mm: number;
   target_height_mm: number;
   spacer_thick: number;
   structure_mode: StructureMode;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
+  color_layers: number | null;
+  layer_height_mm: number | null;
+  model_enable: boolean;
+  model_only: boolean;
+  model_threshold: number | null;
+  model_margin: number | null;
+  selectedLutInfo: LutInfoResponse | null;
 
   // 高级设置
   auto_bg: boolean;
@@ -643,6 +968,7 @@ export interface ConverterState {
 
   // 颜色替换
   replacement_regions: ColorReplacementItem[];
+  recipe_overrides: RecipeOverrideItem[];
   free_color_set: Set<string>;
 
   // 调色板与选择
@@ -662,6 +988,8 @@ export interface ConverterState {
 
   // 3D 预览
   previewGlbUrl: string | null;
+  lutMatchMode: string | null;
+  lutMatchInfo: Record<string, unknown> | null;
 
   // 预览时的原始尺寸（用于实时缩放比例计算）
   preview_width_mm: number | null; // 预览时的原始宽度
@@ -760,6 +1088,12 @@ export interface ConverterActions {
   setStructureMode: (mode: StructureMode) => void;
   setColorMode: (mode: ColorMode) => void;
   setModelingMode: (mode: ModelingMode) => void;
+  setColorLayers: (layers: number | null) => void;
+  setLayerHeightMm: (height: number | null) => void;
+  setModelEnable: (enabled: boolean) => void;
+  setModelOnly: (enabled: boolean) => void;
+  setModelThreshold: (value: number | null) => void;
+  setModelMargin: (value: number | null) => void;
   setAutoBg: (enabled: boolean) => void;
   setBgTol: (tol: number) => void;
   setQuantizeColors: (colors: number) => void;
@@ -837,6 +1171,13 @@ export interface ConverterActions {
   detectAndAccumulateRegion: (x: number, y: number) => Promise<void>;
   removeRegionFromSelection: (regionId: string) => void;
   applyRegionReplace: (newHex: string) => Promise<void>;
+  applyCustomRecipeOverride: (regionIds: string[], recipe: number[], layerOrder?: string) => Promise<void>;
+  upsertRecipeOverrides: (
+    regionIds: string[],
+    recipe: number[],
+    layerOrder: string,
+  ) => void;
+  clearRecipeOverrides: (regionIds?: string[]) => void;
 
   // 待确认颜色替换
   setPendingReplacement: (pending: PendingReplacement | null) => void;
@@ -865,7 +1206,12 @@ export interface ConverterActions {
   // API 操作
   uploadLut: (file: File) => Promise<void>;
   fetchLutList: () => Promise<void>;
+  fetchLutCatalog: () => Promise<void>;
   fetchLutColors: (lutName: string) => Promise<void>;
+  setSourceVersion: (version: SourceVersion) => void;
+  setNativeBrandKey: (brandKey: string) => void;
+  setNativeSupportedMode: (mode: { color_layers: number; layer_height_mm: number }) => void;
+  setNativeDbNames: (dbNames: string[]) => void;
   submitPreview: () => Promise<void>;
   submitGenerate: () => Promise<string | null>;
 
@@ -894,6 +1240,7 @@ export interface ConverterActions {
   // 颜色替换预览
   submitReplacePreview: () => Promise<void>;
   submitSingleReplace: (origHex: string, newHex: string) => Promise<void>;
+  cleanupAfterDownload: () => void;
 
   // 完整流水线（preview → generate）
   submitFullPipeline: () => Promise<string | null>;
@@ -907,7 +1254,7 @@ export interface ConverterActions {
   clearError: () => void;
 
   // 分层预览
-  fetchLayerImages: (previewGlbUrl?: string | null) => Promise<void>;
+  fetchLayerImages: (previewSourceKey?: string | null) => Promise<void>;
   resetLayerImages: () => void;
   setLayerImagesOpen: (open: boolean) => void;
 
@@ -916,6 +1263,66 @@ export interface ConverterActions {
 }
 
 // ========== localStorage Helpers ==========
+
+const EMPTY_LUT_MATCH_STATE = {
+  lutMatchMode: null,
+  lutMatchInfo: null,
+} as const;
+
+const DEFAULT_LAYER_IMAGES_STATE = {
+  layerImages: [] as { layer_index: number; name: string; url: string }[],
+  layerImagesLoading: false,
+  layerImagesOpen: false,
+  layerImagesSourceKey: null as string | null,
+};
+
+const DEFAULT_PUZZLE_PREVIEW_STATE = {
+  puzzleOverlayUrl: null,
+  puzzleWarnings: [] as string[],
+  puzzleResolvedRows: null,
+  puzzleResolvedCols: null,
+  puzzleResolvedPieceCount: null,
+  puzzleDerivedPieceWidthMm: null,
+  puzzleDerivedPieceHeightMm: null,
+};
+
+const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
+
+function buildPreviewSessionResetState(): Partial<ConverterState> {
+  return {
+    sessionId: null,
+    previewImageUrl: null,
+    originalPreviewUrl: null,
+    previewBaseImageUrl: null,
+    previewGlbUrl: null,
+    modelUrl: null,
+    threemfDiskPath: null,
+    downloadUrl: null,
+    palette: [],
+    colorContours: {},
+    colorRemapMap: {},
+    remapHistory: [],
+    replacement_regions: [],
+    recipe_overrides: [],
+    free_color_set: new Set<string>(),
+    regionReplacementCount: 0,
+    selectedColor: null,
+    selectedColors: new Set<string>(),
+    regionData: null,
+    selectedRegions: [],
+    pendingReplacement: null,
+    preview_width_mm: null,
+    preview_height_mm: null,
+    preview_spacer_thick: null,
+    previewPixelWidth: null,
+    previewPixelHeight: null,
+    modelBounds: null,
+    hasManualPreview: false,
+    ...EMPTY_LUT_MATCH_STATE,
+    ...DEFAULT_LAYER_IMAGES_STATE,
+    ...DEFAULT_PUZZLE_PREVIEW_STATE,
+  };
+}
 
 function loadEnableCrop(): boolean {
   try {
@@ -937,25 +1344,30 @@ function loadLutName(): string {
 
 // ========== Default State ==========
 
-const DEFAULT_LAYER_IMAGES_STATE = {
-  layerImages: [] as { layer_index: number; name: string; url: string }[],
-  layerImagesLoading: false,
-  layerImagesOpen: false,
-  layerImagesSourceKey: null as string | null,
-};
-
 export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
   sessionId: null,
+  source_version: "legacy",
   lut_name: loadLutName(),
+  nativeBrandGroups: [],
+  nativeBrandGroupsLoading: false,
+  selectedNativeBrandKey: "",
+  selectedNativeDbNames: [],
   target_width_mm: 60,
   target_height_mm: 60,
   spacer_thick: 1.2,
   structure_mode: StructureModeEnum.DOUBLE_SIDED,
   color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
   modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
+  color_layers: null,
+  layer_height_mm: null,
+  model_enable: false,
+  model_only: false,
+  model_threshold: null,
+  model_margin: null,
+  selectedLutInfo: null,
   auto_bg: false,
   bg_tol: 40,
   quantize_colors: 48,
@@ -989,26 +1401,21 @@ export const DEFAULT_STATE: ConverterState = {
   tileWidthMm: 250,
   tileHeightMm: 250,
   puzzleEnabled: false,
-  puzzleStyle: "regular",
-  puzzleSizingMode: "piece_size",
+  puzzleStyle: "regular" as PuzzleStyle,
+  puzzleSizingMode: "piece_size" as PuzzleSizingMode,
   pieceWidthMm: 20,
   pieceHeightMm: 20,
   puzzleRows: 3,
   puzzleCols: 3,
   targetPieceCount: 12,
-  connectorStyle: "classic",
+  connectorStyle: "classic" as PuzzleConnectorStyle,
   labelsEnabled: false,
   engraveBackLabels: false,
   irregularityStrength: 0.35,
   minNeckWidthMm: 1.2,
-  puzzleOverlayUrl: null,
-  puzzleWarnings: [],
-  puzzleResolvedRows: null,
-  puzzleResolvedCols: null,
-  puzzleResolvedPieceCount: null,
-  puzzleDerivedPieceWidthMm: null,
-  puzzleDerivedPieceHeightMm: null,
+  ...DEFAULT_PUZZLE_PREVIEW_STATE,
   replacement_regions: [],
+  recipe_overrides: [],
   free_color_set: new Set(),
   selectedColor: null,
   palette: [],
@@ -1019,6 +1426,8 @@ export const DEFAULT_STATE: ConverterState = {
   heightmapFile: null,
   heightmapThumbnailUrl: null,
   previewGlbUrl: null,
+  lutMatchMode: null,
+  lutMatchInfo: null,
   preview_width_mm: null,
   preview_height_mm: null,
   preview_spacer_thick: null,
@@ -1040,7 +1449,7 @@ export const DEFAULT_STATE: ConverterState = {
   lutColors: [],
   lutColorsLoading: false,
   lutColorsLutName: "",
-  bed_label: "256 x 256 mm",
+  bed_label: "256脳256 mm",
   bedSizes: [],
   bedSizesLoading: false,
   batchMode: false,
@@ -1113,35 +1522,6 @@ function _clientLog(label: string) {
   }).catch(() => {});
 }
 
-const DEFAULT_PUZZLE_PREVIEW_STATE = {
-  puzzleOverlayUrl: null,
-  puzzleWarnings: [] as string[],
-  puzzleResolvedRows: null,
-  puzzleResolvedCols: null,
-  puzzleResolvedPieceCount: null,
-  puzzleDerivedPieceWidthMm: null,
-  puzzleDerivedPieceHeightMm: null,
-};
-
-const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
-
-export function buildLayerImagesSourceKey(
-  state: Pick<
-    ConverterState,
-    "sessionId" | "previewGlbUrl" | "previewBaseImageUrl" | "previewImageUrl"
-  >,
-): string | null {
-  if (!state.sessionId) {
-    return null;
-  }
-
-  return [
-    state.sessionId,
-    state.previewGlbUrl ?? "",
-    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
-  ].join("|");
-}
-
 function buildPuzzlePreviewParams(
   state: Pick<
     ConverterState,
@@ -1197,19 +1577,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
-          previewImageUrl: null,
-          originalPreviewUrl: null,
-          previewBaseImageUrl: null,
-          sessionId: null,
-          previewGlbUrl: null,
-          selectedColor: null,
-          selectedColors: new Set<string>(),
-          regionData: null,
-          selectedRegions: [],
-          modelUrl: null,
-          threemfDiskPath: null,
-          downloadUrl: null,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          ...buildPreviewSessionResetState(),
         });
         return;
       }
@@ -1220,22 +1588,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           imageFile: file,
           imagePreviewUrl: null,
           aspectRatio: null,
-          previewImageUrl: null,
-          originalPreviewUrl: null,
-          previewBaseImageUrl: null,
-          sessionId: null,
-          previewGlbUrl: null,
-          selectedColor: null,
-          selectedColors: new Set<string>(),
-          regionData: null,
-          selectedRegions: [],
+          ...buildPreviewSessionResetState(),
           cropModalOpen: shouldOpenCrop,
-          hasManualPreview: false,
-          ...DEFAULT_LAYER_IMAGES_STATE,
-          modelUrl: null,
-          threemfDiskPath: null,
-          downloadUrl: null,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
@@ -1264,30 +1618,30 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
-        previewImageUrl: null,
-        originalPreviewUrl: null,
-        previewBaseImageUrl: null,
-        sessionId: null,
-        previewGlbUrl: null,
-        selectedColor: null,
-        selectedColors: new Set<string>(),
-        regionData: null,
-        selectedRegions: [],
+        ...buildPreviewSessionResetState(),
         cropModalOpen: shouldOpenCrop,
-        hasManualPreview: false,
-        ...DEFAULT_LAYER_IMAGES_STATE,
-        modelUrl: null,
-        threemfDiskPath: null,
-        downloadUrl: null,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
+      console.log("[DEBUG] setImageFile: cleared layerImages");
     },
 
     // --- 基础参数 ---
     setLutName: (name: string) => {
       const state = _get();
       const lutInfo = state.lutListFull.find((l) => l.name === name);
-      const updates: Partial<ConverterState> = { lut_name: name };
+      const updates: Partial<ConverterState> = {
+        source_version: "legacy",
+        lut_name: name,
+        selectedLutInfo: null,
+        selectedNativeBrandKey: "",
+        selectedNativeDbNames: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        ...buildPreviewSessionResetState(),
+      };
       if (lutInfo && lutInfo.color_mode) {
         updates.color_mode = lutInfo.color_mode as ColorMode;
       }
@@ -1301,49 +1655,179 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       if (name && name !== state.lutColorsLutName) {
         _get().fetchLutColors(name);
       }
+      if (name) {
+        void apiFetchLutInfo(name)
+          .then((info) => {
+            const nextUpdates: Partial<ConverterState> = {
+              selectedLutInfo: info,
+            };
+            if (info.color_mode) {
+              nextUpdates.color_mode = info.color_mode as ColorMode;
+            }
+            if (info.supports_predictive_match || info.supports_dynamic_layer_count) {
+              if (Array.isArray(info.supported_modes) && info.supported_modes.length > 0) {
+                const preferredMode =
+                  info.supported_modes.find((mode) => mode.color_layers === 5) ??
+                  info.supported_modes.find((mode) => mode.color_layers === info.max_color_layers) ??
+                  info.supported_modes[0];
+                nextUpdates.color_layers = preferredMode.color_layers ?? info.max_color_layers ?? null;
+                nextUpdates.layer_height_mm = preferredMode.layer_height_mm ?? info.layer_height_mm ?? null;
+              } else {
+                nextUpdates.color_layers = info.max_color_layers ?? null;
+                nextUpdates.layer_height_mm = info.layer_height_mm ?? null;
+              }
+            } else {
+              nextUpdates.color_layers = null;
+              nextUpdates.layer_height_mm = null;
+            }
+            set(nextUpdates);
+          })
+          .catch(() => {
+            /* best effort */
+          });
+      }
     },
+
+    setSourceVersion: (version: SourceVersion) =>
+      set((state) => {
+        if (version === state.source_version) {
+          return {};
+        }
+
+        if (version === "legacy") {
+          return {
+            source_version: "legacy",
+            color_layers: null,
+            layer_height_mm: null,
+            selectedNativeBrandKey: "",
+            selectedNativeDbNames: [],
+            model_enable: false,
+            model_only: false,
+            model_threshold: null,
+            model_margin: null,
+            ...buildPreviewSessionResetState(),
+          };
+        }
+
+        const selection = resolveNativeBrandSelection(state);
+        const selectedBrand = selection.brand ?? state.nativeBrandGroups[0] ?? null;
+        const preferredMode = selectedBrand
+          ? resolveNativeSupportedModeForBrand(
+              selectedBrand,
+              state.color_layers,
+              state.layer_height_mm,
+            )
+          : null;
+        return {
+          source_version: "native",
+          selectedNativeBrandKey: selectedBrand?.brand_key ?? "",
+          selectedNativeDbNames: getNativeDbNamesForGroup(selectedBrand),
+          color_layers: preferredMode?.color_layers ?? null,
+          layer_height_mm: preferredMode?.layer_height_mm ?? null,
+          ...buildNativeModelState(selectedBrand, state),
+          ...buildPreviewSessionResetState(),
+        };
+      }),
+
+    setNativeBrandKey: (brandKey: string) =>
+      set((state) => {
+        const selectedBrand = getNativeBrandGroupByKey(state.nativeBrandGroups, brandKey);
+        if (!selectedBrand) {
+          return {
+            selectedNativeBrandKey: brandKey,
+            selectedNativeDbNames: [],
+            color_layers: null,
+            layer_height_mm: null,
+            ...buildNativeModelDefaults(null),
+            ...buildPreviewSessionResetState(),
+          };
+        }
+
+        const preferredMode = resolveNativeSupportedModeForBrand(
+          selectedBrand,
+          state.color_layers,
+          state.layer_height_mm,
+        );
+        return {
+          source_version: "native",
+          selectedNativeBrandKey: selectedBrand.brand_key,
+          selectedNativeDbNames: getNativeDbNamesForGroup(selectedBrand),
+          color_layers: preferredMode?.color_layers ?? null,
+          layer_height_mm: preferredMode?.layer_height_mm ?? null,
+          ...buildNativeModelState(selectedBrand, state),
+          ...buildPreviewSessionResetState(),
+        };
+      }),
+
+    setNativeSupportedMode: (mode: { color_layers: number; layer_height_mm: number }) =>
+      set((state) => {
+        const brand = getSelectedNativeBrandGroup(state);
+        if (!brand) {
+          return {
+            source_version: "native",
+            color_layers: mode.color_layers,
+            layer_height_mm: mode.layer_height_mm,
+            ...buildPreviewSessionResetState(),
+          };
+        }
+        const supported = getSupportedModeByPair(
+          brand.supported_modes ?? [],
+          mode.color_layers,
+          mode.layer_height_mm,
+        );
+        if (!supported) {
+          const preferred = resolveNativeSupportedModeForBrand(
+            brand,
+            mode.color_layers,
+            mode.layer_height_mm,
+          );
+          return {
+            source_version: "native",
+            color_layers: preferred?.color_layers ?? null,
+            layer_height_mm: preferred?.layer_height_mm ?? null,
+            ...buildPreviewSessionResetState(),
+          };
+        }
+        return {
+          source_version: "native",
+          color_layers: supported.color_layers,
+          layer_height_mm: supported.layer_height_mm,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
+
+    setNativeDbNames: (dbNames: string[]) =>
+      set((state) => {
+        const selectedBrand = getSelectedNativeBrandGroup(state);
+        const allowed = selectedBrand ? new Set(getNativeDbOptionNames(selectedBrand)) : null;
+        const normalized = normalizeStringArray(
+          dbNames.filter((dbName) => (allowed ? allowed.has(dbName) : true)),
+        );
+        return {
+          source_version: "native",
+          selectedNativeDbNames: normalized,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
 
     setTargetWidthMm: (width: number) =>
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(width, 10, max);
-        const nextDimensions = state.aspectRatio
-          ? {
-              target_width_mm: clamped,
-              target_height_mm: clampValue(
-                Math.round(clamped / state.aspectRatio),
-                10,
-                max,
-              ),
-            }
-          : {
-              target_width_mm: clamped,
-            };
-        const nextState = {
-          ...state,
-          ...nextDimensions,
-        };
-        const nextFridgeMagnets = canonicalizeFridgeMagnets(
-          nextState,
-          state.fridge_magnets,
-          { resolveCollisions: true },
-        );
-
         if (state.aspectRatio) {
           return {
-            ...nextDimensions,
-            ...buildFridgeMagnetState(nextState, {
-              fridge_magnets: nextFridgeMagnets,
-            }),
+            target_width_mm: clamped,
+            target_height_mm: clampValue(
+              Math.round(clamped / state.aspectRatio),
+              10,
+              max,
+            ),
             threemfDiskPath: null,
             downloadUrl: null,
           };
         }
         return {
-          ...nextDimensions,
-          ...buildFridgeMagnetState(nextState, {
-            fridge_magnets: nextFridgeMagnets,
-          }),
+          target_width_mm: clamped,
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -1353,46 +1837,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(height, 10, max);
-        const nextDimensions = state.aspectRatio
-          ? {
-              target_height_mm: clamped,
-              target_width_mm: clampValue(
-                Math.round(clamped * state.aspectRatio),
-                10,
-                max,
-              ),
-            }
-          : {
-              target_height_mm: clamped,
-            };
-        const nextState = {
-          ...state,
-          ...nextDimensions,
-        };
-        const nextFridgeMagnets = canonicalizeFridgeMagnets(
-          nextState,
-          state.fridge_magnets,
-          { resolveCollisions: true },
-        );
-
         if (state.aspectRatio) {
           return {
-            ...nextDimensions,
-            ...buildFridgeMagnetState(nextState, {
-              fridge_magnets: nextFridgeMagnets,
-            }),
-            threemfDiskPath: null,
-            downloadUrl: null,
+            target_height_mm: clamped,
+            target_width_mm: clampValue(
+              Math.round(clamped * state.aspectRatio),
+              10,
+              max,
+            ),
           };
         }
-        return {
-          ...nextDimensions,
-          ...buildFridgeMagnetState(nextState, {
-            fridge_magnets: nextFridgeMagnets,
-          }),
-          threemfDiskPath: null,
-          downloadUrl: null,
-        };
+        return { target_height_mm: clamped };
       }),
 
     setSpacerThick: (thick: number) =>
@@ -1407,7 +1862,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
         structure_mode:
-          state.enable_fridge_magnet
+          state.enable_fridge_magnet && mode !== StructureModeEnum.SINGLE_SIDED
             ? StructureModeEnum.SINGLE_SIDED
             : mode,
         threemfDiskPath: null,
@@ -1417,6 +1872,44 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ color_mode: mode, threemfDiskPath: null, downloadUrl: null }),
     setModelingMode: (mode: ModelingMode) =>
       set({ modeling_mode: mode, threemfDiskPath: null, downloadUrl: null }),
+    setColorLayers: (layers: number | null) =>
+      set({
+        color_layers:
+          layers == null ? null : clampValue(Math.round(layers), 1, 20),
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setLayerHeightMm: (height: number | null) =>
+      set({
+        layer_height_mm:
+          height == null ? null : clampValue(height, 0.04, 0.20),
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setModelEnable: (enabled: boolean) =>
+      set({
+        model_enable: enabled,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setModelOnly: (enabled: boolean) =>
+      set({
+        model_only: enabled,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setModelThreshold: (value: number | null) =>
+      set({
+        model_threshold: value == null ? null : Number(value),
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setModelMargin: (value: number | null) =>
+      set({
+        model_margin: value == null ? null : Number(value),
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
 
     // --- 高级设置 ---
     setAutoBg: (enabled: boolean) =>
@@ -1454,17 +1947,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setSeparateBacking: (enabled: boolean) =>
       set({ separate_backing: enabled }),
 
-    // --- 挂件环 ---
+    // --- 鎸備欢鐜?---
     setAddLoop: (enabled: boolean) =>
       set((state) => ({
-        add_loop: enabled,
-        puzzleEnabled: enabled ? false : state.puzzleEnabled,
-        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
-        spacer_thick: enabled
-          ? state.base_spacer_thick
-          : state.spacer_thick,
-        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+        add_loop:
+          enabled && (state.puzzleEnabled || state.enable_fridge_magnet)
+            ? false
+            : enabled,
         threemfDiskPath: null,
         downloadUrl: null,
       })),
@@ -1482,6 +1971,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setLoopPositionPreset: (preset: string) => {
       set({ loop_position_preset: preset });
     },
+
     setEnableFridgeMagnet: (enabled: boolean) =>
       set((state) => {
         const shouldSeedDefaults =
@@ -1511,6 +2001,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: null,
         };
       }),
+
     resetFridgeMagnetLayout: () =>
       set((state) => ({
         ...buildFridgeMagnetState(state, {
@@ -1520,6 +2011,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         threemfDiskPath: null,
         downloadUrl: null,
       })),
+
     addFridgeMagnet: () =>
       set((state) => {
         const nextFridgeMagnets = autoLayoutFridgeMagnets({
@@ -1544,6 +2036,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: null,
         };
       }),
+
     removeFridgeMagnet: (id: string) =>
       set((state) => {
         const nextFridgeMagnets = state.fridge_magnets.filter(
@@ -1562,6 +2055,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: null,
         };
       }),
+
     updateFridgeMagnet: (id: string, updates: Partial<Omit<FridgeMagnetItem, "id">>) =>
       set((state) => {
         const nextFridgeMagnets = state.fridge_magnets.map((item) =>
@@ -1611,6 +2105,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: null,
         };
       }),
+
     updateFridgeMagnetCenter: (id: string, centerX: number, centerY: number) =>
       set((state) => {
         const nextFridgeMagnets = state.fridge_magnets.map((item) =>
@@ -1631,8 +2126,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: null,
         };
       }),
+
     selectFridgeMagnet: (id: string | null) =>
       set({ selectedFridgeMagnetId: id }),
+
     clearSelectedFridgeMagnet: () =>
       set({ selectedFridgeMagnetId: null }),
 
@@ -1727,14 +2224,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     // --- 大画幅 ---
     setLargeFormatEnabled: (enabled: boolean) =>
       set((state) => ({
-        largeFormatEnabled: enabled,
-        puzzleEnabled: enabled ? false : state.puzzleEnabled,
-        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
-        spacer_thick: enabled
-          ? state.base_spacer_thick
-          : state.spacer_thick,
-        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+        largeFormatEnabled:
+          enabled && (state.puzzleEnabled || state.enable_fridge_magnet)
+            ? false
+            : enabled,
         threemfDiskPath: null,
         downloadUrl: null,
       })),
@@ -1750,15 +2243,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
+
     setPuzzleEnabled: (enabled: boolean) =>
       set((state) => ({
         puzzleEnabled: enabled && !state.batchMode,
         largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
         add_loop: enabled ? false : state.add_loop,
-        enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
-        spacer_thick: enabled
-          ? state.base_spacer_thick
-          : state.spacer_thick,
+        ...buildFridgeMagnetState(state, {
+          enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
+        }),
         selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
         ...(!enabled ? DEFAULT_PUZZLE_PREVIEW_STATE : {}),
         threemfDiskPath: null,
@@ -1819,8 +2312,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
-    setEngraveBackLabels: (enabled: boolean) => {
-      void enabled;
+    setEngraveBackLabels: () => {
       set({
         engraveBackLabels: false,
         threemfDiskPath: null,
@@ -1857,9 +2349,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
         if (
-          latestState.sessionId !== requestedSessionId
-          || !latestState.puzzleEnabled
-          || JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          latestState.sessionId !== requestedSessionId ||
+          !latestState.puzzleEnabled ||
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
         ) {
           return false;
         }
@@ -1879,21 +2371,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
         if (
-          latestState.sessionId !== requestedSessionId
-          || !latestState.puzzleEnabled
-          || JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          latestState.sessionId !== requestedSessionId ||
+          !latestState.puzzleEnabled ||
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
         ) {
           return false;
         }
         set({
           ...DEFAULT_PUZZLE_PREVIEW_STATE,
-          error:
-            err instanceof Error ? err.message : "Puzzle layout preview failed",
+          error: err instanceof Error ? err.message : "Puzzle preview failed",
         });
         return false;
       }
     },
-    clearPuzzleLayoutPreview: () => set({ ...DEFAULT_PUZZLE_PREVIEW_STATE }),
+    clearPuzzleLayoutPreview: () =>
+      set({
+        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+      }),
 
     // --- 热床尺寸 ---
     setBedLabel: (label: string) => {
@@ -2121,6 +2615,46 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       });
     },
 
+    upsertRecipeOverrides: (regionIds: string[], recipe: number[], layerOrder: string) => {
+      const validRegionIds = regionIds.filter((value) => !!value);
+      if (validRegionIds.length === 0) {
+        return;
+      }
+      const normalizedRecipe = recipe.map((value) => Math.max(0, Math.round(value)));
+      set((state) => {
+        const existing = state.recipe_overrides.filter(
+          (item) => !validRegionIds.includes(item.region_id),
+        );
+        const next = [
+          ...existing,
+          ...validRegionIds.map((regionId) => ({
+            region_id: regionId,
+            recipe: normalizedRecipe,
+            layer_order: layerOrder,
+          })),
+        ];
+        return {
+          recipe_overrides: next,
+          color_layers: Math.max(
+            state.color_layers ?? 0,
+            normalizedRecipe.length,
+          ),
+        };
+      });
+    },
+
+    clearRecipeOverrides: (regionIds?: string[]) => {
+      if (!regionIds || regionIds.length === 0) {
+        set({ recipe_overrides: [] });
+        return;
+      }
+      set((state) => ({
+        recipe_overrides: state.recipe_overrides.filter(
+          (item) => !regionIds.includes(item.region_id),
+        ),
+      }));
+    },
+
     // --- 连通区域替换 ---
     applyRegionReplace: async (newHex: string) => {
       const state = _get();
@@ -2175,6 +2709,74 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         set({
           replacePreviewLoading: false,
           error: err instanceof Error ? err.message : "区域颜色替换失败",
+        });
+      }
+    },
+
+    applyCustomRecipeOverride: async (
+      regionIds: string[],
+      recipe: number[],
+      layerOrder: string = "Top2Bottom",
+    ) => {
+      const state = _get();
+      if (!state.sessionId) {
+        set({ error: "请先预览图片" });
+        return;
+      }
+      const targetRegionIds = regionIds.filter(Boolean);
+      if (targetRegionIds.length === 0) {
+        set({ error: "请先选择区域" });
+        return;
+      }
+      const resolvedLayers = Math.max(
+        recipe.length,
+        state.color_layers ?? recipe.length,
+      );
+      const resolvedHeight =
+        state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
+
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiApplyRecipeOverride({
+          session_id: state.sessionId,
+          region_ids: targetRegionIds,
+          recipe,
+          layer_order: layerOrder,
+          color_layers: resolvedLayers,
+          layer_height_mm: resolvedHeight,
+        });
+        set((current) => ({
+          replacePreviewLoading: false,
+          previewImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
+          previewGlbUrl: response.preview_glb_url
+            ? normalizeResourceUrl(response.preview_glb_url)
+            : current.previewGlbUrl,
+          color_layers: Math.max(current.color_layers ?? 0, resolvedLayers),
+          layer_height_mm: resolvedHeight,
+          recipe_overrides: [
+            ...current.recipe_overrides.filter(
+              (item) => !targetRegionIds.includes(item.region_id),
+            ),
+            ...targetRegionIds.map((regionId) => ({
+              region_id: regionId,
+              recipe: [...recipe],
+              layer_order: layerOrder,
+            })),
+          ],
+          lutMatchMode: "predictive",
+          lutMatchInfo: {
+            ...(current.lutMatchInfo ?? {}),
+            match_mode: "predictive",
+            runtime_mode_key: response.runtime_mode_key ?? null,
+            source: response.source,
+            override: true,
+          },
+        }));
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "自定义配方应用失败",
         });
       }
     },
@@ -2406,7 +3008,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const thumbnailUrl = `${response.thumbnail_url}`;
         set({
           isLoading: false,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
           heightmapThumbnailUrl: thumbnailUrl,
           color_height_map: response.color_height_map,
         });
@@ -2423,24 +3024,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
     // --- 模型边界 ---
     setModelBounds: (bounds: ConverterState["modelBounds"]) =>
-      set((state) => {
-        const nextState = {
-          ...state,
-          modelBounds: bounds,
-        };
-        const nextFridgeMagnets = canonicalizeFridgeMagnets(
-          nextState,
-          state.fridge_magnets,
-          { resolveCollisions: true },
-        );
-
-        return {
-          modelBounds: bounds,
-          ...buildFridgeMagnetState(nextState, {
-            fridge_magnets: nextFridgeMagnets,
-          }),
-        };
-      }),
+      set((state) => ({
+        modelBounds: bounds,
+        ...(state.fridge_magnets.length > 0
+          ? buildFridgeMagnetState(
+              {
+                ...state,
+                modelBounds: bounds,
+              },
+              {
+                fridge_magnets: state.fridge_magnets,
+              },
+            )
+          : {}),
+      })),
 
     fetchBedSizes: async () => {
       set({ bedSizesLoading: true });
@@ -2471,8 +3068,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ lutListLoading: true, error: null });
       try {
         const res = await apiUploadLut(file);
-        // 上传成功后刷新列表并通过 setLutName 选中新 LUT（同步 color_mode）
-        await _get().fetchLutList();
+        // 上传成功后通过 catalog 刷新 legacy/native 共享状态，再选中新 LUT
+        await _get().fetchLutCatalog();
         _get().setLutName(res.name);
       } catch (err) {
         set({
@@ -2520,6 +3117,66 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       }
     },
 
+    fetchLutCatalog: async () => {
+      set({ nativeBrandGroupsLoading: true });
+      try {
+        const response = await apiFetchLutCatalog();
+        const legacyGroups = response.legacy_groups ?? [];
+        const groups = filterNativeBrandGroups(response.native_brand_groups ?? []);
+        const legacyLuts = legacyGroups.flatMap((group) => group.items ?? []);
+        const currentState = _get();
+        const updates: Partial<ConverterState> = {
+          lutList: legacyLuts.map((lut) => lut.name),
+          lutListFull: legacyLuts,
+          nativeBrandGroups: groups,
+          nativeBrandGroupsLoading: false,
+        };
+        const remembered = currentState.lut_name;
+        if (remembered) {
+          const info = legacyLuts.find((lut) => lut.name === remembered);
+          if (info && info.color_mode) {
+            updates.color_mode = info.color_mode as ColorMode;
+          } else if (!info) {
+            updates.lut_name = "";
+            try {
+              localStorage.removeItem("lumina_lastLut");
+            } catch {
+              /* noop */
+            }
+          }
+        }
+        const selection =
+          currentState.source_version === "native"
+            ? resolveNativeBrandSelection({
+                nativeBrandGroups: groups,
+                selectedNativeBrandKey: currentState.selectedNativeBrandKey,
+                selectedNativeDbNames: currentState.selectedNativeDbNames,
+                color_layers: currentState.color_layers,
+                layer_height_mm: currentState.layer_height_mm,
+              })
+            : null;
+        const fallbackBrand = selection?.brand ?? groups[0] ?? null;
+        const preferredMode = selection?.supported_mode ?? resolvePreferredSupportedMode(fallbackBrand?.supported_modes ?? []);
+        set({
+          ...updates,
+          ...(currentState.source_version === "native" && fallbackBrand
+            ? {
+                selectedNativeBrandKey: fallbackBrand.brand_key,
+                selectedNativeDbNames: selection?.db_names ?? getNativeDbNamesForGroup(fallbackBrand),
+                color_layers: preferredMode?.color_layers ?? null,
+                layer_height_mm: preferredMode?.layer_height_mm ?? null,
+                ...buildNativeModelState(fallbackBrand, currentState),
+              }
+            : {}),
+        });
+      } catch (err) {
+        set({
+          nativeBrandGroupsLoading: false,
+          error: err instanceof Error ? err.message : "品牌目录加载失败",
+        });
+      }
+    },
+
     fetchLutColors: async (lutName: string) => {
       if (!lutName) {
         set({ lutColors: [], lutColorsLutName: "" });
@@ -2546,13 +3203,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     },
 
     submitPreview: async () => {
-      const state = _get();
-      if (!state.imageFile) {
-        set({ error: "请先上传图片" });
-        return;
-      }
-      if (!state.lut_name) {
-        set({ error: "请先选择 LUT" });
+        const state = _get();
+        if (!state.imageFile) {
+          set({ error: "请先上传图片" });
+          return;
+        }
+      const sourceSelection = resolveConverterSourceSelection(state);
+      if (!sourceSelection.isReady) {
+        set({
+          error:
+            state.source_version === "native"
+              ? "请先选择品牌和数据库"
+              : "请先选择 LUT",
+        });
         return;
       }
 
@@ -2567,14 +3230,34 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         isLoading: true,
         error: null,
         hasManualPreview: false,
-        ...DEFAULT_LAYER_IMAGES_STATE,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+        layerImages: [],
+        layerImagesOpen: false,
       });
+      console.log("[DEBUG] submitPreview: cleared layerImages");
       try {
+        const sourceSelection =
+          state.source_version === "native"
+            ? buildNativeSourceParams(resolveConverterSourceSelection(state), state)
+            : buildLegacySourceParams(state.lut_name);
+        if (!sourceSelection) {
+          set({
+            isLoading: false,
+            error: "请先选择品牌和数据库",
+          });
+          return;
+        }
         const response = await apiConvertPreview(
           state.imageFile,
           {
-            lut_name: state.lut_name,
+            ...sourceSelection,
+            color_layers:
+              sourceSelection.source_kind === "native_bundle"
+                ? sourceSelection.color_layers ?? undefined
+                : state.color_layers ?? undefined,
+            layer_height_mm:
+              sourceSelection.source_kind === "native_bundle"
+                ? sourceSelection.layer_height_mm ?? undefined
+                : state.layer_height_mm ?? undefined,
             target_width_mm: state.target_width_mm,
             auto_bg: state.auto_bg,
             bg_tol: state.bg_tol,
@@ -2599,6 +3282,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           quantized_hex: e.quantized_hex.replace(/^#/, ""),
           matched_hex: e.matched_hex.replace(/^#/, ""),
         }));
+        const resolvedColorLayers =
+          sourceSelection.source_kind === "native_bundle"
+            ? sourceSelection.color_layers ?? null
+            : state.color_layers;
+        const resolvedLayerHeightMm =
+          sourceSelection.source_kind === "native_bundle"
+            ? sourceSelection.layer_height_mm ?? null
+            : state.layer_height_mm;
+
         set({
           isLoading: false,
           sessionId: response.session_id,
@@ -2606,9 +3298,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           originalPreviewUrl: previewUrl,
           previewBaseImageUrl:
             normalizeResourceUrl(response.dimensions?.preview_raw_url) ?? previewUrl,
+          lutMatchMode: response.lut_match_mode ?? "legacy",
+          lutMatchInfo:
+            response.lut_match_info ??
+            { match_mode: response.lut_match_mode ?? "legacy" },
           palette: normalizedPalette,
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
+          colorRemapMap: {},
+          remapHistory: [],
+          replacement_regions: [],
+          recipe_overrides: [],
+          free_color_set: new Set<string>(),
+          regionReplacementCount: 0,
           selectedColor: null,
           selectedColors: new Set<string>(),
           regionData: null,
@@ -2617,12 +3319,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           preview_width_mm: state.target_width_mm,
           preview_height_mm: state.target_height_mm,
           preview_spacer_thick: state.spacer_thick,
+          color_layers: resolvedColorLayers,
+          layer_height_mm: resolvedLayerHeightMm,
           previewPixelWidth: response.dimensions?.width ?? null,
           previewPixelHeight: response.dimensions?.height ?? null,
           hasManualPreview: true,
-          ...DEFAULT_LAYER_IMAGES_STATE,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          layerImages: [],
+          layerImagesOpen: false,
         });
+        console.log(
+          "[DEBUG] submitPreview success: cleared layerImages for new sessionId",
+        );
       } catch (err) {
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {
@@ -2639,6 +3346,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       const state = _get();
       if (!state.sessionId) {
         set({ error: "请先预览图片" });
+        return null;
+      }
+      const sourceSelection = resolveConverterSourceSelection(state);
+      if (!sourceSelection.isReady) {
+        set({
+          error:
+            state.source_version === "native"
+              ? "请先选择品牌和数据库"
+              : "请先选择 LUT",
+        });
         return null;
       }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
@@ -2675,8 +3392,27 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           mergedReplacements = [...(mergedReplacements ?? []), ...remapRegions];
         }
 
+        const sourceSelection =
+          state.source_version === "native"
+            ? buildNativeSourceParams(resolveConverterSourceSelection(state), state)
+            : buildLegacySourceParams(state.lut_name);
+        if (!sourceSelection) {
+          set({
+            isGenerating: false,
+            error: "请先选择品牌和数据库",
+          });
+          return null;
+        }
         const baseParams = {
-          lut_name: state.lut_name,
+          ...sourceSelection,
+          color_layers:
+            sourceSelection.source_kind === "native_bundle"
+              ? sourceSelection.color_layers ?? undefined
+              : state.color_layers ?? undefined,
+          layer_height_mm:
+            sourceSelection.source_kind === "native_bundle"
+              ? sourceSelection.layer_height_mm ?? undefined
+              : state.layer_height_mm ?? undefined,
           target_width_mm: state.target_width_mm,
           auto_bg: state.auto_bg,
           bg_tol: state.bg_tol,
@@ -2698,8 +3434,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           loop_offset_x: state.loop_offset_x,
           loop_offset_y: state.loop_offset_y,
           loop_position_preset: state.loop_position_preset,
-          enable_fridge_magnet: state.enable_fridge_magnet,
-          fridge_magnets: state.fridge_magnets,
           enable_relief: state.enable_relief,
           height_mode: state.enable_relief
             ? state.autoHeightMode === "use-heightmap"
@@ -2717,9 +3451,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           wire_height_mm: state.wire_height_mm,
           enable_coating: state.enable_coating,
           coating_height_mm: state.coating_height_mm,
+          enable_fridge_magnet: state.enable_fridge_magnet,
+          fridge_magnets:
+            state.enable_fridge_magnet && state.fridge_magnets.length > 0
+              ? state.fridge_magnets
+              : undefined,
           replacement_regions:
             mergedReplacements && mergedReplacements.length > 0
               ? mergedReplacements
+              : undefined,
+          recipe_overrides:
+            state.recipe_overrides.length > 0
+              ? state.recipe_overrides
               : undefined,
           free_color_set:
             state.free_color_set.size > 0
@@ -2729,6 +3472,27 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           slicer: useSettingsStore.getState().slicerSoftware,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
         } as const;
+
+        if (state.largeFormatEnabled) {
+          const lfResponse = await apiConvertGenerateLargeFormat(
+            state.sessionId!,
+            {
+              target_height_mm: state.target_height_mm,
+              tile_width_mm: state.tileWidthMm,
+              tile_height_mm: state.tileHeightMm,
+              params: baseParams,
+            },
+          );
+          set({
+            isLoading: false,
+            modelUrl: null,
+            threemfDiskPath: null,
+            downloadUrl: lfResponse.download_url
+              ? `${lfResponse.download_url}`
+              : null,
+          });
+          return null;
+        }
 
         if (state.puzzleEnabled) {
           const puzzleResponse = await apiConvertGeneratePuzzle(
@@ -2745,29 +3509,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             downloadUrl: puzzleResponse.download_url
               ? `${puzzleResponse.download_url}`
               : null,
-          });
-          _logGenerateTimer('puzzle 3mf received');
-          _clientLog('generate: puzzle 3mf received');
-          return null;
-        }
-
-        if (state.largeFormatEnabled) {
-          const lfResponse = await apiConvertGenerateLargeFormat(
-            state.sessionId!,
-            {
-              target_height_mm: state.target_height_mm,
-              tile_width_mm: state.tileWidthMm,
-              tile_height_mm: state.tileHeightMm,
-              params: baseParams,
-            },
-          );
-          set({
-            isGenerating: false,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: lfResponse.download_url
-              ? `${lfResponse.download_url}`
-              : null,
+            puzzleWarnings: puzzleResponse.warnings ?? [],
+            puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
+            puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
+            puzzleResolvedPieceCount: puzzleResponse.piece_count ?? null,
           });
           return null;
         }
@@ -2852,7 +3597,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           aspectRatio: ratio,
           cropModalOpen: false,
           isCropping: false,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
         });
       } catch (err) {
         set({
@@ -2893,11 +3637,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     addBatchFiles: (files: File[]) => {
       const valid = files.filter((f) => isValidImageType(f.type, f.name));
       if (valid.length === 0) return;
-      set((state) => ({
-        batchFiles: [...state.batchFiles, ...valid],
-        puzzleEnabled: false,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
-      }));
+      set((state) => ({ batchFiles: [...state.batchFiles, ...valid] }));
     },
 
     removeBatchFile: (index: number) => {
@@ -2913,16 +3653,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             imageFile: lastFile,
             imagePreviewUrl: null,
             aspectRatio: null,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: null,
             batchMode: false,
             hasManualPreview: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
           });
           uploadImagePreview(lastFile)
             .then(({ preview_url, width, height }) => {
@@ -2946,16 +3678,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             batchFiles: [],
             imageFile: lastFile,
             imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: null,
             batchMode: false,
             hasManualPreview: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
           });
         }
       } else if (remaining.length === 0) {
@@ -2973,31 +3697,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
-          modelUrl: null,
-          threemfDiskPath: null,
-          downloadUrl: null,
+          ...EMPTY_LUT_MATCH_STATE,
           selectedColor: null,
           selectedColors: new Set<string>(),
           regionData: null,
           selectedRegions: [],
           batchMode: false,
           hasManualPreview: false,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining, ...DEFAULT_PUZZLE_PREVIEW_STATE });
+        set({ batchFiles: remaining });
       }
     },
 
-    clearBatchFiles: () =>
-      set({
-        batchFiles: [],
-        puzzleEnabled: false,
-        threemfDiskPath: null,
-        downloadUrl: null,
-        ...DEFAULT_PUZZLE_PREVIEW_STATE,
-      }),
+    clearBatchFiles: () => set({ batchFiles: [] }),
 
     handleFilesSelect: (files: File[]) => {
       // Filter out falsy values and invalid formats
@@ -3014,8 +3728,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
           batchMode: true,
-          puzzleEnabled: false,
-          ...DEFAULT_PUZZLE_PREVIEW_STATE,
         });
         return;
       }
@@ -3038,14 +3750,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             previewBaseImageUrl: null,
             sessionId: null,
             previewGlbUrl: null,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: null,
+            ...EMPTY_LUT_MATCH_STATE,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: state.enableCrop,
-            ...DEFAULT_LAYER_IMAGES_STATE,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            layerImages: [],
+            layerImagesOpen: false,
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
@@ -3078,14 +3788,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             previewBaseImageUrl: null,
             sessionId: null,
             previewGlbUrl: null,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: null,
+            ...EMPTY_LUT_MATCH_STATE,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
-            ...DEFAULT_LAYER_IMAGES_STATE,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            layerImages: [],
+            layerImagesOpen: false,
             ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
           });
         } else {
@@ -3099,18 +3807,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           set({
             imageFile: singleFile,
             imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: null,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
-            ...DEFAULT_LAYER_IMAGES_STATE,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            layerImages: [],
+            layerImagesOpen: false,
             ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
           });
         }
@@ -3136,15 +3837,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         previewBaseImageUrl: null,
         sessionId: null,
         previewGlbUrl: null,
-        modelUrl: null,
-        threemfDiskPath: null,
-        downloadUrl: null,
-        batchMode: true,
+        ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
-        hasManualPreview: false,
-        ...DEFAULT_LAYER_IMAGES_STATE,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
+        batchMode: true,
+        hasManualPreview: false,
+        layerImages: [],
+        layerImagesOpen: false,
       });
+      console.log("[DEBUG] handleFilesSelect (batch): cleared layerImages");
     },
 
     submitBatch: async () => {

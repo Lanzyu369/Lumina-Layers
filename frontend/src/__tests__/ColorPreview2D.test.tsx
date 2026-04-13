@@ -66,9 +66,18 @@ describe('ColorPreview2D hover inspector', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal('ResizeObserver', MockResizeObserver);
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext() {
-      return createCanvasContext(this);
-    });
+    const getContextMock = function getContext(
+      this: HTMLCanvasElement,
+      contextId: string,
+    ): RenderingContext | null {
+      if (contextId === '2d') {
+        return createCanvasContext(this);
+      }
+      return null;
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      getContextMock as unknown as typeof HTMLCanvasElement.prototype.getContext,
+    );
 
     useConverterStore.setState({
       ...DEFAULT_STATE,

@@ -29,6 +29,7 @@ from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_batch_convert_item, worker_generate_model
 from config import TEMP_DIR, ModelingMode as CoreModelingMode
+from core.recipe_order import convert_recipe_between_orders
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -47,6 +48,46 @@ class _GenerateBody(BaseModel):
 
     session_id: str
     params: ConvertGenerateRequest
+
+
+def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[str, object]] | None:
+    """Normalize recipe overrides into per-region dict items.
+    将配方覆盖归一化为按单区域展开的字典条目。
+    """
+
+    if recipe_overrides is None:
+        return None
+
+    normalized: list[dict[str, object]] = []
+    for item in recipe_overrides:
+        region_id = item.region_id if hasattr(item, "region_id") else item.get("region_id")
+        region_ids = item.region_ids if hasattr(item, "region_ids") else item.get("region_ids")
+        recipe = item.recipe if hasattr(item, "recipe") else item.get("recipe")
+        layer_order = item.layer_order if hasattr(item, "layer_order") else item.get("layer_order")
+
+        expanded_region_ids: list[str] = []
+        if isinstance(region_id, str) and region_id:
+            expanded_region_ids.append(region_id)
+        elif isinstance(region_ids, list):
+            expanded_region_ids.extend(str(value) for value in region_ids if value)
+
+        if not expanded_region_ids or recipe is None:
+            continue
+
+        recipe_values = [int(value) for value in recipe]
+        if not recipe_values:
+            continue
+
+        for expanded_region_id in expanded_region_ids:
+            normalized.append(
+                {
+                    "region_id": expanded_region_id,
+                    "recipe": list(recipe_values),
+                    "layer_order": str(layer_order or "Top2Bottom"),
+                }
+            )
+
+    return normalized or None
 
 
 def _serialize_fridge_magnets(request: ConvertGenerateRequest) -> list[dict]:
@@ -105,6 +146,9 @@ async def convert_generate(
             }
             for r in request.replacement_regions
         ]
+    recipe_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
+    if request.recipe_overrides is not None:
+        recipe_overrides = _normalize_recipe_overrides(request.recipe_overrides)
 
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
@@ -132,6 +176,7 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    material_matrix_path: str | None = None
     log.info(
         "[GENERATE][DEBUG-COMPARE] use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -151,6 +196,92 @@ async def convert_generate(
                 cached_matched_rgb.dtype,
             )
 
+    if recipe_overrides:
+        cached_material_matrix = cache.get("material_matrix")
+        region_masks = session_data.get("selected_region_masks") or {}
+        lut_metadata = cache.get("lut_metadata")
+        if cached_material_matrix is None:
+            raise HTTPException(status_code=409, detail="Preview cache missing material_matrix")
+        if not isinstance(region_masks, dict):
+            region_masks = {}
+
+        material_matrix_override = np.asarray(cached_material_matrix).copy()
+        current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
+        target_layers = int(request.color_layers or current_layers)
+        metadata_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
+        base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+
+        if target_layers > current_layers and material_matrix_override.ndim == 3:
+            pad_shape = (
+                material_matrix_override.shape[0],
+                material_matrix_override.shape[1],
+                target_layers - current_layers,
+            )
+            pad = np.full(pad_shape, base_channel_idx, dtype=material_matrix_override.dtype)
+            if metadata_order == "Top2Bottom":
+                material_matrix_override = np.concatenate([material_matrix_override, pad], axis=2)
+            else:
+                material_matrix_override = np.concatenate([pad, material_matrix_override], axis=2)
+        elif target_layers < current_layers:
+            raise HTTPException(
+                status_code=422,
+                detail="Recipe overrides cannot reduce the current optical layer count",
+            )
+
+        for item in recipe_overrides:
+            region_id = item["region_id"]
+            item_recipe = item["recipe"]
+            item_layer_order = item["layer_order"]
+            region_mask = region_masks.get(region_id)
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Region mask not found for recipe override: {region_id}",
+                )
+            recipe = convert_recipe_between_orders(
+                list(item_recipe),
+                item_layer_order,
+                metadata_order,
+            )
+            if len(recipe) < target_layers:
+                pad_count = target_layers - len(recipe)
+                if metadata_order == "Top2Bottom":
+                    recipe = recipe + [base_channel_idx] * pad_count
+                else:
+                    recipe = [base_channel_idx] * pad_count + recipe
+            elif len(recipe) > target_layers:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Recipe override has {len(recipe)} layers but target mode is {target_layers}",
+                )
+            material_matrix_override[np.asarray(region_mask, dtype=bool)] = np.asarray(recipe, dtype=material_matrix_override.dtype)
+
+        fd, mm_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+        os.close(fd)
+        np.save(mm_temp_path, material_matrix_override)
+        material_matrix_path = mm_temp_path
+        store.register_temp_file(body.session_id, mm_temp_path)
+
+    recipe_override_masks_path: str | None = None
+    if recipe_overrides:
+        region_masks = session_data.get("selected_region_masks") or {}
+        if isinstance(region_masks, dict):
+            selected_masks = {
+                item["region_id"]:
+                region_masks[item["region_id"]]
+                for item in recipe_overrides
+                if item["region_id"] in region_masks
+            }
+            if selected_masks:
+                fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+                os.close(fd)
+                import pickle
+
+                with open(masks_temp_path, "wb") as f:
+                    pickle.dump(selected_masks, f)
+                recipe_override_masks_path = masks_temp_path
+                store.register_temp_file(body.session_id, masks_temp_path)
+
     # 2b. Collect scalar parameters into a dict for the worker
     params: dict = {
         "target_width_mm": request.target_width_mm,
@@ -159,6 +290,12 @@ async def convert_generate(
         "auto_bg": request.auto_bg,
         "bg_tol": request.bg_tol,
         "color_mode": request.color_mode.value,
+        "color_layers": request.color_layers,
+        "layer_height_mm": request.layer_height_mm,
+        "model_enable": request.model_enable,
+        "model_only": request.model_only,
+        "model_threshold": request.model_threshold,
+        "model_margin": request.model_margin,
         "add_loop": request.add_loop,
         "loop_width": request.loop_width,
         "loop_length": request.loop_length,
@@ -173,6 +310,19 @@ async def convert_generate(
         "modeling_mode": core_modeling_mode,
         "quantize_colors": request.quantize_colors,
         "replacement_regions": replacement_regions,
+        "recipe_overrides": (
+            [
+                {
+                    "region_id": item["region_id"],
+                    "recipe": list(item["recipe"]),
+                    "layer_order": item["layer_order"],
+                }
+                for item in recipe_overrides
+            ]
+            if recipe_overrides is not None
+            else None
+        ),
+        "recipe_override_masks_path": recipe_override_masks_path,
         "separate_backing": request.separate_backing,
         "enable_relief": request.enable_relief,
         "height_mode": height_mode,
@@ -191,6 +341,7 @@ async def convert_generate(
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
         "matched_rgb_path": matched_rgb_path,
+        "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
     }
@@ -338,6 +489,12 @@ async def convert_generate_large_format(
         "auto_bg": request.auto_bg,
         "bg_tol": request.bg_tol,
         "color_mode": request.color_mode.value,
+        "color_layers": request.color_layers,
+        "layer_height_mm": request.layer_height_mm,
+        "model_enable": request.model_enable,
+        "model_only": request.model_only,
+        "model_threshold": request.model_threshold,
+        "model_margin": request.model_margin,
         "add_loop": request.add_loop,
         "loop_width": request.loop_width,
         "loop_length": request.loop_length,
@@ -352,6 +509,18 @@ async def convert_generate_large_format(
         "modeling_mode": core_modeling_mode,
         "quantize_colors": request.quantize_colors,
         "replacement_regions": replacement_regions,
+        "recipe_overrides": (
+            [
+                {
+                    "region_id": item.region_id,
+                    "recipe": list(item.recipe),
+                    "layer_order": item.layer_order,
+                }
+                for item in request.recipe_overrides
+            ]
+            if request.recipe_overrides is not None
+            else None
+        ),
         "separate_backing": request.separate_backing,
         "enable_relief": request.enable_relief,
         "height_mode": height_mode,

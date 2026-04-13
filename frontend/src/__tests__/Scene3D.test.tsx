@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, waitFor } from "@testing-library/react";
+import type * as THREE from "three";
 import { buildLayerImagesSourceKey, useConverterStore } from "../stores/converter";
 
 // Mock i18n — return key as-is
@@ -85,13 +86,13 @@ vi.mock("@react-three/fiber", () => ({
   },
   useThree: (selector?: (state: {
     gl: ReturnType<typeof createMockGl>;
-    scene: { children: [] };
+    scene: { children: THREE.Object3D[] };
     camera: { position: { x: number; y: number; z: number } };
     controls: null;
   }) => unknown) => {
     const state = {
       gl: createMockGl(),
-      scene: { children: [] },
+      scene: { children: [] as THREE.Object3D[] },
       camera: { position: { x: 0, y: 0, z: 0 } },
       controls: null,
     };

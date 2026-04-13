@@ -11,6 +11,7 @@ Validates:
 from __future__ import annotations
 
 import io
+import json
 import os
 import pickle
 import tempfile
@@ -25,6 +26,7 @@ from api.dependencies import get_session_store, get_file_registry, get_worker_po
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
+from config import TEMP_DIR
 
 # Isolated store/registry per test module to avoid cross-test pollution
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -194,6 +196,49 @@ class TestSessionContainsPreviewCache:
         assert loaded_cache["target_w"] == 120
         assert loaded_cache["target_h"] == 80
 
+    def test_preview_passes_model_assisted_controls_to_worker(self) -> None:
+        """Preview route should forward model-assisted matching controls to the worker."""
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.msgpack", "Native Bundle"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "BambuLab",
+                    "db_names": "RYBW_008_5L.json",
+                    "model_enable": "true",
+                    "model_only": "false",
+                    "model_threshold": "6.5",
+                    "model_margin": "0.9",
+                },
+            )
+
+        assert response.status_code == 200
+        call_args = _mock_pool.submit.call_args.args
+        assert call_args[13] is True
+        assert call_args[14] is False
+        assert call_args[15] == 6.5
+        assert call_args[16] == 0.9
+
 
 # =========================================================================
 # 3. Response includes palette and dimensions - Requirement 5.3
@@ -328,3 +373,257 @@ class TestGeneralExceptionReturns500:
             )
         assert response.status_code == 500
         assert "Worker crashed" in response.json()["detail"]
+
+
+class TestNativeBundleValidation:
+    """Verify preview parsing rejects invalid native-bundle selections."""
+
+    def test_preview_rejects_native_bundle_db_names_outside_brand(self) -> None:
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "BambuLab",
+                    "db_names": "definitely-not-a-real-db",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "native" in str(response.json()["detail"]).lower()
+
+    def test_preview_returns_json_safe_validation_error_for_invalid_native_bundle_contract(self) -> None:
+        buf = _make_test_image_buf()
+
+        response = client.post(
+            "/api/convert/preview",
+            files={"image": ("test.png", buf, "image/png")},
+            data={
+                "source_kind": "native_bundle",
+                "material_type": "PLA",
+                "db_names": "RYBW_008_5L.json",
+            },
+        )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert isinstance(detail, list)
+        assert "vendor" in str(detail).lower()
+
+
+class TestNativeBundleDbNamesParsing:
+    """Verify preview parsing accepts all supported native DB name shapes."""
+
+    def test_preview_accepts_plain_string_db_name(self) -> None:
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        def _resolve_source_selection(*, source_kind, lut_name, material_type, vendor, db_names):
+            assert source_kind == "native_bundle"
+            assert material_type == "PLA"
+            assert vendor == "BambuLab"
+            assert db_names == ["RYBW_008_5L.json"]
+            return "/tmp/fake.npy", "Native Bundle"
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                side_effect=_resolve_source_selection,
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "BambuLab",
+                    "db_names": "RYBW_008_5L.json",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+
+    def test_preview_accepts_json_stringified_db_names(self) -> None:
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        def _resolve_source_selection(*, source_kind, lut_name, material_type, vendor, db_names):
+            assert source_kind == "native_bundle"
+            assert material_type == "PLA"
+            assert vendor == "BambuLab"
+            assert db_names == ["RYBW_008_5L.json"]
+            return "/tmp/fake.npy", "Native Bundle"
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                side_effect=_resolve_source_selection,
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "BambuLab",
+                    "db_names": json.dumps(["RYBW_008_5L.json"]),
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+
+    def test_preview_accepts_repeated_form_field_db_names(self) -> None:
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        def _resolve_source_selection(*, source_kind, lut_name, material_type, vendor, db_names):
+            assert source_kind == "native_bundle"
+            assert material_type == "PLA"
+            assert vendor == "BambuLab"
+            assert db_names == ["RYBW_008_5L.json", "CMYW_008_5L.json"]
+            return "/tmp/fake.npy", "Native Bundle"
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                side_effect=_resolve_source_selection,
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files=[
+                    ("image", ("test.png", buf, "image/png")),
+                    ("source_kind", (None, "native_bundle")),
+                    ("material_type", (None, "PLA")),
+                    ("vendor", (None, "BambuLab")),
+                    ("db_names", (None, "RYBW_008_5L.json")),
+                    ("db_names", (None, "CMYW_008_5L.json")),
+                ],
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+
+
+class TestNativeBundleCleanup:
+    """Verify temp native-bundle artifacts are cleaned up before a session exists."""
+
+    def test_preview_upload_failure_cleans_up_temp_native_bundle_file(self) -> None:
+        local_client = TestClient(app, raise_server_exceptions=False)
+        buf = _make_test_image_buf()
+        fd, temp_bundle_path = tempfile.mkstemp(suffix=".msgpack", dir=TEMP_DIR)
+        os.close(fd)
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                    return_value=(temp_bundle_path, "Native Bundle"),
+                ),
+                patch(
+                    "api.routers.converter.preview.ensure_png_tempfile",
+                    new=AsyncMock(side_effect=Exception("upload failed")),
+                ),
+            ):
+                response = local_client.post(
+                    "/api/convert/preview",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "source_kind": "native_bundle",
+                        "material_type": "PLA",
+                        "vendor": "BambuLab",
+                        "db_names": "RYBW_008_5L.json",
+                    },
+                )
+
+            assert response.status_code == 500
+            assert not os.path.exists(temp_bundle_path)
+        finally:
+            if os.path.exists(temp_bundle_path):
+                os.unlink(temp_bundle_path)
+
+    def test_preview_timeout_cleans_up_temp_native_bundle_file(self) -> None:
+        import asyncio
+
+        buf = _make_test_image_buf()
+        fd, temp_bundle_path = tempfile.mkstemp(suffix=".msgpack", dir=TEMP_DIR)
+        os.close(fd)
+
+        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                    return_value=(temp_bundle_path, "Native Bundle"),
+                ),
+                patch(
+                    "api.routers.converter.preview.ensure_png_tempfile",
+                    new=AsyncMock(return_value="/tmp/uploaded.png"),
+                ),
+            ):
+                response = client.post(
+                    "/api/convert/preview",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "source_kind": "native_bundle",
+                        "material_type": "PLA",
+                        "vendor": "BambuLab",
+                        "db_names": "RYBW_008_5L.json",
+                    },
+                )
+
+            assert response.status_code == 504
+            assert not os.path.exists(temp_bundle_path)
+        finally:
+            if os.path.exists(temp_bundle_path):
+                os.unlink(temp_bundle_path)

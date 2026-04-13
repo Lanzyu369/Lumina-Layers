@@ -1,6 +1,7 @@
 import { useI18n } from "../../i18n/context"
 import type { HoverLayerColorSample } from "./previewHoverInspectorUtils"
 import { MAGNIFIER_SIZE_PX } from "./previewHoverInspectorUtils"
+import { getHoverInspectorLayout } from "./previewHoverInspectorUtils"
 
 interface PreviewHoverInspectorProps {
   dataTestId: string
@@ -28,6 +29,7 @@ export default function PreviewHoverInspector({
   showLayerDetails = true,
 }: PreviewHoverInspectorProps) {
   const { t } = useI18n()
+  const layerLayout = getHoverInspectorLayout(hoverLayerColors.length, showLayerDetails)
 
   return (
     <div
@@ -98,13 +100,23 @@ export default function PreviewHoverInspector({
             {layerImagesLoading && hoverLayerColors.length === 0 ? (
               <p className="text-[11px]">{t("viewer_hover_loading_layers")}</p>
             ) : hoverLayerColors.length > 0 ? (
-              <ul className="max-h-28 space-y-1 overflow-y-auto pr-1 text-[11px]">
+              <ul
+                className={
+                  layerLayout.isCompactGrid
+                    ? "grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]"
+                    : "max-h-28 space-y-1 overflow-y-auto pr-1 text-[11px]"
+                }
+              >
                 {hoverLayerColors.map((layer) => (
                   <li
                     key={`${layer.displayIndex}-${layer.layerName}`}
-                    className="flex items-center justify-between gap-2"
+                    className={
+                      layerLayout.isCompactGrid
+                        ? "flex min-w-0 items-start justify-between gap-1"
+                        : "flex items-center justify-between gap-2"
+                    }
                   >
-                    <span className="truncate">
+                    <span className="min-w-0 truncate">
                       {t("action_layer_nth")}{layer.displayIndex}{t("action_layer_unit")}
                     </span>
                     <span className="inline-flex items-center gap-1.5 font-mono">

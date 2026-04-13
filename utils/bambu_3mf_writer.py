@@ -183,6 +183,8 @@ class BambuStudio3MFWriter:
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
         self.watermark = watermark
+        self._project_slot_names: list[str] = []
+        self._project_preview_colors: dict | None = None
 
     def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
@@ -214,15 +216,19 @@ class BambuStudio3MFWriter:
             )
         )
 
-    def _build_material_palette(self) -> tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
-        """Build a stable shared material palette from the queued mesh objects.
+    def _set_project_palette(self, slot_names: list[str], preview_colors: Dict) -> None:
+        """Configure the project-wide palette used for exported metadata.
 
-        从待导出的网格对象中构建稳定的共享材料调色板。
+        配置导出元数据使用的项目级完整调色板。
+        """
 
-        Returns:
-            tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
-                Ordered shared-material palette and material-name to palette-index map.
-                （有序共享材料调色板，以及材料名到调色板索引的映射）
+        self._project_slot_names = [str(name) for name in slot_names if str(name)]
+        self._project_preview_colors = dict(preview_colors or {})
+
+    def _build_object_material_palette(self) -> tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
+        """Build the compact material palette from queued mesh objects only.
+
+        从待导出的网格对象中构建仅包含实际对象的紧凑材料调色板。
         """
 
         palette: list[tuple[str, tuple[int, int, int]]] = []
@@ -232,6 +238,44 @@ class BambuStudio3MFWriter:
                 continue
             name_to_index[entry.material_name] = len(palette)
             palette.append((entry.material_name, entry.color_rgb))
+        return palette, name_to_index
+
+    def _build_material_palette(self) -> tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
+        """Build the shared export palette for meshes and project metadata.
+
+        构建用于网格与项目元数据的共享导出调色板。
+
+        Returns:
+            tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
+                Ordered shared-material palette and material-name to palette-index map.
+                （有序共享材料调色板，以及材料名到调色板索引的映射）
+        """
+
+        object_palette, _ = self._build_object_material_palette()
+        if not self._project_slot_names:
+            return object_palette, {
+                material_name: idx for idx, (material_name, _) in enumerate(object_palette)
+            }
+
+        palette: list[tuple[str, tuple[int, int, int]]] = []
+        name_to_index: dict[str, int] = {}
+        preview_colors = self._project_preview_colors or {}
+        for slot_index, slot_name in enumerate(self._project_slot_names):
+            if slot_name in name_to_index:
+                continue
+            color_rgb, _ = _resolve_preview_color_for_slot_name(
+                slot_name=slot_name,
+                slot_index=slot_index,
+                preview_colors=preview_colors,
+            )
+            name_to_index[slot_name] = len(palette)
+            palette.append((slot_name, color_rgb))
+
+        for material_name, color_rgb in object_palette:
+            if material_name in name_to_index:
+                continue
+            name_to_index[material_name] = len(palette)
+            palette.append((material_name, color_rgb))
         return palette, name_to_index
 
     def export(self) -> str:
@@ -374,12 +418,22 @@ class BambuStudio3MFWriter:
                     ("Metadata/cut_information.xml", "text/xml", self._build_cut_information_bytes()),
                 ]
             )
+        preview_png = self._build_preview_placeholder_png_bytes()
+        parts.extend(
+            [
+                ("Metadata/plate_1.png", "image/png", preview_png),
+                ("Metadata/plate_no_light_1.png", "image/png", preview_png),
+                ("Metadata/top_1.png", "image/png", preview_png),
+                ("Metadata/pick_1.png", "image/png", preview_png),
+            ]
+        )
         for path, content_type, data in parts:
             builder.add_custom_part(_get_n3mf().CustomPart(path, content_type, data))
 
         builder.add_custom_content_type(_get_n3mf().CustomContentType("config", "text/xml"))
         builder.add_custom_content_type(_get_n3mf().CustomContentType("json", "application/json"))
         builder.add_custom_content_type(_get_n3mf().CustomContentType("xml", "text/xml"))
+        builder.add_custom_content_type(_get_n3mf().CustomContentType("png", "image/png"))
 
     # ------------------------------------------------------------------
     # Individual metadata builders (return bytes, no filesystem I/O)
@@ -605,6 +659,16 @@ class BambuStudio3MFWriter:
         tree.write(buf, encoding="utf-8", xml_declaration=False)
         return buf.getvalue()
 
+    @staticmethod
+    def _build_preview_placeholder_png_bytes() -> bytes:
+        """Build a tiny valid PNG payload for referenced plate preview assets."""
+        # 1x1 transparent PNG
+        return (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc`\x00\x01"
+            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
     # ------------------------------------------------------------------
     # Config template & filament arrays (unchanged logic)
     # ------------------------------------------------------------------
@@ -690,6 +754,7 @@ def export_scene_with_bambu_metadata(
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
     watermark: str = "LuminaStudio",
+    project_slot_names: Optional[List[str]] = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
@@ -704,6 +769,8 @@ def export_scene_with_bambu_metadata(
         printer_id (str): Printer identifier for template selection, default 'bambu-h2d'. (打印机标识)
         slicer (str): Slicer software identifier, default 'BambuStudio'. (切片器标识)
         watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
+        project_slot_names (Optional[List[str]]): Full selected source palette/material names to preserve
+            in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
 
     Returns:
         str: Path to the exported 3MF file. (导出的 3MF 文件路径)
@@ -713,32 +780,37 @@ def export_scene_with_bambu_metadata(
     if not slot_names:
         raise ValueError("[BAMBU_3MF] slot_names is empty - no exportable objects")
 
-    num_used_colors = len(slot_names)
+    resolved_project_slot_names = [str(name) for name in (project_slot_names or []) if str(name)]
+    palette_color_count = len(resolved_project_slot_names) if resolved_project_slot_names else len(slot_names)
 
-    if num_used_colors <= 2:
+    if palette_color_count <= 2:
         actual_color_mode = "BW"
-    elif num_used_colors <= 4:
+    elif palette_color_count <= 4:
         actual_color_mode = "4-Color"
-    elif num_used_colors <= 6:
+    elif palette_color_count <= 6:
         actual_color_mode = "6-Color"
     else:
         actual_color_mode = "8-Color"
 
     print(
-        f"[BAMBU_3MF] LUT color_mode: {color_mode}, Actual colors used: {num_used_colors} → 3MF mode: {actual_color_mode}"
+        f"[BAMBU_3MF] LUT color_mode: {color_mode}, Palette colors: {palette_color_count} → 3MF mode: {actual_color_mode}"
     )
 
     writer = BambuStudio3MFWriter(
         output_path, settings, actual_color_mode,
         printer_id=printer_id, slicer=slicer, watermark=watermark,
     )
+    if resolved_project_slot_names:
+        writer._set_project_palette(resolved_project_slot_names, preview_colors)
 
     name_to_color: dict[str, tuple] = {}
+    project_slot_indices = {name: idx for idx, name in enumerate(resolved_project_slot_names)}
     print("[BAMBU_3MF] Building color mapping:")
     for idx, slot_name in enumerate(slot_names):
+        resolved_slot_index = project_slot_indices.get(slot_name, idx)
         color_rgb, source = _resolve_preview_color_for_slot_name(
             slot_name=slot_name,
-            slot_index=idx,
+            slot_index=resolved_slot_index,
             preview_colors=preview_colors,
         )
         name_to_color[slot_name] = color_rgb

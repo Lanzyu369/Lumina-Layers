@@ -1,6 +1,6 @@
 const DEFAULT_COLOR_LAYER_HEIGHT_MM = 0.4;
 const OVERLAY_ELEVATION_MM = 0.15;
-const MAX_3D_OVERLAY_TEXTURE_SIZE_PX = 1024;
+export const MAX_3D_OVERLAY_TEXTURE_SIZE_PX = 1024;
 
 export interface PuzzleOverlayBounds {
   minX: number;

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.schemas.converter import ConvertGenerateRequest
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -180,6 +181,10 @@ class TestGenerateParameterCompleteness:
                 "bg_tol": 60,
                 "color_mode": "4-Color (RYBW)",
                 "modeling_mode": "high-fidelity",
+                "model_enable": True,
+                "model_only": False,
+                "model_threshold": 6.5,
+                "model_margin": 0.9,
                 "quantize_colors": 64,
                 "enable_cleanup": False,
                 "separate_backing": True,
@@ -247,6 +252,10 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["auto_bg"] is True
         assert submitted_params["bg_tol"] == 60
         assert submitted_params["color_mode"] == "4-Color (RYBW)"
+        assert submitted_params["model_enable"] is True
+        assert submitted_params["model_only"] is False
+        assert submitted_params["model_threshold"] == 6.5
+        assert submitted_params["model_margin"] == 0.9
         assert submitted_params["quantize_colors"] == 64
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
@@ -408,6 +417,22 @@ class TestLargeFormatFridgeMagnetValidation:
 
         assert response.status_code == 422
         assert "fridge magnet" in response.json()["detail"].lower()
+
+
+def test_convert_generate_request_accepts_native_bundle_source() -> None:
+    """ConvertGenerateRequest should support native-bundle source selection fields."""
+
+    request = ConvertGenerateRequest(
+        source_kind="native_bundle",
+        material_type="PLA",
+        vendor="BambuLab",
+        db_names=["RYBW_008_5L"],
+    )
+
+    assert request.source_kind == "native_bundle"
+    assert request.material_type == "PLA"
+    assert request.vendor == "BambuLab"
+    assert request.db_names == ["RYBW_008_5L"]
 
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
