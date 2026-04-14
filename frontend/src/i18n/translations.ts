@@ -1579,6 +1579,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用七彩粒子聚合加载特效，关闭后使用轻量级扫描线动画",
     en: "Enable rainbow particle convergence effect, disable for lightweight scan line animation",
   },
+  "settings.witty_loading": {
+    zh: "加载趣味消息",
+    en: "Loading Witty Messages",
+  },
+  "settings.witty_loading_desc": {
+    zh: "在加载时显示趣味提示消息",
+    en: "Show witty messages during loading",
+  },
   "settings.cache": {
     zh: "缓存管理",
     en: "Cache Management",

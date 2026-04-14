@@ -9,6 +9,7 @@ import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -93,6 +94,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
+  const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
   const wittyMsg = useWittyMessage(2000, isLoading);
 
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
@@ -313,11 +315,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                   <div className="h-3 w-3 rounded-full bg-slate-100/90 dark:bg-slate-50/90" />
                 </div>
               </div>
-              <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
-                <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
-                  {wittyMsg}
-                </p>
-              </div>
+              {enableWittyLoading && (
+                <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
+                  <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
+                    {wittyMsg}
+                  </p>
+                </div>
+              )}
             </div>
           </Html>
         )}
