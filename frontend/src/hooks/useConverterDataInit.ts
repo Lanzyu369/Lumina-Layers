@@ -9,12 +9,12 @@ import { useConverterStore } from '../stores/converter';
  * 从 LeftPanel 的 useEffect 初始化逻辑迁移而来。
  */
 export function useConverterDataInit() {
-  const fetchLutList = useConverterStore((s) => s.fetchLutList);
+  const fetchLutCatalog = useConverterStore((s) => s.fetchLutCatalog);
   const fetchBedSizes = useConverterStore((s) => s.fetchBedSizes);
   const fetchLutColors = useConverterStore((s) => s.fetchLutColors);
 
   useEffect(() => {
-    void fetchLutList().then(() => {
+    void fetchLutCatalog().then(() => {
       // After LUT list loads, if a remembered LUT is set, also load its colors
       const { lut_name, lutColorsLutName, lutColors } = useConverterStore.getState();
       if (lut_name && (lutColorsLutName !== lut_name || lutColors.length === 0)) {
@@ -22,5 +22,5 @@ export function useConverterDataInit() {
       }
     });
     void fetchBedSizes();
-  }, [fetchLutList, fetchBedSizes, fetchLutColors]);
+  }, [fetchLutCatalog, fetchBedSizes, fetchLutColors]);
 }

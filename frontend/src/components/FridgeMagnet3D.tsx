@@ -273,7 +273,7 @@ function FridgeMagnetProxy({
   const setControlsEnabled = useCallback(
     (enabled: boolean) => {
       if (controls) {
-        (controls as { enabled: boolean }).enabled = enabled;
+        (controls as unknown as { enabled: boolean }).enabled = enabled;
       }
     },
     [controls],

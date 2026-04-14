@@ -9,21 +9,21 @@ const MAX_PUZZLE_PREVIEW_RETRIES = 1;
  * 自动刷新拼图叠线预览，而不重跑整图预览。
  */
 export function usePuzzleLayoutPreview(): void {
-  const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
+  const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled ?? false);
   const sessionId = useConverterStore((s) => s.sessionId);
   const targetHeightMm = useConverterStore((s) => s.target_height_mm);
-  const puzzleStyle = useConverterStore((s) => s.puzzleStyle);
-  const puzzleSizingMode = useConverterStore((s) => s.puzzleSizingMode);
-  const pieceWidthMm = useConverterStore((s) => s.pieceWidthMm);
-  const pieceHeightMm = useConverterStore((s) => s.pieceHeightMm);
-  const puzzleRows = useConverterStore((s) => s.puzzleRows);
-  const puzzleCols = useConverterStore((s) => s.puzzleCols);
-  const targetPieceCount = useConverterStore((s) => s.targetPieceCount);
-  const connectorStyle = useConverterStore((s) => s.connectorStyle);
-  const labelsEnabled = useConverterStore((s) => s.labelsEnabled);
-  const engraveBackLabels = useConverterStore((s) => s.engraveBackLabels);
-  const irregularityStrength = useConverterStore((s) => s.irregularityStrength);
-  const minNeckWidthMm = useConverterStore((s) => s.minNeckWidthMm);
+  const puzzleStyle = useConverterStore((s) => s.puzzleStyle ?? "regular");
+  const puzzleSizingMode = useConverterStore((s) => s.puzzleSizingMode ?? "piece_size");
+  const pieceWidthMm = useConverterStore((s) => s.pieceWidthMm ?? 20);
+  const pieceHeightMm = useConverterStore((s) => s.pieceHeightMm ?? 20);
+  const puzzleRows = useConverterStore((s) => s.puzzleRows ?? 3);
+  const puzzleCols = useConverterStore((s) => s.puzzleCols ?? 3);
+  const targetPieceCount = useConverterStore((s) => s.targetPieceCount ?? 12);
+  const connectorStyle = useConverterStore((s) => s.connectorStyle ?? "classic");
+  const labelsEnabled = useConverterStore((s) => s.labelsEnabled ?? false);
+  const engraveBackLabels = useConverterStore((s) => s.engraveBackLabels ?? false);
+  const irregularityStrength = useConverterStore((s) => s.irregularityStrength ?? 0.35);
+  const minNeckWidthMm = useConverterStore((s) => s.minNeckWidthMm ?? 1.2);
   const submitPuzzleLayoutPreview = useConverterStore(
     (s) => s.submitPuzzleLayoutPreview,
   );
@@ -86,12 +86,19 @@ export function usePuzzleLayoutPreview(): void {
       timerRef.current = null;
     }
 
-    if (!puzzleEnabled || !sessionId) {
+    if (
+      !puzzleEnabled ||
+      !sessionId ||
+      typeof clearPuzzleLayoutPreview !== "function" ||
+      typeof submitPuzzleLayoutPreview !== "function"
+    ) {
       currentRequestKeyRef.current = "";
       lastAppliedKeyRef.current = "";
       inFlightKeyRef.current = null;
       retryCountRef.current = 0;
-      clearPuzzleLayoutPreview();
+      if (typeof clearPuzzleLayoutPreview === "function") {
+        clearPuzzleLayoutPreview();
+      }
       return;
     }
 

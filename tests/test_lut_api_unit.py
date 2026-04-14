@@ -7,12 +7,18 @@ Validates:
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from api.app import app
-from config import LUTMetadata
+from config import LUTMetadata, PaletteEntry
+from core.native_reference import (
+    NativeReferenceContext,
+    SOURCE_KIND_COLORD_DB,
+    SOURCE_KIND_PACKAGE,
+)
 
 client: TestClient = TestClient(app)
 
@@ -25,10 +31,36 @@ client: TestClient = TestClient(app)
 class TestLutInfoSuccess:
     """Verify the info endpoint returns correct mode and count."""
 
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(
+            None,
+            None,
+            LUTMetadata(
+                schema_version="2.0",
+                capabilities=["legacy_lookup", "predictive_match", "dynamic_layer_height", "dynamic_layer_count"],
+                palette=[
+                    PaletteEntry(
+                        color="White",
+                        material="PLA Basic",
+                        hex_color="#FFFFFF",
+                        color_name="Jade White",
+                    )
+                ],
+                extensions={
+                    "source_kind": "predictive_package",
+                    "runtime_package": {
+                        "defaults": {"threshold": 5.0},
+                        "modes": {},
+                    }
+                },
+            ),
+        ),
+    )
     @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("8-Color", 2738))
     @patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/path.npy")
     def test_info_returns_200_with_correct_fields(
-        self, mock_path, mock_detect
+        self, mock_path, mock_detect, mock_load_meta
     ) -> None:
         response = client.get("/api/lut/TestLUT/info")
         assert response.status_code == 200
@@ -36,6 +68,22 @@ class TestLutInfoSuccess:
         assert data["name"] == "TestLUT"
         assert data["color_mode"] == "8-Color"
         assert data["color_count"] == 2738
+        assert data["schema_version"] == "2.0"
+        assert data["supports_predictive_match"] is True
+        assert data["supports_dynamic_layer_height"] is True
+        assert data["supports_dynamic_layer_count"] is True
+        assert data["supports_custom_recipe"] is False
+        assert data["source_kind"] == "predictive_package"
+        assert data["supported_modes"] == []
+        assert data["palette"] == [
+            {
+                "color": "White",
+                "material": "PLA Basic",
+                "hex_color": "#FFFFFF",
+                "color_name": "Jade White",
+            }
+        ]
+        assert "predictive_match" in data["capabilities"]
 
 
 # =========================================================================
@@ -51,6 +99,290 @@ class TestLutInfoNotFound:
         response = client.get("/api/lut/NonExistent/info")
         assert response.status_code == 404
         assert "LUT not found" in response.json()["detail"]
+
+
+class TestPredictRecipeColor:
+    """Verify predictive recipe endpoint returns predicted color data."""
+
+    @patch(
+        "api.routers.lut.predict_recipe_color",
+        return_value={
+            "rgb": [255, 255, 255],
+            "lab": [100.0, 0.0, 0.0],
+            "runtime_mode_key": "0.08x5",
+            "source": "stage_model",
+        },
+    )
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(None, None, LUTMetadata()),
+    )
+    @patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/source.json")
+    def test_predict_recipe_color_returns_200(
+        self,
+        mock_path,
+        mock_load_meta,
+        mock_predict,
+    ) -> None:
+        response = client.post(
+            "/api/lut/TestSource/predict-recipe-color",
+            json={
+                "recipe": [0, 0, 0, 0, 0],
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["rgb"] == [255, 255, 255]
+        assert data["runtime_mode_key"] == "0.08x5"
+
+    @patch(
+        "api.routers.lut.predict_recipe_color",
+        side_effect=ValueError("Recipe is not present in the runtime package; exact prediction unavailable for package-only source"),
+    )
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(None, None, LUTMetadata()),
+    )
+    @patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/source.json")
+    def test_predict_recipe_color_returns_422_for_non_exact_package_only_recipe(
+        self,
+        mock_path,
+        mock_load_meta,
+        mock_predict,
+    ) -> None:
+        response = client.post(
+            "/api/lut/TestSource/predict-recipe-color",
+            json={
+                "recipe": [0, 1, 0, 1, 0],
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+            },
+        )
+        assert response.status_code == 422
+        assert "exact prediction unavailable" in response.json()["detail"]
+
+
+class TestSourceKindFallback:
+    """Verify plain V2 predictive LUTs still surface predictive source_kind without explicit extension."""
+
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(
+            None,
+            None,
+            LUTMetadata(
+                schema_version="2.0",
+                capabilities=["predictive_match"],
+                extensions={
+                    "runtime_package": {
+                        "defaults": {"threshold": 5.0},
+                        "modes": {},
+                    }
+                },
+            ),
+        ),
+    )
+    @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("8-Color", 2738))
+    @patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/path.json")
+    def test_info_source_kind_falls_back_to_predictive_package(
+        self, mock_path, mock_detect, mock_load_meta
+    ) -> None:
+        response = client.get("/api/lut/TestRuntimePackage/info")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["source_kind"] == "predictive_package"
+
+
+class TestSourceCatalog:
+    """Verify the new LUT/source catalog exposes both legacy and native groupings."""
+
+    def test_list_remains_legacy_only(self) -> None:
+        response = client.get("/api/lut/list")
+        assert response.status_code == 200
+
+        data = response.json()["luts"]
+        names = {entry["name"] for entry in data}
+        assert not any(name.startswith("ReferenceDB -") for name in names)
+        assert not any(name.startswith("ReferencePack -") for name in names)
+        assert not any(name.startswith("ReferenceModel -") for name in names)
+
+    def test_catalog_includes_legacy_and_native_groups(self) -> None:
+        response = client.get("/api/lut/catalog")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "legacy_groups" in data
+        assert "native_brand_groups" in data
+
+        legacy_group_names = {group["group_name"] for group in data["legacy_groups"]}
+        assert {"Preset", "ReferenceDB", "ReferencePack", "ReferenceModel"} & legacy_group_names
+
+        native_groups = data["native_brand_groups"]
+        assert native_groups
+
+        bambu_pla = next(
+            group
+            for group in native_groups
+            if group["vendor"] == "BambuLab" and group["material_type"] == "PLA"
+        )
+        assert bambu_pla["brand_key"]
+        assert bambu_pla["display_name"]
+        assert bambu_pla["db_options"]
+        assert bambu_pla["default_db_names"]
+        assert bambu_pla["package_name"] == "bambulab_pla.msgpack"
+        assert bambu_pla["model_name"] == "bambulab_pla_stage_B.json"
+        assert bambu_pla["supported_modes"]
+        option_names = {option["name"] for option in bambu_pla["db_options"]}
+        assert bambu_pla["default_db_names"][0] in option_names
+
+    def test_manager_catalog_payload_omits_internal_resolution_fields(self) -> None:
+        fake_path = os.path.join("C:\\tmp", "fake.msgpack")
+        native_ctx = NativeReferenceContext(
+            source_kind=SOURCE_KIND_PACKAGE,
+            primary_path=fake_path,
+            package_path=fake_path,
+            stage_model_path=os.path.join("C:\\tmp", "fake_stage.json"),
+            db_paths=(os.path.join("C:\\tmp", "A.json"),),
+            vendor="BambuLab",
+            material_type="PLA",
+        )
+
+        from utils.lut_manager import LUTManager
+
+        LUTManager.invalidate_native_source_index_cache()
+        try:
+            with (
+                patch("utils.lut_manager.LUTManager._build_legacy_catalog_groups", return_value=[]),
+                patch("utils.lut_manager.LUTManager._iter_scanned_lut_files", return_value=[("ReferencePack", "C:\\tmp", fake_path)]),
+                patch("utils.lut_manager.discover_native_reference_context", return_value=native_ctx),
+            ):
+                catalog = LUTManager.get_source_catalog()
+
+            native_group = catalog["native_brand_groups"][0]
+            assert "package_path" not in native_group
+            assert "model_path" not in native_group
+        finally:
+            LUTManager.invalidate_native_source_index_cache()
+
+    def test_native_source_catalog_reuses_cached_index(self) -> None:
+        from utils.lut_manager import LUTManager
+
+        LUTManager.invalidate_native_source_index_cache()
+        try:
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                fake_path = os.path.join(tmpdir, "A.json")
+                with open(fake_path, "w", encoding="utf-8") as fh:
+                    fh.write("{}")
+
+                native_ctx = NativeReferenceContext(
+                    source_kind=SOURCE_KIND_COLORD_DB,
+                    primary_path=fake_path,
+                    db_paths=(fake_path,),
+                    vendor="BambuLab",
+                    material_type="PLA",
+                )
+
+                with (
+                    patch("utils.lut_manager.LUTManager._build_legacy_catalog_groups", return_value=[]),
+                    patch("utils.lut_manager.LUTManager._iter_scanned_lut_files", return_value=[("ReferenceDB", tmpdir, fake_path)]),
+                    patch("utils.lut_manager.discover_native_reference_context", return_value=native_ctx) as mock_discover,
+                    patch("utils.lut_manager.LUTManager.compute_fingerprint", return_value="fp"),
+                    patch("utils.lut_manager.LUTManager.infer_color_mode", return_value="4-Color (RYBW)"),
+                ):
+                    first = LUTManager.get_source_catalog()
+                    second = LUTManager.get_source_catalog()
+                    resolved_path, resolved_name = LUTManager.resolve_source_selection(
+                        source_kind="native_bundle",
+                        material_type="PLA",
+                        vendor="BambuLab",
+                        db_names=["A.json"],
+                    )
+
+                assert first == second
+                assert resolved_path == fake_path
+                assert resolved_name == "A.json"
+                assert mock_discover.call_count == 1
+        finally:
+            LUTManager.invalidate_native_source_index_cache()
+
+    def test_native_source_catalog_auto_refreshes_after_ttl(self) -> None:
+        from utils.lut_manager import LUTManager, _NativeBrandIndexItem, _NativeDbIndexItem
+
+        LUTManager.invalidate_native_source_index_cache()
+        original_ttl = getattr(LUTManager, "NATIVE_SOURCE_INDEX_TTL_SECONDS", None)
+        LUTManager.NATIVE_SOURCE_INDEX_TTL_SECONDS = 10.0
+        first_index = (
+            _NativeBrandIndexItem(
+                brand_key="bambulab_pla",
+                material_type="PLA",
+                vendor="BambuLab",
+                display_name="BambuLab PLA",
+                db_options=(
+                    _NativeDbIndexItem(
+                        name="A.json",
+                        path="A.json",
+                        color_mode="4-Color (RYBW)",
+                        fingerprint="fp-a",
+                    ),
+                ),
+                default_db_names=("A.json",),
+                package_name=None,
+                model_name=None,
+                supported_modes=(),
+                package_path=None,
+                model_path=None,
+            ),
+        )
+        second_index = (
+            _NativeBrandIndexItem(
+                brand_key="bambulab_pla",
+                material_type="PLA",
+                vendor="BambuLab",
+                display_name="BambuLab PLA",
+                db_options=(
+                    _NativeDbIndexItem(
+                        name="B.json",
+                        path="B.json",
+                        color_mode="4-Color (CMYW)",
+                        fingerprint="fp-b",
+                    ),
+                ),
+                default_db_names=("B.json",),
+                package_name=None,
+                model_name=None,
+                supported_modes=(),
+                package_path=None,
+                model_path=None,
+            ),
+        )
+
+        try:
+            with (
+                patch("utils.lut_manager.time.monotonic", side_effect=[0.0, 0.0, 11.0, 11.0]),
+                patch(
+                    "utils.lut_manager.LUTManager._build_native_source_index",
+                    side_effect=[first_index, second_index],
+                ) as mock_build,
+            ):
+                first = LUTManager.get_source_catalog()
+                second = LUTManager.get_source_catalog()
+
+            assert first["native_brand_groups"][0]["db_options"][0]["name"] == "A.json"
+            assert second["native_brand_groups"][0]["db_options"][0]["name"] == "B.json"
+            assert mock_build.call_count == 2
+        finally:
+            if original_ttl is None:
+                delattr(LUTManager, "NATIVE_SOURCE_INDEX_TTL_SECONDS")
+            else:
+                LUTManager.NATIVE_SOURCE_INDEX_TTL_SECONDS = original_ttl
+            LUTManager.invalidate_native_source_index_cache()
 
 
 # =========================================================================

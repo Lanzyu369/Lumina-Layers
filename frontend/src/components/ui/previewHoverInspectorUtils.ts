@@ -1,4 +1,18 @@
-import type { ZoomableImageHoverSample } from "./ZoomableImage"
+export interface HoverInspectorAnchorSample {
+  containerX: number
+  containerY: number
+  containerWidth: number
+  containerHeight: number
+  containerLeft: number
+  containerTop: number
+}
+
+interface HoverInspectorEqualitySample extends HoverInspectorAnchorSample {
+  pixelX: number
+  pixelY: number
+  naturalWidth: number
+  naturalHeight: number
+}
 
 export interface HoverLayerColorSample {
   displayIndex: number
@@ -27,8 +41,68 @@ export const MAGNIFIER_ZOOM = 3
 
 const MAGNIFIER_OFFSET_PX = 18
 const INSPECTOR_WIDTH_PX = 248
-const INSPECTOR_HEIGHT_PX = 310
 const INSPECTOR_EDGE_MARGIN_PX = 8
+const INSPECTOR_MIN_HEIGHT_PX = 310
+const INSPECTOR_PADDING_PX = 16
+const INSPECTOR_MAGNIFIER_HEIGHT_PX = 152
+const INSPECTOR_MAGNIFIER_SECTION_GAP_PX = 8
+const INSPECTOR_META_SECTION_HEIGHT_PX = 34
+const INSPECTOR_LAYER_TITLE_HEIGHT_PX = 18
+const INSPECTOR_LAYER_ROW_HEIGHT_PX = 18
+const INSPECTOR_LAYER_ROW_GAP_PX = 4
+const INSPECTOR_COMPACT_GRID_THRESHOLD = 6
+const INSPECTOR_COMPACT_GRID_COLUMNS = 2
+
+export interface HoverInspectorLayout {
+  columns: number
+  isCompactGrid: boolean
+  estimatedHeightPx: number
+}
+
+export interface HoverInspectorPlacementOptions {
+  layerCount?: number
+  showMagnifier?: boolean
+  showLayerDetails?: boolean
+}
+
+function estimateHoverInspectorContentHeight(
+  layerCount: number,
+  showMagnifier: boolean,
+  showLayerDetails: boolean,
+): HoverInspectorLayout {
+  const isCompactGrid = showLayerDetails && layerCount > INSPECTOR_COMPACT_GRID_THRESHOLD
+  const columns = isCompactGrid ? INSPECTOR_COMPACT_GRID_COLUMNS : 1
+  const rows = showLayerDetails && layerCount > 0
+    ? Math.ceil(layerCount / columns)
+    : 0
+
+  const layerSectionHeightPx = showLayerDetails
+    ? INSPECTOR_LAYER_TITLE_HEIGHT_PX
+      + rows * INSPECTOR_LAYER_ROW_HEIGHT_PX
+      + Math.max(0, rows - 1) * INSPECTOR_LAYER_ROW_GAP_PX
+    : 0
+
+  const estimatedHeightPx = Math.max(
+    showLayerDetails ? INSPECTOR_MIN_HEIGHT_PX : 0,
+    INSPECTOR_PADDING_PX
+      + (showMagnifier ? INSPECTOR_MAGNIFIER_HEIGHT_PX + INSPECTOR_MAGNIFIER_SECTION_GAP_PX : 0)
+      + INSPECTOR_META_SECTION_HEIGHT_PX
+      + layerSectionHeightPx,
+  )
+
+  return {
+    columns,
+    isCompactGrid,
+    estimatedHeightPx,
+  }
+}
+
+export function getHoverInspectorLayout(
+  layerCount: number,
+  showLayerDetails = true,
+): HoverInspectorLayout {
+  return estimateHoverInspectorContentHeight(layerCount, true, showLayerDetails)
+}
 
 export function buildPreviewCanvasBuffer(image: HTMLImageElement): PreviewCanvasBuffer | null {
   const width = image.naturalWidth || image.width
@@ -61,7 +135,10 @@ export function mapPixelToBufferCoordinate(pixel: number, sourceSize: number, bu
   )
 }
 
-export function computeHoverInspectorStyle(sample: ZoomableImageHoverSample): { left: string; top: string } | null {
+export function computeHoverInspectorStyle(
+  sample: HoverInspectorAnchorSample,
+  options: HoverInspectorPlacementOptions = {},
+): { left: string; top: string } | null {
   if (typeof window === "undefined") {
     return null
   }
@@ -78,9 +155,14 @@ export function computeHoverInspectorStyle(sample: ZoomableImageHoverSample): { 
   const containerBottom = containerTop + sample.containerHeight
   const pointerX = containerLeft + sample.containerX
   const pointerY = containerTop + sample.containerY
+  const layout = estimateHoverInspectorContentHeight(
+    options.layerCount ?? 0,
+    options.showMagnifier ?? true,
+    options.showLayerDetails ?? true,
+  )
 
   const requiredHorizontal = INSPECTOR_WIDTH_PX + MAGNIFIER_OFFSET_PX
-  const requiredVertical = INSPECTOR_HEIGHT_PX + MAGNIFIER_OFFSET_PX
+  const requiredVertical = layout.estimatedHeightPx + MAGNIFIER_OFFSET_PX
 
   const spaceRight = viewportWidth - containerRight - INSPECTOR_EDGE_MARGIN_PX
   const spaceLeft = containerLeft - INSPECTOR_EDGE_MARGIN_PX
@@ -93,7 +175,7 @@ export function computeHoverInspectorStyle(sample: ZoomableImageHoverSample): { 
   const canPlaceAbove = spaceAbove >= requiredVertical
 
   let left = pointerX - INSPECTOR_WIDTH_PX / 2
-  let top = pointerY - INSPECTOR_HEIGHT_PX / 2
+  let top = pointerY - layout.estimatedHeightPx / 2
 
   if (canPlaceRight || canPlaceLeft) {
     left = canPlaceRight && (!canPlaceLeft || spaceRight >= spaceLeft)
@@ -102,7 +184,7 @@ export function computeHoverInspectorStyle(sample: ZoomableImageHoverSample): { 
   } else if (canPlaceBelow || canPlaceAbove) {
     top = canPlaceBelow && (!canPlaceAbove || spaceBelow >= spaceAbove)
       ? containerBottom + MAGNIFIER_OFFSET_PX
-      : containerTop - INSPECTOR_HEIGHT_PX - MAGNIFIER_OFFSET_PX
+      : containerTop - layout.estimatedHeightPx - MAGNIFIER_OFFSET_PX
   } else {
     const horizontalShortfall = Math.max(0, requiredHorizontal - Math.max(spaceRight, spaceLeft))
     const verticalShortfall = Math.max(0, requiredVertical - Math.max(spaceBelow, spaceAbove))
@@ -113,12 +195,12 @@ export function computeHoverInspectorStyle(sample: ZoomableImageHoverSample): { 
     } else {
       top = spaceBelow >= spaceAbove
         ? containerBottom + MAGNIFIER_OFFSET_PX
-        : containerTop - INSPECTOR_HEIGHT_PX - MAGNIFIER_OFFSET_PX
+        : containerTop - layout.estimatedHeightPx - MAGNIFIER_OFFSET_PX
     }
   }
 
   const maxLeft = Math.max(INSPECTOR_EDGE_MARGIN_PX, viewportWidth - INSPECTOR_WIDTH_PX - INSPECTOR_EDGE_MARGIN_PX)
-  const maxTop = Math.max(INSPECTOR_EDGE_MARGIN_PX, viewportHeight - INSPECTOR_HEIGHT_PX - INSPECTOR_EDGE_MARGIN_PX)
+  const maxTop = Math.max(INSPECTOR_EDGE_MARGIN_PX, viewportHeight - layout.estimatedHeightPx - INSPECTOR_EDGE_MARGIN_PX)
 
   return {
     left: `${clampNumber(left, INSPECTOR_EDGE_MARGIN_PX, maxLeft)}px`,
@@ -145,8 +227,8 @@ export function areLayerSamplesEqual(left: HoverLayerColorSample[], right: Hover
 }
 
 export function areHoverSamplesEqual(
-  left: ZoomableImageHoverSample | null,
-  right: ZoomableImageHoverSample | null,
+  left: HoverInspectorEqualitySample | null,
+  right: HoverInspectorEqualitySample | null,
 ): boolean {
   if (left === right) return true
   if (!left || !right) return false

@@ -190,6 +190,96 @@ class TestAnycubicWriterMetadata:
             ("Slot 3 (Green)", (0, 174, 66)),
         ]
 
+    def test_export_scene_uses_full_palette_order_for_sparse_native_plain_names(self, monkeypatch) -> None:
+        captured_colors: list[tuple[str, tuple[int, int, int]]] = []
+        captured_object_names: list[str] = []
+        captured_settings: dict[str, object] = {}
+        captured_color_mode: dict[str, str] = {}
+
+        class _CapturingWriter(writer_module.BambuStudio3MFWriter):
+            def __init__(
+                self,
+                output_path: str,
+                settings=None,
+                color_mode: str = "4-Color",
+                printer_id: str = "bambu-h2d",
+                slicer: str = "BambuStudio",
+                watermark: str = "LuminaStudio",
+            ) -> None:
+                captured_color_mode["value"] = color_mode
+                super().__init__(output_path, settings, color_mode, printer_id, slicer, watermark)
+
+            def add_mesh(self, mesh, name: str, color_rgb: tuple[int, int, int]) -> None:
+                captured_colors.append((name, color_rgb))
+                super().add_mesh(mesh, name, color_rgb)
+
+            def export(self) -> str:
+                captured_object_names.extend(entry.object_name for entry in self.objects)
+                captured_settings.update(json.loads(self._build_project_settings_bytes().decode("utf-8")))
+                return self.output_path
+
+        monkeypatch.setattr(writer_module, "BambuStudio3MFWriter", _CapturingWriter)
+
+        scene = trimesh.Scene()
+        for offset, name in enumerate(("yellow", "red", "white", "bambugreen")):
+            mesh = trimesh.creation.box(extents=[1, 1, 1])
+            mesh.apply_translation([offset * 2, 0, 0])
+            scene.add_geometry(mesh, geom_name=name)
+
+        full_palette = [
+            "bambugreen",
+            "black",
+            "blue",
+            "cyan",
+            "magenta",
+            "red",
+            "white",
+            "yellow",
+        ]
+        preview_colors = {
+            0: (0, 174, 66, 255),
+            1: (0, 0, 0, 255),
+            2: (10, 41, 137, 255),
+            3: (0, 255, 255, 255),
+            4: (255, 0, 255, 255),
+            5: (220, 20, 60, 255),
+            6: (255, 255, 255, 255),
+            7: (255, 230, 0, 255),
+        }
+
+        out_path = writer_module.export_scene_with_bambu_metadata(
+            scene=scene,
+            output_path="native-sparse.3mf",
+            slot_names=["yellow", "red", "white", "bambugreen"],
+            preview_colors=preview_colors,
+            settings={},
+            color_mode="8-Color",
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            project_slot_names=full_palette,
+        )
+
+        assert out_path == "native-sparse.3mf"
+        assert captured_color_mode["value"] == "8-Color"
+        assert captured_object_names == ["yellow", "red", "white", "bambugreen"]
+        assert captured_colors == [
+            ("yellow", (255, 230, 0)),
+            ("red", (220, 20, 60)),
+            ("white", (255, 255, 255)),
+            ("bambugreen", (0, 174, 66)),
+        ]
+        assert captured_settings["filament_colour"] == [
+            "#00AE42",
+            "#000000",
+            "#0A2989",
+            "#00FFFF",
+            "#FF00FF",
+            "#DC143C",
+            "#FFFFFF",
+            "#FFE600",
+        ]
+        assert len(captured_settings["filament_ids"]) == 8
+
     def test_anycubic_slice_info_and_custom_parts_use_acnext_layout(
         self,
         tmp_path,
@@ -235,6 +325,10 @@ class TestAnycubicWriterMetadata:
 
         with zipfile.ZipFile(out_path) as package:
             names = set(package.namelist())
+            assert "Metadata/plate_1.png" in names
+            assert "Metadata/plate_no_light_1.png" in names
+            assert "Metadata/top_1.png" in names
+            assert "Metadata/pick_1.png" in names
             assert "Metadata/custom_gcode_per_layer.xml" in names
             assert "Metadata/filament_sequence.json" not in names
             assert "Metadata/cut_information.xml" not in names

@@ -81,6 +81,7 @@ function mockExtractResponse(): ExtractResponse {
     lut_download_url: "/output/test.npy",
     warp_view_url: "/output/warp.png",
     lut_preview_url: "/output/preview.png",
+    default_palette: [],
   };
 }
 

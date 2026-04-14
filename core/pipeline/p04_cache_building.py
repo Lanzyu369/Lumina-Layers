@@ -50,6 +50,8 @@ def run(ctx: dict) -> dict:
     target_w = ctx['target_w']
     target_h = ctx['target_h']
     target_width_mm = ctx['target_width_mm']
+    color_layers = ctx.get('color_layers')
+    layer_height_mm = ctx.get('layer_height_mm')
     color_conf = ctx['color_conf']
     color_mode = ctx['color_mode']
     quantize_colors = ctx['quantize_colors']
@@ -69,6 +71,8 @@ def run(ctx: dict) -> dict:
         'target_w': target_w,
         'target_h': target_h,
         'target_width_mm': target_width_mm,
+        'color_layers': color_layers,
+        'layer_height_mm': layer_height_mm,
         'mask_solid': mask_solid,
         'material_matrix': material_matrix,
         'matched_rgb': matched_rgb,
@@ -80,6 +84,7 @@ def run(ctx: dict) -> dict:
         'is_dark': is_dark,
         'bed_label': BedManager.DEFAULT_BED,
         'lut_metadata': lut_metadata,
+        'lut_match_info': ctx.get('lut_match_info'),
         # For Merged LUTs, preserve the corrected preview_colors and slot_names from P01
         'preview_colors': ctx.get('preview_colors'),
         'slot_names': ctx.get('slot_names'),

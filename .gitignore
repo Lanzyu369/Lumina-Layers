@@ -243,13 +243,13 @@ output/.gradio_cache/
 # Lumina Studio Specific
 # ==========================================
 
-# 本地个人设置 (包含上次选择�?LUT 路径�?
+# 本地个人设置 (包含上次选择的 LUT 路径)
 user_settings.json
 
 # 批量生成产生的压缩包
 outputs/*.zip
 
-# 核心输出目录 (保留目录结构，忽略具体文�?
+# 核心输出目录 (保留目录结构，忽略具体文件)
 outputs/*.3mf
 outputs/*.glb
 outputs/*.npy
@@ -257,14 +257,13 @@ outputs/batch_*/
 
 # 指标统计文件
 lumina_stats.txt
-+lut-npy163623644576/Custom/*.npy
+lut-npy预设/Custom/*.npy
 .venv312/
 .venv*/
 
 
 # Kiro hooks
 .kiro/hooks/
-lut-npyԤ��/Custom/*.npy
 
 # Kiro documentation and internal files (personal use only)
 .kiro/

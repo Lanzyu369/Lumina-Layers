@@ -56,9 +56,26 @@ def run(ctx: dict) -> dict:
     auto_bg = ctx['auto_bg']
     bg_tol = ctx['bg_tol']
     enable_cleanup = ctx.get('enable_cleanup', True)
+    color_layers = ctx.get('color_layers')
+    layer_height_mm = ctx.get('layer_height_mm')
+    model_enable = ctx.get('model_enable', False)
+    model_only = ctx.get('model_only', False)
+    model_threshold = ctx.get('model_threshold')
+    model_margin = ctx.get('model_margin')
 
     # ---- 核心处理 ----
-    processor = LuminaImageProcessor(actual_lut_path, color_mode, hue_weight=hue_weight, chroma_gate=chroma_gate)
+    processor = LuminaImageProcessor(
+        actual_lut_path,
+        color_mode,
+        hue_weight=hue_weight,
+        chroma_gate=chroma_gate,
+        color_layers=color_layers,
+        layer_height_mm=layer_height_mm,
+        model_enable=model_enable,
+        model_only=model_only,
+        model_threshold=model_threshold,
+        model_margin=model_margin,
+    )
     processor.enable_cleanup = enable_cleanup
 
     result = processor.process_image(
@@ -86,6 +103,7 @@ def run(ctx: dict) -> dict:
     ctx['target_h'] = target_h
     ctx['debug_data'] = result.get('debug_data') if isinstance(result, dict) else None
     ctx['quantized_image'] = result.get('quantized_image')
+    ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p03_s'] = _elapsed
     print(f"[P03] core_processing done: {_elapsed:.3f}s")

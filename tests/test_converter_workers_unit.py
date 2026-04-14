@@ -17,6 +17,7 @@ import pickle
 import types
 import zipfile
 from types import SimpleNamespace
+from typing import get_args, get_origin
 from unittest.mock import patch
 
 import pytest
@@ -103,12 +104,29 @@ class TestParameterAnnotations:
             if param.annotation is not inspect.Parameter.empty
         }
 
+    @staticmethod
+    def _annotation_is_serializable(annotation: object) -> bool:
+        if annotation in SERIALIZABLE_TYPES or annotation is type(None):
+            return True
+        origin = get_origin(annotation)
+        if origin is None and isinstance(annotation, types.UnionType):
+            return all(
+                TestParameterAnnotations._annotation_is_serializable(option)
+                for option in get_args(annotation)
+            )
+        if origin is not None:
+            return all(
+                TestParameterAnnotations._annotation_is_serializable(option)
+                for option in get_args(annotation)
+            )
+        return False
+
     def test_preview_params_are_serializable(self) -> None:
         """All worker_generate_preview params must be basic serializable types."""
         annotations = self._get_param_annotations(worker_generate_preview)
         assert len(annotations) > 0, "Function should have type annotations"
         for name, ann in annotations.items():
-            assert ann in SERIALIZABLE_TYPES, (
+            assert self._annotation_is_serializable(ann), (
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
@@ -117,7 +135,7 @@ class TestParameterAnnotations:
         annotations = self._get_param_annotations(worker_generate_model)
         assert len(annotations) > 0, "Function should have type annotations"
         for name, ann in annotations.items():
-            assert ann in SERIALIZABLE_TYPES, (
+            assert self._annotation_is_serializable(ann), (
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
@@ -126,14 +144,14 @@ class TestParameterAnnotations:
         annotations = self._get_param_annotations(worker_generate_large_format_svg_native)
         assert len(annotations) > 0, "Function should have type annotations"
         for name, ann in annotations.items():
-            assert ann in SERIALIZABLE_TYPES, (
+            assert self._annotation_is_serializable(ann), (
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
     def test_preview_has_expected_param_count(self) -> None:
-        """worker_generate_preview should have 12 parameters."""
+        """worker_generate_preview should have 18 parameters."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 12
+        assert len(sig.parameters) == 18
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -151,7 +169,9 @@ class TestParameterAnnotations:
         expected = {
             "image_path", "lut_path", "target_width_mm", "auto_bg",
             "bg_tol", "color_mode", "modeling_mode", "quantize_colors",
-            "enable_cleanup", "is_dark", "hue_weight", "chroma_gate",
+            "color_layers", "layer_height_mm", "enable_cleanup", "is_dark",
+            "model_enable", "model_only", "model_threshold", "model_margin",
+            "hue_weight", "chroma_gate",
         }
         assert set(sig.parameters.keys()) == expected
 

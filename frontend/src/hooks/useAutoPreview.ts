@@ -10,7 +10,12 @@ import { useConverterStore } from "../stores/converter";
  */
 export function useAutoPreview(): void {
   const imageFile = useConverterStore((s) => s.imageFile);
+  const source_version = useConverterStore((s) => s.source_version);
   const lut_name = useConverterStore((s) => s.lut_name);
+  const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey);
+  const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames);
+  const color_layers = useConverterStore((s) => s.color_layers);
+  const layer_height_mm = useConverterStore((s) => s.layer_height_mm);
   const cropModalOpen = useConverterStore((s) => s.cropModalOpen);
   const hue_enable = useConverterStore((s) => s.hue_enable);
   const chroma_gate = useConverterStore((s) => s.chroma_gate);
@@ -20,15 +25,29 @@ export function useAutoPreview(): void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTriggeredRef = useRef<{
     imageFile: File | null;
-    lut_name: string;
+    sourceKey: string;
     hue_enable: boolean;
     chroma_gate: number;
   }>({
     imageFile: null,
-    lut_name: "",
+    sourceKey: "",
     hue_enable: false,
     chroma_gate: 15,
   });
+
+  const sourceKey = source_version === "native"
+    ? [
+        "native_bundle",
+        selectedNativeBrandKey,
+        selectedNativeDbNames.join("|"),
+        color_layers ?? "",
+        layer_height_mm ?? "",
+      ].join("::")
+    : `legacy_single::${lut_name}`;
+
+  const isSourceReady = source_version === "native"
+    ? selectedNativeBrandKey.length > 0 && selectedNativeDbNames.length > 0
+    : lut_name.length > 0;
 
   useEffect(() => {
     // Clear any pending timer on every dependency change
@@ -37,8 +56,8 @@ export function useAutoPreview(): void {
       timerRef.current = null;
     }
 
-    // Check preconditions: 必须有图片、有 LUT、裁剪弹窗关闭、且已手动预览过
-    if (!imageFile || !lut_name || cropModalOpen || !hasManualPreview) {
+    // Check preconditions: 必须有图片、源选择已就绪、裁剪弹窗关闭、且已手动预览过
+    if (!imageFile || !isSourceReady || cropModalOpen || !hasManualPreview) {
       return;
     }
 
@@ -46,7 +65,7 @@ export function useAutoPreview(): void {
     const last = lastTriggeredRef.current;
     if (
       last.imageFile === imageFile &&
-      last.lut_name === lut_name &&
+      last.sourceKey === sourceKey &&
       last.hue_enable === hue_enable &&
       last.chroma_gate === chroma_gate
     ) {
@@ -56,7 +75,7 @@ export function useAutoPreview(): void {
     // hasManualPreview just flipped to true (manual preview completed).
     // Seed the ref so we don't re-trigger what was just manually run.
     if (last.imageFile === null) {
-      lastTriggeredRef.current = { imageFile, lut_name, hue_enable, chroma_gate };
+      lastTriggeredRef.current = { imageFile, sourceKey, hue_enable, chroma_gate };
       return;
     }
 
@@ -64,7 +83,7 @@ export function useAutoPreview(): void {
     timerRef.current = setTimeout(() => {
       lastTriggeredRef.current = {
         imageFile,
-        lut_name,
+        sourceKey,
         hue_enable,
         chroma_gate,
       };
@@ -80,7 +99,8 @@ export function useAutoPreview(): void {
     };
   }, [
     imageFile,
-    lut_name,
+    sourceKey,
+    isSourceReady,
     cropModalOpen,
     hue_enable,
     chroma_gate,

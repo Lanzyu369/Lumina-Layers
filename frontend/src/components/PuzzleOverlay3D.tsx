@@ -3,6 +3,7 @@ import * as THREE from "three";
 import {
   computePuzzleOverlayPlacement,
   computePuzzleOverlayTextureSize,
+  MAX_3D_OVERLAY_TEXTURE_SIZE_PX,
   type PuzzleOverlayBounds,
 } from "./puzzleOverlay3DUtils";
 

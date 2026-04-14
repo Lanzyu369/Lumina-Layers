@@ -18,15 +18,22 @@ from api.schemas.lut import (
     CompareRequest,
     CompareResponse,
     CompareStats,
-    LutInfoResponse,
+    LutInfoResponseV2,
+    LutSourceCatalogResponse,
     MergeRequest,
     MergeResponse,
     MergeStats,
     PaletteEntrySchema,
+    RecipeColorPredictRequest,
+    RecipeColorPredictResponse,
+    RecipeSearchItem,
+    RecipeSearchRequest,
+    RecipeSearchResponse,
 )
 from api.schemas.responses import LUTListResponse, LutInfo, LutColorsResponse, LutColorEntry
-from config import LUTMetadata
+from config import LUTMetadata, get_capabilities, get_schema_version, get_source_kind, get_supported_modes
 from core.lut_merger import LUTMerger
+from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, resolve_predictive_runtime
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/lut", tags=["LUT"])
@@ -45,6 +52,32 @@ def _dedupe_warnings(warnings: list[str]) -> list[str]:
             seen.add(warning)
             result.append(warning)
     return result
+
+
+def _recipe_matches_pattern(recipe: list[int], palette_letters: list[str], pattern: str) -> bool:
+    normalized = pattern.replace("-", "").strip().upper()
+    if not normalized:
+        return True
+    letters = [palette_letters[idx] if 0 <= idx < len(palette_letters) else "?" for idx in recipe]
+    i = 0
+    j = 0
+    while i < len(normalized) and j < len(letters):
+        token = normalized[i]
+        if token == "*":
+            if i == len(normalized) - 1:
+                return True
+            next_token = normalized[i + 1]
+            while j < len(letters) and next_token not in ("?", letters[j]):
+                j += 1
+            i += 1
+            continue
+        if token != "?" and token != letters[j]:
+            return False
+        i += 1
+        j += 1
+    while i < len(normalized) and normalized[i] == "*":
+        i += 1
+    return i == len(normalized) and j == len(letters)
 
 
 @router.get("/list")
@@ -70,7 +103,16 @@ def list_luts() -> LUTListResponse:
     return LUTListResponse(luts=lut_list)
 
 
-_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz"}
+@router.get("/catalog", response_model=LutSourceCatalogResponse)
+def get_source_catalog() -> LutSourceCatalogResponse:
+    """Return legacy and native source catalog groupings.
+    返回传统源与原生源的分组目录。
+    """
+
+    return LutSourceCatalogResponse.model_validate(LUTManager.get_source_catalog())
+
+
+_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 
 
 @router.post("/upload")
@@ -83,7 +125,7 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
     if ext not in _ALLOWED_LUT_EXTENSIONS:
         raise HTTPException(
             status_code=422,
-            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz",
+            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz/.msgpack",
         )
 
     # Save to temp file first (chunked read with size limit)
@@ -275,8 +317,16 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
                 exact_dupes=stats["exact_dupes"],
                 similar_removed=stats["similar_removed"],
             ),
-            palette=[],
-            warnings=[],
+            palette=[
+                PaletteEntrySchema(
+                    color=entry.color,
+                    material=entry.material,
+                    hex_color=entry.hex_color,
+                    color_name=entry.color_name,
+                )
+                for entry in ((stats.get("merged_metadata").palette) if stats.get("merged_metadata") else [])
+            ],
+            warnings=_dedupe_warnings(list(stats.get("warnings", []))),
         )
 
     except HTTPException:
@@ -339,6 +389,20 @@ def compare_luts_endpoint(request: CompareRequest) -> CompareResponse:
 
         _compatible, param_warnings = LUTMerger.validate_print_params([metadata_a, metadata_b])
         warnings.extend(param_warnings)
+        if get_schema_version(metadata_a) != get_schema_version(metadata_b):
+            warnings.append(
+                f"schema_version differs: {get_schema_version(metadata_a)} vs {get_schema_version(metadata_b)}"
+            )
+        if metadata_a.supports_predictive_match() != metadata_b.supports_predictive_match():
+            warnings.append(
+                "predictive support differs: "
+                f"{metadata_a.supports_predictive_match()} vs {metadata_b.supports_predictive_match()}"
+            )
+        if metadata_a.supports_dynamic_layer_height() != metadata_b.supports_dynamic_layer_height():
+            warnings.append(
+                "dynamic_layer_height support differs: "
+                f"{metadata_a.supports_dynamic_layer_height()} vs {metadata_b.supports_dynamic_layer_height()}"
+            )
 
         stats_dict = compare_result["stats"]
         if stats_dict["matched_recipe_count"] == 0:
@@ -387,7 +451,7 @@ def get_lut_colors(lut_name: str) -> LutColorsResponse:
 
 
 @router.get("/{lut_name}/info")
-def get_lut_info(lut_name: str) -> LutInfoResponse:
+def get_lut_info(lut_name: str) -> LutInfoResponseV2:
     """Return color mode and color count for a specific LUT.
     返回指定 LUT 的颜色模式和颜色数量。
     """
@@ -406,10 +470,16 @@ def get_lut_info(lut_name: str) -> LutInfoResponse:
         pass
 
     palette_schema = [
-        PaletteEntrySchema(color=e.color, material=e.material, hex_color=e.hex_color) for e in metadata.palette
+        PaletteEntrySchema(
+            color=e.color,
+            material=e.material,
+            hex_color=e.hex_color,
+            color_name=e.color_name,
+        )
+        for e in metadata.palette
     ]
 
-    return LutInfoResponse(
+    return LutInfoResponseV2(
         name=lut_name,
         color_mode=color_mode,
         color_count=color_count,
@@ -420,4 +490,94 @@ def get_lut_info(lut_name: str) -> LutInfoResponse:
         base_layers=metadata.base_layers,
         base_channel_idx=metadata.base_channel_idx,
         layer_order=metadata.layer_order,
+        schema_version=get_schema_version(metadata),
+        capabilities=get_capabilities(metadata),
+        supports_predictive_match=metadata.supports_predictive_match(),
+        supports_dynamic_layer_height=metadata.supports_dynamic_layer_height(),
+        supports_dynamic_layer_count=metadata.supports_dynamic_layer_count(),
+        supports_custom_recipe=metadata.supports_custom_recipe(),
+        source_kind=metadata.get_source_kind(),
+        supported_modes=metadata.get_supported_modes(),
+    )
+
+
+@router.post("/{lut_name}/predict-recipe-color")
+def predict_recipe_color_endpoint(
+    lut_name: str,
+    request: RecipeColorPredictRequest,
+) -> RecipeColorPredictResponse:
+    """Predict a custom recipe color for the selected source."""
+    path: str | None = LUTManager.get_lut_path(lut_name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+
+    try:
+        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
+        payload = predict_recipe_color(
+            metadata,
+            recipe=list(request.recipe),
+            layer_height_mm=float(request.layer_height_mm),
+            color_layers=int(request.color_layers),
+            layer_order=str(request.layer_order),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Recipe color prediction failed: {exc}",
+        ) from exc
+
+    return RecipeColorPredictResponse(
+        status="ok",
+        rgb=[int(v) for v in payload["rgb"]],
+        lab=[float(v) for v in payload["lab"]],
+        runtime_mode_key=str(payload["runtime_mode_key"]),
+        source=str(payload["source"]),
+    )
+
+
+@router.post("/{lut_name}/search-recipes")
+def search_recipes_endpoint(
+    lut_name: str,
+    request: RecipeSearchRequest,
+) -> RecipeSearchResponse:
+    """Search predictive candidate recipes by a simple layer pattern."""
+    path: str | None = LUTManager.get_lut_path(lut_name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+
+    try:
+        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
+        runtime = resolve_predictive_runtime(
+            metadata,
+            float(request.layer_height_mm),
+            int(request.color_layers),
+            str(request.layer_order),
+        )
+        if runtime is None:
+            raise ValueError("No predictive runtime available for the requested mode")
+
+        palette_letters = [
+            (entry.color_name or entry.color or "?")[:1].upper()
+            for entry in metadata.palette
+        ]
+        matches: list[RecipeSearchItem] = []
+        for idx, recipe in enumerate(runtime.candidate_recipes.tolist()):
+            if not _recipe_matches_pattern(recipe, palette_letters, request.pattern):
+                continue
+            rgb = opencv_lab_to_rgb_uint8(runtime.pred_lab[idx : idx + 1])[0].astype(int).tolist()
+            lab = runtime.pred_lab[idx].astype(float).tolist()
+            matches.append(RecipeSearchItem(recipe=[int(v) for v in recipe], rgb=rgb, lab=lab))
+            if len(matches) >= int(request.limit):
+                break
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Recipe search failed: {exc}") from exc
+
+    return RecipeSearchResponse(
+        status="ok",
+        runtime_mode_key=runtime.mode_key,
+        items=matches,
     )

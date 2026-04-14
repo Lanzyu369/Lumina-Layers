@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pickle
 import tempfile
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -27,8 +29,9 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
 from api.routers.converter.generate import _generate_large_format_raster
+from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
-from api.schemas.converter import LargeFormatConvertGenerateRequest, ModelingMode
+from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -132,6 +135,48 @@ def _create_svg_session(
         },
     )
     return sid, svg_path, lut_path
+
+
+def _create_raster_large_format_session(store: SessionStore) -> tuple[str, str, str]:
+    """Create a PNG-backed session for large-format route tests."""
+    fd_img, image_path = tempfile.mkstemp(suffix=".png")
+    fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+    try:
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+    finally:
+        os.close(fd_img)
+        os.close(fd_lut)
+
+    sid = store.create()
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "lut_metadata": SimpleNamespace(layer_order="Top2Bottom", base_channel_idx=0),
+        },
+    )
+    store.put(sid, "image_path", image_path)
+    store.put(sid, "source_basename", "poster")
+    store.put(sid, "lut_path", lut_path)
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "free_color_set", set())
+    store.put(
+        sid,
+        "selected_region_masks",
+        {"region-1": np.ones((4, 4), dtype=bool)},
+    )
+    store.put(
+        sid,
+        "recipe_overrides",
+        [{"region_id": "region-1", "recipe": [1, 1, 1, 1, 1], "layer_order": "Top2Bottom"}],
+    )
+    return sid, image_path, lut_path
 
 
 # =========================================================================
@@ -249,6 +294,10 @@ class TestGenerateParameterCompleteness:
                 "bg_tol": 60,
                 "color_mode": "4-Color (RYBW)",
                 "modeling_mode": "high-fidelity",
+                "model_enable": True,
+                "model_only": False,
+                "model_threshold": 6.5,
+                "model_margin": 0.9,
                 "quantize_colors": 64,
                 "enable_cleanup": False,
                 "separate_backing": True,
@@ -316,6 +365,10 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["auto_bg"] is True
         assert submitted_params["bg_tol"] == 60
         assert submitted_params["color_mode"] == "4-Color (RYBW)"
+        assert submitted_params["model_enable"] is True
+        assert submitted_params["model_only"] is False
+        assert submitted_params["model_threshold"] == 6.5
+        assert submitted_params["model_margin"] == 0.9
         assert submitted_params["quantize_colors"] == 64
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
@@ -670,6 +723,116 @@ class TestLargeFormatDimensionsAndRouting:
         assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
         assert any("raster fallback" in warning.lower() for warning in body["warnings"])
 
+    def test_large_format_route_passes_recipe_override_artifacts_to_raster_helper(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "recipe_overrides": [
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                },
+            },
+        }
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=raster_response,
+            ) as raster_helper:
+                response = client.post("/api/convert/generate-large-format", json=payload)
+
+            assert response.status_code == 200
+            raster_helper.assert_called_once()
+            kwargs = raster_helper.call_args.kwargs
+            assert kwargs["image_path"] == image_path
+            assert kwargs["lut_path"] == lut_path
+            assert kwargs["recipe_overrides"] == [
+                {
+                    "region_id": "region-1",
+                    "recipe": [1, 1, 1, 1, 1],
+                    "layer_order": "Top2Bottom",
+                }
+            ]
+            assert kwargs["material_matrix_path"] is not None
+            assert os.path.exists(kwargs["material_matrix_path"])
+            assert kwargs["recipe_override_masks_path"] is not None
+            assert os.path.exists(kwargs["recipe_override_masks_path"])
+        finally:
+            _test_store.clear_all()
+
+    def test_large_format_svg_with_recipe_overrides_uses_raster_path_even_when_native_supported(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        session_data = _test_store.get(sid)
+        assert session_data is not None
+        session_data["preview_cache"]["material_matrix"] = np.zeros((4, 4, 5), dtype=np.uint8)
+        session_data["preview_cache"]["lut_metadata"] = SimpleNamespace(layer_order="Top2Bottom", base_channel_idx=0)
+        session_data["selected_region_masks"] = {"region-1": np.ones((4, 4), dtype=bool)}
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                    "recipe_overrides": [
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                },
+            },
+        }
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": ["Raster fallback was used for this large-format SVG request."],
+        }
+
+        with (
+            patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper,
+            patch("api.routers.converter.generate._generate_large_format_raster", return_value=raster_response) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        native_helper.assert_not_called()
+        raster_helper.assert_called_once()
+        assert any("raster fallback" in warning.lower() for warning in response.json()["warnings"])
+
     def test_large_format_reinspects_unmarked_svg_policy_before_using_native_path(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
         session_data = _test_store.get(sid)
@@ -861,6 +1024,9 @@ class TestLargeFormatDimensionsAndRouting:
                     image_path=image_path,
                     lut_path=lut_path,
                     source_basename=" bad:name* ",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    material_matrix_path=None,
                     total_width_mm=40.0,
                     total_height_mm=40.0,
                     tile_width_mm=40.0,
@@ -881,6 +1047,87 @@ class TestLargeFormatDimensionsAndRouting:
         finally:
             store.clear_all()
             for path in (image_path, lut_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_raster_helper_slices_recipe_override_artifacts_per_tile(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_mm, material_matrix_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_mm)
+        fd_masks, recipe_override_masks_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd_masks)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        np.save(material_matrix_path, np.zeros((4, 8, 5), dtype=np.uint8))
+        with open(recipe_override_masks_path, "wb") as mask_file:
+            pickle.dump({"region-1": np.ones((4, 8), dtype=bool)}, mask_file)
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        store.put(sid, "preview_cache", {"target_w": 8, "target_h": 4})
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename="poster",
+                    recipe_overrides=[
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                    recipe_override_masks_path=recipe_override_masks_path,
+                    material_matrix_path=material_matrix_path,
+                    total_width_mm=80.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={"preview_cache": {"target_w": 8, "target_h": 4}},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
+
+            first_tile_params = mock_pool.submit.await_args_list[0].args[3]
+            sliced_matrix = np.load(first_tile_params["material_matrix_path"])
+            assert sliced_matrix.shape == (4, 4, 5)
+            with open(first_tile_params["recipe_override_masks_path"], "rb") as mask_file:
+                sliced_masks = pickle.load(mask_file)
+            assert sliced_masks["region-1"].shape == (4, 4)
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            zip_path, _filename = registry.resolve(download_id)
+            assert os.path.exists(zip_path)
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
                 if os.path.exists(path):
                     os.unlink(path)
 
@@ -905,3 +1152,33 @@ class TestLargeFormatDimensionsAndRouting:
 
         assert response.status_code == 422
         assert "fridge magnet" in response.json()["detail"].lower()
+
+
+def test_convert_generate_request_accepts_native_bundle_source() -> None:
+    """ConvertGenerateRequest should support native-bundle source selection fields."""
+
+    request = ConvertGenerateRequest(
+        source_kind="native_bundle",
+        material_type="PLA",
+        vendor="BambuLab",
+        db_names=["RYBW_008_5L"],
+    )
+
+    assert request.source_kind == "native_bundle"
+    assert request.material_type == "PLA"
+    assert request.vendor == "BambuLab"
+    assert request.db_names == ["RYBW_008_5L"]
+
+
+def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_value() -> None:
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[],
+    )
+
+    resolved = _resolve_recipe_overrides(
+        {"recipe_overrides": [{"region_id": "region-1", "recipe": [1, 1, 1, 1, 1], "layer_order": "Top2Bottom"}]},
+        request,
+    )
+
+    assert resolved is None

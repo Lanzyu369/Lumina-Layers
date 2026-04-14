@@ -3,6 +3,8 @@ import type {
   ConfirmPaletteRequest,
   ExtractResponse,
   ManualFixResponse,
+  SingleStageExtractResponse,
+  StageAFitResponse,
 } from "./types";
 
 /** 提取颜色 - multipart/form-data */
@@ -110,6 +112,39 @@ export async function confirmPalette(
   const response = await apiClient.post<{ status: string; message: string }>(
     "/extractor/confirm-palette",
     payload
+  );
+  return response.data;
+}
+
+/** Extract a single-stage dataset zip into 1_single_stage.json */
+export async function extractSingleStageDataset(
+  datasetZip: File,
+): Promise<SingleStageExtractResponse> {
+  const fd = new FormData();
+  fd.append("dataset_zip", datasetZip);
+  const response = await apiClient.post<SingleStageExtractResponse>(
+    "/extractor/extract-single-stage",
+    fd,
+    { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+/** Fit Stage A from either an extraction session or a raw stage JSON file. */
+export async function fitStageA(
+  params: { sessionId?: string | null; stageJsonFile?: File | null },
+): Promise<StageAFitResponse> {
+  const fd = new FormData();
+  if (params.sessionId) {
+    fd.append("session_id", params.sessionId);
+  }
+  if (params.stageJsonFile) {
+    fd.append("stage_json", params.stageJsonFile);
+  }
+  const response = await apiClient.post<StageAFitResponse>(
+    "/extractor/fit-stage-a",
+    fd,
+    { timeout: 600_000 },
   );
   return response.data;
 }

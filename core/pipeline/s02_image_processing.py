@@ -68,6 +68,12 @@ def run(ctx: dict) -> dict:
     blur_kernel = ctx.get('blur_kernel', 0)
     smooth_sigma = ctx.get('smooth_sigma', 10)
     enable_cleanup = ctx.get('enable_cleanup', True)
+    color_layers = ctx.get('color_layers')
+    layer_height_mm = ctx.get('layer_height_mm')
+    model_enable = ctx.get('model_enable', False)
+    model_only = ctx.get('model_only', False)
+    model_threshold = ctx.get('model_threshold')
+    model_margin = ctx.get('model_margin')
 
     # Load LUT metadata for palette info
     lut_metadata = None
@@ -82,7 +88,18 @@ def run(ctx: dict) -> dict:
     # Create processor and process image
     _hifi_t0 = time.perf_counter()
     try:
-        processor = LuminaImageProcessor(actual_lut_path, color_mode, hue_weight=hue_weight, chroma_gate=chroma_gate)
+        processor = LuminaImageProcessor(
+            actual_lut_path,
+            color_mode,
+            hue_weight=hue_weight,
+            chroma_gate=chroma_gate,
+            color_layers=color_layers,
+            layer_height_mm=layer_height_mm,
+            model_enable=model_enable,
+            model_only=model_only,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
+        )
         processor.enable_cleanup = enable_cleanup
 
         result = processor.process_image(
@@ -118,6 +135,7 @@ def run(ctx: dict) -> dict:
     ctx['mode_info'] = result['mode_info']
     ctx['debug_data'] = result.get('debug_data', None)
     ctx['processor'] = processor
+    ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
 
     print(f"[S02] image_proc done: {_elapsed:.3f}s, {target_w}x{target_h}px, "
           f"scale={result['pixel_scale']}mm/px")

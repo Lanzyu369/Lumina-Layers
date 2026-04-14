@@ -3,18 +3,117 @@ Lumina Studio - LUT Preset Manager
 LUT preset management module
 """
 
+from dataclasses import dataclass
 import hashlib
+import logging
 import os
 import re
 import sys
 import json
 import shutil
 import glob
+import tempfile
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
+import msgpack
 import numpy as np
 
-from config import LUTMetadata, PaletteEntry, ColorSystem, PrinterConfig
+from config import LUTMetadata, PaletteEntry, ColorSystem, PrinterConfig, TEMP_DIR
+from core.native_reference import (
+    REFERENCE_DB_ROOT,
+    REFERENCE_FORWARD_MODEL_ROOT,
+    REFERENCE_MODEL_PACK_ROOT,
+    SOURCE_KIND_COLORD_DB,
+    SOURCE_KIND_PACKAGE,
+    SOURCE_KIND_STAGE_MODEL,
+    build_channel_key,
+    build_model_package_runtime_payload,
+    build_recipe_runtime_payload,
+    derive_color_mode_from_palette_entries,
+    derive_color_mode_from_palette_size,
+    discover_native_reference_context,
+    looks_like_reference_colordb,
+    looks_like_reference_recipe_set,
+    looks_like_reference_stage_model,
+    normalize_channel_key,
+    parse_model_package_file,
+    select_native_db_paths_for_mode,
+    split_channel_key,
+    standard_lab_to_rgb_uint8,
+)
+from core.recipe_order import convert_recipe_between_orders, expand_recipe_by_layer_height, pad_recipe_to_layer_count
+
+_log = logging.getLogger(__name__)
+
+
+def _resolve_native_base_channel_idx(
+    channel_keys: list[str] | tuple[str, ...],
+    preferred_key: str | None = None,
+) -> int:
+    """Resolve native base channel index from an explicit key or white fallback."""
+    normalized_keys = [normalize_channel_key(str(key)) for key in channel_keys if str(key)]
+    if preferred_key:
+        normalized_preferred = normalize_channel_key(preferred_key)
+        if normalized_preferred in normalized_keys:
+            return normalized_keys.index(normalized_preferred)
+    for fallback in ("white|plabasic", "white|pla basic"):
+        if fallback in normalized_keys:
+            return normalized_keys.index(fallback)
+    return 0
+
+
+def _resolve_model_package_base_channel_idx(
+    payload: dict[str, Any],
+    channel_keys: list[str] | tuple[str, ...],
+    default_mode: dict[str, Any] | None,
+) -> int:
+    """Resolve native package/stage base channel index from model package metadata."""
+    preferred_key: str | None = None
+    modes_raw = payload.get("modes", [])
+    if isinstance(modes_raw, list):
+        if default_mode is not None:
+            for item in modes_raw:
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    int(item.get("color_layers", 0)) == int(default_mode.get("color_layers", 0))
+                    and abs(float(item.get("layer_height_mm", 0.0)) - float(default_mode.get("layer_height_mm", 0.0))) <= 1e-3
+                    and str(item.get("layer_order", "Top2Bottom")) == str(default_mode.get("layer_order", "Top2Bottom"))
+                ):
+                    preferred_key = item.get("base_channel_key")
+                    break
+        if preferred_key is None:
+            for item in modes_raw:
+                if isinstance(item, dict) and item.get("base_channel_key"):
+                    preferred_key = str(item.get("base_channel_key"))
+                    break
+    return _resolve_native_base_channel_idx(channel_keys, preferred_key)
+
+
+@dataclass(frozen=True)
+class _NativeDbIndexItem:
+    name: str
+    path: str
+    color_mode: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class _NativeBrandIndexItem:
+    brand_key: str
+    material_type: str
+    vendor: str
+    display_name: str
+    db_options: tuple[_NativeDbIndexItem, ...]
+    default_db_names: tuple[str, ...]
+    package_name: str | None
+    model_name: str | None
+    supported_modes: tuple[dict[str, Any], ...]
+    package_path: str | None
+    model_path: str | None
 
 
 class LUTManager:
@@ -42,6 +141,52 @@ class LUTManager:
         # Running as script
         _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-preset")
+
+    _native_source_index_cache: tuple[_NativeBrandIndexItem, ...] | None = None
+    _native_source_index_cache_at: float | None = None
+    _native_source_index_lock = threading.Lock()
+    NATIVE_SOURCE_INDEX_TTL_SECONDS = 30.0
+
+    @classmethod
+    def _scan_roots(cls) -> list[tuple[str, str]]:
+        roots: list[tuple[str, str]] = []
+        if os.path.exists(cls.LUT_PRESET_DIR):
+            roots.append(("Preset", cls.LUT_PRESET_DIR))
+        if REFERENCE_DB_ROOT.exists():
+            roots.append(("ReferenceDB", str(REFERENCE_DB_ROOT)))
+        if REFERENCE_MODEL_PACK_ROOT.exists():
+            roots.append(("ReferencePack", str(REFERENCE_MODEL_PACK_ROOT)))
+        if REFERENCE_FORWARD_MODEL_ROOT.exists():
+            roots.append(("ReferenceModel", str(REFERENCE_FORWARD_MODEL_ROOT)))
+        return roots
+
+    @classmethod
+    def _scan_legacy_roots(cls) -> list[tuple[str, str]]:
+        """Return roots that should remain visible to legacy LUT consumers."""
+
+        roots: list[tuple[str, str]] = []
+        if os.path.exists(cls.LUT_PRESET_DIR):
+            roots.append(("Preset", cls.LUT_PRESET_DIR))
+        return roots
+
+    @staticmethod
+    def _display_name_for_root(root_label: str, root_dir: str, file_path: str) -> str:
+        rel_path = os.path.relpath(file_path, root_dir)
+        parts = Path(rel_path).parts
+        stem = Path(rel_path).stem
+        if root_label == "Preset":
+            if len(parts) > 1:
+                return f"{parts[0]} - {stem}"
+            return stem
+        if root_label == "ReferenceDB":
+            if len(parts) >= 3:
+                return f"ReferenceDB - {parts[0]} - {parts[1]} - {stem}"
+            return f"ReferenceDB - {stem}"
+        if root_label == "ReferencePack":
+            return f"ReferencePack - {stem}"
+        if root_label == "ReferenceModel":
+            return f"ReferenceModel - {stem}"
+        return stem
     
     @classmethod
     def get_all_lut_files(cls) -> dict[str, str]:
@@ -51,48 +196,31 @@ class LUTManager:
         Returns:
             dict[str, str]: 映射 {显示名称: 文件路径}。
         """
-        lut_files = {}
-        
-        if not os.path.exists(cls.LUT_PRESET_DIR):
-            print(f"[LUT_MANAGER] Warning: LUT preset directory not found: {cls.LUT_PRESET_DIR}")
-            return lut_files
-        
-        # Recursively search for all .npy, .json and .npz files
-        npy_pattern = os.path.join(cls.LUT_PRESET_DIR, "**", "*.npy")
-        json_pattern = os.path.join(cls.LUT_PRESET_DIR, "**", "*.json")
-        npz_pattern = os.path.join(cls.LUT_PRESET_DIR, "**", "*.npz")
-        
-        all_files = glob.glob(npy_pattern, recursive=True) + \
-                    glob.glob(json_pattern, recursive=True) + \
-                    glob.glob(npz_pattern, recursive=True)
-        
-        # Priority: .json > .npz > .npy (higher priority overwrites lower)
-        _EXT_PRIORITY = {".npy": 0, ".npz": 1, ".json": 2}
+        lut_files: dict[str, str] = {}
+
+        # Priority: .msgpack > .json > .npz > .npy (higher priority overwrites lower)
+        _EXT_PRIORITY = {".npy": 0, ".npz": 1, ".json": 2, ".msgpack": 3}
         # Track priority of each display_name to avoid lower-priority overwrite
         _name_priority: dict[str, int] = {}
-        
-        for file_path in all_files:
-            # Generate friendly display name
-            rel_path = os.path.relpath(file_path, cls.LUT_PRESET_DIR)
-            
-            # Extract brand/folder name
-            parts = Path(rel_path).parts
-            if len(parts) > 1:
-                # Has subfolder, format: Brand - Filename
-                brand = parts[0]
-                filename = Path(parts[-1]).stem  # Remove .npy/.npz extension
-                display_name = f"{brand} - {filename}"
-            else:
-                # Root directory file, use filename directly
-                filename = Path(rel_path).stem
-                display_name = filename
-            
-            ext = Path(file_path).suffix.lower()
-            priority = _EXT_PRIORITY.get(ext, -1)
-            
-            if display_name not in lut_files or priority > _name_priority.get(display_name, -1):
-                lut_files[display_name] = file_path
-                _name_priority[display_name] = priority
+
+        for root_label, root_dir in cls._scan_legacy_roots():
+            patterns = [
+                os.path.join(root_dir, "**", "*.npy"),
+                os.path.join(root_dir, "**", "*.json"),
+                os.path.join(root_dir, "**", "*.npz"),
+                os.path.join(root_dir, "**", "*.msgpack"),
+            ]
+            all_files: list[str] = []
+            for pattern in patterns:
+                all_files.extend(glob.glob(pattern, recursive=True))
+
+            for file_path in all_files:
+                display_name = cls._display_name_for_root(root_label, root_dir, file_path)
+                ext = Path(file_path).suffix.lower()
+                priority = _EXT_PRIORITY.get(ext, -1)
+                if display_name not in lut_files or priority > _name_priority.get(display_name, -1):
+                    lut_files[display_name] = file_path
+                    _name_priority[display_name] = priority
         
         # Sort by name
         lut_files = dict(sorted(lut_files.items()))
@@ -175,7 +303,8 @@ class LUTManager:
         根据 LUT 显示名称或文件路径推断颜色模式。
 
         - .npz → 直接返回 "Merged"
-        - .json → 轻量读取 JSON，按 entries 数量精确判断模式（自描述，不依赖文件名）
+        - .msgpack → 按 channel_keys / package metadata 判断
+        - .json → 轻量读取 JSON，按原生 source 类型或 entries 数量判断
         - .npy → 按文件名关键词匹配
 
         Args:
@@ -190,6 +319,13 @@ class LUTManager:
         # .npz 文件通常是合并 LUT
         if ext == ".npz":
             return "Merged"
+
+        if ext == ".msgpack":
+            try:
+                ctx = parse_model_package_file(file_path)
+                return derive_color_mode_from_palette_entries(ctx.channel_keys, "Merged")
+            except Exception:
+                return "Merged"
 
         # .json (Keyed JSON) — 自描述格式，从内容判断模式
         if ext == ".json":
@@ -225,6 +361,15 @@ class LUTManager:
             stored_mode = data.get("color_mode")
             if stored_mode and isinstance(stored_mode, str):
                 return stored_mode
+            if looks_like_reference_stage_model(data):
+                channels = data.get("parameters", {}).get("channels", [])
+                return derive_color_mode_from_palette_entries(channels, "Merged")
+            if looks_like_reference_recipe_set(data):
+                palette = data.get("palette", [])
+                return derive_color_mode_from_palette_entries(palette, "Merged")
+            if looks_like_reference_colordb(data):
+                palette = data.get("palette", [])
+                return derive_color_mode_from_palette_entries(palette, "Merged")
             entries = data.get("entries", [])
             count = len(entries)
         else:
@@ -296,6 +441,354 @@ class LUTManager:
         lut_files = cls.get_all_lut_files()
         return lut_files.get(display_name)
 
+    @classmethod
+    def _iter_scanned_lut_files(cls):
+        """Yield every discovered LUT-like file with its source root metadata."""
+
+        for root_label, root_dir in cls._scan_roots():
+            patterns = [
+                os.path.join(root_dir, "**", "*.npy"),
+                os.path.join(root_dir, "**", "*.json"),
+                os.path.join(root_dir, "**", "*.npz"),
+                os.path.join(root_dir, "**", "*.msgpack"),
+            ]
+            seen: set[str] = set()
+            for pattern in patterns:
+                for file_path in glob.glob(pattern, recursive=True):
+                    resolved = str(Path(file_path).resolve())
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    yield root_label, root_dir, resolved
+
+    @classmethod
+    def invalidate_native_source_index_cache(cls) -> None:
+        """Clear the cached native source index."""
+
+        with cls._native_source_index_lock:
+            cls._native_source_index_cache = None
+            cls._native_source_index_cache_at = None
+
+    @classmethod
+    def _build_native_source_index(cls) -> tuple[_NativeBrandIndexItem, ...]:
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for root_label, _root_dir, file_path in cls._iter_scanned_lut_files():
+            if root_label == "Preset":
+                continue
+
+            ext = Path(file_path).suffix.lower()
+            data = None
+            native_ctx = None
+            try:
+                if ext == ".json":
+                    with open(file_path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    native_ctx = discover_native_reference_context(file_path, data)
+                elif ext == ".msgpack":
+                    native_ctx = discover_native_reference_context(file_path)
+                else:
+                    continue
+            except Exception as exc:
+                _log.warning(
+                    "Native source discovery failed for %s: %s",
+                    file_path,
+                    exc,
+                )
+                continue
+
+            if native_ctx is None or not native_ctx.vendor or not native_ctx.material_type:
+                continue
+
+            brand_key = f"{native_ctx.vendor.lower().replace(' ', '')}_{native_ctx.material_type.lower()}"
+            group_key = (native_ctx.vendor, native_ctx.material_type)
+            group = groups.setdefault(
+                group_key,
+                {
+                    "brand_key": brand_key,
+                    "material_type": native_ctx.material_type,
+                    "vendor": native_ctx.vendor,
+                    "display_name": f"{native_ctx.vendor} {native_ctx.material_type}",
+                    "db_options": {},
+                    "default_db_names": set(),
+                    "package_name": None,
+                    "model_name": None,
+                    "supported_modes": [],
+                    "_supported_mode_keys": set(),
+                    "package_path": native_ctx.package_path,
+                    "model_path": native_ctx.stage_model_path,
+                },
+            )
+
+            if native_ctx.package_path and group["package_path"] is None:
+                group["package_path"] = native_ctx.package_path
+            if native_ctx.stage_model_path and group["model_path"] is None:
+                group["model_path"] = native_ctx.stage_model_path
+
+            if native_ctx.source_kind == SOURCE_KIND_COLORD_DB:
+                try:
+                    fingerprint = cls.compute_fingerprint(file_path)
+                except OSError:
+                    fingerprint = ""
+                group["db_options"][Path(file_path).name] = _NativeDbIndexItem(
+                    name=Path(file_path).name,
+                    path=file_path,
+                    color_mode=cls.infer_color_mode(Path(file_path).name, file_path),
+                    fingerprint=fingerprint,
+                )
+            elif native_ctx.source_kind == SOURCE_KIND_PACKAGE:
+                group["package_name"] = Path(file_path).name
+            elif native_ctx.source_kind == SOURCE_KIND_STAGE_MODEL:
+                group["model_name"] = Path(file_path).name
+
+            for db_path in native_ctx.db_paths:
+                group["default_db_names"].add(Path(db_path).name)
+            for mode in native_ctx.supported_modes:
+                mode_key = (
+                    str(mode.get("mode_key"))
+                    if isinstance(mode, dict) and mode.get("mode_key")
+                    else f"{float(mode.get('layer_height_mm', 0.0)):.2f}x{int(mode.get('color_layers', 0))}"
+                )
+                if mode_key in group["_supported_mode_keys"]:
+                    continue
+                group["_supported_mode_keys"].add(mode_key)
+                group["supported_modes"].append(dict(mode))
+
+        index: list[_NativeBrandIndexItem] = []
+        for group_key in sorted(groups, key=lambda item: (item[0].lower(), item[1].lower())):
+            group = groups[group_key]
+            db_options = tuple(
+                sorted(group["db_options"].values(), key=lambda item: item.name)
+            )
+            default_db_names = tuple(sorted(group["default_db_names"])) or tuple(item.name for item in db_options)
+            index.append(
+                _NativeBrandIndexItem(
+                    brand_key=group["brand_key"],
+                    material_type=group["material_type"],
+                    vendor=group["vendor"],
+                    display_name=group["display_name"],
+                    db_options=db_options,
+                    default_db_names=default_db_names,
+                    package_name=group["package_name"],
+                    model_name=group["model_name"],
+                    supported_modes=tuple(group["supported_modes"]),
+                    package_path=group["package_path"],
+                    model_path=group["model_path"],
+                )
+            )
+        return tuple(index)
+
+    @classmethod
+    def _get_native_source_index(cls) -> tuple[_NativeBrandIndexItem, ...]:
+        cached = cls._native_source_index_cache
+        cached_at = cls._native_source_index_cache_at
+        now = time.monotonic()
+        if (
+            cached is not None
+            and cached_at is not None
+            and (now - cached_at) < float(cls.NATIVE_SOURCE_INDEX_TTL_SECONDS)
+        ):
+            return cached
+
+        with cls._native_source_index_lock:
+            now = time.monotonic()
+            if (
+                cls._native_source_index_cache is not None
+                and cls._native_source_index_cache_at is not None
+                and (now - cls._native_source_index_cache_at) < float(cls.NATIVE_SOURCE_INDEX_TTL_SECONDS)
+            ):
+                return cls._native_source_index_cache
+            if cls._native_source_index_cache is None or cls._native_source_index_cache_at is None:
+                cls._native_source_index_cache = cls._build_native_source_index()
+                cls._native_source_index_cache_at = now
+            elif (now - cls._native_source_index_cache_at) >= float(cls.NATIVE_SOURCE_INDEX_TTL_SECONDS):
+                cls._native_source_index_cache = cls._build_native_source_index()
+                cls._native_source_index_cache_at = now
+            return cls._native_source_index_cache
+
+    @classmethod
+    def _build_legacy_catalog_groups(cls) -> list[dict]:
+        groups: dict[str, list[dict]] = {}
+        for root_label, root_dir in cls._scan_legacy_roots():
+            patterns = [
+                os.path.join(root_dir, "**", "*.npy"),
+                os.path.join(root_dir, "**", "*.json"),
+                os.path.join(root_dir, "**", "*.npz"),
+                os.path.join(root_dir, "**", "*.msgpack"),
+            ]
+            all_files: list[str] = []
+            for pattern in patterns:
+                all_files.extend(glob.glob(pattern, recursive=True))
+
+            for file_path in all_files:
+                display_name = cls._display_name_for_root(root_label, root_dir, file_path)
+                try:
+                    fingerprint = cls.compute_fingerprint(file_path)
+                except OSError:
+                    fingerprint = ""
+                groups.setdefault(root_label, []).append(
+                    {
+                        "name": display_name,
+                        "color_mode": cls.infer_color_mode(display_name, file_path),
+                        "path": file_path,
+                        "fingerprint": fingerprint,
+                    }
+                )
+
+        legacy_groups: list[dict] = []
+        for group_name in sorted(groups):
+            items = sorted(groups[group_name], key=lambda item: item["name"])
+            legacy_groups.append({"group_name": group_name, "items": items})
+        return legacy_groups
+
+    @classmethod
+    def _build_native_brand_catalog_groups(cls) -> list[dict]:
+        native_groups: list[dict] = []
+        for item in cls._get_native_source_index():
+            native_groups.append(
+                {
+                    "brand_key": item.brand_key,
+                    "material_type": item.material_type,
+                    "vendor": item.vendor,
+                    "display_name": item.display_name,
+                    "db_options": [
+                        {
+                            "name": option.name,
+                            "path": option.path,
+                            "color_mode": option.color_mode,
+                            "fingerprint": option.fingerprint,
+                        }
+                        for option in item.db_options
+                    ],
+                    "default_db_names": list(item.default_db_names),
+                    "package_name": item.package_name,
+                    "model_name": item.model_name,
+                    "supported_modes": [dict(mode) for mode in item.supported_modes],
+                }
+            )
+        return native_groups
+
+    @classmethod
+    def _bundle_selection_temp_path(
+        cls,
+        bundle_path: str,
+        selected_db_paths: list[str],
+    ) -> str:
+        """Create a temp copy of a native bundle with an explicit DB subset."""
+
+        source_path = Path(bundle_path)
+        suffix = source_path.suffix.lower()
+        resolved_selected_db_paths = [str(Path(path).resolve()) for path in selected_db_paths if str(path)]
+
+        if suffix == ".msgpack":
+            payload = msgpack.unpackb(source_path.read_bytes(), raw=False)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid model package payload")
+            payload["selected_db_paths"] = resolved_selected_db_paths
+            payload["selected_db_names"] = [Path(path).name for path in resolved_selected_db_paths]
+            fd, temp_path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
+            os.close(fd)
+            try:
+                Path(temp_path).write_bytes(msgpack.packb(payload, use_bin_type=True))
+                return temp_path
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+
+        if suffix == ".json":
+            data = json.loads(source_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Invalid stage model payload")
+            data["selected_db_paths"] = resolved_selected_db_paths
+            data["selected_db_names"] = [Path(path).name for path in resolved_selected_db_paths]
+            fd, temp_path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
+            os.close(fd)
+            try:
+                Path(temp_path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return temp_path
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+
+        raise ValueError(f"Unsupported native bundle format: {bundle_path}")
+
+    @classmethod
+    def get_source_catalog(cls) -> dict[str, list[dict]]:
+        """Return legacy and native source catalog groupings."""
+
+        return {
+            "legacy_groups": cls._build_legacy_catalog_groups(),
+            "native_brand_groups": cls._build_native_brand_catalog_groups(),
+        }
+
+    @classmethod
+    def resolve_source_selection(
+        cls,
+        *,
+        source_kind: str,
+        lut_name: str | None = None,
+        material_type: str | None = None,
+        vendor: str | None = None,
+        db_names: list[str] | None = None,
+    ) -> tuple[str, str]:
+        """Resolve a source selection to a concrete LUT loading path and display name."""
+
+        normalized_kind = str(source_kind or "legacy_single")
+        if normalized_kind == "legacy_single":
+            if not lut_name:
+                raise ValueError("legacy_single requires lut_name")
+            lut_path = cls.get_lut_path(lut_name)
+            if lut_path is None:
+                raise ValueError(f"LUT not found: {lut_name}")
+            return lut_path, lut_name
+
+        if normalized_kind != "native_bundle":
+            raise ValueError(f"Unsupported source_kind: {source_kind}")
+
+        if not material_type or not vendor:
+            raise ValueError("native_bundle requires material_type and vendor")
+
+        native_groups = cls._get_native_source_index()
+        selected = next(
+            (
+                group
+                for group in native_groups
+                if group.vendor == vendor and group.material_type == material_type
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"Native brand not found: {vendor}/{material_type}")
+
+        allowed_db_names = {item.name for item in selected.db_options}
+        requested_db_names = list(dict.fromkeys(db_names or [])) or list(selected.default_db_names)
+        invalid_db_names = [name for name in requested_db_names if name not in allowed_db_names]
+        if invalid_db_names:
+            raise ValueError(
+                "Selected db_names do not belong to the requested native brand: "
+                + ", ".join(invalid_db_names)
+            )
+
+        selected_db_paths = [
+            option.path
+            for option in selected.db_options
+            if option.name in requested_db_names
+        ]
+        bundle_path = selected.package_path or selected.model_path
+        if bundle_path and os.path.exists(bundle_path):
+            temp_bundle_path = cls._bundle_selection_temp_path(bundle_path, selected_db_paths)
+            display_name = selected.display_name
+            return temp_bundle_path, display_name
+
+        if requested_db_names:
+            for option in selected.db_options:
+                if option.name == requested_db_names[0]:
+                    return option.path, option.name
+
+        raise ValueError(f"No loadable source found for native brand: {vendor}/{material_type}")
+
     @staticmethod
     def compute_fingerprint(file_path: str) -> str:
         """Compute a SHA-256 fingerprint (first 32 hex chars) for a LUT file.
@@ -339,8 +832,8 @@ class LUTManager:
             file_extension = original_path.suffix  # .npy
             
             # Validate file extension
-            if file_extension not in ('.npy', '.json', '.npz'):
-                return False, f"[ERROR] Invalid file type: {file_extension}. Only .npy, .json and .npz are supported.", cls.get_lut_choices()
+            if file_extension not in ('.npy', '.json', '.npz', '.msgpack'):
+                return False, f"[ERROR] Invalid file type: {file_extension}. Only .npy, .json, .npz and .msgpack are supported.", cls.get_lut_choices()
             
             # Use custom name or original name
             if custom_name and custom_name.strip():
@@ -384,7 +877,7 @@ class LUTManager:
                 except Exception as e:
                     return False, f"[ERROR] Failed to convert .npy to JSON: {e}", cls.get_lut_choices()
             else:
-                # Copy file directly for .json and .npz
+                # Copy file directly for .json, .npz and .msgpack
                 shutil.copy2(uploaded_file.name, dest_path)
             
             # Build display name
@@ -472,8 +965,8 @@ class LUTManager:
         """Load LUT file and return (rgb, stacks_or_None, metadata).
         统一加载 LUT 文件，返回 (rgb, stacks_or_None, metadata)。
 
-        Supports .npy, .json (Keyed JSON), and .npz formats.
-        支持 .npy、.json（Keyed JSON）和 .npz 三种格式。
+        Supports .npy, .json, .npz, and native reference .msgpack formats.
+        支持 .npy、.json、.npz 以及原生参考 .msgpack 格式。
 
         Args:
             file_path (str): Path to the LUT file. (LUT 文件路径)
@@ -502,6 +995,10 @@ class LUTManager:
         if ext == ".npz":
             return cls._load_npz(file_path, display_name)
 
+        # ---- native model package (.msgpack) ----
+        if ext == ".msgpack":
+            return cls._load_model_package(file_path, display_name)
+
         # Unsupported format – return empty defaults
         print(f"[WARNING] Unsupported LUT format: {ext}")
         rgb = np.zeros((0, 3), dtype=np.uint8)
@@ -523,6 +1020,15 @@ class LUTManager:
             rgb = np.zeros((0, 3), dtype=np.uint8)
             metadata = cls.infer_default_metadata(display_name, file_path, 0)
             return rgb, None, metadata
+
+        native_ctx = discover_native_reference_context(file_path, data)
+        if native_ctx is not None:
+            if looks_like_reference_colordb(data):
+                return cls._load_native_colordb_json(file_path, display_name, data, native_ctx)
+            if looks_like_reference_stage_model(data):
+                return cls._load_native_stage_model_json(file_path, display_name, data, native_ctx)
+            if looks_like_reference_recipe_set(data):
+                return cls._load_native_recipe_json(file_path, display_name, data, native_ctx)
 
         # ── 兼容顶层为数组的旧格式 ──────────────────────────────────
         # 格式: [{recipe: [...], rgb: [r,g,b], hex: "#...", source: "..."}, ...]
@@ -611,6 +1117,378 @@ class LUTManager:
         else:
             stacks = None
 
+        return rgb, stacks, metadata
+
+    @classmethod
+    def load_native_bundle_exact_lookup(
+        cls,
+        metadata: LUTMetadata,
+        *,
+        color_layers: int,
+        layer_height_mm: float,
+        layer_order: str | None = None,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Load exact lookup RGB/stacks from native ColorDB bundle members.
+
+        Exact same-mode DBs are preferred. When none exist, selected DB entries
+        remain searchable and their recipes are converted to the requested
+        layer-count / layer-height / layer-order target semantics.
+        """
+        db_paths = metadata.extensions.get("native_db_paths")
+        if not isinstance(db_paths, list) or not db_paths:
+            return None
+
+        channel_keys = metadata.extensions.get("native_channel_keys")
+        selected_db_paths = select_native_db_paths_for_mode(
+            db_paths,
+            color_layers=int(color_layers),
+            layer_height_mm=float(layer_height_mm),
+            expected_channel_keys=(channel_keys if isinstance(channel_keys, list) else None),
+            layer_order=layer_order,
+        )
+        explicit_subset = bool(metadata.extensions.get("native_db_subset_explicit"))
+        if selected_db_paths and explicit_subset:
+            exact_paths = list(selected_db_paths)
+            remaining_paths = [path for path in db_paths if path not in set(exact_paths)]
+            candidate_db_paths = exact_paths + remaining_paths
+        elif selected_db_paths:
+            candidate_db_paths = list(selected_db_paths)
+        else:
+            candidate_db_paths = list(db_paths)
+        if not candidate_db_paths:
+            return None
+
+        rgb_parts: list[np.ndarray] = []
+        stack_parts: list[np.ndarray] = []
+        channel_keys = metadata.extensions.get("native_channel_keys")
+        canonical_channel_keys = (
+            [
+                normalize_channel_key(str(key))
+                for key in channel_keys
+                if str(key)
+            ]
+            if isinstance(channel_keys, list)
+            else []
+        )
+        canonical_lookup = {
+            key: idx for idx, key in enumerate(canonical_channel_keys)
+        }
+        target_layers = int(color_layers)
+        target_height = float(layer_height_mm)
+        target_order = str(layer_order or getattr(metadata, "layer_order", "Top2Bottom"))
+        target_base_channel = int(getattr(metadata, "base_channel_idx", 0))
+
+        for db_path in candidate_db_paths:
+            rgb, stacks, _db_metadata = cls._load_keyed_json(db_path, Path(db_path).stem)
+            if (
+                rgb is None
+                or stacks is None
+                or not isinstance(stacks, np.ndarray)
+                or rgb.size == 0
+                or stacks.ndim != 2
+                or stacks.shape[0] != rgb.reshape(-1, 3).shape[0]
+            ):
+                continue
+            if canonical_lookup and _db_metadata.palette:
+                remapped = np.full(stacks.shape, -1, dtype=np.int32)
+                db_index_to_bundle_index: dict[int, int] = {}
+                for db_idx, entry in enumerate(_db_metadata.palette):
+                    bundle_idx = canonical_lookup.get(
+                        normalize_channel_key(build_channel_key(entry.color, entry.material))
+                    )
+                    if bundle_idx is not None:
+                        db_index_to_bundle_index[db_idx] = bundle_idx
+                for db_idx, bundle_idx in db_index_to_bundle_index.items():
+                    remapped[stacks == db_idx] = bundle_idx
+                stacks = remapped
+            source_height = float(getattr(_db_metadata, "layer_height_mm", target_height))
+            source_order = str(getattr(_db_metadata, "layer_order", target_order))
+            converted_rows: list[list[int]] = []
+            for recipe in stacks:
+                recipe_list = [int(v) for v in recipe]
+                try:
+                    converted = expand_recipe_by_layer_height(
+                        recipe_list,
+                        source_height,
+                        target_height,
+                        source_order=source_order,
+                        target_order=target_order,
+                    )
+                except ValueError:
+                    converted = convert_recipe_between_orders(recipe_list, source_order, target_order)
+                converted = pad_recipe_to_layer_count(
+                    converted,
+                    target_layers,
+                    target_base_channel,
+                    layer_order=target_order,
+                )
+                converted_rows.append(converted[:target_layers])
+            if not converted_rows:
+                continue
+            rgb_parts.append(rgb.reshape(-1, 3))
+            stack_parts.append(np.asarray(converted_rows, dtype=np.int32))
+
+        if not rgb_parts:
+            return None
+        if len(rgb_parts) == 1:
+            return rgb_parts[0], stack_parts[0]
+        return np.concatenate(rgb_parts, axis=0), np.concatenate(stack_parts, axis=0)
+
+    @classmethod
+    def _apply_native_context_to_metadata(
+        cls,
+        metadata: LUTMetadata,
+        native_ctx,
+        *,
+        custom_recipe_supported: bool = False,
+    ) -> LUTMetadata:
+        metadata.extensions["source_kind"] = native_ctx.source_kind
+        metadata.extensions["supported_modes"] = list(native_ctx.supported_modes)
+        metadata.extensions["custom_recipe_supported"] = bool(custom_recipe_supported)
+        if native_ctx.package_path:
+            metadata.extensions["native_model_package_path"] = native_ctx.package_path
+        if native_ctx.stage_model_path:
+            metadata.extensions["native_stage_model_path"] = native_ctx.stage_model_path
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"predictive_model"})
+        if native_ctx.recipe_path:
+            metadata.extensions["native_recipe_path"] = native_ctx.recipe_path
+        if native_ctx.db_paths:
+            metadata.extensions["native_db_paths"] = list(native_ctx.db_paths)
+        if native_ctx.channel_keys:
+            metadata.extensions["native_channel_keys"] = list(native_ctx.channel_keys)
+        if native_ctx.vendor:
+            metadata.extensions["native_vendor"] = native_ctx.vendor
+        if native_ctx.material_type:
+            metadata.extensions["native_material_type"] = native_ctx.material_type
+        if native_ctx.source_kind == SOURCE_KIND_PACKAGE:
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"predictive_match", "dynamic_layer_count"})
+        elif native_ctx.source_kind == SOURCE_KIND_STAGE_MODEL:
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"predictive_model", "dynamic_layer_count"})
+        elif native_ctx.source_kind == SOURCE_KIND_COLORD_DB:
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"legacy_lookup"})
+        if custom_recipe_supported:
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"custom_recipe"})
+        return metadata
+
+    @classmethod
+    def _load_native_colordb_json(
+        cls,
+        file_path: str,
+        display_name: str,
+        data: dict,
+        native_ctx,
+    ) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        palette_raw = data.get("palette", [])
+        palette = [
+            PaletteEntry(
+                color=str(item.get("color", "")),
+                material=str(item.get("material", "PLA Basic")),
+            )
+            for item in palette_raw
+            if isinstance(item, dict) and str(item.get("color", ""))
+        ]
+        entries = data.get("entries", [])
+        stacks = np.asarray(
+            [entry.get("recipe", []) for entry in entries if isinstance(entry, dict)],
+            dtype=np.int32,
+        )
+        labs = np.asarray(
+            [entry.get("lab", [0.0, 0.0, 0.0]) for entry in entries if isinstance(entry, dict)],
+            dtype=np.float32,
+        )
+        rgb = standard_lab_to_rgb_uint8(labs)
+        metadata = LUTMetadata(
+            palette=palette,
+            manufacturer=str(data.get("manufacturer", "") or ""),
+            type=str(data.get("type", "") or ""),
+            color_mode=derive_color_mode_from_palette_entries(palette, display_name),
+            max_color_layers=int(data.get("max_color_layers", stacks.shape[1] if stacks.ndim == 2 else 0)),
+            layer_height_mm=float(data.get("layer_height_mm", 0.08)),
+            line_width_mm=float(data.get("line_width_mm", 0.42)),
+            base_layers=int(data.get("base_layers", 0)),
+            base_channel_idx=int(data.get("base_channel_idx", 0)),
+            layer_order=str(data.get("layer_order", "Top2Bottom")),
+        )
+        metadata = cls._apply_native_context_to_metadata(
+            metadata,
+            native_ctx,
+            custom_recipe_supported=bool(native_ctx.package_path or native_ctx.stage_model_path),
+        )
+        return rgb, stacks, metadata
+
+    @classmethod
+    def _load_native_stage_model_json(
+        cls,
+        file_path: str,
+        display_name: str,
+        data: dict,
+        native_ctx,
+    ) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        palette: list[PaletteEntry] = [
+            PaletteEntry(color=split_channel_key(key)[0], material=split_channel_key(key)[1])
+            for key in native_ctx.channel_keys
+        ]
+        channels = data.get("parameters", {}).get("channels", [])
+        rgb_list: list[list[int]] = []
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            e_rgb = np.asarray(item.get("E", [0.5, 0.5, 0.5]), dtype=np.float32)
+            rgb_list.append([int(np.clip(round(float(v) * 255.0), 0, 255)) for v in e_rgb])
+
+        rgb = np.asarray(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)
+        stacks = None
+        default_mode = next(
+            (mode for mode in native_ctx.supported_modes if int(mode.get("color_layers", 0)) == 5),
+            native_ctx.supported_modes[0] if native_ctx.supported_modes else None,
+        )
+        if native_ctx.db_paths:
+            try:
+                selected_db_paths = ()
+                if default_mode is not None:
+                    selected_db_paths = select_native_db_paths_for_mode(
+                        native_ctx.db_paths,
+                        color_layers=int(default_mode.get("color_layers", 5)),
+                        layer_height_mm=float(default_mode.get("layer_height_mm", 0.08)),
+                        expected_channel_keys=native_ctx.channel_keys,
+                        layer_order=str(default_mode.get("layer_order", "Top2Bottom")),
+                    )
+                    resolved_base_channel_idx = (
+                        _resolve_model_package_base_channel_idx(
+                            msgpack.unpackb(Path(native_ctx.package_path).read_bytes(), raw=False),
+                            list(native_ctx.channel_keys),
+                            default_mode,
+                        )
+                        if native_ctx.package_path
+                        else _resolve_native_base_channel_idx(list(native_ctx.channel_keys))
+                    )
+                    selected_lookup = cls.load_native_bundle_exact_lookup(
+                        LUTMetadata(
+                            layer_order=str(default_mode.get("layer_order", "Top2Bottom")),
+                            base_channel_idx=resolved_base_channel_idx,
+                            extensions={
+                                "native_db_paths": list(native_ctx.db_paths),
+                                "native_channel_keys": list(native_ctx.channel_keys),
+                                "native_db_subset_explicit": bool(data.get("selected_db_paths")),
+                            }
+                        ),
+                        color_layers=int(default_mode.get("color_layers", 5)),
+                        layer_height_mm=float(default_mode.get("layer_height_mm", 0.08)),
+                        layer_order=str(default_mode.get("layer_order", "Top2Bottom")),
+                    )
+                    if selected_lookup is not None:
+                        rgb, stacks = selected_lookup
+                sample_db_path = selected_db_paths[0] if selected_db_paths else native_ctx.db_paths[0]
+                _db_rgb, _db_stacks, db_meta = cls._load_keyed_json(sample_db_path, Path(sample_db_path).stem)
+                if stacks is None:
+                    rgb = _db_rgb
+                    stacks = _db_stacks
+                if not palette:
+                    palette = db_meta.palette or palette
+            except Exception:
+                pass
+
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode=derive_color_mode_from_palette_entries(palette, display_name),
+            max_color_layers=(stacks.shape[1] if isinstance(stacks, np.ndarray) and stacks.ndim == 2 and stacks.size else 5),
+            layer_height_mm=(native_ctx.supported_modes[0]["layer_height_mm"] if native_ctx.supported_modes else 0.08),
+            line_width_mm=0.42,
+            base_layers=0,
+            base_channel_idx=(
+                _resolve_model_package_base_channel_idx(
+                    msgpack.unpackb(Path(native_ctx.package_path).read_bytes(), raw=False),
+                    list(native_ctx.channel_keys),
+                    default_mode,
+                )
+                if native_ctx.package_path
+                else _resolve_native_base_channel_idx(list(native_ctx.channel_keys))
+            ),
+            layer_order=(native_ctx.supported_modes[0].get("layer_order", "Top2Bottom") if native_ctx.supported_modes else "Top2Bottom"),
+        )
+        if native_ctx.package_path:
+            metadata.extensions["runtime_package"] = build_model_package_runtime_payload(native_ctx.package_path)
+            metadata.capabilities = sorted(set(metadata.capabilities) | {"predictive_match"})
+        metadata.extensions["native_db_subset_explicit"] = bool(data.get("selected_db_paths"))
+        metadata = cls._apply_native_context_to_metadata(metadata, native_ctx, custom_recipe_supported=True)
+        return rgb, stacks, metadata
+
+    @classmethod
+    def _load_native_recipe_json(
+        cls,
+        file_path: str,
+        display_name: str,
+        data: dict,
+        native_ctx,
+    ) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        runtime_payload = build_recipe_runtime_payload(data)
+        modes = runtime_payload.get("modes", {})
+        first_mode = next(iter(modes.values())) if isinstance(modes, dict) and modes else None
+        stacks = np.asarray(first_mode.get("candidate_recipes", []), dtype=np.int32) if first_mode else np.zeros((0, 0), dtype=np.int32)
+        pred_lab = np.asarray(first_mode.get("pred_lab", []), dtype=np.float32) if first_mode else np.zeros((0, 3), dtype=np.float32)
+        rgb = standard_lab_to_rgb_uint8(pred_lab)
+        palette_raw = data.get("palette", [])
+        palette = [
+            PaletteEntry(
+                color=str(item.get("color", "")),
+                material=str(item.get("material", "PLA Basic")),
+            )
+            for item in palette_raw
+            if isinstance(item, dict) and str(item.get("color", ""))
+        ]
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode=derive_color_mode_from_palette_entries(palette, display_name),
+            max_color_layers=int(first_mode.get("color_layers", stacks.shape[1] if stacks.ndim == 2 else 0)) if first_mode else 5,
+            layer_height_mm=float(first_mode.get("layer_height_mm", 0.08)) if first_mode else 0.08,
+            line_width_mm=0.42,
+            base_layers=int(data.get("base_layers", 0)),
+            base_channel_idx=int(data.get("base_channel_idx", 0)),
+            layer_order=str(first_mode.get("layer_order", "Top2Bottom")) if first_mode else "Top2Bottom",
+            schema_version="1.0",
+            capabilities=["predictive_match", "dynamic_layer_count", "custom_recipe"],
+            extensions={"runtime_package": runtime_payload},
+        )
+        metadata = cls._apply_native_context_to_metadata(metadata, native_ctx, custom_recipe_supported=True)
+        return rgb, stacks, metadata
+
+    @classmethod
+    def _load_model_package(cls, file_path: str, display_name: str) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        native_ctx = parse_model_package_file(file_path)
+        payload = msgpack.unpackb(Path(file_path).read_bytes(), raw=False)
+        rgb = np.zeros((0, 3), dtype=np.uint8)
+        stacks = None
+        palette = [
+            PaletteEntry(color=split_channel_key(key)[0], material=split_channel_key(key)[1])
+            for key in native_ctx.channel_keys
+        ]
+        default_mode = None
+        if native_ctx.supported_modes:
+            default_mode = next(
+                (mode for mode in native_ctx.supported_modes if int(mode.get("color_layers", 0)) == 5),
+                native_ctx.supported_modes[0],
+            )
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode=derive_color_mode_from_palette_entries(palette, display_name),
+            max_color_layers=(
+                int(default_mode["color_layers"])
+                if default_mode is not None
+                else 5
+            ),
+            layer_height_mm=(float(default_mode["layer_height_mm"]) if default_mode is not None else 0.08),
+            line_width_mm=0.42,
+            base_layers=0,
+            base_channel_idx=_resolve_model_package_base_channel_idx(payload, list(native_ctx.channel_keys), default_mode),
+            layer_order=(str(default_mode.get("layer_order", "Top2Bottom")) if default_mode is not None else "Top2Bottom"),
+            schema_version="2.0",
+            capabilities=["predictive_match", "dynamic_layer_count", "custom_recipe"],
+        )
+        metadata.extensions["runtime_package"] = build_model_package_runtime_payload(file_path)
+        metadata.extensions["native_db_subset_explicit"] = bool(
+            isinstance(payload, dict) and payload.get("selected_db_paths")
+        )
+        metadata = cls._apply_native_context_to_metadata(metadata, native_ctx, custom_recipe_supported=True)
         return rgb, stacks, metadata
 
     @classmethod
@@ -724,7 +1602,9 @@ class LUTManager:
     @classmethod
     def save_keyed_json(cls, path: str, rgb: np.ndarray, stacks: np.ndarray,
                         metadata: LUTMetadata, lab: np.ndarray | None = None,
-                        sources: list[str] | None = None) -> None:
+                        sources: list[str] | None = None,
+                        preserve_extensions: bool = True,
+                        legacy_save: bool = False) -> None:
         """Save LUT data as Keyed JSON format.
         将 LUT 数据保存为 Keyed JSON 格式。
 
@@ -737,8 +1617,19 @@ class LUTManager:
                                      (可选 Lab 数组，为 None 时从 RGB 转换)
             sources (list[str] | None): Optional per-entry source labels (e.g. origin LUT name).
                                         (可选的每条记录来源标识)
+            preserve_extensions (bool): Preserve LUT V2 extension blocks by default.
+                                        (默认保留 LUT V2 扩展块)
+            legacy_save (bool): Force V1-only output without V2 extension blocks.
+                                (强制输出不带 V2 扩展块的 V1 结构)
         """
         meta_dict = metadata.to_dict()
+        if legacy_save or not preserve_extensions:
+            for key in list(metadata.extensions.keys()):
+                meta_dict.pop(key, None)
+            if metadata.schema_version is not None:
+                meta_dict.pop("schema_version", None)
+            if metadata.capabilities:
+                meta_dict.pop("capabilities", None)
 
         # Build name from filename
         meta_dict["name"] = Path(path).stem

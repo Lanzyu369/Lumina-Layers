@@ -8,13 +8,17 @@ LUT file loading and format detection.
 Extracted from LuminaImageProcessor._load_lut.
 """
 
+from dataclasses import replace
 import os
 import logging
 import numpy as np
 import cv2
 from scipy.spatial import KDTree
 
-from config import PrinterConfig, ColorSystem, get_asset_path
+from config import PrinterConfig, ColorSystem, get_capabilities, get_source_kind, get_supported_modes, get_asset_path
+from core.native_reference import SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL
+from core.predictive_lut import list_predictive_supported_modes, resolve_predictive_runtime
+from core.recipe_order import convert_recipe_between_orders
 from utils.lut_manager import LUTManager
 
 _log = logging.getLogger(__name__)
@@ -42,7 +46,138 @@ def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     return lab
 
 
-def load_lut(lut_path: str, color_mode: str) -> dict:
+def _build_predictive_info(
+    metadata,
+    layer_count: int,
+    layer_height_mm: float,
+    *,
+    enable_predictive_matching: bool = True,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
+) -> dict:
+    """Build predictive runtime info from LUT metadata when available.
+    在可用时从 LUT 元数据构建预测式运行时信息。
+    """
+    predictive_modes = list_predictive_supported_modes(metadata)
+    predictive_runtime = None
+    if enable_predictive_matching:
+        predictive_runtime = resolve_predictive_runtime(
+            metadata,
+            layer_height_mm,
+            layer_count,
+            getattr(metadata, "layer_order", "Top2Bottom"),
+        )
+        if predictive_runtime is not None:
+            threshold = predictive_runtime.threshold
+            margin = predictive_runtime.margin
+            if model_threshold is not None and float(model_threshold) >= 0.0:
+                threshold = float(model_threshold)
+            if model_margin is not None and float(model_margin) >= 0.0:
+                margin = float(model_margin)
+            predictive_runtime = replace(
+                predictive_runtime,
+                threshold=float(threshold),
+                margin=float(margin),
+            )
+    supported_modes = [
+        dict(item)
+        for item in (list_predictive_supported_modes(metadata) or get_supported_modes(metadata))
+        if isinstance(item, dict)
+    ]
+    warnings: list[str] = []
+    if enable_predictive_matching and supported_modes and predictive_runtime is None:
+        warnings.append("predictive_mode_unavailable")
+    capabilities = set(get_capabilities(metadata))
+    return {
+        "source_kind": get_source_kind(metadata),
+        "native_reference_source": "native_reference" in capabilities,
+        "predictive_runtime": predictive_runtime,
+        "predictive_modes": [str(item.get("mode_key")) for item in supported_modes if item.get("mode_key")],
+        "supported_modes": supported_modes,
+        "predictive_threshold": (float(predictive_runtime.threshold) if predictive_runtime is not None else None),
+        "predictive_margin": (float(predictive_runtime.margin) if predictive_runtime is not None else None),
+        "requested_color_layers": int(layer_count),
+        "requested_layer_height_mm": float(layer_height_mm),
+        "predictive_warnings": warnings,
+    }
+
+
+def _finalize_loaded_lut(
+    lut_rgb: np.ndarray,
+    ref_stacks: np.ndarray,
+    layer_count: int,
+    metadata,
+    layer_height_mm: float,
+    *,
+    enable_predictive_matching: bool = True,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
+) -> dict:
+    """Finalize loaded LUT data into the shared runtime payload.
+    将已加载的 LUT 数据整理成统一运行时载荷。
+    """
+    if lut_rgb.size == 0:
+        lut_lab = np.zeros((0, 3), dtype=np.float64)
+        kdtree = None
+    else:
+        lut_lab = _rgb_to_lab(lut_rgb)
+        kdtree = KDTree(lut_lab)
+    result = {
+        "lut_rgb": lut_rgb,
+        "lut_lab": lut_lab,
+        "ref_stacks": ref_stacks,
+        "kdtree": kdtree,
+        "layer_count": layer_count,
+    }
+    result.update(
+        _build_predictive_info(
+            metadata,
+            layer_count,
+            layer_height_mm,
+            enable_predictive_matching=enable_predictive_matching,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
+        )
+    )
+    return result
+
+
+def _maybe_use_native_bundle_exact_lookup(
+    lut_rgb: np.ndarray,
+    ref_stacks: np.ndarray | None,
+    metadata,
+    layer_count: int,
+    layer_height_mm: float,
+) -> tuple[np.ndarray, np.ndarray | None, bool]:
+    """Replace native package/stage synthetic lookup with matching bundle ColorDB data."""
+    source_kind = get_source_kind(metadata)
+    if source_kind not in (SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL):
+        return lut_rgb, ref_stacks, False
+
+    bundle_lookup = LUTManager.load_native_bundle_exact_lookup(
+        metadata,
+        color_layers=layer_count,
+        layer_height_mm=layer_height_mm,
+        layer_order=getattr(metadata, "layer_order", "Top2Bottom"),
+    )
+    if bundle_lookup is None:
+        return lut_rgb, ref_stacks, False
+
+    bundle_rgb, bundle_stacks = bundle_lookup
+    return bundle_rgb, bundle_stacks, True
+
+
+def load_lut(
+    lut_path: str,
+    color_mode: str,
+    *,
+    color_layers: int | None = None,
+    layer_height_mm: float | None = None,
+    model_enable: bool = False,
+    model_only: bool = False,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
+) -> dict:
     """加载 LUT 文件并返回处理后的数据。
     Load and validate LUT file. Supports 2-Color, 4-Color, 6-Color, 8-Color, and Merged.
 
@@ -61,7 +196,9 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
             - kdtree: scipy.spatial.KDTree 基于 CIELAB 的 KDTree
             - layer_count: int 材料层数
     """
-    layer_count = ColorSystem.get(color_mode).get("layer_count", PrinterConfig.COLOR_LAYERS)
+    default_layer_count = ColorSystem.get(color_mode).get("layer_count", PrinterConfig.COLOR_LAYERS)
+    layer_count = int(color_layers) if color_layers is not None else int(default_layer_count)
+    requested_layer_height_mm = float(layer_height_mm) if layer_height_mm is not None else float(PrinterConfig.LAYER_HEIGHT)
 
     # ── 统一加载入口 ──────────────────────────────────────────────
     try:
@@ -69,8 +206,44 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
     except (OSError, ValueError, TypeError, KeyError) as e:
         raise ValueError(f"LUT file corrupted: {e}")
 
+    rgb, stacks, native_exact_lookup_active = _maybe_use_native_bundle_exact_lookup(
+        rgb,
+        stacks,
+        metadata,
+        layer_count,
+        requested_layer_height_mm,
+    )
+    source_kind = get_source_kind(metadata)
+    capabilities = set(get_capabilities(metadata))
+    is_native_reference_source = "native_reference" in capabilities
+    native_predictive_source = source_kind in (SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL)
+    enable_predictive_matching = bool(
+        model_only
+        or (native_predictive_source and (model_enable or not native_exact_lookup_active))
+        or (not is_native_reference_source and source_kind != "legacy_lookup")
+    )
+
     if rgb is None or len(rgb) == 0:
-        raise ValueError(f"LUT file is empty or corrupted: {lut_path}")
+        predictive_runtime = resolve_predictive_runtime(
+            metadata,
+            requested_layer_height_mm,
+            layer_count,
+            getattr(metadata, "layer_order", "Top2Bottom"),
+        )
+        if predictive_runtime is None:
+            raise ValueError(f"LUT file is empty or corrupted: {lut_path}")
+        lut_rgb = np.zeros((0, 3), dtype=np.uint8)
+        ref_stacks = np.zeros((0, layer_count), dtype=np.int32)
+        return _finalize_loaded_lut(
+            lut_rgb,
+            ref_stacks,
+            layer_count,
+            metadata,
+            requested_layer_height_mm,
+            enable_predictive_matching=enable_predictive_matching,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
+        )
 
     # Flatten to (N, 3) if loaded as grid (e.g. old .npy with shape (rows, cols, 3))
     measured_colors = rgb.reshape(-1, 3)
@@ -92,18 +265,21 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
         if has_stacks:
             lut_rgb = measured_colors
             ref_stacks = stacks
-            if ref_stacks.ndim == 2:
+            if ref_stacks.ndim == 2 and not (
+                color_layers is not None and getattr(metadata, "supports_dynamic_layer_count", lambda: False)()
+            ):
                 layer_count = int(ref_stacks.shape[1])
-            lut_lab = _rgb_to_lab(lut_rgb)
-            kdtree = KDTree(lut_lab)
             _log.info(f"Merged LUT loaded: {len(lut_rgb)} colors (.npz format, Lab KDTree)")
-            return {
-                "lut_rgb": lut_rgb,
-                "lut_lab": lut_lab,
-                "ref_stacks": ref_stacks,
-                "kdtree": kdtree,
-                "layer_count": layer_count,
-            }
+            return _finalize_loaded_lut(
+                lut_rgb,
+                ref_stacks,
+                layer_count,
+                metadata,
+                requested_layer_height_mm,
+                enable_predictive_matching=enable_predictive_matching,
+                model_threshold=model_threshold,
+                model_margin=model_margin,
+            )
         else:
             raise ValueError(f"Merged LUT file missing stacks: {lut_path}")
 
@@ -111,18 +287,21 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
     if has_stacks and stacks.shape[0] == total_colors:
         lut_rgb = measured_colors
         ref_stacks = stacks
-        if ref_stacks.ndim == 2:
+        if ref_stacks.ndim == 2 and not (
+            color_layers is not None and getattr(metadata, "supports_dynamic_layer_count", lambda: False)()
+        ):
             layer_count = int(ref_stacks.shape[1])
         _log.info(f"LUT loaded: {len(lut_rgb)} colors (stacks from file, {layer_count} layers)")
-        lut_lab = _rgb_to_lab(lut_rgb)
-        kdtree = KDTree(lut_lab)
-        return {
-            "lut_rgb": lut_rgb,
-            "lut_lab": lut_lab,
-            "ref_stacks": ref_stacks,
-            "kdtree": kdtree,
-            "layer_count": layer_count,
-        }
+        return _finalize_loaded_lut(
+            lut_rgb,
+            ref_stacks,
+            layer_count,
+            metadata,
+            requested_layer_height_mm,
+            enable_predictive_matching=enable_predictive_matching,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
+        )
 
     # ── 回退：stacks 为空（旧 .npy 文件），从索引重建堆叠配方 ──────
     valid_rgb = []
@@ -145,7 +324,7 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
             for _ in range(5):
                 digits.append(temp % 2)
                 temp //= 2
-            stack = digits[::-1]  # [顶...底] format
+            stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
 
             valid_rgb.append(measured_colors[i])
             valid_stacks.append(stack)
@@ -168,7 +347,10 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
 
         # 约定转换：smart_8color_stacks.npy 存储底到顶约定（stack[0]=背面），
         # 转换为顶到底约定（stack[0]=观赏面, stack[4]=背面），与 4 色模式统一
-        smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
+        smart_stacks = [
+            tuple(convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom"))
+            for s in smart_stacks
+        ]
         _log.info(
             "[IMAGE_PROCESSOR] Stacks converted from bottom-to-top to top-to-bottom convention (matching 4-color mode)."
         )
@@ -195,7 +377,10 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
         smart_stacks = get_top_1296_colors()
         # 约定转换：get_top_1296_colors() 返回底到顶约定（stack[0]=背面），
         # 转换为顶到底约定（stack[0]=观赏面, stack[4]=背面），与 4 色模式统一
-        smart_stacks = [tuple(reversed(s)) for s in smart_stacks]
+        smart_stacks = [
+            tuple(convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom"))
+            for s in smart_stacks
+        ]
         _log.info(
             "[IMAGE_PROCESSOR] Stacks converted from bottom-to-top to top-to-bottom convention (matching 4-color mode)."
         )
@@ -231,14 +416,17 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
             for _ in range(5):
                 digits.append(temp % 4)
                 temp //= 4
-            stack = (-1,) + tuple(reversed(digits))
+            stack = (-1,) + tuple(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
             _ref_stacks.append(stack)
 
         # Generate extended 1444 stacks using select_extended_1444_colors
         if total_colors > 1024:
             from core.calibration import select_extended_1444_colors
 
-            base_5layer = [tuple(reversed([i // 4**j % 4 for j in range(5)])) for i in range(1024)]
+            base_5layer = [
+                tuple(convert_recipe_between_orders([i // 4**j % 4 for j in range(5)], "Bottom2Top", "Top2Bottom"))
+                for i in range(1024)
+            ]
             extended_stacks = select_extended_1444_colors(base_5layer)
 
             # Add extended stacks (already in correct 6-layer format)
@@ -265,16 +453,17 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
                 ref_stacks = npz_stacks
                 if isinstance(ref_stacks, np.ndarray) and ref_stacks.ndim == 2:
                     layer_count = int(ref_stacks.shape[1])
-                lut_lab = _rgb_to_lab(lut_rgb)
-                kdtree = KDTree(lut_lab)
                 _log.info(f"Merged LUT loaded from companion .npz: {len(lut_rgb)} colors (Lab KDTree)")
-                return {
-                    "lut_rgb": lut_rgb,
-                    "lut_lab": lut_lab,
-                    "ref_stacks": ref_stacks,
-                    "kdtree": kdtree,
-                    "layer_count": layer_count,
-                }
+                return _finalize_loaded_lut(
+                    lut_rgb,
+                    ref_stacks,
+                    layer_count,
+                    npz_meta,
+                    requested_layer_height_mm,
+                    enable_predictive_matching=enable_predictive_matching,
+                    model_threshold=model_threshold,
+                    model_margin=model_margin,
+                )
             except (OSError, ValueError, TypeError, KeyError) as e:
                 _log.warning(f"Failed to load companion .npz: {e}")
 
@@ -304,7 +493,7 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
             for _ in range(5):
                 digits.append(temp % 4)
                 temp //= 4
-            stack = digits[::-1]
+            stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
 
             real_rgb = measured_colors[i]
 
@@ -325,13 +514,13 @@ def load_lut(lut_path: str, color_mode: str) -> dict:
         _log.info(f"LUT loaded: {len(lut_rgb)} colors (filtered {dropped} outliers)")
 
     # Build KD-Tree in CIELAB space for perceptually accurate color matching
-    lut_lab = _rgb_to_lab(lut_rgb)
-    kdtree = KDTree(lut_lab)
-
-    return {
-        "lut_rgb": lut_rgb,
-        "lut_lab": lut_lab,
-        "ref_stacks": ref_stacks,
-        "kdtree": kdtree,
-        "layer_count": layer_count,
-    }
+    return _finalize_loaded_lut(
+        lut_rgb,
+        ref_stacks,
+        layer_count,
+        metadata,
+        requested_layer_height_mm,
+        enable_predictive_matching=enable_predictive_matching,
+        model_threshold=model_threshold,
+        model_margin=model_margin,
+    )

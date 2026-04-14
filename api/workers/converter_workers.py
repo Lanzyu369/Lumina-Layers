@@ -14,6 +14,44 @@ Design rules:
 - All imports of core modules are lazy (inside function body).
 """
 
+_HIGH_FIDELITY_PIXELS_PER_MM = 10.0
+
+
+def _normalize_puzzle_piece_target_width(image_path: str, params: dict) -> dict:
+    """Stabilize puzzle-piece width against float truncation artifacts.
+    规整拼图块宽度，避免浮点截断导致的单像素偏差。
+    """
+
+    piece_boundary_geometry_path = params.get("piece_boundary_geometry_path")
+    target_width_mm = params.get("target_width_mm")
+    modeling_mode = params.get("modeling_mode")
+
+    modeling_mode_value = modeling_mode.value if hasattr(modeling_mode, "value") else modeling_mode
+    if (
+        not piece_boundary_geometry_path
+        or target_width_mm is None
+        or modeling_mode_value != "high-fidelity"
+    ):
+        return params
+
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            source_width_px = int(image.width)
+    except (OSError, ValueError):
+        return params
+
+    target_width_mm_value = float(target_width_mm)
+    truncated_width_px = max(1, int(target_width_mm_value * _HIGH_FIDELITY_PIXELS_PER_MM))
+    rounded_width_px = max(1, int(round(target_width_mm_value * _HIGH_FIDELITY_PIXELS_PER_MM)))
+    if truncated_width_px == rounded_width_px or source_width_px != rounded_width_px:
+        return params
+
+    normalized_params = dict(params)
+    normalized_params["target_width_mm"] = (source_width_px + 1e-6) / _HIGH_FIDELITY_PIXELS_PER_MM
+    return normalized_params
+
 
 def worker_generate_preview(
     image_path: str,
@@ -23,9 +61,15 @@ def worker_generate_preview(
     bg_tol: int,
     color_mode: str,
     modeling_mode: str,
+    color_layers: int | None,
+    layer_height_mm: float | None,
     quantize_colors: int,
     enable_cleanup: bool,
     is_dark: bool = True,
+    model_enable: bool = False,
+    model_only: bool = False,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
 ) -> dict:
@@ -89,6 +133,12 @@ def worker_generate_preview(
             bg_tol=bg_tol,
             color_mode=color_mode,
             modeling_mode=mode_enum,
+            color_layers=color_layers,
+            layer_height_mm=layer_height_mm,
+            model_enable=model_enable,
+            model_only=model_only,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
             quantize_colors=quantize_colors,
             enable_cleanup=enable_cleanup,
             is_dark=is_dark,
@@ -163,6 +213,8 @@ def worker_batch_convert_item(
     bg_tol: int,
     color_mode: str,
     modeling_mode_value: str,
+    color_layers: int | None,
+    layer_height_mm: float | None,
     quantize_colors: int,
     enable_cleanup: bool,
     hue_weight: float = 0.0,
@@ -208,6 +260,8 @@ def worker_batch_convert_item(
         auto_bg=auto_bg,
         bg_tol=bg_tol,
         color_mode=color_mode,
+        color_layers=color_layers,
+        layer_height_mm=layer_height_mm,
         add_loop=False,
         loop_width=4.0,
         loop_length=8.0,
@@ -256,10 +310,11 @@ def worker_generate_model(
     # Lazy imports — executed inside the worker process
     from core.converter import generate_final_model
 
+    normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
     result_tuple = generate_final_model(
         image_path=image_path,
         lut_path=lut_path,
-        **params,
+        **normalized_params,
     )
 
     # generate_final_model returns:

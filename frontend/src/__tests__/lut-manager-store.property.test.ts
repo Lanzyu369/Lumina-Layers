@@ -25,6 +25,7 @@ const lutInfoArb = fc.record({
   name: fc.string({ minLength: 1, maxLength: 20 }),
   color_mode: fc.constantFrom(...COLOR_MODES) as fc.Arbitrary<ColorMode>,
   path: fc.constant("/fake/path.npy"),
+  fingerprint: fc.constant("fp-test"),
 });
 
 // Use uniqueBy to ensure no duplicate names — real LUT lists have unique names,

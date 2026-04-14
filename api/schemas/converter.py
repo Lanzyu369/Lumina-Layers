@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
+from api.schemas.lut import LutSourceSelection
+
 # ========== Enums ==========
 
 
@@ -135,6 +137,16 @@ class ColorReplacementItem(BaseModel):
     replacement_hex: str = Field(..., description="替换目标色 (#rrggbb)")
 
 
+class RecipeOverrideItem(BaseModel):
+    """Region-scoped recipe override.
+    区域级配方覆盖项。
+    """
+
+    region_id: str = Field(..., description="区域 ID")
+    recipe: List[int] = Field(..., min_length=1, description="覆盖配方（通道索引序列）")
+    layer_order: str = Field("Top2Bottom", description="配方层序")
+
+
 class FridgeMagnetItem(BaseModel):
     """A single fridge-magnet cavity descriptor.
     单个冰箱贴磁铁槽描述。
@@ -185,7 +197,7 @@ class FridgeMagnetItem(BaseModel):
         return self
 
 
-class ConvertPreviewRequest(BaseModel):
+class ConvertPreviewRequest(LutSourceSelection):
     """Request model for generating a 2D color preview.
     生成 2D 颜色预览的请求模型。
 
@@ -195,8 +207,16 @@ class ConvertPreviewRequest(BaseModel):
     展示输入图像与 LUT 的颜色匹配效果。
 
     Attributes:
-        lut_name: Name of the LUT to use (from LUT list).
-            LUT 名称（从 LUT 列表获取）。
+        source_kind: Legacy LUT or native bundle source selector.
+            源类型选择器。
+        lut_name: Name of the LUT to use (for legacy_single).
+            LUT 名称（legacy_single 使用）。
+        material_type: Native material type (for native_bundle).
+            原生材料类型。
+        vendor: Native vendor (for native_bundle).
+            原生厂商。
+        db_names: Native DB selection list (for native_bundle).
+            原生 DB 选择列表。
         target_width_mm: Target output width in millimeters.
             目标宽度 (mm)。
         auto_bg: Whether to automatically remove background.
@@ -213,19 +233,32 @@ class ConvertPreviewRequest(BaseModel):
             是否启用孤立像素清理。
     """
 
-    lut_name: str = Field(..., description="LUT 名称")
     target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
     auto_bg: bool = Field(False, description="自动去背景")
     bg_tol: int = Field(40, ge=0, le=150, description="背景容差")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
+    color_layers: Optional[int] = Field(None, ge=1, le=20, description="叠色层数")
+    layer_height_mm: Optional[float] = Field(None, gt=0.0, le=1.0, description="叠色层高 (mm)")
+    model_enable: bool = Field(False, description="启用模型辅助匹配")
+    model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
+    model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
+    model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
 
 
-class ConvertGenerateRequest(BaseModel):
+class RecipeOverrideItem(BaseModel):
+    """Region-level recipe override for predictive/custom recipe workflows."""
+
+    region_id: str = Field(..., description="区域 ID")
+    recipe: list[int] = Field(..., min_length=1, max_length=20, description="配方层序列")
+    layer_order: str = Field("Top2Bottom", description="配方层顺序")
+
+
+class ConvertGenerateRequest(LutSourceSelection):
     """Request model for generating a final 3MF model.
     生成最终 3MF 模型的请求模型。
 
@@ -236,8 +269,16 @@ class ConvertGenerateRequest(BaseModel):
     支持浮雕、描边、掐丝珐琅、涂层、挂件环和颜色替换等完整参数控制。
 
     Attributes:
-        lut_name: Name of the LUT to use.
-            LUT 名称。
+        source_kind: Legacy LUT or native bundle source selector.
+            源类型选择器。
+        lut_name: Name of the LUT to use (for legacy_single).
+            LUT 名称（legacy_single 使用）。
+        material_type: Native material type (for native_bundle).
+            原生材料类型。
+        vendor: Native vendor (for native_bundle).
+            原生厂商。
+        db_names: Native DB selection list (for native_bundle).
+            原生 DB 选择列表。
         target_width_mm: Target output width in millimeters.
             目标宽度 (mm)。
         spacer_thick: Backing plate thickness in millimeters.
@@ -306,7 +347,6 @@ class ConvertGenerateRequest(BaseModel):
             自由色集合 (hex)。
     """
 
-    lut_name: str = Field(..., description="LUT 名称")
     target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
     spacer_thick: float = Field(1.2, ge=0.2, le=3.5, description="底板厚度 (mm)")
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
@@ -314,10 +354,17 @@ class ConvertGenerateRequest(BaseModel):
     bg_tol: int = Field(40, ge=0, le=150, description="背景容差")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
+    color_layers: Optional[int] = Field(None, ge=1, le=20, description="叠色层数")
+    layer_height_mm: Optional[float] = Field(None, gt=0.0, le=1.0, description="叠色层高 (mm)")
+    model_enable: bool = Field(False, description="启用模型辅助匹配")
+    model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
+    model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
+    model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
+    recipe_overrides: list[RecipeOverrideItem] | None = Field(None, description="区域级自定义配方覆盖")
     separate_backing: bool = Field(False, description="底板作为独立对象")
     add_loop: bool = Field(False, description="启用挂件环")
     loop_width: float = Field(4.0, ge=2, le=10, description="环宽度 (mm)")
@@ -348,6 +395,7 @@ class ConvertGenerateRequest(BaseModel):
     enable_coating: bool = Field(False, description="启用涂层")
     coating_height_mm: float = Field(0.08, ge=0.04, le=0.12, description="涂层高度 (mm)")
     replacement_regions: Optional[List[ColorReplacementItem]] = Field(None, description="颜色替换列表")
+    recipe_overrides: Optional[List[RecipeOverrideItem]] = Field(None, description="区域级配方覆盖列表")
     free_color_set: Optional[Set[str]] = Field(None, description="自由色集合 (hex)")
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
@@ -545,6 +593,26 @@ class ResetReplacementsRequest(BaseModel):
     """
 
     session_id: str = Field(..., description="Session ID")
+
+
+class RecipePredictRequest(BaseModel):
+    """Request for predicting a custom recipe color.
+    预测自定义配方颜色的请求。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    recipe: List[int] = Field(..., min_length=1, description="配方通道索引序列")
+    layer_order: str = Field("Top2Bottom", description="配方层序")
+    color_layers: int = Field(..., ge=1, le=20, description="叠色层数")
+    layer_height_mm: float = Field(..., gt=0.0, le=1.0, description="叠色层高 (mm)")
+
+
+class RecipeOverrideApplyRequest(RecipePredictRequest):
+    """Request for applying a custom recipe to selected regions.
+    将自定义配方应用到选区的请求。
+    """
+
+    region_ids: List[str] = Field(default_factory=list, description="要应用的区域 ID 列表")
 
 
 class ColorMergePreviewRequest(BaseModel):

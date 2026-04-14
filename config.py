@@ -487,7 +487,7 @@ def get_tray_runtime_policy():
 # ========== Printer Profile Registry ==========
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "bambu": "BambuStudio",
@@ -902,6 +902,9 @@ class LUTMetadata:
     base_layers: int = 10
     base_channel_idx: int = 0
     layer_order: str = "Top2Bottom"
+    schema_version: Optional[str] = None
+    capabilities: list[str] = field(default_factory=list)
+    extensions: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dictionary.
@@ -919,7 +922,8 @@ class LUTMetadata:
                 entry["color_name"] = e.color_name
             palette_obj[e.color] = entry
 
-        d = {
+        d = dict(self.extensions)
+        d.update({
             "palette": palette_obj,
             "manufacturer": self.manufacturer,
             "type": self.type,
@@ -929,9 +933,13 @@ class LUTMetadata:
             "base_layers": self.base_layers,
             "base_channel_idx": self.base_channel_idx,
             "layer_order": self.layer_order,
-        }
+        })
         if self.color_mode is not None:
             d["color_mode"] = self.color_mode
+        if self.schema_version is not None:
+            d["schema_version"] = self.schema_version
+        if self.capabilities:
+            d["capabilities"] = list(self.capabilities)
         return d
 
     @classmethod
@@ -973,6 +981,33 @@ class LUTMetadata:
                         )
                     )
 
+        known_keys = {
+            "palette",
+            "manufacturer",
+            "type",
+            "color_mode",
+            "max_color_layers",
+            "layer_height_mm",
+            "line_width_mm",
+            "base_layers",
+            "base_channel_idx",
+            "layer_order",
+            "schema_version",
+            "capabilities",
+            "name",
+            "entries",
+        }
+        extensions = {
+            key: value
+            for key, value in data.items()
+            if key not in known_keys
+        }
+
+        capabilities_raw = data.get("capabilities", [])
+        capabilities = []
+        if isinstance(capabilities_raw, list):
+            capabilities = [str(item) for item in capabilities_raw if str(item)]
+
         return cls(
             palette=palette,
             manufacturer=str(data.get("manufacturer", "") or ""),
@@ -984,7 +1019,98 @@ class LUTMetadata:
             base_layers=int(data.get("base_layers", 10)),
             base_channel_idx=int(data.get("base_channel_idx", 0)),
             layer_order=str(data.get("layer_order", "Top2Bottom")),
+            schema_version=(str(data["schema_version"]) if data.get("schema_version") is not None else None),
+            capabilities=capabilities,
+            extensions=extensions,
         )
+
+    def get_schema_version(self) -> str:
+        """Return schema version for the current LUT metadata.
+        返回当前 LUT 元数据的 schema 版本。
+        """
+        return self.schema_version or "1.0"
+
+    def get_capabilities(self) -> list[str]:
+        """Return normalized capability list.
+        返回规范化后的能力列表。
+        """
+        return get_capabilities(self)
+
+    def supports_predictive_match(self) -> bool:
+        """Whether this LUT carries predictive runtime data.
+        当前 LUT 是否携带预测式运行时数据。
+        """
+        return is_predictive_lut(self)
+
+    def supports_dynamic_layer_height(self) -> bool:
+        """Whether this LUT explicitly declares dynamic layer height support.
+        当前 LUT 是否显式声明支持动态层高。
+        """
+        return "dynamic_layer_height" in set(self.capabilities) or "dynamic_layer_height" in self.get_capabilities()
+
+    def supports_dynamic_layer_count(self) -> bool:
+        """Whether this LUT/source explicitly supports variable color-layer counts.
+        当前 LUT/source 是否显式支持可变颜色层数。
+        """
+        if "dynamic_layer_count" in self.get_capabilities():
+            return True
+        supported_modes = self.extensions.get("supported_modes")
+        if isinstance(supported_modes, list):
+            unique_counts = {
+                int(item.get("color_layers", 0))
+                for item in supported_modes
+                if isinstance(item, dict) and int(item.get("color_layers", 0)) > 0
+            }
+            return len(unique_counts) > 1
+        return False
+
+    def supports_custom_recipe(self) -> bool:
+        """Whether this LUT/source can drive custom recipe editing/prediction.
+        当前 LUT/source 是否支持自定义配方编辑/预测。
+        """
+        if "custom_recipe" in self.get_capabilities():
+            return True
+        return bool(self.extensions.get("custom_recipe_supported"))
+
+    def get_source_kind(self) -> str:
+        """Return normalized source kind for the selected color source."""
+        source_kind = self.extensions.get("source_kind")
+        if isinstance(source_kind, str) and source_kind:
+            return source_kind
+        if self.extensions.get("runtime_package") is not None:
+            return "predictive_package"
+        return "legacy_lookup"
+
+    def get_supported_modes(self) -> list[dict[str, Any]]:
+        """Return normalized supported mode list for this LUT/source."""
+        supported_modes = self.extensions.get("supported_modes")
+        if isinstance(supported_modes, list):
+            return [dict(item) for item in supported_modes if isinstance(item, dict)]
+        return []
+
+    def supports_dynamic_layer_count(self) -> bool:
+        """Whether this source supports changing color layer counts.
+        当前 source 是否支持动态叠色层数。
+        """
+        return "dynamic_layer_count" in set(self.capabilities) or "dynamic_layer_count" in self.get_capabilities()
+
+    def supports_custom_recipe(self) -> bool:
+        """Whether this source supports custom recipe editing/prediction.
+        当前 source 是否支持自定义配方编辑/预测。
+        """
+        return "custom_recipe" in set(self.capabilities) or "custom_recipe" in self.get_capabilities()
+
+    def get_source_kind(self) -> str:
+        """Return normalized source kind.
+        返回规范化后的 source 类型。
+        """
+        return get_source_kind(self)
+
+    def get_supported_modes(self) -> list[dict[str, Any]]:
+        """Return supported dynamic color-layer modes for the source.
+        返回当前 source 支持的叠色层数/层高模式列表。
+        """
+        return get_supported_modes(self)
 
     @staticmethod
     def validate_color_name(name: str) -> bool:
@@ -998,3 +1124,119 @@ class LUTMetadata:
             bool: True if valid, False otherwise. (合法返回 True，否则 False)
         """
         return isinstance(name, str) and len(name.strip()) > 0
+
+
+def get_schema_version(data_or_meta: LUTMetadata | dict | None) -> str:
+    """Return LUT schema version from metadata or raw dict.
+    从元数据或原始字典中获取 LUT schema 版本。
+    """
+    if isinstance(data_or_meta, LUTMetadata):
+        return data_or_meta.get_schema_version()
+    if isinstance(data_or_meta, dict):
+        value = data_or_meta.get("schema_version")
+        return str(value) if value is not None else "1.0"
+    return "1.0"
+
+
+def get_capabilities(data_or_meta: LUTMetadata | dict | None) -> list[str]:
+    """Return normalized LUT capability list.
+    返回规范化后的 LUT 能力列表。
+    """
+    capabilities: set[str] = set()
+    payload: dict[str, Any] = {}
+
+    if isinstance(data_or_meta, LUTMetadata):
+        capabilities.update(str(item) for item in data_or_meta.capabilities if str(item))
+        payload = dict(data_or_meta.extensions)
+    elif isinstance(data_or_meta, dict):
+        raw_caps = data_or_meta.get("capabilities", [])
+        if isinstance(raw_caps, list):
+            capabilities.update(str(item) for item in raw_caps if str(item))
+        payload = dict(data_or_meta)
+
+    if payload.get("runtime_package") is not None:
+        capabilities.add("predictive_match")
+    if payload.get("stage_model") is not None:
+        capabilities.add("predictive_model")
+    if payload.get("source_kind") in ("predictive_package", "predictive_stage_model"):
+        capabilities.add("predictive_match")
+    if payload.get("supported_modes"):
+        capabilities.add("dynamic_layer_count")
+    if payload.get("custom_recipe_supported"):
+        capabilities.add("custom_recipe")
+    if payload.get("source_kind") in ("predictive_package", "predictive_stage_model", "colordb_backed"):
+        capabilities.add("native_reference")
+    if "dynamic_layer_height" in payload.get("capabilities", []):
+        capabilities.add("dynamic_layer_height")
+
+    capabilities.add("legacy_lookup")
+    return sorted(capabilities)
+
+
+def is_predictive_lut(data_or_meta: LUTMetadata | dict | None) -> bool:
+    """Return True when predictive runtime data is present.
+    当存在预测式运行时数据时返回 True。
+    """
+    capabilities = set(get_capabilities(data_or_meta))
+    if "predictive_match" in capabilities:
+        return True
+    if isinstance(data_or_meta, LUTMetadata):
+        return data_or_meta.extensions.get("runtime_package") is not None
+    if isinstance(data_or_meta, dict):
+        return data_or_meta.get("runtime_package") is not None
+    return False
+
+
+def get_source_kind(data_or_meta: LUTMetadata | dict | None) -> str:
+    """Return normalized source kind for metadata or raw payload."""
+    if isinstance(data_or_meta, LUTMetadata):
+        source_kind = data_or_meta.extensions.get("source_kind")
+        if isinstance(source_kind, str) and source_kind:
+            return source_kind
+        if data_or_meta.extensions.get("runtime_package") is not None:
+            return "predictive_package"
+        if data_or_meta.extensions.get("stage_model") is not None:
+            return "predictive_stage_model"
+        return "legacy_lookup"
+    if isinstance(data_or_meta, dict):
+        source_kind = data_or_meta.get("source_kind")
+        if isinstance(source_kind, str) and source_kind:
+            return source_kind
+        if data_or_meta.get("runtime_package") is not None:
+            return "predictive_package"
+        if data_or_meta.get("stage_model") is not None:
+            return "predictive_stage_model"
+        return "legacy_lookup"
+    return "legacy_lookup"
+
+
+def get_supported_modes(data_or_meta: LUTMetadata | dict | None) -> list[dict[str, Any]]:
+    """Return normalized supported mode list.
+    返回规范化的支持模式列表。
+    """
+    payload: dict[str, Any] = {}
+    if isinstance(data_or_meta, LUTMetadata):
+        payload = dict(data_or_meta.extensions)
+    elif isinstance(data_or_meta, dict):
+        payload = dict(data_or_meta)
+
+    raw_modes = payload.get("supported_modes", [])
+    if not isinstance(raw_modes, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_modes:
+        if not isinstance(item, dict):
+            continue
+        try:
+            normalized.append(
+                {
+                    "mode_key": str(item.get("mode_key") or f"{float(item.get('layer_height_mm', 0.08)):.2f}x{int(item.get('color_layers', 0))}"),
+                    "color_layers": int(item.get("color_layers", 0)),
+                    "layer_height_mm": float(item.get("layer_height_mm", 0.08)),
+                    "layer_order": str(item.get("layer_order", "Top2Bottom")),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return normalized

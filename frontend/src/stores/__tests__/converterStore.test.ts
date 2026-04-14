@@ -10,6 +10,12 @@ import { StructureMode } from '../../api/types';
 
 function resetStore(): void {
   useConverterStore.setState({
+    source_version: 'legacy',
+    lut_name: 'test-lut',
+    nativeBrandGroups: [],
+    nativeBrandGroupsLoading: false,
+    selectedNativeBrandKey: '',
+    selectedNativeDbNames: [],
     selectedColor: null,
     colorRemapMap: {},
     remapHistory: [],
@@ -192,6 +198,40 @@ describe('clearAllRemaps', () => {
 
     expect(store().colorRemapMap).toEqual({});
     expect(store().remapHistory).toEqual([]);
+  });
+});
+
+describe('handleFilesSelect clears stale puzzle state', () => {
+  beforeEach(() => {
+    resetConverterState({
+      puzzleEnabled: true,
+      puzzleOverlayUrl: '/api/files/overlay',
+      puzzleWarnings: ['warning'],
+      puzzleResolvedRows: 2,
+      puzzleResolvedCols: 3,
+      puzzleResolvedPieceCount: 6,
+    });
+  });
+
+  it('clears puzzle mode when selecting a new single file', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:test-preview';
+    URL.revokeObjectURL = () => {};
+
+    try {
+      const file = new File(['png'], 'fresh.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([file]);
+
+      const state = useConverterStore.getState();
+      expect(state.puzzleEnabled).toBe(false);
+      expect(state.puzzleOverlayUrl).toBeNull();
+      expect(state.puzzleWarnings).toEqual([]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
   });
 });
 
@@ -562,6 +602,21 @@ describe('fridge magnet mode', () => {
     expect(state.fridge_magnets).toHaveLength(2);
     expectMagnetsToNotOverlap(state.fridge_magnets);
     expect(new Set(state.fridge_magnets.map((item) => item.center_y_mm)).size).toBeGreaterThan(1);
+  });
+
+  it('keeps mutually exclusive modes disabled after fridge mode is enabled', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+    store.setStructureMode(StructureMode.DOUBLE_SIDED);
+    store.setLargeFormatEnabled(true);
+    store.setAddLoop(true);
+
+    const state = useConverterStore.getState();
+    expect(state.enable_fridge_magnet).toBe(true);
+    expect(state.structure_mode).toBe(StructureMode.SINGLE_SIDED);
+    expect(state.largeFormatEnabled).toBe(false);
+    expect(state.add_loop).toBe(false);
   });
 });
 

@@ -11,11 +11,11 @@ S06 — 体素矩阵构建（5 种模式）。
 - _build_cloisonne_voxel_matrix: 掐丝珐琅体素矩阵
 """
 
-import time
 import logging
+import time
 import numpy as np
 
-from config import PrinterConfig
+from config import PrinterConfig, get_source_kind
 
 _log = logging.getLogger(__name__)
 
@@ -237,6 +237,31 @@ def _carve_fridge_magnet_cavities(
         )
 
     return full_matrix
+
+
+def _resolve_generation_backing_color_id(
+    backing_color_id: int,
+    lut_metadata,
+) -> int:
+    """Resolve the backing fill id for actual generation.
+    解析实际生成时使用的底板填充编号。
+    """
+    if lut_metadata is None:
+        return int(backing_color_id)
+
+    if get_source_kind(lut_metadata) == "legacy_lookup":
+        return int(backing_color_id)
+
+    base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", backing_color_id))
+    if base_channel_idx >= 0:
+        return base_channel_idx
+
+    _log.warning(
+        "[S06] Invalid metadata base_channel_idx=%s for generation, falling back to backing_color_id=%s",
+        base_channel_idx,
+        backing_color_id,
+    )
+    return int(backing_color_id)
 
 
 def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
@@ -643,6 +668,8 @@ def run(ctx: dict) -> dict:
     relief_global_max_height = ctx.get("relief_global_max_height")
     enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
     fridge_magnets = ctx.get("fridge_magnets") or []
+    lut_metadata = ctx.get("lut_metadata")
+    effective_backing_color_id = _resolve_generation_backing_color_id(backing_color_id, lut_metadata)
     if enable_fridge_magnet and fridge_magnets:
         min_fridge_spacer_thick = _resolve_min_fridge_spacer_thick(fridge_magnets)
         if spacer_thick + 1e-9 < min_fridge_spacer_thick:
@@ -664,7 +691,7 @@ def run(ctx: dict) -> dict:
                 _log.info(f"[S06] 5-Color Extended: 2.5D relief mode disabled (incompatible)")
                 enable_relief = False
             full_matrix, backing_metadata = _build_voxel_matrix_faceup(
-                material_matrix, mask_solid, spacer_thick, backing_color_id
+                material_matrix, mask_solid, spacer_thick, effective_backing_color_id
             )
 
         # ========== Cloisonne Mode ==========
@@ -683,7 +710,12 @@ def run(ctx: dict) -> dict:
             mask_wireframe = processor._extract_wireframe_mask(matched_rgb, target_w, pixel_scale, wire_width_mm)
 
             full_matrix, backing_metadata = _build_cloisonne_voxel_matrix(
-                material_matrix, mask_solid, mask_wireframe, spacer_thick, wire_height_mm, backing_color_id
+                material_matrix,
+                mask_solid,
+                mask_wireframe,
+                spacer_thick,
+                wire_height_mm,
+                effective_backing_color_id,
             )
 
         # ========== 2.5D Relief Mode ==========
@@ -729,7 +761,7 @@ def run(ctx: dict) -> dict:
                     color_height_map=color_height_map if color_height_map else {},
                     default_height=spacer_thick,
                     structure_mode=structure_mode,
-                    backing_color_id=backing_color_id,
+                    backing_color_id=effective_backing_color_id,
                     pixel_scale=pixel_scale,
                     height_matrix=heightmap_height_matrix,
                     global_max_height=relief_global_max_height,
@@ -745,14 +777,14 @@ def run(ctx: dict) -> dict:
                     color_height_map=color_height_map,
                     default_height=spacer_thick,
                     structure_mode=structure_mode,
-                    backing_color_id=backing_color_id,
+                    backing_color_id=effective_backing_color_id,
                     pixel_scale=pixel_scale,
                     global_max_height=relief_global_max_height,
                 )
             else:
                 # Original flat voxel matrix
                 full_matrix, backing_metadata = _build_voxel_matrix(
-                    material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id
+                    material_matrix, mask_solid, spacer_thick, structure_mode, effective_backing_color_id
                 )
 
         if enable_fridge_magnet:
@@ -773,12 +805,19 @@ def run(ctx: dict) -> dict:
 
     except (ValueError, TypeError, KeyError, RuntimeError, OSError) as e:
         _log.error(f"[S06] Error marking backing layer: {e}")
-        _log.warning("[S06] Falling back to original behavior (backing_color_id=0)")
+        _log.warning(
+            "[S06] Falling back to original behavior (backing_color_id=%s)",
+            effective_backing_color_id,
+        )
 
         # Fallback to original behavior
         try:
             full_matrix, backing_metadata = _build_voxel_matrix(
-                material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0
+                material_matrix,
+                mask_solid,
+                spacer_thick,
+                structure_mode,
+                backing_color_id=effective_backing_color_id,
             )
             total_layers = full_matrix.shape[0]
             _log.info(f"[S06] Fallback successful: {full_matrix.shape} (ZxHxW)")

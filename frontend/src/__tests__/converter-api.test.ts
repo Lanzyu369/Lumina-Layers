@@ -9,6 +9,7 @@ import {
   fetchLutList,
   getFileUrl,
 } from "../api/converter";
+import { fetchLutCatalog } from "../api/lut";
 import {
   ColorMode,
   ModelingMode,
@@ -36,6 +37,7 @@ beforeEach(() => {
 
 describe("convertPreview", () => {
   const previewParams: ConvertPreviewRequest = {
+    source_kind: "legacy_single",
     lut_name: "test-lut",
     target_width_mm: 80,
     auto_bg: true,
@@ -97,10 +99,60 @@ describe("convertPreview", () => {
       "Network Error"
     );
   });
+
+  it("serializes native bundle source fields into FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        session_id: "sess-native",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/native-prev",
+        palette: [],
+        dimensions: { width: 200, height: 150 },
+      },
+    });
+
+    const file = new File(["img-data"], "photo.png", { type: "image/png" });
+    const result = await convertPreview(file, {
+      source_kind: "native_bundle",
+      material_type: "PLA",
+      vendor: "Vendor A",
+      db_names: ["DB-A", "DB-B"],
+      color_layers: 5,
+      layer_height_mm: 0.08,
+      model_enable: true,
+      model_only: false,
+      target_width_mm: 80,
+      auto_bg: true,
+      bg_tol: 40,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_weight: 0,
+      chroma_gate: 0,
+      is_dark: false,
+    });
+
+    const [, rawFormData] = mockPost.mock.calls[0];
+    const formData = rawFormData as FormData;
+    expect(formData.get("source_kind")).toBe("native_bundle");
+    expect(formData.get("material_type")).toBe("PLA");
+    expect(formData.get("vendor")).toBe("Vendor A");
+    expect(formData.get("db_names")).toBe(JSON.stringify(["DB-A", "DB-B"]));
+    expect(formData.get("color_layers")).toBe("5");
+    expect(formData.get("layer_height_mm")).toBe("0.08");
+    expect(formData.get("model_enable")).toBe("true");
+    expect(formData.get("model_only")).toBe("false");
+    expect(formData.has("model_threshold")).toBe(false);
+    expect(formData.has("model_margin")).toBe(false);
+    expect(result.session_id).toBe("sess-native");
+  });
 });
 
 describe("convertGenerate", () => {
   const generateParams: ConvertGenerateRequest = {
+    source_kind: "legacy_single",
     lut_name: "gen-lut",
     target_width_mm: 100,
     auto_bg: false,
@@ -211,6 +263,59 @@ describe("convertGenerate", () => {
     await expect(convertGenerate("sess-2", generateParams)).rejects.toThrow(
       "Request failed with status code 500"
     );
+  });
+
+  it("sends native bundle source fields in the JSON body", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { status: "ok", message: "done", download_url: "/api/files/native-model" },
+    });
+
+    const nativeParams: ConvertGenerateRequest = {
+      source_kind: "native_bundle",
+      material_type: "PLA",
+      vendor: "Vendor A",
+      db_names: ["DB-A"],
+      color_layers: 5,
+      layer_height_mm: 0.08,
+      model_enable: true,
+      model_only: false,
+      target_width_mm: 100,
+      auto_bg: false,
+      bg_tol: 30,
+      color_mode: ColorMode.EIGHT_COLOR,
+      modeling_mode: ModelingMode.PIXEL,
+      quantize_colors: 64,
+      enable_cleanup: false,
+      hue_weight: 0,
+      chroma_gate: 0,
+      is_dark: true,
+      spacer_thick: 1.2,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      separate_backing: true,
+      add_loop: false,
+      loop_width: 4,
+      loop_length: 8,
+      loop_hole: 2.5,
+      enable_relief: false,
+      heightmap_max_height: 5.0,
+      enable_outline: false,
+      outline_width: 2.0,
+      enable_cloisonne: false,
+      wire_width_mm: 0.4,
+      wire_height_mm: 0.4,
+      enable_coating: false,
+      coating_height_mm: 0.08,
+    };
+
+    await convertGenerate("sess-native", nativeParams);
+
+    expect(mockPost).toHaveBeenCalledOnce();
+    const [url, body] = mockPost.mock.calls[0];
+    expect(url).toBe("/convert/generate");
+    expect(body).toEqual({
+      session_id: "sess-native",
+      params: nativeParams,
+    });
   });
 });
 
@@ -408,6 +513,42 @@ describe("fetchLutList", () => {
   it("propagates network errors", async () => {
     mockGet.mockRejectedValueOnce(new Error("Network Error"));
     await expect(fetchLutList()).rejects.toThrow("Network Error");
+  });
+});
+
+describe("fetchLutCatalog", () => {
+  it("returns the grouped legacy catalog and native db option objects", async () => {
+    const mockData = {
+      legacy_groups: [
+        {
+          group_name: "Preset",
+          items: [
+            { name: "lut-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a.npy", fingerprint: "fp-a" },
+          ],
+        },
+      ],
+      native_brand_groups: [
+        {
+          brand_key: "bambulab_pla",
+          material_type: "PLA",
+          vendor: "Bambu Lab",
+          display_name: "Bambu PLA",
+          db_options: [
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-db-a" },
+          ],
+          default_db_names: ["DB-A"],
+          supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
+        },
+      ],
+    };
+    mockGet.mockResolvedValueOnce({ data: mockData });
+
+    const result = await fetchLutCatalog();
+
+    expect(mockGet).toHaveBeenCalledWith("/lut/catalog");
+    expect(result).toEqual(mockData);
+    expect(result.legacy_groups[0].items[0].name).toBe("lut-a");
+    expect(result.native_brand_groups[0].db_options[0].name).toBe("DB-A");
   });
 });
 

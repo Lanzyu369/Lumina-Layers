@@ -16,6 +16,77 @@ import {
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
 
+function localizeLutCapability(
+  capability: string,
+  t: (key: string) => string,
+): string {
+  switch (capability) {
+    case "legacy_lookup":
+      return t("lut_info_capability_legacy_lookup");
+    case "predictive_match":
+      return t("lut_info_capability_predictive_match");
+    case "predictive_model":
+      return t("lut_info_capability_predictive_model");
+    case "dynamic_layer_height":
+      return t("lut_info_capability_dynamic_layer_height");
+    case "dynamic_layer_count":
+      return t("lut_info_capability_dynamic_layer_count");
+    case "custom_recipe":
+      return t("lut_info_capability_custom_recipe");
+    case "native_reference":
+      return t("lut_info_capability_native_reference");
+    default:
+      return capability;
+  }
+}
+
+function renderLutInfoDetail(
+  info: {
+    schema_version?: string;
+    capabilities?: string[];
+    source_kind?: string;
+    supported_modes?: Array<{ color_layers: number; layer_height_mm: number }>;
+    supports_predictive_match?: boolean;
+    supports_dynamic_layer_height?: boolean;
+    supports_dynamic_layer_count?: boolean;
+    supports_custom_recipe?: boolean;
+  },
+  t: (key: string) => string,
+): string {
+  const capabilityLabels = (info.capabilities ?? []).map((capability) =>
+    localizeLutCapability(capability, t),
+  );
+  const summary = [
+    `${t("lut_info_schema_label")}: ${info.schema_version ?? "1.0"}`,
+    `${t("lut_info_source_kind_label")}: ${info.source_kind ?? "legacy_lookup"}`,
+    info.supports_predictive_match
+      ? t("lut_info_predictive_enabled")
+      : t("lut_info_predictive_disabled"),
+    info.supports_dynamic_layer_height
+      ? t("lut_info_dynamic_enabled")
+      : t("lut_info_dynamic_disabled"),
+    info.supports_dynamic_layer_count
+      ? t("lut_info_dynamic_count_enabled")
+      : t("lut_info_dynamic_count_disabled"),
+    info.supports_custom_recipe
+      ? t("lut_info_custom_recipe_enabled")
+      : t("lut_info_custom_recipe_disabled"),
+  ];
+  if (capabilityLabels.length > 0) {
+    summary.push(
+      `${t("lut_info_capabilities_label")}: ${capabilityLabels.join(", ")}`,
+    );
+  }
+  if ((info.supported_modes ?? []).length > 0) {
+    summary.push(
+      `${t("lut_info_supported_modes_label")}: ${(info.supported_modes ?? [])
+        .map((mode) => `${mode.color_layers}L@${mode.layer_height_mm.toFixed(2)}mm`)
+        .join(", ")}`,
+    );
+  }
+  return summary.join(" | ");
+}
+
 export default function LutManagerPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
@@ -102,9 +173,14 @@ export default function LutManagerPanel() {
             )}
             {primaryInfo && (
               <div className="rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-300">
-                {t("lut_manager_mode_summary")
-                  .replace("{mode}", primaryInfo.color_mode)
-                  .replace("{count}", String(primaryInfo.color_count))}
+                <div>
+                  {t("lut_manager_mode_summary")
+                    .replace("{mode}", primaryInfo.color_mode)
+                    .replace("{count}", String(primaryInfo.color_count))}
+                </div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {renderLutInfoDetail(primaryInfo, t)}
+                </div>
               </div>
             )}
             {isPrimaryModeInvalid && (
@@ -197,8 +273,11 @@ export default function LutManagerPanel() {
                       />
                       <span className="truncate">{name}</span>
                       {info && (
-                        <span className="ml-auto shrink-0 text-xs text-slate-500 dark:text-slate-400">
-                          {info.color_mode} ({info.color_count})
+                        <span className="ml-auto shrink-0 text-right text-xs text-slate-500 dark:text-slate-400">
+                          <span>{info.color_mode} ({info.color_count})</span>
+                          <span className="block">
+                            {renderLutInfoDetail(info, t)}
+                          </span>
                         </span>
                       )}
                     </label>

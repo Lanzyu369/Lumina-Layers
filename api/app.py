@@ -51,6 +51,7 @@ from api.routers import (
     health_router,
     lut_router,
     slicer_router,
+    single_stage_router,
     system_router,
     vectorizer_router,
 )
@@ -180,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(lut_router)
     app.include_router(slicer_router)
+    app.include_router(single_stage_router)
     app.include_router(system_router)
     app.include_router(vectorizer_router)
 
