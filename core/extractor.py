@@ -6,6 +6,10 @@ Extracts color data from printed calibration boards.
 
 import os
 import logging
+import itertools
+import math
+import re
+from functools import lru_cache
 import numpy as np
 import cv2
 from config import (
@@ -20,7 +24,6 @@ from config import (
 from utils import Stats
 from utils.lut_manager import LUTManager
 from core.errors import CoreProcessingError
-from core.recipe_order import convert_recipe_between_orders
 
 log = logging.getLogger(__name__)
 EXTRACTOR_HANDLED_ERRORS = (
@@ -32,6 +35,9 @@ EXTRACTOR_HANDLED_ERRORS = (
     OSError,
     RuntimeError,
 )
+EIGHT_COLOR_PAGE_CAPACITY = 1369
+EIGHT_COLOR_FULL_TOTAL_RECIPES = 8 ** 5
+EIGHT_COLOR_FULL_TOTAL_PAGES = int(math.ceil(EIGHT_COLOR_FULL_TOTAL_RECIPES / EIGHT_COLOR_PAGE_CAPACITY))
 
 
 def _srgb_to_linear(arr: np.ndarray) -> np.ndarray:
@@ -61,6 +67,86 @@ def _linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     c = np.clip(arr, 0.0, 1.0)
     srgb = np.where(c <= 0.0031308, 12.92 * c, 1.055 * c ** (1.0 / 2.4) - 0.055)
     return np.clip(np.round(srgb * 255.0), 0, 255).astype(np.uint8)
+
+
+_ROI_FRAC = 0.6
+_MIN_HALF_ROI = 4
+
+
+def _compute_sampling_geometry(
+    grid_size: int,
+    physical_grid: int,
+    zoom: float,
+    barrel: float,
+    offset_x: float,
+    offset_y: float,
+    roi_frac: float = _ROI_FRAC,
+    min_half_roi: int = _MIN_HALF_ROI,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pre-compute corrected cell centers and per-cell adaptive ROI sizes.
+    预计算校正后的色块中心坐标和逐色块自适应 ROI 尺寸。
+
+    The ROI for each cell is bounded by both a fraction of the nominal grid
+    pitch and the local post-warp center-to-center spacing, preventing
+    overlap under zoom / barrel-distortion extremes.
+
+    Args:
+        grid_size: Data cells per side (e.g. 32 for 4-color).
+            (每边数据色块数)
+        physical_grid: Physical grid dimension including borders.
+            (包含边框的物理网格维度)
+        zoom: Zoom correction factor. (缩放校正因子)
+        barrel: Barrel distortion coefficient. (桶形畸变系数)
+        offset_x: Global X pixel offset. (全局 X 像素偏移)
+        offset_y: Global Y pixel offset. (全局 Y 像素偏移)
+        roi_frac: Fraction of nominal cell size to sample (default 0.6).
+            (采样区域占名义色块尺寸的比例)
+        min_half_roi: Desired minimum half-ROI in pixels for nominal
+            sizing (default 4).  The actual per-cell value may be smaller
+            when local spacing requires it; the absolute floor is 1 px.
+            (名义半 ROI 期望下限；实际值受局部间距约束，绝对下限为 1px)
+
+    Returns:
+        Tuple of (centers_x, centers_y, half_roi_map), each shaped
+        (grid_size, grid_size).
+        (中心 X 坐标、中心 Y 坐标、逐色块半 ROI 尺寸)
+    """
+    cell_px = DST_SIZE / physical_grid
+    nominal_half_roi = max(min_half_roi, int(cell_px * roi_frac / 2))
+
+    rs = np.arange(grid_size)
+    cs = np.arange(grid_size)
+    rr, cc = np.meshgrid(rs, cs, indexing="ij")
+
+    phys_r = rr + 1.0
+    phys_c = cc + 1.0
+    nx = (phys_c + 0.5) / physical_grid * 2 - 1
+    ny = (phys_r + 0.5) / physical_grid * 2 - 1
+
+    rad = np.sqrt(nx**2 + ny**2)
+    k = 1 + barrel * (rad**2)
+    dx = nx * k * zoom
+    dy = ny * k * zoom
+
+    centers_x = (dx + 1) / 2 * DST_SIZE + offset_x
+    centers_y = (dy + 1) / 2 * DST_SIZE + offset_y
+
+    half_roi_map = np.full((grid_size, grid_size), float(nominal_half_roi))
+
+    if grid_size > 1:
+        h_gaps = np.abs(np.diff(centers_x, axis=1))
+        half_roi_map[:, 1:] = np.minimum(half_roi_map[:, 1:], h_gaps / 2)
+        half_roi_map[:, :-1] = np.minimum(half_roi_map[:, :-1], h_gaps / 2)
+
+        v_gaps = np.abs(np.diff(centers_y, axis=0))
+        half_roi_map[1:, :] = np.minimum(half_roi_map[1:, :], v_gaps / 2)
+        half_roi_map[:-1, :] = np.minimum(half_roi_map[:-1, :], v_gaps / 2)
+
+    # Gap bound is the hard physical constraint; absolute floor is 1px
+    # to guarantee a valid (≥2×2) ROI even under extreme compression.
+    half_roi_map = np.maximum(half_roi_map, 1).astype(int)
+
+    return centers_x, centers_y, half_roi_map
 
 
 def _draw_dashed_rect(
@@ -121,14 +207,59 @@ def _normalize_6color_mode(color_mode: str) -> str:
     return color_mode
 
 
-def _generate_recipes(color_mode: str, total_cells: int, page_choice: str = "Page 1") -> np.ndarray:
+def _parse_page_number(page_choice: str, default: int = 1) -> int:
+    match = re.search(r"(\d+)", str(page_choice))
+    if match is None:
+        return default
+    page_number = int(match.group(1))
+    return page_number if page_number >= 1 else default
+
+
+@lru_cache(maxsize=1)
+def _load_selected_8color_stacks() -> np.ndarray:
+    path = get_asset_path("smart_8color_stacks.npy")
+    all_stacks = np.load(path)
+    return np.array([s[::-1] for s in all_stacks], dtype=np.int32)
+
+
+@lru_cache(maxsize=1)
+def _build_full_8color_stacks() -> np.ndarray:
+    return np.array(list(itertools.product(range(8), repeat=5)), dtype=np.int32)
+
+
+def _get_8color_page_cell_count(page_choice: str, eight_color_full_export: bool) -> int:
+    if not eight_color_full_export:
+        return EIGHT_COLOR_PAGE_CAPACITY
+    page_number = min(max(_parse_page_number(page_choice), 1), EIGHT_COLOR_FULL_TOTAL_PAGES)
+    start = (page_number - 1) * EIGHT_COLOR_PAGE_CAPACITY
+    remaining = max(0, EIGHT_COLOR_FULL_TOTAL_RECIPES - start)
+    return min(EIGHT_COLOR_PAGE_CAPACITY, remaining)
+
+
+def _get_8color_page_stacks(page_choice: str, eight_color_full_export: bool) -> np.ndarray:
+    all_stacks = _build_full_8color_stacks() if eight_color_full_export else _load_selected_8color_stacks()
+    total_pages = EIGHT_COLOR_FULL_TOTAL_PAGES if eight_color_full_export else 2
+    page_number = min(max(_parse_page_number(page_choice), 1), total_pages)
+    start = (page_number - 1) * EIGHT_COLOR_PAGE_CAPACITY
+    return all_stacks[start : start + EIGHT_COLOR_PAGE_CAPACITY]
+
+
+def _generate_recipes(
+    color_mode: str,
+    total_cells: int,
+    page_choice: str = "Page 1",
+    eight_color_full_export: bool = False,
+) -> np.ndarray:
     """Generate recipe (stacking) arrays for each cell based on color mode.
     根据颜色模式为每个色块生成配方（堆叠）数组。
 
     Args:
         color_mode (str): Color system mode. (颜色模式)
         total_cells (int): Number of color cells. (色块数量)
-        page_choice (str): Page selection for dual-page modes. (双页模式的页面选择)
+        page_choice (str): Page selection for paged modes. (分页模式的页面选择)
+        eight_color_full_export (bool): Whether 8-color mode should use the
+            exhaustive full-page recipe set instead of the compact two-page set.
+            8 色模式是否使用全量分页配方，而非精简双页配方。
 
     Returns:
         np.ndarray: Stacks array (N, L) int32. (堆叠配方数组)
@@ -142,21 +273,12 @@ def _generate_recipes(color_mode: str, total_cells: int, page_choice: str = "Pag
             for _ in range(5):
                 digits.append(temp % 2)
                 temp //= 2
-            stacks.append(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
+            stacks.append(digits[::-1])
         return np.array(stacks, dtype=np.int32)
 
     if "8-Color" in color_mode:
-        # Load from pre-computed asset, reverse to top-to-bottom convention
         try:
-            path = get_asset_path("smart_8color_stacks.npy")
-            all_stacks = np.load(path)
-            all_stacks = np.array(
-                [convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom") for s in all_stacks]
-            )
-            per_page = 1369
-            page_idx = 1 if "2" in str(page_choice) else 0
-            start = page_idx * per_page
-            stacks = all_stacks[start : start + per_page]
+            stacks = _get_8color_page_stacks(page_choice, eight_color_full_export)
             return stacks[:total_cells].astype(np.int32)
         except (OSError, ValueError, ImportError) as exc:
             log.warning(
@@ -175,7 +297,7 @@ def _generate_recipes(color_mode: str, total_cells: int, page_choice: str = "Pag
 
             top_stacks = get_top_1296_colors()
             # get_top_1296_colors 返回底到顶约定，需反转为顶到底（与校色板生成一致）
-            stacks = [convert_recipe_between_orders(s, "Bottom2Top", "Top2Bottom") for s in top_stacks[:total_cells]]
+            stacks = [list(reversed(s)) for s in top_stacks[:total_cells]]
             return np.array(stacks, dtype=np.int32)
         except (OSError, ValueError, ImportError) as exc:
             log.warning(
@@ -216,7 +338,7 @@ def _generate_recipes(color_mode: str, total_cells: int, page_choice: str = "Pag
                 for _ in range(5):
                     digits.append(temp % 4)
                     temp //= 4
-                stacks.append(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
+                stacks.append(digits[::-1])
             return np.array(stacks, dtype=np.int32)
 
     # Default: 4-Color (RYBW/CMYW) 鈥?4^5 = 1024 combinations, 5 layers
@@ -227,7 +349,7 @@ def _generate_recipes(color_mode: str, total_cells: int, page_choice: str = "Pag
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stacks.append(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
+        stacks.append(digits[::-1])
     return np.array(stacks, dtype=np.int32)
 
 
@@ -247,7 +369,7 @@ def generate_simulated_reference():
         for _ in range(5):
             digits.append(temp % 4)
             temp //= 4
-        stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
+        stack = digits[::-1]
 
         mixed = sum(colors[mid] for mid in stack) / 5.0
         ref_img[i // DATA_GRID_SIZE, i % DATA_GRID_SIZE] = mixed.astype(np.uint8)
@@ -425,7 +547,17 @@ def apply_auto_white_balance(img: np.ndarray) -> np.ndarray:
 
 
 def run_extraction(
-    img, points, offset_x, offset_y, zoom, barrel, bright, color_mode="CMYW", page_choice="Page 1", auto_wb=False
+    img,
+    points,
+    offset_x,
+    offset_y,
+    zoom,
+    barrel,
+    bright,
+    color_mode="CMYW",
+    page_choice="Page 1",
+    auto_wb=False,
+    eight_color_full_export=False,
 ):
     """
     Main extraction pipeline with dynamic grid size support.
@@ -439,8 +571,10 @@ def run_extraction(
         barrel: Barrel distortion correction
         bright: Enable brightness correction
         color_mode: Color system mode
-        page_choice: Page selection for dual-page modes
+        page_choice: Page selection for paged modes
         auto_wb: Enable automatic white balance
+        eight_color_full_export: Whether 8-color mode uses the exhaustive
+            full-page calibration set
 
     Returns:
         Tuple of (visualization, preview, lut_path, status_message)
@@ -458,7 +592,7 @@ def run_extraction(
     elif "8-Color" in color_mode:
         grid_size = 37  # Data: 37x37 (1369色)
         physical_grid = 39  # Physical: 39x39
-        total_cells = 1369
+        total_cells = _get_8color_page_cell_count(page_choice, eight_color_full_export)
     elif "6-Color" in color_mode:
         grid_size = 36  # 核心数据还是 36x36 (1296色)
         physical_grid = 38  # 物理上有 38x38 (含边框)
@@ -481,7 +615,7 @@ def run_extraction(
         total_cells = 1024
 
     log.info(
-        f"[EXTRACTOR] Mode: {color_mode}, Logic: {grid_size}x{grid_size} inside {physical_grid}x{physical_grid}, auto_wb={auto_wb}, bright={bright}"
+        f"[EXTRACTOR] Mode: {color_mode}, Logic: {grid_size}x{grid_size} inside {physical_grid}x{physical_grid}, auto_wb={auto_wb}, bright={bright}, eight_color_full_export={eight_color_full_export}"
     )
 
     # Perspective transform
@@ -500,55 +634,49 @@ def run_extraction(
     if bright:
         warped = apply_brightness_correction(warped)
 
-    # Sampling
+    # Sampling — pre-compute corrected centers and per-cell adaptive ROI
     extracted = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
     vis = warped.copy()
 
-    # BW模式特殊处理：只提取前 32 个色块
-    if color_mode == "BW (Black & White)" or color_mode == "BW":
-        cells_to_extract = 32
-    else:
-        cells_to_extract = grid_size * grid_size
+    centers_x, centers_y, half_roi_map = _compute_sampling_geometry(
+        grid_size, physical_grid, zoom, barrel, offset_x, offset_y,
+    )
+    cell_px = DST_SIZE / physical_grid
+    marker_size = max(8, int(cell_px * 0.3))
+
+    cells_to_extract = total_cells
 
     extracted_count = 0
     for r in range(grid_size):
         for c in range(grid_size):
-            # BW模式：只提取前 32 个
             if extracted_count >= cells_to_extract:
                 break
 
-            # 【关键】计算物理位置时的偏移
-            # 无论是 4色 还是 6色，因为都有 1 格边框，所以都需要 +1
-            phys_r = r + 1
-            phys_c = c + 1
+            cx = float(centers_x[r, c])
+            cy = float(centers_y[r, c])
+            hr = int(half_roi_map[r, c])
 
-            # 归一化坐标 [-1, 1] (基于 physical_grid)
-            nx = (phys_c + 0.5) / physical_grid * 2 - 1
-            ny = (phys_r + 0.5) / physical_grid * 2 - 1
+            # Clamp ROI to image; sample whenever the clamped region has area
+            x0 = int(max(0, cx - hr))
+            y0 = int(max(0, cy - hr))
+            x1 = int(min(DST_SIZE, cx + hr))
+            y1 = int(min(DST_SIZE, cy + hr))
 
-            rad = np.sqrt(nx**2 + ny**2)
-            k = 1 + barrel * (rad**2)
-            dx, dy = nx * k * zoom, ny * k * zoom
-
-            cx = (dx + 1) / 2 * DST_SIZE + offset_x
-            cy = (dy + 1) / 2 * DST_SIZE + offset_y
-
-            if 0 <= cx < DST_SIZE and 0 <= cy < DST_SIZE:
-                x0, y0 = int(max(0, cx - 4)), int(max(0, cy - 4))
-                x1, y1 = int(min(DST_SIZE, cx + 4)), int(min(DST_SIZE, cy + 4))
+            if x1 > x0 and y1 > y0:
                 reg = warped[y0:y1, x0:x1]
                 if reg.size > 0:
                     avg = _linear_to_srgb(_srgb_to_linear(reg).mean(axis=(0, 1)))
                 else:
                     avg = [0, 0, 0]
-                cv2.drawMarker(vis, (int(cx), int(cy)), (0, 255, 0), cv2.MARKER_CROSS, 8, 1)
+                draw_cx = int(np.clip(cx, 0, DST_SIZE - 1))
+                draw_cy = int(np.clip(cy, 0, DST_SIZE - 1))
+                cv2.drawMarker(vis, (draw_cx, draw_cy), (0, 255, 0), cv2.MARKER_CROSS, marker_size, 1)
                 _draw_dashed_rect(vis, (x0, y0), (x1, y1), (0, 255, 0), 1, 4)
             else:
                 avg = [0, 0, 0]
             extracted[r, c] = avg
             extracted_count += 1
 
-        # BW模式：提取够 32 个就退出外层循环
         if extracted_count >= cells_to_extract:
             break
 
@@ -562,7 +690,12 @@ def run_extraction(
         color_mode=metadata_mode,
     )
     # 根据颜色模式生成配方
-    stacks = _generate_recipes(color_mode, total_cells, page_choice)
+    stacks = _generate_recipes(
+        color_mode,
+        total_cells,
+        page_choice,
+        eight_color_full_export=eight_color_full_export,
+    )
     LUTManager.save_keyed_json(LUT_FILE_PATH, rgb_flat, stacks, metadata)
     prev = cv2.resize(extracted, (512, 512), interpolation=cv2.INTER_NEAREST)
 

@@ -4,7 +4,10 @@ import {
   CalibrationColorMode as CalibrationColorModeEnum,
   BackingColor as BackingColorEnum,
 } from "../api/types";
-import { calibrationGenerate, generateSingleStageKit } from "../api/calibration";
+import {
+  calibrationGenerate,
+  generateSingleStageKit,
+} from "../api/calibration";
 import { clampValue } from "./converter";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
@@ -68,7 +71,8 @@ function buildSingleStagePalette(
   colorMode: CalibrationColorMode,
   materialDefault: string,
 ) {
-  return (PALETTE_PRESETS[colorMode] ??
+  return (
+    PALETTE_PRESETS[colorMode] ??
     PALETTE_PRESETS[CalibrationColorModeEnum.FOUR_COLOR_RYBW]
   ).map((entry) => ({
     color: entry.color,
@@ -84,6 +88,7 @@ export interface CalibrationState {
   block_size: number;
   gap: number;
   backing: BackingColor;
+  eight_color_full_export: boolean;
   substrateId: string;
   substrateDisplayName: string;
   materialDefault: string;
@@ -110,6 +115,7 @@ export interface CalibrationActions {
   setBlockSize: (size: number) => void;
   setGap: (gap: number) => void;
   setBacking: (color: BackingColor) => void;
+  setEightColorFullExport: (enabled: boolean) => void;
   setSubstrateId: (value: string) => void;
   setSubstrateDisplayName: (value: string) => void;
   setMaterialDefault: (value: string) => void;
@@ -124,6 +130,7 @@ const DEFAULT_STATE: CalibrationState = {
   block_size: 5,
   gap: 0.82,
   backing: BackingColorEnum.WHITE,
+  eight_color_full_export: false,
   substrateId: "white",
   substrateDisplayName: "White",
   materialDefault: "PLA Basic",
@@ -137,89 +144,98 @@ const DEFAULT_STATE: CalibrationState = {
   singleStageJobs: [],
 };
 
-export const useCalibrationStore = create<CalibrationState & CalibrationActions>(
-  (set, get) => ({
-    ...DEFAULT_STATE,
+export const useCalibrationStore = create<
+  CalibrationState & CalibrationActions
+>((set, get) => ({
+  ...DEFAULT_STATE,
 
-    setWorkflow: (workflow: CalibrationWorkflow) =>
-      set({
-        workflow,
-        downloadUrl: null,
-        previewImageUrl: null,
-        manifestUrl: null,
-        singleStageJobs: [],
-        statusMessage: null,
-        error: null,
-      }),
+  setWorkflow: (workflow: CalibrationWorkflow) =>
+    set({
+      workflow,
+      downloadUrl: null,
+      previewImageUrl: null,
+      manifestUrl: null,
+      singleStageJobs: [],
+      statusMessage: null,
+      error: null,
+    }),
 
-    setColorMode: (mode: CalibrationColorMode) => set({ color_mode: mode }),
+  setColorMode: (mode: CalibrationColorMode) =>
+    set((state) => ({
+      color_mode: mode,
+      eight_color_full_export:
+        mode === CalibrationColorModeEnum.EIGHT_COLOR
+          ? state.eight_color_full_export
+          : false,
+    })),
 
-    setBlockSize: (size: number) =>
-      set({ block_size: clampValue(size, 3, 10) }),
+  setBlockSize: (size: number) => set({ block_size: clampValue(size, 3, 10) }),
 
-    setGap: (gap: number) =>
-      set({ gap: clampValue(gap, 0.4, 2.0) }),
+  setGap: (gap: number) => set({ gap: clampValue(gap, 0.4, 2.0) }),
 
-    setBacking: (color: BackingColor) => set({ backing: color }),
+  setBacking: (color: BackingColor) => set({ backing: color }),
 
-    setSubstrateId: (value: string) => set({ substrateId: value }),
+  setEightColorFullExport: (enabled: boolean) =>
+    set({ eight_color_full_export: enabled }),
 
-    setSubstrateDisplayName: (value: string) =>
-      set({ substrateDisplayName: value }),
+  setSubstrateId: (value: string) => set({ substrateId: value }),
 
-    setMaterialDefault: (value: string) => set({ materialDefault: value }),
+  setSubstrateDisplayName: (value: string) =>
+    set({ substrateDisplayName: value }),
 
-    submitGenerate: async () => {
-      const state = get();
-      set({ isLoading: true, error: null });
-      try {
-        if (state.workflow === "single-stage") {
-          const response = await generateSingleStageKit({
-            palette: buildSingleStagePalette(
-              state.color_mode,
-              state.materialDefault,
-            ),
-            substrate_id: state.substrateId,
-            substrate_display_name: state.substrateDisplayName,
-            material_default: state.materialDefault,
-          });
-          set({
-            downloadUrl: response.kit_download_url,
-            previewImageUrl: response.preview_url ?? null,
-            modelUrl: null,
-            manifestUrl: response.manifest_url,
-            singleStageJobs: response.jobs ?? [],
-            statusMessage: response.message,
-            isLoading: false,
-          });
-          return;
-        }
+  setMaterialDefault: (value: string) => set({ materialDefault: value }),
 
-        const response = await calibrationGenerate({
-          color_mode: state.color_mode,
-          block_size: state.block_size,
-          gap: state.gap,
-          backing: state.backing,
+  submitGenerate: async () => {
+    const state = get();
+    set({ isLoading: true, error: null });
+    try {
+      if (state.workflow === "single-stage") {
+        const response = await generateSingleStageKit({
+          palette: buildSingleStagePalette(
+            state.color_mode,
+            state.materialDefault,
+          ),
+          substrate_id: state.substrateId,
+          substrate_display_name: state.substrateDisplayName,
+          material_default: state.materialDefault,
         });
         set({
-          downloadUrl: response.download_url,
+          downloadUrl: response.kit_download_url,
           previewImageUrl: response.preview_url ?? null,
           modelUrl: null,
-          manifestUrl: null,
-          singleStageJobs: [],
+          manifestUrl: response.manifest_url,
+          singleStageJobs: response.jobs ?? [],
           statusMessage: response.message,
           isLoading: false,
         });
-      } catch (err) {
-        set({
-          error:
-            err instanceof Error ? err.message : "Calibration generation failed",
-          isLoading: false,
-        });
+        return;
       }
-    },
 
-    setError: (error: string | null) => set({ error }),
-    clearError: () => set({ error: null }),
-  }),
-);
+      const response = await calibrationGenerate({
+        color_mode: state.color_mode,
+        block_size: state.block_size,
+        gap: state.gap,
+        backing: state.backing,
+        eight_color_full_export: state.eight_color_full_export,
+      });
+      set({
+        downloadUrl: response.download_url,
+        previewImageUrl: response.preview_url ?? null,
+        modelUrl: null,
+        manifestUrl: null,
+        singleStageJobs: [],
+        statusMessage: response.message,
+        isLoading: false,
+      });
+    } catch (err) {
+      set({
+        error:
+          err instanceof Error ? err.message : "Calibration generation failed",
+        isLoading: false,
+      });
+    }
+  },
+
+  setError: (error: string | null) => set({ error }),
+  clearError: () => set({ error: null }),
+}));

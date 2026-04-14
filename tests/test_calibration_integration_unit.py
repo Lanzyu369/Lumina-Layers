@@ -94,6 +94,27 @@ class TestColorModeRouting:
                 gap_mm=0.82,
             )
 
+    def test_eight_color_full_export_routes_to_generate_8color_full_batch_zip(self) -> None:
+        with patch(
+            "api.routers.calibration.generate_8color_full_batch_zip",
+            return_value=("/tmp/fake_full.zip", _mock_preview, "OK"),
+        ) as mock_fn:
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "8-Color Max",
+                    "block_size": 5,
+                    "gap": 0.82,
+                    "backing": "White",
+                    "eight_color_full_export": True,
+                },
+            )
+            assert response.status_code == 200
+            mock_fn.assert_called_once_with(
+                block_size_mm=5.0,
+                gap_mm=0.82,
+            )
+
     def test_eight_color_mode_routes_to_generate_8color_batch_zip(self) -> None:
         with patch(
             "api.routers.calibration.generate_8color_batch_zip",

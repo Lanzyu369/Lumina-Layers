@@ -67,6 +67,9 @@ class CalibrationGenerateRequest(BaseModel):
             色块间距 (mm)。
         backing: Backing plate color.
             底板颜色。
+        eight_color_full_export: Whether 8-color mode exports the exhaustive
+            multi-page ZIP package instead of the compact two-page kit.
+            8 色模式是否导出全量多页 ZIP，而不是默认的精简双页套件。
     """
 
     color_mode: CalibrationColorMode = Field(
@@ -77,3 +80,4 @@ class CalibrationGenerateRequest(BaseModel):
     backing: BackingColor = Field(
         BackingColor.WHITE, description="底板颜色"
     )
+    eight_color_full_export: bool = Field(False, description="8 色是否导出全量分页包")

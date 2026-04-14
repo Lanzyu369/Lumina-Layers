@@ -60,6 +60,7 @@ function resetExtractorStore(): void {
     imageNaturalHeight: null,
     color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
     page: ExtractorPage.PAGE_1,
+    eight_color_full_export: false,
     corner_points: [],
     offset_x: 0,
     offset_y: 0,
@@ -74,6 +75,13 @@ function resetExtractorStore(): void {
     lut_preview_url: null,
     manualFixLoading: false,
     manualFixError: null,
+    page1Extracted: false,
+    page2Extracted: false,
+    extractedEightColorFullPages: [],
+    mergeLoading: false,
+    mergeError: null,
+    page1Extracted_5c: false,
+    page2Extracted_5c: false,
   });
 }
 

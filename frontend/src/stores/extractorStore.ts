@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ExtractorColorMode, ExtractorPage } from "../api/types";
 import {
+  EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES,
   ExtractorColorMode as ExtractorColorModeEnum,
   ExtractorPage as ExtractorPageEnum,
 } from "../api/types";
@@ -40,6 +41,33 @@ export function isRawFile(file: File): boolean {
   return RAW_EXTENSIONS.has(ext);
 }
 
+const COMPACT_EXTRACTOR_PAGES = new Set<ExtractorPage>([
+  ExtractorPageEnum.PAGE_1,
+  ExtractorPageEnum.PAGE_2,
+]);
+
+function normalizeCompactExtractorPage(page: ExtractorPage): ExtractorPage {
+  return COMPACT_EXTRACTOR_PAGES.has(page) ? page : ExtractorPageEnum.PAGE_1;
+}
+
+function parseExtractorPageNumber(page: ExtractorPage): number {
+  const match = /\d+/.exec(String(page));
+  return match ? Number(match[0]) : 1;
+}
+
+function uniqueSortedPageNumbers(pageNumbers: number[]): number[] {
+  return Array.from(
+    new Set(
+      pageNumbers.filter(
+        (pageNumber) =>
+          Number.isInteger(pageNumber) &&
+          pageNumber >= 1 &&
+          pageNumber <= EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES,
+      ),
+    ),
+  ).sort((a, b) => a - b);
+}
+
 // ========== State Interface ==========
 
 export interface ExtractorState {
@@ -52,6 +80,7 @@ export interface ExtractorState {
   // 颜色模式与页码
   color_mode: ExtractorColorMode;
   page: ExtractorPage;
+  eight_color_full_export: boolean;
 
   // 角点
   corner_points: Array<[number, number]>;
@@ -82,6 +111,7 @@ export interface ExtractorState {
   // 8色双页状态
   page1Extracted: boolean;
   page2Extracted: boolean;
+  extractedEightColorFullPages: number[];
   mergeLoading: boolean;
   mergeError: string | null;
 
@@ -105,6 +135,7 @@ export interface ExtractorActions {
   rotateImage: () => Promise<void>;
   setColorMode: (mode: ExtractorColorMode) => void;
   setPage: (page: ExtractorPage) => void;
+  setEightColorFullExport: (enabled: boolean) => void;
   addCornerPoint: (point: [number, number]) => void;
   clearCornerPoints: () => void;
   setOffsetX: (value: number) => void;
@@ -136,6 +167,7 @@ const DEFAULT_STATE: ExtractorState = {
   imageNaturalHeight: null,
   color_mode: ExtractorColorModeEnum.FOUR_COLOR_RYBW,
   page: ExtractorPageEnum.PAGE_1,
+  eight_color_full_export: false,
   corner_points: [],
   offset_x: 0,
   offset_y: 0,
@@ -154,6 +186,7 @@ const DEFAULT_STATE: ExtractorState = {
   manualFixError: null,
   page1Extracted: false,
   page2Extracted: false,
+  extractedEightColorFullPages: [],
   mergeLoading: false,
   mergeError: null,
   page1Extracted_5c: false,
@@ -304,20 +337,51 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     },
 
     setColorMode: (mode: ExtractorColorMode) =>
-      set({
+      set((state) => ({
         color_mode: mode,
-        // Reset 8-color and 5-color page tracking when switching modes
+        page:
+          mode === ExtractorColorModeEnum.EIGHT_COLOR
+            ? state.page
+            : normalizeCompactExtractorPage(state.page),
+        eight_color_full_export:
+          mode === ExtractorColorModeEnum.EIGHT_COLOR
+            ? state.eight_color_full_export
+            : false,
         page1Extracted: false,
         page2Extracted: false,
+        extractedEightColorFullPages: [],
         page1Extracted_5c: false,
         page2Extracted_5c: false,
         mergeError: null,
         defaultPalette: [],
         paletteConfirmed: false,
         paletteConfirmError: null,
-      }),
+      })),
 
-    setPage: (page: ExtractorPage) => set({ page }),
+    setPage: (page: ExtractorPage) =>
+      set((state) => ({
+        page:
+          state.color_mode === ExtractorColorModeEnum.EIGHT_COLOR &&
+          state.eight_color_full_export
+            ? page
+            : normalizeCompactExtractorPage(page),
+      })),
+
+    setEightColorFullExport: (enabled: boolean) =>
+      set((state) => ({
+        eight_color_full_export:
+          state.color_mode === ExtractorColorModeEnum.EIGHT_COLOR
+            ? enabled
+            : false,
+        page: enabled ? state.page : normalizeCompactExtractorPage(state.page),
+        page1Extracted: false,
+        page2Extracted: false,
+        extractedEightColorFullPages: [],
+        mergeError: null,
+        defaultPalette: [],
+        paletteConfirmed: false,
+        paletteConfirmError: null,
+      })),
 
     addCornerPoint: (point: [number, number]) => {
       const { corner_points } = get();
@@ -367,7 +431,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         } catch (err) {
           set({
             auto_wb: false,
-            error: err instanceof Error ? err.message : "White balance preview failed",
+            error:
+              err instanceof Error
+                ? err.message
+                : "White balance preview failed",
             isLoading: false,
           });
         }
@@ -399,6 +466,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           corner_points: state.corner_points,
           color_mode: state.color_mode,
           page: state.page,
+          eight_color_full_export: state.eight_color_full_export,
           offset_x: state.offset_x,
           offset_y: state.offset_y,
           zoom: state.zoom,
@@ -406,17 +474,20 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           vignette_correction: state.vignette_correction,
           auto_wb: state.auto_wb,
         });
-        
-        // Track 8-color page extraction status
+
         const pageUpdate: Partial<ExtractorState> = {};
         if (state.color_mode === ExtractorColorModeEnum.EIGHT_COLOR) {
-          if (state.page === ExtractorPageEnum.PAGE_1) {
+          if (state.eight_color_full_export) {
+            pageUpdate.extractedEightColorFullPages = uniqueSortedPageNumbers([
+              ...state.extractedEightColorFullPages,
+              parseExtractorPageNumber(state.page),
+            ]);
+          } else if (state.page === ExtractorPageEnum.PAGE_1) {
             pageUpdate.page1Extracted = true;
           } else {
             pageUpdate.page2Extracted = true;
           }
         }
-        // Track 5-Color Extended page extraction status
         if (state.color_mode === ExtractorColorModeEnum.FIVE_COLOR_EXT) {
           if (state.page === ExtractorPageEnum.PAGE_1) {
             pageUpdate.page1Extracted_5c = true;
@@ -478,20 +549,25 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     submitMerge: async () => {
       const state = get();
-      // Determine which page states to check based on color_mode
       const is5c = state.color_mode === ExtractorColorModeEnum.FIVE_COLOR_EXT;
-      const bothExtracted = is5c
+      const isEightColorFull =
+        state.color_mode === ExtractorColorModeEnum.EIGHT_COLOR &&
+        state.eight_color_full_export;
+      const allRequiredExtracted = is5c
         ? state.page1Extracted_5c && state.page2Extracted_5c
-        : state.page1Extracted && state.page2Extracted;
+        : isEightColorFull
+          ? state.extractedEightColorFullPages.length ===
+            EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES
+          : state.page1Extracted && state.page2Extracted;
 
-      if (!bothExtracted) return;
+      if (!allRequiredExtracted) return;
 
       set({ mergeLoading: true, mergeError: null });
       try {
         const response = is5c
           ? await mergeFiveColorExtended()
-          : await mergeEightColor();
-                set({
+          : await mergeEightColor(state.eight_color_full_export);
+        set({
           session_id: response.session_id,
           lut_download_url: response.lut_download_url
             ? normalizeResourceUrl(response.lut_download_url)
@@ -555,5 +631,3 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     },
   }),
 );
-
-

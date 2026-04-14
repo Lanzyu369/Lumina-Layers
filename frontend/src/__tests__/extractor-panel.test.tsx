@@ -46,6 +46,7 @@ function resetExtractorStore(): void {
     imageNaturalHeight: null,
     color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
     page: ExtractorPage.PAGE_1,
+    eight_color_full_export: false,
     corner_points: [],
     offset_x: 0,
     offset_y: 0,
@@ -62,6 +63,7 @@ function resetExtractorStore(): void {
     manualFixError: null,
     page1Extracted: false,
     page2Extracted: false,
+    extractedEightColorFullPages: [],
     mergeLoading: false,
     mergeError: null,
     page1Extracted_5c: false,
@@ -168,6 +170,23 @@ describe("ExtractorPanel 单元测试", () => {
     render(<ExtractorPanel />);
 
     expect(screen.getByTestId("page-select")).toBeInTheDocument();
+  });
+
+  it("shows 24 page options after enabling full 8-color extraction", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+    useExtractorStore.setState({ color_mode: ExtractorColorMode.EIGHT_COLOR });
+
+    render(<ExtractorPanel />);
+
+    fireEvent.click(screen.getByRole("switch"));
+
+    const pageSelect = screen.getByTestId("page-select");
+    const combobox = within(pageSelect).getByRole("combobox");
+    fireEvent.click(combobox);
+
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(options).toHaveLength(24);
   });
 
   it("hides page-select when color_mode is not EIGHT_COLOR", async () => {

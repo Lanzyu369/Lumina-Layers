@@ -133,6 +133,10 @@ def test_block_size_and_gap_do_not_cause_parameter_errors(
             return_value=_mock_return,
         ),
         patch(
+            "api.routers.calibration.generate_8color_full_batch_zip",
+            return_value=_mock_return,
+        ),
+        patch(
             "api.routers.calibration.generate_smart_board_rybw",
             return_value=_mock_return,
         ),

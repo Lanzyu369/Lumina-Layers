@@ -5,6 +5,7 @@ import { CalibrationColorMode, BackingColor } from "../api/types";
 import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";
 import Button from "./ui/Button";
+import Switch from "./ui/Switch";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   PanelIntro,
@@ -39,6 +40,7 @@ export default function CalibrationPanel() {
     block_size,
     gap,
     backing,
+    eight_color_full_export,
     substrateId,
     substrateDisplayName,
     materialDefault,
@@ -54,6 +56,7 @@ export default function CalibrationPanel() {
     setBlockSize,
     setGap,
     setBacking,
+    setEightColorFullExport,
     setSubstrateId,
     setSubstrateDisplayName,
     setMaterialDefault,
@@ -70,6 +73,8 @@ export default function CalibrationPanel() {
     color_mode === CalibrationColorMode.FIVE_COLOR_EXT ||
     color_mode === CalibrationColorMode.SIX_COLOR ||
     color_mode === CalibrationColorMode.SIX_COLOR_RYBW;
+  const showEightColorFullExport =
+    color_mode === CalibrationColorMode.EIGHT_COLOR;
 
   return (
     <motion.aside
@@ -108,6 +113,25 @@ export default function CalibrationPanel() {
                   options={colorModeOptions}
                   onChange={(v) => setColorMode(v as CalibrationColorMode)}
                 />
+
+                {showEightColorFullExport && (
+                  <div className={`${mutedSectionCardClass} flex items-start justify-between gap-4`}>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                        {t("cal_8color_full_export_label")}
+                      </p>
+                      <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t("cal_8color_full_export_hint")}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={eight_color_full_export}
+                      onChange={setEightColorFullExport}
+                      checkedLabel={t("cal_8color_full_export_on")}
+                      uncheckedLabel={t("cal_8color_full_export_off")}
+                    />
+                  </div>
+                )}
 
                 <Slider
                   label={t("cal_block_size_label")}

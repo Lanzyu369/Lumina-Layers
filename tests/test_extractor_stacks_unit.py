@@ -13,7 +13,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from core.extractor import _generate_recipes
+from core.extractor import (
+    EIGHT_COLOR_FULL_TOTAL_PAGES,
+    EIGHT_COLOR_FULL_TOTAL_RECIPES,
+    EIGHT_COLOR_PAGE_CAPACITY,
+    _generate_recipes,
+    _get_8color_page_cell_count,
+)
 
 
 # =========================================================================
@@ -163,3 +169,34 @@ class TestCrossModeConvention:
         unique_surface = set(stacks[:, 0].tolist())
         # Should have at least 4 distinct surface colors (all 6 ideally)
         assert len(unique_surface) >= 4, f"Only {len(unique_surface)} surface colors: {unique_surface}"
+
+
+class TestEightColorFullPages:
+    """8-Color full extraction should respect per-page recipe counts."""
+
+    def test_full_mode_first_page_uses_page_capacity(self) -> None:
+        assert _get_8color_page_cell_count("Page 1", True) == EIGHT_COLOR_PAGE_CAPACITY
+
+    def test_full_mode_last_page_uses_remaining_recipe_count(self) -> None:
+        remaining = EIGHT_COLOR_FULL_TOTAL_RECIPES - (
+            (EIGHT_COLOR_FULL_TOTAL_PAGES - 1) * EIGHT_COLOR_PAGE_CAPACITY
+        )
+        assert remaining > 0
+        assert _get_8color_page_cell_count(
+            f"Page {EIGHT_COLOR_FULL_TOTAL_PAGES}",
+            True,
+        ) == remaining
+
+    def test_generate_recipes_full_last_page_matches_remaining_count(self) -> None:
+        total_cells = _get_8color_page_cell_count(
+            f"Page {EIGHT_COLOR_FULL_TOTAL_PAGES}",
+            True,
+        )
+        stacks = _generate_recipes(
+            "8-Color Max",
+            total_cells,
+            f"Page {EIGHT_COLOR_FULL_TOTAL_PAGES}",
+            eight_color_full_export=True,
+        )
+        assert stacks.shape == (total_cells, 5)
+        assert stacks.dtype == np.int32

@@ -16,6 +16,7 @@ from config import PaletteEntry
 from core.calibration import (
     generate_5color_extended_batch_zip,
     generate_8color_batch_zip,
+    generate_8color_full_batch_zip,
     generate_bw_calibration_board,
     generate_calibration_board,
     generate_smart_board,
@@ -73,10 +74,16 @@ def calibration_generate(
                 gap_mm=request.gap,
             )
         elif mode == "8-Color Max":
-            path, preview_img, status = generate_8color_batch_zip(
-                block_size_mm=float(request.block_size),
-                gap_mm=request.gap,
-            )
+            if request.eight_color_full_export:
+                path, preview_img, status = generate_8color_full_batch_zip(
+                    block_size_mm=float(request.block_size),
+                    gap_mm=request.gap,
+                )
+            else:
+                path, preview_img, status = generate_8color_batch_zip(
+                    block_size_mm=float(request.block_size),
+                    gap_mm=request.gap,
+                )
         elif mode == "5-Color Extended (1444)":
             path, preview_img, status = generate_5color_extended_batch_zip(
                 block_size_mm=float(request.block_size),

@@ -213,6 +213,7 @@ def st_extractor_extract_request(draw: st.DrawFn) -> ExtractorExtractRequest:
         distortion=draw(st.floats(min_value=-0.2, max_value=0.2, allow_nan=False)),
         vignette_correction=draw(st.booleans()),
         page=draw(st_extractor_page),
+        eight_color_full_export=draw(st.booleans()),
     )
 
 
@@ -239,6 +240,7 @@ def st_calibration_generate_request(draw: st.DrawFn) -> CalibrationGenerateReque
         block_size=draw(st.integers(min_value=3, max_value=10)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
         backing=draw(st_backing_color),
+        eight_color_full_export=draw(st.booleans()),
     )
 
 
@@ -485,6 +487,9 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     # CalibrationGenerateRequest
     (CalibrationGenerateRequest, {}, "block_size", 5),
     (CalibrationGenerateRequest, {}, "gap", 0.82),
+    (CalibrationGenerateRequest, {}, "eight_color_full_export", False),
+    # ExtractorExtractRequest
+    (ExtractorExtractRequest, {"corner_points": [(0, 0), (100, 0), (100, 100), (0, 100)]}, "eight_color_full_export", False),
 ]
 
 

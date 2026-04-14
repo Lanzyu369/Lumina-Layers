@@ -22,18 +22,22 @@ from api.file_bridge import (
     upload_to_tempfile,
 )
 from api.file_registry import FileRegistry
-from api.schemas.extractor import ConfirmPaletteRequest, ExtractorManualFixRequest
-from api.schemas.responses import (
-    ExtractResponse,
-    ManualFixResponse,
-    SingleStageExtractResponse,
-    StageAFitResponse,
+from api.schemas.extractor import (
+    ConfirmPaletteRequest,
+    ExtractorManualFixRequest,
+    ExtractorMergeEightColorRequest,
 )
+from api.schemas.responses import ExtractResponse, ManualFixResponse
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import ColorSystem, LUTMetadata, PaletteEntry
-from core.extractor import apply_auto_white_balance, manual_fix_cell, rotate_image, run_extraction
-from core.single_stage import extract_single_stage_dataset, fit_stage_a_from_stage_json
+from core.extractor import (
+    EIGHT_COLOR_FULL_TOTAL_PAGES,
+    apply_auto_white_balance,
+    manual_fix_cell,
+    rotate_image,
+    run_extraction,
+)
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
@@ -171,6 +175,28 @@ def _build_merged_metadata(
     return metadata
 
 
+def _get_assets_dir() -> str:
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.getcwd(), "assets")
+    return "assets"
+
+
+def _parse_page_number(page: str, default: int = 1) -> int:
+    digits = "".join(ch for ch in str(page) if ch.isdigit())
+    if not digits:
+        return default
+    page_number = int(digits)
+    return page_number if page_number >= 1 else default
+
+
+def _get_8color_temp_path(assets_dir: str, page_number: int, eight_color_full_export: bool) -> str:
+    if eight_color_full_export:
+        return os.path.join(assets_dir, f"temp_8c_full_page_{page_number}.json")
+    return os.path.join(assets_dir, f"temp_8c_page_{page_number}.json")
+
+
 @router.post("/rotate")
 async def extractor_rotate(
     image: UploadFile = File(..., description="待旋转的图片"),
@@ -246,6 +272,7 @@ async def extractor_extract(
     corner_points: str = Form(..., description="4 个角点坐标 JSON 数组 [[x,y],...]"),
     color_mode: str = Form("4-Color (RYBW)", description="标准颜色模式"),
     page: str = Form("Page 1", description="8-Color 页码"),
+    eight_color_full_export: bool = Form(False, description="8 色是否来自全量分页导出"),
     offset_x: int = Form(0, description="水平采样偏移"),
     offset_y: int = Form(0, description="垂直采样偏移"),
     zoom: float = Form(1.0, description="透视校正缩放"),
@@ -291,6 +318,7 @@ async def extractor_extract(
             color_mode=effective_color_mode,
             page_choice=page,
             auto_wb=auto_wb,
+            eight_color_full_export=eight_color_full_export,
         )
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color extraction")
@@ -305,15 +333,11 @@ async def extractor_extract(
 
     # For 8-Color mode: save page-specific temp file
     if "8-Color" in effective_color_mode and lut_path:
-        import sys
-
-        if getattr(sys, "frozen", False):
-            assets_dir = os.path.join(os.getcwd(), "assets")
-        else:
-            assets_dir = "assets"
+        assets_dir = _get_assets_dir()
         os.makedirs(assets_dir, exist_ok=True)
-        page_idx = 1 if "1" in str(page) else 2
-        temp_path = os.path.join(assets_dir, f"temp_8c_page_{page_idx}.json")
+        max_page = EIGHT_COLOR_FULL_TOTAL_PAGES if eight_color_full_export else 2
+        page_idx = min(max(_parse_page_number(page), 1), max_page)
+        temp_path = _get_8color_temp_path(assets_dir, page_idx, eight_color_full_export)
         try:
             rgb, stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
             if stacks is None:
@@ -497,41 +521,74 @@ def extractor_merge_5color_extended(
 
 @router.post("/merge-8color")
 def extractor_merge_8color(
+    request: ExtractorMergeEightColorRequest | None = None,
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> ExtractResponse:
-    """Merge two 8-Color pages into a single LUT.
-    将两页 8-Color 合并为单个 LUT。
+    """Merge extracted 8-Color pages into a single LUT.
+    将提取得到的 8 色分页结果合并为单个 LUT。
     """
-    import sys
     from config import LUT_FILE_PATH
 
-    if getattr(sys, "frozen", False):
-        assets_dir = os.path.join(os.getcwd(), "assets")
-    else:
-        assets_dir = "assets"
+    eight_color_full_export = bool(request.eight_color_full_export) if request is not None else False
+    assets_dir = _get_assets_dir()
+    total_pages = EIGHT_COLOR_FULL_TOTAL_PAGES if eight_color_full_export else 2
+    page_paths = [
+        _get_8color_temp_path(assets_dir, page_number, eight_color_full_export)
+        for page_number in range(1, total_pages + 1)
+    ]
+    missing_pages = [
+        str(page_number)
+        for page_number, page_path in enumerate(page_paths, start=1)
+        if not os.path.exists(page_path)
+    ]
 
-    path1 = os.path.join(assets_dir, "temp_8c_page_1.json")
-    path2 = os.path.join(assets_dir, "temp_8c_page_2.json")
-
-    if not os.path.exists(path1) or not os.path.exists(path2):
+    if missing_pages:
+        missing_hint = ", ".join(missing_pages[:8])
+        if len(missing_pages) > 8:
+            missing_hint += ", ..."
         raise HTTPException(
             status_code=400,
-            detail="Missing temp pages. Please extract Page 1 and Page 2 first.",
+            detail=(
+                f"Missing temp pages. Please extract all required pages first. Missing: {missing_hint}"
+            ),
         )
 
     try:
-        rgb1, stacks1, meta1 = LUTManager.load_lut_with_metadata(path1)
-        rgb2, stacks2, meta2 = LUTManager.load_lut_with_metadata(path2)
-        merged_rgb = np.concatenate([rgb1, rgb2], axis=0)
+        rgb_parts = []
+        stack_parts = []
+        metadata_parts = []
+        stacks_compatible = True
+        expected_stack_width = None
 
-        # Merge stacks if available
-        if stacks1 is not None and stacks2 is not None and stacks1.shape[1] == stacks2.shape[1]:
-            merged_stacks = np.concatenate([stacks1, stacks2], axis=0)
+        for page_path in page_paths:
+            rgb, stacks, metadata = LUTManager.load_lut_with_metadata(page_path)
+            rgb_parts.append(rgb.reshape(-1, 3))
+            metadata_parts.append(metadata)
+            if stacks is None:
+                stacks_compatible = False
+                continue
+            stacks = stacks.reshape(stacks.shape[0], -1)
+            if expected_stack_width is None:
+                expected_stack_width = stacks.shape[1]
+            elif stacks.shape[1] != expected_stack_width:
+                stacks_compatible = False
+            stack_parts.append(stacks)
+
+        merged_rgb = np.vstack(rgb_parts)
+
+        if stacks_compatible and stack_parts and len(stack_parts) == len(page_paths):
+            merged_stacks = np.vstack(stack_parts)
         else:
             merged_stacks = np.zeros((len(merged_rgb), 0), dtype=np.int32)
 
-        metadata = _build_merged_metadata(meta1, meta2, "8-Color Max", LUT_FILE_PATH, len(merged_rgb))
+        metadata = _build_merged_metadata(
+            metadata_parts[0],
+            metadata_parts[-1],
+            "8-Color Max",
+            LUT_FILE_PATH,
+            len(merged_rgb),
+        )
         LUTManager.save_keyed_json(LUT_FILE_PATH, merged_rgb, merged_stacks, metadata)
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "8-Color merge")
@@ -546,7 +603,10 @@ def extractor_merge_8color(
     return ExtractResponse(
         session_id=session_id,
         status="ok",
-        message=f"8-Color LUT merged ({merged_rgb.shape[0]}x{merged_rgb.shape[1]})",
+        message=(
+            f"8-Color{' Full' if eight_color_full_export else ''} LUT merged "
+            f"({merged_rgb.shape[0]}x{merged_rgb.shape[1]})"
+        ),
         lut_download_url=f"/api/files/{lut_download_id}",
         warp_view_url="",
         lut_preview_url="",

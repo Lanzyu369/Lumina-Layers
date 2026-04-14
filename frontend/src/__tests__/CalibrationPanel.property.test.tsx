@@ -22,6 +22,7 @@ beforeEach(() => {
     block_size: 5,
     gap: 0.82,
     backing: BackingColor.WHITE,
+    eight_color_full_export: false,
     isLoading: false,
     error: null,
     downloadUrl: null,

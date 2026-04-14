@@ -277,6 +277,7 @@ def st_extractor_extract_request(draw: st.DrawFn) -> Dict[str, Any]:
         distortion=draw(st.floats(min_value=-0.2, max_value=0.2, allow_nan=False)),
         vignette_correction=draw(st.booleans()),
         page=draw(st_extractor_page),
+        eight_color_full_export=draw(st.booleans()),
     ).model_dump(mode="json")
 
 
@@ -303,6 +304,7 @@ def st_calibration_generate_request(draw: st.DrawFn) -> Dict[str, Any]:
         block_size=draw(st.integers(min_value=3, max_value=10)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
         backing=draw(st_backing_color),
+        eight_color_full_export=draw(st.booleans()),
     ).model_dump(mode="json")
 
 

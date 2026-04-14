@@ -1,8 +1,9 @@
-import { describe, it, vi, beforeEach } from "vitest";
+import { describe, it, vi, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
 import type { ExtractorState } from "../stores/extractorStore";
 import {
+  EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES,
   ExtractorColorMode,
   ExtractorPage,
 } from "../api/types";
@@ -34,7 +35,7 @@ vi.stubGlobal(
   Object.assign(globalThis.URL ?? {}, {
     createObjectURL: vi.fn(() => "blob:mock-url"),
     revokeObjectURL: vi.fn(),
-  })
+  }),
 );
 
 // ========== Helpers ==========
@@ -46,6 +47,7 @@ const DEFAULT_STATE: Partial<ExtractorState> = {
   imageNaturalHeight: null,
   color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
   page: ExtractorPage.PAGE_1,
+  eight_color_full_export: false,
   corner_points: [],
   offset_x: 0,
   offset_y: 0,
@@ -62,6 +64,7 @@ const DEFAULT_STATE: Partial<ExtractorState> = {
   manualFixError: null,
   page1Extracted: false,
   page2Extracted: false,
+  extractedEightColorFullPages: [],
   mergeLoading: false,
   mergeError: null,
   page1Extracted_5c: false,
@@ -89,7 +92,7 @@ function mockExtractResponse(): ExtractResponse {
 
 const arbExtractorPage = fc.constantFrom(
   ExtractorPage.PAGE_1,
-  ExtractorPage.PAGE_2
+  ExtractorPage.PAGE_2,
 );
 
 const arbBoolPair = fc.record({
@@ -99,7 +102,7 @@ const arbBoolPair = fc.record({
 
 const arbColorModeForMerge = fc.constantFrom(
   ExtractorColorMode.FIVE_COLOR_EXT,
-  ExtractorColorMode.EIGHT_COLOR
+  ExtractorColorMode.EIGHT_COLOR,
 );
 
 // ========== Tests ==========
@@ -129,7 +132,12 @@ describe("Feature: component-completion, Property 1: 5-Color Extended 页面提�
             page2Extracted_5c: initialStates.page2,
             // Provide valid extraction prerequisites
             imageFile: new File(["test"], "test.png", { type: "image/png" }),
-            corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+            corner_points: [
+              [0, 0],
+              [100, 0],
+              [100, 100],
+              [0, 100],
+            ],
           });
 
           mockExtractColors.mockResolvedValueOnce(mockExtractResponse());
@@ -152,10 +160,36 @@ describe("Feature: component-completion, Property 1: 5-Color Extended 页面提�
               state.page1Extracted_5c === initialStates.page1
             );
           }
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
+  });
+});
+
+describe("Feature: component-completion, Property 4: 8色完整版页面提取状态追踪", () => {
+  it("submitExtract records the extracted full 8-color page number", async () => {
+    resetStore();
+    useExtractorStore.setState({
+      color_mode: ExtractorColorMode.EIGHT_COLOR,
+      eight_color_full_export: true,
+      page: ExtractorPage.PAGE_24,
+      imageFile: new File(["test"], "page-24.png", { type: "image/png" }),
+      corner_points: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    });
+
+    mockExtractColors.mockResolvedValueOnce(mockExtractResponse());
+
+    await useExtractorStore.getState().submitExtract();
+
+    expect(useExtractorStore.getState().extractedEightColorFullPages).toEqual([
+      24,
+    ]);
   });
 });
 
@@ -175,14 +209,15 @@ describe("Feature: component-completion, Property 2: 双页合并按钮启用条
         });
 
         const state = useExtractorStore.getState();
-        const bothExtracted = state.page1Extracted_5c && state.page2Extracted_5c;
+        const bothExtracted =
+          state.page1Extracted_5c && state.page2Extracted_5c;
 
         // The merge button enabled condition: both pages extracted
         const mergeEnabled = pages.page1 && pages.page2;
 
         return bothExtracted === mergeEnabled;
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -202,10 +237,17 @@ describe("Feature: component-completion, Property 3: 合并端点路由正确性
         // Set up state so merge is allowed (both pages extracted)
         useExtractorStore.setState({
           color_mode: colorMode,
+          eight_color_full_export: !is5c,
           page1Extracted_5c: is5c,
           page2Extracted_5c: is5c,
           page1Extracted: !is5c,
           page2Extracted: !is5c,
+          extractedEightColorFullPages: is5c
+            ? []
+            : Array.from(
+                { length: EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES },
+                (_, index) => index + 1,
+              ),
         });
 
         mockMergeFiveColorExtended.mockResolvedValueOnce(mockExtractResponse());
@@ -221,11 +263,12 @@ describe("Feature: component-completion, Property 3: 合并端点路由正确性
         } else {
           return (
             mockMergeEightColor.mock.calls.length === 1 &&
+            mockMergeEightColor.mock.calls[0]?.[0] === true &&
             mockMergeFiveColorExtended.mock.calls.length === 0
           );
         }
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });

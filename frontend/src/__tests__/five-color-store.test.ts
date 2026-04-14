@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useFiveColorStore, type CollectedRecipe } from "../stores/fiveColorStore";
+import {
+  useFiveColorStore,
+  type CollectedRecipe,
+} from "../stores/fiveColorStore";
 
 vi.mock("../api/fiveColor", () => ({
   fetchBaseColors: vi.fn(),
@@ -80,5 +83,35 @@ describe("fiveColorStore LUT switching", () => {
     await useFiveColorStore.getState().generateSwatch();
 
     expect(mockGenerateRecipeSwatch).not.toHaveBeenCalled();
+  });
+
+  it("clears current selection after successfully adding a recipe to the collection", () => {
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      baseColors: [
+        { index: 0, rgb: [255, 0, 0], name: "Red", hex: "#FF0000" },
+        { index: 1, rgb: [0, 255, 0], name: "Green", hex: "#00FF00" },
+        { index: 2, rgb: [0, 0, 255], name: "Blue", hex: "#0000FF" },
+        { index: 3, rgb: [255, 255, 0], name: "Yellow", hex: "#FFFF00" },
+        { index: 4, rgb: [255, 255, 255], name: "White", hex: "#FFFFFF" },
+      ],
+      selectedIndices: [0, 1, 2, 3, 4],
+      queryResult: {
+        found: true,
+        selected_indices: [0, 1, 2, 3, 4],
+        result_rgb: [18, 52, 86],
+        result_hex: "#123456",
+        row_index: 7,
+        message: "found",
+        source: "lut",
+      },
+    });
+
+    useFiveColorStore.getState().addToCollection();
+
+    const state = useFiveColorStore.getState();
+    expect(state.collectedRecipes).toHaveLength(1);
+    expect(state.selectedIndices).toEqual([]);
+    expect(state.queryResult).toBeNull();
   });
 });
