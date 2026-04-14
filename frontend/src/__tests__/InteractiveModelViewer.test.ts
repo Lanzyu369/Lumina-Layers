@@ -184,15 +184,9 @@ describe("resolveSelectionOutlineTargets", () => {
       selectedColors: new Set(["ff0000"]),
       selectedRegions: [{
         colorHex: "#ff0000",
-        pixels: [[0, 0]],
-        bounds: { minX: 0, minY: 0, maxX: 1, maxY: 1 },
-        area: 1,
         contours: polygon,
       }],
       regionData: {
-        pixels: [[0, 0]],
-        bounds: { minX: 0, minY: 0, maxX: 1, maxY: 1 },
-        area: 1,
         contours: polygon,
       },
       colorContours: { ff0000: polygon },

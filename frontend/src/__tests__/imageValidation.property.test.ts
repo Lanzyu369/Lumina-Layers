@@ -94,7 +94,6 @@ describe("Feature: alpha-channel-support, Property 2: 裁剪后文件类型为 P
     fc.assert(
       fc.property(
         fc.constantFrom(...ALL_MIME_TYPES),
-        fc.constantFrom(...ALL_MIME_TYPES),
         (blobType) => {
           // Simulate the blob returned by fetch (could have any type)
           const blob = new Blob(["fake-image-data"], { type: blobType });

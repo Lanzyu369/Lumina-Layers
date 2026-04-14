@@ -70,6 +70,32 @@ function localizeCompareWarning(
     });
   }
 
+  match = warning.match(/^schema_version differs: (.+) vs (.+)$/);
+  if (match) {
+    return replaceTokens(t("lut_compare_warning_schema_mismatch"), {
+      schemaA: match[1],
+      schemaB: match[2],
+    });
+  }
+
+  match = warning.match(/^predictive support differs: (True|False|true|false) vs (True|False|true|false)$/);
+  if (match) {
+    return replaceTokens(t("lut_compare_warning_predictive_mismatch"), {
+      valueA: match[1],
+      valueB: match[2],
+    });
+  }
+
+  match = warning.match(
+    /^dynamic_layer_height support differs: (True|False|true|false) vs (True|False|true|false)$/
+  );
+  if (match) {
+    return replaceTokens(t("lut_compare_warning_dynamic_mismatch"), {
+      valueA: match[1],
+      valueB: match[2],
+    });
+  }
+
   if (warning === "No shared recipes found; comparison metrics are zeroed.") {
     return t("lut_compare_warning_no_shared_recipes");
   }
@@ -117,6 +143,77 @@ function buildLocalizedWarnings(
     }
   }
   return localized;
+}
+
+function localizeLutCapability(
+  capability: string,
+  t: (key: string) => string,
+): string {
+  switch (capability) {
+    case "legacy_lookup":
+      return t("lut_info_capability_legacy_lookup");
+    case "predictive_match":
+      return t("lut_info_capability_predictive_match");
+    case "predictive_model":
+      return t("lut_info_capability_predictive_model");
+    case "dynamic_layer_height":
+      return t("lut_info_capability_dynamic_layer_height");
+    case "dynamic_layer_count":
+      return t("lut_info_capability_dynamic_layer_count");
+    case "custom_recipe":
+      return t("lut_info_capability_custom_recipe");
+    case "native_reference":
+      return t("lut_info_capability_native_reference");
+    default:
+      return capability;
+  }
+}
+
+function renderLutInfoDetail(
+  info: {
+    schema_version?: string;
+    capabilities?: string[];
+    source_kind?: string;
+    supported_modes?: Array<{ color_layers: number; layer_height_mm: number }>;
+    supports_predictive_match?: boolean;
+    supports_dynamic_layer_height?: boolean;
+    supports_dynamic_layer_count?: boolean;
+    supports_custom_recipe?: boolean;
+  },
+  t: (key: string) => string,
+): string {
+  const capabilityLabels = (info.capabilities ?? []).map((capability) =>
+    localizeLutCapability(capability, t),
+  );
+  const summary = [
+    `${t("lut_info_schema_label")}: ${info.schema_version ?? "1.0"}`,
+    `${t("lut_info_source_kind_label")}: ${info.source_kind ?? "legacy_lookup"}`,
+    info.supports_predictive_match
+      ? t("lut_info_predictive_enabled")
+      : t("lut_info_predictive_disabled"),
+    info.supports_dynamic_layer_height
+      ? t("lut_info_dynamic_enabled")
+      : t("lut_info_dynamic_disabled"),
+  ];
+  if (info.supports_dynamic_layer_count) {
+    summary.push(t("lut_info_dynamic_count_enabled"));
+  }
+  if (info.supports_custom_recipe) {
+    summary.push(t("lut_info_custom_recipe_enabled"));
+  }
+  if (capabilityLabels.length > 0) {
+    summary.push(
+      `${t("lut_info_capabilities_label")}: ${capabilityLabels.join(", ")}`,
+    );
+  }
+  if ((info.supported_modes ?? []).length > 0) {
+    summary.push(
+      `Modes: ${(info.supported_modes ?? [])
+        .map((mode) => `${mode.color_layers}L@${mode.layer_height_mm.toFixed(2)}`)
+        .join(", ")}`,
+    );
+  }
+  return summary.join(" | ");
 }
 
 export default function LutComparePanel() {
@@ -194,10 +291,15 @@ export default function LutComparePanel() {
               <StatusBanner tone="info">{t("lut_manager_loading")}</StatusBanner>
             )}
             {lutAInfo && (
-              <div className="rounded-2xl border border-slate-200/80 bg-white/55 px-3 py-2 text-sm text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-300">
-                {t("lut_manager_mode_summary")
-                  .replace("{mode}", lutAInfo.color_mode)
-                  .replace("{count}", String(lutAInfo.color_count))}
+              <div className={`${mutedSectionCardClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
+                <div>
+                  {t("lut_manager_mode_summary")
+                    .replace("{mode}", lutAInfo.color_mode)
+                    .replace("{count}", String(lutAInfo.color_count))}
+                </div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {renderLutInfoDetail(lutAInfo, t)}
+                </div>
               </div>
             )}
           </section>
@@ -218,10 +320,15 @@ export default function LutComparePanel() {
               <StatusBanner tone="info">{t("lut_manager_loading")}</StatusBanner>
             )}
             {lutBInfo && (
-              <div className="rounded-2xl border border-slate-200/80 bg-white/55 px-3 py-2 text-sm text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-300">
-                {t("lut_manager_mode_summary")
-                  .replace("{mode}", lutBInfo.color_mode)
-                  .replace("{count}", String(lutBInfo.color_count))}
+              <div className={`${mutedSectionCardClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
+                <div>
+                  {t("lut_manager_mode_summary")
+                    .replace("{mode}", lutBInfo.color_mode)
+                    .replace("{count}", String(lutBInfo.color_count))}
+                </div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {renderLutInfoDetail(lutBInfo, t)}
+                </div>
               </div>
             )}
           </section>
@@ -310,7 +417,7 @@ export default function LutComparePanel() {
                 {compareResult.worst_diffs.map((item, index) => (
                   <div
                     key={`${item.recipe.join("|")}-${index}`}
-                    className="rounded-[24px] border border-slate-200/80 bg-white/55 p-4 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/55"
+                    className={`${mutedSectionCardClass} p-4`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -334,7 +441,7 @@ export default function LutComparePanel() {
                           style={{ backgroundColor: item.hex_a }}
                         />
                         <span className="text-xs text-slate-600 dark:text-slate-300">
-                          A
+                          {t("lut_compare_lut_a_label")}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -343,7 +450,7 @@ export default function LutComparePanel() {
                           style={{ backgroundColor: item.hex_b }}
                         />
                         <span className="text-xs text-slate-600 dark:text-slate-300">
-                          B
+                          {t("lut_compare_lut_b_label")}
                         </span>
                       </div>
                     </div>

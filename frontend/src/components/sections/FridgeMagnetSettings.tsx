@@ -18,6 +18,13 @@ import {
   getFridgeMagnetPresetsByShape,
 } from "../../constants/fridgeMagnets";
 
+const NOOP = (): void => {};
+const NOOP_BOOL: (value: boolean) => void = () => {};
+const NOOP_ID: (id: string) => void = () => {};
+const NOOP_UPDATE: (id: string, payload: unknown) => void = () => {};
+const NOOP_CENTER: (id: string, x: number, y: number) => void = () => {};
+const EMPTY_MAGNETS: FridgeMagnetItem[] = [];
+
 interface NumberFieldProps {
   label: string;
   value: number;
@@ -84,28 +91,28 @@ function getCustomFridgeMagnetLabel(
 export default function FridgeMagnetSettings() {
   const { t } = useI18n();
   const unitMm = t("common_unit_mm");
-  const enableFridgeMagnet = useConverterStore((s) => s.enable_fridge_magnet);
-  const fridgeMagnets = useConverterStore((s) => s.fridge_magnets);
+  const enableFridgeMagnet = useConverterStore((s) => s.enable_fridge_magnet ?? false);
+  const fridgeMagnets = useConverterStore((s) => s.fridge_magnets ?? EMPTY_MAGNETS);
   const selectedFridgeMagnetId = useConverterStore(
-    (s) => s.selectedFridgeMagnetId,
+    (s) => s.selectedFridgeMagnetId ?? null,
   );
-  const structureMode = useConverterStore((s) => s.structure_mode);
-  const spacerThick = useConverterStore((s) => s.spacer_thick);
+  const structureMode = useConverterStore((s) => s.structure_mode ?? "Double-sided");
+  const spacerThick = useConverterStore((s) => s.spacer_thick ?? 1.2);
   const setEnableFridgeMagnet = useConverterStore(
-    (s) => s.setEnableFridgeMagnet,
+    (s) => s.setEnableFridgeMagnet ?? NOOP_BOOL,
   );
   const resetFridgeMagnetLayout = useConverterStore(
-    (s) => s.resetFridgeMagnetLayout,
+    (s) => s.resetFridgeMagnetLayout ?? NOOP,
   );
-  const addFridgeMagnet = useConverterStore((s) => s.addFridgeMagnet);
-  const removeFridgeMagnet = useConverterStore((s) => s.removeFridgeMagnet);
-  const updateFridgeMagnet = useConverterStore((s) => s.updateFridgeMagnet);
+  const addFridgeMagnet = useConverterStore((s) => s.addFridgeMagnet ?? NOOP);
+  const removeFridgeMagnet = useConverterStore((s) => s.removeFridgeMagnet ?? NOOP_ID);
+  const updateFridgeMagnet = useConverterStore((s) => s.updateFridgeMagnet ?? NOOP_UPDATE);
   const updateFridgeMagnetCenter = useConverterStore(
-    (s) => s.updateFridgeMagnetCenter,
+    (s) => s.updateFridgeMagnetCenter ?? NOOP_CENTER,
   );
-  const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
+  const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet ?? NOOP_ID);
   const clearSelectedFridgeMagnet = useConverterStore(
-    (s) => s.clearSelectedFridgeMagnet,
+    (s) => s.clearSelectedFridgeMagnet ?? NOOP,
   );
 
   const selectedMagnet =

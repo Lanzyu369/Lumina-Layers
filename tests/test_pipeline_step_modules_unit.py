@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from config import ModelingMode, ColorSystem, PrinterConfig
+from config import ColorSystem, LUTMetadata, ModelingMode, PaletteEntry, PrinterConfig
 
 # ===========================================================================
 # S01 — s01_input_validation 单元测试
@@ -257,6 +257,58 @@ class TestS06VoxelBuilding:
         assert "total_layers" in result
         assert isinstance(result["full_matrix"], np.ndarray)
         assert result["full_matrix"].ndim == 3  # (Z, H, W)
+
+    def test_native_reference_sources_use_metadata_base_channel_for_backing_layers(self):
+        """原生/参考 LUT 的底板应使用 metadata.base_channel_idx，而不是通用 backing_color_id。"""
+        from core.pipeline.s06_voxel_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["backing_color_id"] = 0
+        ctx["lut_metadata"] = LUTMetadata(
+            palette=[
+                PaletteEntry(color="bambugreen", material="PLA Basic"),
+                PaletteEntry(color="black", material="PLA Basic"),
+                PaletteEntry(color="blue", material="PLA Basic"),
+                PaletteEntry(color="cyan", material="PLA Basic"),
+                PaletteEntry(color="magenta", material="PLA Basic"),
+                PaletteEntry(color="red", material="PLA Basic"),
+                PaletteEntry(color="white", material="PLA Basic"),
+                PaletteEntry(color="yellow", material="PLA Basic"),
+            ],
+            base_channel_idx=6,
+            extensions={"source_kind": "predictive_package"},
+        )
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [6] * (
+            backing_end - backing_start + 1
+        )
+
+    def test_legacy_sources_keep_explicit_backing_color_id_for_backing_layers(self):
+        """传统 LUT 仍应沿用显式 backing_color_id，而不是 metadata.base_channel_idx。"""
+        from core.pipeline.s06_voxel_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["backing_color_id"] = 3
+        ctx["lut_metadata"] = LUTMetadata(
+            palette=[
+                PaletteEntry(color="white", material="PLA Basic"),
+                PaletteEntry(color="yellow", material="PLA Basic"),
+                PaletteEntry(color="red", material="PLA Basic"),
+                PaletteEntry(color="blue", material="PLA Basic"),
+            ],
+            base_channel_idx=0,
+            extensions={"source_kind": "legacy_lookup"},
+        )
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [3] * (
+            backing_end - backing_start + 1
+        )
 
     def test_missing_material_matrix_raises_key_error(self):
         """缺失 material_matrix 键应抛出 KeyError。"""

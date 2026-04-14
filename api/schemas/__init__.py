@@ -15,6 +15,7 @@ from api.schemas.five_color import (
     FiveColorQueryResponse,
 )
 from api.schemas.calibration import BackingColor, CalibrationGenerateRequest
+from api.schemas.single_stage import SingleStageKitGenerateRequest, StageAFitRequest
 from api.schemas.converter import (
     AutoHeightMode,
     ColorMergePreviewRequest,
@@ -25,13 +26,8 @@ from api.schemas.converter import (
     ConvertGenerateRequest,
     ConvertPreviewRequest,
     FridgeMagnetItem,
-    FridgeMagnetShape,
-    PuzzleConnectorStyle,
-    PuzzleGenerateRequest,
-    PuzzleLayoutPreviewRequest,
-    PuzzleSizingMode,
-    PuzzleStyle,
     ModelingMode,
+    RecipeOverrideItem,
     StructureMode,
 )
 from api.schemas.extractor import (
@@ -42,7 +38,9 @@ from api.schemas.extractor import (
     ExtractorPage,
 )
 from api.schemas.lut import (
+    LutSourceSelection,
     LutInfoResponse,
+    LutInfoResponseV2,
     MergeRequest,
     MergeResponse,
     MergeStats,
@@ -70,8 +68,9 @@ from api.schemas.responses import (
     ManualFixResponse,
     MergePreviewResponse,
     PreviewResponse,
-    PuzzleGenerateResponse,
-    PuzzleLayoutPreviewResponse,
+    SingleStageExtractResponse,
+    SingleStageKitResponse,
+    StageAFitResponse,
 )
 
 __all__ = [
@@ -82,18 +81,13 @@ __all__ = [
     "AutoHeightMode",
     # --- Converter models ---
     "ColorReplacementItem",
-    "FridgeMagnetShape",
-    "FridgeMagnetItem",
     "ConvertPreviewRequest",
     "ConvertGenerateRequest",
     "ConvertBatchRequest",
     "ColorReplaceRequest",
     "ColorMergePreviewRequest",
-    "PuzzleStyle",
-    "PuzzleSizingMode",
-    "PuzzleConnectorStyle",
-    "PuzzleLayoutPreviewRequest",
-    "PuzzleGenerateRequest",
+    "FridgeMagnetItem",
+    "RecipeOverrideItem",
     # --- Extractor enums ---
     "CalibrationColorMode",
     "ExtractorPage",
@@ -105,11 +99,15 @@ __all__ = [
     "BackingColor",
     # --- Calibration models ---
     "CalibrationGenerateRequest",
+    "SingleStageKitGenerateRequest",
+    "StageAFitRequest",
     # --- LUT Manager models ---
     "MergeRequest",
     "MergeResponse",
     "MergeStats",
+    "LutSourceSelection",
     "LutInfoResponse",
+    "LutInfoResponseV2",
     # --- Slicer models ---
     "SlicerInfo",
     "SlicerDetectResponse",
@@ -130,12 +128,13 @@ __all__ = [
     "ColorReplaceResponse",
     "MergePreviewResponse",
     "GenerateResponse",
-    "PuzzleLayoutPreviewResponse",
-    "PuzzleGenerateResponse",
     "BatchItemResult",
     "BatchResponse",
     "LUTListResponse",
     "HealthResponse",
     "ExtractResponse",
     "ManualFixResponse",
+    "SingleStageKitResponse",
+    "SingleStageExtractResponse",
+    "StageAFitResponse",
 ]

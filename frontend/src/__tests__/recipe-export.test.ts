@@ -183,8 +183,8 @@ describe("recipe/exportRecipe", () => {
       const recipe = exportConverterRecipe(state, makeSettings(), "fp");
 
       expect(recipe.geometry.spacer_thick).toBe(1.1);
-      expect(recipe.fridge_magnet.enable_fridge_magnet).toBe(true);
-      expect(recipe.fridge_magnet.fridge_magnets).toEqual(state.fridge_magnets);
+      expect(recipe.fridge_magnet?.enable_fridge_magnet).toBe(true);
+      expect(recipe.fridge_magnet?.fridge_magnets).toEqual(state.fridge_magnets);
       expect(JSON.stringify(recipe)).not.toContain("base_spacer_thick");
     });
 

@@ -135,5 +135,19 @@ describe("Feature: free-color-mode — Unit Tests", () => {
       expect(translations.conv_free_color_label.zh).toBe("🎯 自由色");
       expect(translations.conv_free_color_label.en).toBe("🎯 Free Colors");
     });
+
+    it("viewer hover toggle labels exist with zh/en", () => {
+      expect(translations.viewer_hover_toggle_group).toBeDefined();
+      expect(translations.viewer_hover_toggle_group.zh).toBe("悬停显示");
+      expect(translations.viewer_hover_toggle_group.en).toBe("Hover Display");
+
+      expect(translations.viewer_hover_toggle_magnifier).toBeDefined();
+      expect(translations.viewer_hover_toggle_magnifier.zh).toBe("放大镜");
+      expect(translations.viewer_hover_toggle_magnifier.en).toBe("Magnifier");
+
+      expect(translations.viewer_hover_toggle_layers).toBeDefined();
+      expect(translations.viewer_hover_toggle_layers.zh).toBe("分层颜色");
+      expect(translations.viewer_hover_toggle_layers.en).toBe("Layer Colors");
+    });
   });
 });

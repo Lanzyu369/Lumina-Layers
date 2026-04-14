@@ -23,16 +23,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockFetchLutList.mockResolvedValue({
     luts: [
-      { name: "LUT A", color_mode: "4-Color (RYBW)", path: "/fake/a.json" },
-      { name: "LUT B", color_mode: "4-Color (RYBW)", path: "/fake/b.json" },
+      { name: "LUT A", color_mode: "4-Color (RYBW)", path: "/fake/a.json", fingerprint: "fp-a" },
+      { name: "LUT B", color_mode: "4-Color (RYBW)", path: "/fake/b.json", fingerprint: "fp-b" },
     ],
   });
 
-    useLutCompareStore.setState({
-      lutList: [
-        { name: "LUT A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/fake/a.json" },
-        { name: "LUT B", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/fake/b.json" },
-      ],
+  useLutCompareStore.setState({
+    lutList: [
+      { name: "LUT A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/fake/a.json", fingerprint: "fp-a" },
+      { name: "LUT B", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/fake/b.json", fingerprint: "fp-b" },
+    ],
     lutListLoading: false,
     lutAName: "",
     lutBName: "",

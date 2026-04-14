@@ -28,6 +28,21 @@ async function loadPuzzlePreviewHook() {
 }
 
 describe("converter store cleanup behavior", () => {
+  type LayerImagesPayload = {
+    session_id: string;
+    layers: { layer_index: number; name: string; url: string }[];
+  };
+
+  type PuzzlePreviewPayload = {
+    overlay_url: string;
+    warnings: string[];
+    grid_rows: number;
+    grid_cols: number;
+    piece_count: number;
+    derived_piece_width_mm: number;
+    derived_piece_height_mm: number;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
@@ -90,12 +105,12 @@ describe("converter store cleanup behavior", () => {
 
   it("ignores stale layer image responses after the session changes", async () => {
     const useConverterStore = await loadStore();
-    let resolveFetch: ((value: { session_id: string; layers: { layer_index: number; name: string; url: string }[] }) => void) | null = null;
+    let resolveFetch: ((value: LayerImagesPayload) => void) | undefined;
 
     fetchLayerImagesMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolveFetch = resolve;
+        new Promise<LayerImagesPayload>((resolve) => {
+          resolveFetch = resolve as (value: LayerImagesPayload) => void;
         }),
     );
 
@@ -120,10 +135,13 @@ describe("converter store cleanup behavior", () => {
       layerImagesOpen: false,
     });
 
-    resolveFetch?.({
-      session_id: "session-a",
-      layers: [{ layer_index: 0, name: "Layer stale", url: "/api/files/stale-layer" }],
-    });
+    const fetchResolver = resolveFetch as (value: LayerImagesPayload) => void;
+    if (fetchResolver) {
+      fetchResolver({
+        session_id: "session-a",
+        layers: [{ layer_index: 0, name: "Layer stale", url: "/api/files/stale-layer" }],
+      });
+    }
 
     await fetchPromise;
 
@@ -136,17 +154,12 @@ describe("converter store cleanup behavior", () => {
 
   it("ignores stale layer image responses after the preview source changes within the same session", async () => {
     const { buildLayerImagesSourceKey, useConverterStore } = await import("../stores/converter");
-    let resolveFetch:
-      | ((value: {
-          session_id: string;
-          layers: { layer_index: number; name: string; url: string }[];
-        }) => void)
-      | null = null;
+    let resolveFetch: ((value: LayerImagesPayload) => void) | undefined;
 
     fetchLayerImagesMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolveFetch = resolve;
+        new Promise<LayerImagesPayload>((resolve) => {
+          resolveFetch = resolve as (value: LayerImagesPayload) => void;
         }),
     );
 
@@ -172,10 +185,13 @@ describe("converter store cleanup behavior", () => {
       previewGlbUrl: "/api/files/preview-b.glb",
     });
 
-    resolveFetch?.({
-      session_id: "session-a",
-      layers: [{ layer_index: 1, name: "Layer stale", url: "/api/files/stale-layer" }],
-    });
+    const fetchResolver = resolveFetch as (value: LayerImagesPayload) => void;
+    if (fetchResolver) {
+      fetchResolver({
+        session_id: "session-a",
+        layers: [{ layer_index: 1, name: "Layer stale", url: "/api/files/stale-layer" }],
+      });
+    }
 
     await fetchPromise;
 
@@ -192,13 +208,12 @@ describe("converter store cleanup behavior", () => {
 
   it("ignores stale layer image responses after the preview GLB changes within the same session", async () => {
     const useConverterStore = await loadStore();
-    let resolveFetch: ((value: { session_id: string; layers: { layer_index: number; name: string; url: string }[] }) => void) | null =
-      null;
+    let resolveFetch: ((value: LayerImagesPayload) => void) | undefined;
 
     fetchLayerImagesMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolveFetch = resolve;
+        new Promise<LayerImagesPayload>((resolve) => {
+          resolveFetch = resolve as (value: LayerImagesPayload) => void;
         }),
     );
 
@@ -223,10 +238,13 @@ describe("converter store cleanup behavior", () => {
       layerImagesOpen: false,
     });
 
-    resolveFetch?.({
-      session_id: "session-a",
-      layers: [{ layer_index: 0, name: "Layer stale", url: "/api/files/stale-layer" }],
-    });
+    const fetchResolver = resolveFetch as (value: LayerImagesPayload) => void;
+    if (fetchResolver) {
+      fetchResolver({
+        session_id: "session-a",
+        layers: [{ layer_index: 0, name: "Layer stale", url: "/api/files/stale-layer" }],
+      });
+    }
 
     await fetchPromise;
 
@@ -239,22 +257,12 @@ describe("converter store cleanup behavior", () => {
 
   it("ignores stale puzzle overlay responses after the session changes", async () => {
     const useConverterStore = await loadStore();
-    let resolvePreview:
-      | ((value: {
-        overlay_url: string;
-        warnings: string[];
-        grid_rows: number;
-        grid_cols: number;
-        piece_count: number;
-        derived_piece_width_mm: number;
-        derived_piece_height_mm: number;
-      }) => void)
-      | null = null;
+    let resolvePreview: ((value: PuzzlePreviewPayload) => void) | undefined;
 
     convertPuzzleLayoutPreviewMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolvePreview = resolve;
+        new Promise<PuzzlePreviewPayload>((resolve) => {
+          resolvePreview = resolve as (value: PuzzlePreviewPayload) => void;
         }),
     );
 
@@ -307,15 +315,18 @@ describe("converter store cleanup behavior", () => {
       puzzleDerivedPieceHeightMm: null,
     });
 
-    resolvePreview?.({
-      overlay_url: "/api/files/stale-puzzle-overlay",
-      warnings: ["stale"],
-      grid_rows: 2,
-      grid_cols: 3,
-      piece_count: 6,
-      derived_piece_width_mm: 20,
-      derived_piece_height_mm: 30,
-    });
+    const previewResolver = resolvePreview as (value: PuzzlePreviewPayload) => void;
+    if (previewResolver) {
+      previewResolver({
+        overlay_url: "/api/files/stale-puzzle-overlay",
+        warnings: ["stale"],
+        grid_rows: 2,
+        grid_cols: 3,
+        piece_count: 6,
+        derived_piece_width_mm: 20,
+        derived_piece_height_mm: 30,
+      });
+    }
 
     await previewPromise;
 
@@ -328,30 +339,20 @@ describe("converter store cleanup behavior", () => {
 
   it("does not let a stale failed puzzle request clear a newer successful overlay", async () => {
     const useConverterStore = await loadStore();
-    let rejectFirst: ((reason?: unknown) => void) | null = null;
-    let resolveSecond:
-      | ((value: {
-        overlay_url: string;
-        warnings: string[];
-        grid_rows: number;
-        grid_cols: number;
-        piece_count: number;
-        derived_piece_width_mm: number;
-        derived_piece_height_mm: number;
-      }) => void)
-      | null = null;
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    let resolveSecond: ((value: PuzzlePreviewPayload) => void) | undefined;
 
     convertPuzzleLayoutPreviewMock
       .mockImplementationOnce(
         () =>
-          new Promise((_, reject) => {
-            rejectFirst = reject;
+          new Promise<PuzzlePreviewPayload>((_, reject) => {
+            rejectFirst = reject as (reason?: unknown) => void;
           }),
       )
       .mockImplementationOnce(
         () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
+          new Promise<PuzzlePreviewPayload>((resolve) => {
+            resolveSecond = resolve as (value: PuzzlePreviewPayload) => void;
           }),
       );
 
@@ -388,18 +389,24 @@ describe("converter store cleanup behavior", () => {
     });
     const secondPromise = useConverterStore.getState().submitPuzzleLayoutPreview();
 
-    resolveSecond?.({
-      overlay_url: "/api/files/fresh-puzzle-overlay",
-      warnings: ["fresh"],
-      grid_rows: 2,
-      grid_cols: 4,
-      piece_count: 8,
-      derived_piece_width_mm: 15,
-      derived_piece_height_mm: 30,
-    });
+    const secondResolver = resolveSecond as (value: PuzzlePreviewPayload) => void;
+    if (secondResolver) {
+      secondResolver({
+        overlay_url: "/api/files/fresh-puzzle-overlay",
+        warnings: ["fresh"],
+        grid_rows: 2,
+        grid_cols: 4,
+        piece_count: 8,
+        derived_piece_width_mm: 15,
+        derived_piece_height_mm: 30,
+      });
+    }
     await secondPromise;
 
-    rejectFirst?.(new Error("stale failure"));
+    const firstRejecter = rejectFirst as (reason?: unknown) => void;
+    if (firstRejecter) {
+      firstRejecter(new Error("stale failure"));
+    }
     await firstPromise;
 
     const state = useConverterStore.getState();

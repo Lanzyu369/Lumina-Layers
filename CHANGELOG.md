@@ -10,6 +10,9 @@ All notable changes to Lumina Studio are documented in this file.
 
 ### Features
 - **Puzzle Mode Finish Pass** - Added puzzle-layout overlay preview in the converter workspace, a dedicated puzzle settings widget, 2D/3D overlay rendering, recipe import/export support, and combined 3MF assembly for per-piece puzzle generation
+- **Native Source Bundle Selection** - Added legacy/native source switching, native brand + DB bundle selection, native predictive source metadata, and backend catalog/normalization for reference bundles
+- **Single-Stage Workflow** - Added single-stage dataset extraction, Stage A fitting endpoints, store wiring, and UI/test coverage for the single-stage calibration flow
+- **Predictive Recipe Workflow** - Added predictive recipe color search/apply flows, native custom recipe editing, and supporting runtime metadata for predictive/native LUT sources
 
 ### Fixes
 - **Puzzle Preview Reliability** - Fixed stale failure races that could clear a newer successful overlay, and allowed same-parameter puzzle overlay retries after transient failures
@@ -19,6 +22,10 @@ All notable changes to Lumina Studio are documented in this file.
 - **SVG Puzzle Piece Stability** - SVG puzzle generation now aligns per-piece helper rasters and boundary JSON to the worker's exact rebuild grid, and rounds float-epsilon piece widths instead of truncating them to avoid empty meshes
 - **Unsupported Back Engraving Guard** - Back-label engraving is now treated as reserved and rejected during generation instead of silently exporting without geometry changes
 - **Smoke Coverage** - Added puzzle backend/frontend coverage to the fast smoke gate
+- **Native/Puzzle Contract Hardening** - Restored puzzle response summaries, reconnected puzzle generation to the frontend generate path, forwarded fridge-magnet payloads, and normalized recipe overrides across preview/apply/generate/large-format flows
+- **Preview and Session Safety** - Cleared stale preview sessions when source selections change, prevented native bundle generate from reusing legacy sessions, and tightened pre-session temp cleanup for native preview failures
+- **Governance and Encoding Cleanup** - Removed new catch-all exception regressions in governed paths, fixed the vector-engine false-positive `print(` governance trigger, and cleaned real mojibake from `.gitignore`
+- **Single-Stage ZIP Safety** - Hardened ZIP extraction against path traversal and made malformed ZIP uploads return deterministic 422 responses with pre-session temp-file cleanup
 
 ---
 

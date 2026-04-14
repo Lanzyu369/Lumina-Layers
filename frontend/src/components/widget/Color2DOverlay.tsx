@@ -73,7 +73,7 @@ export default function Color2DOverlay() {
           className="rounded-full border border-slate-200/80 bg-slate-100/85 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-800"
           aria-label={t('color_2d_overlay_close')}
         >
-          {t('color_2d_overlay_close')} <span className="ml-1 text-[10px] text-slate-400">ESC</span>
+          {t('color_2d_overlay_close')} <span className="ml-1 text-[10px] text-slate-400">{t('color_2d_overlay_close_shortcut')}</span>
         </button>
       </div>
 

@@ -62,7 +62,19 @@ class LuminaImageProcessor:
             return lab.reshape(original_shape)
         return lab
 
-    def __init__(self, lut_path, color_mode, hue_weight: float = 0.0, chroma_gate: float = 15.0):
+    def __init__(
+        self,
+        lut_path,
+        color_mode,
+        hue_weight: float = 0.0,
+        chroma_gate: float = 15.0,
+        color_layers: int | None = None,
+        layer_height_mm: float | None = None,
+        model_enable: bool = False,
+        model_only: bool = False,
+        model_threshold: float | None = None,
+        model_margin: float | None = None,
+    ):
         """Initialize image processor.
         加载 LUT 文件并初始化图像处理器。
         Args:
@@ -75,14 +87,58 @@ class LuminaImageProcessor:
         self.color_mode = color_mode
         self.hue_weight = float(hue_weight)
         self.chroma_gate = float(chroma_gate)
+        self.requested_color_layers = int(color_layers) if color_layers is not None else None
+        self.requested_layer_height_mm = float(layer_height_mm) if layer_height_mm is not None else None
+        self.model_enable = bool(model_enable)
+        self.model_only = bool(model_only)
+        self.model_threshold = float(model_threshold) if model_threshold is not None else None
+        self.model_margin = float(model_margin) if model_margin is not None else None
         self.hue_matcher = None
         self.enable_cleanup = True
-        lut_data = load_lut(lut_path, color_mode)
+        lut_data = load_lut(
+            lut_path,
+            color_mode,
+            color_layers=self.requested_color_layers,
+            layer_height_mm=self.requested_layer_height_mm,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            model_threshold=self.model_threshold,
+            model_margin=self.model_margin,
+        )
         self.lut_rgb = lut_data["lut_rgb"]
         self.lut_lab = lut_data["lut_lab"]
         self.ref_stacks = lut_data["ref_stacks"]
         self.kdtree = lut_data["kdtree"]
         self.layer_count = lut_data["layer_count"]
+        self.predictive_runtime = lut_data.get("predictive_runtime")
+        self.predictive_modes = lut_data.get("predictive_modes", [])
+        self.supported_modes = lut_data.get("supported_modes", [])
+        self.source_kind = lut_data.get("source_kind", "legacy_lookup")
+        self.requested_color_layers = lut_data.get("requested_color_layers", self.layer_count)
+        self.requested_layer_height_mm = lut_data.get("requested_layer_height_mm")
+        self.predictive_warnings = lut_data.get("predictive_warnings", [])
+        self.predictive_threshold = lut_data.get("predictive_threshold")
+        self.predictive_margin = lut_data.get("predictive_margin")
+        self.native_reference_source = bool(lut_data.get("native_reference_source", False))
+        self.last_match_info = {
+            "match_mode": (
+                "predictive"
+                if self.predictive_runtime is not None
+                and (self.model_only or self.model_enable or not self.native_reference_source)
+                else "legacy"
+            ),
+            "source_kind": self.source_kind,
+            "native_reference_source": self.native_reference_source,
+            "predictive_modes": list(self.predictive_modes),
+            "supported_modes": list(self.supported_modes),
+            "requested_color_layers": self.requested_color_layers,
+            "requested_layer_height_mm": self.requested_layer_height_mm,
+            "warnings": list(self.predictive_warnings),
+            "predictive_threshold": self.predictive_threshold,
+            "predictive_margin": self.predictive_margin,
+            "model_enable": self.model_enable,
+            "model_only": self.model_only,
+        }
         self._init_hue_matcher()
 
     def _init_hue_matcher(self):
@@ -90,6 +146,8 @@ class LuminaImageProcessor:
         如果 hue_weight > 0，则初始化色相感知的颜色匹配器。
         """
         if self.hue_weight > 0:
+            if self.lut_rgb.size == 0 or self.lut_lab.size == 0:
+                return
             from core.color_matching_hue_aware import HueAwareColorMatcher
 
             self.hue_matcher = HueAwareColorMatcher(
@@ -206,7 +264,11 @@ class LuminaImageProcessor:
             "mask_solid": ~mask_transparent,
             "dimensions": (target_w, target_h),
             "pixel_scale": px_scale,
-            "mode_info": {"mode": modeling_mode},
+            "mode_info": {
+                "mode": modeling_mode,
+                "lut_match_mode": self.last_match_info.get("match_mode", "legacy"),
+            },
+            "lut_match_info": dict(self.last_match_info),
             "quantized_image": debug_data["quantized_image"] if debug_data else rgb_arr.copy(),
         }
         if debug_data is not None:
@@ -217,7 +279,11 @@ class LuminaImageProcessor:
         """Apply isolated pixel cleanup if enabled.
         如果启用，则应用孤立像素清理。
         """
-        if modeling_mode == ModelingMode.HIGH_FIDELITY and self.enable_cleanup:
+        if (
+            modeling_mode == ModelingMode.HIGH_FIDELITY
+            and self.enable_cleanup
+            and self.last_match_info.get("match_mode") != "predictive"
+        ):
             try:
                 from core.isolated_pixel_cleanup import cleanup_isolated_pixels
 
@@ -269,17 +335,15 @@ class LuminaImageProcessor:
         """计算目标尺寸和像素比例。 Calculate target dimensions and pixel scale."""
         if modeling_mode == ModelingMode.HIGH_FIDELITY:
             PIXELS_PER_MM = 10
-            # Round instead of truncating so crop-derived puzzle pieces don't lose
-            # a pixel from float epsilon (e.g. 17.799999999999997mm -> 177px).
-            target_w = int(round(target_width_mm * PIXELS_PER_MM))
+            target_w = int(target_width_mm * PIXELS_PER_MM)
             pixel_scale = 1.0 / PIXELS_PER_MM
             log.info(f"[IMAGE_PROCESSOR] High-res mode: {PIXELS_PER_MM} px/mm")
         else:
-            target_w = int(round(target_width_mm / PrinterConfig.NOZZLE_WIDTH))
+            target_w = int(target_width_mm / PrinterConfig.NOZZLE_WIDTH)
             pixel_scale = PrinterConfig.NOZZLE_WIDTH
             log.info(f"[IMAGE_PROCESSOR] Pixel mode: {1.0/pixel_scale:.2f} px/mm")
         target_w = max(1, target_w)
-        target_h = max(1, int(round(target_w * img.height / img.width)))
+        target_h = max(1, int(target_w * img.height / img.width))
         log.info(
             f"[IMAGE_PROCESSOR] Target: {target_w}x{target_h}px ({target_w*pixel_scale:.1f}x{target_h*pixel_scale:.1f}mm)"
         )
@@ -332,7 +396,51 @@ class LuminaImageProcessor:
     def _match_high_fidelity_unique_colors(self, unique_colors):
         """Match unique colors to LUT indices in high-fidelity mode."""
         log.info(f"[IMAGE_PROCESSOR] hue_weight={self.hue_weight}, hue_matcher={'YES' if self.hue_matcher else 'NONE'}")
-        return match_colors_to_lut(unique_colors, self.lut_rgb, self.lut_lab, self.kdtree, self.hue_matcher)
+        match_result = match_colors_to_lut(
+            unique_colors,
+            self.lut_rgb,
+            self.lut_lab,
+            self.kdtree,
+            self.hue_matcher,
+            predictive_runtime=self.predictive_runtime,
+            source_kind=self.source_kind,
+            native_reference_source=self.native_reference_source,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            ref_stacks=self.ref_stacks,
+        )
+        if isinstance(match_result, dict):
+            self.last_match_info = {
+                "match_mode": "predictive",
+                "runtime_mode_key": match_result.get("runtime_mode_key"),
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": match_result.get("threshold"),
+                "predictive_margin": match_result.get("margin"),
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
+        else:
+            self.last_match_info = {
+                "match_mode": "legacy",
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": self.predictive_threshold,
+                "predictive_margin": self.predictive_margin,
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
+        return match_result
 
     def _build_high_fidelity_debug_data(self, quantized_image, unique_colors, rgb_processed, blur_kernel, smooth_sigma):
         """Build debug payload for high-fidelity mode."""
@@ -356,14 +464,59 @@ class LuminaImageProcessor:
         flat_rgb = rgb_arr.reshape(-1, 3)
         unique_colors, inverse = np.unique(flat_rgb, axis=0, return_inverse=True)
         log.info(f"[IMAGE_PROCESSOR] Pixel dedup: {len(flat_rgb)} pixels -> {len(unique_colors)} unique colors")
-        if self.hue_matcher is not None:
-            log.info(f"[IMAGE_PROCESSOR] Hue-aware matching enabled (hue_weight={self.hue_weight})")
-            unique_indices = self.hue_matcher.match_colors_batch(unique_colors, k=32)
+        unique_match = match_colors_to_lut(
+            unique_colors,
+            self.lut_rgb,
+            self.lut_lab,
+            self.kdtree,
+            self.hue_matcher,
+            predictive_runtime=self.predictive_runtime,
+            source_kind=self.source_kind,
+            native_reference_source=self.native_reference_source,
+            model_enable=self.model_enable,
+            model_only=self.model_only,
+            ref_stacks=self.ref_stacks,
+        )
+        if isinstance(unique_match, dict):
+            self.last_match_info = {
+                "match_mode": "predictive",
+                "runtime_mode_key": unique_match.get("runtime_mode_key"),
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": unique_match.get("threshold"),
+                "predictive_margin": unique_match.get("margin"),
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
         else:
-            unique_lab = self._rgb_to_lab(unique_colors)
-            _, unique_indices = self.kdtree.query(unique_lab)
-        indices = unique_indices[inverse]
-        matched_rgb = self.lut_rgb[indices].reshape(target_h, target_w, 3)
-        material_matrix = self.ref_stacks[indices].reshape(target_h, target_w, self.layer_count)
+            self.last_match_info = {
+                "match_mode": "legacy",
+                "source_kind": self.source_kind,
+                "native_reference_source": self.native_reference_source,
+                "predictive_modes": list(self.predictive_modes),
+                "supported_modes": list(self.supported_modes),
+                "requested_color_layers": self.requested_color_layers,
+                "requested_layer_height_mm": self.requested_layer_height_mm,
+                "warnings": list(self.predictive_warnings),
+                "predictive_threshold": self.predictive_threshold,
+                "predictive_margin": self.predictive_margin,
+                "model_enable": self.model_enable,
+                "model_only": self.model_only,
+            }
+        matched_rgb, material_matrix = map_pixels_to_lut(
+            rgb_arr,
+            unique_colors,
+            unique_match,
+            self.lut_rgb,
+            self.ref_stacks,
+            target_h,
+            target_w,
+            self.layer_count,
+        )
         log.info(f"[IMAGE_PROCESSOR] Direct matching complete!")
         return matched_rgb, material_matrix, rgb_arr

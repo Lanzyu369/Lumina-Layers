@@ -10,6 +10,12 @@ import { StructureMode } from '../../api/types';
 
 function resetStore(): void {
   useConverterStore.setState({
+    source_version: 'legacy',
+    lut_name: 'test-lut',
+    nativeBrandGroups: [],
+    nativeBrandGroupsLoading: false,
+    selectedNativeBrandKey: '',
+    selectedNativeDbNames: [],
     selectedColor: null,
     colorRemapMap: {},
     remapHistory: [],
@@ -562,6 +568,21 @@ describe('fridge magnet mode', () => {
     expect(state.fridge_magnets).toHaveLength(2);
     expectMagnetsToNotOverlap(state.fridge_magnets);
     expect(new Set(state.fridge_magnets.map((item) => item.center_y_mm)).size).toBeGreaterThan(1);
+  });
+
+  it('keeps mutually exclusive modes disabled after fridge mode is enabled', () => {
+    const store = useConverterStore.getState();
+
+    store.setEnableFridgeMagnet(true);
+    store.setStructureMode(StructureMode.DOUBLE_SIDED);
+    store.setLargeFormatEnabled(true);
+    store.setAddLoop(true);
+
+    const state = useConverterStore.getState();
+    expect(state.enable_fridge_magnet).toBe(true);
+    expect(state.structure_mode).toBe(StructureMode.SINGLE_SIDED);
+    expect(state.largeFormatEnabled).toBe(false);
+    expect(state.add_loop).toBe(false);
   });
 });
 

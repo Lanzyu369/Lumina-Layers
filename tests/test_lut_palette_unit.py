@@ -83,6 +83,39 @@ class TestDataModels:
         assert round_tripped.palette[0].color == "White"
         assert round_tripped.palette[0].color_name == "Jade White"
 
+    def test_metadata_round_trip_preserves_v2_extensions(self):
+        """LUT V2 metadata round-trip should preserve schema and extension blocks."""
+        meta = LUTMetadata(
+            palette=[PaletteEntry(color="White", material="PLA Basic")],
+            schema_version="2.0",
+            capabilities=["legacy_lookup", "predictive_match", "dynamic_layer_height"],
+            extensions={
+                "measured_db": {"samples": [{"recipe": [0, 0, 0, 0, 0], "lab": [90, 0, 0]}]},
+                "stage_model": {"model_id": "model-001", "gamma": 1.1},
+                "runtime_package": {
+                    "defaults": {"threshold": 4.5, "margin": 0.8},
+                    "modes": {
+                        "0.08x5": {
+                            "layer_height_mm": 0.08,
+                            "color_layers": 5,
+                            "layer_order": "Top2Bottom",
+                            "candidate_recipes": [[0, 0, 0, 0, 0]],
+                            "pred_lab": [[255, 128, 128]],
+                        }
+                    },
+                },
+                "custom_block": {"keep": True},
+            },
+        )
+
+        round_tripped = LUTMetadata.from_dict(meta.to_dict())
+
+        assert round_tripped.get_schema_version() == "2.0"
+        assert "predictive_match" in round_tripped.get_capabilities()
+        assert round_tripped.supports_predictive_match() is True
+        assert round_tripped.extensions["custom_block"] == {"keep": True}
+        assert round_tripped.extensions["stage_model"]["model_id"] == "model-001"
+
     def test_hex_color_format_validation(self):
         """非法 hex_color 格式处理 — PaletteEntry 在 dataclass 层面不做校验，接受任意字符串。"""
         # PaletteEntry 接受任意字符串作为 hex_color
@@ -467,9 +500,9 @@ class TestAPISchemas:
 
     def test_lut_info_response_contains_palette(self):
         """LutInfoResponse schema 包含 palette 和打印参数字段。"""
-        from api.schemas.lut import LutInfoResponse, PaletteEntrySchema
+        from api.schemas.lut import LutInfoResponseV2, PaletteEntrySchema
 
-        resp = LutInfoResponse(
+        resp = LutInfoResponseV2(
             name="TestLUT",
             color_mode="4-Color",
             color_count=1024,
@@ -482,9 +515,13 @@ class TestAPISchemas:
         assert resp.base_layers == 10
         assert resp.base_channel_idx == 0
         assert resp.layer_order == "Top2Bottom"
+        assert resp.schema_version == "1.0"
+        assert resp.capabilities == []
+        assert resp.supports_predictive_match is False
+        assert resp.supports_dynamic_layer_height is False
 
         # 带 palette 数据
-        resp2 = LutInfoResponse(
+        resp2 = LutInfoResponseV2(
             name="TestLUT2",
             color_mode="8-Color Max",
             color_count=2738,
@@ -495,11 +532,17 @@ class TestAPISchemas:
             base_layers=12,
             base_channel_idx=1,
             layer_order="Bottom2Top",
+            schema_version="2.0",
+            capabilities=["legacy_lookup", "predictive_match", "dynamic_layer_height"],
+            supports_predictive_match=True,
+            supports_dynamic_layer_height=True,
         )
         assert len(resp2.palette) == 1
         assert resp2.palette[0].color == "White"
         assert resp2.palette[0].color_name == "Jade White"
         assert resp2.max_color_layers == 6
+        assert resp2.schema_version == "2.0"
+        assert resp2.supports_predictive_match is True
 
     def test_merge_response_contains_warnings(self):
         """MergeResponse schema 包含 warnings 字段。"""

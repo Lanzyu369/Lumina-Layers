@@ -28,9 +28,6 @@ export enum StructureMode {
   SINGLE_SIDED = "Single-sided",
 }
 
-export type PuzzleStyle = "regular" | "irregular";
-export type PuzzleSizingMode = "piece_size" | "grid" | "piece_count";
-export type PuzzleConnectorStyle = "classic" | "easy_cut";
 export type FridgeMagnetShape = "round" | "rect";
 
 export interface FridgeMagnetItem {
@@ -45,23 +42,56 @@ export interface FridgeMagnetItem {
   center_y_mm: number;
 }
 
+export type PuzzleStyle = "regular" | "irregular";
+export type PuzzleSizingMode = "piece_size" | "grid" | "piece_count";
+export type PuzzleConnectorStyle = "classic" | "easy_cut";
+export type SourceKind = "legacy_single" | "native_bundle";
+
+export interface LutSupportedMode {
+  color_layers: number;
+  layer_height_mm: number;
+  layer_order?: string;
+  mode_key?: string;
+}
+
+export interface LegacySingleSourceSelection {
+  source_kind?: "legacy_single";
+  lut_name: string;
+}
+
+export interface NativeBundleSourceSelection {
+  source_kind: "native_bundle";
+  material_type: string;
+  vendor: string;
+  db_names: string[];
+}
+
+export type ConvertSourceSelection =
+  | LegacySingleSourceSelection
+  | NativeBundleSourceSelection;
+
 // ========== Request Models ==========
 
-export interface ConvertPreviewRequest {
-  lut_name: string;
+export type ConvertPreviewRequest = ConvertSourceSelection & {
   target_width_mm: number;
   auto_bg: boolean;
   bg_tol: number;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
+  color_layers?: number;
+  layer_height_mm?: number;
+  model_enable?: boolean;
+  model_only?: boolean;
+  model_threshold?: number | null;
+  model_margin?: number | null;
   quantize_colors: number;
   enable_cleanup: boolean;
-  hue_weight: number;
-  chroma_gate: number;
-  is_dark: boolean;
-}
+  hue_weight?: number;
+  chroma_gate?: number;
+  is_dark?: boolean;
+};
 
-export interface ConvertGenerateRequest extends ConvertPreviewRequest {
+export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
   structure_mode: StructureMode;
   separate_backing: boolean;
@@ -86,19 +116,14 @@ export interface ConvertGenerateRequest extends ConvertPreviewRequest {
   enable_coating: boolean;
   coating_height_mm: number;
   replacement_regions?: ColorReplacementItem[];
+  recipe_overrides?: RecipeOverrideItem[];
   free_color_set?: string[];
-  enable_fridge_magnet: boolean;
-  fridge_magnets: FridgeMagnetItem[];
+  enable_fridge_magnet?: boolean;
+  fridge_magnets?: FridgeMagnetItem[];
   printer_id?: string;
   slicer?: string;
   use_cached_matched_rgb?: boolean;
-}
-
-export interface ColorReplacementItem {
-  quantized_hex: string;
-  matched_hex: string;
-  replacement_hex: string;
-}
+};
 
 export interface PuzzleLayoutPreviewRequest {
   target_height_mm: number;
@@ -109,7 +134,7 @@ export interface PuzzleLayoutPreviewRequest {
   rows: number;
   cols: number;
   target_piece_count: number;
-  seed: number;
+  seed?: number;
   connector_style: PuzzleConnectorStyle;
   labels_enabled: boolean;
   engrave_back_labels: boolean;
@@ -117,8 +142,70 @@ export interface PuzzleLayoutPreviewRequest {
   min_neck_width_mm: number;
 }
 
+export interface PuzzleLayoutPreviewResponse {
+  status: string;
+  message?: string;
+  overlay_url: string;
+  piece_count: number;
+  grid_cols: number;
+  grid_rows: number;
+  derived_piece_width_mm: number;
+  derived_piece_height_mm: number;
+  warnings: string[];
+}
+
 export interface PuzzleGenerateRequest extends PuzzleLayoutPreviewRequest {
   params: ConvertGenerateRequest;
+}
+
+export interface PuzzleGenerateResponse {
+  status: string;
+  message: string;
+  download_url: string;
+  threemf_disk_path?: string;
+  piece_count: number;
+  grid_cols: number;
+  grid_rows: number;
+  warnings: string[];
+}
+
+export interface RecipeOverrideItem {
+  region_id: string;
+  recipe: number[];
+  layer_order: string;
+}
+
+export interface RecipePredictRequest {
+  session_id: string;
+  recipe: number[];
+  layer_order: string;
+  color_layers: number;
+  layer_height_mm: number;
+}
+
+export interface RecipePredictResponse {
+  status: string;
+  message: string;
+  rgb: number[];
+  lab: number[];
+  source: string;
+  runtime_mode_key?: string | null;
+}
+
+export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
+  region_ids?: string[];
+}
+
+export interface RecipeOverrideApplyResponse extends RecipePredictResponse {
+  preview_url: string;
+  preview_glb_url?: string | null;
+  override_count: number;
+}
+
+export interface ColorReplacementItem {
+  quantized_hex: string;
+  matched_hex: string;
+  replacement_hex: string;
 }
 
 // ========== Palette & Height Types ==========
@@ -164,6 +251,8 @@ export interface PreviewResponse {
   message: string;
   preview_url: string;
   preview_glb_url: string | null; // GLB 3D 预览 URL
+  lut_match_mode?: string | null;
+  lut_match_info?: Record<string, unknown> | null;
   palette: PaletteEntry[];
   dimensions: {
     width: number;
@@ -191,29 +280,6 @@ export interface LargeFormatGenerateResponse {
   grid_rows: number;
 }
 
-export interface PuzzleLayoutPreviewResponse {
-  status: string;
-  message: string;
-  overlay_url: string;
-  piece_count: number;
-  grid_cols: number;
-  grid_rows: number;
-  derived_piece_width_mm: number;
-  derived_piece_height_mm: number;
-  warnings: string[];
-}
-
-export interface PuzzleGenerateResponse {
-  status: string;
-  message: string;
-  download_url: string;
-  threemf_disk_path?: string | null;
-  piece_count: number;
-  grid_cols: number;
-  grid_rows: number;
-  warnings: string[];
-}
-
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */
 export interface GenerateResponse {
   status: string;
@@ -232,6 +298,42 @@ export interface LutInfo {
   color_mode: ColorMode;
   path: string;
   fingerprint: string;
+}
+
+export interface LutCatalogItem {
+  name: string;
+  color_mode: ColorMode;
+  path: string;
+  fingerprint: string;
+}
+
+export interface LutCatalogGroup {
+  group_name: string;
+  items: LutCatalogItem[];
+}
+
+export interface NativeDbOption {
+  name: string;
+  path: string;
+  color_mode: string;
+  fingerprint: string;
+}
+
+export interface NativeBrandGroup {
+  brand_key: string;
+  material_type: string;
+  vendor: string;
+  display_name: string;
+  db_options: NativeDbOption[];
+  default_db_names: string[];
+  package_name?: string | null;
+  model_name?: string | null;
+  supported_modes: LutSupportedMode[];
+}
+
+export interface LutCatalogResponse {
+  legacy_groups: LutCatalogGroup[];
+  native_brand_groups: NativeBrandGroup[];
 }
 
 export interface BedSizeItem {
@@ -284,6 +386,31 @@ export interface CalibrationResponse {
   message: string;
   download_url: string;
   preview_url: string | null;
+}
+
+export interface SingleStageJobSummary {
+  color: string;
+  color_name: string;
+  material: string;
+  substrate_id: string;
+  substrate_display_name: string;
+  filename: string;
+}
+
+export interface SingleStageKitGenerateRequest {
+  palette: ExtractorPaletteEntry[];
+  substrate_id: string;
+  substrate_display_name: string;
+  material_default: string;
+}
+
+export interface SingleStageKitResponse {
+  status: string;
+  message: string;
+  kit_download_url: string;
+  preview_url: string | null;
+  manifest_url: string;
+  jobs: SingleStageJobSummary[];
 }
 
 // ========== Extractor Enums ==========
@@ -354,6 +481,56 @@ export interface ExtractResponse {
   default_palette: ExtractorPaletteEntry[];
 }
 
+export interface SingleStageCoverageItem {
+  substrate_id: string;
+  colors: string[];
+}
+
+export interface SingleStageDatasetItem {
+  substrate_id: string;
+  color_name: string;
+  image_count: number;
+  label_count?: number | null;
+  calibration?: Record<string, unknown> | null;
+}
+
+export interface SingleStageDatasetSummary {
+  substrate_count: number;
+  color_count: number;
+  dataset_count: number;
+  image_count: number;
+  label_count?: number | null;
+  substrates: string[];
+  coverage: SingleStageCoverageItem[];
+  datasets: SingleStageDatasetItem[];
+  uploaded_dataset?: Record<string, unknown> | null;
+}
+
+export interface SingleStageExtractResponse {
+  session_id: string;
+  status: string;
+  message: string;
+  stage_json_url: string;
+  warnings: string[];
+  dataset_summary: SingleStageDatasetSummary;
+}
+
+export interface StageAFitSummary {
+  substrate_count: number;
+  channel_count: number;
+  substrates: string[];
+  colors: string[];
+  overall_validation: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface StageAFitResponse {
+  status: string;
+  message: string;
+  stage_a_params_url: string;
+  fit_summary: StageAFitSummary;
+}
+
 export interface ManualFixResponse {
   status: string;
   message: string;
@@ -366,6 +543,61 @@ export interface LutInfoResponse {
   name: string;
   color_mode: string;
   color_count: number;
+  palette?: Array<{
+    color: string;
+    material: string;
+    hex_color: string | null;
+    color_name?: string | null;
+  }>;
+  max_color_layers?: number;
+  layer_height_mm?: number;
+  line_width_mm?: number;
+  base_layers?: number;
+  base_channel_idx?: number;
+  layer_order?: string;
+  schema_version?: string;
+  capabilities?: string[];
+  supports_predictive_match?: boolean;
+  supports_dynamic_layer_height?: boolean;
+  supports_dynamic_layer_count?: boolean;
+  supports_custom_recipe?: boolean;
+  source_kind?: string;
+  supported_modes?: LutSupportedMode[];
+}
+
+export interface RecipeColorPredictRequest {
+  recipe: number[];
+  color_layers: number;
+  layer_height_mm: number;
+  layer_order: string;
+}
+
+export interface RecipeColorPredictResponse {
+  status: string;
+  rgb: number[];
+  lab: number[];
+  runtime_mode_key: string;
+  source: string;
+}
+
+export interface RecipeSearchRequest {
+  pattern: string;
+  color_layers: number;
+  layer_height_mm: number;
+  layer_order: string;
+  limit?: number;
+}
+
+export interface RecipeSearchItem {
+  recipe: number[];
+  rgb: number[];
+  lab: number[];
+}
+
+export interface RecipeSearchResponse {
+  status: string;
+  runtime_mode_key: string;
+  items: RecipeSearchItem[];
 }
 
 export interface MergeStats {
@@ -386,6 +618,13 @@ export interface MergeResponse {
   message: string;
   filename: string;
   stats: MergeStats;
+  palette?: Array<{
+    color: string;
+    material: string;
+    hex_color: string | null;
+    color_name?: string | null;
+  }>;
+  warnings?: string[];
 }
 
 export interface CompareDiffItem {
@@ -541,15 +780,15 @@ export interface FiveColorQueryResponse {
 export interface RecipeSwatchItemRequest {
   selected_indices: number[];
   result_hex: string;
-  base_color_names: string[];
-  base_color_hexes: string[];
+  base_color_names?: string[];
+  base_color_hexes?: string[];
 }
 
 export interface RecipeSwatchRequest {
   lut_name: string;
   recipes: RecipeSwatchItemRequest[];
-  block_size_mm: number;
-  gap_mm: number;
+  block_size_mm?: number;
+  gap_mm?: number;
   cols?: number;
   structure_mode?: string;
   printer_id?: string;
@@ -560,7 +799,7 @@ export interface RecipeSwatchResponse {
   status: string;
   message: string;
   download_url: string;
-  preview_url: string | null;
+  preview_url?: string | null;
   recipe_count: number;
 }
 

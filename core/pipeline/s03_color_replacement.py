@@ -13,6 +13,7 @@ S03 — 颜色替换（全局替换 + 区域替换 + matched_rgb 覆盖）。
 import time
 import logging
 from collections import deque
+import pickle
 import numpy as np
 
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
@@ -163,6 +164,36 @@ def _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y):
     return out
 
 
+def _pad_recipe_to_layers(
+    recipe: list[int],
+    target_layers: int,
+    base_channel_idx: int,
+    layer_order: str,
+) -> list[int]:
+    if len(recipe) >= target_layers:
+        return recipe[:target_layers]
+    pad_count = target_layers - len(recipe)
+    if layer_order == "Bottom2Top":
+        return [int(base_channel_idx)] * pad_count + [int(v) for v in recipe]
+    return [int(v) for v in recipe] + [int(base_channel_idx)] * pad_count
+
+
+def _upgrade_material_matrix_layers(
+    material_matrix: np.ndarray,
+    target_layers: int,
+    base_channel_idx: int,
+    layer_order: str,
+) -> np.ndarray:
+    current_layers = int(material_matrix.shape[2])
+    if current_layers >= target_layers:
+        return material_matrix
+    pad_shape = (*material_matrix.shape[:2], target_layers - current_layers)
+    pad = np.full(pad_shape, int(base_channel_idx), dtype=material_matrix.dtype)
+    if layer_order == "Bottom2Top":
+        return np.concatenate([pad, material_matrix], axis=2)
+    return np.concatenate([material_matrix, pad], axis=2)
+
+
 def run(ctx: dict) -> dict:
     """Apply color replacements: global, region, and matched_rgb override.
     应用颜色替换：全局替换、区域替换、matched_rgb 覆盖。
@@ -175,6 +206,7 @@ def run(ctx: dict) -> dict:
         - color_replacements (dict | None): 全局颜色替换映射
         - replacement_regions (list | None): 区域替换列表
         - matched_rgb_path (str | None): 预计算 matched_rgb .npy 文件路径
+        - material_matrix_path (str | None): 预计算 material_matrix .npy 文件路径
 
     PipelineContext 输出键 / Output keys:
         - matched_rgb (np.ndarray): 更新后的 RGB（如有替换）
@@ -189,6 +221,12 @@ def run(ctx: dict) -> dict:
     color_replacements = ctx.get("color_replacements")
     replacement_regions = ctx.get("replacement_regions")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    material_matrix_path = ctx.get("material_matrix_path")
+    recipe_overrides = ctx.get("recipe_overrides") or []
+    recipe_override_masks_path = ctx.get("recipe_override_masks_path")
+    lut_metadata = ctx.get("lut_metadata")
+    requested_color_layers = ctx.get("color_layers")
+    requested_layer_height_mm = ctx.get("layer_height_mm")
 
     # ---- Override matched_rgb with pre-computed array if provided ----
     if matched_rgb_path is not None:
@@ -219,6 +257,22 @@ def run(ctx: dict) -> dict:
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
                 f"[S03] Failed to load matched_rgb_path '{matched_rgb_path}': {e}, " f"using original processed result"
+            )
+
+    if material_matrix_path is not None:
+        try:
+            override_material_matrix = np.load(material_matrix_path)
+            if override_material_matrix.shape != material_matrix.shape:
+                _log.warning(
+                    f"[S03] material_matrix_path shape {override_material_matrix.shape} "
+                    f"does not match processed shape {material_matrix.shape}, ignoring override"
+                )
+            else:
+                material_matrix = override_material_matrix
+        except (OSError, ValueError, TypeError) as e:
+            _log.warning(
+                f"[S03] Failed to load material_matrix_path '{material_matrix_path}': {e}, "
+                f"using original processed result"
             )
 
     # ---- Apply global color replacements ----
@@ -256,6 +310,76 @@ def run(ctx: dict) -> dict:
                 f"[S03] material_matrix: {orig_hex} -> LUT#{lut_idx} "
                 f"rgb({lut_color[0]},{lut_color[1]},{lut_color[2]}) stacks={new_stacks}"
             )
+
+    # ---- Apply explicit recipe overrides by region_id ----
+    if recipe_overrides and recipe_override_masks_path:
+        try:
+            with open(recipe_override_masks_path, "rb") as f:
+                region_masks = pickle.load(f)
+        except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
+            _log.warning("[S03] Failed to load recipe override masks: %s", exc)
+            region_masks = {}
+
+        if isinstance(region_masks, dict) and lut_metadata is not None:
+            target_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
+            base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+            target_layers = max(
+                int(material_matrix.shape[2]),
+                max((len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)), default=0),
+            )
+            if requested_color_layers is not None:
+                target_layers = max(target_layers, int(requested_color_layers))
+            material_matrix = _upgrade_material_matrix_layers(
+                material_matrix,
+                int(target_layers),
+                base_channel_idx,
+                target_order,
+            )
+            try:
+                from core.predictive_lut import predict_recipe_color
+                from core.recipe_order import convert_recipe_between_orders
+            except (ImportError, ModuleNotFoundError):
+                predict_recipe_color = None
+                convert_recipe_between_orders = None
+
+            for item in recipe_overrides:
+                if not isinstance(item, dict):
+                    continue
+                region_id = str(item.get("region_id", "")).strip()
+                region_mask = region_masks.get(region_id)
+                if region_mask is None:
+                    continue
+                effective_mask = np.asarray(region_mask, dtype=bool) & mask_solid
+                if not np.any(effective_mask):
+                    continue
+
+                recipe_raw = [int(v) for v in item.get("recipe", [])]
+                recipe_order = str(item.get("layer_order", target_order))
+                normalized_recipe = recipe_raw
+                if convert_recipe_between_orders is not None:
+                    normalized_recipe = convert_recipe_between_orders(recipe_raw, recipe_order, target_order)
+                normalized_recipe = _pad_recipe_to_layers(
+                    normalized_recipe,
+                    int(material_matrix.shape[2]),
+                    base_channel_idx,
+                    target_order,
+                )
+                material_matrix[effective_mask] = np.asarray(normalized_recipe, dtype=material_matrix.dtype)
+
+                if predict_recipe_color is not None:
+                    try:
+                        predicted = predict_recipe_color(
+                            lut_metadata,
+                            recipe_raw,
+                            float(requested_layer_height_mm or getattr(lut_metadata, "layer_height_mm", 0.08)),
+                            int(material_matrix.shape[2]),
+                            recipe_order,
+                        )
+                        rgb = np.asarray(predicted.get("rgb", []), dtype=np.uint8)
+                        if rgb.shape == (3,):
+                            matched_rgb[effective_mask] = rgb
+                    except (AttributeError, ImportError, ModuleNotFoundError, TypeError, ValueError) as exc:
+                        _log.warning("[S03] Recipe color prediction failed for %s: %s", region_id, exc)
 
     # ---- Apply region replacements in-order ----
     if replacement_regions:

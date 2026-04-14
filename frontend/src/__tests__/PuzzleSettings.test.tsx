@@ -1,12 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import PuzzleSettings from "../components/sections/PuzzleSettings";
 import { useConverterStore } from "../stores/converter";
-
-vi.mock("../i18n/context", () => ({
-  useI18n: () => ({ t: (key: string) => key, lang: "en" as const }),
-}));
 
 describe("PuzzleSettings", () => {
   beforeEach(() => {
@@ -34,22 +30,23 @@ describe("PuzzleSettings", () => {
     });
   });
 
-  it("shows requested and resolved puzzle summary values separately", () => {
-    render(<PuzzleSettings />);
-
-    expect(screen.getByText("puzzle_summary_requested_grid")).toBeInTheDocument();
-    expect(screen.getByText("puzzle_summary_requested_piece_count")).toBeInTheDocument();
-    expect(screen.getByText("20")).toBeInTheDocument();
-    expect(screen.getAllByText("5 × 4")).toHaveLength(2);
-    expect(screen.getByText("18")).toBeInTheDocument();
-    expect(screen.getByText("16.5 × 18.2 mm")).toBeInTheDocument();
-  });
-
-  it("shows that back-label engraving is currently unavailable", () => {
+  it("renders translated labels and does not leak raw puzzle keys", () => {
     render(<PuzzleSettings />);
 
     expect(
-      screen.getByText("puzzle_back_engrave_unavailable_hint"),
+      screen.getByRole("checkbox", { name: "启用拼图模式" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "拼图风格" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "尺寸控制方式" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("目标网格")).toBeInTheDocument();
+    expect(screen.getByText("解析网格")).toBeInTheDocument();
+    expect(screen.getByText("背面刻号尚未写入导出几何，当前版本暂不可用。")).toBeInTheDocument();
+    expect(screen.queryByText("puzzle_enable")).not.toBeInTheDocument();
+    expect(screen.queryByText("puzzle_summary_requested_grid")).not.toBeInTheDocument();
+    expect(screen.queryByText("puzzle_back_engrave_unavailable_hint")).not.toBeInTheDocument();
   });
 });

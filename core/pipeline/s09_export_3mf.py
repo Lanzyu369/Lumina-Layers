@@ -41,6 +41,7 @@ def run(ctx: dict) -> dict:
     """
     scene = ctx["scene"]
     valid_slot_names = ctx["valid_slot_names"]
+    slot_names = ctx.get("slot_names", valid_slot_names)
     preview_colors = ctx["preview_colors"]
     color_mode = ctx["color_mode"]
     image_path = ctx["image_path"]
@@ -103,6 +104,7 @@ def run(ctx: dict) -> dict:
             output_path=out_path,
             slot_names=valid_slot_names,
             preview_colors=preview_colors,
+            project_slot_names=slot_names,
             settings=print_settings,
             color_mode=color_mode,
             printer_id=ctx.get("printer_id", "bambu-h2d"),

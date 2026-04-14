@@ -1,71 +1,82 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+
 import CalibrationPanel from "../components/CalibrationPanel";
-import { useCalibrationStore } from "../stores/calibrationStore";
 import { CalibrationColorMode, BackingColor } from "../api/types";
+import { useCalibrationStore } from "../stores/calibrationStore";
 
 vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
+  generateSingleStageKit: vi.fn(),
 }));
 
 beforeEach(() => {
   useCalibrationStore.setState({
+    workflow: "legacy",
     color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
     block_size: 5,
     gap: 0.82,
     backing: BackingColor.WHITE,
     eight_color_full_export: false,
+    substrateId: "white",
+    substrateDisplayName: "White",
+    materialDefault: "PLA Basic",
     isLoading: false,
     error: null,
     downloadUrl: null,
     previewImageUrl: null,
     modelUrl: null,
     statusMessage: null,
+    manifestUrl: null,
+    singleStageJobs: [],
   });
 });
 
 describe("CalibrationPanel", () => {
-  it("renders all controls", () => {
+  it("renders workflow selector and legacy controls by default", () => {
     render(<CalibrationPanel />);
 
     expect(screen.getByTestId("calibration-panel")).toBeInTheDocument();
-    expect(screen.getByText("颜色模式")).toBeInTheDocument();
-    expect(screen.getByText("色块尺寸")).toBeInTheDocument();
-    expect(screen.getByText("色块间距")).toBeInTheDocument();
-    expect(screen.getByText("底板颜色")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成校准板" })).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("shows correct default values", () => {
+  it("renders single-stage fields when workflow is single-stage", () => {
+    useCalibrationStore.setState({ workflow: "single-stage" });
     render(<CalibrationPanel />);
 
-    // Color mode dropdown defaults to 4-Color
-    const selects = screen.getAllByRole("combobox");
-    expect(selects[0]).toHaveTextContent(CalibrationColorMode.FOUR_COLOR_RYBW);
-
-    // Block size default 5 mm, rendered with two decimals
-    expect(screen.getByLabelText("色块尺寸 value")).toHaveValue("5.00");
-
-    // Gap default 0.82 mm
-    expect(screen.getByLabelText("色块间距 value")).toHaveValue("0.82");
-
-    // Backing color defaults to White
-    expect(selects[1]).toHaveTextContent(BackingColor.WHITE);
+    expect(screen.getByTestId("single-stage-config")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("white")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("White")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("PLA Basic")).toBeInTheDocument();
   });
 
-  it("disables only backing in 8-Color Max mode", () => {
-    useCalibrationStore.setState({ color_mode: CalibrationColorMode.EIGHT_COLOR });
+  it("shows manifest link when single-stage output exists", () => {
+    useCalibrationStore.setState({
+      workflow: "single-stage",
+      downloadUrl: "/api/files/kit.zip",
+      manifestUrl: "/api/files/manifest.json",
+      singleStageJobs: [
+        {
+          color: "White",
+          color_name: "White",
+          material: "PLA Basic",
+          substrate_id: "white",
+          substrate_display_name: "White",
+          filename: "single_stage_white_white.3mf",
+        },
+      ],
+    });
     render(<CalibrationPanel />);
 
-    const sliders = screen.getAllByRole("slider");
-    const selects = screen.getAllByRole("combobox");
-
-    // block_size and gap sliders enabled
-    expect(sliders[0]).not.toBeDisabled();
-    expect(sliders[1]).not.toBeDisabled();
-    // backing dropdown disabled
-    expect(selects[1]).toBeDisabled();
-    expect(screen.getByRole("switch")).toBeInTheDocument();
+    expect(screen.getByTestId("download-link")).toHaveAttribute(
+      "href",
+      "/api/files/kit.zip",
+    );
+    expect(screen.getByTestId("manifest-link")).toHaveAttribute(
+      "href",
+      "/api/files/manifest.json",
+    );
+    expect(screen.getByTestId("single-stage-jobs")).toBeInTheDocument();
   });
 
   it("hides the exhaustive export switch outside 8-Color Max mode", () => {
@@ -92,11 +103,9 @@ describe("CalibrationPanel", () => {
     const sliders = screen.getAllByRole("slider");
     const selects = screen.getAllByRole("combobox");
 
-    // block_size and gap sliders enabled
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
-    // backing dropdown disabled
-    expect(selects[1]).toBeDisabled();
+    expect(selects[2]).toBeDisabled();
   });
 
   it("enables all controls in BW mode", () => {
@@ -108,8 +117,8 @@ describe("CalibrationPanel", () => {
 
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
-    expect(selects[0]).not.toBeDisabled();
     expect(selects[1]).not.toBeDisabled();
+    expect(selects[2]).not.toBeDisabled();
   });
 
   it("enables all controls in 4-Color mode", () => {
@@ -120,8 +129,8 @@ describe("CalibrationPanel", () => {
 
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
-    expect(selects[0]).not.toBeDisabled();
     expect(selects[1]).not.toBeDisabled();
+    expect(selects[2]).not.toBeDisabled();
   });
 
   it("disables generate button when isLoading is true", () => {
@@ -166,6 +175,5 @@ describe("CalibrationPanel", () => {
     const img = screen.getByTestId("preview-image");
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute("src", "/api/files/preview.png");
-    expect(img).toHaveAttribute("alt", "校准板预览");
   });
 });

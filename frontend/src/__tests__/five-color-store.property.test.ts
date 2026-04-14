@@ -108,6 +108,7 @@ describe("Feature: five-color-query, Property 6: 清除重置为空", () => {
             result_hex: "#804020",
             row_index: 42,
             message: "found",
+            source: "lut_lookup",
           },
         });
 
@@ -167,6 +168,7 @@ describe("Feature: five-color-query, Property 8: 切换 LUT 重置选择和结�
             result_hex: "#64C832",
             row_index: 10,
             message: "found",
+            source: "lut_lookup",
           },
         });
 

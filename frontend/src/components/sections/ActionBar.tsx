@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { createPortal } from "react-dom"
-import { buildLayerImagesSourceKey, useConverterStore } from "../../stores/converter"
+import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
 import BatchResultSummary from "../ui/BatchResultSummary"
 import ZoomableImage, { type ZoomableImageHoverSample } from "../ui/ZoomableImage"
@@ -54,6 +54,12 @@ export default function ActionBar() {
 
   const imageFile = useConverterStore((s) => s.imageFile)
   const lut_name = useConverterStore((s) => s.lut_name)
+  const sourceVersion = useConverterStore((s) => s.source_version)
+  const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey)
+  const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames)
+  const nativeBrandGroups = useConverterStore((s) => s.nativeBrandGroups)
+  const nativeColorLayers = useConverterStore((s) => s.color_layers)
+  const nativeLayerHeightMm = useConverterStore((s) => s.layer_height_mm)
   const isLoading = useConverterStore((s) => s.isLoading)
   const isGenerating = useConverterStore((s) => s.isGenerating)
   const error = useConverterStore((s) => s.error)
@@ -86,12 +92,34 @@ export default function ActionBar() {
   const layerImages = useConverterStore((s) => s.layerImages)
   const layerImagesSourceKey = useConverterStore((s) => s.layerImagesSourceKey)
   const layerImagesCurrentKey = useConverterStore(buildLayerImagesSourceKey)
+  const sourceSelection = useMemo(
+    () =>
+      resolveConverterSourceSelection({
+        source_version: sourceVersion,
+        lut_name,
+        nativeBrandGroups,
+        selectedNativeBrandKey,
+        selectedNativeDbNames,
+        color_layers: nativeColorLayers,
+        layer_height_mm: nativeLayerHeightMm,
+      }),
+    [
+      sourceVersion,
+      lut_name,
+      nativeBrandGroups,
+      selectedNativeBrandKey,
+      selectedNativeDbNames,
+      nativeColorLayers,
+      nativeLayerHeightMm,
+    ],
+  )
 
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
-  const canSubmit = !!imageFile && !!lut_name
-  const canBatchSubmit = batchFiles.length > 0 && !!lut_name
+  const canSubmit = !!imageFile && sourceSelection.isReady
+  const canGenerate = canSubmit && !!sessionId
+  const canBatchSubmit = batchFiles.length > 0 && sourceVersion === "legacy" && !!lut_name
   const previewDisplayUrl = puzzleOverlayUrl
     ? (previewBaseImageUrl ?? previewImageUrl)
     : selectionMode === "multi-select"
@@ -586,7 +614,11 @@ export default function ActionBar() {
     }, HOVER_POPOVER_DELAY_MS)
   }, [])
 
-  const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample) : null
+  const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample, {
+    layerCount: hoverLayerColors.length,
+    showMagnifier: true,
+    showLayerDetails: true,
+  }) : null
 
   const hoverInspectorContent = hoverSample && hoverInspectorStyle ? (
     <PreviewHoverInspector
@@ -651,7 +683,7 @@ export default function ActionBar() {
                 label={t("action_generate")}
                 variant="primary"
                 onClick={() => void submitGenerate()}
-                disabled={!canSubmit || isLoading || isGenerating}
+                disabled={!canGenerate || isLoading || isGenerating}
                 loading={isGenerating}
                 className="w-full"
               />

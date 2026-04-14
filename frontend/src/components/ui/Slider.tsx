@@ -10,6 +10,7 @@ interface SliderProps {
   onChange: (value: number) => void;
   disabled?: boolean;
   unit?: string;
+  tooltip?: string;
   displayDecimals?: number;
   minInputWidthCh?: number;
 }
@@ -23,6 +24,7 @@ export default function Slider({
   onChange,
   disabled = false,
   unit,
+  tooltip,
   displayDecimals,
   minInputWidthCh,
 }: SliderProps) {
@@ -91,7 +93,7 @@ export default function Slider({
     <div className="flex flex-col gap-1.5">
       {label && (
         <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
-          {label}
+          <span title={tooltip}>{label}</span>
         </label>
       )}
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">
@@ -102,6 +104,7 @@ export default function Slider({
           step={step}
           value={value}
           disabled={disabled}
+          aria-label={label}
           onChange={(e) => onChange(Number(e.target.value))}
           className={cx(
             "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",

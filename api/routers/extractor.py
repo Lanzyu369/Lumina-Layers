@@ -15,7 +15,12 @@ from PIL import Image
 
 from api.dependencies import get_file_registry, get_session_store
 from api.errors import to_http_exception
-from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes, upload_to_ndarray
+from api.file_bridge import (
+    ndarray_to_png_bytes,
+    pil_to_png_bytes,
+    upload_to_ndarray,
+    upload_to_tempfile,
+)
 from api.file_registry import FileRegistry
 from api.schemas.extractor import (
     ConfirmPaletteRequest,
