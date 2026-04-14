@@ -2115,8 +2115,9 @@ class VectorProcessor:
                 if isinstance(seg, (Line, Close)):
                     coords.append((seg.start.x, seg.start.y))
                 elif isinstance(seg, CubicBezier):
-                    if not coords:
-                        coords.append((seg.start.x, seg.start.y))
+                    start_pt = (seg.start.x, seg.start.y)
+                    if not coords or coords[-1] != start_pt:
+                        coords.append(start_pt)
                     _flatten_cubic(
                         seg.start.x,
                         seg.start.y,
@@ -2131,8 +2132,9 @@ class VectorProcessor:
                         0,
                     )
                 elif isinstance(seg, QuadraticBezier):
-                    if not coords:
-                        coords.append((seg.start.x, seg.start.y))
+                    start_pt = (seg.start.x, seg.start.y)
+                    if not coords or coords[-1] != start_pt:
+                        coords.append(start_pt)
                     _flatten_quadratic(
                         seg.start.x,
                         seg.start.y,

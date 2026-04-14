@@ -770,6 +770,83 @@ class TestParseSvgSubpaths:
 
 
 # =====================================================================
+# 5b. SVG parse regression (Line → Bezier junction)
+# =====================================================================
+
+
+class TestLineToBezierJunction:
+    """Regression: Line→CubicBezier/QuadraticBezier junction point must
+    not be silently dropped, which would distort or destroy geometry."""
+
+    def test_rounded_rect_preserves_area(self, tmp_path):
+        """Rounded rectangle (lines + cubic-bezier corners) must keep
+        nearly the full area of its bounding box."""
+        # A 200×100 rounded rect with r=20 corner radii.
+        # k ≈ 0.5523 is the standard cubic Bézier kappa for quarter circles.
+        k = 0.5523
+        r = 20
+        w, h = 200, 100
+        d = (
+            f"M{r},0 L{w - r},0 "
+            f"C{w - r + r * k},0 {w},{r - r * k} {w},{r} "
+            f"L{w},{h - r} "
+            f"C{w},{h - r + r * k} {w - r + r * k},{h} {w - r},{h} "
+            f"L{r},{h} "
+            f"C{r - r * k},{h} 0,{h - r + r * k} 0,{h - r} "
+            f"L0,{r} "
+            f"C0,{r - r * k} {r - r * k},0 {r},0 Z"
+        )
+        svg_file = tmp_path / "rounded_rect.svg"
+        svg_file.write_text(
+            (
+                f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}">\n'
+                f'  <path fill="#ff0000" d="{d}"/>\n'
+                "</svg>\n"
+            ),
+            encoding="utf-8",
+        )
+
+        vp = _make_parse_only_processor()
+        shapes, scale, bbox = vp._parse_svg(str(svg_file), target_width_mm=100.0)
+
+        assert len(shapes) >= 1
+        total_area = sum(s["poly"].area for s in shapes)
+        bbox_area = w * h  # 20000
+        # A rounded rect with r=20 loses about 4*(r^2 - pi*r^2/4) ≈ 343
+        # from its bounding rect, so the expected area ≈ 19657.
+        expected_area = w * h - 4 * (r * r - np.pi * r * r / 4.0)
+        assert total_area > expected_area * 0.95, (
+            f"Rounded rect area {total_area:.1f} is too small "
+            f"(expected ~{expected_area:.1f}, bbox={bbox_area})"
+        )
+
+    def test_line_to_quadratic_bezier_junction(self, tmp_path):
+        """Path with Line→QuadraticBezier must preserve the junction point."""
+        # A shape: straight left edge, quadratic-curved right edge.
+        svg_file = tmp_path / "line_quad.svg"
+        svg_file.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">\n'
+                '  <path fill="#00ff00" d="M0,0 L100,0 Q100,50 100,100 L0,100 Z"/>\n'
+                "</svg>\n"
+            ),
+            encoding="utf-8",
+        )
+
+        vp = _make_parse_only_processor()
+        shapes, _, _ = vp._parse_svg(str(svg_file), target_width_mm=100.0)
+
+        assert len(shapes) >= 1
+        total_area = sum(s["poly"].area for s in shapes)
+        # The shape is a 100x100 square (the Q curve is actually a straight
+        # line from (100,0) to (100,100) with control at (100,50)).
+        assert total_area > 9000.0, (
+            f"Line→QuadBezier shape area {total_area:.1f} is too small "
+            "(expected ~10000)"
+        )
+
+
+# =====================================================================
 # 6. VectorAnalysis dataclass
 # =====================================================================
 
