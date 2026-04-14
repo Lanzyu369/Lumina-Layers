@@ -1046,11 +1046,27 @@ class VectorProcessor:
             for shape in matched_shapes
             if shape.get("geometry") is not None and not shape["geometry"].is_empty
         ]
+        silhouette_bounds = None
         if silhouette_geoms:
             try:
                 silhouette = unary_union(silhouette_geoms)
             except Exception:
-                silhouette = silhouette_geoms[0] if len(silhouette_geoms) == 1 else None
+                fallback_polygons = []
+                for geom in silhouette_geoms:
+                    polygonal_geom = VectorProcessor._extract_polygonal_geometry(geom)
+                    if polygonal_geom is None or polygonal_geom.is_empty:
+                        continue
+                    if polygonal_geom.geom_type == "Polygon":
+                        fallback_polygons.append(polygonal_geom)
+                    elif polygonal_geom.geom_type == "MultiPolygon":
+                        fallback_polygons.extend(poly for poly in polygonal_geom.geoms if not poly.is_empty)
+
+                if len(fallback_polygons) == 1:
+                    silhouette = fallback_polygons[0]
+                elif fallback_polygons:
+                    silhouette = MultiPolygon(fallback_polygons)
+                else:
+                    silhouette = None
             if silhouette is not None:
                 if not silhouette.is_valid:
                     silhouette = make_valid(silhouette)
@@ -1061,7 +1077,17 @@ class VectorProcessor:
             silhouette = None
 
         if silhouette is not None and not silhouette.is_empty:
-            min_x, min_y, max_x, max_y = silhouette.bounds
+            silhouette_bounds = silhouette.bounds
+        elif silhouette_geoms:
+            silhouette_bounds = (
+                min(geom.bounds[0] for geom in silhouette_geoms),
+                min(geom.bounds[1] for geom in silhouette_geoms),
+                max(geom.bounds[2] for geom in silhouette_geoms),
+                max(geom.bounds[3] for geom in silhouette_geoms),
+            )
+
+        if silhouette_bounds is not None:
+            min_x, min_y, max_x, max_y = silhouette_bounds
             offset_x = -min_x if abs(min_x) > 1e-9 else 0.0
             offset_y = -min_y if abs(min_y) > 1e-9 else 0.0
             if offset_x != 0.0 or offset_y != 0.0:
@@ -1074,7 +1100,8 @@ class VectorProcessor:
                     }
                     for shape in matched_shapes
                 ]
-                silhouette = affinity.translate(silhouette, xoff=offset_x, yoff=offset_y)
+                if silhouette is not None and not silhouette.is_empty:
+                    silhouette = affinity.translate(silhouette, xoff=offset_x, yoff=offset_y)
                 min_x += offset_x
                 min_y += offset_y
                 max_x += offset_x
