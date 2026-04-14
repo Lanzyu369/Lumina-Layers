@@ -20,12 +20,14 @@ import msgpack
 import numpy as np
 import cv2
 
+from config import get_asset_path
 
 REFERENCE_REPO_ROOT = Path("reference/ChromaPrint3D").resolve()
 REFERENCE_DATA_ROOT = REFERENCE_REPO_ROOT / "data"
 REFERENCE_DB_ROOT = REFERENCE_DATA_ROOT / "dbs"
 REFERENCE_MODEL_PACK_ROOT = REFERENCE_DATA_ROOT / "model_packs"
 REFERENCE_FORWARD_MODEL_ROOT = REFERENCE_DATA_ROOT / "models" / "forward"
+_BUNDLED_REFERENCE_REPO_RELATIVE = os.path.join("native_sources", "ChromaPrint3D")
 
 SOURCE_KIND_LEGACY = "legacy_lookup"
 SOURCE_KIND_COLORD_DB = "colordb_backed"
@@ -49,10 +51,52 @@ class NativeReferenceContext:
     material_type: str | None = None
 
 
+def _resolve_bundled_reference_repo_root() -> Path | None:
+    try:
+        return Path(get_asset_path(os.path.join(_BUNDLED_REFERENCE_REPO_RELATIVE, "data"))).resolve().parent
+    except FileNotFoundError:
+        candidate = Path("assets", _BUNDLED_REFERENCE_REPO_RELATIVE).resolve()
+        if candidate.joinpath("data").exists():
+            return candidate
+    return None
+
+
+def iter_reference_repo_candidates() -> tuple[Path, ...]:
+    candidates: list[Path] = [REFERENCE_REPO_ROOT]
+    bundled_root = _resolve_bundled_reference_repo_root()
+    if bundled_root is not None and bundled_root not in candidates:
+        candidates.append(bundled_root)
+    return tuple(candidates)
+
+
+def get_reference_repo_root() -> Path:
+    for candidate in iter_reference_repo_candidates():
+        if candidate.joinpath("data").exists():
+            return candidate.resolve()
+    return REFERENCE_REPO_ROOT
+
+
+def get_reference_data_root() -> Path:
+    return get_reference_repo_root() / "data"
+
+
+def get_reference_db_root() -> Path:
+    return get_reference_data_root() / "dbs"
+
+
+def get_reference_model_pack_root() -> Path:
+    return get_reference_data_root() / "model_packs"
+
+
+def get_reference_forward_model_root() -> Path:
+    return get_reference_data_root() / "models" / "forward"
+
+
 def ensure_reference_repo_importable() -> None:
     """Add the local reference repo root to ``sys.path`` if needed."""
-    ref_root = str(REFERENCE_REPO_ROOT)
-    if ref_root not in sys.path and REFERENCE_REPO_ROOT.exists():
+    reference_repo_root = get_reference_repo_root()
+    ref_root = str(reference_repo_root)
+    if ref_root not in sys.path and reference_repo_root.exists():
         sys.path.insert(0, ref_root)
 
 
@@ -382,7 +426,7 @@ def _find_nearby_msgpack(path: str) -> list[str]:
 def _infer_vendor_material_from_db_path(path: str) -> tuple[str | None, str | None]:
     file_path = Path(path).resolve()
     try:
-        rel_parts = file_path.relative_to(REFERENCE_DB_ROOT).parts
+        rel_parts = file_path.relative_to(get_reference_db_root()).parts
     except ValueError:
         return None, None
     if len(rel_parts) >= 3:
@@ -406,7 +450,7 @@ def _global_stage_model_for(vendor: str | None, material_type: str | None) -> st
         return None
     vendor_token = vendor.lower().replace(" ", "")
     material_token = material_type.lower()
-    candidate = REFERENCE_FORWARD_MODEL_ROOT / f"{vendor_token}_{material_token}_stage_B.json"
+    candidate = get_reference_forward_model_root() / f"{vendor_token}_{material_token}_stage_B.json"
     if candidate.exists():
         return str(candidate.resolve())
     return None
@@ -417,7 +461,7 @@ def _global_model_pack_for(vendor: str | None, material_type: str | None) -> str
         return None
     vendor_token = vendor.lower().replace(" ", "")
     material_token = material_type.lower()
-    candidate = REFERENCE_MODEL_PACK_ROOT / f"{vendor_token}_{material_token}.msgpack"
+    candidate = get_reference_model_pack_root() / f"{vendor_token}_{material_token}.msgpack"
     if candidate.exists():
         return str(candidate.resolve())
     return None
@@ -426,7 +470,7 @@ def _global_model_pack_for(vendor: str | None, material_type: str | None) -> str
 def _global_dbs_for(vendor: str | None, material_type: str | None) -> tuple[str, ...]:
     if not material_type:
         return ()
-    material_root = REFERENCE_DB_ROOT / material_type
+    material_root = get_reference_db_root() / material_type
     if vendor:
         vendor_root = material_root / vendor
         if vendor_root.exists():
@@ -633,12 +677,8 @@ def discover_native_reference_context(path: str, data: Any | None = None) -> Nat
         )
 
     if looks_like_reference_stage_model(data):
-        ensure_reference_repo_importable()
-        from modeling.core.forward_model import load_stage_forward_model  # type: ignore
-
-        stage_model = load_stage_forward_model(Path(resolved_path))
         vendor, material_type = _infer_vendor_material_from_stage_path(resolved_path)
-        channel_keys = tuple(build_channel_key(name, "PLA Basic") for name in stage_model.channel_names)
+        channel_keys = _extract_stage_model_channel_keys(data)
         selected_db_paths = data.get("selected_db_paths") if isinstance(data, dict) else None
         if isinstance(selected_db_paths, list) and selected_db_paths:
             db_paths = [str(Path(item).resolve()) for item in selected_db_paths if str(item)]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from unittest.mock import patch
 
 import msgpack
 import numpy as np
@@ -311,6 +312,48 @@ def test_predict_recipe_color_rejects_non_exact_recipe_for_runtime_package_only_
         assert "not present in the runtime package" in str(exc)
     else:
         raise AssertionError("predict_recipe_color should reject non-exact package-only recipes")
+
+
+def test_predict_recipe_color_falls_back_to_runtime_when_stage_model_dependencies_are_unavailable() -> None:
+    """Bundled native assets should still support exact runtime prediction without the reference Python package."""
+    metadata = LUTMetadata(
+        palette=[
+            PaletteEntry(color="White", material="PLA Basic"),
+            PaletteEntry(color="Black", material="PLA Basic"),
+        ],
+        extensions={
+            "native_stage_model_path": "missing-stage-model.json",
+            "native_db_paths": ["DB-A.json"],
+            "runtime_package": {
+                "defaults": {"threshold": 5.0, "margin": 0.7},
+                "modes": {
+                    "0.08x5": {
+                        "layer_height_mm": 0.08,
+                        "color_layers": 5,
+                        "layer_order": "Top2Bottom",
+                        "candidate_recipes": [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+                        "pred_lab": _rgb_to_opencv_lab(
+                            np.array([[255, 255, 255], [0, 0, 0]], dtype=np.uint8)
+                        ).tolist(),
+                    }
+                },
+            },
+        },
+    )
+
+    from core.predictive_lut import predict_recipe_color
+
+    with patch("core.predictive_lut.ensure_reference_repo_importable"):
+        payload = predict_recipe_color(
+            metadata,
+            recipe=[0, 0, 0, 0, 0],
+            layer_height_mm=0.08,
+            color_layers=5,
+            layer_order="Top2Bottom",
+        )
+
+    assert payload["source"] == "runtime_package"
+    assert payload["rgb"] == [255, 255, 255]
 
 
 def test_merge_luts_preserves_compatible_predictive_payload() -> None:

@@ -8,6 +8,7 @@ Validates:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -239,6 +240,53 @@ class TestSourceCatalog:
         assert bambu_pla["supported_modes"]
         option_names = {option["name"] for option in bambu_pla["db_options"]}
         assert bambu_pla["default_db_names"][0] in option_names
+
+    def test_catalog_falls_back_to_bundled_native_assets_when_reference_repo_is_missing(self) -> None:
+        from utils.lut_manager import LUTManager
+
+        bundled_root = Path("assets/native_sources/ChromaPrint3D").resolve()
+        assert bundled_root.joinpath("data", "model_packs", "bambulab_pla.msgpack").exists()
+        assert bundled_root.joinpath("data", "models", "forward", "bambulab_pla_stage_B.json").exists()
+        assert bundled_root.joinpath("data", "dbs", "PLA", "BambuLab", "CMYW_008_5L.json").exists()
+
+        LUTManager.invalidate_native_source_index_cache()
+        resolved_path = None
+        missing_reference_root = Path(os.getcwd(), "missing-reference-root-does-not-exist")
+
+        try:
+            with (
+                patch(
+                    "core.native_reference.iter_reference_repo_candidates",
+                    return_value=(missing_reference_root, bundled_root),
+                ),
+                patch("utils.lut_manager.LUTManager._build_legacy_catalog_groups", return_value=[]),
+            ):
+                catalog = LUTManager.get_source_catalog()
+                native_groups = catalog["native_brand_groups"]
+                assert native_groups
+
+                bambu_pla = next(
+                    group for group in native_groups if group["brand_key"] == "bambulab_pla"
+                )
+                assert bambu_pla["package_name"] == "bambulab_pla.msgpack"
+                assert bambu_pla["model_name"] == "bambulab_pla_stage_B.json"
+                assert "CMYW_008_5L.json" in bambu_pla["default_db_names"]
+
+                resolved_path, resolved_name = LUTManager.resolve_source_selection(
+                    source_kind="native_bundle",
+                    material_type="PLA",
+                    vendor="BambuLab",
+                    db_names=["CMYW_008_5L.json"],
+                )
+
+                assert Path(resolved_path).exists()
+                assert resolved_name == "BambuLab PLA"
+        finally:
+            LUTManager.invalidate_native_source_index_cache()
+            if resolved_path and Path(resolved_path).exists():
+                resolved_resolved = Path(resolved_path).resolve()
+                if not str(resolved_resolved).startswith(str(bundled_root)):
+                    resolved_resolved.unlink(missing_ok=True)
 
     def test_manager_catalog_payload_omits_internal_resolution_fields(self) -> None:
         fake_path = os.path.join("C:\\tmp", "fake.msgpack")

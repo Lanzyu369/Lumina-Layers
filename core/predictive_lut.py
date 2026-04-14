@@ -404,33 +404,36 @@ def predict_recipe_color(
     stage_model_path = metadata.extensions.get("native_stage_model_path")
     db_paths = metadata.extensions.get("native_db_paths") or []
     if isinstance(stage_model_path, str) and stage_model_path:
-        ensure_reference_repo_importable()
-        from modeling.core.forward_model import (  # type: ignore
-            load_stage_forward_model,
-            predict_linear_batch as predict_with_stage_model,
-            resolve_substrate_idx,
-        )
-        from modeling.core.color_space import linear_rgb_to_opencv_lab_batch  # type: ignore
+        try:
+            ensure_reference_repo_importable()
+            from modeling.core.forward_model import (  # type: ignore
+                load_stage_forward_model,
+                predict_linear_batch as predict_with_stage_model,
+                resolve_substrate_idx,
+            )
+            from modeling.core.color_space import linear_rgb_to_opencv_lab_batch  # type: ignore
 
-        stage_model = load_stage_forward_model(Path(stage_model_path))
-        substrate_idx = resolve_substrate_idx(stage_model, [Path(path) for path in db_paths], int(metadata.base_channel_idx))
-        linear_rgb = predict_with_stage_model(
-            np.asarray(recipe, dtype=np.int32).reshape(1, -1),
-            stage_model,
-            float(layer_height_mm),
-            float(stage_model.micro_layer_height_mm),
-            int(metadata.base_channel_idx),
-            str(layer_order),
-            int(substrate_idx),
-        )
-        pred_lab = linear_rgb_to_opencv_lab_batch(linear_rgb).astype(np.float32)
-        pred_rgb = opencv_lab_to_rgb_uint8(pred_lab)
-        return {
-            "rgb": pred_rgb[0].astype(int).tolist(),
-            "lab": pred_lab[0].astype(float).tolist(),
-            "source": "stage_model",
-            "runtime_mode_key": build_mode_key(layer_height_mm, color_layers),
-        }
+            stage_model = load_stage_forward_model(Path(stage_model_path))
+            substrate_idx = resolve_substrate_idx(stage_model, [Path(path) for path in db_paths], int(metadata.base_channel_idx))
+            linear_rgb = predict_with_stage_model(
+                np.asarray(recipe, dtype=np.int32).reshape(1, -1),
+                stage_model,
+                float(layer_height_mm),
+                float(stage_model.micro_layer_height_mm),
+                int(metadata.base_channel_idx),
+                str(layer_order),
+                int(substrate_idx),
+            )
+            pred_lab = linear_rgb_to_opencv_lab_batch(linear_rgb).astype(np.float32)
+            pred_rgb = opencv_lab_to_rgb_uint8(pred_lab)
+            return {
+                "rgb": pred_rgb[0].astype(int).tolist(),
+                "lab": pred_lab[0].astype(float).tolist(),
+                "source": "stage_model",
+                "runtime_mode_key": build_mode_key(layer_height_mm, color_layers),
+            }
+        except Exception:
+            pass
 
     runtime = resolve_predictive_runtime(metadata, layer_height_mm, color_layers, layer_order)
     if runtime is None:

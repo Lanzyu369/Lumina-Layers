@@ -23,9 +23,6 @@ import numpy as np
 
 from config import LUTMetadata, PaletteEntry, ColorSystem, PrinterConfig, TEMP_DIR
 from core.native_reference import (
-    REFERENCE_DB_ROOT,
-    REFERENCE_FORWARD_MODEL_ROOT,
-    REFERENCE_MODEL_PACK_ROOT,
     SOURCE_KIND_COLORD_DB,
     SOURCE_KIND_PACKAGE,
     SOURCE_KIND_STAGE_MODEL,
@@ -35,6 +32,9 @@ from core.native_reference import (
     derive_color_mode_from_palette_entries,
     derive_color_mode_from_palette_size,
     discover_native_reference_context,
+    get_reference_db_root,
+    get_reference_forward_model_root,
+    get_reference_model_pack_root,
     looks_like_reference_colordb,
     looks_like_reference_recipe_set,
     looks_like_reference_stage_model,
@@ -152,12 +152,15 @@ class LUTManager:
         roots: list[tuple[str, str]] = []
         if os.path.exists(cls.LUT_PRESET_DIR):
             roots.append(("Preset", cls.LUT_PRESET_DIR))
-        if REFERENCE_DB_ROOT.exists():
-            roots.append(("ReferenceDB", str(REFERENCE_DB_ROOT)))
-        if REFERENCE_MODEL_PACK_ROOT.exists():
-            roots.append(("ReferencePack", str(REFERENCE_MODEL_PACK_ROOT)))
-        if REFERENCE_FORWARD_MODEL_ROOT.exists():
-            roots.append(("ReferenceModel", str(REFERENCE_FORWARD_MODEL_ROOT)))
+        reference_db_root = get_reference_db_root()
+        reference_model_pack_root = get_reference_model_pack_root()
+        reference_forward_model_root = get_reference_forward_model_root()
+        if reference_db_root.exists():
+            roots.append(("ReferenceDB", str(reference_db_root)))
+        if reference_model_pack_root.exists():
+            roots.append(("ReferencePack", str(reference_model_pack_root)))
+        if reference_forward_model_root.exists():
+            roots.append(("ReferenceModel", str(reference_forward_model_root)))
         return roots
 
     @classmethod
