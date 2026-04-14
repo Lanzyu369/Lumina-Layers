@@ -12,8 +12,11 @@ Instead we inspect function metadata and verify picklability.
 """
 
 import inspect
+import os
 import pickle
 import types
+import zipfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -286,3 +289,59 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         lut_path="lut.npy",
         **params,
     )
+
+
+def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_zip_entries(tmp_path) -> None:
+    """Native SVG worker should emit safe ZIP entry names using tile_name_prefix."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+        def build_mesh(self, **_kwargs):
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    fake_tile = SimpleNamespace(
+        label="R1C1",
+        analysis=SimpleNamespace(
+            preview_colors={0: [255, 0, 0, 255]},
+            slot_names=["Slot1"],
+        ),
+    )
+
+    def _fake_export_scene_with_bambu_metadata(*, output_path: str, **_kwargs) -> None:
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+
+    params = {
+        "tile_name_prefix": r"bad:name*",
+        "total_width_mm": 120.0,
+        "total_height_mm": 80.0,
+        "tile_width_mm": 60.0,
+        "tile_height_mm": 80.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+    }
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[fake_tile]),
+        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export_scene_with_bambu_metadata),
+    ):
+        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+    try:
+        with zipfile.ZipFile(result["zip_path"], "r") as archive:
+            assert archive.namelist() == ["bad_name_R1C1.3mf"]
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])

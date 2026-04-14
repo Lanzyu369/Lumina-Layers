@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.routers.converter.generate import _resolve_large_format_source_basename
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -474,6 +475,19 @@ class TestLargeFormatFridgeMagnetValidation:
 
 class TestLargeFormatDimensionsAndRouting:
     """Verify large-format ratio resolution and SVG routing behavior."""
+
+    def test_large_format_source_basename_falls_back_to_image_path_when_session_value_missing(self) -> None:
+        resolved = _resolve_large_format_source_basename({}, "/tmp/tmpabcd1234_poster-art.png")
+
+        assert resolved == "poster-art"
+
+    def test_large_format_source_basename_re_normalizes_unsafe_session_value(self) -> None:
+        resolved = _resolve_large_format_source_basename(
+            {"source_basename": " bad:name* "},
+            "/tmp/ignored.png",
+        )
+
+        assert resolved == "bad_name"
 
     def test_large_format_svg_width_only_derives_height_and_uses_native_path(self) -> None:
         sid, svg_path, lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
