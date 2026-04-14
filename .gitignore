@@ -299,6 +299,7 @@ assets/temp_*.npy
 assets/temp_*.json
 # AI IDE local config
 .claude/
+.codex/
 .idea/
 *.3mf
 .cursor/
