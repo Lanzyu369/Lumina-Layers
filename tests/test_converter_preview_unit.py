@@ -22,6 +22,7 @@ from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
+from api.routers.converter.preview import _resolve_upload_source_basename
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
@@ -387,6 +388,9 @@ class TestSvgLargeFormatWarnings:
         session_data = _test_store.get(response.json()["session_id"])
         assert session_data is not None
         assert session_data["source_basename"] == "poster"
+
+    def test_preview_source_basename_uses_tempfile_fallback_when_upload_name_is_blank(self) -> None:
+        assert _resolve_upload_source_basename("", "/tmp/tmpabcd1234_poster.png") == "poster"
 
     def test_preview_sanitizes_unsafe_upload_basename_characters(self) -> None:
         worker_result = _create_worker_result_files()

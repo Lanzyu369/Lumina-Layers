@@ -14,15 +14,21 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
+import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+import numpy as np
+from PIL import Image
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _resolve_large_format_source_basename
+from api.schemas.converter import LargeFormatConvertGenerateRequest, ModelingMode
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -731,6 +737,48 @@ class TestLargeFormatDimensionsAndRouting:
         assert updated_policy["inspection_source"] == "generate-large-format"
         assert updated_policy["native_tiling_supported"] is False
 
+    def test_large_format_reuses_preview_svg_policy_without_reinspection(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate.inspect_svg_large_format_support",
+                side_effect=AssertionError("stored preview policy should be reused"),
+            ),
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=native_response,
+            ) as native_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        native_helper.assert_called_once()
+
     def test_large_format_svg_native_timeout_returns_504(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
         _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
@@ -777,6 +825,64 @@ class TestLargeFormatDimensionsAndRouting:
         assert response.status_code == 500
         assert "large-format svg generation failed" in response.json()["detail"].lower()
         assert "tile analysis failed" in response.json()["detail"].lower()
+
+    def test_large_format_raster_helper_writes_sanitized_zip_entry_names(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename=" bad:name* ",
+                    total_width_mm=40.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            zip_path, _filename = registry.resolve(download_id)
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                assert archive.namelist() == ["bad_name_R1C1.3mf"]
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
