@@ -98,10 +98,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
-  const selectedColor = useConverterStore((s) => s.selectedColor);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
   const enableRelief = useConverterStore((s) => s.enable_relief);
-  const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
   const spacerThick = useConverterStore((s) => s.spacer_thick);
   const structureMode = useConverterStore((s) => s.structure_mode);
   const enableOutline = useConverterStore((s) => s.enable_outline);
@@ -137,7 +135,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const modelBounds = useConverterStore((s) => s.modelBounds);
-  const viewerSelectedColor = enableFridgeMagnet ? null : selectedColor;
 
   // Listen to fullscreenchange event
   useEffect(() => {
@@ -176,13 +173,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     }
   }, []);
 
-  const handleColorClick = useCallback(
-    (hex: string | null) => {
-      setSelectedColor(hex);
-    },
-    [setSelectedColor],
-  );
-
   // Check if Fullscreen API is available
   const fullscreenSupported = typeof document.fullscreenElement !== "undefined";
 
@@ -220,18 +210,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         camera={{ position: [0, -57, 474], fov: 45 }}
         gl={{ preserveDrawingBuffer: true }}
         onPointerMissed={() => {
-          // Skip deselection if a color mesh was just clicked via native event
-          const hitRef = (window as unknown as Record<string, unknown>).__luminaColorHitRef as
-            | React.RefObject<boolean>
-            | undefined;
-          if (hitRef?.current) {
-            hitRef.current = false;
-            return;
-          }
           if (enableFridgeMagnet) {
             selectFridgeMagnet(null);
-          } else {
-            setSelectedColor(null);
           }
         }}
         onCreated={({ gl }) => {
@@ -278,10 +258,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               url={previewGlbUrl}
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
-              selectedColor={viewerSelectedColor}
               baseHeight={baseHeight}
               enableRelief={enableRelief}
-              onColorClick={handleColorClick}
               scaleX={scaleX}
               scaleY={scaleY}
               spacerThick={spacerThick}
@@ -293,8 +271,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireHeightMm={wireHeightMm}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
-              colorPickingEnabled={!enableFridgeMagnet}
-              selectionVisualsEnabled={!enableFridgeMagnet}
             />
           </Suspense>
         ) : null}

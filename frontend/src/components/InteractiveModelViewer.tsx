@@ -1,6 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useMemo, useEffect, useRef, useCallback } from "react";
-import { useThree, useFrame } from "@react-three/fiber";
+import { useMemo, useEffect, useRef } from "react";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { useConverterStore } from "../stores/converter";
@@ -34,128 +33,6 @@ export function extractHexFromMeshName(meshName: string): string {
   return meshName.slice(6);
 }
 
-/**
- * Compute the next selected color after a click toggle.
- * 计算点击切换后的下一个选中颜色。
- *
- * @param currentSelected - Currently selected hex or null. (当前选中的 hex 或 null)
- * @param clickedHex - The hex that was clicked. (被点击的 hex)
- * @returns null if toggling off (same color), otherwise the clicked hex. (取消选中返回 null，否则返回被点击的 hex)
- */
-export function toggleColorSelection(
-  currentSelected: string | null,
-  clickedHex: string,
-): string | null {
-  return currentSelected === clickedHex ? null : clickedHex;
-}
-
-/**
- * Determine whether a pointer interaction should still be treated as a click.
- * 判断一次指针交互是否仍应视为点击，而非拖拽。
- *
- * @param startX - Pointer-down X coordinate in CSS pixels. (按下时 X 坐标，单位 CSS 像素)
- * @param startY - Pointer-down Y coordinate in CSS pixels. (按下时 Y 坐标，单位 CSS 像素)
- * @param endX - Current or release X coordinate in CSS pixels. (当前或抬起时 X 坐标，单位 CSS 像素)
- * @param endY - Current or release Y coordinate in CSS pixels. (当前或抬起时 Y 坐标，单位 CSS 像素)
- * @param thresholdPx - Maximum movement allowed for a click. (判定为点击时允许的最大移动距离)
- * @returns True when the interaction stays within the click threshold. (位移未超过点击阈值时返回 true)
- */
-export function isClickWithoutDrag(
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  thresholdPx: number = 4,
-): boolean {
-  return Math.hypot(endX - startX, endY - startY) <= thresholdPx;
-}
-
-/**
- * Determine whether native canvas color-picking handlers should process an event.
- * 判断原生画布取色处理器是否应处理当前事件。
- *
- * @param button - Pointer button identifier from the native event. (原生事件中的按键编号)
- * @param colorPickingEnabled - Whether InteractiveModelViewer is allowed to pick colors. (是否允许取色)
- * @returns True only for enabled left-click interactions. (仅在启用且为左键时返回 true)
- */
-export function shouldHandleColorPickingEvent(
-  button: number,
-  colorPickingEnabled: boolean,
-): boolean {
-  return colorPickingEnabled && button === 0;
-}
-
-interface SelectionVisualModelBounds {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  maxZ: number;
-}
-
-interface SelectionVisualRegionData {
-  contours?: number[][][] | null;
-}
-
-interface SelectionVisualRegion {
-  colorHex: string;
-  contours?: number[][][] | null;
-}
-
-interface ResolveSelectionOutlineTargetsArgs {
-  selectionVisualsEnabled: boolean;
-  modelBounds: SelectionVisualModelBounds | null;
-  selectionMode: string;
-  selectedColor: string | null;
-  selectedColors: Set<string>;
-  selectedRegions: SelectionVisualRegion[];
-  regionData: SelectionVisualRegionData | null;
-  colorContours: Record<string, number[][][]>;
-}
-
-export function resolveSelectionOutlineTargets({
-  selectionVisualsEnabled,
-  modelBounds,
-  selectionMode,
-  selectedColor,
-  selectedColors,
-  selectedRegions,
-  regionData,
-  colorContours,
-}: ResolveSelectionOutlineTargetsArgs): Array<{ hex: string; polygons: number[][][] }> {
-  if (!selectionVisualsEnabled || !modelBounds) {
-    return [];
-  }
-
-  if (
-    (selectionMode === "current" || selectionMode === "region")
-    && selectedColor
-    && regionData?.contours
-    && regionData.contours.length > 0
-  ) {
-    return [{ hex: selectedColor, polygons: regionData.contours }];
-  }
-
-  if (selectionMode === "multi-select" && selectedRegions.length > 0) {
-    return selectedRegions.flatMap((region) => (
-      region.contours && region.contours.length > 0
-        ? [{ hex: region.colorHex.replace(/^#/, ""), polygons: region.contours }]
-        : []
-    ));
-  }
-
-  if (selectionMode === "select-all" && selectedColors.size > 0) {
-    return Array.from(selectedColors).flatMap((hex) => (
-      colorContours[hex] ? [{ hex, polygons: colorContours[hex] }] : []
-    ));
-  }
-
-  if (selectedColor && colorContours[selectedColor]) {
-    return [{ hex: selectedColor, polygons: colorContours[selectedColor] }];
-  }
-
-  return [];
-}
 
 // ========== Component ==========
 
@@ -163,10 +40,8 @@ export interface InteractiveModelViewerProps {
   url: string;
   colorRemapMap: Record<string, string>;
   colorHeightMap: Record<string, number>;
-  selectedColor: string | null;
   baseHeight: number;
   enableRelief: boolean;
-  onColorClick: (hex: string | null) => void;
   scaleX?: number;  // X 方向缩放比例，默认 1.0
   scaleY?: number;  // Y 方向缩放比例，默认 1.0
   spacerThick?: number;    // 底板厚度 (mm)，默认 1.2
@@ -178,31 +53,17 @@ export interface InteractiveModelViewerProps {
   wireHeightMm?: number;       // 金丝高度 (mm)，默认 0.1
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
-  colorPickingEnabled?: boolean;
-  selectionVisualsEnabled?: boolean;
 }
 
 /** Color layer thickness in mm (5 layers × 0.08mm). */
 const COLOR_LAYER_HEIGHT = 0.4;
 
-interface ClickGestureState {
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  startedOnColor: boolean;
-  dragged: boolean;
-}
-
-const CLICK_DRAG_THRESHOLD_PX = 4;
-
 function InteractiveModelViewer({
   url,
   colorRemapMap,
   colorHeightMap,
-  selectedColor,
   baseHeight,
   enableRelief,
-  onColorClick,
   scaleX = 1,
   scaleY = 1,
   spacerThick = 1.2,
@@ -214,13 +75,9 @@ function InteractiveModelViewer({
   wireHeightMm = 0.1,
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
-  colorPickingEnabled = true,
-  selectionVisualsEnabled = true,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
-  const camera = useThree((state) => state.camera);
-  const gl = useThree((state) => state.gl);
   useGltfCacheLifecycle(url, useGLTF.clear);
 
   useEffect(() => {
@@ -493,288 +350,9 @@ function InteractiveModelViewer({
     });
   }, [colorMeshes, isDoubleSided]);
 
-  // Raycaster for manual hit-testing on click (avoids per-mesh R3F pointer events).
-  const raycasterRef = useRef(new THREE.Raycaster());
-  const pointerRef = useRef(new THREE.Vector2());
 
-  // Flag to suppress onPointerMissed when a color mesh was clicked via native event.
-  // We store this on the converterStore so Scene3D can read it.
-  const colorHitRef = useRef(false);
-  const clickGestureRef = useRef<ClickGestureState | null>(null);
-
-  // Read selectionMode and related state for region click handling
-  const selectionMode = useConverterStore((s) => s.selectionMode);
-  const selectedColors = useConverterStore((s) => s.selectedColors);
-  const toggleColorInSelection = useConverterStore((s) => s.toggleColorInSelection);
-  const selectedRegions = useConverterStore((s) => s.selectedRegions);
-  const detectRegion = useConverterStore((s) => s.detectRegion);
-  const detectAndAccumulateRegion = useConverterStore((s) => s.detectAndAccumulateRegion);
-  const regionData = useConverterStore((s) => s.regionData);
-  const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
-  const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
-  const previewWidthMm = useConverterStore((s) => s.preview_width_mm);
-
-  const mapWorldToPreviewPixel = useCallback(
-    (worldPoint: THREE.Vector3): { x: number; y: number } | null => {
-      if (
-        !groupRef.current
-        || !previewPixelWidth
-        || !previewPixelHeight
-        || !previewWidthMm
-        || previewWidthMm <= 0
-      ) {
-        return null;
-      }
-
-      const localPoint = groupRef.current.worldToLocal(worldPoint.clone());
-      const pixelScale = previewWidthMm / previewPixelWidth;
-      const originalX = localPoint.x + sceneCenter.x;
-      const originalY = localPoint.y + sceneCenter.y;
-      const pixelX = Math.floor(originalX / pixelScale);
-      const pixelY = Math.floor(previewPixelHeight - originalY / pixelScale);
-
-      return {
-        x: Math.max(0, Math.min(previewPixelWidth - 1, pixelX)),
-        y: Math.max(0, Math.min(previewPixelHeight - 1, pixelY)),
-      };
-    },
-    [previewPixelWidth, previewPixelHeight, previewWidthMm, sceneCenter],
-  );
-
-  const getColorHitAtPointerPosition = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!colorPickingEnabled) {
-        return null;
-      }
-      const canvas = gl.domElement;
-      const rect = canvas.getBoundingClientRect();
-      pointerRef.current.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      pointerRef.current.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-
-      raycasterRef.current.setFromCamera(pointerRef.current, camera);
-      const intersects = raycasterRef.current.intersectObjects(colorMeshes, false);
-      if (intersects.length === 0) {
-        return null;
-      }
-
-      const hitMesh = intersects[0].object as THREE.Mesh;
-      if (!hitMesh.name.startsWith("color_")) {
-        return null;
-      }
-
-      return {
-        hitMesh,
-        previewPixel: mapWorldToPreviewPixel(intersects[0].point),
-      };
-    },
-    [gl, camera, colorMeshes, mapWorldToPreviewPixel, colorPickingEnabled],
-  );
-
-  const selectColorAtPointerPosition = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!colorPickingEnabled) {
-        return false;
-      }
-      const hit = getColorHitAtPointerPosition(clientX, clientY);
-      if (!hit) {
-        return false;
-      }
-
-      colorHitRef.current = true;
-      const { hitMesh, previewPixel } = hit;
-
-      if (selectionMode === "current" || selectionMode === "region" || selectionMode === "multi-select") {
-        if (!previewPixel) {
-          return false;
-        }
-
-        if (selectionMode === "multi-select") {
-          detectAndAccumulateRegion(previewPixel.x, previewPixel.y);
-        } else {
-          detectRegion(previewPixel.x, previewPixel.y);
-        }
-        return true;
-      }
-
-      const hex = extractHexFromMeshName(hitMesh.name);
-      toggleColorInSelection(hex);
-      if (selectedColors.has(hex)) {
-        const remaining = Array.from(selectedColors).filter((c) => c !== hex);
-        onColorClick(remaining.length > 0 ? remaining[remaining.length - 1] : null);
-      } else {
-        onColorClick(hex);
-      }
-      return true;
-    },
-    [
-      getColorHitAtPointerPosition,
-      selectedColors,
-      toggleColorInSelection,
-      onColorClick,
-      selectionMode,
-      detectRegion,
-      detectAndAccumulateRegion,
-      colorPickingEnabled,
-    ],
-  );
-
-  const handlePointerDown = useCallback(
-    (event: PointerEvent) => {
-      if (!shouldHandleColorPickingEvent(event.button, colorPickingEnabled)) {
-        return;
-      }
-      colorHitRef.current = false;
-      const startHit = getColorHitAtPointerPosition(event.clientX, event.clientY);
-      colorHitRef.current = startHit !== null;
-      clickGestureRef.current = {
-        pointerId: event.pointerId,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        startedOnColor: startHit !== null,
-        dragged: false,
-      };
-    },
-    [getColorHitAtPointerPosition, colorPickingEnabled],
-  );
-
-  const handlePointerUp = useCallback(
-    (event: PointerEvent) => {
-      if (!shouldHandleColorPickingEvent(event.button, colorPickingEnabled)) {
-        return;
-      }
-
-      const gesture = clickGestureRef.current;
-      clickGestureRef.current = null;
-      if (!gesture || gesture.pointerId !== event.pointerId) {
-        return;
-      }
-
-      const isClick = !gesture.dragged && isClickWithoutDrag(
-        gesture.startClientX,
-        gesture.startClientY,
-        event.clientX,
-        event.clientY,
-        CLICK_DRAG_THRESHOLD_PX,
-      );
-      if (!isClick) {
-        colorHitRef.current = false;
-        return;
-      }
-
-      if (gesture.startedOnColor) {
-        colorHitRef.current = true;
-      }
-      selectColorAtPointerPosition(gesture.startClientX, gesture.startClientY);
-    },
-    [selectColorAtPointerPosition, colorPickingEnabled],
-  );
-
-  const handlePointerMove = useCallback(
-    (event: PointerEvent) => {
-      const gesture = clickGestureRef.current;
-      if (gesture && gesture.pointerId === event.pointerId && !gesture.dragged) {
-        gesture.dragged = !isClickWithoutDrag(
-          gesture.startClientX,
-          gesture.startClientY,
-          event.clientX,
-          event.clientY,
-          CLICK_DRAG_THRESHOLD_PX,
-        );
-        if (gesture.dragged) {
-          colorHitRef.current = false;
-        }
-      }
-    },
-    [],
-  );
-
-  const handleWheel = useCallback(() => {
-    clickGestureRef.current = null;
-    colorHitRef.current = false;
-  }, []);
-
-  const handlePointerLeave = useCallback(() => {
-    clickGestureRef.current = null;
-    colorHitRef.current = false;
-  }, []);
-
-  const handlePointerCancel = useCallback(() => {
-    clickGestureRef.current = null;
-    colorHitRef.current = false;
-  }, []);
-
+  // Imperative Three.js mutations: color remap, relief scaling.
   useEffect(() => {
-    if (colorPickingEnabled) {
-      return;
-    }
-    clickGestureRef.current = null;
-    colorHitRef.current = false;
-  }, [colorPickingEnabled]);
-
-  useEffect(() => {
-    return () => {
-      clickGestureRef.current = null;
-    };
-  }, []);
-
-  // Expose colorHitRef check so Scene3D's onPointerMissed can query it
-  useEffect(() => {
-    (window as unknown as Record<string, unknown>).__luminaColorHitRef = colorHitRef;
-    return () => {
-      delete (window as unknown as Record<string, unknown>).__luminaColorHitRef;
-    };
-  }, []);
-
-  // Attach/detach native pointer event for color mesh click detection
-  useEffect(() => {
-    const canvas = gl.domElement;
-    canvas.addEventListener("pointerdown", handlePointerDown);
-    canvas.addEventListener("pointerup", handlePointerUp);
-    canvas.addEventListener("pointermove", handlePointerMove);
-    canvas.addEventListener("wheel", handleWheel, { passive: true });
-    canvas.addEventListener("pointerleave", handlePointerLeave);
-    canvas.addEventListener("pointercancel", handlePointerCancel);
-    return () => {
-      canvas.removeEventListener("pointerdown", handlePointerDown);
-      canvas.removeEventListener("pointerup", handlePointerUp);
-      canvas.removeEventListener("pointermove", handlePointerMove);
-      canvas.removeEventListener("wheel", handleWheel);
-      canvas.removeEventListener("pointerleave", handlePointerLeave);
-      canvas.removeEventListener("pointercancel", handlePointerCancel);
-    };
-  }, [gl, handlePointerDown, handlePointerUp, handlePointerMove, handleWheel, handlePointerLeave, handlePointerCancel]);
-
-  // Edge outline LineSegments for selected color regions.
-  const outlineObjsRef = useRef<THREE.LineSegments[]>([]);
-  // Normalized arc-length ratios per outline, for flowing RGB animation.
-  // Each entry is an array of [h0, h1] pairs (one per line segment).
-  const outlineArcRef = useRef<Array<Array<[number, number]>>>([]);
-  const outlineGroupRef = useRef<THREE.Group>(new THREE.Group());
-  outlineGroupRef.current.name = "__outlineGroup";
-
-  // Imperative Three.js mutations: color remap, contour-based outline, relief scaling.
-  // Colors stay fully visible — contour lines from backend OpenCV mark the selected region.
-  const colorContours = useConverterStore((s) => s.colorContours);
-
-  useEffect(() => {
-    // Clear previous outlines
-    const outlineGroup = outlineGroupRef.current;
-    for (const obj of outlineObjsRef.current) {
-      outlineGroup.remove(obj);
-      obj.geometry.dispose();
-      (obj.material as THREE.Material).dispose();
-    }
-    outlineObjsRef.current = [];
-    outlineArcRef.current = [];
-
-    if (
-      groupRef.current
-      && typeof (groupRef.current as { add?: unknown }).add === "function"
-      && !Array.from(groupRef.current.children).includes(outlineGroup)
-    ) {
-      groupRef.current.add(outlineGroup);
-    }
-
     // ---- Backing plate Z positioning and scaling (Requirements 3.1, 3.2, 3.3, 3.4) ----
     // XY scale is inherited from parent group via scaleX/scaleY (Requirement 3.4)
     if (backingMesh) {
@@ -835,135 +413,7 @@ function InteractiveModelViewer({
         mirror.position.z = 0; // grow downward from bottom of backing plate
       }
     }
-
-    // Draw contour outlines for selected color(s) using backend-computed contours.
-    // Contours are in raw world coords (mm, origin at bottom-left of image).
-    // The GLB model is centered by subtracting sceneCenter, so apply same offset.
-    // - current/region: regionData.contours (single connected region)
-    // - select-all: colorContours[selectedColor] (all regions of that color)
-    // - multi-select: each selectedRegion's own contours (individual connected regions)
-    const outlineTargets = resolveSelectionOutlineTargets({
-      selectionVisualsEnabled,
-      modelBounds,
-      selectionMode,
-      selectedColor,
-      selectedColors,
-      selectedRegions,
-      regionData,
-      colorContours,
-    });
-
-    const offsetX = -sceneCenter.x;
-    const offsetY = -sceneCenter.y;
-
-    for (const { hex, polygons } of outlineTargets) {
-      const colorTopZ = spacerThick + COLOR_LAYER_HEIGHT + 0.1;
-      const topZ = enableRelief
-        ? spacerThick + (colorHeightMap[hex] ?? COLOR_LAYER_HEIGHT) + 0.1
-        : colorTopZ;
-
-      for (const polygon of polygons) {
-        if (polygon.length < 3) continue;
-        const verts: number[] = [];
-        const cumLen: number[] = [0];
-        for (let i = 0; i < polygon.length; i++) {
-          const [x0, y0] = polygon[i];
-          const [x1, y1] = polygon[(i + 1) % polygon.length];
-          const dx = x1 - x0;
-          const dy = y1 - y0;
-          cumLen.push(cumLen[cumLen.length - 1] + Math.sqrt(dx * dx + dy * dy));
-        }
-        const totalLen = cumLen[cumLen.length - 1] || 1;
-
-        const arcPairs: Array<[number, number]> = [];
-        for (let i = 0; i < polygon.length; i++) {
-          const [x0, y0] = polygon[i];
-          const [x1, y1] = polygon[(i + 1) % polygon.length];
-          verts.push(
-            x0 + offsetX, y0 + offsetY, topZ,
-            x1 + offsetX, y1 + offsetY, topZ,
-          );
-          arcPairs.push([cumLen[i] / totalLen, cumLen[i + 1] / totalLen]);
-        }
-
-        const colorArr = new Float32Array(arcPairs.length * 6);
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute(
-          "position",
-          new THREE.Float32BufferAttribute(verts, 3),
-        );
-        lineGeo.setAttribute(
-          "color",
-          new THREE.BufferAttribute(colorArr, 3),
-        );
-        const lineMat = new THREE.LineBasicMaterial({
-          vertexColors: true,
-          linewidth: 3,
-          depthTest: false,
-        });
-        const line = new THREE.LineSegments(lineGeo, lineMat);
-        line.renderOrder = 999;
-        outlineGroup.add(line);
-        outlineObjsRef.current.push(line);
-        outlineArcRef.current.push(arcPairs);
-      }
-    }
-  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, selectedColor, selectedColors, selectedRegions, enableRelief, baseHeight, colorContours, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, regionData, selectionMode, selectionVisualsEnabled]);
-
-  // Flowing RGB animation with flash-on-select and brightness pulse.
-  const tmpColorAnim = useRef(new THREE.Color());
-  const outlineBirthTime = useRef(0);
-  useFrame(() => {
-    const lines = outlineObjsRef.current;
-    const arcs = outlineArcRef.current;
-    if (lines.length === 0) {
-      outlineBirthTime.current = 0;
-      return;
-    }
-
-    const now = performance.now();
-    if (outlineBirthTime.current === 0) outlineBirthTime.current = now;
-    const age = now - outlineBirthTime.current;
-
-    // Flash twice on first appearance (0-700ms), then gentle pulse
-    let lightness: number;
-    if (age < 700) {
-      const phase = (age / 175) * Math.PI;
-      lightness = 0.35 + 0.4 * Math.abs(Math.sin(phase));
-    } else {
-      lightness = 0.45 + 0.1 * Math.sin(now * 0.005);
-    }
-
-    const time = now * 0.001;
-    const c = tmpColorAnim.current;
-    for (let li = 0; li < lines.length; li++) {
-      const colorAttr = lines[li].geometry.getAttribute("color") as THREE.BufferAttribute;
-      const arr = colorAttr.array as Float32Array;
-      const pairs = arcs[li];
-      if (!pairs) continue;
-
-      for (let si = 0; si < pairs.length; si++) {
-        const [t0, t1] = pairs[si];
-        const idx = si * 6;
-        c.setHSL((t0 + time) % 1.0, 1.0, lightness);
-        arr[idx] = c.r; arr[idx + 1] = c.g; arr[idx + 2] = c.b;
-        c.setHSL((t1 + time) % 1.0, 1.0, lightness);
-        arr[idx + 3] = c.r; arr[idx + 4] = c.g; arr[idx + 5] = c.b;
-      }
-      colorAttr.needsUpdate = true;
-    }
-  });
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      for (const obj of outlineObjsRef.current) {
-        obj.geometry.dispose();
-        (obj.material as THREE.Material).dispose();
-      }
-      outlineObjsRef.current = [];
-    };
-  }, []);
+  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh]);
 
   // Double-sided mirror meshes are defined above (before useEffect).
 
