@@ -259,6 +259,83 @@ class TestStabilizeMatchedShapesPrintability:
         assert "_printability_stable_input_index" not in stabilized[0]
         assert first_pass_records == original_records
 
+    def test_second_pass_seeds_stable_indices_from_real_first_pass_items(self):
+        first_pass_input = [
+            {
+                "geometry": box(0.0, 0.0, 0.3, 0.3),
+                "recipe": [0],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+                "lut_idx": 0,
+                "draw_order": 0,
+            },
+            {
+                "geometry": box(0.3, 0.0, 2.0, 2.0),
+                "recipe": [1],
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "lut_idx": 1,
+                "draw_order": 1,
+            },
+            {
+                "geometry": box(5.0, 0.0, 7.0, 2.0),
+                "recipe": [2],
+                "color": (0, 0, 255),
+                "matched_rgb": (0, 0, 255),
+                "lut_idx": 2,
+                "draw_order": 2,
+            },
+        ]
+        first_pass = _ve.PrintableFeatureOptimizer(first_pass_input, scale_factor=1.0).optimize()
+
+        assert len(first_pass.records) == 2
+        assert [item.index for item in first_pass.items if item.action in {"keep", "widen"}] == [1, 2]
+
+        class _FakeSecondPassMergeOptimizer:
+            captured_stable_indices = None
+
+            def __init__(self, shape_records, scale_factor, printable_core_nozzle_multiplier=None, nozzle_width_mm=None):
+                self.shape_records = [dict(record) for record in shape_records]
+                _FakeSecondPassMergeOptimizer.captured_stable_indices = [
+                    record.get("_printability_stable_input_index")
+                    for record in self.shape_records
+                ]
+
+            def optimize(self):
+                source = dict(self.shape_records[0])
+                target = dict(self.shape_records[1])
+                target.setdefault("_received_merge_source_indices", list(target.get("_received_merge_source_indices", ())))
+                target.setdefault("_received_merge_source_recipes", list(target.get("_received_merge_source_recipes", ())))
+                for source_index, source_recipe in zip(
+                    source.get("_received_merge_source_indices", ()),
+                    source.get("_received_merge_source_recipes", ()),
+                ):
+                    target["_received_merge_source_indices"].append(source_index)
+                    target["_received_merge_source_recipes"].append(tuple(source_recipe or ()))
+                target["_received_merge_source_indices"].append(int(source.get("_printability_stable_input_index", 0)))
+                target["_received_merge_source_recipes"].append(tuple(source.get("recipe") or ()))
+                return types.SimpleNamespace(
+                    records=[target],
+                    items=[],
+                    classification_counts={"normal": 1, "isolated": 0, "thin": 1, "skip": 0},
+                    action_counts={"keep": 1, "widen": 0, "merge": 1, "skip": 0},
+                    timings_ms={"classify": 1.0, "action": 1.0, "total": 2.0},
+                )
+
+        with patch.object(_ve, "PrintableFeatureOptimizer", _FakeSecondPassMergeOptimizer):
+            stabilized = VectorProcessor._stabilize_matched_shapes_printability(
+                first_pass.records,
+                scale_factor=1.0,
+                optimization_items=first_pass.items,
+            )
+
+        assert _FakeSecondPassMergeOptimizer.captured_stable_indices == [1, 2]
+        assert len(stabilized) == 1
+        assert stabilized[0]["recipe"] == [2]
+        assert stabilized[0]["_received_merge_source_indices"] == [0, 1]
+        assert stabilized[0]["_received_merge_source_recipes"] == [(0,), (1,)]
+        assert "_printability_stable_input_index" not in stabilized[0]
+
 
 # =====================================================================
 # 2. Run-length extrusion

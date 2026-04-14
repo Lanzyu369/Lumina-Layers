@@ -7,6 +7,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from shapely import affinity
 from shapely.geometry import box
 
 import core.vector_engine as vector_engine_module
@@ -113,6 +114,21 @@ class _FakeEmptyPrintableFeatureOptimizer:
         )
 
 
+class _FakePositiveOffsetPrintableFeatureOptimizer:
+    def __init__(self, shape_records, scale_factor, printable_core_nozzle_multiplier=None, nozzle_width_mm=None):
+        self.shape_records = [dict(record) for record in shape_records]
+
+    def optimize(self):
+        kept = [{**record} for record in self.shape_records]
+        return SimpleNamespace(
+            records=kept,
+            items=[],
+            classification_counts={"normal": len(kept), "isolated": 0, "thin": 0, "skip": 0},
+            action_counts={"keep": len(kept), "widen": 0, "merge": 0, "skip": 0},
+            timings_ms={"classify": 0.5, "action": 0.5, "total": 1.0},
+        )
+
+
 class TestVectorPrintabilityIntegration:
     def test_analyze_svg_uses_optimizer_output_and_records_printability_timing(self, tmp_path, monkeypatch, caplog):
         lut_path = _write_merged_lut(tmp_path)
@@ -125,8 +141,14 @@ class TestVectorPrintabilityIntegration:
         analysis = processor.analyze_svg(svg_path, target_width_mm=50.0)
 
         assert _FakePrintableFeatureOptimizer.captured_records is not None
+        min_x = min(record["geometry"].bounds[0] for record in _FakePrintableFeatureOptimizer.captured_records)
+        min_y = min(record["geometry"].bounds[1] for record in _FakePrintableFeatureOptimizer.captured_records)
         expected_records = [
-            {**record, "optimizer_mark": idx}
+            {
+                **record,
+                "geometry": affinity.translate(record["geometry"], xoff=-min_x, yoff=-min_y),
+                "optimizer_mark": idx,
+            }
             for idx, record in enumerate(_FakePrintableFeatureOptimizer.captured_records)
         ]
         assert analysis.matched_shapes == expected_records
@@ -177,6 +199,72 @@ class TestVectorPrintabilityIntegration:
         assert analysis.bbox[1] == pytest.approx(0.0)
         assert analysis.bbox[2] == pytest.approx(analysis.silhouette.bounds[2] - analysis.silhouette.bounds[0])
         assert analysis.bbox[3] == pytest.approx(analysis.silhouette.bounds[3] - analysis.silhouette.bounds[1])
+
+    def test_analyze_svg_rebases_positive_offset_stabilized_geometry_to_bbox_origin(self, tmp_path, monkeypatch):
+        svg_path = tmp_path / "positive_offset.svg"
+        svg_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+
+        processor = object.__new__(VectorProcessor)
+        processor.sampling_precision = 0.02
+        processor.color_mode = "4-Color"
+        processor.last_stage_timings = {}
+        processor.parse_warnings = []
+        processor.enable_fridge_magnet = False
+        processor.fridge_magnets = []
+        processor.img_processor = SimpleNamespace(
+            lut_rgb=[(220, 20, 60), (0, 0, 0)],
+            lut_path=str(tmp_path / "dummy.lut"),
+        )
+
+        shape_data = [
+            {"poly": box(10.0, 10.0, 11.0, 11.0), "color": (220, 20, 60)},
+            {"poly": box(20.0, 20.0, 21.0, 21.0), "color": (0, 0, 0)},
+        ]
+        clipped_shapes = [
+            {"geometry": box(10.0, 10.0, 11.0, 11.0), "color": (220, 20, 60)},
+            {"geometry": box(20.0, 20.0, 21.0, 21.0), "color": (0, 0, 0)},
+        ]
+
+        monkeypatch.setattr(
+            processor,
+            "_parse_svg",
+            lambda svg_file, target_width_mm: (shape_data, 1.0, (0.0, 0.0, 30.0, 30.0)),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_clip_occlusion",
+            lambda items, return_silhouette=False: (clipped_shapes, None),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_match_colors",
+            lambda clipped, replacement_manager, num_channels, num_layers=None: [
+                {
+                    "geometry": shape["geometry"],
+                    "recipe": [index],
+                    "color": shape["color"],
+                    "matched_rgb": shape["color"],
+                    "lut_idx": index,
+                    "draw_order": shape["draw_order"],
+                }
+                for index, shape in enumerate(clipped)
+            ],
+        )
+        monkeypatch.setattr(
+            vector_engine_module,
+            "PrintableFeatureOptimizer",
+            _FakePositiveOffsetPrintableFeatureOptimizer,
+        )
+
+        analysis = processor.analyze_svg(str(svg_path), target_width_mm=30.0)
+
+        assert analysis.bbox == pytest.approx((0.0, 0.0, 11.0, 11.0))
+        assert analysis.silhouette is not None
+        assert analysis.silhouette.bounds == pytest.approx((0.0, 0.0, 11.0, 11.0))
+        assert analysis.matched_shapes[0]["geometry"].bounds == pytest.approx((0.0, 0.0, 1.0, 1.0))
+        assert analysis.matched_shapes[1]["geometry"].bounds == pytest.approx((10.0, 10.0, 11.0, 11.0))
+        assert max(shape["geometry"].bounds[2] for shape in analysis.matched_shapes) == pytest.approx(analysis.bbox[2])
+        assert max(shape["geometry"].bounds[3] for shape in analysis.matched_shapes) == pytest.approx(analysis.bbox[3])
 
     def test_analyze_svg_reclips_optimizer_output_before_returning_final_shapes(self, tmp_path, monkeypatch):
         lut_path = _write_merged_lut(tmp_path)

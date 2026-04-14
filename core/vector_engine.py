@@ -1062,8 +1062,8 @@ class VectorProcessor:
 
         if silhouette is not None and not silhouette.is_empty:
             min_x, min_y, max_x, max_y = silhouette.bounds
-            offset_x = -min(0.0, min_x)
-            offset_y = -min(0.0, min_y)
+            offset_x = -min_x if abs(min_x) > 1e-9 else 0.0
+            offset_y = -min_y if abs(min_y) > 1e-9 else 0.0
             if offset_x != 0.0 or offset_y != 0.0:
                 matched_shapes = [
                     {

@@ -267,6 +267,28 @@ class TestPrintableFeatureOptimizer:
         assert result.action_counts["widen"] == 1
         assert len(result.records) == 2
 
+    def test_thin_shape_keeps_clipped_visible_widening_when_remainder_is_normal(self):
+        optimizer = PrintableFeatureOptimizer(
+            [
+                _shape(box(0, 0, 10.0, 0.2), [0], draw_order=0),
+                _shape(box(8.0, -1.0, 10.0, 1.0), [1], draw_order=1),
+            ],
+            scale_factor=1.0,
+        )
+
+        result = optimizer.optimize()
+
+        assert result.items[0].classification == "thin"
+        assert result.items[0].action == "widen"
+        assert result.items[0].reason == "widened-to-core"
+        assert result.items[0].widened_to_normal is True
+        assert result.items[1].action == "keep"
+        assert result.action_counts["widen"] == 1
+        assert result.action_counts["merge"] == 0
+        assert [record["recipe"] for record in result.records] == [[0], [1]]
+        assert optimizer.classify(result.records[0]["geometry"]) == "normal"
+        assert result.records[0]["geometry"].intersection(result.records[1]["geometry"]).area == pytest.approx(0.0)
+
     def test_draw_order_ties_are_deterministic(self):
         optimizer = PrintableFeatureOptimizer(
             [

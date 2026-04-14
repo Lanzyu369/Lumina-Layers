@@ -336,14 +336,13 @@ class PrintableFeatureOptimizer:
                     reason = "no-neighbor"
             elif classification == "thin":
                 widened = self._widen_to_printable_core(record["geometry"])
-                visible_widened, clipped_by_later_geometry = self._clip_to_visible_later_geometry(
+                visible_widened, _clipped_by_later_geometry = self._clip_to_visible_later_geometry(
                     widened,
                     record,
                     live_records,
                 )
                 if (
                     visible_widened is not None
-                    and not clipped_by_later_geometry
                     and self.classify(visible_widened) == "normal"
                 ):
                     record["geometry"] = visible_widened
