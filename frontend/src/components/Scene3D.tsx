@@ -95,7 +95,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
-  const wittyMsg = useWittyMessage(2000, isLoading);
+  const wittyMsg = useWittyMessage(2000, isLoading && enableWittyLoading);
 
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
