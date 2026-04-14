@@ -6,6 +6,7 @@ interface SwitchProps {
   checkedLabel?: string;
   uncheckedLabel?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
 export default function Switch({
@@ -14,12 +15,14 @@ export default function Switch({
   checkedLabel,
   uncheckedLabel,
   disabled = false,
+  ariaLabel,
 }: SwitchProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(

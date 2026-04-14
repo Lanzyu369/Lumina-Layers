@@ -1,21 +1,18 @@
-import { Suspense, useRef, useState, useEffect, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
+import { Suspense, useRef, useState, useEffect, useCallback } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
 import ModelViewer from "./ModelViewer";
-import InteractiveModelViewer, { type ViewerHoverSample } from "./InteractiveModelViewer";
+import InteractiveModelViewer from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
-import PreviewHoverInspector from "./ui/PreviewHoverInspector";
-import { buildLayerImagesSourceKey, useConverterStore } from "../stores/converter";
+import { useConverterStore } from "../stores/converter";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
-import { computeHoverInspectorStyle } from "./ui/previewHoverInspectorUtils";
 
 declare global {
   interface Window {
@@ -30,8 +27,6 @@ declare global {
 interface Scene3DProps {
   modelUrl?: string;
 }
-
-const EMPTY_LAYER_IMAGES: { layer_index: number; name: string; url: string }[] = [];
 
 /**
  * Helper component rendered inside <Canvas> to expose the gl context
@@ -89,131 +84,12 @@ function ThemeUpdater() {
   return null;
 }
 
-interface LayerHoverColorSample {
-  displayIndex: number;
-  layerName: string;
-  colorHex: string | null;
-}
-
-interface LayerCanvasBuffer {
-  layerIndex: number;
-  name: string;
-  width: number;
-  height: number;
-  context: CanvasRenderingContext2D;
-}
-
-const MAGNIFIER_SIZE_PX = 152;
-const MAGNIFIER_ZOOM = 3;
-const HOVER_POPOVER_DELAY_MS = 180;
-
-type HoverPerfWindow = Window & { __luminaHoverPerfDebug?: boolean };
-
-interface SceneHoverPerfStats {
-  layerSampleRuns: number;
-  layerCacheHits: number;
-  layerCacheMisses: number;
-  totalLayerSampleMs: number;
-  maxLayerSampleMs: number;
-  magnifierDrawRuns: number;
-  totalMagnifierDrawMs: number;
-  maxMagnifierDrawMs: number;
-  hoverShowCount: number;
-  hoverHideCount: number;
-  timerScheduleCount: number;
-  timerCancelCount: number;
-  lastLogAt: number;
-}
-
-function isHoverPerfDebugEnabled(): boolean {
-  if (typeof window === "undefined") return false;
-  return Boolean((window as HoverPerfWindow).__luminaHoverPerfDebug);
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  const toHex = (component: number) => component.toString(16).padStart(2, "0").toUpperCase();
-  return `${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-function areLayerSamplesEqual(
-  left: LayerHoverColorSample[],
-  right: LayerHoverColorSample[],
-): boolean {
-  if (left === right) return true;
-  if (left.length !== right.length) return false;
-  for (let i = 0; i < left.length; i += 1) {
-    const a = left[i];
-    const b = right[i];
-    if (
-      a.displayIndex !== b.displayIndex
-      || a.layerName !== b.layerName
-      || a.colorHex !== b.colorHex
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function areHoverSamplesEqual(
-  left: ViewerHoverSample | null,
-  right: ViewerHoverSample | null,
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return (
-    left.containerX === right.containerX
-    && left.containerY === right.containerY
-    && left.containerWidth === right.containerWidth
-    && left.containerHeight === right.containerHeight
-    && left.containerLeft === right.containerLeft
-    && left.containerTop === right.containerTop
-    &&
-    left.canvasX === right.canvasX
-    && left.canvasY === right.canvasY
-    && left.pixelX === right.pixelX
-    && left.pixelY === right.pixelY
-    && left.hitColorHex === right.hitColorHex
-  );
-}
-
 function Scene3D({ modelUrl }: Scene3DProps) {
   const { t } = useI18n();
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
-  const magnifierCanvasRef = useRef<HTMLCanvasElement>(null);
-  const layerCanvasBuffersRef = useRef<LayerCanvasBuffer[]>([]);
-  const layerSampleCacheRef = useRef<Map<string, LayerHoverColorSample[]>>(new Map());
-  const pendingHoverSampleRef = useRef<ViewerHoverSample | null>(null);
-  const hoverDelayTimerRef = useRef<number | null>(null);
-  const sceneHoverPerfStatsRef = useRef<SceneHoverPerfStats>({
-    layerSampleRuns: 0,
-    layerCacheHits: 0,
-    layerCacheMisses: 0,
-    totalLayerSampleMs: 0,
-    maxLayerSampleMs: 0,
-    magnifierDrawRuns: 0,
-    totalMagnifierDrawMs: 0,
-    maxMagnifierDrawMs: 0,
-    hoverShowCount: 0,
-    hoverHideCount: 0,
-    timerScheduleCount: 0,
-    timerCancelCount: 0,
-    lastLogAt: performance.now(),
-  });
-  const activeLayerPreviewRef = useRef<string | null>(null);
-  const fetchedLayerPreviewRef = useRef<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isOrbiting, setIsOrbiting] = useState(false);
-  const [hoverSample, setHoverSample] = useState<ViewerHoverSample | null>(null);
-  const [hoverLayerColors, setHoverLayerColors] = useState<LayerHoverColorSample[]>([]);
-  const hoverPixelX = hoverSample?.pixelX ?? null;
-  const hoverPixelY = hoverSample?.pixelY ?? null;
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -223,15 +99,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
   const selectedColor = useConverterStore((s) => s.selectedColor);
-  const sessionId = useConverterStore((s) => s.sessionId);
-  const layerImages = useConverterStore((s) => s.layerImages);
-  const layerImagesLoading = useConverterStore((s) => s.layerImagesLoading);
-  const layerImagesSourceKey = useConverterStore((s) => s.layerImagesSourceKey);
-  const layerImagesCurrentKey = useConverterStore(buildLayerImagesSourceKey);
-  const fetchLayerImages = useConverterStore((s) => s.fetchLayerImages);
-  const resetLayerImages = useConverterStore((s) => s.resetLayerImages);
-  const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
-  const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
   const enableRelief = useConverterStore((s) => s.enable_relief);
   const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
@@ -244,58 +111,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const wireHeightMm = useConverterStore((s) => s.wire_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
   const puzzleOverlayUrl = useConverterStore((s) => s.puzzleOverlayUrl);
-  const activeLayerImages = useMemo(
-    () => (layerImagesSourceKey === layerImagesCurrentKey ? layerImages : EMPTY_LAYER_IMAGES),
-    [layerImagesSourceKey, layerImagesCurrentKey, layerImages],
-  );
-
-  const maybeFlushScenePerfLog = useCallback((force = false) => {
-    if (!isHoverPerfDebugEnabled()) {
-      return;
-    }
-
-    const stats = sceneHoverPerfStatsRef.current;
-    const now = performance.now();
-    const elapsed = Math.max(1, now - stats.lastLogAt);
-    if (!force && elapsed < 1000) {
-      return;
-    }
-
-    const avgLayerSampleMs =
-      stats.layerSampleRuns > 0 ? +(stats.totalLayerSampleMs / stats.layerSampleRuns).toFixed(3) : 0;
-    const avgMagnifierMs =
-      stats.magnifierDrawRuns > 0 ? +(stats.totalMagnifierDrawMs / stats.magnifierDrawRuns).toFixed(3) : 0;
-
-    console.info("[HoverPerf][Scene3D]", {
-      elapsed_ms: +elapsed.toFixed(1),
-      layer_cache_hits: stats.layerCacheHits,
-      layer_cache_misses: stats.layerCacheMisses,
-      layer_sample_runs: stats.layerSampleRuns,
-      layer_sample_avg_ms: avgLayerSampleMs,
-      layer_sample_max_ms: +stats.maxLayerSampleMs.toFixed(3),
-      magnifier_draw_runs: stats.magnifierDrawRuns,
-      magnifier_avg_ms: avgMagnifierMs,
-      magnifier_max_ms: +stats.maxMagnifierDrawMs.toFixed(3),
-      hover_show_count: stats.hoverShowCount,
-      hover_hide_count: stats.hoverHideCount,
-      timer_schedule_count: stats.timerScheduleCount,
-      timer_cancel_count: stats.timerCancelCount,
-    });
-
-    stats.layerSampleRuns = 0;
-    stats.layerCacheHits = 0;
-    stats.layerCacheMisses = 0;
-    stats.totalLayerSampleMs = 0;
-    stats.maxLayerSampleMs = 0;
-    stats.magnifierDrawRuns = 0;
-    stats.totalMagnifierDrawMs = 0;
-    stats.maxMagnifierDrawMs = 0;
-    stats.hoverShowCount = 0;
-    stats.hoverHideCount = 0;
-    stats.timerScheduleCount = 0;
-    stats.timerCancelCount = 0;
-    stats.lastLogAt = now;
-  }, []);
 
   // Real-time scale dimensions
   const targetWidth = useConverterStore((s) => s.target_width_mm);
@@ -330,291 +145,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
-
-  useEffect(() => {
-    if (!sessionId) {
-      activeLayerPreviewRef.current = null;
-      fetchedLayerPreviewRef.current = null;
-      return;
-    }
-
-    if (
-      !previewGlbUrl ||
-      !layerImagesCurrentKey ||
-      layerImagesLoading ||
-      activeLayerImages.length > 0
-    ) {
-      return;
-    }
-    if (fetchedLayerPreviewRef.current === layerImagesCurrentKey) {
-      return;
-    }
-
-    fetchedLayerPreviewRef.current = layerImagesCurrentKey;
-    void fetchLayerImages(layerImagesCurrentKey);
-  }, [
-    previewGlbUrl,
-    sessionId,
-    layerImagesCurrentKey,
-    layerImagesLoading,
-    activeLayerImages.length,
-    fetchLayerImages,
-  ]);
-
-  useEffect(() => {
-    if (activeLayerPreviewRef.current && activeLayerPreviewRef.current !== previewGlbUrl) {
-      fetchedLayerPreviewRef.current = null;
-      resetLayerImages();
-    }
-    activeLayerPreviewRef.current = previewGlbUrl;
-
-    if (!previewGlbUrl) {
-      fetchedLayerPreviewRef.current = null;
-      if (hoverDelayTimerRef.current !== null) {
-        window.clearTimeout(hoverDelayTimerRef.current);
-        hoverDelayTimerRef.current = null;
-        sceneHoverPerfStatsRef.current.timerCancelCount += 1;
-      }
-      pendingHoverSampleRef.current = null;
-      layerSampleCacheRef.current.clear();
-      setHoverSample(null);
-      setHoverLayerColors([]);
-    }
-  }, [previewGlbUrl, resetLayerImages]);
-
-  useEffect(() => {
-    if (!isOrbiting) {
-      return;
-    }
-    if (hoverDelayTimerRef.current !== null) {
-      window.clearTimeout(hoverDelayTimerRef.current);
-      hoverDelayTimerRef.current = null;
-      sceneHoverPerfStatsRef.current.timerCancelCount += 1;
-    }
-    pendingHoverSampleRef.current = null;
-    setHoverSample((previous) => {
-      if (previous !== null) {
-        sceneHoverPerfStatsRef.current.hoverHideCount += 1;
-      }
-      return previous === null ? previous : null;
-    });
-    setHoverLayerColors((previous) => (previous.length === 0 ? previous : []));
-  }, [isOrbiting]);
-
-  useEffect(() => {
-    const stats = sceneHoverPerfStatsRef.current;
-    return () => {
-      if (hoverDelayTimerRef.current !== null) {
-        window.clearTimeout(hoverDelayTimerRef.current);
-        hoverDelayTimerRef.current = null;
-        stats.timerCancelCount += 1;
-      }
-      maybeFlushScenePerfLog(true);
-    };
-  }, [maybeFlushScenePerfLog]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (activeLayerImages.length === 0) {
-      layerCanvasBuffersRef.current = [];
-      layerSampleCacheRef.current.clear();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-      const buildBuffers = async () => {
-      const loaded = await Promise.all(
-        activeLayerImages.map(
-          (layer) =>
-            new Promise<LayerCanvasBuffer | null>((resolve) => {
-              const image = new Image();
-              image.onload = () => {
-                const width = image.naturalWidth || image.width;
-                const height = image.naturalHeight || image.height;
-                const canvas = document.createElement("canvas");
-                canvas.width = width;
-                canvas.height = height;
-                const context = canvas.getContext("2d", { willReadFrequently: true });
-                if (!context || width <= 0 || height <= 0) {
-                  resolve(null);
-                  return;
-                }
-                context.drawImage(image, 0, 0);
-                resolve({
-                  layerIndex: layer.layer_index,
-                  name: layer.name,
-                  width,
-                  height,
-                  context,
-                });
-              };
-              image.onerror = () => resolve(null);
-              image.src = layer.url;
-            }),
-        ),
-      );
-
-      if (cancelled) {
-        return;
-      }
-
-      layerCanvasBuffersRef.current = loaded.filter(
-        (entry): entry is LayerCanvasBuffer => entry !== null,
-      );
-      layerSampleCacheRef.current.clear();
-    };
-
-    void buildBuffers();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLayerImages]);
-
-  useEffect(() => {
-    if (hoverPixelX === null || hoverPixelY === null) {
-      setHoverLayerColors((previous) => (previous.length === 0 ? previous : []));
-      return;
-    }
-
-    const buffers = layerCanvasBuffersRef.current;
-    if (buffers.length === 0) {
-      setHoverLayerColors((previous) => (previous.length === 0 ? previous : []));
-      return;
-    }
-
-    const cacheKey = `${hoverPixelX},${hoverPixelY}`;
-    const cached = layerSampleCacheRef.current.get(cacheKey);
-    if (cached) {
-      sceneHoverPerfStatsRef.current.layerCacheHits += 1;
-      setHoverLayerColors((previous) => (areLayerSamplesEqual(previous, cached) ? previous : cached));
-      maybeFlushScenePerfLog(false);
-      return;
-    }
-
-    const sampleStart = performance.now();
-    sceneHoverPerfStatsRef.current.layerCacheMisses += 1;
-    sceneHoverPerfStatsRef.current.layerSampleRuns += 1;
-
-    const sampled = buffers.map((layer, index) => {
-      const baseWidth = previewPixelWidth && previewPixelWidth > 0 ? previewPixelWidth : layer.width;
-      const baseHeight = previewPixelHeight && previewPixelHeight > 0 ? previewPixelHeight : layer.height;
-      const x = clampNumber(
-        Math.round((hoverPixelX / Math.max(baseWidth - 1, 1)) * (layer.width - 1)),
-        0,
-        Math.max(layer.width - 1, 0),
-      );
-      const y = clampNumber(
-        Math.round((hoverPixelY / Math.max(baseHeight - 1, 1)) * (layer.height - 1)),
-        0,
-        Math.max(layer.height - 1, 0),
-      );
-
-      try {
-        const rgba = layer.context.getImageData(x, y, 1, 1).data;
-        const alpha = rgba[3];
-        return {
-          displayIndex: index + 1,
-          layerName: layer.name,
-          colorHex: alpha <= 8 ? null : rgbToHex(rgba[0], rgba[1], rgba[2]),
-        };
-      } catch {
-        return {
-          displayIndex: index + 1,
-          layerName: layer.name,
-          colorHex: null,
-        };
-      }
-    });
-
-    const sampleMs = performance.now() - sampleStart;
-    sceneHoverPerfStatsRef.current.totalLayerSampleMs += sampleMs;
-    sceneHoverPerfStatsRef.current.maxLayerSampleMs = Math.max(
-      sceneHoverPerfStatsRef.current.maxLayerSampleMs,
-      sampleMs,
-    );
-
-    layerSampleCacheRef.current.set(cacheKey, sampled);
-    setHoverLayerColors((previous) => (areLayerSamplesEqual(previous, sampled) ? previous : sampled));
-    maybeFlushScenePerfLog(sampleMs > 8);
-  }, [
-    hoverPixelX,
-    hoverPixelY,
-    previewPixelWidth,
-    previewPixelHeight,
-    activeLayerImages,
-    maybeFlushScenePerfLog,
-  ]);
-
-  useEffect(() => {
-    const magnifierCanvas = magnifierCanvasRef.current;
-    const context = magnifierCanvas?.getContext("2d");
-    if (!magnifierCanvas || !context) {
-      return;
-    }
-
-    context.clearRect(0, 0, magnifierCanvas.width, magnifierCanvas.height);
-
-    if (!hoverSample) {
-      return;
-    }
-
-    const webglCanvas = glRef.current?.domElement;
-    if (!webglCanvas) {
-      return;
-    }
-
-    const drawStart = performance.now();
-
-    const dpr = window.devicePixelRatio || 1;
-    const sourceSize = (MAGNIFIER_SIZE_PX / MAGNIFIER_ZOOM) * dpr;
-    const maxSourceX = Math.max(0, webglCanvas.width - sourceSize);
-    const maxSourceY = Math.max(0, webglCanvas.height - sourceSize);
-    const sourceX = clampNumber(
-      hoverSample.canvasX * dpr - sourceSize / 2,
-      0,
-      maxSourceX,
-    );
-    const sourceY = clampNumber(
-      hoverSample.canvasY * dpr - sourceSize / 2,
-      0,
-      maxSourceY,
-    );
-
-    context.imageSmoothingEnabled = false;
-    context.drawImage(
-      webglCanvas,
-      sourceX,
-      sourceY,
-      sourceSize,
-      sourceSize,
-      0,
-      0,
-      magnifierCanvas.width,
-      magnifierCanvas.height,
-    );
-
-    const center = magnifierCanvas.width / 2;
-    context.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(center, 0);
-    context.lineTo(center, magnifierCanvas.height);
-    context.moveTo(0, center);
-    context.lineTo(magnifierCanvas.width, center);
-    context.stroke();
-
-    const drawMs = performance.now() - drawStart;
-    sceneHoverPerfStatsRef.current.magnifierDrawRuns += 1;
-    sceneHoverPerfStatsRef.current.totalMagnifierDrawMs += drawMs;
-    sceneHoverPerfStatsRef.current.maxMagnifierDrawMs = Math.max(
-      sceneHoverPerfStatsRef.current.maxMagnifierDrawMs,
-      drawMs,
-    );
-    maybeFlushScenePerfLog(drawMs > 8);
-  }, [hoverSample, maybeFlushScenePerfLog]);
 
   const handleGlReady = useCallback((gl: THREE.WebGLRenderer) => {
     glRef.current = gl;
@@ -653,82 +183,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     [setSelectedColor],
   );
 
-  const handleHoverSample = useCallback((sample: ViewerHoverSample | null) => {
-    const stats = sceneHoverPerfStatsRef.current;
-    pendingHoverSampleRef.current = sample;
-
-    if (hoverDelayTimerRef.current !== null) {
-      window.clearTimeout(hoverDelayTimerRef.current);
-      hoverDelayTimerRef.current = null;
-      stats.timerCancelCount += 1;
-    }
-
-    if (sample === null) {
-      setHoverSample((previous) => {
-        if (previous !== null) {
-          stats.hoverHideCount += 1;
-        }
-        return previous === null ? previous : null;
-      });
-      maybeFlushScenePerfLog(false);
-      return;
-    }
-
-    setHoverSample((previous) => {
-      if (previous !== null) {
-        stats.hoverHideCount += 1;
-      }
-      return previous === null ? previous : null;
-    });
-
-    stats.timerScheduleCount += 1;
-    hoverDelayTimerRef.current = window.setTimeout(() => {
-      hoverDelayTimerRef.current = null;
-      const pending = pendingHoverSampleRef.current;
-      if (!pending) {
-        return;
-      }
-      setHoverSample((previous) => {
-        const next = areHoverSamplesEqual(previous, pending) ? previous : pending;
-        if (previous === null && next !== null) {
-          stats.hoverShowCount += 1;
-        }
-        return next;
-      });
-      maybeFlushScenePerfLog(false);
-    }, HOVER_POPOVER_DELAY_MS);
-  }, [maybeFlushScenePerfLog]);
-
   // Check if Fullscreen API is available
   const fullscreenSupported = typeof document.fullscreenElement !== "undefined";
-  const surfaceHex = hoverSample
-    ? (colorRemapMap[hoverSample.hitColorHex] || hoverSample.hitColorHex).toUpperCase()
-    : null;
-  const hoverInspectorStyle = (() => {
-    if (!hoverSample) {
-      return null;
-    }
-    return computeHoverInspectorStyle(hoverSample, {
-      layerCount: hoverLayerColors.length,
-      showMagnifier: true,
-      showLayerDetails: true,
-    });
-  })();
-  const hoverInspectorOverlay = hoverSample && hoverInspectorStyle && typeof document !== "undefined"
-    ? createPortal(
-      <PreviewHoverInspector
-        dataTestId="viewer-hover-inspector"
-        style={hoverInspectorStyle}
-        magnifierCanvasRef={magnifierCanvasRef}
-        pixelX={hoverSample.pixelX}
-        pixelY={hoverSample.pixelY}
-        surfaceHex={surfaceHex}
-        hoverLayerColors={hoverLayerColors}
-        layerImagesLoading={layerImagesLoading}
-      />,
-      document.body,
-    )
-    : null;
 
   return (
     <div
@@ -772,24 +228,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             hitRef.current = false;
             return;
           }
-          if (hoverDelayTimerRef.current !== null) {
-            window.clearTimeout(hoverDelayTimerRef.current);
-            hoverDelayTimerRef.current = null;
-            sceneHoverPerfStatsRef.current.timerCancelCount += 1;
-          }
-          pendingHoverSampleRef.current = null;
           if (enableFridgeMagnet) {
             selectFridgeMagnet(null);
           } else {
             setSelectedColor(null);
           }
-          setHoverSample((previous) => {
-            if (previous !== null) {
-              sceneHoverPerfStatsRef.current.hoverHideCount += 1;
-            }
-            return previous === null ? previous : null;
-          });
-          maybeFlushScenePerfLog(false);
         }}
         onCreated={({ gl }) => {
           gl.setClearColor(themeColors.canvasClearColor);
@@ -823,8 +266,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           dampingFactor={0.1}
           minDistance={10}
           maxDistance={2000}
-          onStart={() => setIsOrbiting(true)}
-          onEnd={() => setIsOrbiting(false)}
         />
         <BedPlatform />
         {modelUrl ? (
@@ -852,10 +293,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireHeightMm={wireHeightMm}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
-              hoverEnabled={!isOrbiting}
               colorPickingEnabled={!enableFridgeMagnet}
               selectionVisualsEnabled={!enableFridgeMagnet}
-              onHoverSample={handleHoverSample}
             />
           </Suspense>
         ) : null}
@@ -908,7 +347,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         )}
       </Canvas>
 
-      {hoverInspectorOverlay}
     </div>
   );
 }

@@ -320,4 +320,26 @@ describe('PalettePanel 双色显示', () => {
 
     expect(screen.getByText(/暂无调色板数据/)).toBeInTheDocument();
   });
+
+  it('magnifier toggle keeps accessible labels without rendering a hint trigger', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: null,
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+    });
+
+    render(<PalettePanel />);
+
+    const switches = screen.getAllByRole('switch');
+    expect(switches).toHaveLength(2);
+    expect(switches[0]).toHaveAttribute('aria-label');
+    expect(switches[1]).toHaveAttribute('aria-label');
+    expect(screen.queryByTestId('palette-magnifier-hint-trigger')).not.toBeInTheDocument();
+  });
 });

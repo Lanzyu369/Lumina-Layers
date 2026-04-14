@@ -342,6 +342,7 @@ export default function PalettePanel({
                 <Switch
                   checked={showHoverMagnifier}
                   onChange={(checked) => onToggleHoverMagnifier?.(checked)}
+                  ariaLabel={t("viewer_hover_toggle_magnifier")}
                 />
               </div>
               <div className="flex items-center gap-1.5">
@@ -351,6 +352,7 @@ export default function PalettePanel({
                 <Switch
                   checked={showHoverLayerDetails}
                   onChange={(checked) => onToggleHoverLayerDetails?.(checked)}
+                  ariaLabel={t("viewer_hover_toggle_layers")}
                 />
               </div>
             </div>

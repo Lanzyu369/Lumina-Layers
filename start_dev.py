@@ -36,7 +36,7 @@ FRONTEND_DIR = ROOT / "frontend"
 NODE_MODULES_BIN = FRONTEND_DIR / "node_modules" / ".bin"
 
 BACKEND_PORT = 8000
-FRONTEND_PORT = 5174
+FRONTEND_PORT = 4174
 
 # ═══════════════════════════════════════════════════════════
 #  Windows Job Object（保证子进程随父进程退出）

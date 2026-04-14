@@ -554,11 +554,11 @@ describe("native bundle converter flow", () => {
       layer_height_mm: 0.08,
       model_enable: true,
       model_only: false,
+      model_threshold: 6.5,
+      model_margin: 0.9,
       target_width_mm: 90,
       auto_bg: true,
     });
-    expect(params).not.toHaveProperty("model_threshold");
-    expect(params).not.toHaveProperty("model_margin");
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
   });

@@ -746,6 +746,7 @@ export function resolveConverterSourceSelection(
   source_kind: "legacy_single" | "native_bundle";
   isReady: boolean;
   lut_name: string;
+  db_names: string[];
   native: ReturnType<typeof resolveNativeBrandSelection>;
   color_layers: number | null;
   layer_height_mm: number | null;
@@ -755,6 +756,7 @@ export function resolveConverterSourceSelection(
       source_kind: "legacy_single",
       isReady: state.lut_name.length > 0,
       lut_name: state.lut_name,
+      db_names: [],
       native: {
         brand: null,
         db_names: [],
@@ -773,6 +775,7 @@ export function resolveConverterSourceSelection(
     source_kind: "native_bundle",
     isReady: native.isReady,
     lut_name: "",
+    db_names: native.db_names,
     native,
     color_layers: native.supported_mode?.color_layers ?? null,
     layer_height_mm: native.supported_mode?.layer_height_mm ?? null,
@@ -3277,15 +3280,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             modeling_mode: state.modeling_mode,
             quantize_colors: state.quantize_colors,
             enable_cleanup: state.enable_cleanup,
-            ...(sourceParams.source_kind === "native_bundle" &&
-            resolvedSourceSelection.native.predictive_model_available
-              ? {
-                  model_enable: state.model_enable,
-                  model_only: state.model_only,
-                  model_threshold: state.model_threshold ?? undefined,
-                  model_margin: state.model_margin ?? undefined,
-                }
-              : {}),
             hue_weight: state.hue_enable ? 0.5 : 0.0,
             chroma_gate: state.hue_enable ? state.chroma_gate : 0,
             is_dark: useSettingsStore.getState().theme === "dark",
@@ -3475,15 +3469,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           wire_height_mm: state.wire_height_mm,
           enable_coating: state.enable_coating,
           coating_height_mm: state.coating_height_mm,
-          ...(sourceParams.source_kind === "native_bundle" &&
-          resolvedSourceSelection.native.predictive_model_available
-            ? {
-                model_enable: state.model_enable,
-                model_only: state.model_only,
-                model_threshold: state.model_threshold ?? undefined,
-                model_margin: state.model_margin ?? undefined,
-              }
-            : {}),
           enable_fridge_magnet: state.enable_fridge_magnet,
           fridge_magnets:
             state.enable_fridge_magnet && state.fridge_magnets.length > 0

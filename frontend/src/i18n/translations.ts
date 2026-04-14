@@ -251,6 +251,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "#### 🎨 2D预览",
     en: "#### 🎨 2D Preview",
   },
+  converter_preview_2d_alt: {
+    zh: "2D 预览图",
+    en: "2D preview image",
+  },
   conv_palette: {
     zh: "🎨 颜色调色板",
     en: "🎨 Color Palette",

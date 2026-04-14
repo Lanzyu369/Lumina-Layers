@@ -1,72 +1,42 @@
-/**
- * Convert a click on an <img> with object-contain to image pixel coordinates.
- * 将 object-contain 模式下 <img> 上的点击转换为图像像素坐标。
- *
- * @param event - The mouse event on the image element.
- * @param imgEl - The <img> DOM element.
- * @param naturalW - The intrinsic image width in pixels.
- * @param naturalH - The intrinsic image height in pixels.
- * @returns [pixelX, pixelY] in image space, or null if click is in letterbox padding.
- */
-export function imgClickToPixel(
-  event: React.MouseEvent<HTMLImageElement>,
-  imgEl: HTMLImageElement,
-  naturalW: number,
-  naturalH: number,
-): [number, number] | null {
-  const rect = imgEl.getBoundingClientRect();
-  const clientW = rect.width;
-  const clientH = rect.height;
+import {
+  mapPixelToBufferCoordinate,
+  rgbToHex,
+  type PreviewCanvasBuffer,
+} from '../ui/previewHoverInspectorUtils';
 
-  if (naturalW <= 0 || naturalH <= 0 || clientW <= 0 || clientH <= 0) {
-    return null;
-  }
-
-  const scale = Math.min(clientW / naturalW, clientH / naturalH);
-  const renderedW = naturalW * scale;
-  const renderedH = naturalH * scale;
-  const offsetX = (clientW - renderedW) / 2;
-  const offsetY = (clientH - renderedH) / 2;
-
-  const relX = event.clientX - rect.left - offsetX;
-  const relY = event.clientY - rect.top - offsetY;
-
-  if (relX < 0 || relX >= renderedW || relY < 0 || relY >= renderedH) {
-    return null;
-  }
-
-  const pixelX = Math.floor((relX / renderedW) * naturalW);
-  const pixelY = Math.floor((relY / renderedH) * naturalH);
-
-  return [
-    Math.max(0, Math.min(naturalW - 1, pixelX)),
-    Math.max(0, Math.min(naturalH - 1, pixelY)),
-  ];
+interface PreviewPixelReadOptions {
+  pixelX: number;
+  pixelY: number;
+  naturalWidth: number;
+  naturalHeight: number;
 }
 
 /**
- * Read the color of a pixel from an image via an off-screen canvas.
- * 通过离屏 canvas 读取图像某像素的颜色。
+ * Read the color of a preview pixel from the shared preview buffer.
+ * 通过共享预览缓冲区读取预览像素颜色。
  *
- * @param imgEl - A loaded <img> element.
- * @param x - Pixel X coordinate.
- * @param y - Pixel Y coordinate.
- * @returns Hex string without '#' (e.g. "ff0000"), or null on failure.
+ * @param previewBuffer - Shared preview canvas buffer.
+ * @param options - Pixel coordinate and natural image size information.
+ * @returns Hex string without '#' (e.g. "FF0000"), or null on failure.
  */
 export function readPixelColor(
-  imgEl: HTMLImageElement,
-  x: number,
-  y: number,
+  previewBuffer: PreviewCanvasBuffer | null,
+  options: PreviewPixelReadOptions,
 ): string | null {
+  if (!previewBuffer) {
+    return null;
+  }
+
+  const { pixelX, pixelY, naturalWidth, naturalHeight } = options;
+  if (naturalWidth <= 0 || naturalHeight <= 0) {
+    return null;
+  }
+
   try {
-    const canvas = document.createElement('canvas');
-    canvas.width = imgEl.naturalWidth;
-    canvas.height = imgEl.naturalHeight;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
-    ctx.drawImage(imgEl, 0, 0);
-    const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
-    return [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('');
+    const x = mapPixelToBufferCoordinate(pixelX, naturalWidth, previewBuffer.width);
+    const y = mapPixelToBufferCoordinate(pixelY, naturalHeight, previewBuffer.height);
+    const rgba = previewBuffer.context.getImageData(x, y, 1, 1).data;
+    return rgba[3] <= 8 ? null : rgbToHex(rgba[0], rgba[1], rgba[2]);
   } catch {
     return null;
   }

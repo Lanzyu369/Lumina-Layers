@@ -1,3 +1,5 @@
+import type { CanvasPreviewBuffer } from "./canvasPreviewUtils"
+
 export interface HoverInspectorAnchorSample {
   containerX: number
   containerY: number
@@ -28,11 +30,7 @@ export interface LayerCanvasBuffer {
   context: CanvasRenderingContext2D
 }
 
-export interface PreviewCanvasBuffer {
-  width: number
-  height: number
-  context: CanvasRenderingContext2D
-}
+export type PreviewCanvasBuffer = CanvasPreviewBuffer
 
 export const HOVER_POPOVER_DELAY_MS = 180
 export const HOVER_RESOURCE_RELEASE_DELAY_MS = 1500
@@ -102,25 +100,6 @@ export function getHoverInspectorLayout(
   showLayerDetails = true,
 ): HoverInspectorLayout {
   return estimateHoverInspectorContentHeight(layerCount, true, showLayerDetails)
-}
-
-export function buildPreviewCanvasBuffer(image: HTMLImageElement): PreviewCanvasBuffer | null {
-  const width = image.naturalWidth || image.width
-  const height = image.naturalHeight || image.height
-  if (width <= 0 || height <= 0) {
-    return null
-  }
-
-  const canvas = document.createElement("canvas")
-  canvas.width = width
-  canvas.height = height
-  const context = canvas.getContext("2d", { willReadFrequently: true })
-  if (!context) {
-    return null
-  }
-
-  context.drawImage(image, 0, 0)
-  return { width, height, context }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {

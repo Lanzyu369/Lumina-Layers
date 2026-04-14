@@ -178,42 +178,12 @@ export interface InteractiveModelViewerProps {
   wireHeightMm?: number;       // 金丝高度 (mm)，默认 0.1
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
-  onHoverSample?: (sample: ViewerHoverSample | null) => void;
-  hoverEnabled?: boolean;
   colorPickingEnabled?: boolean;
   selectionVisualsEnabled?: boolean;
 }
 
-export interface ViewerHoverSample {
-  containerX: number;
-  containerY: number;
-  containerWidth: number;
-  containerHeight: number;
-  containerLeft: number;
-  containerTop: number;
-  canvasX: number;
-  canvasY: number;
-  pixelX: number;
-  pixelY: number;
-  hitColorHex: string;
-}
-
 /** Color layer thickness in mm (5 layers × 0.08mm). */
 const COLOR_LAYER_HEIGHT = 0.4;
-
-type HoverPerfWindow = Window & { __luminaHoverPerfDebug?: boolean };
-
-interface HoverPerfStats {
-  pointerMoveCount: number;
-  processCount: number;
-  emitCount: number;
-  dedupeCount: number;
-  missCount: number;
-  wheelCount: number;
-  totalProcessMs: number;
-  maxProcessMs: number;
-  lastLogAt: number;
-}
 
 interface ClickGestureState {
   pointerId: number;
@@ -225,11 +195,6 @@ interface ClickGestureState {
 
 const CLICK_DRAG_THRESHOLD_PX = 4;
 
-function isHoverPerfDebugEnabled(): boolean {
-  if (typeof window === "undefined") return false;
-  return Boolean((window as HoverPerfWindow).__luminaHoverPerfDebug);
-}
-
 function InteractiveModelViewer({
   url,
   colorRemapMap,
@@ -238,7 +203,6 @@ function InteractiveModelViewer({
   baseHeight,
   enableRelief,
   onColorClick,
-  onHoverSample,
   scaleX = 1,
   scaleY = 1,
   spacerThick = 1.2,
@@ -250,7 +214,6 @@ function InteractiveModelViewer({
   wireHeightMm = 0.1,
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
-  hoverEnabled = true,
   colorPickingEnabled = true,
   selectionVisualsEnabled = true,
 }: InteractiveModelViewerProps) {
@@ -538,20 +501,6 @@ function InteractiveModelViewer({
   // We store this on the converterStore so Scene3D can read it.
   const colorHitRef = useRef(false);
   const clickGestureRef = useRef<ClickGestureState | null>(null);
-  const hoverPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
-  const hoverRafRef = useRef<number | null>(null);
-  const lastHoverSignatureRef = useRef<string>("");
-  const hoverPerfStatsRef = useRef<HoverPerfStats>({
-    pointerMoveCount: 0,
-    processCount: 0,
-    emitCount: 0,
-    dedupeCount: 0,
-    missCount: 0,
-    wheelCount: 0,
-    totalProcessMs: 0,
-    maxProcessMs: 0,
-    lastLogAt: performance.now(),
-  });
 
   // Read selectionMode and related state for region click handling
   const selectionMode = useConverterStore((s) => s.selectionMode);
@@ -591,90 +540,6 @@ function InteractiveModelViewer({
     },
     [previewPixelWidth, previewPixelHeight, previewWidthMm, sceneCenter],
   );
-
-  const maybeFlushHoverPerfLog = useCallback((force = false) => {
-    if (!isHoverPerfDebugEnabled()) {
-      return;
-    }
-
-    const stats = hoverPerfStatsRef.current;
-    const now = performance.now();
-    const elapsed = Math.max(1, now - stats.lastLogAt);
-    if (!force && elapsed < 1000) {
-      return;
-    }
-
-    const averageProcessMs =
-      stats.processCount > 0 ? +(stats.totalProcessMs / stats.processCount).toFixed(3) : 0;
-    const maxProcessMs = +stats.maxProcessMs.toFixed(3);
-    const processPerSecond = +((stats.processCount * 1000) / elapsed).toFixed(2);
-
-    console.info("[HoverPerf][InteractiveModelViewer]", {
-      elapsed_ms: +elapsed.toFixed(1),
-      pointermove_events: stats.pointerMoveCount,
-      process_events: stats.processCount,
-      process_per_sec: processPerSecond,
-      hover_emits: stats.emitCount,
-      hover_dedupes: stats.dedupeCount,
-      misses: stats.missCount,
-      wheel_events: stats.wheelCount,
-      avg_process_ms: averageProcessMs,
-      max_process_ms: maxProcessMs,
-    });
-
-    stats.pointerMoveCount = 0;
-    stats.processCount = 0;
-    stats.emitCount = 0;
-    stats.dedupeCount = 0;
-    stats.missCount = 0;
-    stats.wheelCount = 0;
-    stats.totalProcessMs = 0;
-    stats.maxProcessMs = 0;
-    stats.lastLogAt = now;
-  }, []);
-
-  const emitHoverSample = useCallback(
-    (sample: ViewerHoverSample | null) => {
-      if (!onHoverSample) return;
-      const stats = hoverPerfStatsRef.current;
-
-      if (!sample) {
-        if (lastHoverSignatureRef.current === "__null__") {
-          stats.dedupeCount += 1;
-          maybeFlushHoverPerfLog(false);
-          return;
-        }
-        lastHoverSignatureRef.current = "__null__";
-        stats.emitCount += 1;
-        onHoverSample(null);
-        maybeFlushHoverPerfLog(false);
-        return;
-      }
-
-      const signature = `${sample.canvasX},${sample.canvasY},${sample.pixelX},${sample.pixelY},${sample.hitColorHex}`;
-      if (signature === lastHoverSignatureRef.current) {
-        stats.dedupeCount += 1;
-        maybeFlushHoverPerfLog(false);
-        return;
-      }
-
-      lastHoverSignatureRef.current = signature;
-      stats.emitCount += 1;
-      onHoverSample(sample);
-      maybeFlushHoverPerfLog(false);
-    },
-    [onHoverSample, maybeFlushHoverPerfLog],
-  );
-
-  const cancelHoverSampling = useCallback(() => {
-    hoverPointerRef.current = null;
-    if (hoverRafRef.current !== null) {
-      window.cancelAnimationFrame(hoverRafRef.current);
-      hoverRafRef.current = null;
-    }
-    emitHoverSample(null);
-    maybeFlushHoverPerfLog(false);
-  }, [emitHoverSample, maybeFlushHoverPerfLog]);
 
   const getColorHitAtPointerPosition = useCallback(
     (clientX: number, clientY: number) => {
@@ -755,9 +620,6 @@ function InteractiveModelViewer({
 
   const handlePointerDown = useCallback(
     (event: PointerEvent) => {
-      if (onHoverSample) {
-        cancelHoverSampling();
-      }
       if (!shouldHandleColorPickingEvent(event.button, colorPickingEnabled)) {
         return;
       }
@@ -772,12 +634,7 @@ function InteractiveModelViewer({
         dragged: false,
       };
     },
-    [
-      onHoverSample,
-      cancelHoverSampling,
-      getColorHitAtPointerPosition,
-      colorPickingEnabled,
-    ],
+    [getColorHitAtPointerPosition, colorPickingEnabled],
   );
 
   const handlePointerUp = useCallback(
@@ -812,86 +669,6 @@ function InteractiveModelViewer({
     [selectColorAtPointerPosition, colorPickingEnabled],
   );
 
-  const processHoverPointer = useCallback(() => {
-    if (!onHoverSample || !hoverEnabled) return;
-    const processStart = performance.now();
-    const stats = hoverPerfStatsRef.current;
-    stats.processCount += 1;
-
-    const pending = hoverPointerRef.current;
-    if (!pending) {
-      stats.missCount += 1;
-      const totalMs = performance.now() - processStart;
-      stats.totalProcessMs += totalMs;
-      stats.maxProcessMs = Math.max(stats.maxProcessMs, totalMs);
-      emitHoverSample(null);
-      maybeFlushHoverPerfLog(totalMs > 8);
-      return;
-    }
-
-    const canvas = gl.domElement;
-    const rect = canvas.getBoundingClientRect();
-    const relativeX = pending.clientX - rect.left;
-    const relativeY = pending.clientY - rect.top;
-
-    pointerRef.current.x = (relativeX / rect.width) * 2 - 1;
-    pointerRef.current.y = -(relativeY / rect.height) * 2 + 1;
-
-    raycasterRef.current.setFromCamera(pointerRef.current, camera);
-    const intersects = raycasterRef.current.intersectObjects(colorMeshes, false);
-
-    if (intersects.length === 0) {
-      stats.missCount += 1;
-      const totalMs = performance.now() - processStart;
-      stats.totalProcessMs += totalMs;
-      stats.maxProcessMs = Math.max(stats.maxProcessMs, totalMs);
-      emitHoverSample(null);
-      maybeFlushHoverPerfLog(totalMs > 8);
-      return;
-    }
-
-    const hitMesh = intersects[0].object as THREE.Mesh;
-    if (!hitMesh.name.startsWith("color_")) {
-      stats.missCount += 1;
-      const totalMs = performance.now() - processStart;
-      stats.totalProcessMs += totalMs;
-      stats.maxProcessMs = Math.max(stats.maxProcessMs, totalMs);
-      emitHoverSample(null);
-      maybeFlushHoverPerfLog(totalMs > 8);
-      return;
-    }
-
-    const previewPixel = mapWorldToPreviewPixel(intersects[0].point);
-    if (!previewPixel) {
-      stats.missCount += 1;
-      const totalMs = performance.now() - processStart;
-      stats.totalProcessMs += totalMs;
-      stats.maxProcessMs = Math.max(stats.maxProcessMs, totalMs);
-      emitHoverSample(null);
-      maybeFlushHoverPerfLog(totalMs > 8);
-      return;
-    }
-
-    emitHoverSample({
-      containerX: Math.round(relativeX),
-      containerY: Math.round(relativeY),
-      containerWidth: rect.width,
-      containerHeight: rect.height,
-      containerLeft: rect.left,
-      containerTop: rect.top,
-      canvasX: Math.round(relativeX),
-      canvasY: Math.round(relativeY),
-      pixelX: previewPixel.x,
-      pixelY: previewPixel.y,
-      hitColorHex: extractHexFromMeshName(hitMesh.name),
-    });
-
-    const totalMs = performance.now() - processStart;
-    stats.totalProcessMs += totalMs;
-    stats.maxProcessMs = Math.max(stats.maxProcessMs, totalMs);
-    maybeFlushHoverPerfLog(totalMs > 8);
-  }, [gl, camera, colorMeshes, mapWorldToPreviewPixel, onHoverSample, hoverEnabled, emitHoverSample, maybeFlushHoverPerfLog]);
-
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
       const gesture = clickGestureRef.current;
@@ -907,47 +684,24 @@ function InteractiveModelViewer({
           colorHitRef.current = false;
         }
       }
-
-      if (!onHoverSample || !hoverEnabled) return;
-      hoverPerfStatsRef.current.pointerMoveCount += 1;
-
-      if (event.buttons !== 0) {
-        cancelHoverSampling();
-        return;
-      }
-
-      hoverPointerRef.current = { clientX: event.clientX, clientY: event.clientY };
-
-      if (hoverRafRef.current !== null) {
-        return;
-      }
-
-      hoverRafRef.current = window.requestAnimationFrame(() => {
-        hoverRafRef.current = null;
-        processHoverPointer();
-      });
     },
-    [onHoverSample, hoverEnabled, cancelHoverSampling, processHoverPointer],
+    [],
   );
 
   const handleWheel = useCallback(() => {
-    hoverPerfStatsRef.current.wheelCount += 1;
     clickGestureRef.current = null;
     colorHitRef.current = false;
-    cancelHoverSampling();
-  }, [cancelHoverSampling]);
+  }, []);
 
   const handlePointerLeave = useCallback(() => {
     clickGestureRef.current = null;
     colorHitRef.current = false;
-    cancelHoverSampling();
-  }, [cancelHoverSampling]);
+  }, []);
 
   const handlePointerCancel = useCallback(() => {
     clickGestureRef.current = null;
     colorHitRef.current = false;
-    cancelHoverSampling();
-  }, [cancelHoverSampling]);
+  }, []);
 
   useEffect(() => {
     if (colorPickingEnabled) {
@@ -958,27 +712,10 @@ function InteractiveModelViewer({
   }, [colorPickingEnabled]);
 
   useEffect(() => {
-    if (hoverEnabled) {
-      return;
-    }
-    hoverPointerRef.current = null;
-    if (hoverRafRef.current !== null) {
-      window.cancelAnimationFrame(hoverRafRef.current);
-      hoverRafRef.current = null;
-    }
-    emitHoverSample(null);
-  }, [hoverEnabled, emitHoverSample]);
-
-  useEffect(() => {
     return () => {
       clickGestureRef.current = null;
-      if (hoverRafRef.current !== null) {
-        window.cancelAnimationFrame(hoverRafRef.current);
-        hoverRafRef.current = null;
-      }
-      maybeFlushHoverPerfLog(true);
     };
-  }, [maybeFlushHoverPerfLog]);
+  }, []);
 
   // Expose colorHitRef check so Scene3D's onPointerMissed can query it
   useEffect(() => {

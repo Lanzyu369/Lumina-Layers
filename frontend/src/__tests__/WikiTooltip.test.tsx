@@ -36,8 +36,9 @@ vi.mock("@floating-ui/react", () => {
     },
     useDismiss: () => ({}),
     useRole: () => ({}),
-    useInteractions: () => ({
-      getReferenceProps: () => ({}),
+    useInteractions: (hooks: Array<Record<string, unknown>>) => ({
+      getReferenceProps: () =>
+        Object.assign({}, ...hooks.map((hook) => hook.referenceProps ?? {})),
       getFloatingProps: () => ({ role: "tooltip" }),
     }),
     offset: () => null,

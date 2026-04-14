@@ -5,7 +5,7 @@ import { useConverterStore } from "../../stores/converter";
 import { buildLayerImagesSourceKey } from "../../stores/converter/store";
 import ActionBar from "../sections/ActionBar";
 
-let capturedZoomableImageProps: Record<string, unknown> | null = null;
+let capturedCanvasPreviewSurfaceProps: Record<string, unknown> | null = null;
 
 // Mock child components with complex dependencies
 vi.mock("../sections/BedSizeSelector", () => ({
@@ -16,14 +16,14 @@ vi.mock("../sections/SlicerSelector", () => ({
   default: () => <div data-testid="slicer-selector" />,
 }));
 
-vi.mock("../ui/ZoomableImage", () => ({
+vi.mock("../ui/CanvasPreviewSurface", () => ({
   default: (props: Record<string, unknown>) => {
-    capturedZoomableImageProps = props;
+    capturedCanvasPreviewSurfaceProps = props;
     return (
-      <div data-testid="zoomable-image-mock">
-        <img alt={String(props.alt ?? "")} src={String(props.src ?? "")} />
-        {props.overlay ? <div data-testid="zoomable-image-overlay">{props.overlay as ReactNode}</div> : null}
-        {props.floatingOverlay ? <div data-testid="zoomable-image-floating-overlay">{props.floatingOverlay as ReactNode}</div> : null}
+      <div data-testid="canvas-preview-surface-mock">
+        <div role="img" aria-label={String(props.alt ?? "")} data-src={String(props.src ?? "")} />
+        {props.overlay ? <div data-testid="canvas-preview-overlay">{props.overlay as ReactNode}</div> : null}
+        {props.floatingOverlay ? <div data-testid="canvas-preview-floating-overlay">{props.floatingOverlay as ReactNode}</div> : null}
       </div>
     );
   },
@@ -35,7 +35,7 @@ function makeFile(name: string, type = "image/png"): File {
 
 describe("ActionBar — auto batch mode", () => {
   beforeEach(() => {
-    capturedZoomableImageProps = null;
+    capturedCanvasPreviewSurfaceProps = null;
     useConverterStore.setState({
       batchMode: false,
       batchFiles: [],
@@ -254,8 +254,8 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    const previewImage = screen.getByAltText("预览结果");
-    expect(previewImage).toHaveAttribute("src", "/api/files/highlight-last-region");
+    const previewImage = screen.getByRole("img", { name: "预览结果" });
+    expect(previewImage).toHaveAttribute("data-src", "/api/files/highlight-last-region");
     expect(screen.getByTestId("preview-multi-select-overlay")).toBeInTheDocument();
     expect(screen.getAllByTestId("preview-multi-select-polygon")).toHaveLength(1);
   });
@@ -296,7 +296,7 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    const hoverHandler = capturedZoomableImageProps?.onHoverSample as
+    const hoverHandler = capturedCanvasPreviewSurfaceProps?.onHoverSample as
       | ((sample: {
         containerX: number;
         containerY: number;
@@ -310,12 +310,19 @@ describe("ActionBar — auto batch mode", () => {
         naturalHeight: number;
       } | null) => void)
       | undefined;
-    const imageReadyHandler = capturedZoomableImageProps?.onImageReady as
-      | ((image: HTMLImageElement | null) => void)
+    const surfaceReadyHandler = capturedCanvasPreviewSurfaceProps?.onSurfaceReady as
+      | ((payload: {
+        image: HTMLImageElement;
+        previewBuffer: {
+          width: number;
+          height: number;
+          context: CanvasRenderingContext2D;
+        } | null;
+      } | null) => void)
       | undefined;
 
     expect(hoverHandler).toBeTypeOf("function");
-    expect(imageReadyHandler).toBeTypeOf("function");
+    expect(surfaceReadyHandler).toBeTypeOf("function");
 
     act(() => {
       hoverHandler?.({
@@ -343,7 +350,14 @@ describe("ActionBar — auto batch mode", () => {
     Object.defineProperty(previewImage, "height", { value: 400, configurable: true });
 
     act(() => {
-      imageReadyHandler?.(previewImage);
+      surfaceReadyHandler?.({
+        image: previewImage,
+        previewBuffer: {
+          width: 600,
+          height: 400,
+          context: context2d,
+        },
+      });
     });
 
     await act(async () => {
@@ -373,7 +387,7 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    expect(capturedZoomableImageProps?.src).toBe("/api/files/preview-raw.png");
+    expect(capturedCanvasPreviewSurfaceProps?.src).toBe("/api/files/preview-raw.png");
   });
 
   it("refetches layer images when the 2D preview changes within the same session", async () => {

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 /**
  * ColorPreview2D — 2D preview image with click-to-select color/region support.
  * ColorPreview2D — 2D 预览图组件，支持点击选色/选区域。
@@ -11,9 +10,10 @@
 
 import { useRef, useCallback, useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useConverterStore } from '../../stores/converter';
+import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
 import { useI18n } from '../../i18n/context';
-import type { ZoomableImageHoverSample } from '../ui/ZoomableImage';
+import CanvasPreviewSurface from '../ui/CanvasPreviewSurface';
+import type { CanvasPreviewHoverSample } from '../ui/canvasPreviewUtils';
 import PreviewHoverInspector from '../ui/PreviewHoverInspector';
 import {
   HOVER_POPOVER_DELAY_MS,
@@ -25,7 +25,6 @@ import {
   type PreviewCanvasBuffer,
   areHoverSamplesEqual,
   areLayerSamplesEqual,
-  buildPreviewCanvasBuffer,
   clampNumber,
   computeHoverInspectorStyle,
   mapPixelToBufferCoordinate,
@@ -34,54 +33,6 @@ import {
 } from '../ui/previewHoverInspectorUtils';
 import { resolvePreviewHoverPixel } from './actionBarHoverUtils';
 import { readPixelColor } from './colorPreview2DUtils';
-
-/**
- * Convert a click on an <img> with object-contain to image pixel coordinates.
- * 将 object-contain 模式下 <img> 上的点击转换为图像像素坐标。
- *
- * @param event - The mouse event on the image element.
- * @param imgEl - The <img> DOM element.
- * @param naturalW - The intrinsic image width in pixels.
- * @param naturalH - The intrinsic image height in pixels.
- * @returns [pixelX, pixelY] in image space, or null if click is in letterbox padding.
- */
-export function imgClickToPixel(
-  event: React.MouseEvent<HTMLImageElement>,
-  imgEl: HTMLImageElement,
-  naturalW: number,
-  naturalH: number,
-): [number, number] | null {
-  const rect = imgEl.getBoundingClientRect();
-  const clientW = rect.width;
-  const clientH = rect.height;
-
-  if (naturalW <= 0 || naturalH <= 0 || clientW <= 0 || clientH <= 0) {
-    return null;
-  }
-
-  // Compute the rendered image rect within the element (object-contain)
-  const scale = Math.min(clientW / naturalW, clientH / naturalH);
-  const renderedW = naturalW * scale;
-  const renderedH = naturalH * scale;
-  const offsetX = (clientW - renderedW) / 2;
-  const offsetY = (clientH - renderedH) / 2;
-
-  const relX = event.clientX - rect.left - offsetX;
-  const relY = event.clientY - rect.top - offsetY;
-
-  // Click in letterbox padding
-  if (relX < 0 || relX >= renderedW || relY < 0 || relY >= renderedH) {
-    return null;
-  }
-
-  const pixelX = Math.floor((relX / renderedW) * naturalW);
-  const pixelY = Math.floor((relY / renderedH) * naturalH);
-
-  return [
-    Math.max(0, Math.min(naturalW - 1, pixelX)),
-    Math.max(0, Math.min(naturalH - 1, pixelY)),
-  ];
-}
 
 /**
  * Find the closest palette entry to a given hex color.
@@ -140,8 +91,6 @@ export default function ColorPreview2D({
   const hoverInspectorEnabled = showMagnifier || showLayerDetails;
   const { t } = useI18n();
   const previewAltText = t('converter_preview_2d_alt');
-  const containerRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
 
   // Use previewBaseImageUrl for a stable image that only changes on actual
   // content updates (initial preview, color replacement, undo), not on
@@ -178,24 +127,26 @@ export default function ColorPreview2D({
   const regionData = useConverterStore((s) => s.regionData);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
   const sessionId = useConverterStore((s) => s.sessionId);
+  const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const previewWidthMm = useConverterStore((s) => s.preview_width_mm);
   const bedLabel = useConverterStore((s) => s.bed_label);
   const bedSizes = useConverterStore((s) => s.bedSizes);
   const fetchLayerImages = useConverterStore((s) => s.fetchLayerImages);
   const layerImagesLoading = useConverterStore((s) => s.layerImagesLoading);
   const layerImages = useConverterStore((s) => s.layerImages);
+  const layerImagesSourceKey = useConverterStore((s) => s.layerImagesSourceKey);
 
   const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
   const toggleColorInSelection = useConverterStore((s) => s.toggleColorInSelection);
   const detectRegion = useConverterStore((s) => s.detectRegion);
   const detectAndAccumulateRegion = useConverterStore((s) => s.detectAndAccumulateRegion);
 
-  const [hoverSample, setHoverSample] = useState<ZoomableImageHoverSample | null>(null);
+  const [hoverSample, setHoverSample] = useState<CanvasPreviewHoverSample | null>(null);
   const [hoverLayerColors, setHoverLayerColors] = useState<HoverLayerColorSample[]>([]);
   const [hoverSurfaceHex, setHoverSurfaceHex] = useState<string | null>(null);
   const [previewCanvasBuffer, setPreviewCanvasBuffer] = useState<PreviewCanvasBuffer | null>(null);
   const [layerCanvasBuffers, setLayerCanvasBuffers] = useState<LayerCanvasBuffer[]>([]);
-  const pendingHoverSampleRef = useRef<ZoomableImageHoverSample | null>(null);
+  const pendingHoverSampleRef = useRef<CanvasPreviewHoverSample | null>(null);
   const hoverDelayTimerRef = useRef<number | null>(null);
   const hoverResourceReleaseTimerRef = useRef<number | null>(null);
   const magnifierCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -203,100 +154,57 @@ export default function ColorPreview2D({
   const layerSampleCacheRef = useRef<Map<string, HoverLayerColorSample[]>>(new Map());
   const surfaceSampleCacheRef = useRef<Map<string, string | null>>(new Map());
   const needsLayerHoverData = hoverInspectorEnabled && showLayerDetails && hoverSample !== null;
+  const displayPreviewSettled = displayUrl === stableImageUrl;
+  const layerImagesCurrentKey = useMemo(
+    () => buildLayerImagesSourceKey({
+      sessionId,
+      previewGlbUrl,
+      previewBaseImageUrl,
+      previewImageUrl,
+    }),
+    [previewBaseImageUrl, previewGlbUrl, previewImageUrl, sessionId],
+  );
+  const activeLayerImages = useMemo(
+    () => {
+      if (!displayPreviewSettled) {
+        return layerImages;
+      }
+      return layerImagesSourceKey === layerImagesCurrentKey ? layerImages : [];
+    },
+    [displayPreviewSettled, layerImages, layerImagesCurrentKey, layerImagesSourceKey],
+  );
 
-  // --------------- Zoom / Pan state ---------------
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const isPanningRef = useRef(false);
-  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
-  const didDragRef = useRef(false);
-
-  // Track container dimensions for explicit image fitting.
-  // Re-run when displayUrl changes so the observer attaches after the
-  // placeholder is replaced by the main view (containerRef becomes valid).
-  const [cSize, setCSize] = useState({ w: 0, h: 0 });
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      setCSize({ w: width, h: height });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [displayUrl]);
-
-  // Track image natural dimensions
-  const [natSize, setNatSize] = useState({ w: 0, h: 0 });
-  const handleImgLoad = useCallback(() => {
-    const img = imgRef.current;
-    if (!img) return;
-    setNatSize({ w: img.naturalWidth, h: img.naturalHeight });
-    setPreviewCanvasBuffer(buildPreviewCanvasBuffer(img));
+  const handleSurfaceReady = useCallback((payload: { previewBuffer: PreviewCanvasBuffer | null } | null) => {
+    setPreviewCanvasBuffer(payload?.previewBuffer ?? null);
     surfaceSampleCacheRef.current.clear();
   }, []);
 
-  // Compute fitted image dimensions (image scaled to fit container)
-  const fitScale =
-    natSize.w > 0 && natSize.h > 0 && cSize.w > 0 && cSize.h > 0
-      ? Math.min(cSize.w / natSize.w, cSize.h / natSize.h)
-      : 0;
-  const fittedW = natSize.w * fitScale;
-  const fittedH = natSize.h * fitScale;
+  const clearHoverResourceReleaseTimer = useCallback(() => {
+    if (hoverResourceReleaseTimerRef.current !== null) {
+      window.clearTimeout(hoverResourceReleaseTimerRef.current);
+      hoverResourceReleaseTimerRef.current = null;
+    }
+  }, []);
 
-  const mapPointerToHoverSample = useCallback(
-    (clientX: number, clientY: number): ZoomableImageHoverSample | null => {
-      const container = containerRef.current;
-      if (!container || !natSize.w || !natSize.h || !fittedW || !fittedH) {
-        return null;
-      }
+  const scheduleHoverResourceRelease = useCallback(() => {
+    clearHoverResourceReleaseTimer();
+    hoverResourceReleaseTimerRef.current = window.setTimeout(() => {
+      hoverResourceReleaseTimerRef.current = null;
+      setLayerCanvasBuffers((previous) => (previous.length === 0 ? previous : []));
+      layerSampleCacheRef.current.clear();
+      surfaceSampleCacheRef.current.clear();
+    }, HOVER_RESOURCE_RELEASE_DELAY_MS);
+  }, [clearHoverResourceReleaseTimer]);
 
-      const rect = container.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) {
-        return null;
-      }
-
-      const baseOffX = (rect.width - fittedW) / 2;
-      const baseOffY = (rect.height - fittedH) / 2;
-      const relX = clientX - rect.left;
-      const relY = clientY - rect.top;
-      const imageX = (relX - pan.x) / zoom - baseOffX;
-      const imageY = (relY - pan.y) / zoom - baseOffY;
-
-      if (imageX < 0 || imageX >= fittedW || imageY < 0 || imageY >= fittedH) {
-        return null;
-      }
-
-      const pixelX = Math.floor((imageX / fittedW) * natSize.w);
-      const pixelY = Math.floor((imageY / fittedH) * natSize.h);
-
-      return {
-        containerX: Math.round(relX),
-        containerY: Math.round(relY),
-        containerWidth: Math.round(rect.width),
-        containerHeight: Math.round(rect.height),
-        containerLeft: Math.round(rect.left),
-        containerTop: Math.round(rect.top),
-        pixelX: Math.max(0, Math.min(natSize.w - 1, pixelX)),
-        pixelY: Math.max(0, Math.min(natSize.h - 1, pixelY)),
-        naturalWidth: natSize.w,
-        naturalHeight: natSize.h,
-      };
-    },
-    [natSize, fittedW, fittedH, pan, zoom],
-  );
-
-  const handleHoverSample = useCallback((sample: ZoomableImageHoverSample | null) => {
+  const handleHoverSample = useCallback((sample: CanvasPreviewHoverSample | null) => {
     if (!hoverInspectorEnabled) {
       pendingHoverSampleRef.current = null;
       if (hoverDelayTimerRef.current !== null) {
         window.clearTimeout(hoverDelayTimerRef.current);
         hoverDelayTimerRef.current = null;
       }
-      if (hoverResourceReleaseTimerRef.current !== null) {
-        window.clearTimeout(hoverResourceReleaseTimerRef.current);
-        hoverResourceReleaseTimerRef.current = null;
-      }
+      clearHoverResourceReleaseTimer();
       setHoverSample((previous) => (previous === null ? previous : null));
       setHoverLayerColors((previous) => (previous.length === 0 ? previous : []));
       setHoverSurfaceHex((previous) => (previous === null ? previous : null));
@@ -312,19 +220,11 @@ export default function ColorPreview2D({
       window.clearTimeout(hoverDelayTimerRef.current);
       hoverDelayTimerRef.current = null;
     }
-    if (hoverResourceReleaseTimerRef.current !== null) {
-      window.clearTimeout(hoverResourceReleaseTimerRef.current);
-      hoverResourceReleaseTimerRef.current = null;
-    }
+    clearHoverResourceReleaseTimer();
 
     if (sample === null) {
       setHoverSample((previous) => (previous === null ? previous : null));
-      hoverResourceReleaseTimerRef.current = window.setTimeout(() => {
-        hoverResourceReleaseTimerRef.current = null;
-        setLayerCanvasBuffers((previous) => (previous.length === 0 ? previous : []));
-        layerSampleCacheRef.current.clear();
-        surfaceSampleCacheRef.current.clear();
-      }, HOVER_RESOURCE_RELEASE_DELAY_MS);
+      scheduleHoverResourceRelease();
       return;
     }
 
@@ -337,7 +237,11 @@ export default function ColorPreview2D({
       }
       setHoverSample((previous) => (areHoverSamplesEqual(previous, pending) ? previous : pending));
     }, HOVER_POPOVER_DELAY_MS);
-  }, [hoverInspectorEnabled]);
+  }, [clearHoverResourceReleaseTimer, hoverInspectorEnabled, scheduleHoverResourceRelease]);
+
+  const handleCanvasHoverSample = useCallback((sample: CanvasPreviewHoverSample | null) => {
+    handleHoverSample(sample);
+  }, [handleHoverSample]);
 
   useEffect(() => {
     if (!hoverInspectorEnabled) {
@@ -346,10 +250,7 @@ export default function ColorPreview2D({
   }, [handleHoverSample, hoverInspectorEnabled]);
 
   useEffect(() => {
-    if (hoverResourceReleaseTimerRef.current !== null) {
-      window.clearTimeout(hoverResourceReleaseTimerRef.current);
-      hoverResourceReleaseTimerRef.current = null;
-    }
+    clearHoverResourceReleaseTimer();
     setPreviewCanvasBuffer(null);
     setLayerCanvasBuffers([]);
     layerSampleCacheRef.current.clear();
@@ -357,7 +258,7 @@ export default function ColorPreview2D({
     setHoverSample(null);
     setHoverLayerColors([]);
     setHoverSurfaceHex(null);
-  }, [displayUrl]);
+  }, [clearHoverResourceReleaseTimer, displayUrl]);
 
   useEffect(() => {
     return () => {
@@ -365,17 +266,13 @@ export default function ColorPreview2D({
         window.clearTimeout(hoverDelayTimerRef.current);
         hoverDelayTimerRef.current = null;
       }
-      if (hoverResourceReleaseTimerRef.current !== null) {
-        window.clearTimeout(hoverResourceReleaseTimerRef.current);
-        hoverResourceReleaseTimerRef.current = null;
-      }
+      clearHoverResourceReleaseTimer();
     };
-  }, []);
+  }, [clearHoverResourceReleaseTimer]);
 
-  // Reset zoom/pan when the image source changes
+  // Reset zoom when the image source changes
   useEffect(() => {
     setZoom(1);
-    setPan({ x: 0, y: 0 });
   }, [stableImageUrl]);
 
   useEffect(() => {
@@ -384,17 +281,33 @@ export default function ColorPreview2D({
       return;
     }
 
-    if (!needsLayerHoverData || !displayUrl || layerImagesLoading || layerImages.length > 0) {
+    if (
+      !needsLayerHoverData
+      || !displayUrl
+      || !displayPreviewSettled
+      || !layerImagesCurrentKey
+      || layerImagesLoading
+      || activeLayerImages.length > 0
+    ) {
       return;
     }
 
-    if (fetchedLayerSessionRef.current === sessionId) {
+    if (fetchedLayerSessionRef.current === layerImagesCurrentKey) {
       return;
     }
 
-    fetchedLayerSessionRef.current = sessionId;
-    void fetchLayerImages();
-  }, [displayUrl, sessionId, needsLayerHoverData, layerImagesLoading, layerImages.length, fetchLayerImages]);
+    fetchedLayerSessionRef.current = layerImagesCurrentKey;
+    void fetchLayerImages(layerImagesCurrentKey);
+  }, [
+    activeLayerImages.length,
+    displayPreviewSettled,
+    displayUrl,
+    fetchLayerImages,
+    layerImagesCurrentKey,
+    layerImagesLoading,
+    needsLayerHoverData,
+    sessionId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -405,7 +318,7 @@ export default function ColorPreview2D({
       };
     }
 
-    if (layerImages.length === 0) {
+    if (activeLayerImages.length === 0) {
       setLayerCanvasBuffers([]);
       layerSampleCacheRef.current.clear();
       return () => {
@@ -415,7 +328,7 @@ export default function ColorPreview2D({
 
     const buildBuffers = async () => {
       const loaded = await Promise.all(
-        layerImages.map(
+        activeLayerImages.map(
           (layer) =>
             new Promise<LayerCanvasBuffer | null>((resolve) => {
               const image = new Image();
@@ -460,7 +373,7 @@ export default function ColorPreview2D({
     return () => {
       cancelled = true;
     };
-  }, [layerImages, needsLayerHoverData]);
+  }, [activeLayerImages, needsLayerHoverData]);
 
   useEffect(() => {
     if (!hoverInspectorEnabled || !hoverSample) {
@@ -595,127 +508,21 @@ export default function ColorPreview2D({
     context.stroke();
   }, [hoverSample, previewCanvasBuffer, showMagnifier]);
 
-  // Mouse wheel → zoom, centred on cursor
-  const handleWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      handleHoverSample(null);
-      const container = containerRef.current;
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left;
-      const cursorY = e.clientY - rect.top;
-
-      setZoom((prevZoom) => {
-        const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-        const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prevZoom * factor));
-        const scale = newZoom / prevZoom;
-        // Adjust pan so the point under the cursor stays fixed
-        setPan((prev) => ({
-          x: cursorX - scale * (cursorX - prev.x),
-          y: cursorY - scale * (cursorY - prev.y),
-        }));
-        return newZoom;
-      });
-    },
-    [handleHoverSample],
-  );
-
-  // Pan via drag
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      handleHoverSample(null);
-      // Only pan with middle button or when zoom is at exactly 1× (no zoom)
-      if (e.button !== 1 && zoom === 1) return;
-      if (e.button === 2) return; // ignore right-click
-      isPanningRef.current = true;
-      didDragRef.current = false;
-      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    },
-    [zoom, pan, handleHoverSample],
-  );
-
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (isPanningRef.current) {
-        const dx = e.clientX - panStartRef.current.x;
-        const dy = e.clientY - panStartRef.current.y;
-        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDragRef.current = true;
-        setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
-        handleHoverSample(null);
-        return;
-      }
-
-      handleHoverSample(mapPointerToHoverSample(e.clientX, e.clientY));
-    },
-    [handleHoverSample, mapPointerToHoverSample],
-  );
-
-  const handlePointerUp = useCallback(() => {
-    isPanningRef.current = false;
-  }, []);
-
-  const handlePointerLeave = useCallback(() => {
-    isPanningRef.current = false;
-    handleHoverSample(null);
-  }, [handleHoverSample]);
-
-  // Double-click to reset zoom/pan
-  const handleDoubleClick = useCallback(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
-
-  /**
-   * Map a mouse event on the container to raw image pixel coordinates,
-   * accounting for current zoom/pan transform and fit-to-container scaling.
-   */
-  const containerClickToPixel = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>): [number, number] | null => {
-      const container = containerRef.current;
-      if (!container || !natSize.w || !natSize.h || !fittedW || !fittedH) return null;
-
-      const cRect = container.getBoundingClientRect();
-      const cW = cRect.width;
-      const cH = cRect.height;
-      if (cW <= 0 || cH <= 0) return null;
-
-      // Centred offset of the fitted image within the container
-      const baseOffX = (cW - fittedW) / 2;
-      const baseOffY = (cH - fittedH) / 2;
-
-      // Invert CSS transform: translate(pan) scale(zoom) with origin 0 0
-      const relX = e.clientX - cRect.left;
-      const relY = e.clientY - cRect.top;
-      const ix = (relX - pan.x) / zoom - baseOffX;
-      const iy = (relY - pan.y) / zoom - baseOffY;
-      const px = Math.floor((ix / fittedW) * natSize.w);
-      const py = Math.floor((iy / fittedH) * natSize.h);
-
-      if (px < 0 || px >= natSize.w || py < 0 || py >= natSize.h) return null;
-      return [px, py];
-    },
-    [zoom, pan, natSize, fittedW, fittedH],
-  );
-
   const handleClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+    (sample: CanvasPreviewHoverSample) => {
       if (replacePreviewLoading) return;
-      if (didDragRef.current) return; // ignore click after drag
       if (!previewPixelWidth || !previewPixelHeight) return;
 
-      const imgEl = imgRef.current;
-      if (!imgEl) return;
-
-      const pixel = containerClickToPixel(e);
-      if (!pixel) return;
-      const [px, py] = pixel;
+      const { pixelX, pixelY, naturalWidth, naturalHeight } = sample;
 
       switch (selectionMode) {
         case 'select-all': {
-          const rawHex = readPixelColor(imgEl, px, py);
+          const rawHex = readPixelColor(previewCanvasBuffer, {
+            pixelX,
+            pixelY,
+            naturalWidth,
+            naturalHeight,
+          });
           if (!rawHex) return;
           const paletteHex = findClosestPaletteHex(rawHex, palette);
           if (!paletteHex) return;
@@ -730,10 +537,10 @@ export default function ColorPreview2D({
         }
         case 'current':
         case 'region':
-          detectRegion(px, py);
+          detectRegion(pixelX, pixelY);
           break;
         case 'multi-select':
-          detectAndAccumulateRegion(px, py);
+          detectAndAccumulateRegion(pixelX, pixelY);
           break;
       }
     },
@@ -742,9 +549,9 @@ export default function ColorPreview2D({
       previewPixelWidth,
       previewPixelHeight,
       selectionMode,
+      previewCanvasBuffer,
       palette,
       selectedColors,
-      containerClickToPixel,
       toggleColorInSelection,
       setSelectedColor,
       detectRegion,
@@ -817,6 +624,76 @@ export default function ColorPreview2D({
     )
     : null;
 
+  const contourOverlay = svgContours.length > 0 && previewPixelWidth && previewPixelHeight ? (
+    <svg
+      viewBox={`0 0 ${previewPixelWidth} ${previewPixelHeight}`}
+      className="pointer-events-none absolute inset-0 h-full w-full"
+      style={{ zIndex: 5 }}
+    >
+      {svgContours.map(({ hex, polygons }, ti) =>
+        polygons.map((polygon, pi) => {
+          if (polygon.length < 3) return null;
+          const previewWidthMmState = useConverterStore.getState().preview_width_mm;
+          if (!previewWidthMmState || previewWidthMmState <= 0) return null;
+          const pixelScale = previewWidthMmState / previewPixelWidth;
+
+          const points = polygon
+            .map(([xMm, yMm]) => {
+              const px = xMm / pixelScale;
+              const py = previewPixelHeight - yMm / pixelScale;
+              return `${px},${py}`;
+            })
+            .join(' ');
+
+          return (
+            <polygon
+              key={`${hex}-${ti}-${pi}`}
+              points={points}
+              fill="none"
+              stroke="#00ffff"
+              strokeWidth={Math.max(1, previewPixelWidth / 500)}
+              strokeLinejoin="round"
+              opacity={0.85}
+            />
+          );
+        }),
+      )}
+    </svg>
+  ) : null;
+
+  const floatingOverlay = (
+    <>
+      {replacePreviewLoading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/40">
+          <p className="text-xs text-slate-100">{t('lut_grid_loading')}</p>
+        </div>
+      )}
+
+      <div
+        className="pointer-events-none absolute inset-0 z-20 border-2"
+        style={{ borderColor: 'var(--info-border)' }}
+        aria-hidden="true"
+      >
+        <div
+          className="absolute right-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold"
+          style={{
+            borderColor: 'var(--info-border)',
+            background: 'var(--info-soft)',
+            color: 'var(--surface-text-muted)',
+          }}
+        >
+          {t('preview_debug_main_2d')}
+        </div>
+      </div>
+
+      {zoom !== 1 && (
+        <div className="absolute left-2 top-2 z-20 rounded-full bg-slate-900/60 px-2 py-0.5 text-[10px] text-slate-100 backdrop-blur-sm">
+          {Math.round(zoom * 100)}%
+        </div>
+      )}
+    </>
+  );
+
 
   if (!displayUrl) {
     return (
@@ -835,127 +712,26 @@ export default function ColorPreview2D({
 
   return (
     <>
-      <div
-        ref={containerRef}
-        data-testid="color-preview-2d-container"
-        className="relative h-full w-full overflow-hidden bg-slate-200/60 dark:bg-slate-900/60"
-        style={{ cursor: zoom > 1 ? 'grab' : 'crosshair' }}
-        onWheel={handleWheel}
-        onClick={handleClick}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerLeave}
-        onDoubleClick={handleDoubleClick}
-      >
-        {replacePreviewLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/40">
-            <p className="text-xs text-slate-100">{t('lut_grid_loading')}</p>
-          </div>
-        )}
-
-        <div
-          className="pointer-events-none absolute inset-0 z-20 border-2"
-          style={{ borderColor: 'var(--info-border)' }}
-          aria-hidden="true"
-        >
-          <div
-            className="absolute right-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold"
-            style={{
-              borderColor: 'var(--info-border)',
-              background: 'var(--info-soft)',
-              color: 'var(--surface-text-muted)',
-            }}
-          >
-            {t('preview_debug_main_2d')}
-          </div>
-        </div>
-
-        {/* Zoom indicator */}
-        {zoom !== 1 && (
-          <div className="absolute left-2 top-2 z-20 rounded-full bg-slate-900/60 px-2 py-0.5 text-[10px] text-slate-100 backdrop-blur-sm">
-            {Math.round(zoom * 100)}%
-          </div>
-        )}
-
-      {/* Inner wrapper — positioned by zoom/pan transform */}
-      <div
-        className="absolute inset-0 flex items-center justify-center"
-        style={{
-          transformOrigin: '0 0',
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          pointerEvents: 'none',
-        }}
-      >
-        {/* Image + SVG wrapper — explicitly sized to fitted image dimensions
-            so SVG overlay shares the exact same bounding box as the image */}
-        {fittedW > 0 && fittedH > 0 && (
-          <div className="relative" style={{ width: fittedW, height: fittedH }}>
-            <img
-              ref={imgRef}
-              src={displayUrl ?? undefined}
-              alt={previewAltText}
-              crossOrigin="anonymous"
-              onLoad={handleImgLoad}
-              className="block h-full w-full"
-              style={replacePreviewLoading ? { opacity: 0.6 } : undefined}
-              draggable={false}
-            />
-
-            {/* SVG contour overlays — raw pixel coordinate space */}
-            {svgContours.length > 0 && previewPixelWidth && previewPixelHeight && (
-              <svg
-                viewBox={`0 0 ${previewPixelWidth} ${previewPixelHeight}`}
-                className="pointer-events-none absolute inset-0 h-full w-full"
-                style={{ zIndex: 5 }}
-              >
-                {svgContours.map(({ hex, polygons }, ti) =>
-                  polygons.map((polygon, pi) => {
-                    if (polygon.length < 3) return null;
-                    const previewWidthMm = useConverterStore.getState().preview_width_mm;
-                    if (!previewWidthMm || previewWidthMm <= 0) return null;
-                    const pixelScale = previewWidthMm / previewPixelWidth;
-
-                    const points = polygon
-                      .map(([xMm, yMm]) => {
-                        const px = xMm / pixelScale;
-                        const py = previewPixelHeight - yMm / pixelScale;
-                        return `${px},${py}`;
-                      })
-                      .join(' ');
-
-                    return (
-                      <polygon
-                        key={`${hex}-${ti}-${pi}`}
-                        points={points}
-                        fill="none"
-                        stroke="#00ffff"
-                        strokeWidth={Math.max(1, previewPixelWidth / 500)}
-                        strokeLinejoin="round"
-                        opacity={0.85}
-                      />
-                    );
-                  }),
-                )}
-              </svg>
-            )}
-          </div>
-        )}
-
-        {/* Fallback: show image while computing fit dimensions */}
-        {(fittedW <= 0 || fittedH <= 0) && (
-          <img
-            ref={imgRef}
-            src={displayUrl ?? undefined}
-            alt={previewAltText}
-            crossOrigin="anonymous"
-            onLoad={handleImgLoad}
-            className="max-h-full max-w-full"
-            draggable={false}
-          />
-        )}
-      </div>
-      </div>
+      <CanvasPreviewSurface
+        src={displayUrl}
+        alt={previewAltText}
+        dataTestId="color-preview-2d-container"
+        className="h-full w-full bg-slate-200/60 dark:bg-slate-900/60"
+        surfaceClassName={zoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}
+        renderingQuality="crisp"
+        overlay={contourOverlay}
+        floatingOverlay={floatingOverlay}
+        interactionsDisabled={replacePreviewLoading}
+        minScale={MIN_ZOOM}
+        maxScale={MAX_ZOOM}
+        wheelZoomStepMultiplier={ZOOM_STEP}
+        resetOnDoubleClick
+        onHoverSample={handleCanvasHoverSample}
+        onClickSample={handleClick}
+        onSurfaceReady={handleSurfaceReady}
+        onScaleChange={setZoom}
+        canStartDrag={(event, context) => event.button !== 2 && (event.button === 1 || context.scale > 1)}
+      />
       {hoverInspectorOverlay}
     </>
   );

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import type * as THREE from "three";
-import { buildLayerImagesSourceKey, useConverterStore } from "../stores/converter";
+import { useConverterStore } from "../stores/converter";
 
 // Mock i18n — return key as-is
 vi.mock("../i18n/context", () => ({
@@ -11,7 +11,6 @@ vi.mock("../i18n/context", () => ({
 // Mock child components that live inside Canvas (R3F components)
 vi.mock("../components/ModelViewer", () => ({ default: () => null }));
 let capturedInteractiveViewerProps: Record<string, unknown> | null = null;
-let capturedOrbitControlsProps: Record<string, unknown> | null = null;
 vi.mock("../components/InteractiveModelViewer", () => ({
   default: (props: Record<string, unknown>) => {
     capturedInteractiveViewerProps = props;
@@ -34,10 +33,7 @@ vi.mock("../components/FridgeMagnet3D", () => ({
 // Mock @react-three/drei — Environment renders a queryable DOM element
 // Boolean false is dropped by React DOM, so we explicitly map props to data-* attributes
 vi.mock("@react-three/drei", () => ({
-  OrbitControls: (props: Record<string, unknown>) => {
-    capturedOrbitControlsProps = props;
-    return null;
-  },
+  OrbitControls: () => null,
   Environment: (props: Record<string, unknown>) => (
     <div
       data-testid="mock-environment"
@@ -105,10 +101,9 @@ vi.mock("@react-three/fiber", () => ({
 import Scene3D from "../components/Scene3D";
 
 describe("Scene3D", () => {
-  beforeEach(() => {
+beforeEach(() => {
     capturedCanvasProps = {};
     capturedInteractiveViewerProps = null;
-    capturedOrbitControlsProps = null;
     capturedFridgeMagnet3DProps = null;
     // Reset store to defaults
       useConverterStore.setState({
@@ -257,57 +252,6 @@ describe("Scene3D", () => {
     });
   });
 
-  describe("hover inspector", () => {
-    it("shows hover inspector when InteractiveModelViewer reports hover and hides on pointer missed", () => {
-      vi.useFakeTimers();
-
-      useConverterStore.setState({
-        previewGlbUrl: "/api/files/mock-preview.glb",
-        colorRemapMap: { ff0000: "00ff00" },
-      });
-
-      render(<Scene3D />);
-
-      const hoverHandler = capturedInteractiveViewerProps?.onHoverSample as
-        | ((sample: {
-          canvasX: number;
-          canvasY: number;
-          pixelX: number;
-          pixelY: number;
-          hitColorHex: string;
-        }) => void)
-        | undefined;
-
-      expect(hoverHandler).toBeTypeOf("function");
-      expect(screen.queryByTestId("viewer-hover-inspector")).not.toBeInTheDocument();
-
-      act(() => {
-        hoverHandler?.({
-          canvasX: 24,
-          canvasY: 36,
-          pixelX: 10,
-          pixelY: 20,
-          hitColorHex: "ff0000",
-        });
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(220);
-      });
-
-      expect(screen.getByTestId("viewer-hover-inspector")).toBeInTheDocument();
-      expect(screen.getByText("(10, 20)")).toBeInTheDocument();
-      expect(screen.getByText("#00FF00")).toBeInTheDocument();
-
-      act(() => {
-        (capturedCanvasProps.onPointerMissed as () => void)();
-      });
-
-      expect(screen.queryByTestId("viewer-hover-inspector")).not.toBeInTheDocument();
-      vi.useRealTimers();
-    });
-  });
-
   describe("puzzle overlay wiring", () => {
     it("passes the live puzzle overlay into InteractiveModelViewer", () => {
       useConverterStore.setState({
@@ -324,7 +268,7 @@ describe("Scene3D", () => {
       );
     });
 
-    it("disables hover sampling while orbit controls are dragging", () => {
+    it("does not wire hover sampling props into InteractiveModelViewer", () => {
       useConverterStore.setState({
         previewGlbUrl: "/api/files/mock-preview.glb",
         puzzleEnabled: true,
@@ -333,67 +277,10 @@ describe("Scene3D", () => {
 
       render(<Scene3D />);
 
-      expect(capturedInteractiveViewerProps?.hoverEnabled).toBe(true);
-
-      act(() => {
-        (capturedOrbitControlsProps?.onStart as (() => void) | undefined)?.();
-      });
-
-      expect(capturedInteractiveViewerProps?.hoverEnabled).toBe(false);
-
-      act(() => {
-        (capturedOrbitControlsProps?.onEnd as (() => void) | undefined)?.();
-      });
-
-      expect(capturedInteractiveViewerProps?.hoverEnabled).toBe(true);
+      expect(capturedInteractiveViewerProps?.onHoverSample).toBeUndefined();
+      expect(capturedInteractiveViewerProps?.hoverEnabled).toBeUndefined();
     });
 
-    it("refreshes layer images when the preview GLB changes within the same session", async () => {
-      const fetchLayerImages = vi.fn();
-      const resetLayerImages = vi.fn(() =>
-        useConverterStore.setState({
-          layerImages: [],
-          layerImagesLoading: false,
-          layerImagesOpen: false,
-          layerImagesSourceKey: null,
-        }),
-      );
-
-      useConverterStore.setState({
-        sessionId: "session-a",
-        previewGlbUrl: "/api/files/mock-preview-a.glb",
-        previewImageUrl: "/api/files/mock-preview-a.png",
-        previewBaseImageUrl: "/api/files/mock-preview-a.png",
-        layerImages: [{ layer_index: 0, name: "Layer 1", url: "/api/files/layer-a" }],
-        layerImagesLoading: false,
-        layerImagesOpen: true,
-        fetchLayerImages,
-        resetLayerImages,
-      });
-      useConverterStore.setState({
-        layerImagesSourceKey: buildLayerImagesSourceKey(useConverterStore.getState()),
-      });
-
-      render(<Scene3D />);
-
-      expect(fetchLayerImages).not.toHaveBeenCalled();
-      expect(resetLayerImages).not.toHaveBeenCalled();
-
-      act(() => {
-        useConverterStore.setState({
-          previewGlbUrl: "/api/files/mock-preview-b.glb",
-          previewImageUrl: "/api/files/mock-preview-b.png",
-          previewBaseImageUrl: "/api/files/mock-preview-b.png",
-        });
-      });
-
-      await waitFor(() => {
-        expect(resetLayerImages).toHaveBeenCalledTimes(1);
-        expect(fetchLayerImages).toHaveBeenCalledWith(
-          buildLayerImagesSourceKey(useConverterStore.getState()),
-        );
-      });
-    });
   });
 
   describe("fridge magnet proxy wiring", () => {

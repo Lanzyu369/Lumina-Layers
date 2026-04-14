@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
 import BatchResultSummary from "../ui/BatchResultSummary"
-import ZoomableImage, { type ZoomableImageHoverSample } from "../ui/ZoomableImage"
+import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../ui/CanvasPreviewSurface"
 import PreviewHoverInspector from "../ui/PreviewHoverInspector"
 import {
   HOVER_POPOVER_DELAY_MS,
@@ -15,13 +15,13 @@ import {
   type PreviewCanvasBuffer,
   areHoverSamplesEqual,
   areLayerSamplesEqual,
-  buildPreviewCanvasBuffer,
   clampNumber,
   computeHoverInspectorStyle,
   mapPixelToBufferCoordinate,
   rgbToHex,
   setBoundedCacheValue,
 } from "../ui/previewHoverInspectorUtils"
+import type { CanvasPreviewHoverSample } from "../ui/canvasPreviewUtils"
 import BedSizeSelector from "./BedSizeSelector"
 import SlicerSelector from "./SlicerSelector"
 import WikiTooltip from "../ui/WikiTooltip"
@@ -38,12 +38,12 @@ export default function ActionBar() {
   const { t } = useI18n()
   const workspace = useWorkspaceMode()
   const [zoomedLayerIdx, setZoomedLayerIdx] = useState<number | null>(null)
-  const [hoverSample, setHoverSample] = useState<ZoomableImageHoverSample | null>(null)
+  const [hoverSample, setHoverSample] = useState<CanvasPreviewHoverSample | null>(null)
   const [hoverLayerColors, setHoverLayerColors] = useState<HoverLayerColorSample[]>([])
   const [hoverSurfaceHex, setHoverSurfaceHex] = useState<string | null>(null)
   const [previewCanvasBuffer, setPreviewCanvasBuffer] = useState<PreviewCanvasBuffer | null>(null)
   const [layerCanvasBuffers, setLayerCanvasBuffers] = useState<LayerCanvasBuffer[]>([])
-  const pendingHoverSampleRef = useRef<ZoomableImageHoverSample | null>(null)
+  const pendingHoverSampleRef = useRef<CanvasPreviewHoverSample | null>(null)
   const hoverDelayTimerRef = useRef<number | null>(null)
   const hoverResourceReleaseTimerRef = useRef<number | null>(null)
   const magnifierCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -249,15 +249,8 @@ export default function ActionBar() {
     </div>
   ), [t])
 
-  const handlePreviewImageReady = useCallback((image: HTMLImageElement | null) => {
-    if (!image) {
-      setPreviewCanvasBuffer(null)
-      surfaceSampleCacheRef.current.clear()
-      return
-    }
-
-    const buffer = buildPreviewCanvasBuffer(image)
-    setPreviewCanvasBuffer(buffer)
+  const handlePreviewSurfaceReady = useCallback((payload: CanvasPreviewSurfaceReadyPayload | null) => {
+    setPreviewCanvasBuffer(payload?.previewBuffer ?? null)
     surfaceSampleCacheRef.current.clear()
   }, [])
 
@@ -579,7 +572,7 @@ export default function ActionBar() {
     context.stroke()
   }, [hoverSample, previewCanvasBuffer])
 
-  const handlePreviewHoverSample = useCallback((sample: ZoomableImageHoverSample | null) => {
+  const handlePreviewHoverSample = useCallback((sample: CanvasPreviewHoverSample | null) => {
     pendingHoverSampleRef.current = sample
 
     if (hoverDelayTimerRef.current !== null) {
@@ -636,6 +629,17 @@ export default function ActionBar() {
   const hoverInspectorOverlay = hoverInspectorContent && typeof document !== "undefined"
     ? createPortal(hoverInspectorContent, document.body)
     : null
+  const previewAspectRatio = (
+    previewPixelWidth && previewPixelWidth > 0 && previewPixelHeight && previewPixelHeight > 0
+  )
+    ? `${previewPixelWidth} / ${previewPixelHeight}`
+    : undefined
+  const previewSurfaceClassName = workspace.isCompact ? "min-h-[12rem]" : "min-h-[16rem]"
+  const previewSurfaceOverlay = previewOverlay ? (
+    <div className="absolute inset-0">
+      {previewOverlay}
+    </div>
+  ) : null
 
   return (
     <div className="flex flex-col gap-3">
@@ -751,15 +755,22 @@ export default function ActionBar() {
       <BedSizeSelector />
 
       {previewDisplayUrl && (
-        <ZoomableImage
-          src={previewDisplayUrl}
-          alt={t("action_preview_alt")}
-          className="w-full rounded-[22px] border border-gray-300 dark:border-gray-700"
-          overlay={previewOverlay}
-          floatingOverlay={previewDebugOverlay}
-          onHoverSample={handlePreviewHoverSample}
-          onImageReady={handlePreviewImageReady}
-        />
+        <div
+          className={`w-full overflow-hidden rounded-[22px] border border-gray-300 dark:border-gray-700 ${previewSurfaceClassName}`}
+          style={previewAspectRatio ? { aspectRatio: previewAspectRatio } : undefined}
+        >
+          <CanvasPreviewSurface
+            src={previewDisplayUrl}
+            alt={t("action_preview_alt")}
+            className="h-full w-full"
+            surfaceClassName="cursor-grab active:cursor-grabbing"
+            overlay={previewSurfaceOverlay}
+            floatingOverlay={previewDebugOverlay}
+            resetLabel={t("zoom_reset")}
+            onHoverSample={handlePreviewHoverSample}
+            onSurfaceReady={handlePreviewSurfaceReady}
+          />
+        </div>
       )}
       {hoverInspectorOverlay}
 

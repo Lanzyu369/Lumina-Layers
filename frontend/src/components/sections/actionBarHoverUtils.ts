@@ -1,4 +1,4 @@
-import type { ZoomableImageHoverSample } from "../ui/ZoomableImage"
+import type { CanvasPreviewHoverSample } from "../ui/canvasPreviewUtils"
 
 const BED_TARGET_CANVAS_PX = 1200
 const BED_MARGIN_MM = 10
@@ -29,7 +29,7 @@ function getBedSizeMm(
 }
 
 export function resolvePreviewHoverPixel(
-  sample: Pick<ZoomableImageHoverSample, "pixelX" | "pixelY" | "naturalWidth" | "naturalHeight">,
+  sample: Pick<CanvasPreviewHoverSample, "pixelX" | "pixelY" | "naturalWidth" | "naturalHeight">,
   options: {
     rawWidth: number | null
     rawHeight: number | null
