@@ -12,19 +12,21 @@ export async function extractColors(
     corner_points: Array<[number, number]>;
     color_mode: string;
     page: string;
+    eight_color_full_export: boolean;
     offset_x: number;
     offset_y: number;
     zoom: number;
     distortion: number;
     vignette_correction: boolean;
     auto_wb: boolean;
-  }
+  },
 ): Promise<ExtractResponse> {
   const fd = new FormData();
   fd.append("image", image);
   fd.append("corner_points", JSON.stringify(params.corner_points));
   fd.append("color_mode", params.color_mode);
   fd.append("page", params.page);
+  fd.append("eight_color_full_export", String(params.eight_color_full_export));
   fd.append("offset_x", String(params.offset_x));
   fd.append("offset_y", String(params.offset_y));
   fd.append("zoom", String(params.zoom));
@@ -35,7 +37,7 @@ export async function extractColors(
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/extract",
     fd,
-    { timeout: 600_000 }
+    { timeout: 600_000 },
   );
   return response.data;
 }
@@ -44,21 +46,27 @@ export async function extractColors(
 export async function manualFixCell(
   sessionId: string,
   cellCoord: [number, number],
-  overrideColor: string
+  overrideColor: string,
 ): Promise<ManualFixResponse> {
   const response = await apiClient.post<ManualFixResponse>(
     "/extractor/manual-fix",
-    { session_id: sessionId, cell_coord: cellCoord, override_color: overrideColor }
+    {
+      session_id: sessionId,
+      cell_coord: cellCoord,
+      override_color: overrideColor,
+    },
   );
   return response.data;
 }
 
-/** 合并 8 色双页 LUT */
-export async function mergeEightColor(): Promise<ExtractResponse> {
+/** 合并 8 色分页 LUT */
+export async function mergeEightColor(
+  eightColorFullExport: boolean,
+): Promise<ExtractResponse> {
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/merge-8color",
-    {},
-    { timeout: 600_000 }
+    { eight_color_full_export: eightColorFullExport },
+    { timeout: 600_000 },
   );
   return response.data;
 }
@@ -68,7 +76,7 @@ export async function mergeFiveColorExtended(): Promise<ExtractResponse> {
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/merge-5color-extended",
     {},
-    { timeout: 600_000 }
+    { timeout: 600_000 },
   );
   return response.data;
 }
@@ -105,11 +113,11 @@ export async function rotateExtractorImage(
 
 /** 确认调色板 */
 export async function confirmPalette(
-  payload: ConfirmPaletteRequest
+  payload: ConfirmPaletteRequest,
 ): Promise<{ status: string; message: string }> {
   const response = await apiClient.post<{ status: string; message: string }>(
     "/extractor/confirm-palette",
-    payload
+    payload,
   );
   return response.data;
 }

@@ -6,8 +6,10 @@ Generates calibration boards for physical color testing.
 
 from __future__ import annotations
 
+import json
 import os
 import logging
+import math
 from typing import Optional
 import itertools
 import zipfile
@@ -44,6 +46,10 @@ CALIBRATION_HANDLED_ERRORS = (
     OSError,
     RuntimeError,
 )
+EIGHT_COLOR_PAGE_CAPACITY = 1369
+EIGHT_COLOR_DATA_DIM = 37
+EIGHT_COLOR_PADDING = 1
+EIGHT_COLOR_TOTAL_DIM = 39
 
 
 def _generate_voxel_mesh(
@@ -539,96 +545,133 @@ def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8):
     )
 
 
-def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8):
-    """Generate 8-color calibration board page as 3MF.
-    生成 8 色校准板单页 3MF 模型。
+def _load_selected_8color_stacks() -> np.ndarray:
+    path = get_asset_path("smart_8color_stacks.npy")
+    all_stacks = np.load(path)
+    _log.info(f"[8COLOR] Loaded {len(all_stacks)} stacks from {path}")
+    all_stacks = np.array([s[::-1] for s in all_stacks])
+    surface_black = sum(1 for s in all_stacks if s[0] == 5)
+    _log.info(
+        f"[8COLOR] Surface black: {surface_black}/{len(all_stacks)} ({surface_black/len(all_stacks)*100:.2f}%)"
+    )
+    return all_stacks
 
-    Args:
-        page_index (int): Page index (0 or 1). (页码索引，0 或 1)
-        block_size_mm (float): Size of each color block in mm. (色块边长，单位 mm)
-        gap_mm (float): Gap between blocks in mm. (色块间距，单位 mm)
 
-    Returns:
-        tuple: (output_path, preview_image, status_message).
-               (输出路径, 预览图像, 状态消息)
-    """
-    # 1. Load Data
-    try:
-        path = get_asset_path("smart_8color_stacks.npy")
-        all_stacks = np.load(path)
-        _log.info(f"[8COLOR] Loaded {len(all_stacks)} stacks from {path}")
+def _build_exhaustive_8color_stacks() -> np.ndarray:
+    return np.array(list(itertools.product(range(8), repeat=5)), dtype=int)
 
-        # 约定转换：smart_8color_stacks.npy 存储底到顶约定 (stack[0]=背面，stack[4]=观赏面)
-        # 转换为顶到底约定 (stack[0]=观赏面，stack[4]=背面)，与 4 色模式统一
-        all_stacks = np.array([s[::-1] for s in all_stacks])
 
-        # Debug: Check surface black count (转换后 stack[0] 为观赏面)
-        surface_black = sum(1 for s in all_stacks if s[0] == 5)
-        _log.info(
-            f"[8COLOR] Surface black: {surface_black}/{len(all_stacks)} ({surface_black/len(all_stacks)*100:.2f}%)"
-        )
-    except CALIBRATION_HANDLED_ERRORS as e:
-        _log.info(f"[8COLOR] Error loading data: {e}")
-        return None, None, "[ERROR] Data not found. Run analyze_colors.py first."
+def _build_8color_preview_rgb(stacks: np.ndarray, preview_colors: dict[int, list[int]]) -> np.ndarray:
+    rgb = []
+    for stack in stacks:
+        stack_rgb = np.array([preview_colors[int(mid)][:3] for mid in stack], dtype=np.float64)
+        rgb.append(np.round(stack_rgb.mean(axis=0)).astype(np.uint8))
+    if not rgb:
+        return np.zeros((0, 3), dtype=np.uint8)
+    return np.array(rgb, dtype=np.uint8)
 
-    # 2. Slice Data (1369 per page for 37x37)
-    per_page = 1369
-    start = page_index * per_page
-    stacks = all_stacks[start : start + per_page]
 
-    # 3. Layout: 37x37 Data + 1 Padding = 39x39 Physical
-    data_dim, padding = 37, 1
-    total_dim = 39
+def _save_8color_recipe_json(
+    out_path: str,
+    stacks: np.ndarray,
+    color_mode: str,
+    slot_names: list[str],
+    preview_colors: dict[int, list[int]],
+    page_index: int,
+    total_pages: int,
+    export_variant: str,
+) -> str:
+    from config import LUTMetadata, PaletteEntry
+    from utils.lut_manager import LUTManager
 
-    # Calculate Voxels
+    json_path = os.path.splitext(out_path)[0] + ".json"
+    palette = []
+    for idx, name in enumerate(slot_names):
+        rgba = preview_colors.get(idx)
+        hex_color = None
+        if rgba is not None:
+            hex_color = f"#{rgba[0]:02X}{rgba[1]:02X}{rgba[2]:02X}"
+        palette.append(PaletteEntry(color=name, material="PLA Basic", hex_color=hex_color, color_name=name))
+    metadata = LUTMetadata(
+        palette=palette,
+        manufacturer="Lumina Studio",
+        type=f"Calibration {export_variant} Page {page_index + 1}/{total_pages}",
+        color_mode=color_mode,
+        max_color_layers=PrinterConfig.COLOR_LAYERS,
+        layer_height_mm=PrinterConfig.LAYER_HEIGHT,
+        line_width_mm=PrinterConfig.NOZZLE_WIDTH,
+        base_layers=int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT),
+        base_channel_idx=0,
+        layer_order="Top2Bottom",
+    )
+    rgb = _build_8color_preview_rgb(stacks, preview_colors)
+    LUTManager.save_keyed_json(json_path, rgb, stacks.astype(np.int32), metadata)
+    payload = None
+    with open(json_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["page_index"] = page_index + 1
+    payload["total_pages"] = total_pages
+    payload["export_variant"] = export_variant
+    payload["data_grid"] = {
+        "rows": EIGHT_COLOR_DATA_DIM,
+        "cols": EIGHT_COLOR_DATA_DIM,
+        "padding": EIGHT_COLOR_PADDING,
+        "physical_rows": EIGHT_COLOR_TOTAL_DIM,
+        "physical_cols": EIGHT_COLOR_TOTAL_DIM,
+    }
+    for idx, entry in enumerate(payload.get("entries", [])):
+        entry["page_recipe_index"] = idx
+        entry["data_row"] = idx // EIGHT_COLOR_DATA_DIM
+        entry["data_col"] = idx % EIGHT_COLOR_DATA_DIM
+        entry["physical_row"] = entry["data_row"] + EIGHT_COLOR_PADDING
+        entry["physical_col"] = entry["data_col"] + EIGHT_COLOR_PADDING
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=4)
+    return json_path
+
+
+def _generate_8color_board_artifacts(
+    stacks: np.ndarray,
+    page_index: int,
+    total_pages: int,
+    block_size_mm: float,
+    gap_mm: float,
+    calibration_type: str,
+    export_variant: str,
+):
     px_blk = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
     px_gap = max(1, int(gap_mm / PrinterConfig.NOZZLE_WIDTH))
-    v_w = total_dim * (px_blk + px_gap)
-
+    v_w = EIGHT_COLOR_TOTAL_DIM * (px_blk + px_gap)
     full_matrix = np.full((5 + int(PrinterConfig.BACKING_MM / 0.08), v_w, v_w), 0, dtype=int)
-
-    # 4. Fill Data
     for i, stack in enumerate(stacks):
-        r, c = (i // data_dim) + padding, (i % data_dim) + padding
-        py, px = r * (px_blk + px_gap), c * (px_blk + px_gap)
-
-        # Debug first few stacks
-        if i < 3:
-            _log.info(f"[8COLOR] Stack {i} (顶到底): {stack}")
-
-        # 直接写入，与 4 色模式一致（已在加载时完成约定转换）
-        # stack[0] = 观赏面 -> Z=0 (物理第 1 层，观赏面)
-        # stack[4] = 背面   -> Z=4 (物理第 5 层)
+        r = (i // EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
+        c = (i % EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
+        py = r * (px_blk + px_gap)
+        px = c * (px_blk + px_gap)
         for z, mid in enumerate(stack):
             full_matrix[z, py : py + px_blk, px : px + px_blk] = mid
-
-    # 5. Set Corner Markers (Crucial for Page ID)
-    # Page 1 TR = Cyan(1), Page 2 TR = Magenta(2)
-    page_mark = 1 if page_index == 0 else 2
-
-    # 8 色材料 ID: 0=White, 1=Cyan, 2=Magenta, 3=Yellow, 4=Black, 5=Red, 6=DeepBlue, 7=Green
+    page_mark = 1 if page_index % 2 == 0 else 2
     corners = [
-        (0, 0, 0),  # TL: White (ID=0)
-        (0, total_dim - 1, page_mark),  # TR: Page ID (Cyan=1 or Magenta=2)
-        (total_dim - 1, total_dim - 1, 5),  # BR: Red (ID=5) - TODO: Should be Black(4)?
-        (total_dim - 1, 0, 4),  # BL: Black (ID=4) - TODO: Should be Yellow(3)?
+        (0, 0, 0),
+        (0, EIGHT_COLOR_TOTAL_DIM - 1, page_mark),
+        (EIGHT_COLOR_TOTAL_DIM - 1, EIGHT_COLOR_TOTAL_DIM - 1, 5),
+        (EIGHT_COLOR_TOTAL_DIM - 1, 0, 4),
     ]
     for r, c, mid in corners:
-        py, px = r * (px_blk + px_gap), c * (px_blk + px_gap)
+        py = r * (px_blk + px_gap)
+        px = c * (px_blk + px_gap)
         for z in range(5):
             full_matrix[z, py : py + px_blk, px : px + px_blk] = mid
-
-    # 6. Export 3MF & Preview
     scene = _get_trimesh().Scene()
     conf = ColorSystem.EIGHT_COLOR
     for mid in range(8):
-        m = _generate_voxel_mesh(full_matrix, mid, v_w, v_w)
-        if m:
-            m.visual.face_colors = conf["preview"][mid]
-            m.metadata["name"] = conf["slots"][mid]
-            scene.add_geometry(m, geom_name=conf["slots"][mid])
-
-    out_name = generate_calibration_filename("8-Color", f"Page{page_index+1}")
+        mesh = _generate_voxel_mesh(full_matrix, mid, v_w, v_w)
+        if mesh:
+            mesh.visual.face_colors = conf["preview"][mid]
+            mesh.metadata["name"] = conf["slots"][mid]
+            scene.add_geometry(mesh, geom_name=conf["slots"][mid])
+    page_name = f"{page_index + 1}号"
+    out_name = f"{page_name}.3mf"
     out_path = os.path.join(MODELS_DIR, out_name)
     export_scene_with_bambu_metadata(
         scene=scene,
@@ -646,35 +689,97 @@ def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_m
         },
         color_mode="8-Color",
     )
-
-    # Simple preview generation
     prev = np.zeros((v_w, v_w, 3), dtype=np.uint8)
     for mid, col in conf["preview"].items():
         prev[full_matrix[0] == mid] = col[:3]
+    json_path = _save_8color_recipe_json(
+        out_path=out_path,
+        stacks=stacks,
+        color_mode="8-Color Max",
+        slot_names=list(conf["map"].keys()),
+        preview_colors=conf["preview"],
+        page_index=page_index,
+        total_pages=total_pages,
+        export_variant=export_variant,
+    )
+    return out_path, json_path, Image.fromarray(prev)
 
-    # Debug: Check what's on the first layer
-    unique, counts = np.unique(full_matrix[0], return_counts=True)
-    material_stats = dict(zip(unique, counts))
-    _log.info(f"[8COLOR] First layer (Z=0) materials: {material_stats}")
 
-    # Calculate actual color blocks (not pixels)
-    total_pixels = v_w * v_w
-    block_pixels = px_blk * px_blk
-    _log.info(f"[8COLOR] Pixel stats:")
-    _log.info(f"  Total pixels: {total_pixels}")
-    _log.info(f"  Pixels per block: {block_pixels}")
-    for mid, pixel_count in material_stats.items():
-        block_count = pixel_count / block_pixels
-        percentage = pixel_count / total_pixels * 100
-        mat_name = conf["slots"][mid] if mid < len(conf["slots"]) else f"Material{mid}"
-        _log.info(f"  {mat_name} (ID={mid}): {pixel_count} pixels = ~{block_count:.1f} blocks ({percentage:.1f}%)")
+def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
+    """Generate the exhaustive 8-color calibration set as a multi-page ZIP.
+    将全量 8 色校准配方导出为多页 ZIP。
 
-    return out_path, Image.fromarray(prev), "OK"
+    Args:
+        block_size_mm (float): Size of each color block in mm. (色块边长，单位 mm)
+        gap_mm (float): Gap between adjacent blocks in mm. (色块间距，单位 mm)
+
+    Returns:
+        tuple: (zip_path, preview_image, status_message).
+               (ZIP 路径、预览图、状态信息)
+    """
+    all_stacks = _build_exhaustive_8color_stacks()
+    total_pages = int(math.ceil(len(all_stacks) / EIGHT_COLOR_PAGE_CAPACITY))
+    artifacts = []
+    preview = None
+    for page_index in range(total_pages):
+        start = page_index * EIGHT_COLOR_PAGE_CAPACITY
+        page_stacks = all_stacks[start : start + EIGHT_COLOR_PAGE_CAPACITY]
+        calibration_type = f"{page_index + 1}号"
+        out_path, json_path, page_preview = _generate_8color_board_artifacts(
+            stacks=page_stacks,
+            page_index=page_index,
+            total_pages=total_pages,
+            block_size_mm=block_size_mm,
+            gap_mm=gap_mm,
+            calibration_type=calibration_type,
+            export_variant="full",
+        )
+        artifacts.append((out_path, json_path))
+        if preview is None:
+            preview = page_preview
+    zip_path = os.path.join(MODELS_DIR, generate_calibration_filename("8-Color", "FullKit", ".zip"))
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for out_path, json_path in artifacts:
+            zf.write(out_path, os.path.basename(out_path))
+            zf.write(json_path, os.path.basename(json_path))
+    return zip_path, preview, f"[OK] 8-Color Full Kit ({total_pages} Pages + JSON) Generated!"
+
+
+def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8):
+    """Generate 8-color calibration board page as 3MF.
+    生成 8 色校准板单页 3MF 模型。
+
+    Args:
+        page_index (int): Page index (0 or 1). (页码索引，0 或 1)
+        block_size_mm (float): Size of each color block in mm. (色块边长，单位 mm)
+        gap_mm (float): Gap between blocks in mm. (色块间距，单位 mm)
+
+    Returns:
+        tuple: (output_path, preview_image, status_message).
+               (输出路径, 预览图像, 状态消息)
+    """
+    try:
+        all_stacks = _load_selected_8color_stacks()
+    except CALIBRATION_HANDLED_ERRORS as e:
+        _log.info(f"[8COLOR] Error loading data: {e}")
+        return None, None, "[ERROR] Data not found. Run analyze_colors.py first."
+    start = page_index * EIGHT_COLOR_PAGE_CAPACITY
+    stacks = all_stacks[start : start + EIGHT_COLOR_PAGE_CAPACITY]
+    out_path, _, preview = _generate_8color_board_artifacts(
+        stacks=stacks,
+        page_index=page_index,
+        total_pages=2,
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        calibration_type=f"{page_index + 1}号",
+        export_variant="selected",
+    )
+    return out_path, preview, "OK"
 
 
 def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
-    """Generate both 8-color pages and zip them.
-    生成两页 8 色校准板并打包为 ZIP。
+    """Generate both compact 8-color pages and zip them with recipe JSON files.
+    生成两页精简 8 色校准板，并连同配方 JSON 一起打包为 ZIP。
 
     Args:
         block_size_mm (float): Size of each color block in mm. (色块边长，单位 mm)
@@ -683,19 +788,25 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
     Returns:
         tuple: (zip_path, preview_image, status_message). (ZIP 路径、预览图、状态信息)
     """
-    f1, _, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm)
+    f1, prev, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm)
     f2, _, _ = generate_8color_board(1, block_size_mm=block_size_mm, gap_mm=gap_mm)
 
     if not f1 or not f2:
         return None, None, "[ERROR] Generation failed"
 
+    j1 = os.path.splitext(f1)[0] + ".json"
+    j2 = os.path.splitext(f2)[0] + ".json"
+
     zip_path = os.path.join(MODELS_DIR, generate_calibration_filename("8-Color", "Kit", ".zip"))
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.write(f1, os.path.basename(f1))
         zf.write(f2, os.path.basename(f2))
+        if os.path.exists(j1):
+            zf.write(j1, os.path.basename(j1))
+        if os.path.exists(j2):
+            zf.write(j2, os.path.basename(j2))
 
-    _, prev, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm)
-    return zip_path, prev, "[OK] 8-Color Kit (Page 1 & 2) Generated!"
+    return zip_path, prev, "[OK] 8-Color Kit (Page 1 & 2 + JSON) Generated!"
 
 
 def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White"):

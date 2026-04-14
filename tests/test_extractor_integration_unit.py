@@ -124,7 +124,7 @@ class TestFieldNameMapping:
     """Verify API field names map to core function parameter names."""
 
     def test_extract_field_name_mapping(self) -> None:
-        """Verify distortion->barrel, vignette_correction->bright."""
+        """Verify distortion->barrel, vignette_correction->bright, and 8-color full flag forwarding."""
         buf = _make_test_image_buf()
         with patch(
             "api.routers.extractor.run_extraction",
@@ -136,6 +136,8 @@ class TestFieldNameMapping:
                 data={
                     "corner_points": json.dumps([[0, 0], [100, 0], [100, 100], [0, 100]]),
                     "color_mode": "4-Color",
+                    "page": "Page 3",
+                    "eight_color_full_export": "true",
                     "distortion": "0.1",
                     "vignette_correction": "true",
                 },
@@ -147,3 +149,6 @@ class TestFieldNameMapping:
         assert call_kwargs["barrel"] == 0.1
         # vignette_correction -> bright
         assert call_kwargs["bright"] is True
+        # eight_color_full_export passthrough
+        assert call_kwargs["eight_color_full_export"] is True
+        assert call_kwargs["page_choice"] == "Page 3"

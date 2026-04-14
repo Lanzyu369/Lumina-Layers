@@ -274,6 +274,7 @@ export interface CalibrationGenerateRequest {
   block_size: number;
   gap: number;
   backing: BackingColor;
+  eight_color_full_export: boolean;
 }
 
 // ========== Calibration Response Models ==========
@@ -300,7 +301,31 @@ export enum ExtractorColorMode {
 export enum ExtractorPage {
   PAGE_1 = "Page 1",
   PAGE_2 = "Page 2",
+  PAGE_3 = "Page 3",
+  PAGE_4 = "Page 4",
+  PAGE_5 = "Page 5",
+  PAGE_6 = "Page 6",
+  PAGE_7 = "Page 7",
+  PAGE_8 = "Page 8",
+  PAGE_9 = "Page 9",
+  PAGE_10 = "Page 10",
+  PAGE_11 = "Page 11",
+  PAGE_12 = "Page 12",
+  PAGE_13 = "Page 13",
+  PAGE_14 = "Page 14",
+  PAGE_15 = "Page 15",
+  PAGE_16 = "Page 16",
+  PAGE_17 = "Page 17",
+  PAGE_18 = "Page 18",
+  PAGE_19 = "Page 19",
+  PAGE_20 = "Page 20",
+  PAGE_21 = "Page 21",
+  PAGE_22 = "Page 22",
+  PAGE_23 = "Page 23",
+  PAGE_24 = "Page 24",
 }
+
+export const EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES = 24;
 
 // ========== Extractor Response Models ==========
 

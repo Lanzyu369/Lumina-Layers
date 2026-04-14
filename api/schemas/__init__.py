@@ -37,6 +37,7 @@ from api.schemas.converter import (
 from api.schemas.extractor import (
     CalibrationColorMode,
     ExtractorExtractRequest,
+    ExtractorMergeEightColorRequest,
     ExtractorManualFixRequest,
     ExtractorPage,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "ExtractorPage",
     # --- Extractor models ---
     "ExtractorExtractRequest",
+    "ExtractorMergeEightColorRequest",
     "ExtractorManualFixRequest",
     # --- Calibration enums ---
     "BackingColor",

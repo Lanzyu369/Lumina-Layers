@@ -17,7 +17,7 @@ vi.stubGlobal(
   Object.assign(globalThis.URL ?? {}, {
     createObjectURL: vi.fn(() => "blob:mock-url"),
     revokeObjectURL: vi.fn(),
-  })
+  }),
 );
 
 // ========== Helpers ==========
@@ -31,6 +31,7 @@ function resetExtractorStore(): void {
     imageNaturalHeight: null,
     color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
     page: ExtractorPage.PAGE_1,
+    eight_color_full_export: false,
     corner_points: [],
     offset_x: 0,
     offset_y: 0,
@@ -47,6 +48,7 @@ function resetExtractorStore(): void {
     manualFixError: null,
     page1Extracted: false,
     page2Extracted: false,
+    extractedEightColorFullPages: [],
     mergeLoading: false,
     mergeError: null,
     page1Extracted_5c: false,
@@ -70,6 +72,7 @@ function snapshotExtractorState() {
     imageNaturalHeight: s.imageNaturalHeight,
     color_mode: s.color_mode,
     page: s.page,
+    eight_color_full_export: s.eight_color_full_export,
     corner_points: s.corner_points,
     offset_x: s.offset_x,
     offset_y: s.offset_y,
@@ -86,6 +89,7 @@ function snapshotExtractorState() {
     manualFixError: s.manualFixError,
     page1Extracted: s.page1Extracted,
     page2Extracted: s.page2Extracted,
+    extractedEightColorFullPages: s.extractedEightColorFullPages,
     mergeLoading: s.mergeLoading,
     mergeError: s.mergeError,
     page1Extracted_5c: s.page1Extracted_5c,
@@ -160,7 +164,7 @@ function snapshotCalibrationState() {
 /** Generate a coordinate pair [x, y] with non-negative integers. */
 const arbCornerPoint = fc.tuple(
   fc.integer({ min: 0, max: 10000 }),
-  fc.integer({ min: 0, max: 10000 })
+  fc.integer({ min: 0, max: 10000 }),
 ) as fc.Arbitrary<[number, number]>;
 
 /** Generate an initial corner_points array of length 0..3. */
@@ -177,22 +181,37 @@ const arbExtractorColorMode = fc.constantFrom(
   ExtractorColorMode.BW,
   ExtractorColorMode.FOUR_COLOR_RYBW,
   ExtractorColorMode.SIX_COLOR,
-  ExtractorColorMode.EIGHT_COLOR
+  ExtractorColorMode.EIGHT_COLOR,
 );
 
 const arbExtractorPage = fc.constantFrom(
   ExtractorPage.PAGE_1,
-  ExtractorPage.PAGE_2
+  ExtractorPage.PAGE_2,
 );
 
 /** Generate a random ExtractorStore mutation for isolation testing. */
 const arbExtractorMutation = fc.record({
   color_mode: arbExtractorColorMode,
   page: arbExtractorPage,
-  offset_x: fc.double({ min: -100, max: 100, noNaN: true, noDefaultInfinity: true }),
-  offset_y: fc.double({ min: -100, max: 100, noNaN: true, noDefaultInfinity: true }),
+  offset_x: fc.double({
+    min: -100,
+    max: 100,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
+  offset_y: fc.double({
+    min: -100,
+    max: 100,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   zoom: fc.double({ min: -5, max: 5, noNaN: true, noDefaultInfinity: true }),
-  distortion: fc.double({ min: -5, max: 5, noNaN: true, noDefaultInfinity: true }),
+  distortion: fc.double({
+    min: -5,
+    max: 5,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   vignette_correction: fc.boolean(),
 });
 
@@ -239,39 +258,50 @@ describe("Feature: extractor-calibration-tab, Property 1: 上传新图片重置�
           // Cleanup
           resetExtractorStore();
 
-          return cornersReset && sessionReset && lutReset && warpReset && previewReset;
-        }
+          return (
+            cornersReset &&
+            sessionReset &&
+            lutReset &&
+            warpReset &&
+            previewReset
+          );
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
-
 
 // **Feature: extractor-calibration-tab, Property 3: addCornerPoint 追加正确性**
 // **Validates: Requirements 4.2**
 describe("Feature: extractor-calibration-tab, Property 3: addCornerPoint 追加正确性", () => {
   it("For any initial corner array (length 0..3) and valid coordinate, addCornerPoint appends correctly", () => {
     fc.assert(
-      fc.property(arbInitialCorners, arbCornerPoint, (initialCorners, newPoint) => {
-        // Set initial state
-        useExtractorStore.setState({ corner_points: [...initialCorners] });
+      fc.property(
+        arbInitialCorners,
+        arbCornerPoint,
+        (initialCorners, newPoint) => {
+          // Set initial state
+          useExtractorStore.setState({ corner_points: [...initialCorners] });
 
-        const lengthBefore = initialCorners.length;
-        useExtractorStore.getState().addCornerPoint(newPoint);
-        const state = useExtractorStore.getState();
+          const lengthBefore = initialCorners.length;
+          useExtractorStore.getState().addCornerPoint(newPoint);
+          const state = useExtractorStore.getState();
 
-        const lengthIncreased = state.corner_points.length === lengthBefore + 1;
-        const lastElement = state.corner_points[state.corner_points.length - 1];
-        const lastCorrect =
-          lastElement[0] === newPoint[0] && lastElement[1] === newPoint[1];
+          const lengthIncreased =
+            state.corner_points.length === lengthBefore + 1;
+          const lastElement =
+            state.corner_points[state.corner_points.length - 1];
+          const lastCorrect =
+            lastElement[0] === newPoint[0] && lastElement[1] === newPoint[1];
 
-        // Cleanup
-        resetExtractorStore();
+          // Cleanup
+          resetExtractorStore();
 
-        return lengthIncreased && lastCorrect;
-      }),
-      { numRuns: 100 }
+          return lengthIncreased && lastCorrect;
+        },
+      ),
+      { numRuns: 100 },
     );
   });
 
@@ -292,9 +322,9 @@ describe("Feature: extractor-calibration-tab, Property 3: addCornerPoint 追加�
           resetExtractorStore();
 
           return lengthUnchanged;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -317,7 +347,7 @@ describe("Feature: extractor-calibration-tab, Property 4: clearCornerPoints 重�
 
         return isEmpty;
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -328,64 +358,83 @@ describe("Feature: extractor-calibration-tab, Property 5: 参数 setter 钳制�
   it("setOffsetX always clamps offset_x to [-30, 30] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           useExtractorStore.getState().setOffsetX(value);
           const { offset_x } = useExtractorStore.getState();
           resetExtractorStore();
           return offset_x >= -30 && offset_x <= 30;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
   it("setOffsetY always clamps offset_y to [-30, 30] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           useExtractorStore.getState().setOffsetY(value);
           const { offset_y } = useExtractorStore.getState();
           resetExtractorStore();
           return offset_y >= -30 && offset_y <= 30;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
   it("setZoom always clamps zoom to [0.8, 1.2] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           useExtractorStore.getState().setZoom(value);
           const { zoom } = useExtractorStore.getState();
           resetExtractorStore();
           return zoom >= 0.8 && zoom <= 1.2;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
   it("setDistortion always clamps distortion to [-0.2, 0.2] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           useExtractorStore.getState().setDistortion(value);
           const { distortion } = useExtractorStore.getState();
           resetExtractorStore();
           return distortion >= -0.2 && distortion <= 0.2;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
-
 
 // **Feature: extractor-calibration-tab, Property 9: Store 三向隔离**
 // **Validates: Requirements 9.1**
@@ -412,7 +461,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
 
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
@@ -438,14 +487,19 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
 
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
   it("ConverterStore changes do not affect ExtractorStore state", () => {
     const arbConverterMutation = fc.record({
       lut_name: fc.string({ minLength: 0, maxLength: 20 }),
-      target_width_mm: fc.double({ min: -100, max: 500, noNaN: true, noDefaultInfinity: true }),
+      target_width_mm: fc.double({
+        min: -100,
+        max: 500,
+        noNaN: true,
+        noDefaultInfinity: true,
+      }),
       auto_bg: fc.boolean(),
       enable_cleanup: fc.boolean(),
       enable_outline: fc.boolean(),
@@ -476,7 +530,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
 
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
@@ -486,15 +540,25 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         CalibrationColorMode.BW,
         CalibrationColorMode.FOUR_COLOR_RYBW,
         CalibrationColorMode.SIX_COLOR,
-        CalibrationColorMode.EIGHT_COLOR
+        CalibrationColorMode.EIGHT_COLOR,
       ),
-      block_size: fc.double({ min: -100, max: 200, noNaN: true, noDefaultInfinity: true }),
-      gap: fc.double({ min: -10, max: 10, noNaN: true, noDefaultInfinity: true }),
+      block_size: fc.double({
+        min: -100,
+        max: 200,
+        noNaN: true,
+        noDefaultInfinity: true,
+      }),
+      gap: fc.double({
+        min: -10,
+        max: 10,
+        noNaN: true,
+        noDefaultInfinity: true,
+      }),
       backing: fc.constantFrom(
         BackingColor.WHITE,
         BackingColor.CYAN,
         BackingColor.MAGENTA,
-        BackingColor.YELLOW
+        BackingColor.YELLOW,
       ),
     });
 
@@ -516,11 +580,12 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           block_size: 5,
           gap: 0.82,
           backing: BackingColor.WHITE,
+          eight_color_full_export: false,
         });
 
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -530,39 +595,35 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
 describe("Feature: extractor-calibration-tab, Property 10: 标签页切换状态持久性", () => {
   it("For any ExtractorStore state, simulating tab switch preserves all state fields", () => {
     fc.assert(
-      fc.property(
-        arbExtractorMutation,
-        arbCorners0to4,
-        (mutation, corners) => {
-          // Set up arbitrary state
-          const store = useExtractorStore.getState();
-          store.setColorMode(mutation.color_mode);
-          store.setPage(mutation.page);
-          store.setOffsetX(mutation.offset_x);
-          store.setOffsetY(mutation.offset_y);
-          store.setZoom(mutation.zoom);
-          store.setDistortion(mutation.distortion);
-          store.setVignetteCorrection(mutation.vignette_correction);
-          useExtractorStore.setState({ corner_points: [...corners] });
+      fc.property(arbExtractorMutation, arbCorners0to4, (mutation, corners) => {
+        // Set up arbitrary state
+        const store = useExtractorStore.getState();
+        store.setColorMode(mutation.color_mode);
+        store.setPage(mutation.page);
+        store.setOffsetX(mutation.offset_x);
+        store.setOffsetY(mutation.offset_y);
+        store.setZoom(mutation.zoom);
+        store.setDistortion(mutation.distortion);
+        store.setVignetteCorrection(mutation.vignette_correction);
+        useExtractorStore.setState({ corner_points: [...corners] });
 
-          // Snapshot before tab switch
-          const before = snapshotExtractorState();
+        // Snapshot before tab switch
+        const before = snapshotExtractorState();
 
-          // Simulate tab switch: extractor -> converter -> extractor
-          // (Zustand stores are global singletons, tab switching only changes
-          //  which component renders, not the store state)
-          // No store action needed — just verify state persists.
+        // Simulate tab switch: extractor -> converter -> extractor
+        // (Zustand stores are global singletons, tab switching only changes
+        //  which component renders, not the store state)
+        // No store action needed — just verify state persists.
 
-          // Snapshot after simulated tab switch
-          const after = snapshotExtractorState();
+        // Snapshot after simulated tab switch
+        const after = snapshotExtractorState();
 
-          // Cleanup
-          resetExtractorStore();
+        // Cleanup
+        resetExtractorStore();
 
-          return JSON.stringify(before) === JSON.stringify(after);
-        }
-      ),
-      { numRuns: 100 }
+        return JSON.stringify(before) === JSON.stringify(after);
+      }),
+      { numRuns: 100 },
     );
   });
 });

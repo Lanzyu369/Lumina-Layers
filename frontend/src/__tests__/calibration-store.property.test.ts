@@ -10,16 +10,16 @@ describe("Feature: calibration-tab-integration, Property 4: clampValue 通用正
         fc
           .tuple(
             fc.double({ noNaN: true, noDefaultInfinity: true }),
-            fc.double({ noNaN: true, noDefaultInfinity: true })
+            fc.double({ noNaN: true, noDefaultInfinity: true }),
           )
           .map(([a, b]) => (a <= b ? ([a, b] as const) : ([b, a] as const))),
         fc.double({ noNaN: true, noDefaultInfinity: true }),
         ([min, max], value) => {
           const result = clampValue(value, min, max);
           return result >= min && result <= max;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -31,7 +31,12 @@ describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制�
   it("setBlockSize always clamps block_size to [3, 10] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           const store = useCalibrationStore.getState();
           store.setBlockSize(value);
@@ -39,16 +44,21 @@ describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制�
           // Reset to default to avoid state leaking
           useCalibrationStore.setState({ block_size: 5 });
           return block_size >= 3 && block_size <= 10;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
   it("setGap always clamps gap to [0.4, 2.0] for any numeric input", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -1000, max: 1000, noNaN: true, noDefaultInfinity: true }),
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
         (value) => {
           const store = useCalibrationStore.getState();
           store.setGap(value);
@@ -56,18 +66,15 @@ describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制�
           // Reset to default to avoid state leaking
           useCalibrationStore.setState({ gap: 0.82 });
           return gap >= 0.4 && gap <= 2.0;
-        }
+        },
       ),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
 
 import { useConverterStore } from "../stores/converter";
-import {
-  CalibrationColorMode,
-  BackingColor,
-} from "../api/types";
+import { CalibrationColorMode, BackingColor } from "../api/types";
 
 // ========== Helpers ==========
 
@@ -79,6 +86,7 @@ function snapshotCalibrationState() {
     block_size: s.block_size,
     gap: s.gap,
     backing: s.backing,
+    eight_color_full_export: s.eight_color_full_export,
     isLoading: s.isLoading,
     error: s.error,
     downloadUrl: s.downloadUrl,
@@ -133,7 +141,7 @@ const arbCalibrationColorMode = fc.constantFrom(
   CalibrationColorMode.BW,
   CalibrationColorMode.FOUR_COLOR_RYBW,
   CalibrationColorMode.SIX_COLOR,
-  CalibrationColorMode.EIGHT_COLOR
+  CalibrationColorMode.EIGHT_COLOR,
 );
 
 const arbBackingColor = fc.constantFrom(
@@ -142,31 +150,67 @@ const arbBackingColor = fc.constantFrom(
   BackingColor.MAGENTA,
   BackingColor.YELLOW,
   BackingColor.RED,
-  BackingColor.BLUE
+  BackingColor.BLUE,
 );
 
 const arbCalibrationMutation = fc.record({
   color_mode: arbCalibrationColorMode,
-  block_size: fc.double({ min: -100, max: 200, noNaN: true, noDefaultInfinity: true }),
+  block_size: fc.double({
+    min: -100,
+    max: 200,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   gap: fc.double({ min: -10, max: 10, noNaN: true, noDefaultInfinity: true }),
   backing: arbBackingColor,
+  eight_color_full_export: fc.boolean(),
 });
 
 const arbConverterMutation = fc.record({
   lut_name: fc.string({ minLength: 0, maxLength: 20 }),
-  target_width_mm: fc.double({ min: -100, max: 500, noNaN: true, noDefaultInfinity: true }),
-  target_height_mm: fc.double({ min: -100, max: 500, noNaN: true, noDefaultInfinity: true }),
-  spacer_thick: fc.double({ min: -10, max: 10, noNaN: true, noDefaultInfinity: true }),
+  target_width_mm: fc.double({
+    min: -100,
+    max: 500,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
+  target_height_mm: fc.double({
+    min: -100,
+    max: 500,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
+  spacer_thick: fc.double({
+    min: -10,
+    max: 10,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   auto_bg: fc.boolean(),
-  bg_tol: fc.double({ min: -50, max: 200, noNaN: true, noDefaultInfinity: true }),
+  bg_tol: fc.double({
+    min: -50,
+    max: 200,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   quantize_colors: fc.integer({ min: 1, max: 300 }),
   enable_cleanup: fc.boolean(),
   separate_backing: fc.boolean(),
   add_loop: fc.boolean(),
   enable_outline: fc.boolean(),
-  outline_width: fc.double({ min: 0, max: 15, noNaN: true, noDefaultInfinity: true }),
+  outline_width: fc.double({
+    min: 0,
+    max: 15,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   enable_coating: fc.boolean(),
-  coating_height_mm: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
+  coating_height_mm: fc.double({
+    min: 0,
+    max: 1,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
 });
 
 // **Validates: Requirements 4.1, 4.2, 4.3**
@@ -183,6 +227,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
         calStore.setBlockSize(mutation.block_size);
         calStore.setGap(mutation.gap);
         calStore.setBacking(mutation.backing);
+        calStore.setEightColorFullExport(mutation.eight_color_full_export);
 
         // Snapshot ConverterStore after mutation
         const after = snapshotConverterState();
@@ -193,6 +238,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
           block_size: 5,
           gap: 0.82,
           backing: BackingColor.WHITE,
+          eight_color_full_export: false,
           isLoading: false,
           error: null,
           downloadUrl: null,
@@ -204,7 +250,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
         // Verify ConverterStore is unchanged
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 
@@ -255,7 +301,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
         // Verify CalibrationStore is unchanged
         return JSON.stringify(before) === JSON.stringify(after);
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -279,6 +325,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       block_size: 5,
       gap: 0.82,
       backing: BackingColor.WHITE,
+      eight_color_full_export: false,
       isLoading: false,
       error: null,
       downloadUrl: null,
@@ -294,9 +341,20 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
 
   const arbValidCalibrationState = fc.record({
     color_mode: arbCalibrationColorMode,
-    block_size: fc.double({ min: 3, max: 10, noNaN: true, noDefaultInfinity: true }),
-    gap: fc.double({ min: 0.4, max: 2.0, noNaN: true, noDefaultInfinity: true }),
+    block_size: fc.double({
+      min: 3,
+      max: 10,
+      noNaN: true,
+      noDefaultInfinity: true,
+    }),
+    gap: fc.double({
+      min: 0.4,
+      max: 2.0,
+      noNaN: true,
+      noDefaultInfinity: true,
+    }),
     backing: arbBackingColor,
+    eight_color_full_export: fc.boolean(),
   });
 
   it("submitGenerate sends API request body matching current store state", async () => {
@@ -308,6 +366,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
         store.setBlockSize(state.block_size);
         store.setGap(state.gap);
         store.setBacking(state.backing);
+        store.setEightColorFullExport(state.eight_color_full_export);
 
         // Mock API to return success
         mockCalibrationGenerate.mockResolvedValueOnce({
@@ -322,18 +381,21 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
 
         // Verify the API was called with the correct payload
         const currentState = useCalibrationStore.getState();
-        const callArgs = mockCalibrationGenerate.mock.calls[
-          mockCalibrationGenerate.mock.calls.length - 1
-        ][0];
+        const callArgs =
+          mockCalibrationGenerate.mock.calls[
+            mockCalibrationGenerate.mock.calls.length - 1
+          ][0];
 
         return (
           callArgs.color_mode === currentState.color_mode &&
           callArgs.block_size === currentState.block_size &&
           callArgs.gap === currentState.gap &&
-          callArgs.backing === currentState.backing
+          callArgs.backing === currentState.backing &&
+          callArgs.eight_color_full_export ===
+            currentState.eight_color_full_export
         );
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });

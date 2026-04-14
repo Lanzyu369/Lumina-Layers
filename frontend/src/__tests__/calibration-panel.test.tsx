@@ -14,6 +14,7 @@ beforeEach(() => {
     block_size: 5,
     gap: 0.82,
     backing: BackingColor.WHITE,
+    eight_color_full_export: false,
     isLoading: false,
     error: null,
     downloadUrl: null,
@@ -64,6 +65,24 @@ describe("CalibrationPanel", () => {
     expect(sliders[1]).not.toBeDisabled();
     // backing dropdown disabled
     expect(selects[1]).toBeDisabled();
+    expect(screen.getByRole("switch")).toBeInTheDocument();
+  });
+
+  it("hides the exhaustive export switch outside 8-Color Max mode", () => {
+    render(<CalibrationPanel />);
+
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("reflects the exhaustive export switch state in 8-Color Max mode", () => {
+    useCalibrationStore.setState({
+      color_mode: CalibrationColorMode.EIGHT_COLOR,
+      eight_color_full_export: true,
+    });
+    render(<CalibrationPanel />);
+
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("导出全部 8 色配方")).toBeInTheDocument();
   });
 
   it("disables only backing in 6-Color mode", () => {

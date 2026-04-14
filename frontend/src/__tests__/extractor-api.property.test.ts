@@ -24,7 +24,7 @@ vi.stubGlobal(
   Object.assign(globalThis.URL ?? {}, {
     createObjectURL: vi.fn(() => "blob:mock-url"),
     revokeObjectURL: vi.fn(),
-  })
+  }),
 );
 
 // ========== Helpers ==========
@@ -37,6 +37,7 @@ function resetExtractorStore(): void {
     imageNaturalHeight: null,
     color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
     page: ExtractorPage.PAGE_1,
+    eight_color_full_export: false,
     corner_points: [],
     offset_x: 0,
     offset_y: 0,
@@ -53,6 +54,7 @@ function resetExtractorStore(): void {
     manualFixError: null,
     page1Extracted: false,
     page2Extracted: false,
+    extractedEightColorFullPages: [],
     mergeLoading: false,
     mergeError: null,
     page1Extracted_5c: false,
@@ -70,7 +72,7 @@ function resetExtractorStore(): void {
 
 const arbCornerPoint = fc.tuple(
   fc.integer({ min: 0, max: 10000 }),
-  fc.integer({ min: 0, max: 10000 })
+  fc.integer({ min: 0, max: 10000 }),
 ) as fc.Arbitrary<[number, number]>;
 
 const arbFourCorners = fc.array(arbCornerPoint, {
@@ -82,17 +84,23 @@ const arbExtractorColorMode = fc.constantFrom(
   ExtractorColorMode.BW,
   ExtractorColorMode.FOUR_COLOR_RYBW,
   ExtractorColorMode.SIX_COLOR,
-  ExtractorColorMode.EIGHT_COLOR
+  ExtractorColorMode.EIGHT_COLOR,
 );
 
 /** Generate a valid store state for submitExtract (imageFile non-null, 4 corner points). */
 const arbValidExtractState = fc.record({
   color_mode: arbExtractorColorMode,
+  eight_color_full_export: fc.boolean(),
   corner_points: arbFourCorners,
   offset_x: fc.integer({ min: -30, max: 30 }),
   offset_y: fc.integer({ min: -30, max: 30 }),
   zoom: fc.double({ min: 0.8, max: 1.2, noNaN: true, noDefaultInfinity: true }),
-  distortion: fc.double({ min: -0.2, max: 0.2, noNaN: true, noDefaultInfinity: true }),
+  distortion: fc.double({
+    min: -0.2,
+    max: 0.2,
+    noNaN: true,
+    noDefaultInfinity: true,
+  }),
   vignette_correction: fc.boolean(),
 });
 
@@ -104,14 +112,18 @@ const arbExtractResponse = fc.record({
   lut_download_url: fc.string({ minLength: 1, maxLength: 80 }),
   warp_view_url: fc.string({ minLength: 1, maxLength: 80 }),
   lut_preview_url: fc.string({ minLength: 1, maxLength: 80 }),
-  default_palette: fc.constant([]),
+  default_palette: fc.constant([] as ExtractResponse["default_palette"]),
 });
 
 const arbPaletteEntry = fc.record({
   color: fc.string({ minLength: 1, maxLength: 16 }),
   material: fc.string({ minLength: 1, maxLength: 16 }),
-  hex_color: fc.option(fc.constantFrom("#FFFFFF", "#000000", "#FF0000"), { nil: null }),
-  color_name: fc.option(fc.string({ minLength: 1, maxLength: 20 }), { nil: null }),
+  hex_color: fc.option(fc.constantFrom("#FFFFFF", "#000000", "#FF0000"), {
+    nil: null,
+  }),
+  color_name: fc.option(fc.string({ minLength: 1, maxLength: 20 }), {
+    nil: null,
+  }),
 });
 
 // ========== Tests ==========
@@ -140,6 +152,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
           imageFile: file,
           corner_points: stateInput.corner_points,
           color_mode: stateInput.color_mode,
+          eight_color_full_export: stateInput.eight_color_full_export,
           offset_x: stateInput.offset_x,
           offset_y: stateInput.offset_y,
           zoom: stateInput.zoom,
@@ -170,13 +183,18 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
         expect(calledImage).toBe(file);
         expect(calledParams.corner_points).toEqual(stateInput.corner_points);
         expect(calledParams.color_mode).toBe(stateInput.color_mode);
+        expect(calledParams.eight_color_full_export).toBe(
+          stateInput.eight_color_full_export,
+        );
         expect(calledParams.offset_x).toBe(stateInput.offset_x);
         expect(calledParams.offset_y).toBe(stateInput.offset_y);
         expect(calledParams.zoom).toBe(stateInput.zoom);
         expect(calledParams.distortion).toBe(stateInput.distortion);
-        expect(calledParams.vignette_correction).toBe(stateInput.vignette_correction);
+        expect(calledParams.vignette_correction).toBe(
+          stateInput.vignette_correction,
+        );
       }),
-      { numRuns: 100 }
+      { numRuns: 100 },
     );
   });
 });
@@ -221,9 +239,9 @@ describe("Feature: extractor-calibration-tab, Property 11: confirm-palette 请�
           expect(state.paletteConfirmed).toBe(true);
           expect(state.paletteConfirmLoading).toBe(false);
           expect(state.paletteConfirmError).toBeNull();
-        }
+        },
       ),
-      { numRuns: 50 }
+      { numRuns: 50 },
     );
   });
 });
@@ -233,46 +251,45 @@ describe("Feature: extractor-calibration-tab, Property 11: confirm-palette 请�
 describe("Feature: extractor-calibration-tab, Property 8: API 响应字段正确存储", () => {
   it("For any valid ExtractResponse, submitExtract stores session_id, lut_download_url, warp_view_url, lut_preview_url correctly", async () => {
     await fc.assert(
-      fc.asyncProperty(arbExtractResponse, async (response: ExtractResponse) => {
-        resetExtractorStore();
-        vi.clearAllMocks();
+      fc.asyncProperty(
+        arbExtractResponse,
+        async (response: ExtractResponse) => {
+          resetExtractorStore();
+          vi.clearAllMocks();
 
-        // Set up valid preconditions for submitExtract
-        const file = new File(["test-data"], "calibration.png", {
-          type: "image/png",
-        });
-        useExtractorStore.setState({
-          imageFile: file,
-          corner_points: [
-            [0, 0],
-            [100, 0],
-            [100, 100],
-            [0, 100],
-          ],
-        });
+          // Set up valid preconditions for submitExtract
+          const file = new File(["test-data"], "calibration.png", {
+            type: "image/png",
+          });
+          useExtractorStore.setState({
+            imageFile: file,
+            corner_points: [
+              [0, 0],
+              [100, 0],
+              [100, 100],
+              [0, 100],
+            ],
+          });
 
-        // Mock extractColors to return the random response
-        mockedExtractColors.mockResolvedValueOnce(response);
+          // Mock extractColors to return the random response
+          mockedExtractColors.mockResolvedValueOnce(response);
 
-        // Call submitExtract
-        await useExtractorStore.getState().submitExtract();
+          // Call submitExtract
+          await useExtractorStore.getState().submitExtract();
 
-        // Verify store fields match the response (relative URL contract)
-        const state = useExtractorStore.getState();
-        expect(state.session_id).toBe(response.session_id);
-        expect(state.lut_download_url).toBe(
-          response.lut_download_url ?? null
-        );
-        expect(state.warp_view_url).toBe(
-          response.warp_view_url ?? null
-        );
-        expect(state.lut_preview_url).toBe(
-          response.lut_preview_url ?? null
-        );
-        expect(state.isLoading).toBe(false);
-        expect(state.error).toBeNull();
-      }),
-      { numRuns: 100 }
+          // Verify store fields match the response (relative URL contract)
+          const state = useExtractorStore.getState();
+          expect(state.session_id).toBe(response.session_id);
+          expect(state.lut_download_url).toBe(
+            response.lut_download_url ?? null,
+          );
+          expect(state.warp_view_url).toBe(response.warp_view_url ?? null);
+          expect(state.lut_preview_url).toBe(response.lut_preview_url ?? null);
+          expect(state.isLoading).toBe(false);
+          expect(state.error).toBeNull();
+        },
+      ),
+      { numRuns: 100 },
     );
   });
 });

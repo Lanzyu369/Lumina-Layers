@@ -1931,8 +1931,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Generate Calibration",
   },
   cal_download_3mf: {
-    zh: "下载 3MF 文件",
-    en: "Download 3MF File",
+    zh: "下载校准文件",
+    en: "Download Calibration File",
+  },
+  cal_8color_full_export_label: {
+    zh: "导出全部 8 色配方",
+    en: "Export Full 8-Color Recipes",
+  },
+  cal_8color_full_export_hint: {
+    zh: "生成多页 ZIP，每页包含 3MF 和对应配方 JSON，不影响现有两页提取流程。",
+    en: "Generate a multi-page ZIP with a 3MF and matching recipe JSON for each page without changing the existing two-page extraction flow.",
+  },
+  cal_8color_full_export_on: {
+    zh: "全量",
+    en: "Full",
+  },
+  cal_8color_full_export_off: {
+    zh: "精简",
+    en: "Compact",
   },
   cal_preview_alt: {
     zh: "校准板预览",
@@ -1948,9 +1964,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "页码",
     en: "Page",
   },
+  ext_page_number_prefix: {
+    zh: "",
+    en: "Page ",
+  },
+  ext_page_number_suffix: {
+    zh: "号",
+    en: "",
+  },
   ext_upload_label: {
     zh: "上传校准板照片",
-    en: "Upload Calibration Photo",
+    en: "Upload Calibration Board Photo",
   },
   ext_offset_x_label: {
     zh: "水平偏移 (offset_x)",
@@ -1992,6 +2016,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "8色双页合并",
     en: "8-Color Dual-Page Merge",
   },
+  ext_merge_8c_full_title: {
+    zh: "8色完整版合并",
+    en: "8-Color Full Merge",
+  },
   ext_merge_5c_btn: {
     zh: "合并 5 色 LUT",
     en: "Merge 5-Color LUT",
@@ -1999,6 +2027,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_merge_8c_btn: {
     zh: "合并 8 色 LUT",
     en: "Merge 8-Color LUT",
+  },
+  ext_merge_8c_full_btn: {
+    zh: "合并 8 色完整版 LUT",
+    en: "Merge Full 8-Color LUT",
+  },
+  ext_pages_extracted_label: {
+    zh: "已提取页数",
+    en: "Extracted Pages",
   },
   ext_page_extracted: {
     zh: "已提取",
@@ -2015,6 +2051,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_page_2_label: {
     zh: "第 2 页",
     en: "Page 2",
+  },
+  ext_8color_full_export_label: {
+    zh: "8色完整版提取",
+    en: "Full 8-Color Extraction",
+  },
+  ext_8color_full_export_hint: {
+    zh: "如果你的校准板来自完整版 ZIP，请开启后按 1号-24号逐页提取并在全部完成后合并。",
+    en: "Enable this if your calibration boards come from the full 8-color ZIP, then extract pages 1-24 and merge after all pages are complete.",
+  },
+  ext_8color_full_export_on: {
+    zh: "全量",
+    en: "Full",
+  },
+  ext_8color_full_export_off: {
+    zh: "精简",
+    en: "Compact",
   },
   ext_download_lut: {
     zh: "下载 LUT 文件 (.json)",

@@ -50,18 +50,44 @@ class CalibrationColorMode(str, Enum):
 
 
 class ExtractorPage(str, Enum):
-    """Page selector for 8-Color two-page calibration workflow.
-    8 色双页校准流程的页码选择器。
+    """Page selector for paged calibration workflows.
+    分页校准流程的页码选择器。
 
     Attributes:
         PAGE_1: First calibration page.
             第一页。
         PAGE_2: Second calibration page.
             第二页。
+        PAGE_3: Third calibration page.
+            第三页。
+        PAGE_24: Twenty-fourth calibration page.
+            第二十四页。
     """
 
     PAGE_1 = "Page 1"
     PAGE_2 = "Page 2"
+    PAGE_3 = "Page 3"
+    PAGE_4 = "Page 4"
+    PAGE_5 = "Page 5"
+    PAGE_6 = "Page 6"
+    PAGE_7 = "Page 7"
+    PAGE_8 = "Page 8"
+    PAGE_9 = "Page 9"
+    PAGE_10 = "Page 10"
+    PAGE_11 = "Page 11"
+    PAGE_12 = "Page 12"
+    PAGE_13 = "Page 13"
+    PAGE_14 = "Page 14"
+    PAGE_15 = "Page 15"
+    PAGE_16 = "Page 16"
+    PAGE_17 = "Page 17"
+    PAGE_18 = "Page 18"
+    PAGE_19 = "Page 19"
+    PAGE_20 = "Page 20"
+    PAGE_21 = "Page 21"
+    PAGE_22 = "Page 22"
+    PAGE_23 = "Page 23"
+    PAGE_24 = "Page 24"
 
 
 # ========== Models ==========
@@ -90,8 +116,11 @@ class ExtractorExtractRequest(BaseModel):
             畸变校正。
         vignette_correction: Whether to apply vignette correction.
             暗角校正。
-        page: Page number for 8-Color two-page workflow.
-            8-Color 页码。
+        page: Page number for paged calibration workflows.
+            分页校准页码。
+        eight_color_full_export: Whether 8-color extraction uses the exhaustive
+            24-page calibration workflow instead of the compact two-page kit.
+            8 色提取是否使用全量 24 页流程，而非精简双页套件。
     """
 
     color_mode: CalibrationColorMode = Field(CalibrationColorMode.FOUR_COLOR_RYBW, description="校准颜色模式")
@@ -104,6 +133,20 @@ class ExtractorExtractRequest(BaseModel):
     distortion: float = Field(0.0, ge=-0.2, le=0.2, description="畸变校正")
     vignette_correction: bool = Field(False, description="暗角校正")
     page: ExtractorPage = Field(ExtractorPage.PAGE_1, description="8-Color 页码")
+    eight_color_full_export: bool = Field(False, description="8 色是否使用全量 24 页提取")
+
+
+class ExtractorMergeEightColorRequest(BaseModel):
+    """Request model for merging extracted 8-color pages.
+    8 色提取页合并请求模型。
+
+    Attributes:
+        eight_color_full_export: Whether the merge should combine the full
+            24-page exhaustive extraction set instead of the compact two-page set.
+            合并时是否使用全量 24 页提取结果，而不是精简双页结果。
+    """
+
+    eight_color_full_export: bool = Field(False, description="8 色是否合并全量 24 页提取结果")
 
 
 class ExtractorManualFixRequest(BaseModel):
