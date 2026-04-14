@@ -34,11 +34,6 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, ColorSystem
-from core.feature_printability import (
-    PrintableFeatureOptimizer,
-    _STABLE_INPUT_INDEX_KEY,
-    _difference_polygonal_geometry,
-)
 
 _log = logging.getLogger(__name__)
 
@@ -1030,94 +1025,6 @@ class VectorProcessor:
         stage_timings["color_match_s"] = time.perf_counter() - t0
         _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
 
-        t0 = time.perf_counter()
-        printability_optimizer = PrintableFeatureOptimizer(
-            matched_shapes,
-            scale_factor=scale_factor,
-        )
-        printability_result = printability_optimizer.optimize()
-        matched_shapes = VectorProcessor._stabilize_matched_shapes_printability(
-            printability_result.records,
-            scale_factor=scale_factor,
-            optimization_items=printability_result.items,
-        )
-        silhouette_geoms = [
-            shape["geometry"]
-            for shape in matched_shapes
-            if shape.get("geometry") is not None and not shape["geometry"].is_empty
-        ]
-        silhouette_bounds = None
-        if silhouette_geoms:
-            try:
-                silhouette = unary_union(silhouette_geoms)
-            except Exception:
-                fallback_polygons = []
-                for geom in silhouette_geoms:
-                    polygonal_geom = VectorProcessor._extract_polygonal_geometry(geom)
-                    if polygonal_geom is None or polygonal_geom.is_empty:
-                        continue
-                    if polygonal_geom.geom_type == "Polygon":
-                        fallback_polygons.append(polygonal_geom)
-                    elif polygonal_geom.geom_type == "MultiPolygon":
-                        fallback_polygons.extend(poly for poly in polygonal_geom.geoms if not poly.is_empty)
-
-                if len(fallback_polygons) == 1:
-                    silhouette = fallback_polygons[0]
-                elif fallback_polygons:
-                    silhouette = MultiPolygon(fallback_polygons)
-                else:
-                    silhouette = None
-            if silhouette is not None:
-                if not silhouette.is_valid:
-                    silhouette = make_valid(silhouette)
-                silhouette = VectorProcessor._extract_polygonal_geometry(silhouette)
-                if silhouette is None or silhouette.is_empty:
-                    silhouette = None
-        else:
-            silhouette = None
-
-        if silhouette is not None and not silhouette.is_empty:
-            silhouette_bounds = silhouette.bounds
-        elif silhouette_geoms:
-            silhouette_bounds = (
-                min(geom.bounds[0] for geom in silhouette_geoms),
-                min(geom.bounds[1] for geom in silhouette_geoms),
-                max(geom.bounds[2] for geom in silhouette_geoms),
-                max(geom.bounds[3] for geom in silhouette_geoms),
-            )
-
-        if silhouette_bounds is not None:
-            min_x, min_y, max_x, max_y = silhouette_bounds
-            offset_x = -min_x if abs(min_x) > 1e-9 else 0.0
-            offset_y = -min_y if abs(min_y) > 1e-9 else 0.0
-            if offset_x != 0.0 or offset_y != 0.0:
-                matched_shapes = [
-                    {
-                        **shape,
-                        "geometry": affinity.translate(shape["geometry"], xoff=offset_x, yoff=offset_y)
-                        if shape.get("geometry") is not None and not shape["geometry"].is_empty
-                        else shape.get("geometry"),
-                    }
-                    for shape in matched_shapes
-                ]
-                if silhouette is not None and not silhouette.is_empty:
-                    silhouette = affinity.translate(silhouette, xoff=offset_x, yoff=offset_y)
-                min_x += offset_x
-                min_y += offset_y
-                max_x += offset_x
-                max_y += offset_y
-            bbox = (max(0.0, min_x), max(0.0, min_y), max_x - min_x, max_y - min_y)
-        else:
-            bbox = (0.0, 0.0, 0.0, 0.0)
-        stage_timings["printability_filter_s"] = time.perf_counter() - t0
-        _log.info(
-            "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",
-            len(matched_shapes),
-            printability_result.classification_counts,
-            printability_result.action_counts,
-            printability_result.timings_ms,
-        )
-
         return VectorAnalysis(
             shape_data=shape_data,
             clipped_shapes=clipped_shapes,
@@ -1207,7 +1114,7 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
-        if silhouette is None and matched_shapes and clipped_shapes:
+        if silhouette is None and clipped_shapes:
             all_geoms = [
                 s["geometry"] for s in clipped_shapes if s["geometry"] is not None and not s["geometry"].is_empty
             ]
@@ -1667,130 +1574,6 @@ class VectorProcessor:
             return result, silhouette
         return result
 
-    @staticmethod
-    def _clip_matched_shapes_occlusion(matched_shapes):
-        """Clip matched-shape records after printability optimization.
-
-        Preserves all non-geometry metadata while ensuring the final records are
-        non-overlapping in draw-order order.
-        """
-        ordered_shapes = [
-            item
-            for _, item in sorted(
-                enumerate(matched_shapes),
-                key=lambda pair: (int(pair[1].get("draw_order", pair[0])), pair[0]),
-            )
-        ]
-        n = len(ordered_shapes)
-        if n == 0:
-            return []
-
-        valid = []
-        for i, item in enumerate(ordered_shapes):
-            geom = item.get("geometry")
-            if geom is None or geom.is_empty:
-                continue
-            valid.append((i, geom))
-
-        if not valid:
-            return []
-
-        orders = [v[0] for v in valid]
-        geoms = [v[1] for v in valid]
-        tree = STRtree(geoms)
-        result = []
-
-        for i in range(n - 1, -1, -1):
-            item = ordered_shapes[i]
-            geom = item.get("geometry")
-            if geom is None or geom.is_empty:
-                continue
-
-            occluders = []
-            try:
-                candidate_refs = tree.query(geom)
-            except Exception:
-                candidate_refs = []
-
-            for ref in candidate_refs:
-                if isinstance(ref, (int, np.integer)):
-                    idx = int(ref)
-                else:
-                    idx = -1
-                if idx < 0:
-                    continue
-                if orders[idx] <= i:
-                    continue
-                cand = geoms[idx]
-                try:
-                    if cand.intersects(geom):
-                        occluders.append(cand)
-                except Exception:
-                    continue
-
-            if not occluders:
-                clipped = geom
-            else:
-                occ = occluders[0] if len(occluders) == 1 else unary_union(occluders)
-                clipped = _difference_polygonal_geometry(geom, occ)
-            if clipped is None or clipped.is_empty:
-                continue
-
-            result.append({**item, "geometry": clipped})
-
-        result.reverse()
-        return result
-
-    @staticmethod
-    def _stabilize_matched_shapes_printability(matched_shapes, scale_factor, optimization_items=None):
-        """Revalidate visible matched shapes after the first final clip.
-
-        A widened thin feature can become sub-printable again after final
-        occlusion trimming. Re-run printability on the visible shapes and clip
-        once more so the returned matched shapes stay stable.
-        """
-        visible_shapes = VectorProcessor._clip_matched_shapes_occlusion(
-            VectorProcessor._seed_printability_stable_indices(
-                matched_shapes,
-                optimization_items=optimization_items,
-            )
-        )
-        if not visible_shapes:
-            return []
-
-        stabilized = PrintableFeatureOptimizer(
-            visible_shapes,
-            scale_factor=scale_factor,
-        ).optimize()
-        return VectorProcessor._strip_printability_internal_keys(
-            VectorProcessor._clip_matched_shapes_occlusion(stabilized.records)
-        )
-
-    @staticmethod
-    def _strip_printability_internal_keys(matched_shapes):
-        """Remove internal printability bookkeeping before returning records."""
-        return [{key: value for key, value in shape.items() if key != _STABLE_INPUT_INDEX_KEY} for shape in matched_shapes]
-
-    @staticmethod
-    def _seed_printability_stable_indices(matched_shapes, optimization_items=None):
-        """Attach stable optimizer indices to survivor records for later passes."""
-        seeded_shapes = [dict(shape) for shape in matched_shapes]
-        if not seeded_shapes or any(_STABLE_INPUT_INDEX_KEY in shape for shape in seeded_shapes):
-            return seeded_shapes
-        if optimization_items is None:
-            return seeded_shapes
-
-        survivor_items = sorted(
-            (item for item in optimization_items if item.action in {"keep", "widen"}),
-            key=lambda item: (item.draw_order, item.index),
-        )
-        if len(survivor_items) != len(seeded_shapes):
-            return seeded_shapes
-
-        for shape, item in zip(seeded_shapes, survivor_items):
-            shape[_STABLE_INPUT_INDEX_KEY] = item.index
-        return seeded_shapes
-
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 
     def _match_colors(self, clipped_shapes, replacement_manager, num_channels, num_layers=None):
@@ -1852,7 +1635,6 @@ class VectorProcessor:
                     "color": rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
-                    "draw_order": int(item.get("draw_order", len(matched))),
                 }
             )
 
