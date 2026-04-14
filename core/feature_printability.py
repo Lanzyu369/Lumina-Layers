@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Iterable, Mapping, Optional
 
+import numpy as np
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, VectorConfig
@@ -25,6 +27,7 @@ _THIN_MAX_COMPACTNESS = 0.32
 _MITRE_LIMIT = 2.0
 _WIDEN_ATTEMPTS = 4
 _WIDEN_STEP_RATIO = 0.12
+_STABLE_INPUT_INDEX_KEY = "_printability_stable_input_index"
 
 
 def _as_float(value: Any, default: float) -> float:
@@ -129,6 +132,29 @@ def _same_recipe(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     return left.get("recipe") == right.get("recipe")
 
 
+def _difference_polygonal_geometry(source_geometry, occluder_geometry):
+    """Subtract occluders and keep only valid polygonal output.
+
+    从源几何中扣除遮挡几何，并仅保留有效多边形输出。
+    """
+    if source_geometry is None or occluder_geometry is None:
+        return _normalize_polygonal_geometry(source_geometry)
+
+    try:
+        clipped = source_geometry.difference(occluder_geometry)
+    except Exception:
+        try:
+            fixed_source = source_geometry if getattr(source_geometry, "is_valid", True) else source_geometry.buffer(0)
+            fixed_occluder = (
+                occluder_geometry if getattr(occluder_geometry, "is_valid", True) else occluder_geometry.buffer(0)
+            )
+            clipped = fixed_source.difference(fixed_occluder)
+        except Exception:
+            clipped = None
+
+    return _normalize_polygonal_geometry(clipped)
+
+
 @dataclass
 class PrintableFeatureOptimizationItem:
     """Per-shape optimization outcome.
@@ -199,10 +225,28 @@ class PrintableFeatureOptimizer:
         self._source_records: list[dict[str, Any]] = []
         for index, record in enumerate(shape_records):
             copied = dict(record)
-            copied["_input_index"] = index
+            stable_input_index = int(copied.get(_STABLE_INPUT_INDEX_KEY, index))
+            copied["_input_index"] = stable_input_index
+            copied[_STABLE_INPUT_INDEX_KEY] = stable_input_index
             copied["_original_geometry"] = copied.get("geometry")
             copied["geometry"] = _normalize_polygonal_geometry(copied.get("geometry"))
+            if "recipe" in copied:
+                copied["recipe"] = self._recipe_copy(copied.get("recipe"))
+            if "_received_merge_source_indices" in copied:
+                copied["_received_merge_source_indices"] = [
+                    int(source_index) for source_index in copied.get("_received_merge_source_indices", ())
+                ]
+            if "_received_merge_source_recipes" in copied:
+                copied["_received_merge_source_recipes"] = [
+                    tuple(recipe or ())
+                    for recipe in copied.get("_received_merge_source_recipes", ())
+                ]
             self._source_records.append(copied)
+
+        self._live_index_dirty = True
+        self._live_index_records: list[dict[str, Any]] = []
+        self._live_tree: STRtree | None = None
+        self._live_index_owner_id: int | None = None
 
     @property
     def printable_core_width_mm(self) -> float:
@@ -231,6 +275,7 @@ class PrintableFeatureOptimizer:
             key=lambda item: (int(item.get("draw_order", item["_input_index"])), item["_input_index"]),
         )
         live_records = {record["_input_index"]: record for record in sorted_records if record.get("geometry") is not None}
+        self._mark_live_index_dirty()
         active_records: list[dict[str, Any]] = []
 
         items_by_input_index: dict[int, PrintableFeatureOptimizationItem] = {}
@@ -276,7 +321,7 @@ class PrintableFeatureOptimizer:
             if classification == "normal":
                 active_records.append(record)
             elif classification == "isolated":
-                target = self._select_best_neighbor(record, live_records.values())
+                target = self._select_best_neighbor(record, live_records)
                 if target is not None:
                     merge_info = self._merge_record_into_target(record, target)
                     merged_into_index = int(target["_input_index"])
@@ -284,21 +329,31 @@ class PrintableFeatureOptimizer:
                     reason = "isolated"
                     output_area = 0.0
                     live_records.pop(int(record["_input_index"]), None)
+                    self._mark_live_index_dirty()
                     self._update_target_receipt(target, record, merge_info)
                 else:
                     active_records.append(record)
                     reason = "no-neighbor"
             elif classification == "thin":
                 widened = self._widen_to_printable_core(record["geometry"])
-                if widened is not None and self.classify(widened) == "normal":
-                    record["geometry"] = widened
-                    output_area = _geometry_area_mm2(widened, self._scale_factor)
+                visible_widened, _clipped_by_later_geometry = self._clip_to_visible_later_geometry(
+                    widened,
+                    record,
+                    live_records,
+                )
+                if (
+                    visible_widened is not None
+                    and self.classify(visible_widened) == "normal"
+                ):
+                    record["geometry"] = visible_widened
+                    output_area = _geometry_area_mm2(visible_widened, self._scale_factor)
                     action = "widen"
                     reason = "widened-to-core"
                     widened_to_normal = True
+                    self._mark_live_index_dirty()
                     active_records.append(record)
                 else:
-                    target = self._select_best_neighbor(record, live_records.values())
+                    target = self._select_best_neighbor(record, live_records)
                     if target is not None:
                         merge_info = self._merge_record_into_target(record, target)
                         merged_into_index = int(target["_input_index"])
@@ -306,6 +361,7 @@ class PrintableFeatureOptimizer:
                         reason = "thin-fallback-merge"
                         output_area = 0.0
                         live_records.pop(int(record["_input_index"]), None)
+                        self._mark_live_index_dirty()
                         self._update_target_receipt(target, record, merge_info)
                     else:
                         active_records.append(record)
@@ -426,17 +482,147 @@ class PrintableFeatureOptimizer:
 
         return None if best_candidate is None else best_candidate
 
-    def _select_best_neighbor(self, record: Mapping[str, Any], records: list[dict[str, Any]]):
-        """Pick the best merge target using shared boundary, distance, and recipe ties.
+    def _mark_live_index_dirty(self) -> None:
+        """Mark the live STRtree snapshot dirty after geometry mutations."""
+        self._live_index_dirty = True
+        self._live_index_owner_id = None
 
-        按共享边界、距离和 recipe 兼容性选择最佳合并目标。
+    def _ensure_live_index(self, live_records: Mapping[int, dict[str, Any]]) -> None:
+        """Build a fresh STRtree snapshot when the live geometry set changes."""
+        live_records_owner_id = id(live_records)
+        if not self._live_index_dirty and self._live_index_owner_id == live_records_owner_id:
+            return
+
+        snapshot_records = sorted(
+            (
+                record
+                for record in live_records.values()
+                if record.get("geometry") is not None and not getattr(record["geometry"], "is_empty", True)
+            ),
+            key=lambda item: (int(item.get("draw_order", item["_input_index"])), int(item["_input_index"])),
+        )
+        self._live_index_records = snapshot_records
+        geoms = [record["geometry"] for record in snapshot_records]
+        self._live_tree = STRtree(geoms) if geoms else None
+        self._live_index_dirty = False
+        self._live_index_owner_id = live_records_owner_id
+
+    @staticmethod
+    def _resolve_tree_ref(ref) -> int:
+        """Return a stable integer position from a STRtree query result."""
+        if isinstance(ref, (int, np.integer)):
+            return int(ref)
+        try:
+            return int(ref)
+        except (TypeError, ValueError):
+            return -1
+
+    def _query_live_records(self, geometry, live_records: Mapping[int, dict[str, Any]], nearest: bool = False) -> list[dict[str, Any]]:
+        """Query the live STRtree snapshot and return unique candidate records."""
+        if geometry is None or getattr(geometry, "is_empty", True):
+            return []
+
+        self._ensure_live_index(live_records)
+        if self._live_tree is None:
+            return []
+
+        try:
+            refs = (
+                self._live_tree.query_nearest(geometry, all_matches=True, exclusive=True)
+                if nearest
+                else self._live_tree.query(geometry)
+            )
+        except Exception:
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        seen_input_indices: set[int] = set()
+        for ref in refs:
+            idx = self._resolve_tree_ref(ref)
+            if idx < 0 or idx >= len(self._live_index_records):
+                continue
+            candidate = self._live_index_records[idx]
+            input_index = int(candidate["_input_index"])
+            if input_index in seen_input_indices:
+                continue
+            if input_index not in live_records:
+                continue
+            seen_input_indices.add(input_index)
+            candidates.append(candidate)
+        return candidates
+
+    def _clip_to_visible_later_geometry(
+        self,
+        geometry,
+        record: Mapping[str, Any],
+        live_records: Mapping[int, dict[str, Any]],
+    ) -> tuple[Optional[object], bool]:
+        """Trim widened geometry against later draw-order records that still occlude it.
+
+        对扩展后的几何按后续绘制顺序记录做可见性裁剪，仅忽略那些最终会并入当前形状的后续记录。
         """
-        candidates = []
+        normalized = _normalize_polygonal_geometry(geometry)
+        if normalized is None:
+            return None, False
+
+        current_index = int(record["_input_index"])
+        current_draw_order = int(record.get("draw_order", record["_input_index"]))
+        simulated_live_records = dict(live_records)
+        simulated_current = dict(record)
+        simulated_current["geometry"] = normalized
+        simulated_live_records[current_index] = simulated_current
+
+        occluders = []
+        for candidate in self._query_live_records(normalized, live_records):
+            candidate_index = int(candidate["_input_index"])
+            if candidate_index == current_index:
+                continue
+            candidate_draw_order = int(candidate.get("draw_order", candidate["_input_index"]))
+            if candidate_draw_order <= current_draw_order:
+                continue
+            candidate_geometry = candidate.get("geometry")
+            if candidate_geometry is None:
+                continue
+            try:
+                overlap = candidate_geometry.intersection(normalized)
+                if float(getattr(overlap, "area", 0.0)) <= _MIN_AREA_EPSILON:
+                    continue
+            except Exception:
+                continue
+
+            candidate_classification = self.classify(candidate_geometry)
+            if candidate_classification == "normal":
+                occluders.append(candidate_geometry)
+                continue
+
+            if candidate_classification == "thin":
+                candidate_widened = self._widen_to_printable_core(candidate_geometry)
+                if candidate_widened is not None and self.classify(candidate_widened) == "normal":
+                    occluders.append(candidate_geometry)
+                    continue
+
+            target = self._select_best_neighbor(candidate, simulated_live_records)
+            if target is not None:
+                target_draw_order = int(target.get("draw_order", target["_input_index"]))
+                if target_draw_order <= current_draw_order:
+                    continue
+
+            occluders.append(candidate_geometry)
+
+        if not occluders:
+            return normalized, False
+
+        occluder = occluders[0] if len(occluders) == 1 else unary_union(occluders)
+        return _difference_polygonal_geometry(normalized, occluder), True
+
+    def _score_neighbor_candidates(self, record: Mapping[str, Any], candidates: list[dict[str, Any]]) -> list[tuple]:
+        """Compute the stable tie-break tuple for neighbor candidates."""
         source_geometry = record.get("geometry")
         if source_geometry is None:
-            return None
+            return []
 
-        for candidate in records:
+        scored = []
+        for candidate in candidates:
             if candidate["_input_index"] == record["_input_index"]:
                 continue
             target_geometry = candidate.get("geometry")
@@ -449,7 +635,7 @@ class PrintableFeatureOptimizer:
             except Exception:
                 distance = float("inf")
             same_recipe = _same_recipe(record, candidate)
-            candidates.append(
+            scored.append(
                 (
                     0 if shared_boundary > _SHARED_BOUNDARY_EPSILON else 1,
                     distance,
@@ -459,7 +645,24 @@ class PrintableFeatureOptimizer:
                     candidate,
                 )
             )
+        return scored
 
+    def _select_best_neighbor(self, record: Mapping[str, Any], live_records: Mapping[int, dict[str, Any]]):
+        """Pick the best merge target using shared boundary, distance, and recipe ties.
+
+        按共享边界、距离和 recipe 兼容性选择最佳合并目标。
+        """
+        source_geometry = record.get("geometry")
+        if source_geometry is None:
+            return None
+
+        candidates = self._score_neighbor_candidates(record, self._query_live_records(source_geometry, live_records))
+        boundary_candidates = [candidate for candidate in candidates if candidate[0] == 0]
+        if boundary_candidates:
+            boundary_candidates.sort(key=lambda item: item[:-1])
+            return boundary_candidates[0][-1]
+
+        candidates = self._score_neighbor_candidates(record, self._query_live_records(source_geometry, live_records, nearest=True))
         if not candidates:
             return None
         candidates.sort(key=lambda item: item[:-1])
@@ -479,6 +682,7 @@ class PrintableFeatureOptimizer:
         merged = _normalize_polygonal_geometry(merged)
         if merged is not None:
             target["geometry"] = merged
+            self._mark_live_index_dirty()
         return {
             "source_index": int(source["_input_index"]),
             "source_recipe": self._recipe_copy(source.get("recipe")),
@@ -576,4 +780,5 @@ class PrintableFeatureOptimizer:
         public = dict(record)
         public.pop("_input_index", None)
         public.pop("_original_geometry", None)
+        public.pop(_STABLE_INPUT_INDEX_KEY, None)
         return public
