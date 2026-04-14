@@ -10,6 +10,7 @@ Validates:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -18,11 +19,13 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
+from api.routers.converter.preview import _resolve_upload_source_basename, convert_preview
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
@@ -301,6 +304,232 @@ class TestResponseContainsPaletteAndDimensions:
         assert "dimensions" in body
         assert body["dimensions"]["width"] == 120
         assert body["dimensions"]["height"] == 80
+        assert body["warnings"] == []
+
+
+class TestSvgLargeFormatWarnings:
+    """Verify preview records SVG native large-format compatibility warnings."""
+
+    def test_preview_returns_and_stores_svg_large_format_warnings(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<text x="10" y="30">Risky text</text>'
+                '<rect x="0" y="40" width="120" height="40" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("risky.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "warnings" in body
+        assert any("native vector large-format" in warning.lower() for warning in body["warnings"])
+        assert any("text" in warning.lower() for warning in body["warnings"])
+
+        session_data = _test_store.get(body["session_id"])
+        assert session_data is not None
+        assert session_data["source_basename"] == "risky"
+        policy = session_data["svg_large_format_policy"]
+        assert policy["native_tiling_supported"] is False
+        assert policy["inspection_source"] == "preview-vector-svg"
+        assert any("text" in warning.lower() for warning in policy["warnings"])
+
+    def test_preview_does_not_store_synthetic_svg_policy_for_non_vector_mode(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<text x="10" y="30">Risky text</text>'
+                '<rect x="0" y="40" width="120" height="40" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("risky.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "high-fidelity",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["warnings"] == []
+
+        session_data = _test_store.get(body["session_id"])
+        assert session_data is not None
+        assert session_data["source_basename"] == "risky"
+        assert session_data.get("svg_large_format_policy") is None
+
+    def test_preview_normalizes_windows_style_upload_names_for_source_basename(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<rect x="0" y="0" width="120" height="80" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": (r"C:\\art\\poster.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 200
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        assert session_data["source_basename"] == "poster"
+
+    def test_preview_source_basename_uses_tempfile_fallback_when_upload_name_is_blank(self) -> None:
+        assert _resolve_upload_source_basename("", "/tmp/tmpabcd1234_poster.png") == "poster"
+
+    def test_preview_endpoint_uses_tempfile_basename_when_upload_filename_is_blank(self) -> None:
+        worker_result = _create_worker_result_files()
+        pool = MagicMock(spec=WorkerPoolManager)
+        pool.submit = AsyncMock(return_value=worker_result)
+
+        upload = UploadFile(filename="", file=_make_test_image_buf())
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/tmpabcd1234_poster.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            result = asyncio.run(
+                convert_preview(
+                    image=upload,
+                    source_kind="legacy_single",
+                    lut_name="test_lut",
+                    material_type=None,
+                    vendor=None,
+                    db_names=None,
+                    target_width_mm=60.0,
+                    auto_bg=False,
+                    bg_tol=40,
+                    color_mode="4-Color",
+                    modeling_mode="high-fidelity",
+                    color_layers=None,
+                    layer_height_mm=None,
+                    quantize_colors=48,
+                    enable_cleanup=True,
+                    model_enable=False,
+                    model_only=False,
+                    model_threshold=None,
+                    model_margin=None,
+                    hue_weight=0.0,
+                    chroma_gate=15.0,
+                    is_dark=True,
+                    store=_test_store,
+                    registry=_test_registry,
+                    pool=pool,
+                )
+            )
+
+        session_data = _test_store.get(result.session_id)
+        assert session_data is not None
+        assert session_data["source_basename"] == "poster"
+
+    def test_preview_sanitizes_unsafe_upload_basename_characters(self) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        svg_bytes = io.BytesIO(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<rect x="0" y="0" width="120" height="80" fill="#ff0000"/>'
+                "</svg>"
+            ).encode("utf-8")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": (r"C:\\art\\bad:name*.svg", svg_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 200
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        assert session_data["source_basename"] == "bad_name"
 
 
 # =========================================================================

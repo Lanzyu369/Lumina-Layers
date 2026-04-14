@@ -424,10 +424,21 @@ class LargeFormatGenerateRequest(BaseModel):
             所有切片共享的生成参数。
     """
 
-    target_height_mm: float = Field(..., gt=0, description="总输出高度 (mm)")
+    target_height_mm: float | None = Field(None, gt=0, description="总输出高度 (mm)")
     tile_width_mm: float = Field(250.0, gt=0, description="切片宽度 (mm)")
     tile_height_mm: float = Field(250.0, gt=0, description="切片高度 (mm)")
-    params: ConvertGenerateRequest = Field(..., description="生成参数")
+    params: "LargeFormatConvertGenerateRequest" = Field(..., description="生成参数")
+
+
+class LargeFormatConvertGenerateRequest(ConvertGenerateRequest):
+    """Large-format generate params where target width may be derived.
+    大画幅生成参数：目标宽度可由目标高度和原图比例推导。
+    """
+
+    target_width_mm: float | None = Field(None, ge=10, le=9999, description="目标宽度 (mm)")
+
+
+LargeFormatGenerateRequest.model_rebuild()
 
 
 class PuzzleStyle(str, Enum):

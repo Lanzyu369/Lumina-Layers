@@ -201,6 +201,40 @@ describe('clearAllRemaps', () => {
   });
 });
 
+describe('handleFilesSelect clears stale puzzle state', () => {
+  beforeEach(() => {
+    resetConverterState({
+      puzzleEnabled: true,
+      puzzleOverlayUrl: '/api/files/overlay',
+      puzzleWarnings: ['warning'],
+      puzzleResolvedRows: 2,
+      puzzleResolvedCols: 3,
+      puzzleResolvedPieceCount: 6,
+    });
+  });
+
+  it('clears puzzle mode when selecting a new single file', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:test-preview';
+    URL.revokeObjectURL = () => {};
+
+    try {
+      const file = new File(['png'], 'fresh.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([file]);
+
+      const state = useConverterStore.getState();
+      expect(state.puzzleEnabled).toBe(false);
+      expect(state.puzzleOverlayUrl).toBeNull();
+      expect(state.puzzleWarnings).toEqual([]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+});
+
 
 describe('setModelBounds', () => {
   beforeEach(() => {

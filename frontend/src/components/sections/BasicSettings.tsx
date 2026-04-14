@@ -20,6 +20,7 @@ import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import type { RecipeFileSource } from "../../recipe/importRecipe";
+import { StatusBanner } from "../ui/panelPrimitives";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -112,6 +113,8 @@ export default function BasicSettings() {
     tileWidthMm,
     tileHeightMm,
     previewImageUrl,
+    previewWarnings,
+    generatedLargeFormatWarnings,
     setColorLayers,
     setLayerHeightMm,
     setModelEnable,
@@ -153,6 +156,8 @@ export default function BasicSettings() {
     tileWidthMm: s.tileWidthMm,
     tileHeightMm: s.tileHeightMm,
     previewImageUrl: s.previewImageUrl,
+    previewWarnings: s.previewWarnings,
+    generatedLargeFormatWarnings: s.largeFormatWarnings,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
     setModelEnable: s.setModelEnable,
@@ -346,6 +351,11 @@ export default function BasicSettings() {
     const lastH = Math.round(target_height_mm - (rows - 1) * tileHeightMm);
     return { cols, rows, total: cols * rows, lastW, lastH };
   }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
+
+  const mergedLargeFormatWarnings = useMemo(
+    () => Array.from(new Set([...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])])),
+    [previewWarnings, generatedLargeFormatWarnings],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -611,6 +621,16 @@ export default function BasicSettings() {
           {t("puzzle_large_format_disabled_hint")}
         </div>
       )}
+
+      {mergedLargeFormatWarnings.length > 0 ? (
+        <StatusBanner tone="warning">
+          <div className="flex flex-col gap-1">
+            {mergedLargeFormatWarnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        </StatusBanner>
+      ) : null}
 
       {largeFormatEnabled && (
         <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">

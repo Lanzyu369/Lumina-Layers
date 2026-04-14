@@ -260,14 +260,20 @@ export interface PreviewResponse {
     preview_raw_url?: string;
   };
   contours?: Record<string, number[][][]> | null; // hex -> list of contour polygons (world coords mm)
+  warnings: string[];
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
+export type LargeFormatConvertGenerateRequest =
+  Omit<ConvertGenerateRequest, "target_width_mm"> & {
+    target_width_mm?: number;
+  };
+
 export interface LargeFormatGenerateRequest {
-  target_height_mm: number;
+  target_height_mm?: number;
   tile_width_mm: number;
   tile_height_mm: number;
-  params: ConvertGenerateRequest;
+  params: LargeFormatConvertGenerateRequest;
 }
 
 /** 大画幅生成响应 */
@@ -278,6 +284,7 @@ export interface LargeFormatGenerateResponse {
   tile_count: number;
   grid_cols: number;
   grid_rows: number;
+  warnings: string[];
 }
 
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */

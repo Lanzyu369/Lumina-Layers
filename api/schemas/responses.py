@@ -143,6 +143,7 @@ class PreviewResponse(BaseModel):
     palette: list[dict]
     dimensions: dict
     contours: Optional[dict[str, list[list[list[float]]]]] = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ColorReplaceResponse(BaseModel):
@@ -226,6 +227,7 @@ class LargeFormatGenerateResponse(BaseModel):
     tile_count: int
     grid_cols: int
     grid_rows: int
+    warnings: list[str] = Field(default_factory=list)
 
 
 class BatchItemResult(BaseModel):

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+import pickle
 import tempfile
 import time
 import uuid
@@ -27,9 +29,22 @@ from api.schemas.responses import (
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
-from api.workers.converter_workers import worker_batch_convert_item, worker_generate_model
+from api.workers.converter_workers import (
+    worker_batch_convert_item,
+    worker_generate_large_format_svg_native,
+    worker_generate_model,
+)
 from config import TEMP_DIR, ModelingMode as CoreModelingMode
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
+from core.vector_large_format import (
+    SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
+    SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
+    choose_svg_raster_fallback_density,
+    format_large_format_tile_label,
+    inspect_svg_large_format_support,
+    normalize_large_format_source_basename,
+)
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -60,10 +75,20 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
 
     normalized: list[dict[str, object]] = []
     for item in recipe_overrides:
-        region_id = item.region_id if hasattr(item, "region_id") else item.get("region_id")
-        region_ids = item.region_ids if hasattr(item, "region_ids") else item.get("region_ids")
-        recipe = item.recipe if hasattr(item, "recipe") else item.get("recipe")
-        layer_order = item.layer_order if hasattr(item, "layer_order") else item.get("layer_order")
+        if isinstance(item, dict):
+            item_data = item
+        else:
+            item_data = {
+                "region_id": getattr(item, "region_id", None),
+                "region_ids": getattr(item, "region_ids", None),
+                "recipe": getattr(item, "recipe", None),
+                "layer_order": getattr(item, "layer_order", None),
+            }
+
+        region_id = item_data.get("region_id")
+        region_ids = item_data.get("region_ids")
+        recipe = item_data.get("recipe")
+        layer_order = item_data.get("layer_order")
 
         expanded_region_ids: list[str] = []
         if isinstance(region_id, str) and region_id:
@@ -88,6 +113,114 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
             )
 
     return normalized or None
+
+
+def _resolve_recipe_overrides(session_data: dict, request: ConvertGenerateRequest) -> list[dict[str, object]] | None:
+    """Resolve effective recipe overrides from session state and request body."""
+
+    recipe_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
+    if request.recipe_overrides is not None:
+        recipe_overrides = _normalize_recipe_overrides(request.recipe_overrides)
+    return recipe_overrides
+
+
+def _prepare_recipe_override_worker_inputs(
+    *,
+    cache: dict,
+    session_data: dict,
+    recipe_overrides: list[dict[str, object]] | None,
+    request: ConvertGenerateRequest,
+    sid: str,
+    store: SessionStore,
+) -> tuple[str | None, str | None]:
+    """Serialize recipe-override artifacts required by the worker pipeline."""
+
+    if not recipe_overrides:
+        return None, None
+
+    cached_material_matrix = cache.get("material_matrix")
+    region_masks = session_data.get("selected_region_masks") or {}
+    lut_metadata = cache.get("lut_metadata")
+    if cached_material_matrix is None:
+        raise HTTPException(status_code=409, detail="Preview cache missing material_matrix")
+    if not isinstance(region_masks, dict):
+        region_masks = {}
+
+    material_matrix_override = np.asarray(cached_material_matrix).copy()
+    current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
+    target_layers = int(request.color_layers or current_layers)
+    metadata_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
+    base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+
+    if target_layers > current_layers and material_matrix_override.ndim == 3:
+        pad_shape = (
+            material_matrix_override.shape[0],
+            material_matrix_override.shape[1],
+            target_layers - current_layers,
+        )
+        pad = np.full(pad_shape, base_channel_idx, dtype=material_matrix_override.dtype)
+        if metadata_order == "Top2Bottom":
+            material_matrix_override = np.concatenate([material_matrix_override, pad], axis=2)
+        else:
+            material_matrix_override = np.concatenate([pad, material_matrix_override], axis=2)
+    elif target_layers < current_layers:
+        raise HTTPException(
+            status_code=422,
+            detail="Recipe overrides cannot reduce the current optical layer count",
+        )
+
+    for item in recipe_overrides:
+        region_id = item["region_id"]
+        item_recipe = item["recipe"]
+        item_layer_order = item["layer_order"]
+        region_mask = region_masks.get(region_id)
+        if region_mask is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Region mask not found for recipe override: {region_id}",
+            )
+        recipe = convert_recipe_between_orders(
+            list(item_recipe),
+            item_layer_order,
+            metadata_order,
+        )
+        if len(recipe) < target_layers:
+            pad_count = target_layers - len(recipe)
+            if metadata_order == "Top2Bottom":
+                recipe = recipe + [base_channel_idx] * pad_count
+            else:
+                recipe = [base_channel_idx] * pad_count + recipe
+        elif len(recipe) > target_layers:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Recipe override has {len(recipe)} layers but target mode is {target_layers}",
+            )
+        material_matrix_override[np.asarray(region_mask, dtype=bool)] = np.asarray(
+            recipe,
+            dtype=material_matrix_override.dtype,
+        )
+
+    fd, mm_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+    os.close(fd)
+    np.save(mm_temp_path, material_matrix_override)
+    store.register_temp_file(sid, mm_temp_path)
+
+    recipe_override_masks_path: str | None = None
+    if isinstance(region_masks, dict):
+        selected_masks = {
+            item["region_id"]: region_masks[item["region_id"]]
+            for item in recipe_overrides
+            if item["region_id"] in region_masks
+        }
+        if selected_masks:
+            fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+            os.close(fd)
+            with open(masks_temp_path, "wb") as f:
+                pickle.dump(selected_masks, f)
+            recipe_override_masks_path = masks_temp_path
+            store.register_temp_file(sid, masks_temp_path)
+
+    return mm_temp_path, recipe_override_masks_path
 
 
 def _serialize_fridge_magnets(request: ConvertGenerateRequest) -> list[dict]:
@@ -146,9 +279,7 @@ async def convert_generate(
             }
             for r in request.replacement_regions
         ]
-    recipe_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
-    if request.recipe_overrides is not None:
-        recipe_overrides = _normalize_recipe_overrides(request.recipe_overrides)
+    recipe_overrides = _resolve_recipe_overrides(session_data, request)
 
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
@@ -196,91 +327,14 @@ async def convert_generate(
                 cached_matched_rgb.dtype,
             )
 
-    if recipe_overrides:
-        cached_material_matrix = cache.get("material_matrix")
-        region_masks = session_data.get("selected_region_masks") or {}
-        lut_metadata = cache.get("lut_metadata")
-        if cached_material_matrix is None:
-            raise HTTPException(status_code=409, detail="Preview cache missing material_matrix")
-        if not isinstance(region_masks, dict):
-            region_masks = {}
-
-        material_matrix_override = np.asarray(cached_material_matrix).copy()
-        current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
-        target_layers = int(request.color_layers or current_layers)
-        metadata_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
-        base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
-
-        if target_layers > current_layers and material_matrix_override.ndim == 3:
-            pad_shape = (
-                material_matrix_override.shape[0],
-                material_matrix_override.shape[1],
-                target_layers - current_layers,
-            )
-            pad = np.full(pad_shape, base_channel_idx, dtype=material_matrix_override.dtype)
-            if metadata_order == "Top2Bottom":
-                material_matrix_override = np.concatenate([material_matrix_override, pad], axis=2)
-            else:
-                material_matrix_override = np.concatenate([pad, material_matrix_override], axis=2)
-        elif target_layers < current_layers:
-            raise HTTPException(
-                status_code=422,
-                detail="Recipe overrides cannot reduce the current optical layer count",
-            )
-
-        for item in recipe_overrides:
-            region_id = item["region_id"]
-            item_recipe = item["recipe"]
-            item_layer_order = item["layer_order"]
-            region_mask = region_masks.get(region_id)
-            if region_mask is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Region mask not found for recipe override: {region_id}",
-                )
-            recipe = convert_recipe_between_orders(
-                list(item_recipe),
-                item_layer_order,
-                metadata_order,
-            )
-            if len(recipe) < target_layers:
-                pad_count = target_layers - len(recipe)
-                if metadata_order == "Top2Bottom":
-                    recipe = recipe + [base_channel_idx] * pad_count
-                else:
-                    recipe = [base_channel_idx] * pad_count + recipe
-            elif len(recipe) > target_layers:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Recipe override has {len(recipe)} layers but target mode is {target_layers}",
-                )
-            material_matrix_override[np.asarray(region_mask, dtype=bool)] = np.asarray(recipe, dtype=material_matrix_override.dtype)
-
-        fd, mm_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
-        os.close(fd)
-        np.save(mm_temp_path, material_matrix_override)
-        material_matrix_path = mm_temp_path
-        store.register_temp_file(body.session_id, mm_temp_path)
-
-    recipe_override_masks_path: str | None = None
-    if recipe_overrides:
-        region_masks = session_data.get("selected_region_masks") or {}
-        if isinstance(region_masks, dict):
-            selected_masks = {
-                item["region_id"]:
-                region_masks[item["region_id"]]
-                for item in recipe_overrides
-                if item["region_id"] in region_masks
-            }
-            if selected_masks:
-                fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-                os.close(fd)
-                import pickle
-
-                with open(masks_temp_path, "wb") as f:
-                    pickle.dump(selected_masks, f)
-                recipe_override_masks_path = masks_temp_path
-                store.register_temp_file(body.session_id, masks_temp_path)
+    material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
+        cache=cache,
+        session_data=session_data,
+        recipe_overrides=recipe_overrides,
+        request=request,
+        sid=body.session_id,
+        store=store,
+    )
 
     # 2b. Collect scalar parameters into a dict for the worker
     params: dict = {
@@ -410,54 +464,42 @@ class _LargeFormatBody(BaseModel):
     params: LargeFormatGenerateRequest
 
 
-@router.post("/generate-large-format")
-async def convert_generate_large_format(
-    body: _LargeFormatBody,
-    store: SessionStore = Depends(get_session_store),
-    registry: FileRegistry = Depends(get_file_registry),
-    pool: WorkerPoolManager = Depends(get_worker_pool),
-) -> LargeFormatGenerateResponse:
-    """Split image into tiles, generate a 3MF per tile, and package into ZIP.
-    将图片切割为网格切片，每片生成 3MF，打包为 ZIP。
-    """
-    import math
+def _resolve_large_format_dimensions(
+    cache: dict,
+    request,
+    target_height_mm: float | None,
+) -> tuple[float, float]:
+    ratio_w = float(cache.get("target_w") or 0.0)
+    ratio_h = float(cache.get("target_h") or 0.0)
+    if ratio_w <= 0 or ratio_h <= 0:
+        raise HTTPException(status_code=409, detail="Preview cache is missing valid aspect ratio data.")
 
-    # 1. Session validation
-    session_data = _require_session(store, body.session_id)
-    _require_preview_cache(session_data)
+    aspect_ratio = ratio_w / ratio_h
+    requested_width = request.target_width_mm
+    requested_height = target_height_mm
 
-    lf = body.params
-    request = lf.params
-
-    if _has_requested_fridge_magnet_cavities(request):
+    if requested_width is None and requested_height is None:
         raise HTTPException(
             status_code=422,
-            detail="Large-format tiled generation does not support fridge magnet cavities.",
+            detail="Large-format generation requires width or height. Provide at least one dimension.",
         )
 
-    image_path: str | None = session_data.get("image_path")
-    lut_path: str | None = session_data.get("lut_path")
-    if not image_path or not os.path.exists(image_path):
-        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
-    if not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+    if requested_width is None:
+        requested_width = round(float(requested_height) * aspect_ratio, 4)
+    elif requested_height is None:
+        requested_height = round(float(requested_width) / aspect_ratio, 4)
+    else:
+        expected_height = float(requested_width) / aspect_ratio
+        if abs(float(requested_height) - expected_height) > 1.0:
+            raise HTTPException(
+                status_code=422,
+                detail="Provided width and height do not match the preview aspect ratio.",
+            )
 
-    # 2. Compute tile grid
-    with Image.open(image_path) as img:
-        px_w, px_h = img.size
+    return float(requested_width), float(requested_height)
 
-    total_w_mm = request.target_width_mm
-    total_h_mm = lf.target_height_mm
-    tile_w_mm = lf.tile_width_mm
-    tile_h_mm = lf.tile_height_mm
 
-    cols = max(1, math.ceil(total_w_mm / tile_w_mm))
-    rows = max(1, math.ceil(total_h_mm / tile_h_mm))
-
-    px_per_mm_x = px_w / total_w_mm
-    px_per_mm_y = px_h / total_h_mm
-
-    # 3. Pre-compute global relief max height for 2.5D consistency
+def _resolve_relief_global_max_height(session_data: dict, request) -> float | None:
     relief_global_max_height: float | None = None
     if request.enable_relief:
         height_mode = request.height_mode or "color"
@@ -468,11 +510,18 @@ async def convert_generate_large_format(
             if hm_gray is not None:
                 hm_max_cfg = request.heightmap_max_height if request.heightmap_max_height else 5.0
                 relief_global_max_height = float(hm_max_cfg)
+    return relief_global_max_height
 
-    # 4. Build shared worker params (same as /generate, minus per-tile fields)
-    core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
-    height_mode = request.height_mode or "color"
 
+def _resolve_large_format_shared_params(
+    session_data: dict,
+    request,
+    relief_global_max_height: float | None,
+    *,
+    recipe_overrides: list[dict[str, object]] | None = None,
+    recipe_override_masks_path: str | None = None,
+    material_matrix_path: str | None = None,
+) -> dict:
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
         replacement_regions = [
@@ -483,7 +532,7 @@ async def convert_generate_large_format(
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
 
-    base_params: dict = {
+    return {
         "spacer_thick": request.spacer_thick,
         "structure_mode": request.structure_mode.value,
         "auto_bg": request.auto_bg,
@@ -506,24 +555,25 @@ async def convert_generate_large_format(
         "loop_offset_x": request.loop_offset_x,
         "loop_offset_y": request.loop_offset_y,
         "loop_position_preset": request.loop_position_preset,
-        "modeling_mode": core_modeling_mode,
+        "modeling_mode": CoreModelingMode(request.modeling_mode.value),
         "quantize_colors": request.quantize_colors,
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
                 {
-                    "region_id": item.region_id,
-                    "recipe": list(item.recipe),
-                    "layer_order": item.layer_order,
+                    "region_id": item["region_id"],
+                    "recipe": list(item["recipe"]),
+                    "layer_order": item["layer_order"],
                 }
-                for item in request.recipe_overrides
+                for item in recipe_overrides
             ]
-            if request.recipe_overrides is not None
+            if recipe_overrides is not None
             else None
         ),
+        "recipe_override_masks_path": recipe_override_masks_path,
         "separate_backing": request.separate_backing,
         "enable_relief": request.enable_relief,
-        "height_mode": height_mode,
+        "height_mode": request.height_mode or "color",
         "color_height_map": request.color_height_map,
         "heightmap_max_height": request.heightmap_max_height,
         "enable_cleanup": request.enable_cleanup,
@@ -537,39 +587,162 @@ async def convert_generate_large_format(
         "coating_height_mm": request.coating_height_mm,
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
+        "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "relief_global_max_height": relief_global_max_height,
     }
 
-    # 5. Crop tiles and submit workers
-    sid = body.session_id
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    full_img = Image.open(image_path)
+
+def _resolve_large_format_source_basename(session_data: dict, image_path: str) -> str:
+    source_basename = normalize_large_format_source_basename(session_data.get("source_basename"))
+    if source_basename:
+        return source_basename
+    return normalize_large_format_source_basename(os.path.splitext(os.path.basename(image_path))[0])
+
+
+async def _generate_large_format_svg_native(
+    *,
+    image_path: str,
+    lut_path: str,
+    source_basename: str,
+    recipe_overrides: list[dict[str, object]] | None,
+    recipe_override_masks_path: str | None,
+    material_matrix_path: str | None,
+    total_width_mm: float,
+    total_height_mm: float,
+    tile_width_mm: float,
+    tile_height_mm: float,
+    request,
+    session_data: dict,
+    sid: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    pool: WorkerPoolManager,
+    warnings: list[str] | None = None,
+) -> dict:
+    shared_params = _resolve_large_format_shared_params(
+        session_data,
+        request,
+        _resolve_relief_global_max_height(session_data, request),
+        recipe_overrides=recipe_overrides,
+        recipe_override_masks_path=recipe_override_masks_path,
+        material_matrix_path=material_matrix_path,
+    )
+    try:
+        result = await pool.submit(
+            worker_generate_large_format_svg_native,
+            image_path,
+            lut_path,
+            {
+                **shared_params,
+                "tile_name_prefix": source_basename,
+                "total_width_mm": total_width_mm,
+                "total_height_mm": total_height_mm,
+                "tile_width_mm": tile_width_mm,
+                "tile_height_mm": tile_height_mm,
+            },
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
+    except ROUTER_HANDLED_ERRORS as e:
+        raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
+    zip_path = result["zip_path"]
+    store.register_temp_file(sid, zip_path)
+    download_id = registry.register_path(sid, zip_path)
+    return {
+        "status": "ok",
+        "message": f"Generated {result['tile_count']}/{result['grid_cols'] * result['grid_rows']} tiles ({result['grid_cols']}×{result['grid_rows']})",
+        "download_url": f"/api/files/{download_id}",
+        "tile_count": result["tile_count"],
+        "grid_cols": result["grid_cols"],
+        "grid_rows": result["grid_rows"],
+        "warnings": list(warnings or []) + list(result.get("warnings", [])),
+    }
+
+
+async def _generate_large_format_raster(
+    *,
+    image_path: str,
+    lut_path: str,
+    source_basename: str,
+    recipe_overrides: list[dict[str, object]] | None,
+    recipe_override_masks_path: str | None,
+    material_matrix_path: str | None,
+    total_width_mm: float,
+    total_height_mm: float,
+    tile_width_mm: float,
+    tile_height_mm: float,
+    request,
+    session_data: dict,
+    sid: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    pool: WorkerPoolManager,
+    warnings: list[str] | None = None,
+) -> dict:
+    with Image.open(image_path) as img:
+        px_w, px_h = img.size
+        full_img = img.copy()
+
+    full_material_matrix: np.ndarray | None = None
+    full_recipe_override_masks: dict[str, np.ndarray] | None = None
+    override_target_w = 0
+    override_target_h = 0
+    if recipe_overrides and material_matrix_path is not None:
+        try:
+            full_material_matrix = np.load(material_matrix_path)
+        except (OSError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to load large-format recipe override matrix: {exc}")
+        if full_material_matrix.ndim != 3:
+            raise HTTPException(status_code=500, detail="Large-format recipe override matrix must be 3-dimensional")
+        override_target_h, override_target_w = full_material_matrix.shape[:2]
+        if recipe_override_masks_path is not None:
+            try:
+                with open(recipe_override_masks_path, "rb") as f:
+                    loaded_masks = pickle.load(f)
+            except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load large-format recipe override masks: {exc}")
+            if isinstance(loaded_masks, dict):
+                full_recipe_override_masks = {
+                    str(region_id): np.asarray(mask, dtype=bool)
+                    for region_id, mask in loaded_masks.items()
+                }
+
+    px_per_mm_x = px_w / total_width_mm
+    px_per_mm_y = px_h / total_height_mm
+    cols = max(1, math.ceil(total_width_mm / tile_width_mm))
+    rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    shared_params = _resolve_large_format_shared_params(
+        session_data,
+        request,
+        _resolve_relief_global_max_height(session_data, request),
+        recipe_overrides=recipe_overrides,
+        recipe_override_masks_path=recipe_override_masks_path,
+        material_matrix_path=material_matrix_path,
+    )
+    if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
+        shared_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
     hm_gray = (
-        session_data.get("heightmap_grayscale") if (request.enable_relief and height_mode == "heightmap") else None
+        session_data.get("heightmap_grayscale")
+        if (request.enable_relief and (request.height_mode or "color") == "heightmap")
+        else None
     )
 
     futures = []
     tile_labels: list[str] = []
-
     for r in range(rows):
         for c in range(cols):
-            # mm bounds
-            x0_mm = c * tile_w_mm
-            y0_mm = r * tile_h_mm
-            x1_mm = min(x0_mm + tile_w_mm, total_w_mm)
-            y1_mm = min(y0_mm + tile_h_mm, total_h_mm)
+            x0_mm = c * tile_width_mm
+            y0_mm = r * tile_height_mm
+            x1_mm = min(x0_mm + tile_width_mm, total_width_mm)
+            y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
             cur_tile_w = x1_mm - x0_mm
-            cur_tile_h = y1_mm - y0_mm
 
-            # pixel bounds
             px_x0 = int(round(x0_mm * px_per_mm_x))
             px_y0 = int(round(y0_mm * px_per_mm_y))
-            px_x1 = int(round(x1_mm * px_per_mm_x))
-            px_y1 = int(round(y1_mm * px_per_mm_y))
-            px_x1 = min(px_x1, px_w)
-            px_y1 = min(px_y1, px_h)
+            px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+            px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
             tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
             fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
@@ -577,9 +750,7 @@ async def convert_generate_large_format(
             tile_img.save(tile_path)
             store.register_temp_file(sid, tile_path)
 
-            tile_params = dict(base_params, target_width_mm=cur_tile_w)
-
-            # Tile-specific heightmap
+            tile_params = dict(shared_params, target_width_mm=cur_tile_w)
             if hm_gray is not None:
                 hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
                 fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
@@ -587,14 +758,41 @@ async def convert_generate_large_format(
                 Image.fromarray(hm_tile).save(hm_tile_path)
                 store.register_temp_file(sid, hm_tile_path)
                 tile_params["heightmap_path"] = hm_tile_path
+            if full_material_matrix is not None and override_target_w > 0 and override_target_h > 0:
+                ov_x0 = int(round(x0_mm * (override_target_w / total_width_mm)))
+                ov_y0 = int(round(y0_mm * (override_target_h / total_height_mm)))
+                ov_x1 = min(int(round(x1_mm * (override_target_w / total_width_mm))), override_target_w)
+                ov_y1 = min(int(round(y1_mm * (override_target_h / total_height_mm))), override_target_h)
+                material_matrix_tile = full_material_matrix[ov_y0:ov_y1, ov_x0:ov_x1, :]
+                fd_mm, mm_tile_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+                os.close(fd_mm)
+                np.save(mm_tile_path, material_matrix_tile)
+                store.register_temp_file(sid, mm_tile_path)
+                tile_params["material_matrix_path"] = mm_tile_path
+                tile_params["recipe_override_masks_path"] = None
 
-            label = f"{base_name}_R{r + 1}C{c + 1}"
+                selected_mask_tiles: dict[str, np.ndarray] = {}
+                for region_id, mask in (full_recipe_override_masks or {}).items():
+                    if mask.shape != (override_target_h, override_target_w):
+                        continue
+                    mask_tile = mask[ov_y0:ov_y1, ov_x0:ov_x1]
+                    if mask_tile.any():
+                        selected_mask_tiles[region_id] = mask_tile
+                if selected_mask_tiles:
+                    fd_masks, masks_tile_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+                    os.close(fd_masks)
+                    with open(masks_tile_path, "wb") as f:
+                        pickle.dump(selected_mask_tiles, f)
+                    store.register_temp_file(sid, masks_tile_path)
+                    tile_params["recipe_override_masks_path"] = masks_tile_path
+
+            label = format_large_format_tile_label(
+                source_basename=source_basename,
+                tile_label=f"R{r + 1}C{c + 1}",
+            )
             tile_labels.append(label)
             futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
 
-    full_img.close()
-
-    # 6. Collect results
     successful_paths: list[tuple[str, str]] = []
     errors: list[str] = []
     for label, fut in zip(tile_labels, futures):
@@ -614,29 +812,181 @@ async def convert_generate_large_format(
             detail += ": " + "; ".join(errors[:5])
         raise HTTPException(status_code=500, detail=detail)
 
-    # 7. Package into ZIP
     fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
     os.close(fd)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for label, tp in successful_paths:
             zf.write(tp, f"{label}.3mf")
-
+    store.register_temp_file(sid, zip_path)
     download_id = registry.register_path(sid, zip_path)
 
-    total_tiles = cols * rows
-    ok_count = len(successful_paths)
-    msg = f"Generated {ok_count}/{total_tiles} tiles ({cols}×{rows})"
+    msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"
     if errors:
         msg += f" — {len(errors)} failed"
+    return {
+        "status": "ok",
+        "message": msg,
+        "download_url": f"/api/files/{download_id}",
+        "tile_count": len(successful_paths),
+        "grid_cols": cols,
+        "grid_rows": rows,
+        "warnings": list(warnings or []),
+    }
 
-    return LargeFormatGenerateResponse(
-        status="ok",
-        message=msg,
-        download_url=f"/api/files/{download_id}",
-        tile_count=ok_count,
-        grid_cols=cols,
-        grid_rows=rows,
+
+def _rasterize_svg_for_large_format_fallback(
+    *,
+    svg_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    sid: str,
+    store: SessionStore,
+) -> tuple[str, list[str]]:
+    density, density_warnings = choose_svg_raster_fallback_density(
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
     )
+    raster_rgba = rasterize_svg(svg_path, total_width_mm, pixels_per_mm=density)
+    fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+    os.close(fd)
+    Image.fromarray(raster_rgba).save(png_path)
+    store.register_temp_file(sid, png_path)
+    return png_path, density_warnings
+
+
+@router.post("/generate-large-format")
+async def convert_generate_large_format(
+    body: _LargeFormatBody,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+    pool: WorkerPoolManager = Depends(get_worker_pool),
+) -> LargeFormatGenerateResponse:
+    """Split image into tiles, generate a 3MF per tile, and package into ZIP.
+    将图片切割为网格切片，每片生成 3MF，打包为 ZIP。
+    """
+    # 1. Session validation
+    session_data = _require_session(store, body.session_id)
+    cache = _require_preview_cache(session_data)
+
+    lf = body.params
+    request = lf.params
+
+    if _has_requested_fridge_magnet_cavities(request):
+        raise HTTPException(
+            status_code=422,
+            detail="Large-format tiled generation does not support fridge magnet cavities.",
+        )
+
+    image_path: str | None = session_data.get("image_path")
+    lut_path: str | None = session_data.get("lut_path")
+    if not image_path or not os.path.exists(image_path):
+        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
+    if not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+
+    sid = body.session_id
+    total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
+    source_basename = _resolve_large_format_source_basename(session_data, image_path)
+    recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
+        cache=cache,
+        session_data=session_data,
+        recipe_overrides=recipe_overrides,
+        request=request,
+        sid=sid,
+        store=store,
+    )
+    tile_w_mm = lf.tile_width_mm
+    tile_h_mm = lf.tile_height_mm
+
+    warnings: list[str] = []
+    is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
+    prefer_raster_svg = bool(recipe_overrides)
+    if is_svg_vector:
+        policy = session_data.get("svg_large_format_policy")
+        if not isinstance(policy, dict) or policy.get("inspection_source") not in {
+            "preview-vector-svg",
+            "generate-large-format",
+        }:
+            policy = {
+                **inspect_svg_large_format_support(image_path),
+                "inspection_source": "generate-large-format",
+            }
+            session_data["svg_large_format_policy"] = policy
+        warnings.extend(list(policy.get("warnings", [])))
+
+        if bool(policy.get("native_tiling_supported", False)) and not prefer_raster_svg:
+            result = await _generate_large_format_svg_native(
+                image_path=image_path,
+                lut_path=lut_path,
+                source_basename=source_basename,
+                recipe_overrides=recipe_overrides,
+                recipe_override_masks_path=recipe_override_masks_path,
+                material_matrix_path=material_matrix_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                tile_width_mm=tile_w_mm,
+                tile_height_mm=tile_h_mm,
+                request=request,
+                session_data=session_data,
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=pool,
+                warnings=warnings,
+            )
+        else:
+            fallback_png_path, density_warnings = _rasterize_svg_for_large_format_fallback(
+                svg_path=image_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                sid=sid,
+                store=store,
+            )
+            fallback_warnings = warnings + [SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING]
+            if not prefer_raster_svg:
+                fallback_warnings += density_warnings
+            result = await _generate_large_format_raster(
+                image_path=fallback_png_path,
+                lut_path=lut_path,
+                source_basename=source_basename,
+                recipe_overrides=recipe_overrides,
+                recipe_override_masks_path=recipe_override_masks_path,
+                material_matrix_path=material_matrix_path,
+                total_width_mm=total_w_mm,
+                total_height_mm=total_h_mm,
+                tile_width_mm=tile_w_mm,
+                tile_height_mm=tile_h_mm,
+                request=request,
+                session_data=session_data,
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=pool,
+                warnings=fallback_warnings,
+            )
+    else:
+        result = await _generate_large_format_raster(
+            image_path=image_path,
+            lut_path=lut_path,
+            source_basename=source_basename,
+            recipe_overrides=recipe_overrides,
+            recipe_override_masks_path=recipe_override_masks_path,
+            material_matrix_path=material_matrix_path,
+            total_width_mm=total_w_mm,
+            total_height_mm=total_h_mm,
+            tile_width_mm=tile_w_mm,
+            tile_height_mm=tile_h_mm,
+            request=request,
+            session_data=session_data,
+            sid=sid,
+            store=store,
+            registry=registry,
+            pool=pool,
+            warnings=warnings,
+        )
+
+    return LargeFormatGenerateResponse(**result)
 
 
 @router.post("/batch")

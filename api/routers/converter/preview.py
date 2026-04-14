@@ -34,6 +34,7 @@ from config import BedManager, PrinterConfig, TEMP_DIR
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
+from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -48,6 +49,21 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+
+
+def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str:
+    """Resolve a stable source basename from upload metadata across path styles."""
+
+    candidate = str(filename or "").strip()
+    if candidate:
+        normalized_filename = candidate.replace("\\", "/")
+        source_basename = normalize_large_format_source_basename(
+            os.path.splitext(os.path.basename(normalized_filename))[0]
+        )
+        if source_basename:
+            return source_basename
+    fallback_basename = os.path.splitext(os.path.basename(temp_path))[0]
+    return normalize_large_format_source_basename(fallback_basename) or fallback_basename
 
 
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
@@ -283,7 +299,7 @@ async def convert_preview(
     temp_native_bundle_path: str | None = None
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
-
+    svg_large_format_policy = None
     try:
         normalized_db_names = _normalize_db_names(db_names)
         request = LutSourceSelection.model_validate(
@@ -326,6 +342,12 @@ async def convert_preview(
         _t = time.perf_counter()
         temp_path = await ensure_png_tempfile(image)
         _t_upload = time.perf_counter() - _t
+        is_svg_upload = str(temp_path).lower().endswith(".svg")
+        if modeling_mode == "vector" and is_svg_upload:
+            svg_large_format_policy = {
+                **inspect_svg_large_format_support(temp_path),
+                "inspection_source": "preview-vector-svg",
+            }
 
         # 2. CPU computation offloaded to process pool (only paths and scalars)
         log.info(
@@ -417,6 +439,8 @@ async def convert_preview(
     bind_session_id(session_id)
     store.put(session_id, "preview_cache", cache_data)
     store.put(session_id, "image_path", temp_path)
+    source_basename = _resolve_upload_source_basename(image.filename, temp_path)
+    store.put(session_id, "source_basename", source_basename)
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", resolved_lut_name)
     store.put(session_id, "lut_source_kind", request.source_kind)
@@ -432,6 +456,8 @@ async def convert_preview(
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())
+    if svg_large_format_policy is not None:
+        store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
     # Save a pristine copy of matched_rgb for reset-replacements
     if cache_data and "matched_rgb" in cache_data:
         store.put(session_id, "original_matched_rgb", cache_data["matched_rgb"].copy())
@@ -572,6 +598,7 @@ async def convert_preview(
         palette=palette,
         dimensions=dimensions,
         contours=contours_data,
+        warnings=list((svg_large_format_policy or {}).get("warnings", [])),
     )
 
 

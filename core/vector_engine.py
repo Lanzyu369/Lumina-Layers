@@ -34,6 +34,7 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 from config import PrinterConfig, ColorSystem
+from core.feature_printability import PrintableFeatureOptimizer
 
 _log = logging.getLogger(__name__)
 
@@ -1025,6 +1026,61 @@ class VectorProcessor:
         stage_timings["color_match_s"] = time.perf_counter() - t0
         _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
 
+        t0 = time.perf_counter()
+        printability_optimizer = PrintableFeatureOptimizer(
+            matched_shapes,
+            scale_factor=scale_factor,
+        )
+        printability_result = printability_optimizer.optimize()
+        matched_shapes = printability_result.records
+        silhouette_geoms = [
+            shape["geometry"]
+            for shape in matched_shapes
+            if shape.get("geometry") is not None and not shape["geometry"].is_empty
+        ]
+        if silhouette_geoms:
+            try:
+                silhouette = unary_union(silhouette_geoms)
+            except Exception:
+                silhouette = silhouette_geoms[0] if len(silhouette_geoms) == 1 else None
+            if silhouette is not None:
+                if not silhouette.is_valid:
+                    silhouette = make_valid(silhouette)
+                silhouette = VectorProcessor._extract_polygonal_geometry(silhouette)
+                if silhouette is None or silhouette.is_empty:
+                    silhouette = None
+        else:
+            silhouette = None
+
+        if silhouette is not None and not silhouette.is_empty:
+            min_x, min_y, max_x, max_y = silhouette.bounds
+            offset_x = -min(0.0, min_x)
+            offset_y = -min(0.0, min_y)
+            if offset_x != 0.0 or offset_y != 0.0:
+                matched_shapes = [
+                    {
+                        **shape,
+                        "geometry": affinity.translate(shape["geometry"], xoff=offset_x, yoff=offset_y)
+                        if shape.get("geometry") is not None and not shape["geometry"].is_empty
+                        else shape.get("geometry"),
+                    }
+                    for shape in matched_shapes
+                ]
+                silhouette = affinity.translate(silhouette, xoff=offset_x, yoff=offset_y)
+                min_x += offset_x
+                min_y += offset_y
+                max_x += offset_x
+                max_y += offset_y
+            bbox = (max(0.0, min_x), max(0.0, min_y), max_x - min_x, max_y - min_y)
+        stage_timings["printability_filter_s"] = time.perf_counter() - t0
+        _log.info(
+            "[VECTOR] Printability filter: shapes=%s, classification_counts=%s, action_counts=%s, timings_ms=%s",
+            len(matched_shapes),
+            printability_result.classification_counts,
+            printability_result.action_counts,
+            printability_result.timings_ms,
+        )
+
         return VectorAnalysis(
             shape_data=shape_data,
             clipped_shapes=clipped_shapes,
@@ -1635,6 +1691,7 @@ class VectorProcessor:
                     "color": rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
+                    "draw_order": int(item.get("draw_order", len(matched))),
                 }
             )
 

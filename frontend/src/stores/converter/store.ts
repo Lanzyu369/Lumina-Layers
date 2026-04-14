@@ -706,11 +706,14 @@ function resolveNativeBrandSelection(
   }
 
   const allowedNames = new Set(getNativeDbOptionNames(brand));
-  const db_names = normalizeStringArray(
-    state.selectedNativeDbNames.length > 0
-      ? state.selectedNativeDbNames.filter((name) => allowedNames.has(name))
-      : brand.default_db_names.filter((name) => allowedNames.has(name)),
+  const selectedDbNames = normalizeStringArray(
+    state.selectedNativeDbNames.filter((name) => allowedNames.has(name)),
   );
+  const db_names = state.selectedNativeDbNames.length === 0
+    ? []
+    : selectedDbNames.length > 0
+      ? selectedDbNames
+      : normalizeStringArray(brand.default_db_names.filter((name) => allowedNames.has(name)));
   const supported_modes = brand.supported_modes ?? [];
   const supported_mode = resolveNativeSupportedModeForBrand(
     brand,
@@ -809,6 +812,8 @@ function buildNativeSourceParams(
       ? {
           model_enable: modelState?.model_enable ?? false,
           model_only: modelState?.model_only ?? false,
+          model_threshold: modelState?.model_threshold ?? undefined,
+          model_margin: modelState?.model_margin ?? undefined,
         }
       : {}),
   };
@@ -997,6 +1002,8 @@ export interface ConverterState {
   preview_spacer_thick: number | null; // 预览时的原始厚度
   previewPixelWidth: number | null; // 预览图像像素宽度（用于 3D→像素坐标转换）
   previewPixelHeight: number | null; // 预览图像像素高度（用于 3D→像素坐标转换）
+  previewWarnings: string[];
+  largeFormatWarnings: string[];
 
   // 模型边界（供 KeychainRing3D 定位）
   modelBounds: {
@@ -1433,6 +1440,8 @@ export const DEFAULT_STATE: ConverterState = {
   preview_spacer_thick: null,
   previewPixelWidth: null,
   previewPixelHeight: null,
+  previewWarnings: [],
+  largeFormatWarnings: [],
   modelBounds: null,
   enableCrop: loadEnableCrop(),
   cropModalOpen: false,
@@ -3230,16 +3239,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         isLoading: true,
         error: null,
         hasManualPreview: false,
-        layerImages: [],
-        layerImagesOpen: false,
+        previewWarnings: [],
+        largeFormatWarnings: [],
+        ...DEFAULT_LAYER_IMAGES_STATE,
+        ...DEFAULT_PUZZLE_PREVIEW_STATE,
       });
       console.log("[DEBUG] submitPreview: cleared layerImages");
       try {
-        const sourceSelection =
+        const resolvedSourceSelection = resolveConverterSourceSelection(state);
+        const sourceParams =
           state.source_version === "native"
-            ? buildNativeSourceParams(resolveConverterSourceSelection(state), state)
+            ? buildNativeSourceParams(resolvedSourceSelection, state)
             : buildLegacySourceParams(state.lut_name);
-        if (!sourceSelection) {
+        if (!sourceParams) {
           set({
             isLoading: false,
             error: "请先选择品牌和数据库",
@@ -3249,14 +3261,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const response = await apiConvertPreview(
           state.imageFile,
           {
-            ...sourceSelection,
+            ...sourceParams,
             color_layers:
-              sourceSelection.source_kind === "native_bundle"
-                ? sourceSelection.color_layers ?? undefined
+              sourceParams.source_kind === "native_bundle"
+                ? sourceParams.color_layers ?? undefined
                 : state.color_layers ?? undefined,
             layer_height_mm:
-              sourceSelection.source_kind === "native_bundle"
-                ? sourceSelection.layer_height_mm ?? undefined
+              sourceParams.source_kind === "native_bundle"
+                ? sourceParams.layer_height_mm ?? undefined
                 : state.layer_height_mm ?? undefined,
             target_width_mm: state.target_width_mm,
             auto_bg: state.auto_bg,
@@ -3265,6 +3277,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             modeling_mode: state.modeling_mode,
             quantize_colors: state.quantize_colors,
             enable_cleanup: state.enable_cleanup,
+            ...(sourceParams.source_kind === "native_bundle" &&
+            resolvedSourceSelection.native.predictive_model_available
+              ? {
+                  model_enable: state.model_enable,
+                  model_only: state.model_only,
+                  model_threshold: state.model_threshold ?? undefined,
+                  model_margin: state.model_margin ?? undefined,
+                }
+              : {}),
             hue_weight: state.hue_enable ? 0.5 : 0.0,
             chroma_gate: state.hue_enable ? state.chroma_gate : 0,
             is_dark: useSettingsStore.getState().theme === "dark",
@@ -3323,6 +3344,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           layer_height_mm: resolvedLayerHeightMm,
           previewPixelWidth: response.dimensions?.width ?? null,
           previewPixelHeight: response.dimensions?.height ?? null,
+          previewWarnings: response.warnings ?? [],
+          largeFormatWarnings: [],
           hasManualPreview: true,
           layerImages: [],
           layerImagesOpen: false,
@@ -3392,11 +3415,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           mergedReplacements = [...(mergedReplacements ?? []), ...remapRegions];
         }
 
-        const sourceSelection =
+        const resolvedSourceSelection = resolveConverterSourceSelection(state);
+        const sourceParams =
           state.source_version === "native"
-            ? buildNativeSourceParams(resolveConverterSourceSelection(state), state)
+            ? buildNativeSourceParams(resolvedSourceSelection, state)
             : buildLegacySourceParams(state.lut_name);
-        if (!sourceSelection) {
+        if (!sourceParams) {
           set({
             isGenerating: false,
             error: "请先选择品牌和数据库",
@@ -3404,14 +3428,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           return null;
         }
         const baseParams = {
-          ...sourceSelection,
+          ...sourceParams,
           color_layers:
-            sourceSelection.source_kind === "native_bundle"
-              ? sourceSelection.color_layers ?? undefined
+            sourceParams.source_kind === "native_bundle"
+              ? sourceParams.color_layers ?? undefined
               : state.color_layers ?? undefined,
           layer_height_mm:
-            sourceSelection.source_kind === "native_bundle"
-              ? sourceSelection.layer_height_mm ?? undefined
+            sourceParams.source_kind === "native_bundle"
+              ? sourceParams.layer_height_mm ?? undefined
               : state.layer_height_mm ?? undefined,
           target_width_mm: state.target_width_mm,
           auto_bg: state.auto_bg,
@@ -3451,6 +3475,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           wire_height_mm: state.wire_height_mm,
           enable_coating: state.enable_coating,
           coating_height_mm: state.coating_height_mm,
+          ...(sourceParams.source_kind === "native_bundle" &&
+          resolvedSourceSelection.native.predictive_model_available
+            ? {
+                model_enable: state.model_enable,
+                model_only: state.model_only,
+                model_threshold: state.model_threshold ?? undefined,
+                model_margin: state.model_margin ?? undefined,
+              }
+            : {}),
           enable_fridge_magnet: state.enable_fridge_magnet,
           fridge_magnets:
             state.enable_fridge_magnet && state.fridge_magnets.length > 0
@@ -3460,10 +3493,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             mergedReplacements && mergedReplacements.length > 0
               ? mergedReplacements
               : undefined,
-          recipe_overrides:
-            state.recipe_overrides.length > 0
-              ? state.recipe_overrides
-              : undefined,
+          recipe_overrides: state.recipe_overrides,
           free_color_set:
             state.free_color_set.size > 0
               ? Array.from(state.free_color_set).map((h) => `#${h}`)
@@ -3472,27 +3502,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           slicer: useSettingsStore.getState().slicerSoftware,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
         } as const;
-
-        if (state.largeFormatEnabled) {
-          const lfResponse = await apiConvertGenerateLargeFormat(
-            state.sessionId!,
-            {
-              target_height_mm: state.target_height_mm,
-              tile_width_mm: state.tileWidthMm,
-              tile_height_mm: state.tileHeightMm,
-              params: baseParams,
-            },
-          );
-          set({
-            isLoading: false,
-            modelUrl: null,
-            threemfDiskPath: null,
-            downloadUrl: lfResponse.download_url
-              ? `${lfResponse.download_url}`
-              : null,
-          });
-          return null;
-        }
 
         if (state.puzzleEnabled) {
           const puzzleResponse = await apiConvertGeneratePuzzle(
@@ -3514,6 +3523,30 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
             puzzleResolvedPieceCount: puzzleResponse.piece_count ?? null,
           });
+          _logGenerateTimer('puzzle 3mf received');
+          _clientLog('generate: puzzle 3mf received');
+          return null;
+        }
+
+        if (state.largeFormatEnabled) {
+          const lfResponse = await apiConvertGenerateLargeFormat(
+            state.sessionId!,
+            {
+              target_height_mm: state.target_height_mm,
+              tile_width_mm: state.tileWidthMm,
+              tile_height_mm: state.tileHeightMm,
+              params: baseParams,
+            },
+          );
+          set({
+            isGenerating: false,
+            modelUrl: null,
+            threemfDiskPath: null,
+            downloadUrl: lfResponse.download_url
+              ? `${lfResponse.download_url}`
+              : null,
+            largeFormatWarnings: lfResponse.warnings ?? [],
+          });
           return null;
         }
 
@@ -3532,6 +3565,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
+          largeFormatWarnings: [],
         });
         _logGenerateTimer('UI unlocked (isGenerating=false, modelUrl set)');
         _clientLog('generate: UI unlocked');
@@ -3711,7 +3745,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       }
     },
 
-    clearBatchFiles: () => set({ batchFiles: [] }),
+    clearBatchFiles: () =>
+      set({
+        batchFiles: [],
+        ...EMPTY_LUT_MATCH_STATE,
+        puzzleEnabled: false,
+        threemfDiskPath: null,
+        downloadUrl: null,
+        previewWarnings: [],
+        largeFormatWarnings: [],
+        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+      }),
 
     handleFilesSelect: (files: File[]) => {
       // Filter out falsy values and invalid formats
@@ -3750,7 +3794,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             previewBaseImageUrl: null,
             sessionId: null,
             previewGlbUrl: null,
+            modelUrl: null,
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
             ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: state.enableCrop,
@@ -3788,7 +3839,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             previewBaseImageUrl: null,
             sessionId: null,
             previewGlbUrl: null,
+            modelUrl: null,
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
             ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
@@ -3807,6 +3865,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           set({
             imageFile: singleFile,
             imagePreviewUrl: previewUrl,
+            previewImageUrl: null,
+            previewBaseImageUrl: null,
+            sessionId: null,
+            previewGlbUrl: null,
+            modelUrl: null,
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
+            ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: isSvg ? false : state.enableCrop,
@@ -3837,6 +3907,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         previewBaseImageUrl: null,
         sessionId: null,
         previewGlbUrl: null,
+        modelUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+        previewWarnings: [],
+        largeFormatWarnings: [],
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,

@@ -10,6 +10,7 @@ import { ColorMode, ModelingMode, StructureMode } from "../../api/types";
 const mocks = vi.hoisted(() => ({
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
+  convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
   applyRecipeOverride: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock("../../api/converter", async () => {
     ...actual,
     convertPreview: mocks.convertPreview,
     convertGenerate: mocks.convertGenerate,
+    convertGenerateLargeFormat: mocks.convertGenerateLargeFormat,
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
     applyRecipeOverride: mocks.applyRecipeOverride,
   };
@@ -92,6 +94,7 @@ describe("native bundle converter flow", () => {
     resetStore();
     mocks.convertPreview.mockReset();
     mocks.convertGenerate.mockReset();
+    mocks.convertGenerateLargeFormat.mockReset();
     mocks.convertGeneratePuzzle.mockReset();
     mocks.applyRecipeOverride.mockReset();
   });
@@ -149,6 +152,36 @@ describe("native bundle converter flow", () => {
     expect(resolveConverterSourceSelection(useConverterStore.getState()).isReady).toBe(true);
   });
 
+  it("falls back to brand defaults when persisted native DB names are all invalid", () => {
+    useConverterStore.setState({
+      source_version: "native",
+      lut_name: "",
+      nativeBrandGroups: [makePredictiveBrand()],
+      selectedNativeBrandKey: "brand-a",
+      selectedNativeDbNames: ["STALE-DB"],
+    } as never);
+
+    const selection = resolveConverterSourceSelection(useConverterStore.getState());
+
+    expect(selection.db_names).toEqual(["A2"]);
+    expect(selection.isReady).toBe(true);
+  });
+
+  it("preserves an explicitly cleared native DB selection", () => {
+    useConverterStore.setState({
+      source_version: "native",
+      lut_name: "",
+      nativeBrandGroups: [makePredictiveBrand()],
+      selectedNativeBrandKey: "brand-a",
+      selectedNativeDbNames: [],
+    } as never);
+
+    const selection = resolveConverterSourceSelection(useConverterStore.getState());
+
+    expect(selection.db_names).toEqual([]);
+    expect(selection.isReady).toBe(false);
+  });
+
   it("defaults model controls when switching to a predictive native source", () => {
     useConverterStore.setState({
       source_version: "legacy",
@@ -165,6 +198,69 @@ describe("native bundle converter flow", () => {
     expect(state.model_only).toBe(false);
     expect(state.model_threshold).toBeNull();
     expect(state.model_margin).toBeNull();
+  });
+
+  it("clears isGenerating and stores warnings after large-format generate", async () => {
+    mocks.convertGenerateLargeFormat.mockResolvedValue({
+      status: "ok",
+      message: "Generated 4 tiles",
+      download_url: "/api/files/lf-zip",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["Raster fallback was used for this large-format SVG request."],
+    });
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      source_version: "native",
+      lut_name: "",
+      sessionId: "session-large",
+      largeFormatEnabled: true,
+      isGenerating: false,
+      selectedNativeBrandKey: "brand-a",
+      selectedNativeDbNames: ["A2"],
+      nativeBrandGroups: [makePredictiveBrand()],
+      model_threshold: 0.42,
+      model_margin: 1.25,
+      model_enable: true,
+      model_only: false,
+    } as never);
+
+    await useConverterStore.getState().submitGenerate();
+
+    const state = useConverterStore.getState();
+    expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
+    const [, request] = mocks.convertGenerateLargeFormat.mock.calls[0];
+    expect(request.params.model_threshold).toBe(0.42);
+    expect(request.params.model_margin).toBe(1.25);
+    expect(state.isGenerating).toBe(false);
+    expect(state.downloadUrl).toBe("/api/files/lf-zip");
+    expect(state.largeFormatWarnings).toEqual([
+      "Raster fallback was used for this large-format SVG request.",
+    ]);
+  });
+
+  it("submitGenerate sends an explicit empty recipe_overrides array when cleared", async () => {
+    mocks.convertGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "Model generated",
+      download_url: "/api/files/legacy-model",
+      preview_3d_url: "/api/files/legacy-model.glb",
+    });
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      source_version: "legacy",
+      lut_name: "legacy-lut",
+      sessionId: "session-legacy",
+      recipe_overrides: [],
+    } as never);
+
+    await useConverterStore.getState().submitGenerate();
+
+    const [, params] = mocks.convertGenerate.mock.calls.at(-1)!;
+    expect(params.recipe_overrides).toEqual([]);
   });
 
   it("defaults native layer count to 5 when entering native mode without a valid current selection", () => {

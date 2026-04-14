@@ -14,14 +14,24 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import os
+import pickle
+import tempfile
+import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+import numpy as np
+from PIL import Image
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
-from api.schemas.converter import ConvertGenerateRequest
+from api.routers.converter.generate import _generate_large_format_raster
+from api.routers.converter.generate import _resolve_recipe_overrides
+from api.routers.converter.generate import _resolve_large_format_source_basename
+from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -58,12 +68,115 @@ client: TestClient = TestClient(app)
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()
-    store.put(sid, "preview_cache", {"some": "data"})
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "some": "data",
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+        },
+    )
     store.put(sid, "image_path", "/tmp/test_image.png")
+    store.put(sid, "source_basename", "test-image")
     store.put(sid, "lut_path", "/tmp/test_lut.npy")
     store.put(sid, "replacement_regions", [])
     store.put(sid, "free_color_set", set())
     return sid
+
+
+def _create_svg_session(
+    store: SessionStore,
+    *,
+    native_tiling_supported: bool,
+    warnings: list[str] | None = None,
+) -> tuple[str, str, str]:
+    """Create a session for SVG large-format tests with real temp files."""
+    fd_svg, svg_path = tempfile.mkstemp(suffix=".svg")
+    fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+    try:
+        with open(fd_svg, "w", encoding="utf-8", closefd=False) as svg_file:
+            svg_file.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                '<rect x="0" y="0" width="120" height="80" fill="#ff0000"/>'
+                "</svg>"
+            )
+        with open(fd_lut, "wb", closefd=False) as lut_file:
+            lut_file.write(b"lut")
+    finally:
+        import os
+
+        os.close(fd_svg)
+        os.close(fd_lut)
+
+    sid = store.create()
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+        },
+    )
+    store.put(sid, "image_path", svg_path)
+    store.put(sid, "source_basename", "source-artwork")
+    store.put(sid, "lut_path", lut_path)
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "free_color_set", set())
+    store.put(
+        sid,
+        "svg_large_format_policy",
+        {
+            "native_tiling_supported": native_tiling_supported,
+            "warnings": list(warnings or []),
+            "inspection_source": "preview-vector-svg",
+        },
+    )
+    return sid, svg_path, lut_path
+
+
+def _create_raster_large_format_session(store: SessionStore) -> tuple[str, str, str]:
+    """Create a PNG-backed session for large-format route tests."""
+    fd_img, image_path = tempfile.mkstemp(suffix=".png")
+    fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+    try:
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+    finally:
+        os.close(fd_img)
+        os.close(fd_lut)
+
+    sid = store.create()
+    store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 120,
+            "target_h": 80,
+            "target_width_mm": 60.0,
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "lut_metadata": SimpleNamespace(layer_order="Top2Bottom", base_channel_idx=0),
+        },
+    )
+    store.put(sid, "image_path", image_path)
+    store.put(sid, "source_basename", "poster")
+    store.put(sid, "lut_path", lut_path)
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "free_color_set", set())
+    store.put(
+        sid,
+        "selected_region_masks",
+        {"region-1": np.ones((4, 4), dtype=bool)},
+    )
+    store.put(
+        sid,
+        "recipe_overrides",
+        [{"region_id": "region-1", "recipe": [1, 1, 1, 1, 1], "layer_order": "Top2Bottom"}],
+    )
+    return sid, image_path, lut_path
 
 
 # =========================================================================
@@ -419,20 +532,604 @@ class TestLargeFormatFridgeMagnetValidation:
         assert "fridge magnet" in response.json()["detail"].lower()
 
 
-def test_convert_generate_request_accepts_native_bundle_source() -> None:
-    """ConvertGenerateRequest should support native-bundle source selection fields."""
+class TestLargeFormatDimensionsAndRouting:
+    """Verify large-format ratio resolution and SVG routing behavior."""
 
-    request = ConvertGenerateRequest(
-        source_kind="native_bundle",
-        material_type="PLA",
-        vendor="BambuLab",
-        db_names=["RYBW_008_5L"],
-    )
+    def test_large_format_source_basename_falls_back_to_image_path_when_session_value_missing(self) -> None:
+        resolved = _resolve_large_format_source_basename({}, "/tmp/tmpabcd1234_poster-art.png")
 
-    assert request.source_kind == "native_bundle"
-    assert request.material_type == "PLA"
-    assert request.vendor == "BambuLab"
-    assert request.db_names == ["RYBW_008_5L"]
+        assert resolved == "poster-art"
+
+    def test_large_format_source_basename_re_normalizes_unsafe_session_value(self) -> None:
+        resolved = _resolve_large_format_source_basename(
+            {"source_basename": " bad:name* "},
+            "/tmp/ignored.png",
+        )
+
+        assert resolved == "bad_name"
+
+    def test_large_format_svg_width_only_derives_height_and_uses_native_path(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with (
+            patch("api.routers.converter.generate.Image.open", side_effect=AssertionError("raster path should not open SVG")),
+            patch("api.routers.converter.generate._generate_large_format_svg_native", return_value=native_response) as native_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["warnings"] == []
+        native_helper.assert_called_once()
+        assert native_helper.call_args.kwargs["image_path"] == svg_path
+        assert native_helper.call_args.kwargs["lut_path"] == lut_path
+        assert native_helper.call_args.kwargs["source_basename"] == "source-artwork"
+        assert native_helper.call_args.kwargs["total_width_mm"] == 90.0
+        assert native_helper.call_args.kwargs["total_height_mm"] == 60.0
+
+    def test_large_format_svg_height_only_derives_width(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 100.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 6,
+            "grid_cols": 3,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_svg_native",
+            return_value=native_response,
+        ) as native_helper:
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        assert native_helper.call_args.kwargs["source_basename"] == "source-artwork"
+        assert native_helper.call_args.kwargs["total_width_mm"] == 150.0
+        assert native_helper.call_args.kwargs["total_height_mm"] == 100.0
+
+    def test_large_format_rejects_missing_both_dimensions(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "width" in response.json()["detail"].lower()
+        assert "height" in response.json()["detail"].lower()
+
+    def test_large_format_rejects_dimensions_inconsistent_with_preview_ratio(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 90.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 100.0,
+                },
+            },
+        }
+
+        with patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper:
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 422
+        assert "aspect ratio" in response.json()["detail"].lower()
+        native_helper.assert_not_called()
+
+    def test_large_format_svg_unsupported_falls_back_to_raster_with_warning(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=False,
+            warnings=["Native vector large-format is unavailable because the SVG uses text elements."],
+        )
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        fallback_response = {
+            "status": "ok",
+            "message": "fallback",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [
+                "Native vector large-format is unavailable because the SVG uses text elements.",
+                "Raster fallback was used for this large-format SVG request.",
+            ],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=fallback_response,
+            ) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert native_helper.call_count == 0
+        raster_helper.assert_called_once()
+        assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
+        assert any("raster fallback" in warning.lower() for warning in body["warnings"])
+
+    def test_large_format_route_passes_recipe_override_artifacts_to_raster_helper(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "recipe_overrides": [
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                },
+            },
+        }
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=raster_response,
+            ) as raster_helper:
+                response = client.post("/api/convert/generate-large-format", json=payload)
+
+            assert response.status_code == 200
+            raster_helper.assert_called_once()
+            kwargs = raster_helper.call_args.kwargs
+            assert kwargs["image_path"] == image_path
+            assert kwargs["lut_path"] == lut_path
+            assert kwargs["recipe_overrides"] == [
+                {
+                    "region_id": "region-1",
+                    "recipe": [1, 1, 1, 1, 1],
+                    "layer_order": "Top2Bottom",
+                }
+            ]
+            assert kwargs["material_matrix_path"] is not None
+            assert os.path.exists(kwargs["material_matrix_path"])
+            assert kwargs["recipe_override_masks_path"] is not None
+            assert os.path.exists(kwargs["recipe_override_masks_path"])
+        finally:
+            _test_store.clear_all()
+
+    def test_large_format_svg_with_recipe_overrides_uses_raster_path_even_when_native_supported(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        session_data = _test_store.get(sid)
+        assert session_data is not None
+        session_data["preview_cache"]["material_matrix"] = np.zeros((4, 4, 5), dtype=np.uint8)
+        session_data["preview_cache"]["lut_metadata"] = SimpleNamespace(layer_order="Top2Bottom", base_channel_idx=0)
+        session_data["selected_region_masks"] = {"region-1": np.ones((4, 4), dtype=bool)}
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                    "recipe_overrides": [
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                },
+            },
+        }
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": ["Raster fallback was used for this large-format SVG request."],
+        }
+
+        with (
+            patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper,
+            patch("api.routers.converter.generate._generate_large_format_raster", return_value=raster_response) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        native_helper.assert_not_called()
+        raster_helper.assert_called_once()
+        assert any("raster fallback" in warning.lower() for warning in response.json()["warnings"])
+
+    def test_large_format_reinspects_unmarked_svg_policy_before_using_native_path(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        session_data = _test_store.get(sid)
+        assert session_data is not None
+        session_data["svg_large_format_policy"] = {
+            "native_tiling_supported": True,
+            "warnings": [],
+            "unsupported_features": [],
+        }
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        fallback_response = {
+            "status": "ok",
+            "message": "fallback",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [
+                "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling. Unsupported features: text.",
+                "Raster fallback was used for this large-format SVG request.",
+            ],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate.inspect_svg_large_format_support",
+                return_value={
+                    "native_tiling_supported": False,
+                    "warnings": [
+                        "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling. Unsupported features: text."
+                    ],
+                    "unsupported_features": ["text"],
+                },
+            ) as inspect_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=fallback_response,
+            ) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        inspect_helper.assert_called_once()
+        native_helper.assert_not_called()
+        raster_helper.assert_called_once()
+        assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
+        updated_policy = _test_store.get(sid)["svg_large_format_policy"]
+        assert updated_policy["inspection_source"] == "generate-large-format"
+        assert updated_policy["native_tiling_supported"] is False
+
+    def test_large_format_reuses_preview_svg_policy_without_reinspection(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate.inspect_svg_large_format_support",
+                side_effect=AssertionError("stored preview policy should be reused"),
+            ),
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=native_response,
+            ) as native_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        native_helper.assert_called_once()
+
+    def test_large_format_svg_native_timeout_returns_504(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 504
+        assert "timed out" in response.json()["detail"].lower()
+
+    def test_large_format_svg_native_worker_error_returns_500(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
+        _mock_pool.submit = AsyncMock(side_effect=ValueError("tile analysis failed"))
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 500
+        assert "large-format svg generation failed" in response.json()["detail"].lower()
+        assert "tile analysis failed" in response.json()["detail"].lower()
+
+    def test_large_format_raster_helper_writes_sanitized_zip_entry_names(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename=" bad:name* ",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    material_matrix_path=None,
+                    total_width_mm=40.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            zip_path, _filename = registry.resolve(download_id)
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                assert archive.namelist() == ["bad_name_R1C1.3mf"]
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_raster_helper_slices_recipe_override_artifacts_per_tile(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_mm, material_matrix_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_mm)
+        fd_masks, recipe_override_masks_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd_masks)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        np.save(material_matrix_path, np.zeros((4, 8, 5), dtype=np.uint8))
+        with open(recipe_override_masks_path, "wb") as mask_file:
+            pickle.dump({"region-1": np.ones((4, 8), dtype=bool)}, mask_file)
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        store.put(sid, "preview_cache", {"target_w": 8, "target_h": 4})
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename="poster",
+                    recipe_overrides=[
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                    recipe_override_masks_path=recipe_override_masks_path,
+                    material_matrix_path=material_matrix_path,
+                    total_width_mm=80.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={"preview_cache": {"target_w": 8, "target_h": 4}},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
+
+            first_tile_params = mock_pool.submit.await_args_list[0].args[3]
+            sliced_matrix = np.load(first_tile_params["material_matrix_path"])
+            assert sliced_matrix.shape == (4, 4, 5)
+            with open(first_tile_params["recipe_override_masks_path"], "rb") as mask_file:
+                sliced_masks = pickle.load(mask_file)
+            assert sliced_masks["region-1"].shape == (4, 4)
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            zip_path, _filename = registry.resolve(download_id)
+            assert os.path.exists(zip_path)
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_rejects_fridge_magnet_flag_even_with_empty_list(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
@@ -455,3 +1152,33 @@ def test_convert_generate_request_accepts_native_bundle_source() -> None:
 
         assert response.status_code == 422
         assert "fridge magnet" in response.json()["detail"].lower()
+
+
+def test_convert_generate_request_accepts_native_bundle_source() -> None:
+    """ConvertGenerateRequest should support native-bundle source selection fields."""
+
+    request = ConvertGenerateRequest(
+        source_kind="native_bundle",
+        material_type="PLA",
+        vendor="BambuLab",
+        db_names=["RYBW_008_5L"],
+    )
+
+    assert request.source_kind == "native_bundle"
+    assert request.material_type == "PLA"
+    assert request.vendor == "BambuLab"
+    assert request.db_names == ["RYBW_008_5L"]
+
+
+def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_value() -> None:
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[],
+    )
+
+    resolved = _resolve_recipe_overrides(
+        {"recipe_overrides": [{"region_id": "region-1", "recipe": [1, 1, 1, 1, 1], "layer_order": "Top2Bottom"}]},
+        request,
+    )
+
+    assert resolved is None

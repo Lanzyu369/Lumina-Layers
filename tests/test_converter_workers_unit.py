@@ -12,13 +12,18 @@ Instead we inspect function metadata and verify picklability.
 """
 
 import inspect
+import os
 import pickle
 import types
+import zipfile
+from types import SimpleNamespace
+from typing import get_args, get_origin
 from unittest.mock import patch
 
 import pytest
 
 from api.workers.converter_workers import (
+    worker_generate_large_format_svg_native,
     worker_generate_model,
     worker_generate_preview,
 )
@@ -42,6 +47,10 @@ class TestWorkerImportability:
         """worker_generate_model should be importable from the module."""
         assert worker_generate_model is not None
 
+    def test_worker_generate_large_format_svg_native_is_importable(self) -> None:
+        """worker_generate_large_format_svg_native should be importable from the module."""
+        assert worker_generate_large_format_svg_native is not None
+
     def test_worker_generate_preview_is_function(self) -> None:
         """worker_generate_preview must be a plain function, not a method."""
         assert isinstance(worker_generate_preview, types.FunctionType)
@@ -49,6 +58,10 @@ class TestWorkerImportability:
     def test_worker_generate_model_is_function(self) -> None:
         """worker_generate_model must be a plain function, not a method."""
         assert isinstance(worker_generate_model, types.FunctionType)
+
+    def test_worker_generate_large_format_svg_native_is_function(self) -> None:
+        """worker_generate_large_format_svg_native must be a plain function."""
+        assert isinstance(worker_generate_large_format_svg_native, types.FunctionType)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +81,11 @@ class TestWorkerPicklability:
         restored = pickle.loads(pickle.dumps(worker_generate_model))
         assert restored is worker_generate_model
 
+    def test_worker_generate_large_format_svg_native_is_picklable(self) -> None:
+        """pickle.dumps/loads round-trip should return the same function."""
+        restored = pickle.loads(pickle.dumps(worker_generate_large_format_svg_native))
+        assert restored is worker_generate_large_format_svg_native
+
 
 # ---------------------------------------------------------------------------
 # Parameter type annotations — all must be serializable scalars
@@ -86,12 +104,29 @@ class TestParameterAnnotations:
             if param.annotation is not inspect.Parameter.empty
         }
 
+    @staticmethod
+    def _annotation_is_serializable(annotation: object) -> bool:
+        if annotation in SERIALIZABLE_TYPES or annotation is type(None):
+            return True
+        origin = get_origin(annotation)
+        if origin is None and isinstance(annotation, types.UnionType):
+            return all(
+                TestParameterAnnotations._annotation_is_serializable(option)
+                for option in get_args(annotation)
+            )
+        if origin is not None:
+            return all(
+                TestParameterAnnotations._annotation_is_serializable(option)
+                for option in get_args(annotation)
+            )
+        return False
+
     def test_preview_params_are_serializable(self) -> None:
         """All worker_generate_preview params must be basic serializable types."""
         annotations = self._get_param_annotations(worker_generate_preview)
         assert len(annotations) > 0, "Function should have type annotations"
         for name, ann in annotations.items():
-            assert ann in SERIALIZABLE_TYPES, (
+            assert self._annotation_is_serializable(ann), (
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
@@ -100,18 +135,32 @@ class TestParameterAnnotations:
         annotations = self._get_param_annotations(worker_generate_model)
         assert len(annotations) > 0, "Function should have type annotations"
         for name, ann in annotations.items():
-            assert ann in SERIALIZABLE_TYPES, (
+            assert self._annotation_is_serializable(ann), (
+                f"Parameter '{name}' has non-serializable type {ann}"
+            )
+
+    def test_large_format_svg_native_params_are_serializable(self) -> None:
+        """All worker_generate_large_format_svg_native params must be serializable."""
+        annotations = self._get_param_annotations(worker_generate_large_format_svg_native)
+        assert len(annotations) > 0, "Function should have type annotations"
+        for name, ann in annotations.items():
+            assert self._annotation_is_serializable(ann), (
                 f"Parameter '{name}' has non-serializable type {ann}"
             )
 
     def test_preview_has_expected_param_count(self) -> None:
-        """worker_generate_preview should have 12 parameters."""
+        """worker_generate_preview should have 18 parameters."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 12
+        assert len(sig.parameters) == 18
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
         sig = inspect.signature(worker_generate_model)
+        assert len(sig.parameters) == 3
+
+    def test_large_format_svg_native_has_expected_param_count(self) -> None:
+        """worker_generate_large_format_svg_native should have 3 parameters."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
         assert len(sig.parameters) == 3
 
     def test_preview_param_names(self) -> None:
@@ -120,13 +169,21 @@ class TestParameterAnnotations:
         expected = {
             "image_path", "lut_path", "target_width_mm", "auto_bg",
             "bg_tol", "color_mode", "modeling_mode", "quantize_colors",
-            "enable_cleanup", "is_dark", "hue_weight", "chroma_gate",
+            "color_layers", "layer_height_mm", "enable_cleanup", "is_dark",
+            "model_enable", "model_only", "model_threshold", "model_margin",
+            "hue_weight", "chroma_gate",
         }
         assert set(sig.parameters.keys()) == expected
 
     def test_model_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_model."""
         sig = inspect.signature(worker_generate_model)
+        expected = {"image_path", "lut_path", "params"}
+        assert set(sig.parameters.keys()) == expected
+
+    def test_large_format_svg_native_param_names(self) -> None:
+        """Verify expected parameter names for worker_generate_large_format_svg_native."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
         expected = {"image_path", "lut_path", "params"}
         assert set(sig.parameters.keys()) == expected
 
@@ -146,6 +203,11 @@ class TestReturnAnnotations:
     def test_model_returns_dict(self) -> None:
         """worker_generate_model return annotation should be dict."""
         hints = inspect.signature(worker_generate_model).return_annotation
+        assert hints is dict
+
+    def test_large_format_svg_native_returns_dict(self) -> None:
+        """worker_generate_large_format_svg_native return annotation should be dict."""
+        hints = inspect.signature(worker_generate_large_format_svg_native).return_annotation
         assert hints is dict
 
 
@@ -168,6 +230,12 @@ class TestTopLevelFunctions:
         assert "self" not in sig.parameters
         assert "cls" not in sig.parameters
 
+    def test_large_format_svg_native_has_no_self_param(self) -> None:
+        """Top-level functions should not have 'self' or 'cls' parameter."""
+        sig = inspect.signature(worker_generate_large_format_svg_native)
+        assert "self" not in sig.parameters
+        assert "cls" not in sig.parameters
+
     def test_preview_qualname_is_module_level(self) -> None:
         """__qualname__ should equal __name__ for top-level functions."""
         assert "." not in worker_generate_preview.__qualname__
@@ -175,6 +243,10 @@ class TestTopLevelFunctions:
     def test_model_qualname_is_module_level(self) -> None:
         """__qualname__ should equal __name__ for top-level functions."""
         assert "." not in worker_generate_model.__qualname__
+
+    def test_large_format_svg_native_qualname_is_module_level(self) -> None:
+        """__qualname__ should equal __name__ for top-level functions."""
+        assert "." not in worker_generate_large_format_svg_native.__qualname__
 
 
 def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
@@ -237,3 +309,92 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         lut_path="lut.npy",
         **params,
     )
+
+
+def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_zip_entries(tmp_path) -> None:
+    """Native SVG worker should emit safe ZIP entry names using tile_name_prefix."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+        def build_mesh(self, **_kwargs):
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    fake_tile = SimpleNamespace(
+        label="R1C1",
+        analysis=SimpleNamespace(
+            preview_colors={0: [255, 0, 0, 255]},
+            slot_names=["Slot1"],
+        ),
+    )
+
+    def _fake_export_scene_with_bambu_metadata(*, output_path: str, **_kwargs) -> None:
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+
+    params = {
+        "tile_name_prefix": r"bad:name*",
+        "total_width_mm": 120.0,
+        "total_height_mm": 80.0,
+        "tile_width_mm": 60.0,
+        "tile_height_mm": 80.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+    }
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[fake_tile]),
+        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export_scene_with_bambu_metadata),
+    ):
+        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+    try:
+        with zipfile.ZipFile(result["zip_path"], "r") as archive:
+            assert archive.namelist() == ["bad_name_R1C1.3mf"]
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_worker_generate_large_format_svg_native_raises_when_all_tiles_are_empty() -> None:
+    """Native SVG worker should surface the empty-slice failure clearly."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+    params = {
+        "tile_name_prefix": "poster-art",
+        "total_width_mm": 120.0,
+        "total_height_mm": 80.0,
+        "tile_width_mm": 60.0,
+        "tile_height_mm": 80.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+    }
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[]),
+    ):
+        with pytest.raises(ValueError, match="All SVG large-format tiles were empty after slicing"):
+            worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
