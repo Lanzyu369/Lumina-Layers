@@ -266,6 +266,91 @@ class TestVectorPrintabilityIntegration:
         assert max(shape["geometry"].bounds[2] for shape in analysis.matched_shapes) == pytest.approx(analysis.bbox[2])
         assert max(shape["geometry"].bounds[3] for shape in analysis.matched_shapes) == pytest.approx(analysis.bbox[3])
 
+    def test_analyze_svg_preserves_bbox_when_final_silhouette_recompute_fails(self, tmp_path, monkeypatch):
+        svg_path = tmp_path / "final_union_failure.svg"
+        svg_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+
+        processor = object.__new__(VectorProcessor)
+        processor.sampling_precision = 0.02
+        processor.color_mode = "4-Color"
+        processor.last_stage_timings = {}
+        processor.parse_warnings = []
+        processor.enable_fridge_magnet = False
+        processor.fridge_magnets = []
+        processor.img_processor = SimpleNamespace(
+            lut_rgb=[(220, 20, 60), (0, 0, 0)],
+            lut_path=str(tmp_path / "dummy.lut"),
+        )
+
+        shape_data = [
+            {"poly": box(12.0, 8.0, 13.0, 9.0), "color": (220, 20, 60)},
+            {"poly": box(18.0, 11.0, 20.0, 12.0), "color": (0, 0, 0)},
+        ]
+        clipped_shapes = [
+            {"geometry": box(12.0, 8.0, 13.0, 9.0), "color": (220, 20, 60)},
+            {"geometry": box(18.0, 11.0, 20.0, 12.0), "color": (0, 0, 0)},
+        ]
+
+        monkeypatch.setattr(
+            processor,
+            "_parse_svg",
+            lambda svg_file, target_width_mm: (shape_data, 1.0, (12.0, 8.0, 8.0, 4.0)),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_clip_occlusion",
+            lambda items, return_silhouette=False: (clipped_shapes, None),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_match_colors",
+            lambda clipped, replacement_manager, num_channels, num_layers=None: [
+                {
+                    "geometry": shape["geometry"],
+                    "recipe": [index],
+                    "color": shape["color"],
+                    "matched_rgb": shape["color"],
+                    "lut_idx": index,
+                    "draw_order": shape["draw_order"],
+                }
+                for index, shape in enumerate(clipped)
+            ],
+        )
+        monkeypatch.setattr(
+            vector_engine_module,
+            "PrintableFeatureOptimizer",
+            _FakePositiveOffsetPrintableFeatureOptimizer,
+        )
+
+        real_unary_union = vector_engine_module.unary_union
+        union_failure_state = {"failed": False}
+
+        def _fail_first_final_union(geoms):
+            geometries = list(geoms)
+            if len(geometries) > 1 and not union_failure_state["failed"]:
+                union_failure_state["failed"] = True
+                raise RuntimeError("final union failed")
+            return real_unary_union(geometries)
+
+        monkeypatch.setattr(vector_engine_module, "unary_union", _fail_first_final_union)
+
+        analysis = processor.analyze_svg(str(svg_path), target_width_mm=24.0)
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        board = scene.geometry["Board"]
+        color_bounds = [mesh.bounds for name, mesh in scene.geometry.items() if name != "Board"]
+        min_color_x = min(bounds[0][0] for bounds in color_bounds)
+        max_color_x = max(bounds[1][0] for bounds in color_bounds)
+
+        assert analysis.matched_shapes
+        assert analysis.bbox == pytest.approx((0.0, 0.0, 8.0, 4.0))
+        assert analysis.matched_shapes[0]["geometry"].bounds == pytest.approx((0.0, 0.0, 1.0, 1.0))
+        assert analysis.matched_shapes[1]["geometry"].bounds == pytest.approx((6.0, 3.0, 8.0, 4.0))
+        assert all(shape["geometry"].bounds[0] >= 0.0 and shape["geometry"].bounds[1] >= 0.0 for shape in analysis.matched_shapes)
+        assert board.bounds[0][0] == pytest.approx(min_color_x - 0.15, abs=1e-6)
+        assert board.bounds[1][0] == pytest.approx(max_color_x + 0.15, abs=1e-6)
+        assert analysis.silhouette is not None
+        assert analysis.silhouette.bounds == pytest.approx((0.0, 0.0, 8.0, 4.0))
+
     def test_analyze_svg_reclips_optimizer_output_before_returning_final_shapes(self, tmp_path, monkeypatch):
         lut_path = _write_merged_lut(tmp_path)
         svg_path = _write_simple_svg(tmp_path)
