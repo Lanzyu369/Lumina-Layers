@@ -345,3 +345,36 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
     finally:
         if os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
+
+
+def test_worker_generate_large_format_svg_native_raises_when_all_tiles_are_empty() -> None:
+    """Native SVG worker should surface the empty-slice failure clearly."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+    params = {
+        "tile_name_prefix": "poster-art",
+        "total_width_mm": 120.0,
+        "total_height_mm": 80.0,
+        "tile_width_mm": 60.0,
+        "tile_height_mm": 80.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+    }
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[]),
+    ):
+        with pytest.raises(ValueError, match="All SVG large-format tiles were empty after slicing"):
+            worker_generate_large_format_svg_native("image.svg", "lut.npy", params)

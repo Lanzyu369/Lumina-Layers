@@ -10,6 +10,7 @@ Validates:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import pickle
@@ -17,12 +18,13 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
-from api.routers.converter.preview import _resolve_upload_source_basename
+from api.routers.converter.preview import _resolve_upload_source_basename, convert_preview
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
@@ -391,6 +393,51 @@ class TestSvgLargeFormatWarnings:
 
     def test_preview_source_basename_uses_tempfile_fallback_when_upload_name_is_blank(self) -> None:
         assert _resolve_upload_source_basename("", "/tmp/tmpabcd1234_poster.png") == "poster"
+
+    def test_preview_endpoint_uses_tempfile_basename_when_upload_filename_is_blank(self) -> None:
+        worker_result = _create_worker_result_files()
+        pool = MagicMock(spec=WorkerPoolManager)
+        pool.submit = AsyncMock(return_value=worker_result)
+
+        upload = UploadFile(filename="", file=_make_test_image_buf())
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/tmpabcd1234_poster.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            result = asyncio.run(
+                convert_preview(
+                    image=upload,
+                    lut_name="test_lut",
+                    target_width_mm=60.0,
+                    auto_bg=False,
+                    bg_tol=40,
+                    color_mode="4-Color",
+                    modeling_mode="high-fidelity",
+                    quantize_colors=48,
+                    enable_cleanup=True,
+                    hue_weight=0.0,
+                    chroma_gate=15.0,
+                    is_dark=True,
+                    store=_test_store,
+                    registry=_test_registry,
+                    pool=pool,
+                )
+            )
+
+        session_data = _test_store.get(result.session_id)
+        assert session_data is not None
+        assert session_data["source_basename"] == "poster"
 
     def test_preview_sanitizes_unsafe_upload_basename_characters(self) -> None:
         worker_result = _create_worker_result_files()
