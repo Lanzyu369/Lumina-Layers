@@ -181,8 +181,10 @@ def _sample_grid_means(warped_rgb: np.ndarray, spec: SingleStageSpec) -> np.ndar
 
 
 def _canonical_step_layers(spec: SingleStageSpec) -> np.ndarray:
-    base = np.asarray(spec.step_layers, dtype=np.float64).reshape(spec.grid_rows, spec.grid_cols)
-    return np.flip(base, axis=(0, 1))
+    return np.asarray(spec.step_layers, dtype=np.float64).reshape(
+        spec.grid_rows,
+        spec.grid_cols,
+    )
 
 
 

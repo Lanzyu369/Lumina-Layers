@@ -91,9 +91,9 @@ def _build_gradient_card_capture(
         _linear_to_srgb_uint8(substrate_linear.reshape(1, 3)),
         (height, width, 1),
     )
-    step_matrix = np.flip(
-        np.asarray(spec.step_layers, dtype=np.float64).reshape(spec.grid_rows, spec.grid_cols),
-        axis=(0, 1),
+    step_matrix = np.asarray(spec.step_layers, dtype=np.float64).reshape(
+        spec.grid_rows,
+        spec.grid_cols,
     )
     for row in range(spec.grid_rows):
         for col in range(spec.grid_cols):
