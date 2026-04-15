@@ -24,6 +24,12 @@ class SingleStageKitGenerateRequest(BaseModel):
         "PLA Basic",
         description="Default material label used when palette entries omit material",
     )
+    layer_height_mm: float = Field(
+        0.04,
+        ge=0.04,
+        le=0.3,
+        description="Layer height in millimeters for generated single-stage jobs",
+    )
 
 
 class StageAFitRequest(BaseModel):

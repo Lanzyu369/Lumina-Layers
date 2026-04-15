@@ -2,6 +2,8 @@ import apiClient from "./client";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
+  GradientCardMaterialSaveResponse,
+  GradientCardStageAExtractResponse,
   ManualFixResponse,
   SingleStageExtractResponse,
   StageAFitResponse,
@@ -38,6 +40,42 @@ export async function extractColors(
 
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/extract",
+    fd,
+    { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function extractGradientCardStageA(params: {
+  datasetZip: File;
+  whiteImage: File;
+  blackImage: File;
+  whiteCornerPoints: Array<[number, number]>;
+  blackCornerPoints: Array<[number, number]>;
+}): Promise<GradientCardStageAExtractResponse> {
+  const fd = new FormData();
+  fd.append("dataset_zip", params.datasetZip);
+  fd.append("white_image", params.whiteImage);
+  fd.append("black_image", params.blackImage);
+  fd.append("white_corner_points", JSON.stringify(params.whiteCornerPoints));
+  fd.append("black_corner_points", JSON.stringify(params.blackCornerPoints));
+  const response = await apiClient.post<GradientCardStageAExtractResponse>(
+    "/extractor/extract-gradient-card-stage-a",
+    fd,
+    { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function saveGradientCardMaterial(params: {
+  sessionId: string;
+  materialName: string;
+}): Promise<GradientCardMaterialSaveResponse> {
+  const fd = new FormData();
+  fd.append("session_id", params.sessionId);
+  fd.append("material_name", params.materialName);
+  const response = await apiClient.post<GradientCardMaterialSaveResponse>(
+    "/extractor/save-gradient-card-material",
     fd,
     { timeout: 600_000 },
   );
@@ -139,9 +177,10 @@ export async function extractSingleStageDataset(
 }
 
 /** Fit Stage A from either an extraction session or a raw stage JSON file. */
-export async function fitStageA(
-  params: { sessionId?: string | null; stageJsonFile?: File | null },
-): Promise<StageAFitResponse> {
+export async function fitStageA(params: {
+  sessionId?: string | null;
+  stageJsonFile?: File | null;
+}): Promise<StageAFitResponse> {
   const fd = new FormData();
   if (params.sessionId) {
     fd.append("session_id", params.sessionId);

@@ -16,6 +16,8 @@ import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP } from "./stores/widget
 import TabNavBar from "./components/widget/TabNavBar";
 import CalibrationPanel from "./components/CalibrationPanel";
 import ExtractorPanel from "./components/ExtractorPanel";
+import GradientCardGeneratePanel from "./components/GradientCardGeneratePanel";
+import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
 import LutComparePanel from "./components/LutComparePanel";
 import LutManagerPanel from "./components/LutManagerPanel";
 import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
@@ -268,6 +270,8 @@ function AppContent() {
         )}
 
         {activeTab === 'calibration' && <CalibrationPanel />}
+        {activeTab === 'gradient-card-generate' && <GradientCardGeneratePanel />}
+        {activeTab === 'gradient-card-extract' && <GradientCardExtractPanel />}
 
         {activeTab === 'extractor' && (
           <div className="flex h-full min-h-0">

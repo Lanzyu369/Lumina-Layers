@@ -6,6 +6,7 @@ import json
 import zipfile
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -13,13 +14,20 @@ from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from config import PaletteEntry
 from core.single_stage import (
+    GradientCardStageAResult,
+    MaterialArchiveSaveResult,
     SingleStageExtractResult,
     SingleStageKitResult,
     StageAFitResult,
     extract_single_stage_dataset,
+    extract_stage_a_material_from_gradient_cards,
     fit_stage_a_from_stage_json,
+    generate_single_stage_kit,
+    save_stage_a_material_archive,
 )
+from core.single_stage.kit import SingleStageSpec, _build_stage_matrix, _build_stage_scene
 from core.single_stage.processing import _safe_extract_zip
 
 
@@ -32,28 +40,92 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     return TestClient(app), store, registry
 
 
+def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
+    clipped = np.clip(arr.astype(np.float64), 0.0, 1.0)
+    srgb = np.where(
+        clipped <= 0.0031308,
+        12.92 * clipped,
+        1.055 * np.power(clipped, 1.0 / 2.4) - 0.055,
+    )
+    return np.clip(np.round(srgb * 255.0), 0, 255).astype(np.uint8)
+
+
+def _write_gradient_card_manifest(zip_path: Path, spec: SingleStageSpec) -> None:
+    manifest = {
+        "schema_version": "1.0",
+        "workflow": "single-stage-kit",
+        "material_default": "PLA Basic",
+        "substrate_id": "white",
+        "substrate_display_name": "White",
+        "spec": {
+            "grid_cols": spec.grid_cols,
+            "grid_rows": spec.grid_rows,
+            "block_mm": spec.block_mm,
+            "gap_mm": spec.gap_mm,
+            "margin_mm": spec.margin_mm,
+            "pixel_mm": spec.pixel_mm,
+            "layer_height_mm": spec.layer_height_mm,
+            "base_mm": spec.base_mm,
+            "max_step_layers": spec.max_step_layers,
+            "step_layers": list(spec.step_layers),
+            "shrink_xy_mm": spec.shrink_xy_mm,
+        },
+    }
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(
+            "manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+        )
+
+
+def _build_gradient_card_capture(
+    spec: SingleStageSpec,
+    substrate_linear: np.ndarray,
+    e_linear: np.ndarray,
+    k_linear: np.ndarray,
+) -> np.ndarray:
+    pixels_per_mm = 20
+    width = int(round(spec.board_width_mm * pixels_per_mm))
+    height = int(round(spec.board_height_mm * pixels_per_mm))
+    image = np.tile(
+        _linear_to_srgb_uint8(substrate_linear.reshape(1, 3)),
+        (height, width, 1),
+    )
+    step_matrix = np.flip(
+        np.asarray(spec.step_layers, dtype=np.float64).reshape(spec.grid_rows, spec.grid_cols),
+        axis=(0, 1),
+    )
+    for row in range(spec.grid_rows):
+        for col in range(spec.grid_cols):
+            step_layers = step_matrix[row, col]
+            thickness_mm = step_layers * spec.layer_height_mm
+            linear_rgb = e_linear + (substrate_linear - e_linear) * np.exp(
+                -k_linear * thickness_mm,
+            )
+            srgb = _linear_to_srgb_uint8(linear_rgb.reshape(1, 3))[0]
+            x0 = int(round((spec.margin_mm + col * (spec.block_mm + spec.gap_mm)) * pixels_per_mm))
+            y0 = int(round((spec.margin_mm + row * (spec.block_mm + spec.gap_mm)) * pixels_per_mm))
+            x1 = int(round((spec.margin_mm + col * (spec.block_mm + spec.gap_mm) + spec.block_mm) * pixels_per_mm))
+            y1 = int(round((spec.margin_mm + row * (spec.block_mm + spec.gap_mm) + spec.block_mm) * pixels_per_mm))
+            image[y0:y1, x0:x1] = srgb
+    return image
+
+
 def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     client, _, _ = _client_with_state()
     kit_path = tmp_path / "kit.zip"
     manifest_path = tmp_path / "manifest.json"
     kit_path.write_bytes(b"zip")
     manifest_path.write_text("{}", encoding="utf-8")
+    captured: dict[str, object] = {}
 
     def _fake_generate_single_stage_kit(*args, **kwargs):
+        captured.update(kwargs)
         return SingleStageKitResult(
             zip_path=str(kit_path),
             manifest_path=str(manifest_path),
             preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
-            jobs=[
-                {
-                    "color": "White",
-                    "color_name": "White",
-                    "material": "PLA Basic",
-                    "substrate_id": "white",
-                    "substrate_display_name": "White",
-                    "filename": "single_stage_white_white.3mf",
-                }
-            ],
+            jobs=[],
             message="ok",
         )
 
@@ -76,6 +148,7 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
             "substrate_id": "white",
             "substrate_display_name": "White",
             "material_default": "PLA Basic",
+            "layer_height_mm": 0.1,
         },
     )
 
@@ -85,7 +158,156 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert body["kit_download_url"].startswith("/api/files/")
     assert body["manifest_url"].startswith("/api/files/")
     assert body["preview_url"].startswith("/api/files/")
-    assert len(body["jobs"]) == 1
+    assert body["jobs"] == []
+    assert captured["layer_height_mm"] == 0.1
+
+
+def test_build_stage_matrix_creates_flat_face_down_board() -> None:
+    spec = SingleStageSpec(
+        grid_cols=2,
+        grid_rows=1,
+        block_mm=2.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.5,
+        base_mm=1.0,
+        max_step_layers=2,
+        step_layers=(0, 2),
+        shrink_xy_mm=0.0,
+    )
+
+    voxel = _build_stage_matrix(spec)
+
+    assert voxel.shape == (4, 2, 4)
+    assert np.all(np.isin(voxel, [0, 1]))
+    assert np.all(voxel[-1] == 0)
+    assert int(np.count_nonzero(voxel[:, 0, 0] == 1)) == 0
+    assert int(np.count_nonzero(voxel[:, 0, 3] == 1)) == 2
+
+
+def test_build_stage_scene_applies_face_down_mirror_compensation() -> None:
+    spec = SingleStageSpec(
+        grid_cols=2,
+        grid_rows=1,
+        block_mm=2.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.5,
+        base_mm=1.0,
+        max_step_layers=1,
+        step_layers=(1, 0),
+        shrink_xy_mm=0.0,
+    )
+    entry = PaletteEntry(
+        color="Red",
+        material="PLA Basic",
+        hex_color="#FF0000",
+        color_name="Red",
+    )
+
+    scene, preview = _build_stage_scene(
+        entry,
+        "white",
+        "White",
+        (255, 255, 255),
+        spec,
+    )
+
+    step_bounds = scene.geometry["Step - Red"].bounds
+    assert step_bounds[0][0] == 2.0
+    assert step_bounds[1][0] == 4.0
+    assert preview.getpixel((0, 0)) == (255, 0, 0)
+    assert preview.getpixel((3, 0)) == (255, 255, 255)
+
+
+def test_generate_single_stage_kit_overrides_layer_height_in_manifest_spec(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("core.single_stage.kit.MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr("core.single_stage.kit.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.single_stage.kit.export_scene_with_bambu_metadata",
+        lambda scene, output_path, **kwargs: Path(output_path).write_bytes(b"3mf"),
+    )
+    monkeypatch.setattr(
+        "core.single_stage.kit._resolve_colorchecker_bundle",
+        lambda: (None, None),
+    )
+
+    result = generate_single_stage_kit(
+        palette=[
+            PaletteEntry(
+                color="Red",
+                material="PLA Basic",
+                hex_color="#FF0000",
+                color_name="Red",
+            )
+        ],
+        layer_height_mm=0.1,
+    )
+
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["spec"]["layer_height_mm"] == 0.1
+
+
+def test_generate_single_stage_kit_packages_one_shared_3mf(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("core.single_stage.kit.MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr("core.single_stage.kit.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.single_stage.kit.export_scene_with_bambu_metadata",
+        lambda scene, output_path, **kwargs: Path(output_path).write_bytes(b"3mf"),
+    )
+    monkeypatch.setattr(
+        "core.single_stage.kit._resolve_colorchecker_bundle",
+        lambda: (None, None),
+    )
+
+    result = generate_single_stage_kit(
+        palette=[
+            PaletteEntry(
+                color="White",
+                material="PLA Basic",
+                hex_color="#FFFFFF",
+                color_name="White",
+            ),
+            PaletteEntry(
+                color="Red",
+                material="PLA Basic",
+                hex_color="#FF0000",
+                color_name="Red",
+            ),
+            PaletteEntry(
+                color="Blue",
+                material="PLA Basic",
+                hex_color="#0000FF",
+                color_name="Blue",
+            ),
+        ],
+        substrate_id="white",
+        substrate_display_name="White",
+    )
+
+    with zipfile.ZipFile(result.zip_path, "r") as archive:
+        names = archive.namelist()
+
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    model_entries = [name for name in names if name.endswith(".3mf")]
+    template_entries = [
+        name
+        for name in names
+        if name.startswith("dataset_template/")
+        and name.endswith("PUT_PHOTOS_AND_LABELME_JSON_HERE.txt")
+    ]
+
+    assert len(model_entries) == 1
+    assert template_entries == [
+        "dataset_template/white/Sample/PUT_PHOTOS_AND_LABELME_JSON_HERE.txt"
+    ]
+    assert manifest["shared_model_filename"] == model_entries[0]
+    assert manifest["jobs"] == []
 
 
 def test_extract_single_stage_route_creates_session(monkeypatch, tmp_path: Path) -> None:
@@ -246,6 +468,214 @@ def test_fit_stage_a_route_accepts_uploaded_stage_json(
         and session.get("single_stage_stage_json_path") == str(uploaded_stage_json)
         for session in stored_sessions
     )
+
+
+def test_gradient_card_stage_a_core_extracts_and_saves_material_archive(
+    tmp_path: Path,
+) -> None:
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    expected_e = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    expected_k = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    white_capture = _build_gradient_card_capture(
+        spec,
+        white_substrate,
+        expected_e,
+        expected_k,
+    )
+    black_capture = _build_gradient_card_capture(
+        spec,
+        black_substrate,
+        expected_e,
+        expected_k,
+    )
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        white_capture,
+        black_capture,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a.json"),
+    )
+
+    assert Path(result.params_path).exists()
+    payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
+    estimated_e = np.asarray(payload["parameters"]["channels"][0]["E"], dtype=np.float64)
+    estimated_k = np.asarray(payload["parameters"]["channels"][0]["k"], dtype=np.float64)
+    assert np.allclose(estimated_e, expected_e, atol=0.08)
+    assert np.allclose(estimated_k, expected_k, atol=0.35)
+    assert result.material_summary["sample_count"] == 12
+
+    save_result = save_stage_a_material_archive(
+        material_name="Test Material",
+        params_payload=result.params_payload,
+        fit_summary=result.fit_summary,
+        source_summary=result.source_summary,
+        material_summary=result.material_summary,
+        materials_dir=str(tmp_path / "materials"),
+    )
+
+    assert Path(save_result.archive_path).exists()
+    assert Path(save_result.stage_a_params_path).exists()
+    saved_payload = json.loads(Path(save_result.stage_a_params_path).read_text(encoding="utf-8"))
+    archive_payload = json.loads(Path(save_result.archive_path).read_text(encoding="utf-8"))
+    assert saved_payload["parameters"]["channels"][0]["color_name"] == "Test Material"
+    assert archive_payload["material_name"] == "Test Material"
+
+
+def test_gradient_card_stage_a_routes_compute_and_save_material(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, registry = _client_with_state()
+    zip_path = tmp_path / "kit.zip"
+    zip_path.write_bytes(b"zip")
+    params_path = tmp_path / "stage_A_parameters.json"
+    params_payload = {
+        "parameters": {"channels": [{"color_name": "PLA Basic", "E": [0.1, 0.2, 0.3], "k": [1.0, 1.1, 1.2]}]},
+        "meta": {"warnings": []},
+    }
+    params_path.write_text(json.dumps(params_payload), encoding="utf-8")
+    fit_summary = {
+        "substrate_count": 2,
+        "channel_count": 1,
+        "substrates": ["black", "white"],
+        "colors": ["PLA Basic"],
+        "overall_validation": {"mean_delta_e": 1.2},
+        "warnings": [],
+    }
+    material_summary = {
+        "sample_count": 36,
+        "per_substrate_sample_count": 18,
+        "grid_rows": 3,
+        "grid_cols": 6,
+        "layer_height_mm": 0.04,
+        "thickness_layers": [25, 16, 15],
+        "white_zero_rgb": [255, 255, 255],
+        "black_zero_rgb": [12, 12, 12],
+        "estimated_rgb": [120, 130, 140],
+        "estimated_k": [1.0, 1.1, 1.2],
+    }
+    source_summary = {
+        "kit_manifest": {"material_default": "PLA Basic"},
+        "white_corner_points": [[0, 0], [100, 0], [100, 50], [0, 50]],
+        "black_corner_points": [[0, 0], [100, 0], [100, 50], [0, 50]],
+        "spec": {"grid_cols": 6, "grid_rows": 3},
+    }
+    extract_result = GradientCardStageAResult(
+        params_path=str(params_path),
+        params_payload=params_payload,
+        fit_summary=fit_summary,
+        material_summary=material_summary,
+        source_summary=source_summary,
+        warnings=["warn"],
+        white_warp_rgb=np.zeros((32, 32, 3), dtype=np.uint8),
+        black_warp_rgb=np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+
+    async def _fake_upload_to_ndarray(file):
+        return np.zeros((32, 32, 3), dtype=np.uint8)
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(zip_path)
+
+    def _fake_extract_stage_a_material_from_gradient_cards(*args, **kwargs):
+        return extract_result
+
+    archive_path = tmp_path / "materials" / "test-material" / "material.json"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(json.dumps({"material_name": "Test Material"}), encoding="utf-8")
+    saved_stage_a_path = archive_path.parent / "stage_A_parameters.json"
+    saved_stage_a_path.write_text(json.dumps(params_payload), encoding="utf-8")
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        assert kwargs["material_name"] == "Test Material"
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(saved_stage_a_path),
+            material_summary={
+                "material_name": "Test Material",
+                "directory_name": "test-material",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(saved_stage_a_path),
+            },
+        )
+
+    monkeypatch.setattr("api.routers.single_stage.upload_to_ndarray", _fake_upload_to_ndarray)
+    monkeypatch.setattr("api.routers.single_stage.upload_to_tempfile", _fake_upload_to_tempfile)
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+        _fake_extract_stage_a_material_from_gradient_cards,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+
+    response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": json.dumps([[0, 0], [100, 0], [100, 50], [0, 50]]),
+            "black_corner_points": json.dumps([[0, 0], [100, 0], [100, 50], [0, 50]]),
+        },
+        files={
+            "white_image": ("white.png", b"white", "image/png"),
+            "black_image": ("black.png", b"black", "image/png"),
+            "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage_a_params_url"].startswith("/api/files/")
+    assert body["white_warp_preview_url"].startswith("/api/files/")
+    assert body["black_warp_preview_url"].startswith("/api/files/")
+    assert body["warnings"] == ["warn"]
+
+    session = store.get(body["session_id"])
+    assert session is not None
+    assert session["gradient_card_stage_a_params"] == params_payload
+    assert session["gradient_card_material_summary"]["sample_count"] == 36
+
+    save_response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={"session_id": body["session_id"], "material_name": "Test Material"},
+    )
+
+    assert save_response.status_code == 200
+    save_body = save_response.json()
+    assert save_body["material_file_url"].startswith("/api/files/")
+    assert save_body["stage_a_params_url"].startswith("/api/files/")
+
+    material_resolved = registry.resolve(save_body["material_file_url"].split("/")[-1])
+    stage_a_resolved = registry.resolve(save_body["stage_a_params_url"].split("/")[-1])
+    assert material_resolved is not None
+    assert stage_a_resolved is not None
+    assert material_resolved[0] == str(archive_path)
+    assert stage_a_resolved[0] == str(saved_stage_a_path)
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

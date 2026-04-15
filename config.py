@@ -22,6 +22,9 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 MODELS_DIR = os.path.join(OUTPUT_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+MATERIALS_DIR = os.path.join(_BASE_DIR, "materials")
+os.makedirs(MATERIALS_DIR, exist_ok=True)
+
 
 def get_asset_path(relative_path: str) -> str:
     """Resolve asset file path for both script and PyInstaller frozen modes.

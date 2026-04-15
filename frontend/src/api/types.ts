@@ -264,10 +264,12 @@ export interface PreviewResponse {
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
-export type LargeFormatConvertGenerateRequest =
-  Omit<ConvertGenerateRequest, "target_width_mm"> & {
-    target_width_mm?: number;
-  };
+export type LargeFormatConvertGenerateRequest = Omit<
+  ConvertGenerateRequest,
+  "target_width_mm"
+> & {
+  target_width_mm?: number;
+};
 
 export interface LargeFormatGenerateRequest {
   target_height_mm?: number;
@@ -409,6 +411,7 @@ export interface SingleStageKitGenerateRequest {
   substrate_id: string;
   substrate_display_name: string;
   material_default: string;
+  layer_height_mm: number;
 }
 
 export interface SingleStageKitResponse {
@@ -536,6 +539,46 @@ export interface StageAFitResponse {
   message: string;
   stage_a_params_url: string;
   fit_summary: StageAFitSummary;
+}
+
+export interface GradientCardMaterialSummary {
+  sample_count: number;
+  per_substrate_sample_count: number;
+  grid_rows: number;
+  grid_cols: number;
+  layer_height_mm: number;
+  thickness_layers: number[];
+  white_zero_rgb: number[];
+  black_zero_rgb: number[];
+  estimated_rgb: number[];
+  estimated_k: number[];
+}
+
+export interface SavedMaterialSummary {
+  material_name: string;
+  directory_name: string;
+  archive_path: string;
+  stage_a_params_path: string;
+}
+
+export interface GradientCardStageAExtractResponse {
+  session_id: string;
+  status: string;
+  message: string;
+  stage_a_params_url: string;
+  white_warp_preview_url?: string | null;
+  black_warp_preview_url?: string | null;
+  fit_summary: StageAFitSummary;
+  material_summary: GradientCardMaterialSummary;
+  warnings: string[];
+}
+
+export interface GradientCardMaterialSaveResponse {
+  status: string;
+  message: string;
+  material_file_url: string;
+  stage_a_params_url: string;
+  material_summary: SavedMaterialSummary;
 }
 
 export interface ManualFixResponse {

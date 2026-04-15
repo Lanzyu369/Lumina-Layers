@@ -36,6 +36,8 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   ],
   calibration: ["calibration"],
   extractor: ["extractor"],
+  "gradient-card-generate": [],
+  "gradient-card-extract": [],
   "lut-manager": ["lut-manager"],
   "lut-compare": [],
   "five-color": ["five-color"],
@@ -320,9 +322,14 @@ export const useWidgetStore = create<WidgetStore>()(
        * Batch update widget positions in a single store commit.
        * 批量更新 Widget 位置，合并为一次 store 提交。
        */
-      setWidgetPositions: (positions: Partial<Record<WidgetId, { x: number; y: number }>>) => {
+      setWidgetPositions: (
+        positions: Partial<Record<WidgetId, { x: number; y: number }>>,
+      ) => {
         set((state) => {
-          const entries = Object.entries(positions) as [WidgetId, { x: number; y: number }][];
+          const entries = Object.entries(positions) as [
+            WidgetId,
+            { x: number; y: number },
+          ][];
           if (entries.length === 0) return state;
 
           let changed = false;
@@ -332,7 +339,8 @@ export const useWidgetStore = create<WidgetStore>()(
             const current = widgets[id];
             if (
               !current ||
-              (current.position.x === position.x && current.position.y === position.y)
+              (current.position.x === position.x &&
+                current.position.y === position.y)
             ) {
               continue;
             }
@@ -512,7 +520,11 @@ export const useWidgetStore = create<WidgetStore>()(
        * Atomically snap dragged widget and reorder target edge stack.
        * 原子化执行吸附与重排，避免中间态导致的错误动画。
        */
-      snapAndReorder: (id: WidgetId, edge: "left" | "right", orderedIds: WidgetId[]) => {
+      snapAndReorder: (
+        id: WidgetId,
+        edge: "left" | "right",
+        orderedIds: WidgetId[],
+      ) => {
         set((state) => {
           const updated = { ...state.widgets };
 
@@ -589,7 +601,9 @@ export const useWidgetStore = create<WidgetStore>()(
             };
           }
           if (!widgets["puzzle-settings"]) {
-            widgets["puzzle-settings"] = { ...DEFAULT_LAYOUT["puzzle-settings"] };
+            widgets["puzzle-settings"] = {
+              ...DEFAULT_LAYOUT["puzzle-settings"],
+            };
           }
           // Recalculate stackOrder for converter widgets on both dock edges.
           const converterIds = TAB_WIDGET_MAP.converter;

@@ -21,6 +21,7 @@ vi.mock("../components/Scene3D", () => ({
 // Mock calibration API to prevent CalibrationPanel network calls
 vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
+  generateSingleStageKit: vi.fn(),
 }));
 
 // Mock converter API to prevent fetchLutList call during data init

@@ -14,15 +14,18 @@ import { CalibrationColorMode, BackingColor } from "../api/types";
 
 vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
+  generateSingleStageKit: vi.fn(),
 }));
 
 beforeEach(() => {
   useCalibrationStore.setState({
+    workflow: "legacy",
     color_mode: CalibrationColorMode.FOUR_COLOR_CMYW,
     block_size: 5,
     gap: 0.82,
     backing: BackingColor.WHITE,
     eight_color_full_export: false,
+    singleStageLayerHeightMm: 0.04,
     isLoading: false,
     error: null,
     downloadUrl: null,

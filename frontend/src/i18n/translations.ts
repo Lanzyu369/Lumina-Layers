@@ -1529,13 +1529,25 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT管理",
     en: "LUT Management",
   },
+  "tab.materialManagement": {
+    zh: "耗材管理",
+    en: "Material Management",
+  },
   "tab.calibration": {
-    zh: "校准",
-    en: "Calibration",
+    zh: "LUT校准",
+    en: "LUT Calibration",
   },
   "tab.extractor": {
-    zh: "提取器",
-    en: "Extractor",
+    zh: "LUT提取",
+    en: "LUT Extractor",
+  },
+  "tab.gradientCardGenerate": {
+    zh: "梯度卡生成",
+    en: "Gradient Card Generate",
+  },
+  "tab.gradientCardExtract": {
+    zh: "梯度卡提取",
+    en: "Gradient Card Extract",
   },
   "tab.lutManager": {
     zh: "LUT 合并",
@@ -3986,6 +3998,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "默认材料",
     en: "Default Material",
   },
+  cal_single_stage_layer_height_label: {
+    zh: "层高",
+    en: "Layer Height",
+  },
   cal_generate_single_stage_btn: {
     zh: "生成 Single-Stage Kit",
     en: "Generate Single-Stage Kit",
@@ -4005,6 +4021,126 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   cal_single_stage_jobs_desc: {
     zh: "每个颜色都会生成一个可打印的 3MF 任务",
     en: "One printable 3MF job is generated per color",
+  },
+  mat_gradient_generate_title: {
+    zh: "生成梯度卡",
+    en: "Generate Gradient Card",
+  },
+  mat_gradient_generate_desc: {
+    zh: "生成用于耗材表征的共享梯度卡套件，并保留 manifest、层高等元数据。",
+    en: "Generate a shared gradient card kit for material characterization while preserving manifest metadata such as layer height.",
+  },
+  mat_gradient_extract_title: {
+    zh: "提取梯度卡数据",
+    en: "Extract Gradient Card Data",
+  },
+  mat_gradient_extract_desc: {
+    zh: "上传梯度卡套件 ZIP、白底图和黑底图，分别点选四角并提取 Stage A 耗材参数。",
+    en: "Upload the gradient card kit ZIP plus white/black substrate images, mark four corners on each, and extract Stage A material parameters.",
+  },
+  mat_gradient_dataset_selected: {
+    zh: "已选数据集",
+    en: "Selected Dataset",
+  },
+  mat_gradient_select_dataset_btn: {
+    zh: "选择数据集 ZIP",
+    en: "Choose Dataset ZIP",
+  },
+  mat_gradient_no_dataset_selected: {
+    zh: "尚未选择数据集 ZIP",
+    en: "No dataset ZIP selected",
+  },
+  mat_gradient_extract_output_title: {
+    zh: "提取输出",
+    en: "Extraction Output",
+  },
+  mat_gradient_fit_output_title: {
+    zh: "拟合输出",
+    en: "Fit Output",
+  },
+  mat_gradient_upload_title: {
+    zh: "上传与点角",
+    en: "Upload and Corner Marking",
+  },
+  mat_gradient_upload_desc: {
+    zh: "先上传套件 ZIP 与两张梯度卡照片，再分别在白底图和黑底图上点选四角。",
+    en: "Upload the kit ZIP and both gradient card photos, then mark four corners on the white and black images.",
+  },
+  mat_gradient_white_image_label: {
+    zh: "白底梯度卡图片",
+    en: "White Gradient Card Image",
+  },
+  mat_gradient_black_image_label: {
+    zh: "黑底梯度卡图片",
+    en: "Black Gradient Card Image",
+  },
+  mat_gradient_no_image_selected: {
+    zh: "尚未选择图片",
+    en: "No image selected",
+  },
+  mat_gradient_select_image_btn: {
+    zh: "选择图片",
+    en: "Choose Image",
+  },
+  mat_gradient_rotate_image_btn: {
+    zh: "旋转 90°",
+    en: "Rotate 90°",
+  },
+  mat_gradient_clear_points_btn: {
+    zh: "清除角点",
+    en: "Clear Corners",
+  },
+  mat_gradient_corner_hint_prefix: {
+    zh: "已标记角点",
+    en: "Corners Marked",
+  },
+  mat_gradient_corner_complete: {
+    zh: "四角已完成，可开始提取。",
+    en: "All four corners are set and ready for extraction.",
+  },
+  mat_gradient_white_canvas_title: {
+    zh: "白底梯度卡",
+    en: "White Gradient Card",
+  },
+  mat_gradient_black_canvas_title: {
+    zh: "黑底梯度卡",
+    en: "Black Gradient Card",
+  },
+  mat_gradient_empty_white_canvas: {
+    zh: "上传白底梯度卡图片后，在这里点选四角。",
+    en: "Upload the white gradient card image to mark its four corners here.",
+  },
+  mat_gradient_empty_black_canvas: {
+    zh: "上传黑底梯度卡图片后，在这里点选四角。",
+    en: "Upload the black gradient card image to mark its four corners here.",
+  },
+  mat_gradient_compute_btn: {
+    zh: "提取 Stage A 耗材参数",
+    en: "Extract Stage A Material Parameters",
+  },
+  mat_gradient_material_name_label: {
+    zh: "耗材名称",
+    en: "Material Name",
+  },
+  mat_gradient_material_name_placeholder: {
+    zh: "输入要保存的耗材名称",
+    en: "Enter the material name to save",
+  },
+  mat_gradient_save_material_btn: {
+    zh: "保存耗材档案",
+    en: "Save Material Archive",
+  },
+  mat_gradient_warp_preview_title: {
+    zh: "透视校正预览",
+    en: "Perspective Warp Preview",
+  },
+  mat_gradient_saved_material_title: {
+    zh: "已保存的耗材档案",
+    en: "Saved Material Archive",
+  },
+  mat_gradient_download_material_btn: {
+    zh: "下载 material.json",
+    en: "Download material.json",
   },
   ext_workflow_label: {
     zh: "工作流模式",

@@ -105,6 +105,54 @@ class StageAFitResponse(BaseModel):
     fit_summary: StageAFitSummaryResponse
 
 
+class GradientCardMaterialSummaryResponse(BaseModel):
+    """Summary of extracted gradient-card material data."""
+
+    sample_count: int
+    per_substrate_sample_count: int
+    grid_rows: int
+    grid_cols: int
+    layer_height_mm: float
+    thickness_layers: list[int] = Field(default_factory=list)
+    white_zero_rgb: list[int] = Field(default_factory=list)
+    black_zero_rgb: list[int] = Field(default_factory=list)
+    estimated_rgb: list[int] = Field(default_factory=list)
+    estimated_k: list[float] = Field(default_factory=list)
+
+
+class SavedMaterialSummaryResponse(BaseModel):
+    """Summary of a saved material archive."""
+
+    material_name: str
+    directory_name: str
+    archive_path: str
+    stage_a_params_path: str
+
+
+class GradientCardStageAExtractResponse(BaseModel):
+    """Gradient-card Stage A extraction response."""
+
+    session_id: str
+    status: str
+    message: str
+    stage_a_params_url: str
+    white_warp_preview_url: str | None = None
+    black_warp_preview_url: str | None = None
+    fit_summary: StageAFitSummaryResponse
+    material_summary: GradientCardMaterialSummaryResponse
+    warnings: list[str] = Field(default_factory=list)
+
+
+class GradientCardMaterialSaveResponse(BaseModel):
+    """Gradient-card material archive save response."""
+
+    status: str
+    message: str
+    material_file_url: str
+    stage_a_params_url: str
+    material_summary: SavedMaterialSummaryResponse
+
+
 class RecipePredictResponse(BaseModel):
     """Recipe color prediction response."""
 

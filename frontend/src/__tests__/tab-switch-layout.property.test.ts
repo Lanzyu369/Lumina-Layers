@@ -10,20 +10,41 @@
  * visible, snapEdge, and stackOrder fields should remain unchanged.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import * as fc from 'fast-check';
-import { useWidgetStore, DEFAULT_LAYOUT } from '../stores/widgetStore';
-import type { WidgetId, WidgetLayoutState, TabId } from '../types/widget';
+import { describe, it, expect, beforeEach } from "vitest";
+import * as fc from "fast-check";
+import { useWidgetStore, DEFAULT_LAYOUT } from "../stores/widgetStore";
+import type { WidgetId, WidgetLayoutState, TabId } from "../types/widget";
 
 // All valid TabIds
-const ALL_TAB_IDS: TabId[] = ['converter', 'calibration', 'extractor', 'lut-manager', 'lut-compare', 'five-color', 'vectorizer', 'settings'];
+const ALL_TAB_IDS: TabId[] = [
+  "converter",
+  "calibration",
+  "extractor",
+  "gradient-card-generate",
+  "gradient-card-extract",
+  "lut-manager",
+  "lut-compare",
+  "five-color",
+  "vectorizer",
+  "settings",
+];
 
 // All valid WidgetIds
 const ALL_WIDGET_IDS: WidgetId[] = [
-  'basic-settings', 'advanced-settings', 'relief-settings',
-  'outline-settings', 'cloisonne-settings', 'coating-settings',
-  'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar', 'calibration', 'extractor',
-  'lut-manager', 'five-color',
+  "basic-settings",
+  "advanced-settings",
+  "relief-settings",
+  "outline-settings",
+  "cloisonne-settings",
+  "coating-settings",
+  "keychain-loop",
+  "fridge-magnet-settings",
+  "puzzle-settings",
+  "action-bar",
+  "calibration",
+  "extractor",
+  "lut-manager",
+  "five-color",
 ];
 
 // Arbitrary for a single WidgetLayoutState with randomized layout fields
@@ -36,43 +57,45 @@ const widgetLayoutArb = (id: WidgetId): fc.Arbitrary<WidgetLayoutState> =>
     }),
     collapsed: fc.boolean(),
     visible: fc.boolean(),
-    snapEdge: fc.constantFrom('left' as const, 'right' as const, null),
+    snapEdge: fc.constantFrom("left" as const, "right" as const, null),
     stackOrder: fc.integer({ min: -1, max: 20 }),
     expandedHeight: fc.integer({ min: 50, max: 800 }),
   });
 
 // Arbitrary for a full widgets record with randomized layout for all 14 widgets
-const allWidgetsArb: fc.Arbitrary<Record<WidgetId, WidgetLayoutState>> = fc.tuple(
-  ...ALL_WIDGET_IDS.map((id) => widgetLayoutArb(id))
-).map((layouts) => {
-  const record = {} as Record<WidgetId, WidgetLayoutState>;
-  ALL_WIDGET_IDS.forEach((id, i) => {
-    record[id] = layouts[i];
+const allWidgetsArb: fc.Arbitrary<Record<WidgetId, WidgetLayoutState>> = fc
+  .tuple(...ALL_WIDGET_IDS.map((id) => widgetLayoutArb(id)))
+  .map((layouts) => {
+    const record = {} as Record<WidgetId, WidgetLayoutState>;
+    ALL_WIDGET_IDS.forEach((id, i) => {
+      record[id] = layouts[i];
+    });
+    return record;
   });
-  return record;
-});
 
 // Arbitrary for a TAB switching sequence: [startTab, ...intermediate tabs, startTab]
 // This generates a round-trip: A -> B1 -> B2 -> ... -> A
-const tabSwitchSequenceArb: fc.Arbitrary<TabId[]> = fc.tuple(
-  fc.constantFrom(...ALL_TAB_IDS),                                    // starting tab
-  fc.array(fc.constantFrom(...ALL_TAB_IDS), { minLength: 1, maxLength: 10 }), // intermediate tabs
-).map(([startTab, intermediates]) => [startTab, ...intermediates, startTab]);
+const tabSwitchSequenceArb: fc.Arbitrary<TabId[]> = fc
+  .tuple(
+    fc.constantFrom(...ALL_TAB_IDS), // starting tab
+    fc.array(fc.constantFrom(...ALL_TAB_IDS), { minLength: 1, maxLength: 10 }), // intermediate tabs
+  )
+  .map(([startTab, intermediates]) => [startTab, ...intermediates, startTab]);
 
-describe('Granular Floating Widgets — Property-Based Tests', () => {
+describe("Granular Floating Widgets — Property-Based Tests", () => {
   beforeEach(() => {
     // Reset store to default before each test
     useWidgetStore.setState({
       widgets: { ...DEFAULT_LAYOUT },
       isDragging: false,
       activeWidgetId: null,
-      activeTab: 'converter' as TabId,
+      activeTab: "converter" as TabId,
     });
   });
 
   // Feature: granular-floating-widgets, Property 2: TAB 切换保持 Widget 布局不变性
-  describe('Property 2: TAB 切换保持 Widget 布局不变性', () => {
-    it('switching tabs and returning preserves all widget layout fields', () => {
+  describe("Property 2: TAB 切换保持 Widget 布局不变性", () => {
+    it("switching tabs and returning preserves all widget layout fields", () => {
       // **Validates: Requirements 1.4**
       fc.assert(
         fc.property(
@@ -89,7 +112,10 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
             const snapshotBefore: Record<string, WidgetLayoutState> = {};
             const stateBefore = useWidgetStore.getState().widgets;
             for (const id of ALL_WIDGET_IDS) {
-              snapshotBefore[id] = { ...stateBefore[id], position: { ...stateBefore[id].position } };
+              snapshotBefore[id] = {
+                ...stateBefore[id],
+                position: { ...stateBefore[id].position },
+              };
             }
 
             // Execute the full TAB switching sequence
@@ -109,13 +135,13 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
               expect(after.snapEdge).toBe(before.snapEdge);
               expect(after.stackOrder).toBe(before.stackOrder);
             }
-          }
+          },
         ),
-        { numRuns: 100 }
+        { numRuns: 100 },
       );
     });
 
-    it('single tab switch A->B does not mutate any widget state', () => {
+    it("single tab switch A->B does not mutate any widget state", () => {
       // **Validates: Requirements 1.4**
       fc.assert(
         fc.property(
@@ -130,7 +156,9 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
             });
 
             // Snapshot before
-            const snapshotBefore = JSON.parse(JSON.stringify(useWidgetStore.getState().widgets));
+            const snapshotBefore = JSON.parse(
+              JSON.stringify(useWidgetStore.getState().widgets),
+            );
 
             // Switch to tabB
             useWidgetStore.getState().setActiveTab(tabB);
@@ -138,9 +166,9 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
             // Verify: widget states are identical (deep equality)
             const stateAfter = useWidgetStore.getState().widgets;
             expect(stateAfter).toEqual(snapshotBefore);
-          }
+          },
         ),
-        { numRuns: 100 }
+        { numRuns: 100 },
       );
     });
   });
