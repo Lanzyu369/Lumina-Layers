@@ -1549,6 +1549,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "梯度卡提取",
     en: "Gradient Card Extract",
   },
+  "tab.materialLibrary": {
+    zh: "耗材库",
+    en: "Material Library",
+  },
   "tab.lutManager": {
     zh: "LUT 合并",
     en: "LUT Merge",
@@ -4134,6 +4138,66 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "透视校正预览",
     en: "Perspective Warp Preview",
   },
+  mat_gradient_sample_boxes_hint: {
+    zh: "方框表示实际取色区域。",
+    en: "Boxes indicate the actual sampled regions.",
+  },
+  mat_gradient_estimated_color_title: {
+    zh: "计算出的耗材颜色",
+    en: "Estimated Material Color",
+  },
+  mat_gradient_rgb_label: {
+    zh: "RGB",
+    en: "RGB",
+  },
+  mat_gradient_hex_label: {
+    zh: "HEX",
+    en: "HEX",
+  },
+  mat_gradient_mean_delta_e_label: {
+    zh: "平均 ΔE",
+    en: "Mean ΔE",
+  },
+  mat_gradient_max_delta_e_label: {
+    zh: "最大 ΔE",
+    en: "Max ΔE",
+  },
+  mat_gradient_rmse_linear_label: {
+    zh: "线性 RMSE",
+    en: "Linear RMSE",
+  },
+  mat_gradient_channel_rmse_label: {
+    zh: "通道 RMSE",
+    en: "Channel RMSE",
+  },
+  mat_gradient_channel_rmse_value: {
+    zh: "红 {r} / 绿 {g} / 蓝 {b}",
+    en: "R {r} / G {g} / B {b}",
+  },
+  mat_gradient_orientation_title: {
+    zh: "方向检测",
+    en: "Orientation Detection",
+  },
+  mat_gradient_orientation_reliable: {
+    zh: "可靠",
+    en: "Reliable",
+  },
+  mat_gradient_orientation_unreliable: {
+    zh: "置信度低",
+    en: "Low Confidence",
+  },
+  mat_gradient_white_orientation_label: {
+    zh: "白底方向",
+    en: "White Orientation",
+  },
+  mat_gradient_black_orientation_label: {
+    zh: "黑底方向",
+    en: "Black Orientation",
+  },
+  mat_gradient_delta_e_gap_label: {
+    zh: "ΔE 差距",
+    en: "ΔE Gap",
+  },
   mat_gradient_saved_material_title: {
     zh: "已保存的耗材档案",
     en: "Saved Material Archive",
@@ -4141,6 +4205,146 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_download_material_btn: {
     zh: "下载 material.json",
     en: "Download material.json",
+  },
+  mat_gradient_library_title: {
+    zh: "耗材库",
+    en: "Material Library",
+  },
+  mat_gradient_library_desc: {
+    zh: "浏览已保存的 Stage A 耗材档案，并下载 material.json 或 Stage A 参数。",
+    en: "Browse saved Stage A material archives and download material.json or Stage A parameters.",
+  },
+  mat_gradient_library_refresh_btn: {
+    zh: "刷新耗材库",
+    en: "Refresh Library",
+  },
+  mat_gradient_library_loading: {
+    zh: "正在加载耗材库...",
+    en: "Loading material library...",
+  },
+  mat_gradient_library_load_failed: {
+    zh: "加载耗材库失败",
+    en: "Failed to load material library",
+  },
+  mat_gradient_library_empty: {
+    zh: "还没有已保存的耗材档案。先在“梯度卡提取”里保存一个耗材。",
+    en: "No saved material archives yet. Save one from Gradient Card Extract first.",
+  },
+  mat_gradient_library_updated_at_label: {
+    zh: "最近验证",
+    en: "Last Verified",
+  },
+  mat_gradient_library_created_at_label: {
+    zh: "创建时间",
+    en: "Created",
+  },
+  mat_gradient_library_verification_count_label: {
+    zh: "验证次数",
+    en: "Verification Runs",
+  },
+  mat_gradient_library_directory_label: {
+    zh: "目录名",
+    en: "Directory",
+  },
+  mat_gradient_library_fit_error_label: {
+    zh: "拟合误差",
+    en: "Fit Error",
+  },
+  mat_gradient_library_layer_height_label: {
+    zh: "层高",
+    en: "Layer Height",
+  },
+  mat_gradient_library_reverify_btn: {
+    zh: "再次验证",
+    en: "Re-Verify",
+  },
+  mat_gradient_library_delete_btn: {
+    zh: "删除耗材",
+    en: "Delete Material",
+  },
+  mat_gradient_library_delete_confirm: {
+    zh: "确认删除耗材“{materialName}”？此操作不可撤销。",
+    en: 'Delete material "{materialName}"? This action cannot be undone.',
+  },
+  mat_gradient_library_show_history_btn: {
+    zh: "展开验证历史",
+    en: "Show Verification History",
+  },
+  mat_gradient_library_hide_history_btn: {
+    zh: "收起验证历史",
+    en: "Hide Verification History",
+  },
+  mat_gradient_library_history_title: {
+    zh: "验证历史",
+    en: "Verification History",
+  },
+  mat_gradient_library_history_empty: {
+    zh: "当前还没有可展示的验证历史摘要。",
+    en: "No verification history summary is available yet.",
+  },
+  mat_gradient_library_history_run_label: {
+    zh: "第 {index} 次验证",
+    en: "Run {index}",
+  },
+  mat_gradient_library_history_time_label: {
+    zh: "验证时间",
+    en: "Verified At",
+  },
+  mat_gradient_library_history_color_label: {
+    zh: "估算颜色",
+    en: "Estimated Color",
+  },
+  mat_gradient_library_history_rmse_label: {
+    zh: "线性 RMSE",
+    en: "Linear RMSE",
+  },
+  mat_gradient_library_history_e_label: {
+    zh: "E 参数",
+    en: "E Parameters",
+  },
+  mat_gradient_library_history_k_label: {
+    zh: "k 参数",
+    en: "k Parameters",
+  },
+  mat_gradient_library_history_white_c0_label: {
+    zh: "白底 C0",
+    en: "White C0",
+  },
+  mat_gradient_library_history_black_c0_label: {
+    zh: "黑底 C0",
+    en: "Black C0",
+  },
+  mat_gradient_library_history_orientation_label: {
+    zh: "识别方向",
+    en: "Detected Orientation",
+  },
+  mat_gradient_library_history_orientation_value: {
+    zh: "白底 {white} / 黑底 {black}",
+    en: "White {white} / Black {black}",
+  },
+  mat_gradient_verification_mode_title: {
+    zh: "当前正在进行耗材复验",
+    en: "Material Re-Verification Active",
+  },
+  mat_gradient_verification_mode_desc: {
+    zh: "目标耗材：{materialName}。当前已累计 {count} 次验证；本次保存后会继续聚合参数。",
+    en: "Target material: {materialName}. There are already {count} verification runs; saving this run will further aggregate the parameters.",
+  },
+  mat_gradient_verification_name_label: {
+    zh: "复验目标耗材",
+    en: "Verification Target Material",
+  },
+  mat_gradient_verification_name_desc: {
+    zh: "当前为已有耗材做复验。已累计 {count} 次验证，本次结果会并入同一档案。",
+    en: "You are re-verifying an existing material. There are already {count} runs and this result will be merged into the same archive.",
+  },
+  mat_gradient_save_verification_btn: {
+    zh: "保存验证结果",
+    en: "Save Verification Result",
+  },
+  mat_gradient_cancel_verification_btn: {
+    zh: "取消复验",
+    en: "Cancel Re-Verification",
   },
   ext_workflow_label: {
     zh: "工作流模式",

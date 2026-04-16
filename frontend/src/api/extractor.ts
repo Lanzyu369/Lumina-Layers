@@ -2,6 +2,8 @@ import apiClient from "./client";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
+  GradientCardMaterialDeleteResponse,
+  GradientCardMaterialLibraryResponse,
   GradientCardMaterialSaveResponse,
   GradientCardStageAExtractResponse,
   ManualFixResponse,
@@ -70,14 +72,36 @@ export async function extractGradientCardStageA(params: {
 export async function saveGradientCardMaterial(params: {
   sessionId: string;
   materialName: string;
+  targetDirectoryName?: string | null;
 }): Promise<GradientCardMaterialSaveResponse> {
   const fd = new FormData();
   fd.append("session_id", params.sessionId);
   fd.append("material_name", params.materialName);
+  if (params.targetDirectoryName) {
+    fd.append("target_directory_name", params.targetDirectoryName);
+  }
   const response = await apiClient.post<GradientCardMaterialSaveResponse>(
     "/extractor/save-gradient-card-material",
     fd,
     { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function deleteGradientCardMaterial(
+  directoryName: string,
+): Promise<GradientCardMaterialDeleteResponse> {
+  const response = await apiClient.delete<GradientCardMaterialDeleteResponse>(
+    `/extractor/gradient-card-materials/${encodeURIComponent(directoryName)}`,
+    { timeout: 60_000 },
+  );
+  return response.data;
+}
+
+export async function listGradientCardMaterials(): Promise<GradientCardMaterialLibraryResponse> {
+  const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
+    "/extractor/gradient-card-materials",
+    { timeout: 60_000 },
   );
   return response.data;
 }

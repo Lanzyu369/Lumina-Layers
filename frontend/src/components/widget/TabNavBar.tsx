@@ -14,10 +14,10 @@ interface TabNavBarProps {
 
 type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'settings';
 type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-compare' | 'five-color';
-type MaterialSubTabId = 'gradient-card-generate' | 'gradient-card-extract';
+type MaterialSubTabId = 'gradient-card-generate' | 'gradient-card-extract' | 'material-library';
 
 const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-compare', 'five-color'];
-const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['gradient-card-generate', 'gradient-card-extract'];
+const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'gradient-card-generate', 'gradient-card-extract'];
 
 const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   'converter': (
@@ -87,6 +87,11 @@ const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNod
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 12l-4-4m4 4l4-4M6 20h12" />
     </svg>
   ),
+  'material-library': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H9l1.5 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+    </svg>
+  ),
 };
 
 const PRIMARY_TAB_LIST: { id: PrimaryTabId; titleKey: string }[] = [
@@ -106,6 +111,7 @@ const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
 ];
 
 const MATERIAL_SECONDARY_TAB_LIST: { id: MaterialSubTabId; titleKey: string }[] = [
+  { id: 'material-library', titleKey: 'tab.materialLibrary' },
   { id: 'gradient-card-generate', titleKey: 'tab.gradientCardGenerate' },
   { id: 'gradient-card-extract', titleKey: 'tab.gradientCardExtract' },
 ];
@@ -149,7 +155,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                     return;
                   }
                   if (id === 'material-management') {
-                    onTabChange(isMaterialSubTab(activeTab) ? activeTab : 'gradient-card-generate');
+                    onTabChange(isMaterialSubTab(activeTab) ? activeTab : 'material-library');
                     return;
                   }
                   onTabChange(id);

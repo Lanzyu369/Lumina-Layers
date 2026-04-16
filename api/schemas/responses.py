@@ -105,6 +105,18 @@ class StageAFitResponse(BaseModel):
     fit_summary: StageAFitSummaryResponse
 
 
+class GradientCardSampleBoxResponse(BaseModel):
+    """Warped sample ROI geometry for gradient-card extraction."""
+
+    row: int
+    col: int
+    x: int
+    y: int
+    width: int
+    height: int
+    thickness_layers: int
+
+
 class GradientCardMaterialSummaryResponse(BaseModel):
     """Summary of extracted gradient-card material data."""
 
@@ -113,7 +125,10 @@ class GradientCardMaterialSummaryResponse(BaseModel):
     grid_rows: int
     grid_cols: int
     layer_height_mm: float
+    warp_width_px: int | None = None
+    warp_height_px: int | None = None
     thickness_layers: list[int] = Field(default_factory=list)
+    sample_boxes: list[GradientCardSampleBoxResponse] = Field(default_factory=list)
     white_zero_rgb: list[int] = Field(default_factory=list)
     black_zero_rgb: list[int] = Field(default_factory=list)
     estimated_rgb: list[int] = Field(default_factory=list)
@@ -127,6 +142,28 @@ class SavedMaterialSummaryResponse(BaseModel):
     directory_name: str
     archive_path: str
     stage_a_params_path: str
+    verification_count: int = 1
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class OrientationCandidateResponse(BaseModel):
+    """One orientation candidate in the ranking."""
+
+    white_orientation: str
+    black_orientation: str
+    anchor_penalty: float = 0.0
+    mean_delta_e: float
+    rmse_linear: float
+    max_delta_e: float
+
+
+class OrientationRankingResponse(BaseModel):
+    """Orientation detection reliability ranking."""
+
+    orientation_reliable: bool
+    delta_e_gap: float
+    top_candidates: list[OrientationCandidateResponse] = Field(default_factory=list)
 
 
 class GradientCardStageAExtractResponse(BaseModel):
@@ -140,6 +177,7 @@ class GradientCardStageAExtractResponse(BaseModel):
     black_warp_preview_url: str | None = None
     fit_summary: StageAFitSummaryResponse
     material_summary: GradientCardMaterialSummaryResponse
+    orientation_ranking: OrientationRankingResponse | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -151,6 +189,58 @@ class GradientCardMaterialSaveResponse(BaseModel):
     material_file_url: str
     stage_a_params_url: str
     material_summary: SavedMaterialSummaryResponse
+
+
+class GradientCardMaterialDeleteResponse(BaseModel):
+    """Gradient-card material archive delete response."""
+
+    status: str
+    message: str
+    directory_name: str
+    material_name: str
+
+
+class SavedMaterialVerificationHistoryItemResponse(BaseModel):
+    """Summary row for a single saved material verification run."""
+
+    verification_index: int
+    captured_at: str | None = None
+    mean_delta_e: float | None = None
+    rmse_linear: float | None = None
+    estimated_rgb: list[int] = Field(default_factory=list)
+    estimated_k: list[float] = Field(default_factory=list)
+    e_values: list[float] = Field(default_factory=list)
+    k_values: list[float] = Field(default_factory=list)
+    white_c0_values: list[float] = Field(default_factory=list)
+    black_c0_values: list[float] = Field(default_factory=list)
+    white_detected_orientation: str | None = None
+    black_detected_orientation: str | None = None
+
+
+class SavedMaterialLibraryItemResponse(BaseModel):
+    """Summary row for a saved Stage A material archive."""
+
+    material_name: str
+    directory_name: str
+    created_at: str | None = None
+    updated_at: str | None = None
+    archive_path: str
+    stage_a_params_path: str | None = None
+    material_file_url: str
+    stage_a_params_url: str | None = None
+    estimated_rgb: list[int] = Field(default_factory=list)
+    layer_height_mm: float | None = None
+    mean_delta_e: float | None = None
+    verification_count: int = 1
+    verification_history: list[SavedMaterialVerificationHistoryItemResponse] = Field(default_factory=list)
+
+
+class GradientCardMaterialLibraryResponse(BaseModel):
+    """Saved gradient-card material archive library response."""
+
+    status: str
+    message: str
+    materials: list[SavedMaterialLibraryItemResponse] = Field(default_factory=list)
 
 
 class RecipePredictResponse(BaseModel):

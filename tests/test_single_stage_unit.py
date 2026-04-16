@@ -17,14 +17,17 @@ from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
     GradientCardStageAResult,
+    MaterialArchiveDeleteResult,
     MaterialArchiveSaveResult,
     SingleStageExtractResult,
     SingleStageKitResult,
     StageAFitResult,
+    delete_saved_stage_a_material_archive,
     extract_single_stage_dataset,
     extract_stage_a_material_from_gradient_cards,
     fit_stage_a_from_stage_json,
     generate_single_stage_kit,
+    list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
 )
 from core.single_stage.kit import SingleStageSpec, _build_stage_matrix, _build_stage_scene
@@ -528,6 +531,12 @@ def test_gradient_card_stage_a_core_extracts_and_saves_material_archive(
     assert np.allclose(estimated_e, expected_e, atol=0.08)
     assert np.allclose(estimated_k, expected_k, atol=0.35)
     assert result.material_summary["sample_count"] == 12
+    assert result.material_summary["warp_width_px"] == 600
+    assert result.material_summary["warp_height_px"] == 400
+    assert len(result.material_summary["sample_boxes"]) == 6
+    assert result.material_summary["sample_boxes"][0]["row"] == 0
+    assert result.material_summary["sample_boxes"][0]["col"] == 0
+    assert result.material_summary["sample_boxes"][0]["thickness_layers"] == 0
 
     save_result = save_stage_a_material_archive(
         material_name="Test Material",
@@ -544,6 +553,187 @@ def test_gradient_card_stage_a_core_extracts_and_saves_material_archive(
     archive_payload = json.loads(Path(save_result.archive_path).read_text(encoding="utf-8"))
     assert saved_payload["parameters"]["channels"][0]["color_name"] == "Test Material"
     assert archive_payload["material_name"] == "Test Material"
+
+
+def test_save_stage_a_material_archive_aggregates_reverification_runs(tmp_path: Path) -> None:
+    materials_root = tmp_path / "materials"
+    first_params = {
+        "meta": {},
+        "parameters": {
+            "channels": [{"color_name": "PLA Basic", "E": [0.2, 0.3, 0.4], "k": [1.0, 1.1, 1.2]}],
+            "substrates": [
+                {"substrate_id": "white", "C0": [0.9, 0.9, 0.9]},
+                {"substrate_id": "black", "C0": [0.1, 0.1, 0.1]},
+            ],
+        },
+        "fitted_substrates": {},
+        "validation": {"overall": {"mean_delta_e": 2.0}},
+    }
+    second_params = {
+        "meta": {},
+        "parameters": {
+            "channels": [{"color_name": "PLA Basic", "E": [0.4, 0.5, 0.6], "k": [1.4, 1.5, 1.6]}],
+            "substrates": [
+                {"substrate_id": "white", "C0": [0.8, 0.8, 0.8]},
+                {"substrate_id": "black", "C0": [0.2, 0.2, 0.2]},
+            ],
+        },
+        "fitted_substrates": {},
+        "validation": {"overall": {"mean_delta_e": 1.0}},
+    }
+    first_fit_summary = {
+        "overall_validation": {"mean_delta_e": 2.0, "rmse_linear": 0.2, "channel_rmse": [0.2, 0.2, 0.2]},
+        "warnings": [],
+    }
+    second_fit_summary = {
+        "overall_validation": {"mean_delta_e": 1.0, "rmse_linear": 0.1, "channel_rmse": [0.1, 0.1, 0.1]},
+        "warnings": [],
+    }
+    first_material_summary = {
+        "estimated_rgb": [120, 130, 140],
+        "estimated_k": [1.0, 1.1, 1.2],
+        "white_zero_rgb": [240, 240, 240],
+        "black_zero_rgb": [30, 30, 30],
+        "layer_height_mm": 0.04,
+        "sample_boxes": [],
+    }
+    second_material_summary = {
+        "estimated_rgb": [150, 160, 170],
+        "estimated_k": [1.4, 1.5, 1.6],
+        "white_zero_rgb": [220, 220, 220],
+        "black_zero_rgb": [40, 40, 40],
+        "layer_height_mm": 0.04,
+        "sample_boxes": [],
+    }
+
+    first_result = save_stage_a_material_archive(
+        material_name="PLA Basic",
+        params_payload=first_params,
+        fit_summary=first_fit_summary,
+        source_summary={"capture": 1},
+        material_summary=first_material_summary,
+        materials_dir=str(materials_root),
+    )
+    second_result = save_stage_a_material_archive(
+        material_name="Should Be Ignored",
+        params_payload=second_params,
+        fit_summary=second_fit_summary,
+        source_summary={"capture": 2},
+        material_summary=second_material_summary,
+        materials_dir=str(materials_root),
+        existing_directory_name=first_result.material_summary["directory_name"],
+    )
+
+    assert second_result.material_summary["directory_name"] == first_result.material_summary["directory_name"]
+    assert second_result.material_summary["material_name"] == "PLA Basic"
+    assert second_result.material_summary["verification_count"] == 2
+
+    saved_payload = json.loads(Path(second_result.stage_a_params_path).read_text(encoding="utf-8"))
+    archive_payload = json.loads(Path(second_result.archive_path).read_text(encoding="utf-8"))
+    assert archive_payload["verification_count"] == 2
+    assert len(archive_payload["verification_runs"]) == 2
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert saved_payload["meta"]["verification_count"] == 2
+    assert saved_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert np.allclose(
+        np.asarray(saved_payload["parameters"]["channels"][0]["E"], dtype=np.float64),
+        np.asarray([0.3, 0.4, 0.5], dtype=np.float64),
+    )
+    assert np.allclose(
+        np.asarray(saved_payload["parameters"]["channels"][0]["k"], dtype=np.float64),
+        np.asarray([1.2, 1.3, 1.4], dtype=np.float64),
+    )
+
+
+def test_delete_saved_stage_a_material_archive_removes_directory(tmp_path: Path) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps({"material_name": "PLA Basic"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text("{}", encoding="utf-8")
+
+    result = delete_saved_stage_a_material_archive(
+        directory_name="pla-basic",
+        materials_dir=str(materials_root),
+    )
+
+    assert result.directory_name == "pla-basic"
+    assert result.material_name == "PLA Basic"
+    assert not material_dir.exists()
+
+
+def test_gradient_card_stage_a_core_auto_detects_rotated_and_mirrored_capture_orientation(
+    tmp_path: Path,
+) -> None:
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_rotated.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    expected_e = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    expected_k = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    white_capture = np.rot90(
+        np.fliplr(
+            _build_gradient_card_capture(
+                spec,
+                white_substrate,
+                expected_e,
+                expected_k,
+            )
+        ),
+        k=1,
+    )
+    black_capture = np.rot90(
+        np.fliplr(
+            _build_gradient_card_capture(
+                spec,
+                black_substrate,
+                expected_e,
+                expected_k,
+            )
+        ),
+        k=1,
+    )
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        white_capture,
+        black_capture,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_rotated.json"),
+    )
+
+    payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
+    estimated_e = np.asarray(payload["parameters"]["channels"][0]["E"], dtype=np.float64)
+    estimated_k = np.asarray(payload["parameters"]["channels"][0]["k"], dtype=np.float64)
+    assert np.allclose(estimated_e, expected_e, atol=0.08)
+    assert np.allclose(estimated_k, expected_k, atol=0.35)
+    assert result.fit_summary["overall_validation"]["mean_delta_e"] < 1.0
+    assert result.source_summary["white_detected_orientation"] != "identity"
+    assert result.source_summary["black_detected_orientation"] != "identity"
 
 
 def test_gradient_card_stage_a_routes_compute_and_save_material(
@@ -613,6 +803,7 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
 
     def _fake_save_stage_a_material_archive(**kwargs):
         assert kwargs["material_name"] == "Test Material"
+        assert kwargs["existing_directory_name"] == "test-material"
         return MaterialArchiveSaveResult(
             archive_path=str(archive_path),
             stage_a_params_path=str(saved_stage_a_path),
@@ -621,6 +812,7 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
                 "directory_name": "test-material",
                 "archive_path": str(archive_path),
                 "stage_a_params_path": str(saved_stage_a_path),
+                "verification_count": 2,
             },
         )
 
@@ -662,13 +854,18 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
 
     save_response = client.post(
         "/api/extractor/save-gradient-card-material",
-        data={"session_id": body["session_id"], "material_name": "Test Material"},
+        data={
+            "session_id": body["session_id"],
+            "material_name": "Test Material",
+            "target_directory_name": "test-material",
+        },
     )
 
     assert save_response.status_code == 200
     save_body = save_response.json()
     assert save_body["material_file_url"].startswith("/api/files/")
     assert save_body["stage_a_params_url"].startswith("/api/files/")
+    assert "2 runs aggregated" in save_body["message"]
 
     material_resolved = registry.resolve(save_body["material_file_url"].split("/")[-1])
     stage_a_resolved = registry.resolve(save_body["stage_a_params_url"].split("/")[-1])
@@ -676,6 +873,165 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert stage_a_resolved is not None
     assert material_resolved[0] == str(archive_path)
     assert stage_a_resolved[0] == str(saved_stage_a_path)
+
+
+def test_list_saved_stage_a_material_archives_reads_saved_material_directory(tmp_path: Path) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "pla-basic"
+    material_dir.mkdir(parents=True)
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    archive_path = material_dir / "material.json"
+    stage_a_path.write_text(json.dumps({"parameters": {}}), encoding="utf-8")
+    archive_path.write_text(
+        json.dumps(
+            {
+                "material_name": "PLA Basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "stage_a_params_file": "stage_A_parameters.json",
+                "verification_count": 3,
+                "verification_runs": [
+                    {
+                        "captured_at": "2026-04-16T10:00:00Z",
+                        "params": {
+                            "E": [0.2, 0.3, 0.4],
+                            "k": [1.1, 1.2, 1.3],
+                            "white_C0": [0.9, 0.91, 0.92],
+                            "black_C0": [0.1, 0.11, 0.12],
+                        },
+                        "fit_summary": {
+                            "overall_validation": {
+                                "mean_delta_e": 1.23,
+                                "rmse_linear": 0.015,
+                            },
+                        },
+                        "material_summary": {
+                            "estimated_rgb": [100, 120, 140],
+                            "estimated_k": [1.1, 1.2, 1.3],
+                        },
+                        "source": {
+                            "white_detected_orientation": "identity",
+                            "black_detected_orientation": "rotate_90_cw",
+                        },
+                    },
+                ],
+                "fit_summary": {"overall_validation": {"mean_delta_e": 1.23}},
+                "material_summary": {
+                    "estimated_rgb": [100, 120, 140],
+                    "layer_height_mm": 0.04,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    results = list_saved_stage_a_material_archives(materials_dir=str(materials_root))
+
+    assert len(results) == 1
+    assert results[0]["material_name"] == "PLA Basic"
+    assert results[0]["directory_name"] == "pla-basic"
+    assert results[0]["archive_path"] == str(archive_path)
+    assert results[0]["stage_a_params_path"] == str(stage_a_path)
+    assert results[0]["estimated_rgb"] == [100, 120, 140]
+    assert results[0]["layer_height_mm"] == 0.04
+    assert results[0]["mean_delta_e"] == 1.23
+    assert results[0]["updated_at"] == "2026-04-16T11:00:00Z"
+    assert results[0]["verification_count"] == 3
+    assert len(results[0]["verification_history"]) == 1
+    assert results[0]["verification_history"][0]["verification_index"] == 1
+    assert results[0]["verification_history"][0]["rmse_linear"] == 0.015
+    assert results[0]["verification_history"][0]["white_detected_orientation"] == "identity"
+
+
+def test_gradient_card_material_library_route_lists_saved_materials(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [
+                    {
+                        "verification_index": 1,
+                        "captured_at": "2026-04-16T10:00:00Z",
+                        "mean_delta_e": 1.23,
+                        "rmse_linear": 0.015,
+                        "estimated_rgb": [100, 120, 140],
+                        "estimated_k": [1.1, 1.2, 1.3],
+                        "e_values": [0.2, 0.3, 0.4],
+                        "k_values": [1.1, 1.2, 1.3],
+                        "white_c0_values": [0.9, 0.91, 0.92],
+                        "black_c0_values": [0.1, 0.11, 0.12],
+                        "white_detected_orientation": "identity",
+                        "black_detected_orientation": "rotate_90_cw",
+                    }
+                ],
+            }
+        ],
+    )
+
+    response = client.get("/api/extractor/gradient-card-materials")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert len(body["materials"]) == 1
+    item = body["materials"][0]
+    assert item["material_name"] == "PLA Basic"
+    assert item["updated_at"] == "2026-04-16T11:00:00Z"
+    assert item["verification_count"] == 3
+    assert len(item["verification_history"]) == 1
+    assert item["verification_history"][0]["rmse_linear"] == 0.015
+    assert item["material_file_url"].startswith("/api/files/")
+    assert item["stage_a_params_url"].startswith("/api/files/")
+    material_resolved = registry.resolve(item["material_file_url"].split("/")[-1])
+    stage_a_resolved = registry.resolve(item["stage_a_params_url"].split("/")[-1])
+    assert material_resolved is not None
+    assert stage_a_resolved is not None
+    assert material_resolved[0] == str(archive_path)
+    assert stage_a_resolved[0] == str(stage_a_path)
+
+
+def test_gradient_card_material_delete_route_removes_saved_material(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.delete_saved_stage_a_material_archive",
+        lambda directory_name: MaterialArchiveDeleteResult(
+            directory_name=directory_name,
+            material_name="PLA Basic",
+            deleted_path=f"materials/{directory_name}",
+        ),
+    )
+
+    response = client.delete("/api/extractor/gradient-card-materials/pla-basic")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["directory_name"] == "pla-basic"
+    assert body["material_name"] == "PLA Basic"
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ import {
 } from "../api/extractor";
 import type {
   GradientCardMaterialSummary,
+  OrientationRanking,
   SavedMaterialSummary,
   StageAFitSummary,
 } from "../api/types";
@@ -40,7 +41,10 @@ interface SingleStageState {
   blackWarpPreviewUrl: string | null;
   fitSummary: StageAFitSummary | null;
   materialSummary: GradientCardMaterialSummary | null;
+  orientationRanking: OrientationRanking | null;
   materialName: string;
+  verificationTargetDirectoryName: string | null;
+  verificationTargetCount: number;
   isSaving: boolean;
   saveError: string | null;
   saveSuccess: string | null;
@@ -63,6 +67,12 @@ interface SingleStageActions {
   clearWhiteCornerPoints: () => void;
   clearBlackCornerPoints: () => void;
   setMaterialName: (value: string) => void;
+  startMaterialVerification: (target: {
+    materialName: string;
+    directoryName: string;
+    verificationCount?: number | null;
+  }) => void;
+  clearMaterialVerification: () => void;
   submitExtract: () => Promise<void>;
   submitSave: () => Promise<void>;
   clearMessages: () => void;
@@ -98,6 +108,7 @@ const RESULT_RESET_STATE = {
   blackWarpPreviewUrl: null,
   fitSummary: null,
   materialSummary: null,
+  orientationRanking: null,
   isSaving: false,
   saveError: null,
   saveSuccess: null,
@@ -130,7 +141,10 @@ const DEFAULT_STATE: SingleStageState = {
   blackWarpPreviewUrl: null,
   fitSummary: null,
   materialSummary: null,
+  orientationRanking: null,
   materialName: "",
+  verificationTargetDirectoryName: null,
+  verificationTargetCount: 0,
   isSaving: false,
   saveError: null,
   saveSuccess: null,
@@ -319,6 +333,41 @@ export const useSingleStageStore = create<
   setMaterialName: (value: string) =>
     set({ materialName: value, saveError: null, saveSuccess: null }),
 
+  startMaterialVerification: ({
+    materialName,
+    directoryName,
+    verificationCount,
+  }) => {
+    const { whiteImagePreviewUrl, blackImagePreviewUrl } = get();
+    revokePreviewUrl(whiteImagePreviewUrl);
+    revokePreviewUrl(blackImagePreviewUrl);
+    set({
+      datasetFile: null,
+      whiteImageFile: null,
+      whiteImagePreviewUrl: null,
+      whiteImageNaturalWidth: null,
+      whiteImageNaturalHeight: null,
+      whiteCornerPoints: [],
+      blackImageFile: null,
+      blackImagePreviewUrl: null,
+      blackImageNaturalWidth: null,
+      blackImageNaturalHeight: null,
+      blackCornerPoints: [],
+      materialName,
+      verificationTargetDirectoryName: directoryName,
+      verificationTargetCount: Math.max(1, verificationCount ?? 1),
+      ...RESULT_RESET_STATE,
+    });
+  },
+
+  clearMaterialVerification: () =>
+    set({
+      verificationTargetDirectoryName: null,
+      verificationTargetCount: 0,
+      saveError: null,
+      saveSuccess: null,
+    }),
+
   submitExtract: async () => {
     const state = get();
     if (!state.datasetFile || !state.whiteImageFile || !state.blackImageFile) {
@@ -364,6 +413,7 @@ export const useSingleStageStore = create<
         ),
         fitSummary: response.fit_summary ?? null,
         materialSummary: response.material_summary ?? null,
+        orientationRanking: response.orientation_ranking ?? null,
         materialFileUrl: null,
         savedStageAParamsUrl: null,
         savedMaterialSummary: null,
@@ -396,11 +446,16 @@ export const useSingleStageStore = create<
       const response = await saveGradientCardMaterial({
         sessionId: state.sessionId,
         materialName: state.materialName.trim(),
+        targetDirectoryName: state.verificationTargetDirectoryName,
       });
       set({
         materialFileUrl: normalizeResourceUrl(response.material_file_url),
         savedStageAParamsUrl: normalizeResourceUrl(response.stage_a_params_url),
         savedMaterialSummary: response.material_summary ?? null,
+        verificationTargetCount: Math.max(
+          state.verificationTargetCount,
+          Number(response.material_summary?.verification_count ?? 0),
+        ),
         saveSuccess: response.message,
         isSaving: false,
       });

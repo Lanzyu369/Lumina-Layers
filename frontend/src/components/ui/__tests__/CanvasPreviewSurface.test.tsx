@@ -270,6 +270,38 @@ describe("CanvasPreviewSurface", () => {
     expect(contexts.at(-1)?.imageSmoothingEnabled).toBe(false)
   })
 
+  it("does not change scale when wheel zoom is disabled", () => {
+    const scaleChanges: number[] = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        wheelZoomEnabled={false}
+        onScaleChange={(scale) => scaleChanges.push(scale)}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    fireEvent.wheel(surface, { deltaY: -120, clientX: 60, clientY: 40 })
+
+    expect(scaleChanges).toEqual([1])
+  })
+
   it("does not reload or reset lifecycle state when callback identities change but src is stable", () => {
     const readyPayloads: Array<CanvasPreviewSurfaceReadyPayload | null> = []
     const hoverSamples: Array<unknown> = []
@@ -508,7 +540,7 @@ describe("CanvasPreviewSurface", () => {
         <CanvasPreviewSurface
           src="/preview.png"
           alt="Preview"
-          className="h-full w-full rounded-xl"
+          className="h-full w-full min-h-64 rounded-xl"
         />
       </div>,
     )
@@ -517,6 +549,8 @@ describe("CanvasPreviewSurface", () => {
 
     expect(surface).toHaveClass("h-full")
     expect(surface).toHaveClass("w-full")
+    expect(surface).toHaveClass("min-h-64")
+    expect(surface).toHaveClass("rounded-xl")
   })
 
   it("keeps the current preview painted until the replacement image finishes loading", () => {

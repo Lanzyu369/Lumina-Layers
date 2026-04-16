@@ -530,8 +530,15 @@ export interface StageAFitSummary {
   channel_count: number;
   substrates: string[];
   colors: string[];
-  overall_validation: Record<string, unknown>;
+  overall_validation: StageAOverallValidationSummary;
   warnings: string[];
+}
+
+export interface StageAOverallValidationSummary {
+  mean_delta_e?: number | null;
+  max_delta_e?: number | null;
+  rmse_linear?: number | null;
+  channel_rmse?: number[];
 }
 
 export interface StageAFitResponse {
@@ -547,11 +554,24 @@ export interface GradientCardMaterialSummary {
   grid_rows: number;
   grid_cols: number;
   layer_height_mm: number;
+  warp_width_px?: number | null;
+  warp_height_px?: number | null;
   thickness_layers: number[];
+  sample_boxes: GradientCardSampleBox[];
   white_zero_rgb: number[];
   black_zero_rgb: number[];
   estimated_rgb: number[];
   estimated_k: number[];
+}
+
+export interface GradientCardSampleBox {
+  row: number;
+  col: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  thickness_layers: number;
 }
 
 export interface SavedMaterialSummary {
@@ -559,6 +579,24 @@ export interface SavedMaterialSummary {
   directory_name: string;
   archive_path: string;
   stage_a_params_path: string;
+  verification_count?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OrientationCandidate {
+  white_orientation: string;
+  black_orientation: string;
+  anchor_penalty: number;
+  mean_delta_e: number;
+  rmse_linear: number;
+  max_delta_e: number;
+}
+
+export interface OrientationRanking {
+  orientation_reliable: boolean;
+  delta_e_gap: number;
+  top_candidates: OrientationCandidate[];
 }
 
 export interface GradientCardStageAExtractResponse {
@@ -570,6 +608,7 @@ export interface GradientCardStageAExtractResponse {
   black_warp_preview_url?: string | null;
   fit_summary: StageAFitSummary;
   material_summary: GradientCardMaterialSummary;
+  orientation_ranking?: OrientationRanking | null;
   warnings: string[];
 }
 
@@ -579,6 +618,50 @@ export interface GradientCardMaterialSaveResponse {
   material_file_url: string;
   stage_a_params_url: string;
   material_summary: SavedMaterialSummary;
+}
+
+export interface GradientCardMaterialDeleteResponse {
+  status: string;
+  message: string;
+  directory_name: string;
+  material_name: string;
+}
+
+export interface SavedMaterialVerificationHistoryItem {
+  verification_index: number;
+  captured_at?: string | null;
+  mean_delta_e?: number | null;
+  rmse_linear?: number | null;
+  estimated_rgb: number[];
+  estimated_k: number[];
+  e_values: number[];
+  k_values: number[];
+  white_c0_values: number[];
+  black_c0_values: number[];
+  white_detected_orientation?: string | null;
+  black_detected_orientation?: string | null;
+}
+
+export interface SavedMaterialLibraryItem {
+  material_name: string;
+  directory_name: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  archive_path: string;
+  stage_a_params_path?: string | null;
+  material_file_url: string;
+  stage_a_params_url?: string | null;
+  estimated_rgb: number[];
+  layer_height_mm?: number | null;
+  mean_delta_e?: number | null;
+  verification_count?: number;
+  verification_history?: SavedMaterialVerificationHistoryItem[];
+}
+
+export interface GradientCardMaterialLibraryResponse {
+  status: string;
+  message: string;
+  materials: SavedMaterialLibraryItem[];
 }
 
 export interface ManualFixResponse {

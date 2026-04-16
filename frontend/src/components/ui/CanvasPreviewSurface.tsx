@@ -45,6 +45,7 @@ interface CanvasPreviewSurfaceProps {
   resetLabel?: string
   minScale?: number
   maxScale?: number
+  wheelZoomEnabled?: boolean
   wheelZoomSensitivity?: number
   wheelZoomStepMultiplier?: number
   resetOnDoubleClick?: boolean
@@ -72,6 +73,7 @@ export default function CanvasPreviewSurface({
   resetLabel,
   minScale = 0.5,
   maxScale = 5,
+  wheelZoomEnabled = true,
   wheelZoomSensitivity = 0.001,
   wheelZoomStepMultiplier,
   resetOnDoubleClick = false,
@@ -316,6 +318,9 @@ export default function CanvasPreviewSurface({
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
+      if (!wheelZoomEnabled) {
+        return
+      }
       event.preventDefault()
       if (interactionsDisabled) {
         lastPointerClientRef.current = null
@@ -352,6 +357,7 @@ export default function CanvasPreviewSurface({
       interactionsDisabled,
       scale,
       translate,
+      wheelZoomEnabled,
       wheelZoomSensitivity,
       wheelZoomStepMultiplier,
     ],
@@ -478,11 +484,11 @@ export default function CanvasPreviewSurface({
   }, [interactionsDisabled, resetOnDoubleClick, resetZoom])
 
   return (
-    <div className={`relative ${className ?? ""}`}>
+    <div className="relative h-full w-full">
       <div
         ref={containerRef}
         data-testid={dataTestId}
-        className={`relative h-full w-full overflow-hidden ${surfaceClassName ?? "cursor-grab active:cursor-grabbing"}`.trim()}
+        className={`relative h-full w-full overflow-hidden ${className ?? ""} ${surfaceClassName ?? "cursor-grab active:cursor-grabbing"}`.trim()}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

@@ -12,8 +12,11 @@ from .kit import (
 )
 from .materials import (
     GradientCardStageAResult,
+    MaterialArchiveDeleteResult,
     MaterialArchiveSaveResult,
+    delete_saved_stage_a_material_archive,
     extract_stage_a_material_from_gradient_cards,
+    list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
 )
 from .processing import (
@@ -29,13 +32,16 @@ __all__ = [
     "SingleStageKitResult",
     "SingleStageSpec",
     "GradientCardStageAResult",
+    "MaterialArchiveDeleteResult",
     "MaterialArchiveSaveResult",
     "SingleStageExtractResult",
     "StageAFitResult",
+    "delete_saved_stage_a_material_archive",
     "generate_single_stage_kit",
     "extract_stage_a_material_from_gradient_cards",
     "extract_single_stage_dataset",
     "fit_stage_a_from_stage_json",
+    "list_saved_stage_a_material_archives",
     "save_stage_a_material_archive",
     "resolve_single_stage_colorchecker_assets",
 ]

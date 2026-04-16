@@ -1,9 +1,11 @@
 import { useRef } from "react";
 import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
+import { tRuntime } from "../i18n/runtime";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import Button from "./ui/Button";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
+import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   PanelIntro,
@@ -18,6 +20,21 @@ import {
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
+
+const isRgbTriplet = (value: number[] | null | undefined): value is [number, number, number] =>
+  Array.isArray(value) && value.length === 3;
+
+const toRgbCss = (rgb: [number, number, number]) =>
+  `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+const toHex = (rgb: [number, number, number]) =>
+  `#${rgb
+    .map((channel) => Math.max(0, Math.min(255, channel)).toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+
+const formatMetricValue = (value: number | null | undefined, digits = 3) =>
+  typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
 
 export default function GradientCardExtractPanel() {
   const { t } = useI18n();
@@ -48,7 +65,10 @@ export default function GradientCardExtractPanel() {
     blackWarpPreviewUrl,
     fitSummary,
     materialSummary,
+    orientationRanking,
     materialName,
+    verificationTargetDirectoryName,
+    verificationTargetCount,
     isSaving,
     saveError,
     saveSuccess,
@@ -67,6 +87,7 @@ export default function GradientCardExtractPanel() {
     clearWhiteCornerPoints,
     clearBlackCornerPoints,
     setMaterialName,
+    clearMaterialVerification,
     submitExtract,
     submitSave,
   } = useSingleStageStore();
@@ -83,6 +104,37 @@ export default function GradientCardExtractPanel() {
     whiteCornerPoints.length === 4 &&
     blackCornerPoints.length === 4;
 
+  const estimatedRgb = isRgbTriplet(materialSummary?.estimated_rgb)
+    ? materialSummary.estimated_rgb
+    : null;
+  const estimatedRgbLabel = estimatedRgb ? estimatedRgb.join(", ") : "-";
+  const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
+  const meanDeltaE = fitSummary?.overall_validation?.mean_delta_e ?? null;
+  const maxDeltaE = fitSummary?.overall_validation?.max_delta_e ?? null;
+  const rmseLinear = fitSummary?.overall_validation?.rmse_linear ?? null;
+  const channelRmse = fitSummary?.overall_validation?.channel_rmse ?? [];
+  const channelRmseLabel = channelRmse.length >= 3
+    ? tRuntime("mat_gradient_channel_rmse_value", {
+        r: formatMetricValue(channelRmse[0], 4),
+        g: formatMetricValue(channelRmse[1], 4),
+        b: formatMetricValue(channelRmse[2], 4),
+      })
+    : "-";
+  const sampleBoxes = materialSummary?.sample_boxes ?? [];
+  const warpWidth = materialSummary?.warp_width_px ?? null;
+  const warpHeight = materialSummary?.warp_height_px ?? null;
+  const bestCandidate = orientationRanking?.top_candidates?.[0] ?? null;
+  const orientationReliable = orientationRanking?.orientation_reliable ?? null;
+  const deltaEGap = orientationRanking?.delta_e_gap ?? null;
+  const isVerificationMode = !!verificationTargetDirectoryName;
+  const verificationRunCount = Math.max(
+    1,
+    Number(savedMaterialSummary?.verification_count ?? verificationTargetCount ?? 1),
+  );
+  const saveButtonLabel = isVerificationMode
+    ? t("mat_gradient_save_verification_btn")
+    : t("mat_gradient_save_material_btn");
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
@@ -96,6 +148,19 @@ export default function GradientCardExtractPanel() {
         title={t("mat_gradient_extract_title")}
         description={t("mat_gradient_extract_desc")}
       />
+
+      {isVerificationMode ? (
+        <StatusBanner
+          data-testid="gradient-card-verification-mode-banner"
+          tone="info"
+          title={t("mat_gradient_verification_mode_title")}
+        >
+          {tRuntime("mat_gradient_verification_mode_desc", {
+            materialName: materialName || "-",
+            count: verificationRunCount,
+          })}
+        </StatusBanner>
+      ) : null}
 
       <input
         ref={datasetInputRef}
@@ -237,28 +302,6 @@ export default function GradientCardExtractPanel() {
               className="w-full"
             />
           </section>
-
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_material_name_label")}
-              </h3>
-            </div>
-            <input
-              value={materialName}
-              onChange={(event) => setMaterialName(event.target.value)}
-              placeholder={t("mat_gradient_material_name_placeholder")}
-              className={textInputClass}
-            />
-            <Button
-              label={t("mat_gradient_save_material_btn")}
-              variant="primary"
-              onClick={() => void submitSave()}
-              disabled={!sessionId || !materialName.trim() || isSaving}
-              loading={isSaving}
-              className="w-full"
-            />
-          </section>
         </div>
 
         <div className={desktopSecondaryColumnClass}>
@@ -295,6 +338,8 @@ export default function GradientCardExtractPanel() {
               naturalHeight={whiteImageNaturalHeight}
               cornerPoints={whiteCornerPoints}
               emptyText={t("mat_gradient_empty_white_canvas")}
+              dataTestId="white-corner-selector-preview"
+              emptyStateTestId="white-corner-selector-empty-state"
               onSelectPoint={addWhiteCornerPoint}
               onImageLoad={setWhiteImageNaturalSize}
             />
@@ -306,6 +351,8 @@ export default function GradientCardExtractPanel() {
               naturalHeight={blackImageNaturalHeight}
               cornerPoints={blackCornerPoints}
               emptyText={t("mat_gradient_empty_black_canvas")}
+              dataTestId="black-corner-selector-preview"
+              emptyStateTestId="black-corner-selector-empty-state"
               onSelectPoint={addBlackCornerPoint}
               onImageLoad={setBlackImageNaturalSize}
             />
@@ -317,22 +364,31 @@ export default function GradientCardExtractPanel() {
                 <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
                   {t("mat_gradient_warp_preview_title")}
                 </h3>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {t("mat_gradient_sample_boxes_hint")}
+                </p>
               </div>
               <div className="grid gap-4 xl:grid-cols-2">
                 {whiteWarpPreviewUrl && (
-                  <img
-                    data-testid="white-warp-preview"
-                    src={whiteWarpPreviewUrl}
+                  <GradientCardWarpPreview
+                    title={t("mat_gradient_white_canvas_title")}
+                    imageUrl={whiteWarpPreviewUrl}
                     alt={t("mat_gradient_white_canvas_title")}
-                    className="w-full rounded-2xl border border-slate-200/80 dark:border-slate-700/80"
+                    sampleBoxes={sampleBoxes}
+                    warpWidth={warpWidth}
+                    warpHeight={warpHeight}
+                    testIdPrefix="white-warp-preview"
                   />
                 )}
                 {blackWarpPreviewUrl && (
-                  <img
-                    data-testid="black-warp-preview"
-                    src={blackWarpPreviewUrl}
+                  <GradientCardWarpPreview
+                    title={t("mat_gradient_black_canvas_title")}
+                    imageUrl={blackWarpPreviewUrl}
                     alt={t("mat_gradient_black_canvas_title")}
-                    className="w-full rounded-2xl border border-slate-200/80 dark:border-slate-700/80"
+                    sampleBoxes={sampleBoxes}
+                    warpWidth={warpWidth}
+                    warpHeight={warpHeight}
+                    testIdPrefix="black-warp-preview"
                   />
                 )}
               </div>
@@ -396,6 +452,121 @@ export default function GradientCardExtractPanel() {
                   {t("mat_gradient_extract_output_title")}
                 </h3>
               </div>
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
+                <div
+                  data-testid="estimated-material-color"
+                  className="min-h-40 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
+                  style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
+                />
+                <div className={`${mutedSectionCardClass} flex flex-col justify-between gap-4`}>
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {t("mat_gradient_estimated_color_title")}
+                    </h4>
+                  </div>
+                  <dl className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_rgb_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-color-rgb" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {estimatedRgbLabel}
+                      </dd>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_hex_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-color-hex" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {estimatedHex}
+                      </dd>
+                    </div>
+                  </dl>
+                  <dl className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_mean_delta_e_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-fit-mean-delta-e" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {formatMetricValue(meanDeltaE, 3)}
+                      </dd>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_max_delta_e_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-fit-max-delta-e" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {formatMetricValue(maxDeltaE, 3)}
+                      </dd>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_rmse_linear_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-fit-rmse-linear" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {formatMetricValue(rmseLinear, 4)}
+                      </dd>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50 sm:col-span-3">
+                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {t("mat_gradient_channel_rmse_label")}
+                      </dt>
+                      <dd data-testid="estimated-material-fit-channel-rmse" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {channelRmseLabel}
+                      </dd>
+                    </div>
+                  </dl>
+                  {bestCandidate && (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <h5 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-600 dark:text-slate-300">
+                          {t("mat_gradient_orientation_title")}
+                        </h5>
+                        {orientationReliable !== null && (
+                          <span
+                            data-testid="orientation-reliability-badge"
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4 ${
+                              orientationReliable
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                            }`}
+                          >
+                            {orientationReliable
+                              ? t("mat_gradient_orientation_reliable")
+                              : t("mat_gradient_orientation_unreliable")}
+                          </span>
+                        )}
+                      </div>
+                      <dl className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                          <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                            {t("mat_gradient_white_orientation_label")}
+                          </dt>
+                          <dd data-testid="orientation-white" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                            {bestCandidate.white_orientation}
+                          </dd>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                          <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                            {t("mat_gradient_black_orientation_label")}
+                          </dt>
+                          <dd data-testid="orientation-black" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                            {bestCandidate.black_orientation}
+                          </dd>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50">
+                          <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                            {t("mat_gradient_delta_e_gap_label")}
+                          </dt>
+                          <dd data-testid="orientation-delta-e-gap" className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                            {formatMetricValue(deltaEGap, 4)}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
+                </div>
+              </div>
               <pre className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}>
                 {JSON.stringify(materialSummary, null, 2)}
               </pre>
@@ -444,6 +615,49 @@ export default function GradientCardExtractPanel() {
               </div>
             </section>
           )}
+
+          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
+            <div>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                {isVerificationMode
+                  ? t("mat_gradient_verification_name_label")
+                  : t("mat_gradient_material_name_label")}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {isVerificationMode
+                  ? tRuntime("mat_gradient_verification_name_desc", {
+                      count: verificationRunCount,
+                    })
+                  : t("mat_gradient_material_name_placeholder")}
+              </p>
+            </div>
+            <input
+              value={materialName}
+              onChange={(event) => setMaterialName(event.target.value)}
+              placeholder={t("mat_gradient_material_name_placeholder")}
+              className={textInputClass}
+              disabled={isVerificationMode}
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button
+                label={saveButtonLabel}
+                variant="primary"
+                onClick={() => void submitSave()}
+                disabled={!sessionId || !materialName.trim() || isSaving}
+                loading={isSaving}
+                className="w-full"
+              />
+              {isVerificationMode ? (
+                <Button
+                  label={t("mat_gradient_cancel_verification_btn")}
+                  variant="secondary"
+                  onClick={clearMaterialVerification}
+                  disabled={isSaving}
+                  className="w-full"
+                />
+              ) : null}
+            </div>
+          </section>
         </div>
       </div>
     </motion.aside>

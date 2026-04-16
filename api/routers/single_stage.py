@@ -13,6 +13,8 @@ from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
 from api.schemas.responses import (
+    GradientCardMaterialDeleteResponse,
+    GradientCardMaterialLibraryResponse,
     GradientCardMaterialSaveResponse,
     GradientCardStageAExtractResponse,
     SingleStageExtractResponse,
@@ -21,9 +23,11 @@ from api.schemas.responses import (
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id
 from core.single_stage import (
+    delete_saved_stage_a_material_archive,
     extract_single_stage_dataset,
     extract_stage_a_material_from_gradient_cards,
     fit_stage_a_from_stage_json,
+    list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
 )
 
@@ -216,6 +220,7 @@ async def extractor_extract_gradient_card_stage_a(
         black_warp_preview_url=f"/api/files/{black_warp_id}",
         fit_summary=result.fit_summary,
         material_summary=result.material_summary,
+        orientation_ranking=result.fit_summary.get("orientation_ranking"),
         warnings=result.warnings,
     )
 
@@ -224,6 +229,7 @@ async def extractor_extract_gradient_card_stage_a(
 async def extractor_save_gradient_card_material(
     session_id: str = Form(...),
     material_name: str = Form(...),
+    target_directory_name: str | None = Form(None),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialSaveResponse:
@@ -253,17 +259,84 @@ async def extractor_save_gradient_card_material(
             fit_summary=fit_summary,
             source_summary=source_summary,
             material_summary=material_summary,
+            existing_directory_name=target_directory_name.strip() if isinstance(target_directory_name, str) and target_directory_name.strip() else None,
         )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     persistent_registry_session = f"material:{uuid.uuid4().hex}"
     material_id = registry.register_path(persistent_registry_session, result.archive_path)
     stage_a_id = registry.register_path(persistent_registry_session, result.stage_a_params_path)
+    verification_count = int(result.material_summary.get("verification_count") or 1)
     return GradientCardMaterialSaveResponse(
         status="ok",
-        message="Gradient card material saved successfully",
+        message=(
+            f"Gradient card verification saved successfully ({verification_count} runs aggregated)"
+            if verification_count > 1
+            else "Gradient card material saved successfully"
+        ),
         material_file_url=f"/api/files/{material_id}",
         stage_a_params_url=f"/api/files/{stage_a_id}",
         material_summary=result.material_summary,
+    )
+
+
+@router.delete("/gradient-card-materials/{directory_name}")
+async def extractor_delete_gradient_card_material(
+    directory_name: str,
+) -> GradientCardMaterialDeleteResponse:
+    """Delete a saved gradient-card material archive.
+    删除已保存的梯度卡耗材档案。
+    """
+    try:
+        result = delete_saved_stage_a_material_archive(directory_name=directory_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return GradientCardMaterialDeleteResponse(
+        status="ok",
+        message="Gradient card material deleted successfully",
+        directory_name=result.directory_name,
+        material_name=result.material_name,
+    )
+
+
+@router.get("/gradient-card-materials")
+async def extractor_list_gradient_card_materials(
+    registry: FileRegistry = Depends(get_file_registry),
+) -> GradientCardMaterialLibraryResponse:
+    """List saved gradient-card material archives.
+    列出已保存的梯度卡耗材档案。
+    """
+    try:
+        materials = list_saved_stage_a_material_archives()
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
+    response_items: list[dict[str, object]] = []
+    for item in materials:
+        material_file_url = f"/api/files/{registry.register_path(persistent_registry_session, str(item['archive_path']))}"
+        stage_a_path = item.get("stage_a_params_path")
+        stage_a_params_url = (
+            f"/api/files/{registry.register_path(persistent_registry_session, str(stage_a_path))}"
+            if isinstance(stage_a_path, str) and stage_a_path
+            else None
+        )
+        response_items.append(
+            {
+                **item,
+                "material_file_url": material_file_url,
+                "stage_a_params_url": stage_a_params_url,
+            }
+        )
+
+    return GradientCardMaterialLibraryResponse(
+        status="ok",
+        message=f"Loaded {len(response_items)} saved materials",
+        materials=response_items,
     )
