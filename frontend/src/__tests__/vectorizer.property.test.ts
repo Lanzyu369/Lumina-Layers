@@ -12,13 +12,17 @@
 import { describe, it, expect, vi } from "vitest";
 import * as fc from "fast-check";
 
-// Mock apiClient before importing buildFileUrl
-vi.mock("../api/client", () => ({
-  default: {
+const { mockedApiClient } = vi.hoisted(() => ({
+  mockedApiClient: {
     defaults: { baseURL: "/api" },
     post: vi.fn(),
     get: vi.fn(),
   },
+}));
+
+// Mock apiClient before importing buildFileUrl
+vi.mock("../api/client", () => ({
+  default: mockedApiClient,
 }));
 
 vi.mock("../api/vectorizer", () => ({
@@ -171,6 +175,22 @@ describe("Property 5: 下载 URL 构建正确性 (Download URL construction)", (
         const url = buildFileUrl(path);
         expect(url).toBe(`/api${path}`);
         expect(url.endsWith(path)).toBe(true);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  const apiPrefixedPathArb = fc
+    .tuple(
+      fc.stringMatching(/^[a-z0-9_-]{1,20}$/),
+      fc.stringMatching(/^[a-z0-9_-]{1,20}$/),
+    )
+    .map(([dir, file]) => `/api/${dir}/${file}.svg`);
+
+  it("buildFileUrl preserves api-prefixed resource paths without double-prefixing", () => {
+    fc.assert(
+      fc.property(apiPrefixedPathArb, (path) => {
+        expect(buildFileUrl(path)).toBe(path);
       }),
       { numRuns: 200 },
     );

@@ -1,19 +1,33 @@
+// @vitest-environment jsdom
+
 /**
  * Unit tests for vectorizerStore and buildFileUrl.
  * vectorizerStore 和 buildFileUrl 单元测试。
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createElement } from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useVectorizerStore } from "../stores/vectorizerStore";
-import { buildFileUrl } from "../components/VectorizerPanel";
+import VectorizerPanel, { buildFileUrl } from "../components/VectorizerPanel";
 
-// Mock apiClient for buildFileUrl tests
-vi.mock("../api/client", () => ({
-  default: {
+const {
+  mockedApiClient,
+  setConverterImageFileSpy,
+  setWidgetActiveTabSpy,
+} = vi.hoisted(() => ({
+  mockedApiClient: {
     defaults: { baseURL: "/api" },
     post: vi.fn(),
     get: vi.fn(),
   },
+  setConverterImageFileSpy: vi.fn(),
+  setWidgetActiveTabSpy: vi.fn(),
+}));
+
+// Mock apiClient for buildFileUrl tests
+vi.mock("../api/client", () => ({
+  default: mockedApiClient,
 }));
 
 // Mock vectorizeImage to avoid real API calls
@@ -25,7 +39,7 @@ vi.mock("../api/vectorizer", () => ({
 vi.mock("../stores/converter", () => ({
   useConverterStore: {
     getState: vi.fn(() => ({
-      setImageFile: vi.fn(),
+      setImageFile: setConverterImageFileSpy,
     })),
   },
 }));
@@ -33,7 +47,7 @@ vi.mock("../stores/converter", () => ({
 vi.mock("../stores/widgetStore", () => ({
   useWidgetStore: {
     getState: vi.fn(() => ({
-      setActiveTab: vi.fn(),
+      setActiveTab: setWidgetActiveTabSpy,
     })),
   },
 }));
@@ -44,7 +58,10 @@ function resetStore() {
 
 describe("vectorizerStore", () => {
   beforeEach(() => {
+    cleanup();
     resetStore();
+    mockedApiClient.defaults.baseURL = "/api";
+    vi.clearAllMocks();
   });
 
   // --- Initial state ---
@@ -154,10 +171,79 @@ describe("vectorizerStore", () => {
   });
 });
 
+describe("VectorizerPanel send-to-converter", () => {
+  beforeEach(() => {
+    cleanup();
+    resetStore();
+    mockedApiClient.defaults.baseURL = "/api";
+    vi.clearAllMocks();
+  });
+
+  it("fetches svg with normalized url and forwards it to converter tab", async () => {
+    const svgBlob = new Blob(["<svg/>"], { type: "image/svg+xml" });
+    mockedApiClient.get.mockResolvedValueOnce({ data: svgBlob });
+
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/vectorized.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "vec.send_to_converter",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mockedApiClient.get).toHaveBeenCalledWith("/api/files/vectorized.svg", {
+        responseType: "blob",
+        baseURL: "",
+      });
+    });
+
+    await waitFor(() => {
+      expect(setConverterImageFileSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const fileArg = setConverterImageFileSpy.mock.calls[0]?.[0];
+    expect(fileArg).toBeInstanceOf(File);
+    expect(fileArg.name).toBe("vectorized.svg");
+    expect(fileArg.type).toBe("image/svg+xml");
+
+    expect(setWidgetActiveTabSpy).toHaveBeenCalledWith("converter");
+  });
+});
+
 describe("buildFileUrl", () => {
-  it("prepends apiClient baseURL to relative path", () => {
+  beforeEach(() => {
+    mockedApiClient.defaults.baseURL = "/api";
+  });
+
+  it("prepends apiClient baseURL to legacy relative path", () => {
     const url = buildFileUrl("/files/test.svg");
     expect(url).toBe("/api/files/test.svg");
+  });
+
+  it("does not double-prefix api-prefixed paths", () => {
+    const url = buildFileUrl("/api/files/test.svg");
+    expect(url).toBe("/api/files/test.svg");
+  });
+
+  it("keeps the backend origin when apiClient baseURL is absolute", () => {
+    mockedApiClient.defaults.baseURL = "http://localhost:8000/api";
+    const url = buildFileUrl("/api/files/test.svg");
+    expect(url).toBe("http://localhost:8000/api/files/test.svg");
   });
 
   it("handles empty relative path", () => {
