@@ -52,7 +52,11 @@ export function buildFileUrl(relativePath: string): string {
     }
     if (baseIsAbsolute) {
       try {
-        return `${new URL(normalizedBase).origin}${normalizedPath}`;
+        const parsedBase = new URL(normalizedBase);
+        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
+        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
+        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
+        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
       } catch {
         return normalizedPath;
       }

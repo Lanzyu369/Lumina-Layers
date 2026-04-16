@@ -294,10 +294,10 @@ describe("buildFileUrl", () => {
     expect(url).toBe("/api/files/test.svg");
   });
 
-  it("keeps the backend origin when apiClient baseURL is absolute", () => {
-    mockedApiClient.defaults.baseURL = "http://localhost:8000/api";
+  it("preserves path prefix when apiClient baseURL is absolute", () => {
+    mockedApiClient.defaults.baseURL = "https://host.example/lumina/api";
     const url = buildFileUrl("/api/files/test.svg");
-    expect(url).toBe("http://localhost:8000/api/files/test.svg");
+    expect(url).toBe("https://host.example/lumina/api/files/test.svg");
   });
 
   it("handles empty relative path", () => {
