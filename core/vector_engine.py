@@ -1074,11 +1074,19 @@ class VectorProcessor:
         preview_colors = analysis.preview_colors
         enable_fridge_magnet = bool(getattr(self, "enable_fridge_magnet", False))
         fridge_magnets = list(getattr(self, "fridge_magnets", []) or [])
+        structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
 
         # === Stage 5: Run-length extrude per channel ===
         layer_h = PrinterConfig.LAYER_HEIGHT
         extrude_cache = {}
         is_5color = "5-Color Extended" in self.color_mode
+        is_single_sided = "单面" in structure_mode_value or "Single" in structure_mode_value
+        mirror_transform = None
+        if is_single_sided and not is_5color:
+            model_width_mm = bbox[2] * scale_factor
+            mirror_transform = np.array(
+                [[-1.0, 0.0, 0.0, model_width_mm], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+            )
         backing_layer_count = max(1, int(round(thickness_mm / layer_h)))
         backing_height = backing_layer_count * layer_h
 
@@ -1174,7 +1182,7 @@ class VectorProcessor:
 
         # === Stage 7: Double-sided structure ===
         t0 = time.perf_counter()
-        is_double_sided = "双面" in structure_mode or "Double" in structure_mode
+        is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
         if is_double_sided:
             _log.info("[VECTOR] Adding mirrored color layers (double-sided mode)...")
             top_z_start = backing_z_start + backing_layer_count * layer_h
@@ -1207,6 +1215,8 @@ class VectorProcessor:
             _log.info("[VECTOR] Merging %s parts for %s...", len(mesh_list), name)
             combined = trimesh.util.concatenate(mesh_list) if len(mesh_list) > 1 else mesh_list[0]
             self._fix_coordinates(combined, svg_height_mm)
+            if mirror_transform is not None:
+                combined.apply_transform(mirror_transform)
 
             color_val = preview_colors.get(mat_id, [255, 255, 255, 255])
             combined.visual.face_colors = color_val

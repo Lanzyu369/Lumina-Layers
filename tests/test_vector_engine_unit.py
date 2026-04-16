@@ -494,6 +494,57 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
 
 
+class TestVectorSingleSidedMirrorRegression:
+
+    def test_build_mesh_mirrors_non_5color_single_sided_x_coordinates(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "8-Color Max"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[{"geometry": box(0, 0, 4, 10), "recipe": [1, 1, 1, 1, 1], "color": (0, 255, 255)}],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
+        bounds = scene.geometry["Cyan"].bounds
+
+        assert bounds[0][0] == pytest.approx(6.0)
+        assert bounds[1][0] == pytest.approx(10.0)
+
+    def test_build_mesh_does_not_mirror_5color_single_sided_x_coordinates(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "5-Color Extended"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[{"geometry": box(0, 0, 4, 10), "recipe": [1, 1, 1, 1, 1, 1], "color": (0, 255, 255)}],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=6,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
+        bounds = scene.geometry["Cyan"].bounds
+
+        assert bounds[0][0] == pytest.approx(0.0)
+        assert bounds[1][0] == pytest.approx(4.0)
+
+
 # =====================================================================
 # 5. SVG parse regression (multi-subpath)
 # =====================================================================
