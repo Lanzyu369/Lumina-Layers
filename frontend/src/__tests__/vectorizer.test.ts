@@ -10,6 +10,7 @@ import { createElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useVectorizerStore } from "../stores/vectorizerStore";
 import VectorizerPanel, { buildFileUrl } from "../components/VectorizerPanel";
+import { translations } from "../i18n/translations";
 
 const {
   mockedApiClient,
@@ -54,6 +55,19 @@ vi.mock("../stores/widgetStore", () => ({
 
 function resetStore() {
   useVectorizerStore.getState().reset();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getPanelButtonByKey(key: string): HTMLElement {
+  const entry = translations[key];
+  const labels = [entry?.zh, entry?.en, key].filter(
+    (label): label is string => typeof label === "string" && label.length > 0,
+  );
+  const namePattern = new RegExp(`^(?:${labels.map(escapeRegExp).join("|")})$`, "i");
+  return screen.getByRole("button", { name: namePattern });
 }
 
 describe("vectorizerStore", () => {
@@ -199,11 +213,7 @@ describe("VectorizerPanel send-to-converter", () => {
 
     render(createElement(VectorizerPanel));
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "vec.send_to_converter",
-      }),
-    );
+    fireEvent.click(getPanelButtonByKey("vec.send_to_converter"));
 
     await waitFor(() => {
       expect(mockedApiClient.get).toHaveBeenCalledWith("/api/files/vectorized.svg", {
@@ -222,6 +232,50 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(fileArg.type).toBe("image/svg+xml");
 
     expect(setWidgetActiveTabSpy).toHaveBeenCalledWith("converter");
+  });
+
+  it("downloads svg using a resolved anchor href", () => {
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/vectorized.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    const originalCreateElement = document.createElement.bind(document);
+    const anchorMock = {
+      href: "",
+      download: "",
+      click: vi.fn(),
+    } as unknown as HTMLAnchorElement;
+
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return anchorMock;
+        }
+        return originalCreateElement(tagName, options);
+      });
+
+    try {
+      fireEvent.click(getPanelButtonByKey("vec.download_svg"));
+    } finally {
+      createElementSpy.mockRestore();
+    }
+
+    expect(anchorMock.href).toBe("/api/files/vectorized.svg");
+    expect(anchorMock.download).toBe("vectorized.svg");
+    expect(anchorMock.click).toHaveBeenCalledTimes(1);
   });
 });
 
