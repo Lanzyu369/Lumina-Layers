@@ -140,8 +140,8 @@ describe("GradientCardExtractPanel", () => {
         orientation_reliable: true,
         delta_e_gap: 2.3456,
         top_candidates: [
-          { white_orientation: "flip_horizontal", black_orientation: "identity", mean_delta_e: 4.5141, rmse_linear: 0.014, max_delta_e: 15.1658 },
-          { white_orientation: "identity", black_orientation: "identity", mean_delta_e: 6.8597, rmse_linear: 0.021, max_delta_e: 18.2 },
+          { white_orientation: "flip_horizontal", black_orientation: "identity", anchor_penalty: 0.001, mean_delta_e: 4.5141, rmse_linear: 0.014, max_delta_e: 15.1658 },
+          { white_orientation: "identity", black_orientation: "identity", anchor_penalty: 0.35, mean_delta_e: 6.8597, rmse_linear: 0.021, max_delta_e: 18.2 },
         ],
       },
       materialFileUrl: "/api/files/material.json",
@@ -234,8 +234,8 @@ describe("GradientCardExtractPanel", () => {
         orientation_reliable: false,
         delta_e_gap: 0.12,
         top_candidates: [
-          { white_orientation: "rotate_180", black_orientation: "flip_vertical", mean_delta_e: 6.61, rmse_linear: 0.04, max_delta_e: 18.0 },
-          { white_orientation: "identity", black_orientation: "identity", mean_delta_e: 6.73, rmse_linear: 0.042, max_delta_e: 18.5 },
+          { white_orientation: "rotate_180", black_orientation: "flip_vertical", anchor_penalty: 0.12, mean_delta_e: 6.61, rmse_linear: 0.04, max_delta_e: 18.0 },
+          { white_orientation: "identity", black_orientation: "identity", anchor_penalty: 0.13, mean_delta_e: 6.73, rmse_linear: 0.042, max_delta_e: 18.5 },
         ],
       },
     });
@@ -261,7 +261,10 @@ describe("GradientCardExtractPanel", () => {
       screen.getByTestId("gradient-card-verification-mode-banner"),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /保存验证结果|save verification result/i }),
+      screen.getByRole("button", { name: /合并结果|merge result/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /覆盖结果|override/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /取消复验|cancel re-verification/i }),

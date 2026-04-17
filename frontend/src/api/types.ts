@@ -89,6 +89,10 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   hue_weight?: number;
   chroma_gate?: number;
   is_dark?: boolean;
+  material_source?: "lut" | "material_archive";
+  selected_materials?: string[];
+  material_layer_count?: number;
+  material_layer_height_mm?: number;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {

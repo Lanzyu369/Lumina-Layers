@@ -74,7 +74,7 @@ interface SingleStageActions {
   }) => void;
   clearMaterialVerification: () => void;
   submitExtract: () => Promise<void>;
-  submitSave: () => Promise<void>;
+  submitSave: (saveMode?: "merge" | "override") => Promise<void>;
   clearMessages: () => void;
 }
 
@@ -430,7 +430,7 @@ export const useSingleStageStore = create<
     }
   },
 
-  submitSave: async () => {
+  submitSave: async (saveMode?: "merge" | "override") => {
     const state = get();
     if (!state.sessionId) {
       set({ saveError: "Compute Stage A material data before saving." });
@@ -447,6 +447,7 @@ export const useSingleStageStore = create<
         sessionId: state.sessionId,
         materialName: state.materialName.trim(),
         targetDirectoryName: state.verificationTargetDirectoryName,
+        saveMode,
       });
       set({
         materialFileUrl: normalizeResourceUrl(response.material_file_url),

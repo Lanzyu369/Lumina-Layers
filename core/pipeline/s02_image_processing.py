@@ -55,6 +55,12 @@ def run(ctx: dict) -> dict:
     Raises:
         KeyError: 缺少必需的输入键时抛出
     """
+    # ---- Material-archive branch ----
+    if ctx.get("material_source") == "material_archive":
+        from core.pipeline.p03_core_processing import _run_material_archive_branch
+        ctx['lut_metadata'] = None
+        return _run_material_archive_branch(ctx)
+
     actual_lut_path = ctx['actual_lut_path']
     color_mode = ctx['color_mode']
     hue_weight = ctx.get('hue_weight', 0.0)

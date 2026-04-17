@@ -123,6 +123,42 @@ def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
     return normalized
 
 
+def _parse_selected_materials(value: list[str] | str | None) -> list[str]:
+    """Normalize selected-materials field from multipart/form-data inputs.
+    规范化 multipart/form-data 中的 selected_materials 字段。
+
+    Accepts repeated form fields, JSON-stringified arrays (the typical
+    frontend shape: ``'["mat1","mat2"]'``), or comma-separated strings.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [s.strip() for s in stripped.split(",") if s.strip()]
+
+    normalized = [str(item) for item in value if str(item).strip()]
+    if len(normalized) == 1:
+        stripped = normalized[0].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+    return [s.strip() for s in normalized if s.strip()]
+
+
 @router.get("/bed-sizes", response_model=BedSizeListResponse)
 def get_bed_sizes() -> BedSizeListResponse:
     """Return all available printer bed sizes including printer models and custom sizes.
@@ -282,6 +318,10 @@ async def convert_preview(
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     is_dark: bool = Form(True, description="深色主题"),
+    material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
+    selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
+    material_layer_count: int | None = Form(None, description="耗材模式叠色层数 (5-10)"),
+    material_layer_height_mm: float | None = Form(None, description="耗材模式层高 (mm)"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -300,34 +340,43 @@ async def convert_preview(
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
     svg_large_format_policy = None
-    try:
-        normalized_db_names = _normalize_db_names(db_names)
+    # Material-archive mode: skip LUT resolution entirely
+    if material_source == "material_archive":
         request = LutSourceSelection.model_validate(
-            {
-                "source_kind": source_kind,
-                "lut_name": lut_name,
-                "material_type": material_type,
-                "vendor": vendor,
-                "db_names": normalized_db_names,
-            }
+            {"source_kind": "legacy_single", "lut_name": "__material_archive__", "material_type": None, "vendor": None, "db_names": []}
         )
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
+        lut_path = "__material_archive__"
+        resolved_lut_name = "__material_archive__"
+        resolved_lut_path = "__material_archive__"
+    else:
+        try:
+            normalized_db_names = _normalize_db_names(db_names)
+            request = LutSourceSelection.model_validate(
+                {
+                    "source_kind": source_kind,
+                    "lut_name": lut_name,
+                    "material_type": material_type,
+                    "vendor": vendor,
+                    "db_names": normalized_db_names,
+                }
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
 
-    try:
-        lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
-            source_kind=request.source_kind,
-            lut_name=request.lut_name,
-            material_type=request.material_type,
-            vendor=request.vendor,
-            db_names=request.db_names,
-        )
-    except ValueError as exc:
-        detail = str(exc)
-        status_code = 404 if detail.startswith("LUT not found:") else 422
-        raise HTTPException(status_code=status_code, detail=detail) from exc
+        try:
+            lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
+                source_kind=request.source_kind,
+                lut_name=request.lut_name,
+                material_type=request.material_type,
+                vendor=request.vendor,
+                db_names=request.db_names,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if detail.startswith("LUT not found:") else 422
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    resolved_lut_path = os.path.abspath(lut_path)
+        resolved_lut_path = os.path.abspath(lut_path)
     if request.source_kind == "native_bundle":
         try:
             Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
@@ -367,10 +416,19 @@ async def convert_preview(
             },
         )
         _t = time.perf_counter()
+        _selected_mats: list[str] | None = None
+        if material_source == "material_archive" and selected_materials is not None:
+            _selected_mats = _parse_selected_materials(selected_materials)
+            log.info(
+                "Material mode parsed: count=%d names=%s",
+                len(_selected_mats or []),
+                _selected_mats,
+            )
+
         result = await pool.submit(
             worker_generate_preview,
             temp_path,
-            lut_path,
+            lut_path if material_source != "material_archive" else "__material_archive__",
             target_width_mm,
             auto_bg,
             bg_tol,
@@ -387,6 +445,10 @@ async def convert_preview(
             model_margin,
             hue_weight,
             chroma_gate,
+            material_source,
+            _selected_mats,
+            material_layer_count,
+            material_layer_height_mm,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True
@@ -453,6 +515,11 @@ async def convert_preview(
     store.put(session_id, "model_only", model_only)
     store.put(session_id, "model_threshold", model_threshold)
     store.put(session_id, "model_margin", model_margin)
+    store.put(session_id, "material_source", material_source)
+    if material_source == "material_archive":
+        store.put(session_id, "selected_materials", _selected_mats or [])
+        store.put(session_id, "material_layer_count", material_layer_count)
+        store.put(session_id, "material_layer_height_mm", material_layer_height_mm)
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())

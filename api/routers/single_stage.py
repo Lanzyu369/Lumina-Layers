@@ -230,6 +230,7 @@ async def extractor_save_gradient_card_material(
     session_id: str = Form(...),
     material_name: str = Form(...),
     target_directory_name: str | None = Form(None),
+    save_mode: str = Form("merge"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialSaveResponse:
@@ -253,6 +254,9 @@ async def extractor_save_gradient_card_material(
         )
 
     try:
+        validated_save_mode = save_mode.strip().lower() if isinstance(save_mode, str) else "merge"
+        if validated_save_mode not in ("merge", "override"):
+            validated_save_mode = "merge"
         result = save_stage_a_material_archive(
             material_name=cleaned_material_name,
             params_payload=params_payload,
@@ -260,6 +264,7 @@ async def extractor_save_gradient_card_material(
             source_summary=source_summary,
             material_summary=material_summary,
             existing_directory_name=target_directory_name.strip() if isinstance(target_directory_name, str) and target_directory_name.strip() else None,
+            save_mode=validated_save_mode,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

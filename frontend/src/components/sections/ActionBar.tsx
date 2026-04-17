@@ -60,6 +60,9 @@ export default function ActionBar() {
   const nativeBrandGroups = useConverterStore((s) => s.nativeBrandGroups)
   const nativeColorLayers = useConverterStore((s) => s.color_layers)
   const nativeLayerHeightMm = useConverterStore((s) => s.layer_height_mm)
+  const selectedMaterialDirNames = useConverterStore((s) => s.selectedMaterialDirNames)
+  const materialLayerCount = useConverterStore((s) => s.materialLayerCount)
+  const materialLayerHeightMm = useConverterStore((s) => s.materialLayerHeightMm)
   const isLoading = useConverterStore((s) => s.isLoading)
   const isGenerating = useConverterStore((s) => s.isGenerating)
   const error = useConverterStore((s) => s.error)
@@ -102,6 +105,9 @@ export default function ActionBar() {
         selectedNativeDbNames,
         color_layers: nativeColorLayers,
         layer_height_mm: nativeLayerHeightMm,
+        selectedMaterialDirNames,
+        materialLayerCount,
+        materialLayerHeightMm,
       }),
     [
       sourceVersion,
@@ -111,6 +117,9 @@ export default function ActionBar() {
       selectedNativeDbNames,
       nativeColorLayers,
       nativeLayerHeightMm,
+      selectedMaterialDirNames,
+      materialLayerCount,
+      materialLayerHeightMm,
     ],
   )
 
@@ -666,7 +675,9 @@ export default function ActionBar() {
       ) : (
         <>
           {!canSubmit && (
-            <p className="text-xs text-yellow-600 dark:text-yellow-400">{t("action_upload_hint")}</p>
+            <p className="text-xs text-yellow-600 dark:text-yellow-400">
+              {t(sourceVersion === "material" ? "action_upload_hint_material" : "action_upload_hint")}
+            </p>
           )}
 
           <div className="grid grid-cols-1 gap-2">

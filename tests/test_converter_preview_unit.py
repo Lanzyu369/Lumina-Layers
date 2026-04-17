@@ -25,7 +25,11 @@ from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
-from api.routers.converter.preview import _resolve_upload_source_basename, convert_preview
+from api.routers.converter.preview import (
+    _parse_selected_materials,
+    _resolve_upload_source_basename,
+    convert_preview,
+)
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
@@ -856,3 +860,46 @@ class TestNativeBundleCleanup:
         finally:
             if os.path.exists(temp_bundle_path):
                 os.unlink(temp_bundle_path)
+
+
+class TestParseSelectedMaterials:
+    """Regression tests for the _parse_selected_materials helper.
+
+    The frontend sends selected_materials as a JSON-stringified array, which
+    FastAPI wraps in a list-of-one-string before the endpoint sees it. This
+    helper must unwrap both plain strings and that list shape.
+    """
+
+    def test_none_returns_empty(self):
+        assert _parse_selected_materials(None) == []
+
+    def test_empty_string_returns_empty(self):
+        assert _parse_selected_materials("") == []
+
+    def test_json_stringified_array(self):
+        """Direct JSON string (e.g. '["a","b"]') is parsed."""
+        assert _parse_selected_materials('["mat1","mat2"]') == ["mat1", "mat2"]
+
+    def test_list_with_one_json_string_item(self):
+        """FastAPI form-coercion often wraps the JSON string in a list."""
+        assert _parse_selected_materials(['["mat1","mat2"]']) == ["mat1", "mat2"]
+
+    def test_plain_list_of_strings(self):
+        """Repeated form fields arrive as a regular list."""
+        assert _parse_selected_materials(["mat1", "mat2"]) == ["mat1", "mat2"]
+
+    def test_comma_separated_string(self):
+        """Fallback for legacy comma-joined inputs."""
+        assert _parse_selected_materials("mat1, mat2") == ["mat1", "mat2"]
+
+    def test_unicode_material_names(self):
+        """Chinese material directory names round-trip correctly."""
+        value = json.dumps(["瑞贝思 PLA 红", "瑞贝思 PLA 黄"])
+        assert _parse_selected_materials([value]) == [
+            "瑞贝思 PLA 红",
+            "瑞贝思 PLA 黄",
+        ]
+
+    def test_malformed_json_falls_back_to_string(self):
+        """Invalid JSON is treated as a single literal name."""
+        assert _parse_selected_materials("[not-json") == ["[not-json"]

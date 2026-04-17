@@ -14,6 +14,11 @@ import time
 import logging
 
 from config import ModelingMode, ColorSystem
+from core.material_lut_synthesis import (
+    build_material_preview_colors,
+    build_material_slot_names,
+    load_multiple_materials,
+)
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from utils.lut_manager import LUTManager
 
@@ -49,10 +54,64 @@ def run(ctx: dict) -> dict:
     quantize_colors = ctx.get("quantize_colors", 64)
     color_mode = ctx.get("color_mode", "4-Color")
 
+    material_source = ctx.get("material_source", "lut")
+
     # ---- 输入校验 ----
     if image_path is None:
         ctx["error"] = "[ERROR] Please upload an image"
         return ctx
+
+    # ---- modeling_mode 规范化 ----
+    if modeling_mode is None or modeling_mode == "none":
+        modeling_mode = ModelingMode.HIGH_FIDELITY
+        _log.warning("[CONVERTER] modeling_mode was None, using default HIGH_FIDELITY")
+    else:
+        modeling_mode = ModelingMode(modeling_mode)
+
+    # ---- quantize_colors clamp ----
+    quantize_colors = max(8, min(256, quantize_colors))
+
+    # ---- Material-archive branch ----
+    if material_source == "material_archive":
+        selected_materials = ctx.get("selected_materials") or []
+        if not selected_materials:
+            ctx["error"] = "[ERROR] No materials selected for material-archive mode"
+            return ctx
+        try:
+            materials = load_multiple_materials(selected_materials)
+        except (FileNotFoundError, ValueError) as exc:
+            ctx["error"] = f"[ERROR] Failed to load materials: {exc}"
+            return ctx
+        slot_names = build_material_slot_names(materials)
+        preview_colors = build_material_preview_colors(materials)
+        # Build a synthetic color_conf compatible with downstream steps
+        color_conf = {
+            "name": "Material",
+            "slots": slot_names,
+            "preview": preview_colors,
+            "map": {name: idx for idx, name in enumerate(slot_names)},
+        }
+        material_layer_count = int(ctx.get("material_layer_count") or 5)
+        material_layer_height = float(ctx.get("material_layer_height_mm") or 0.08)
+        ctx["actual_lut_path"] = "__material_archive__"
+        ctx["modeling_mode"] = modeling_mode
+        ctx["quantize_colors"] = quantize_colors
+        ctx["preview_colors"] = preview_colors
+        ctx["slot_names"] = slot_names
+        ctx["color_conf"] = color_conf
+        ctx["color_layers"] = material_layer_count
+        ctx["layer_height_mm"] = material_layer_height
+        ctx["_material_params"] = materials
+        ctx["material_source"] = "material_archive"
+        _elapsed = time.perf_counter() - _t0
+        ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
+        _log.info(
+            "[P01] material_archive mode: %d materials, %d layers, %.2f mm/layer",
+            len(materials), material_layer_count, material_layer_height,
+        )
+        return ctx
+
+    # ---- LUT branch (existing logic) ----
     if lut_path is None:
         ctx["error"] = "[WARNING] Please select or upload calibration file"
         return ctx
@@ -65,16 +124,6 @@ def run(ctx: dict) -> dict:
     else:
         ctx["error"] = "[ERROR] Invalid LUT file format"
         return ctx
-
-    # ---- modeling_mode 规范化 ----
-    if modeling_mode is None or modeling_mode == "none":
-        modeling_mode = ModelingMode.HIGH_FIDELITY
-        _log.warning("[CONVERTER] modeling_mode was None, using default HIGH_FIDELITY")
-    else:
-        modeling_mode = ModelingMode(modeling_mode)
-
-    # ---- quantize_colors clamp ----
-    quantize_colors = max(8, min(256, quantize_colors))
 
     # ---- 颜色系统配置 ----
     color_conf = ColorSystem.get(color_mode)

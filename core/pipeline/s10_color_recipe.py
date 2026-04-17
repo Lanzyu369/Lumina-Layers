@@ -8,12 +8,15 @@ S10 — 颜色配方报告生成（可选步骤）。
 - ColorRecipeLogger 调用
 """
 
+import logging
 import os
 import time
 
 import numpy as np
 
 from config import OUTPUT_DIR
+
+_log = logging.getLogger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -33,7 +36,15 @@ def run(ctx: dict) -> dict:
     """
     _t0 = time.perf_counter()
 
-    processor = ctx['processor']
+    # processor is only available in LUT mode; material-archive mode produces
+    # recipes via the beam-search solver and exposes them through
+    # material_matrix + slot_names instead of a ColorRecipeLogger.
+    processor = ctx.get('processor')
+    if processor is None:
+        ctx['color_recipe_path'] = None
+        _log.info("[S10] color recipe report skipped (no LUT processor; material-archive mode)")
+        return ctx
+
     matched_rgb = ctx['matched_rgb']
     material_matrix = ctx['material_matrix']
     mask_solid = ctx['mask_solid']

@@ -73,12 +73,16 @@ export async function saveGradientCardMaterial(params: {
   sessionId: string;
   materialName: string;
   targetDirectoryName?: string | null;
+  saveMode?: "merge" | "override";
 }): Promise<GradientCardMaterialSaveResponse> {
   const fd = new FormData();
   fd.append("session_id", params.sessionId);
   fd.append("material_name", params.materialName);
   if (params.targetDirectoryName) {
     fd.append("target_directory_name", params.targetDirectoryName);
+  }
+  if (params.saveMode) {
+    fd.append("save_mode", params.saveMode);
   }
   const response = await apiClient.post<GradientCardMaterialSaveResponse>(
     "/extractor/save-gradient-card-material",

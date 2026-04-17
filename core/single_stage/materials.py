@@ -1010,6 +1010,7 @@ def save_stage_a_material_archive(
     material_summary: dict[str, Any],
     materials_dir: str | None = None,
     existing_directory_name: str | None = None,
+    save_mode: str = "merge",
 ) -> MaterialArchiveSaveResult:
     """Persist a Stage A material archive into the project materials directory.
     将 Stage A 耗材档案持久化保存到项目 materials 目录。
@@ -1022,10 +1023,15 @@ def save_stage_a_material_archive(
         material_summary: Material extraction summary. (耗材提取摘要)
         materials_dir: Optional override output directory. (可选的输出目录覆盖)
         existing_directory_name: Optional existing material directory to update. (可选的已有耗材目录名)
+        save_mode: ``"merge"`` to append to existing verification runs and
+            aggregate, or ``"override"`` to replace all previous runs with the
+            current result only. (合并已有验证或覆盖)
 
     Returns:
         MaterialArchiveSaveResult: Saved archive information. (保存结果)
     """
+    if save_mode not in ("merge", "override"):
+        raise ValueError(f"Invalid save_mode: {save_mode!r}, expected 'merge' or 'override'")
     target_root = Path(materials_dir or MATERIALS_DIR)
     target_root.mkdir(parents=True, exist_ok=True)
     archive_path: Path
@@ -1043,7 +1049,8 @@ def save_stage_a_material_archive(
             raise ValueError("Existing material archive is not valid UTF-8 JSON") from exc
         created_at = str(existing_archive_payload.get("created_at") or _now_iso())
         final_material_name = str(existing_archive_payload.get("material_name") or material_name)
-        verification_runs = _load_existing_verification_runs(material_dir, existing_archive_payload)
+        if save_mode == "merge":
+            verification_runs = _load_existing_verification_runs(material_dir, existing_archive_payload)
     else:
         material_dir = _unique_material_dir(target_root, material_name)
         material_dir.mkdir(parents=True, exist_ok=True)

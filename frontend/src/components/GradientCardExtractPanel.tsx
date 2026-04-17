@@ -638,7 +638,33 @@ export default function GradientCardExtractPanel() {
               className={textInputClass}
               disabled={isVerificationMode}
             />
-            <div className="grid gap-3 sm:grid-cols-2">
+            {isVerificationMode ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Button
+                  label={t("mat_gradient_save_merge_btn")}
+                  variant="primary"
+                  onClick={() => void submitSave("merge")}
+                  disabled={!sessionId || !materialName.trim() || isSaving}
+                  loading={isSaving}
+                  className="w-full"
+                />
+                <Button
+                  label={t("mat_gradient_save_override_btn")}
+                  variant="secondary"
+                  onClick={() => void submitSave("override")}
+                  disabled={!sessionId || !materialName.trim() || isSaving}
+                  loading={isSaving}
+                  className="w-full"
+                />
+                <Button
+                  label={t("mat_gradient_cancel_verification_btn")}
+                  variant="secondary"
+                  onClick={clearMaterialVerification}
+                  disabled={isSaving}
+                  className="w-full"
+                />
+              </div>
+            ) : (
               <Button
                 label={saveButtonLabel}
                 variant="primary"
@@ -647,16 +673,7 @@ export default function GradientCardExtractPanel() {
                 loading={isSaving}
                 className="w-full"
               />
-              {isVerificationMode ? (
-                <Button
-                  label={t("mat_gradient_cancel_verification_btn")}
-                  variant="secondary"
-                  onClick={clearMaterialVerification}
-                  disabled={isSaving}
-                  className="w-full"
-                />
-              ) : null}
-            </div>
+            )}
           </section>
         </div>
       </div>

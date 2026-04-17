@@ -2225,8 +2225,68 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Legacy LUT",
   },
   basic_source_version_native: {
-    zh: "反推LUT",
+    zh: "\u53cd\u63a8LUT",
     en: "Inferred LUT",
+  },
+  basic_source_version_material: {
+    zh: "\u8017\u6750\u6863\u6848",
+    en: "Material Archive",
+  },
+  basic_material_select_label: {
+    zh: "\u9009\u62e9\u8017\u6750",
+    en: "Select Materials",
+  },
+  basic_material_loading: {
+    zh: "\u52a0\u8f7d\u8017\u6750\u5e93\u2026",
+    en: "Loading materials\u2026",
+  },
+  basic_material_empty: {
+    zh: "\u65e0\u53ef\u7528\u8017\u6750\uff0c\u8bf7\u5148\u5728\u300c\u8017\u6750\u63d0\u53d6\u300d\u4e2d\u521b\u5efa",
+    en: "No materials available. Create one in Material Extraction first.",
+  },
+  basic_material_selected_count: {
+    zh: "\u5df2\u9009\u8017\u6750",
+    en: "Selected",
+  },
+  basic_material_layer_count_label: {
+    zh: "\u53e0\u8272\u5c42\u6570",
+    en: "Color Layers",
+  },
+  basic_material_layer_height_label: {
+    zh: "\u5c42\u9ad8",
+    en: "Layer Height",
+  },
+  basic_material_picker_open: {
+    zh: "\u9009\u62e9\u8017\u6750\u2026",
+    en: "Choose materials\u2026",
+  },
+  basic_material_picker_summary_more: {
+    zh: "\u7b49 {count} \u79cd",
+    en: "+{count} more",
+  },
+  basic_material_picker_dialog_title: {
+    zh: "\u9009\u62e9\u8017\u6750",
+    en: "Choose Materials",
+  },
+  basic_material_picker_dialog_subtitle: {
+    zh: "\u52fe\u9009\u8981\u53c2\u4e0e\u8c03\u8272\u7684\u8017\u6750\uff08\u53ef\u591a\u9009\uff09",
+    en: "Pick materials to use for color blending (multi-select)",
+  },
+  basic_material_picker_done: {
+    zh: "\u5b8c\u6210",
+    en: "Done",
+  },
+  basic_material_picker_clear: {
+    zh: "\u6e05\u7a7a",
+    en: "Clear all",
+  },
+  basic_material_picker_select_all: {
+    zh: "\u5168\u9009",
+    en: "Select all",
+  },
+  basic_material_picker_close: {
+    zh: "\u5173\u95ed",
+    en: "Close",
   },
   basic_source_kind_label: {
     zh: "颜色源类型",
@@ -2563,6 +2623,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   action_upload_hint: {
     zh: "请先上传图片并选择 LUT",
     en: "Please upload an image and select a LUT first",
+  },
+  action_upload_hint_material: {
+    zh: "请先上传图片并选择耗材",
+    en: "Please upload an image and select materials first",
   },
   action_batch_upload_hint: {
     zh: "请先添加图片并选择 LUT",
@@ -4341,6 +4405,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_save_verification_btn: {
     zh: "保存验证结果",
     en: "Save Verification Result",
+  },
+  mat_gradient_save_merge_btn: {
+    zh: "合并结果",
+    en: "Merge Result",
+  },
+  mat_gradient_save_override_btn: {
+    zh: "覆盖结果",
+    en: "Override",
   },
   mat_gradient_cancel_verification_btn: {
     zh: "取消复验",
