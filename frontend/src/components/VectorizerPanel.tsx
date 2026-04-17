@@ -19,6 +19,14 @@ import { cx, resolveSectionCardClass } from "./ui/panelPrimitives";
 
 const ACCEPT_FORMATS = "image/png,image/jpeg,image/webp,image/bmp";
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
 /**
  * Build full URL from a relative API file path.
  * In dev mode (frontend :5173, backend :8000), apiClient.defaults.baseURL
@@ -26,7 +34,36 @@ const ACCEPT_FORMATS = "image/png,image/jpeg,image/webp,image/bmp";
  */
 export function buildFileUrl(relativePath: string): string {
   const base = apiClient.defaults.baseURL ?? "";
-  return `${base}${relativePath}`;
+  if (!relativePath) return base;
+  if (isHttpUrl(relativePath)) return relativePath;
+
+  const normalizedPath = relativePath.startsWith("/")
+    ? relativePath
+    : `/${relativePath}`;
+  if (!base) return normalizedPath;
+
+  const normalizedBase = base.replace(/\/+$/, "");
+  const baseIsAbsolute = isHttpUrl(normalizedBase);
+
+  // Backend now returns svg_url as /api/files/<id>; keep it stable.
+  if (normalizedPath.startsWith("/api/")) {
+    if (!baseIsAbsolute && normalizedBase === "/api") {
+      return normalizedPath;
+    }
+    if (baseIsAbsolute) {
+      try {
+        const parsedBase = new URL(normalizedBase);
+        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
+        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
+        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
+        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
+      } catch {
+        return normalizedPath;
+      }
+    }
+  }
+
+  return joinUrl(normalizedBase, normalizedPath);
 }
 
 export default function VectorizerPanel() {
@@ -84,7 +121,10 @@ export default function VectorizerPanel() {
     if (!svgUrl) return;
     setIsSending(true);
     try {
-      const res = await apiClient.get(svgUrl, { responseType: "blob" });
+      const res = await apiClient.get(buildFileUrl(svgUrl), {
+        responseType: "blob",
+        baseURL: "",
+      });
       const blob = res.data as Blob;
       const file = new File([blob], "vectorized.svg", { type: "image/svg+xml" });
       useConverterStore.getState().setImageFile(file);
