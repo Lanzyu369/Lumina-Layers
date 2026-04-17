@@ -335,7 +335,7 @@ function StatusPill({ tone, label }: StatusPillProps) {
     <span
       data-testid="material-solver-cache-status-pill"
       data-tone={tone}
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold w-auto ${toneClass}`}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold flex-none ${toneClass}`}
     >
       {label}
     </span>
