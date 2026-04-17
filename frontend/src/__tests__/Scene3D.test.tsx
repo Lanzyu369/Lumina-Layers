@@ -17,8 +17,6 @@ vi.mock("../components/InteractiveModelViewer", () => ({
     return null;
   },
   extractHexFromMeshName: (name: string) => name.slice(6),
-  toggleColorSelection: (sel: string | null, clicked: string) =>
-    sel === clicked ? null : clicked,
 }));
 vi.mock("../components/BedPlatform", () => ({ default: () => null }));
 vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
@@ -173,17 +171,6 @@ beforeEach(() => {
       expect(capturedCanvasProps.onPointerMissed).toBeTypeOf("function");
     });
 
-    it("onPointerMissed calls setSelectedColor(null)", () => {
-      useConverterStore.setState({ selectedColor: "ff0000" });
-      render(<Scene3D />);
-
-      act(() => {
-        (capturedCanvasProps.onPointerMissed as () => void)();
-      });
-
-      expect(useConverterStore.getState().selectedColor).toBeNull();
-    });
-
     it("clears selected fridge magnet on empty-canvas clicks while fridge mode is enabled", () => {
       useConverterStore.setState({
         enable_fridge_magnet: true,
@@ -196,59 +183,6 @@ beforeEach(() => {
       });
 
       expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
-    });
-
-    it("preserves the underlying color selection store state while clearing fridge selection", () => {
-      useConverterStore.setState({
-        previewGlbUrl: "/api/files/mock-preview.glb",
-        selectedColor: "ff0000",
-      });
-      render(<Scene3D />);
-
-      act(() => {
-        useConverterStore.getState().setEnableFridgeMagnet(true);
-        useConverterStore.getState().selectFridgeMagnet("magnet-1");
-      });
-
-      expect(useConverterStore.getState().selectedColor).toBe("ff0000");
-      expect(useConverterStore.getState().selectedFridgeMagnetId).toBe("magnet-1");
-      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
-
-      act(() => {
-        (capturedCanvasProps.onPointerMissed as () => void)();
-      });
-
-      expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
-      expect(useConverterStore.getState().selectedColor).toBe("ff0000");
-
-      act(() => {
-        useConverterStore.getState().setEnableFridgeMagnet(false);
-      });
-
-      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
-    });
-  });
-
-  describe("handleColorClick (Req 2.3)", () => {
-    it("setSelectedColor is called when handleColorClick triggers", () => {
-      // Verify the store action works as expected for the callback
-      useConverterStore.setState({ selectedColor: null });
-
-      act(() => {
-        useConverterStore.getState().setSelectedColor("aabbcc");
-      });
-
-      expect(useConverterStore.getState().selectedColor).toBe("aabbcc");
-    });
-
-    it("setSelectedColor(null) deselects", () => {
-      useConverterStore.setState({ selectedColor: "ff0000" });
-
-      act(() => {
-        useConverterStore.getState().setSelectedColor(null);
-      });
-
-      expect(useConverterStore.getState().selectedColor).toBeNull();
     });
   });
 
@@ -386,48 +320,6 @@ beforeEach(() => {
       );
     });
 
-    it("suppresses stale selection visuals in InteractiveModelViewer while fridge mode is enabled", () => {
-      useConverterStore.setState({
-        previewGlbUrl: "/api/files/mock-preview.glb",
-        enable_fridge_magnet: true,
-        selectedColor: "ff0000",
-      });
-
-      render(<Scene3D />);
-
-      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(false);
-      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
-      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(false);
-    });
-
-    it("restores the pre-existing viewer selection props after a fridge mode enable-disable round trip", () => {
-      useConverterStore.setState({
-        previewGlbUrl: "/api/files/mock-preview.glb",
-        selectedColor: "ff0000",
-      });
-
-      render(<Scene3D />);
-
-      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(true);
-      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
-      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(true);
-
-      act(() => {
-        useConverterStore.getState().setEnableFridgeMagnet(true);
-      });
-
-      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(false);
-      expect(capturedInteractiveViewerProps?.selectedColor).toBeNull();
-      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(false);
-
-      act(() => {
-        useConverterStore.getState().setEnableFridgeMagnet(false);
-      });
-
-      expect(capturedInteractiveViewerProps?.colorPickingEnabled).toBe(true);
-      expect(capturedInteractiveViewerProps?.selectedColor).toBe("ff0000");
-      expect(capturedInteractiveViewerProps?.selectionVisualsEnabled).toBe(true);
-    });
   });
 
   describe("lighting (Environment optimization)", () => {

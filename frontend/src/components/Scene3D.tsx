@@ -9,6 +9,7 @@ import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -93,15 +94,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
-  const wittyMsg = useWittyMessage(2000, isLoading);
+  const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
+  const wittyMsg = useWittyMessage(2000, isLoading && enableWittyLoading);
 
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
-  const selectedColor = useConverterStore((s) => s.selectedColor);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
   const enableRelief = useConverterStore((s) => s.enable_relief);
-  const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
   const spacerThick = useConverterStore((s) => s.spacer_thick);
   const structureMode = useConverterStore((s) => s.structure_mode);
   const enableOutline = useConverterStore((s) => s.enable_outline);
@@ -137,7 +137,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const modelBounds = useConverterStore((s) => s.modelBounds);
-  const viewerSelectedColor = enableFridgeMagnet ? null : selectedColor;
 
   // Listen to fullscreenchange event
   useEffect(() => {
@@ -176,13 +175,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     }
   }, []);
 
-  const handleColorClick = useCallback(
-    (hex: string | null) => {
-      setSelectedColor(hex);
-    },
-    [setSelectedColor],
-  );
-
   // Check if Fullscreen API is available
   const fullscreenSupported = typeof document.fullscreenElement !== "undefined";
 
@@ -220,18 +212,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         camera={{ position: [0, -57, 474], fov: 45 }}
         gl={{ preserveDrawingBuffer: true }}
         onPointerMissed={() => {
-          // Skip deselection if a color mesh was just clicked via native event
-          const hitRef = (window as unknown as Record<string, unknown>).__luminaColorHitRef as
-            | React.RefObject<boolean>
-            | undefined;
-          if (hitRef?.current) {
-            hitRef.current = false;
-            return;
-          }
           if (enableFridgeMagnet) {
             selectFridgeMagnet(null);
-          } else {
-            setSelectedColor(null);
           }
         }}
         onCreated={({ gl }) => {
@@ -278,10 +260,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               url={previewGlbUrl}
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
-              selectedColor={viewerSelectedColor}
               baseHeight={baseHeight}
               enableRelief={enableRelief}
-              onColorClick={handleColorClick}
               scaleX={scaleX}
               scaleY={scaleY}
               spacerThick={spacerThick}
@@ -293,8 +273,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireHeightMm={wireHeightMm}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
-              colorPickingEnabled={!enableFridgeMagnet}
-              selectionVisualsEnabled={!enableFridgeMagnet}
             />
           </Suspense>
         ) : null}
@@ -337,11 +315,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                   <div className="h-3 w-3 rounded-full bg-slate-100/90 dark:bg-slate-50/90" />
                 </div>
               </div>
-              <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
-                <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
-                  {wittyMsg}
-                </p>
-              </div>
+              {enableWittyLoading && (
+                <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
+                  <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
+                    {wittyMsg}
+                  </p>
+                </div>
+              )}
             </div>
           </Html>
         )}

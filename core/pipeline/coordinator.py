@@ -576,7 +576,6 @@ def _log_vector_timings(timings: dict) -> None:
         f"parse={timings.get('parse_s', 0.0):.3f}, "
         f"clip={timings.get('occlusion_s', 0.0):.3f}, "
         f"match={timings.get('color_match_s', 0.0):.3f}, "
-        f"printability_filter={timings.get('printability_filter_s', 0.0):.3f}, "
         f"extrude_bottom={timings.get('extrude_bottom_s', 0.0):.3f}, "
         f"backing={timings.get('backing_s', 0.0):.3f}, "
         f"extrude_top={timings.get('extrude_top_s', 0.0):.3f}, "

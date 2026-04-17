@@ -18,6 +18,7 @@ import {
 import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
+import Switch from "./ui/Switch";
 import { PanelIntro, StatusBanner, resolvePanelSurfaceClass, resolveSectionCardClass } from "./ui/panelPrimitives";
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
@@ -45,6 +46,8 @@ export default function SettingsPanel() {
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
   const setLastBedLabel = useSettingsStore((s) => s.setLastBedLabel);
   const syncToBackend = useSettingsStore((s) => s.syncToBackend);
+  const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
+  const setEnableWittyLoading = useSettingsStore((s) => s.setEnableWittyLoading);
 
   // Load printers and slicers on mount
   useEffect(() => {
@@ -274,6 +277,27 @@ export default function SettingsPanel() {
             {cacheResult}
           </StatusBanner>
         )}
+      </section>
+
+      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
+            {t("settings.maintenance")}
+          </p>
+          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
+            {t("settings.witty_loading")}
+          </h4>
+        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {t("settings.witty_loading_desc")}
+        </p>
+        <div className="flex items-center gap-3">
+          <Switch
+            checked={enableWittyLoading}
+            onChange={setEnableWittyLoading}
+            ariaLabel={t("settings.witty_loading")}
+          />
+        </div>
       </section>
     </motion.aside>
   );

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
 import {
   extractHexFromMeshName,
-  toggleColorSelection,
 } from "../components/InteractiveModelViewer";
 
 // ========== Generators ==========
@@ -24,27 +23,6 @@ describe("Color Selection Interaction — Property-Based Tests", () => {
           const extracted = extractHexFromMeshName(meshName);
           expect(extracted).toBe(h);
         }),
-        { numRuns: 200 },
-      );
-    });
-  });
-
-  // Validates: Requirements 2.4
-  describe("P2: toggleSelect returns null when same, clicked otherwise", () => {
-    it("toggleColorSelection(selected, clicked) === null when selected === clicked, otherwise clicked", () => {
-      fc.assert(
-        fc.property(
-          fc.option(hexColor, { nil: null }),
-          hexColor,
-          (selected, clicked) => {
-            const result = toggleColorSelection(selected, clicked);
-            if (selected === clicked) {
-              expect(result).toBeNull();
-            } else {
-              expect(result).toBe(clicked);
-            }
-          },
-        ),
         { numRuns: 200 },
       );
     });

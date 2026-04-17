@@ -7,9 +7,8 @@ Covers:
     4. Public API: analyze_svg, build_mesh, render_preview, svg_to_mesh backward compat
 """
 
-import os
 import sys
-from copy import deepcopy
+import os
 import types
 import importlib.util
 import inspect
@@ -161,180 +160,6 @@ class TestClipOcclusion:
         result = VectorProcessor._clip_occlusion(shapes)
         reds = [r for r in result if r["color"] == (255, 0, 0)]
         assert len(reds) == 0, "small feature should be fully occluded"
-
-
-class TestClipMatchedShapesOcclusion:
-    """Verify final matched-shape occlusion preserves metadata."""
-
-    def test_preserves_metadata_while_removing_xy_overlap(self):
-        matched_shapes = [
-            {
-                "geometry": box(0, 0, 10, 10),
-                "recipe": [0, 0, 0],
-                "color": (255, 0, 0),
-                "matched_rgb": (255, 0, 0),
-                "lut_idx": 0,
-                "draw_order": 0,
-            },
-            {
-                "geometry": box(5, 0, 15, 10),
-                "recipe": [1, 1, 1],
-                "color": (0, 255, 0),
-                "matched_rgb": (0, 255, 0),
-                "lut_idx": 1,
-                "draw_order": 1,
-            },
-        ]
-
-        clipped = VectorProcessor._clip_matched_shapes_occlusion(matched_shapes)
-
-        assert len(clipped) == 2
-        assert clipped[0]["draw_order"] == 0
-        assert clipped[1]["draw_order"] == 1
-        assert clipped[0]["geometry"].intersection(clipped[1]["geometry"]).area == pytest.approx(0.0)
-        assert clipped[0]["matched_rgb"] == (255, 0, 0)
-        assert clipped[1]["lut_idx"] == 1
-
-    def test_respects_draw_order_even_when_input_is_unsorted(self):
-        matched_shapes = [
-            {
-                "geometry": box(5, 0, 15, 10),
-                "recipe": [1, 1, 1],
-                "color": (0, 255, 0),
-                "matched_rgb": (0, 255, 0),
-                "lut_idx": 1,
-                "draw_order": 1,
-            },
-            {
-                "geometry": box(0, 0, 10, 10),
-                "recipe": [0, 0, 0],
-                "color": (255, 0, 0),
-                "matched_rgb": (255, 0, 0),
-                "lut_idx": 0,
-                "draw_order": 0,
-            },
-        ]
-
-        clipped = VectorProcessor._clip_matched_shapes_occlusion(matched_shapes)
-
-        assert [item["draw_order"] for item in clipped] == [0, 1]
-        assert clipped[0]["geometry"].intersection(clipped[1]["geometry"]).area == pytest.approx(0.0)
-        assert clipped[1]["geometry"].area == pytest.approx(100.0)
-
-
-class TestStabilizeMatchedShapesPrintability:
-    def test_second_pass_preserves_original_merge_provenance_without_mutating_inputs(self):
-        first_pass_records = [
-            {
-                "geometry": box(0.0, 0.0, 0.3, 0.3),
-                "recipe": [10],
-                "color": (255, 0, 0),
-                "matched_rgb": (255, 0, 0),
-                "lut_idx": 10,
-                "draw_order": 0,
-                "_received_merge_source_indices": [4],
-                "_received_merge_source_recipes": [(40,)],
-                "_printability_stable_input_index": 7,
-            },
-            {
-                "geometry": box(0.3, 0.0, 1.0, 1.0),
-                "recipe": [20],
-                "color": (0, 255, 0),
-                "matched_rgb": (0, 255, 0),
-                "lut_idx": 20,
-                "draw_order": 1,
-                "_received_merge_source_indices": [6],
-                "_received_merge_source_recipes": [(60,)],
-                "_printability_stable_input_index": 9,
-            },
-        ]
-        original_records = deepcopy(first_pass_records)
-
-        stabilized = VectorProcessor._stabilize_matched_shapes_printability(first_pass_records, scale_factor=1.0)
-
-        assert len(stabilized) == 1
-        assert stabilized[0]["recipe"] == [20]
-        assert stabilized[0]["_received_merge_source_indices"] == [6, 4, 7]
-        assert stabilized[0]["_received_merge_source_recipes"] == [(60,), (40,), (10,)]
-        assert "_printability_stable_input_index" not in stabilized[0]
-        assert first_pass_records == original_records
-
-    def test_second_pass_seeds_stable_indices_from_real_first_pass_items(self):
-        first_pass_input = [
-            {
-                "geometry": box(0.0, 0.0, 0.3, 0.3),
-                "recipe": [0],
-                "color": (255, 0, 0),
-                "matched_rgb": (255, 0, 0),
-                "lut_idx": 0,
-                "draw_order": 0,
-            },
-            {
-                "geometry": box(0.3, 0.0, 2.0, 2.0),
-                "recipe": [1],
-                "color": (0, 255, 0),
-                "matched_rgb": (0, 255, 0),
-                "lut_idx": 1,
-                "draw_order": 1,
-            },
-            {
-                "geometry": box(5.0, 0.0, 7.0, 2.0),
-                "recipe": [2],
-                "color": (0, 0, 255),
-                "matched_rgb": (0, 0, 255),
-                "lut_idx": 2,
-                "draw_order": 2,
-            },
-        ]
-        first_pass = _ve.PrintableFeatureOptimizer(first_pass_input, scale_factor=1.0).optimize()
-
-        assert len(first_pass.records) == 2
-        assert [item.index for item in first_pass.items if item.action in {"keep", "widen"}] == [1, 2]
-
-        class _FakeSecondPassMergeOptimizer:
-            captured_stable_indices = None
-
-            def __init__(self, shape_records, scale_factor, printable_core_nozzle_multiplier=None, nozzle_width_mm=None):
-                self.shape_records = [dict(record) for record in shape_records]
-                _FakeSecondPassMergeOptimizer.captured_stable_indices = [
-                    record.get("_printability_stable_input_index")
-                    for record in self.shape_records
-                ]
-
-            def optimize(self):
-                source = dict(self.shape_records[0])
-                target = dict(self.shape_records[1])
-                target.setdefault("_received_merge_source_indices", list(target.get("_received_merge_source_indices", ())))
-                target.setdefault("_received_merge_source_recipes", list(target.get("_received_merge_source_recipes", ())))
-                for source_index, source_recipe in zip(
-                    source.get("_received_merge_source_indices", ()),
-                    source.get("_received_merge_source_recipes", ()),
-                ):
-                    target["_received_merge_source_indices"].append(source_index)
-                    target["_received_merge_source_recipes"].append(tuple(source_recipe or ()))
-                target["_received_merge_source_indices"].append(int(source.get("_printability_stable_input_index", 0)))
-                target["_received_merge_source_recipes"].append(tuple(source.get("recipe") or ()))
-                return types.SimpleNamespace(
-                    records=[target],
-                    items=[],
-                    classification_counts={"normal": 1, "isolated": 0, "thin": 1, "skip": 0},
-                    action_counts={"keep": 1, "widen": 0, "merge": 1, "skip": 0},
-                    timings_ms={"classify": 1.0, "action": 1.0, "total": 2.0},
-                )
-
-        with patch.object(_ve, "PrintableFeatureOptimizer", _FakeSecondPassMergeOptimizer):
-            stabilized = VectorProcessor._stabilize_matched_shapes_printability(
-                first_pass.records,
-                scale_factor=1.0,
-                optimization_items=first_pass.items,
-            )
-
-        assert _FakeSecondPassMergeOptimizer.captured_stable_indices == [1, 2]
-        assert len(stabilized) == 1
-        assert stabilized[0]["recipe"] == [2]
-        assert stabilized[0]["_received_merge_source_indices"] == [0, 1]
-        assert stabilized[0]["_received_merge_source_recipes"] == [(0,), (1,)]
-        assert "_printability_stable_input_index" not in stabilized[0]
 
 
 # =====================================================================
@@ -668,16 +493,19 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.bounds[0][0] == pytest.approx(board_without_cavity.bounds[0][0])
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
 
-    def test_build_mesh_does_not_revive_board_when_final_analysis_geometry_is_empty(self):
+
+class TestVectorSingleSidedMirrorRegression:
+
+    def test_build_mesh_mirrors_non_5color_single_sided_x_coordinates(self):
         processor = _make_parse_only_processor()
-        processor.color_mode = "4-Color"
+        processor.color_mode = "8-Color Max"
         analysis = VectorAnalysis(
             shape_data=[],
-            clipped_shapes=[{"geometry": box(0, 0, 20, 20), "color": (255, 0, 0), "draw_order": 0}],
-            matched_shapes=[],
+            clipped_shapes=[],
+            matched_shapes=[{"geometry": box(0, 0, 4, 10), "recipe": [1, 1, 1, 1, 1], "color": (0, 255, 255)}],
             silhouette=None,
             scale_factor=1.0,
-            bbox=(0.0, 0.0, 0.0, 0.0),
+            bbox=(0.0, 0.0, 10.0, 10.0),
             color_conf={},
             slot_names=["White", "Cyan"],
             num_channels=2,
@@ -686,10 +514,35 @@ class TestVectorFridgeMagnetBuildMeshRegression:
             stage_timings={},
         )
 
-        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
+        bounds = scene.geometry["Cyan"].bounds
 
-        assert "Board" not in scene.geometry
-        assert len(scene.geometry) == 0
+        assert bounds[0][0] == pytest.approx(6.0)
+        assert bounds[1][0] == pytest.approx(10.0)
+
+    def test_build_mesh_does_not_mirror_5color_single_sided_x_coordinates(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "5-Color Extended"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[{"geometry": box(0, 0, 4, 10), "recipe": [1, 1, 1, 1, 1, 1], "color": (0, 255, 255)}],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=6,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
+        bounds = scene.geometry["Cyan"].bounds
+
+        assert bounds[0][0] == pytest.approx(0.0)
+        assert bounds[1][0] == pytest.approx(4.0)
 
 
 # =====================================================================
@@ -767,6 +620,83 @@ class TestParseSvgSubpaths:
 
         assert abs(red_area - 10000.0) < 5.0
         assert abs(blue_area - 10000.0) < 5.0
+
+
+# =====================================================================
+# 5b. SVG parse regression (Line → Bezier junction)
+# =====================================================================
+
+
+class TestLineToBezierJunction:
+    """Regression: Line→CubicBezier/QuadraticBezier junction point must
+    not be silently dropped, which would distort or destroy geometry."""
+
+    def test_rounded_rect_preserves_area(self, tmp_path):
+        """Rounded rectangle (lines + cubic-bezier corners) must keep
+        nearly the full area of its bounding box."""
+        # A 200×100 rounded rect with r=20 corner radii.
+        # k ≈ 0.5523 is the standard cubic Bézier kappa for quarter circles.
+        k = 0.5523
+        r = 20
+        w, h = 200, 100
+        d = (
+            f"M{r},0 L{w - r},0 "
+            f"C{w - r + r * k},0 {w},{r - r * k} {w},{r} "
+            f"L{w},{h - r} "
+            f"C{w},{h - r + r * k} {w - r + r * k},{h} {w - r},{h} "
+            f"L{r},{h} "
+            f"C{r - r * k},{h} 0,{h - r + r * k} 0,{h - r} "
+            f"L0,{r} "
+            f"C0,{r - r * k} {r - r * k},0 {r},0 Z"
+        )
+        svg_file = tmp_path / "rounded_rect.svg"
+        svg_file.write_text(
+            (
+                f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}">\n'
+                f'  <path fill="#ff0000" d="{d}"/>\n'
+                "</svg>\n"
+            ),
+            encoding="utf-8",
+        )
+
+        vp = _make_parse_only_processor()
+        shapes, scale, bbox = vp._parse_svg(str(svg_file), target_width_mm=100.0)
+
+        assert len(shapes) >= 1
+        total_area = sum(s["poly"].area for s in shapes)
+        bbox_area = w * h  # 20000
+        # A rounded rect with r=20 loses about 4*(r^2 - pi*r^2/4) ≈ 343
+        # from its bounding rect, so the expected area ≈ 19657.
+        expected_area = w * h - 4 * (r * r - np.pi * r * r / 4.0)
+        assert total_area > expected_area * 0.95, (
+            f"Rounded rect area {total_area:.1f} is too small "
+            f"(expected ~{expected_area:.1f}, bbox={bbox_area})"
+        )
+
+    def test_line_to_quadratic_bezier_junction(self, tmp_path):
+        """Path with Line→QuadraticBezier must preserve the junction point."""
+        # A shape: straight left edge, quadratic-curved right edge.
+        svg_file = tmp_path / "line_quad.svg"
+        svg_file.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">\n'
+                '  <path fill="#00ff00" d="M0,0 L100,0 Q100,50 100,100 L0,100 Z"/>\n'
+                "</svg>\n"
+            ),
+            encoding="utf-8",
+        )
+
+        vp = _make_parse_only_processor()
+        shapes, _, _ = vp._parse_svg(str(svg_file), target_width_mm=100.0)
+
+        assert len(shapes) >= 1
+        total_area = sum(s["poly"].area for s in shapes)
+        # The shape is a 100x100 square (the Q curve is actually a straight
+        # line from (100,0) to (100,100) with control at (100,50)).
+        assert total_area > 9000.0, (
+            f"Line→QuadBezier shape area {total_area:.1f} is too small "
+            "(expected ~10000)"
+        )
 
 
 # =====================================================================
