@@ -55,6 +55,7 @@ from core.single_stage import (
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
+MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 
 
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
@@ -346,8 +347,16 @@ async def extractor_save_gradient_card_material(
         raise HTTPException(status_code=422, detail=str(exc))
 
     persistent_registry_session = f"material:{uuid.uuid4().hex}"
-    material_id = registry.register_path(persistent_registry_session, result.archive_path)
-    stage_a_id = registry.register_path(persistent_registry_session, result.stage_a_params_path)
+    material_id = registry.register_path(
+        persistent_registry_session,
+        result.archive_path,
+        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+    )
+    stage_a_id = registry.register_path(
+        persistent_registry_session,
+        result.stage_a_params_path,
+        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+    )
     verification_count = int(result.material_summary.get("verification_count") or 1)
     return GradientCardMaterialSaveResponse(
         status="ok",
@@ -399,10 +408,20 @@ async def extractor_list_gradient_card_materials(
     persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
     response_items: list[dict[str, object]] = []
     for item in materials:
-        material_file_url = f"/api/files/{registry.register_path(persistent_registry_session, str(item['archive_path']))}"
+        material_file_url = (
+            f"/api/files/{registry.register_path(
+                persistent_registry_session,
+                str(item['archive_path']),
+                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+            )}"
+        )
         stage_a_path = item.get("stage_a_params_path")
         stage_a_params_url = (
-            f"/api/files/{registry.register_path(persistent_registry_session, str(stage_a_path))}"
+            f"/api/files/{registry.register_path(
+                persistent_registry_session,
+                str(stage_a_path),
+                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+            )}"
             if isinstance(stage_a_path, str) and stage_a_path
             else None
         )

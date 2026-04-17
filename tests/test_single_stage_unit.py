@@ -1129,6 +1129,8 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     tmp_path: Path,
 ) -> None:
     client, store, registry = _client_with_state()
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
     zip_path = tmp_path / "kit.zip"
     zip_path.write_bytes(b"zip")
     params_path = tmp_path / "stage_A_parameters.json"
@@ -1262,6 +1264,12 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert material_resolved[0] == str(archive_path)
     assert stage_a_resolved[0] == str(saved_stage_a_path)
 
+    clock["now"] += 86_400
+    removed = registry.cleanup_expired()
+    assert removed == 4
+    assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
+    assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
+
 
 def test_list_saved_stage_a_material_archives_reads_saved_material_directory(tmp_path: Path) -> None:
     materials_root = tmp_path / "materials"
@@ -1338,6 +1346,8 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     tmp_path: Path,
 ) -> None:
     client, _, registry = _client_with_state()
+    clock = {"now": 2_000.0}
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
     archive_path = tmp_path / "material.json"
     stage_a_path = tmp_path / "stage_A_parameters.json"
     archive_path.write_text("{}", encoding="utf-8")
@@ -1397,6 +1407,12 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     assert stage_a_resolved is not None
     assert material_resolved[0] == str(archive_path)
     assert stage_a_resolved[0] == str(stage_a_path)
+
+    clock["now"] += 86_400
+    removed = registry.cleanup_expired()
+    assert removed == 2
+    assert registry.resolve(item["material_file_url"].split("/")[-1]) is None
+    assert registry.resolve(item["stage_a_params_url"].split("/")[-1]) is None
 
 
 def test_gradient_card_material_delete_route_removes_saved_material(
