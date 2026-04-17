@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -528,8 +529,14 @@ def test_gradient_card_stage_a_core_extracts_and_saves_material_archive(
     payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
     estimated_e = np.asarray(payload["parameters"]["channels"][0]["E"], dtype=np.float64)
     estimated_k = np.asarray(payload["parameters"]["channels"][0]["k"], dtype=np.float64)
-    assert np.allclose(estimated_e, expected_e, atol=0.08)
-    assert np.allclose(estimated_k, expected_k, atol=0.35)
+    # Tight tolerances after precision overhaul (linear-space median sampling,
+    # locked C0, fixed k-init bug): on noise-free synthetic captures the fit
+    # recovers E to <5e-3 and k to <5e-2. Tolerances kept above measured
+    # values to allow for numerical drift across platforms/BLAS backends.
+    # 经过精度改进后，无噪声合成数据下 E 误差 <5e-3，k 误差 <5e-2。
+    assert np.allclose(estimated_e, expected_e, atol=5e-3)
+    assert np.allclose(estimated_k, expected_k, atol=5e-2)
+    assert result.fit_summary["overall_validation"]["mean_delta_e"] < 0.2
     assert result.material_summary["sample_count"] == 12
     assert result.material_summary["warp_width_px"] == 600
     assert result.material_summary["warp_height_px"] == 400
@@ -729,11 +736,392 @@ def test_gradient_card_stage_a_core_auto_detects_rotated_and_mirrored_capture_or
     payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
     estimated_e = np.asarray(payload["parameters"]["channels"][0]["E"], dtype=np.float64)
     estimated_k = np.asarray(payload["parameters"]["channels"][0]["k"], dtype=np.float64)
-    assert np.allclose(estimated_e, expected_e, atol=0.08)
-    assert np.allclose(estimated_k, expected_k, atol=0.35)
-    assert result.fit_summary["overall_validation"]["mean_delta_e"] < 1.0
+    # Same tight tolerances as the identity-orientation test — perspective
+    # warp of a rotated+mirrored capture should not degrade fit accuracy
+    # beyond the noise-free synthetic baseline.
+    # 旋转翻转后仍应达到与 identity 方向一致的精度。
+    assert np.allclose(estimated_e, expected_e, atol=5e-3)
+    assert np.allclose(estimated_k, expected_k, atol=5e-2)
+    assert result.fit_summary["overall_validation"]["mean_delta_e"] < 0.2
     assert result.source_summary["white_detected_orientation"] != "identity"
     assert result.source_summary["black_detected_orientation"] != "identity"
+
+
+def test_gradient_card_stage_a_core_is_robust_to_image_noise(tmp_path: Path) -> None:
+    """Regression test for noise robustness after precision overhaul.
+    精度改进后对图像噪声鲁棒性的回归测试。
+
+    Adds independent Gaussian noise to each pixel of both substrate captures
+    and asserts that the fit still recovers E/k well within a conservative
+    budget. This exercises the linear-space-median sampling path (which
+    should reject the noise tails) and locked-C0 path (which should stay
+    anchored to the measured zero-thickness observation).
+
+    向像素加入独立高斯噪声后，仍应满足保守的 E/k 误差预算。
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_noisy.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    expected_e = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    expected_k = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    clean_white = _build_gradient_card_capture(spec, white_substrate, expected_e, expected_k)
+    clean_black = _build_gradient_card_capture(spec, black_substrate, expected_e, expected_k)
+
+    # Gaussian noise with sigma=6 in sRGB uint8 space — roughly comparable to
+    # a modern phone's ISO 400 sensor noise after JPEG. (与手机 ISO 400 拍摄噪声相当)
+    rng = np.random.default_rng(42)
+    white_noisy = np.clip(
+        clean_white.astype(np.int16) + rng.normal(0.0, 6.0, clean_white.shape).astype(np.int16),
+        0,
+        255,
+    ).astype(np.uint8)
+    black_noisy = np.clip(
+        clean_black.astype(np.int16) + rng.normal(0.0, 6.0, clean_black.shape).astype(np.int16),
+        0,
+        255,
+    ).astype(np.uint8)
+
+    corners = [
+        [0, 0],
+        [white_noisy.shape[1] - 1, 0],
+        [white_noisy.shape[1] - 1, white_noisy.shape[0] - 1],
+        [0, white_noisy.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        white_noisy,
+        black_noisy,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_noisy.json"),
+    )
+    payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
+    estimated_e = np.asarray(payload["parameters"]["channels"][0]["E"], dtype=np.float64)
+    estimated_k = np.asarray(payload["parameters"]["channels"][0]["k"], dtype=np.float64)
+
+    # Conservative noise-budget tolerances. Observed values on a reference run
+    # are ~2e-3 for E and ~2e-2 for k; margin accounts for BLAS/platform drift.
+    # (观测值约 E<2e-3，k<2e-2；留够不同平台的数值波动余量)
+    assert np.allclose(estimated_e, expected_e, atol=1e-2)
+    assert np.allclose(estimated_k, expected_k, atol=1e-1)
+    assert result.fit_summary["overall_validation"]["mean_delta_e"] < 1.0
+
+
+def test_gradient_card_stage_a_core_locks_c0_to_measured_zero_thickness_samples(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: fitted C0 must equal the measured zero-thickness sample.
+    回归校验：拟合出的 C0 必须等于零厚度格的实测值（不再作为自由参数）。
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_c0.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    white_substrate = np.array([0.82, 0.85, 0.88], dtype=np.float64)
+    black_substrate = np.array([0.05, 0.06, 0.07], dtype=np.float64)
+    expected_e = np.array([0.30, 0.25, 0.20], dtype=np.float64)
+    expected_k = np.array([1.5, 1.3, 1.1], dtype=np.float64)
+    white_capture = _build_gradient_card_capture(spec, white_substrate, expected_e, expected_k)
+    black_capture = _build_gradient_card_capture(spec, black_substrate, expected_e, expected_k)
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        white_capture,
+        black_capture,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_c0.json"),
+    )
+    payload = json.loads(Path(result.params_path).read_text(encoding="utf-8"))
+    white_c0 = np.asarray(
+        next(
+            substrate["C0"]
+            for substrate in payload["parameters"]["substrates"]
+            if substrate["substrate_id"] == "white"
+        ),
+        dtype=np.float64,
+    )
+    black_c0 = np.asarray(
+        next(
+            substrate["C0"]
+            for substrate in payload["parameters"]["substrates"]
+            if substrate["substrate_id"] == "black"
+        ),
+        dtype=np.float64,
+    )
+    # C0 is locked to the median of the zero-thickness cell in linear RGB space.
+    # JPEG/rendering losses keep the gap within a few thousandths.
+    # (C0 锁定为零厚度格中位数，渲染误差应在千分之几)
+    assert np.allclose(white_c0, white_substrate, atol=5e-3)
+    assert np.allclose(black_c0, black_substrate, atol=5e-3)
+
+
+def test_gradient_card_stage_a_core_flags_flat_substrate_and_recommends_manual_override(
+    tmp_path: Path,
+) -> None:
+    """White-on-white captures must surface a 'flat substrate' diagnostic
+    and a Chinese warning steering the user toward the manual override.
+    白底白色耗材：必须给出"基底信号过弱"诊断与手动覆盖提示。
+
+    Real-world failure mode reported by user: a pure white material on a
+    white substrate has near-zero gradient signal, so the joint-fit
+    orientation search may pick an arbitrary rotation. We do NOT auto-lock
+    (would degrade legitimate low-absorption materials); instead we expose
+    ``signal_strength`` + a clear warning so the user knows to override.
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_white_on_white.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    # Material E ≈ substrate → all white cells look identical regardless of
+    # thickness — no usable orientation gradient on the white capture.
+    white_substrate = np.array([0.95, 0.96, 0.97], dtype=np.float64)
+    black_substrate = np.array([0.04, 0.05, 0.06], dtype=np.float64)
+    expected_e = np.array([0.93, 0.94, 0.95], dtype=np.float64)
+    expected_k = np.array([2.5, 2.7, 3.0], dtype=np.float64)
+    white_capture = _build_gradient_card_capture(spec, white_substrate, expected_e, expected_k)
+    black_capture = _build_gradient_card_capture(spec, black_substrate, expected_e, expected_k)
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        white_capture,
+        black_capture,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_white_on_white.json"),
+    )
+
+    white_info = result.source_summary["white_orientation_info"]
+    black_info = result.source_summary["black_orientation_info"]
+    # White is flagged flat — but NOT auto-locked. The user is steered toward
+    # manual override via a clear warning. (不自动收缩候选，仅警示)
+    assert white_info["flat"] is True
+    assert white_info["manual_override"] is None
+    assert white_info["locked_to"] is None
+    # Diagnostic signal strengths are present and ordered as expected.
+    assert white_info["signal_strength"] < 0.015
+    assert black_info["signal_strength"] > white_info["signal_strength"]
+    # Clear Chinese warning steering user to manual_white_orientation.
+    assert any(
+        "白底" in w and "manual_white_orientation" in w for w in result.warnings
+    )
+
+
+def test_gradient_card_stage_a_core_does_not_auto_lock_orientation_for_low_absorption_materials(
+    tmp_path: Path,
+) -> None:
+    """Low-absorption colored materials (low k) produce small per-cell
+    variance but the orientation IS still recoverable from the data — the
+    auto-detector must NOT collapse to identity in these cases.
+    弱吸收彩色耗材方差天然较小，但方向仍可由数据决定，自动检测不得强制锁 identity。
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_low_absorption.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    # Same data as the rotated-orientation regression test: low k (1.2-1.7)
+    # plus narrow C0/E gap on the black substrate produce small std, but the
+    # joint fit can still determine the correct orientation.
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    expected_e = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    expected_k = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    rotated_white = np.rot90(
+        np.fliplr(_build_gradient_card_capture(spec, white_substrate, expected_e, expected_k)),
+        k=1,
+    )
+    rotated_black = np.rot90(
+        np.fliplr(_build_gradient_card_capture(spec, black_substrate, expected_e, expected_k)),
+        k=1,
+    )
+    corners = [
+        [0, 0],
+        [rotated_white.shape[1] - 1, 0],
+        [rotated_white.shape[1] - 1, rotated_white.shape[0] - 1],
+        [0, rotated_white.shape[0] - 1],
+    ]
+
+    result = extract_stage_a_material_from_gradient_cards(
+        rotated_white,
+        rotated_black,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_low_abs.json"),
+    )
+    # The detected orientation must NOT be identity (the rotated capture
+    # genuinely needs a non-identity warp to recover the canonical layout).
+    # 旋转捕获必须自动选择非 identity 方向。
+    assert result.source_summary["white_detected_orientation"] != "identity"
+    # Manual override fields stay clean (no auto-locking).
+    white_info = result.source_summary["white_orientation_info"]
+    assert white_info["manual_override"] is None
+    assert white_info["locked_to"] is None
+
+
+def test_gradient_card_stage_a_core_respects_manual_white_orientation_override(
+    tmp_path: Path,
+) -> None:
+    """Manual orientation override must bypass auto-detection entirely.
+    手动方向覆盖必须完全绕过自动检测。
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_manual.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    expected_e = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    expected_k = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    white_capture = _build_gradient_card_capture(spec, white_substrate, expected_e, expected_k)
+    black_capture = _build_gradient_card_capture(spec, black_substrate, expected_e, expected_k)
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    # Force a deliberately wrong orientation; the result must reflect the user's
+    # explicit choice (manual_override + locked_to set), even if it's wrong.
+    result = extract_stage_a_material_from_gradient_cards(
+        white_capture,
+        black_capture,
+        corners,
+        corners,
+        str(zip_path),
+        output_path=str(tmp_path / "stage_a_manual.json"),
+        manual_white_orientation="rotate_180",
+        manual_black_orientation="identity",
+    )
+    white_info = result.source_summary["white_orientation_info"]
+    black_info = result.source_summary["black_orientation_info"]
+    assert white_info["manual_override"] == "rotate_180"
+    assert white_info["locked_to"] == "rotate_180"
+    assert black_info["manual_override"] == "identity"
+    assert result.source_summary["white_detected_orientation"] == "rotate_180"
+    assert result.source_summary["black_detected_orientation"] == "identity"
+
+
+def test_gradient_card_stage_a_core_rejects_invalid_manual_orientation_label(
+    tmp_path: Path,
+) -> None:
+    """Invalid orientation labels must raise ``ValueError`` early.
+    非法方向标签应在调用早期抛出 ValueError。
+    """
+    spec = SingleStageSpec(
+        grid_cols=3,
+        grid_rows=2,
+        block_mm=10.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.1,
+        base_mm=1.0,
+        max_step_layers=6,
+        step_layers=(0, 1, 2, 3, 4, 6),
+        shrink_xy_mm=0.0,
+    )
+    zip_path = tmp_path / "kit_invalid.zip"
+    _write_gradient_card_manifest(zip_path, spec)
+    white_substrate = np.array([0.86, 0.88, 0.9], dtype=np.float64)
+    black_substrate = np.array([0.08, 0.09, 0.1], dtype=np.float64)
+    e_arr = np.array([0.22, 0.18, 0.15], dtype=np.float64)
+    k_arr = np.array([1.7, 1.4, 1.2], dtype=np.float64)
+    white_capture = _build_gradient_card_capture(spec, white_substrate, e_arr, k_arr)
+    black_capture = _build_gradient_card_capture(spec, black_substrate, e_arr, k_arr)
+    corners = [
+        [0, 0],
+        [white_capture.shape[1] - 1, 0],
+        [white_capture.shape[1] - 1, white_capture.shape[0] - 1],
+        [0, white_capture.shape[0] - 1],
+    ]
+
+    with pytest.raises(ValueError, match="Invalid orientation label"):
+        extract_stage_a_material_from_gradient_cards(
+            white_capture,
+            black_capture,
+            corners,
+            corners,
+            str(zip_path),
+            manual_white_orientation="not_a_real_orientation",
+        )
 
 
 def test_gradient_card_stage_a_routes_compute_and_save_material(

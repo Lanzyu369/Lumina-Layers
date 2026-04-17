@@ -7,6 +7,7 @@ import {
 } from "../api/extractor";
 import type {
   GradientCardMaterialSummary,
+  ManualOrientationLabel,
   OrientationRanking,
   SavedMaterialSummary,
   StageAFitSummary,
@@ -42,6 +43,8 @@ interface SingleStageState {
   fitSummary: StageAFitSummary | null;
   materialSummary: GradientCardMaterialSummary | null;
   orientationRanking: OrientationRanking | null;
+  manualWhiteOrientation: ManualOrientationLabel | null;
+  manualBlackOrientation: ManualOrientationLabel | null;
   materialName: string;
   verificationTargetDirectoryName: string | null;
   verificationTargetCount: number;
@@ -67,6 +70,8 @@ interface SingleStageActions {
   clearWhiteCornerPoints: () => void;
   clearBlackCornerPoints: () => void;
   setMaterialName: (value: string) => void;
+  setManualWhiteOrientation: (value: ManualOrientationLabel | null) => void;
+  setManualBlackOrientation: (value: ManualOrientationLabel | null) => void;
   startMaterialVerification: (target: {
     materialName: string;
     directoryName: string;
@@ -142,6 +147,8 @@ const DEFAULT_STATE: SingleStageState = {
   fitSummary: null,
   materialSummary: null,
   orientationRanking: null,
+  manualWhiteOrientation: null,
+  manualBlackOrientation: null,
   materialName: "",
   verificationTargetDirectoryName: null,
   verificationTargetCount: 0,
@@ -333,6 +340,12 @@ export const useSingleStageStore = create<
   setMaterialName: (value: string) =>
     set({ materialName: value, saveError: null, saveSuccess: null }),
 
+  setManualWhiteOrientation: (value: ManualOrientationLabel | null) =>
+    set({ manualWhiteOrientation: value, extractError: null }),
+
+  setManualBlackOrientation: (value: ManualOrientationLabel | null) =>
+    set({ manualBlackOrientation: value, extractError: null }),
+
   startMaterialVerification: ({
     materialName,
     directoryName,
@@ -400,6 +413,8 @@ export const useSingleStageStore = create<
         blackImage: state.blackImageFile,
         whiteCornerPoints: state.whiteCornerPoints,
         blackCornerPoints: state.blackCornerPoints,
+        manualWhiteOrientation: state.manualWhiteOrientation,
+        manualBlackOrientation: state.manualBlackOrientation,
       });
       set({
         sessionId: response.session_id,

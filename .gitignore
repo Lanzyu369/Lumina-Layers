@@ -297,6 +297,9 @@ frontend/.eslint-report.json
 # Temporary assets
 assets/temp_*.npy
 assets/temp_*.json
+
+# Material solver exhaustive cache (regenerable per palette)
+materials/_solver_cache/
 # AI IDE local config
 .claude/
 .codex/

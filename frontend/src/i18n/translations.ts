@@ -2288,6 +2288,118 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5173\u95ed",
     en: "Close",
   },
+  basic_material_picker_search_placeholder: {
+    zh: "\u641c\u7d22\u8017\u6750\u540d\u79f0\u2026",
+    en: "Search materials\u2026",
+  },
+  basic_material_picker_search_clear: {
+    zh: "\u6e05\u9664\u641c\u7d22",
+    en: "Clear search",
+  },
+  basic_material_picker_no_match: {
+    zh: "\u6ca1\u6709\u5339\u914d\u7684\u8017\u6750",
+    en: "No materials match your search",
+  },
+  basic_material_cache_section_title: {
+    zh: "穷举缓存",
+    en: "Exhaustive Cache",
+  },
+  basic_material_cache_open_button: {
+    zh: "\u7a77\u4e3e\u7f13\u5b58\u2026",
+    en: "Exhaustive cache\u2026",
+  },
+  basic_material_cache_section_description: {
+    zh: "为当前耗材组合构建 64³ Lab 网格配方库，后续出图直接查表。",
+    en: "Build a 64³ Lab-grid recipe library for this palette so future conversions are served from cache.",
+  },
+  basic_material_cache_status_idle: {
+    zh: "请选择至少一种耗材后查看缓存状态。",
+    en: "Select at least one material to view cache status.",
+  },
+  basic_material_cache_status_checking: {
+    zh: "正在检查缓存\u2026",
+    en: "Checking cache\u2026",
+  },
+  basic_material_cache_status_ready: {
+    zh: "缓存已就绪",
+    en: "Cache ready",
+  },
+  basic_material_cache_status_missing: {
+    zh: "缓存未构建",
+    en: "Cache not built",
+  },
+  basic_material_cache_status_error: {
+    zh: "缓存状态查询失败",
+    en: "Failed to query cache status",
+  },
+  basic_material_cache_fallback_hint: {
+    zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
+    en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
+  },
+  basic_material_cache_build_button: {
+    zh: "立即构建缓存",
+    en: "Build cache now",
+  },
+  basic_material_cache_building_label: {
+    zh: "正在构建\u2026",
+    en: "Building\u2026",
+  },
+  basic_material_cache_building_hint: {
+    zh: "穷举 {combinations} 种组合并落盘，大约需要 {seconds} 秒。",
+    en: "Enumerating {combinations} combinations and writing to disk — about {seconds} seconds.",
+  },
+  basic_material_cache_rebuild_button: {
+    zh: "重新构建",
+    en: "Rebuild",
+  },
+  basic_material_cache_delete_button: {
+    zh: "删除缓存",
+    en: "Delete cache",
+  },
+  basic_material_cache_confirm_delete: {
+    zh: "确认删除当前组合的缓存？",
+    en: "Delete the cache for this combination?",
+  },
+  basic_material_cache_built_at_label: {
+    zh: "构建时间",
+    en: "Built at",
+  },
+  basic_material_cache_size_label: {
+    zh: "缓存大小",
+    en: "Cache size",
+  },
+  basic_material_cache_coverage_label: {
+    zh: "覆盖格数",
+    en: "Cell coverage",
+  },
+  basic_material_cache_mean_delta_e_label: {
+    zh: "平均 ΔE",
+    en: "Mean ΔE",
+  },
+  basic_material_cache_max_delta_e_label: {
+    zh: "最大 ΔE",
+    en: "Max ΔE",
+  },
+  basic_material_cache_build_time_label: {
+    zh: "构建耗时",
+    en: "Build time",
+  },
+  basic_material_cache_units_seconds: {
+    zh: "{seconds} 秒",
+    en: "{seconds} s",
+  },
+  basic_material_cache_units_mb: {
+    zh: "{mb} MB",
+    en: "{mb} MB",
+  },
+  basic_material_cache_build_error: {
+    zh: "构建失败：{message}",
+    en: "Build failed: {message}",
+  },
+  basic_material_cache_delete_error: {
+    zh: "删除失败：{message}",
+    en: "Delete failed: {message}",
+  },
   basic_source_kind_label: {
     zh: "颜色源类型",
     en: "Source Kind",
@@ -4261,6 +4373,78 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_delta_e_gap_label: {
     zh: "ΔE 差距",
     en: "ΔE Gap",
+  },
+  mat_gradient_manual_orientation_title: {
+    zh: "方向控制（高级）",
+    en: "Orientation Control (Advanced)",
+  },
+  mat_gradient_manual_orientation_desc: {
+    zh: "默认自动检测方向。若自动结果不理想（尤其是白色耗材打白底），可在此手动指定采样方向。",
+    en: "Defaults to automatic detection. If auto-detection is unreliable (especially for a white material on a white substrate), you can pin the sampling orientation here.",
+  },
+  mat_gradient_manual_white_orientation_label: {
+    zh: "白底方向覆盖",
+    en: "White Orientation Override",
+  },
+  mat_gradient_manual_black_orientation_label: {
+    zh: "黑底方向覆盖",
+    en: "Black Orientation Override",
+  },
+  mat_gradient_orientation_option_auto: {
+    zh: "自动检测",
+    en: "Auto (recommended)",
+  },
+  mat_gradient_orientation_option_identity: {
+    zh: "原样",
+    en: "Identity",
+  },
+  mat_gradient_orientation_option_rotate_90_cw: {
+    zh: "顺时针 90°",
+    en: "Rotate 90° CW",
+  },
+  mat_gradient_orientation_option_rotate_180: {
+    zh: "旋转 180°",
+    en: "Rotate 180°",
+  },
+  mat_gradient_orientation_option_rotate_90_ccw: {
+    zh: "逆时针 90°",
+    en: "Rotate 90° CCW",
+  },
+  mat_gradient_orientation_option_flip_horizontal: {
+    zh: "水平翻转",
+    en: "Flip Horizontal",
+  },
+  mat_gradient_orientation_option_flip_vertical: {
+    zh: "垂直翻转",
+    en: "Flip Vertical",
+  },
+  mat_gradient_orientation_option_transpose: {
+    zh: "沿主对角线转置",
+    en: "Transpose",
+  },
+  mat_gradient_orientation_option_transverse: {
+    zh: "沿副对角线转置",
+    en: "Transverse",
+  },
+  mat_gradient_white_signal_label: {
+    zh: "白底信号",
+    en: "White Signal",
+  },
+  mat_gradient_black_signal_label: {
+    zh: "黑底信号",
+    en: "Black Signal",
+  },
+  mat_gradient_signal_flat_badge: {
+    zh: "信号过弱",
+    en: "Low Signal",
+  },
+  mat_gradient_manual_override_badge: {
+    zh: "手动指定",
+    en: "Manual",
+  },
+  mat_gradient_signal_flat_hint: {
+    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在「方向控制」中手动指定方向。",
+    en: 'This substrate\'s gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — consider setting the orientation manually under "Orientation Control".',
   },
   mat_gradient_saved_material_title: {
     zh: "已保存的耗材档案",

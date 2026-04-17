@@ -19,14 +19,25 @@ _log = logging.getLogger(__name__)
 
 
 def _run_material_archive_branch(ctx: dict) -> dict:
-    """Material-archive processing: quantize image, solve colors via beam search.
-    耗材档案模式处理：量化图像，通过 beam search 求解颜色。
+    """Material-archive processing: quantize image, solve recipes via cache or B&B.
+    耗材档案模式处理：量化图像，通过缓存命中或 B&B 最优求解器生成配方。
+
+    Solver selection:
+      1. Try to load a persisted :class:`core.material_cache.MaterialSolverCache`
+         that matches ``(palette, layer_count, layer_height_mm, substrate)``.
+      2. On cache hit, resolve recipes via :meth:`MaterialSolverCache.lookup`.
+      3. On cache miss, fall back to
+         :func:`core.material_color_solver.solve_image_colors_optimal` —
+         guaranteed globally optimal per image but slower.
+    The choice is recorded in ``ctx["material_solver_info"]`` so the UI can
+    show whether the cache was used.
     """
     from PIL import Image
 
+    from core.material_cache import load_material_solver_cache
     from core.material_lut_synthesis import (
         map_pixels_to_materials,
-        solve_image_colors,
+        solve_image_colors_optimal,
     )
     from core.pipeline.processing_ops.bilateral_filter import apply_bilateral_filter
     from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors as kmeans_quantize
@@ -41,8 +52,9 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     auto_bg = ctx["auto_bg"]
     bg_tol = ctx["bg_tol"]
     materials = ctx["_material_params"]
-    layer_count = ctx.get("color_layers") or 5
-    layer_height_mm = ctx.get("layer_height_mm") or 0.08
+    layer_count = int(ctx.get("color_layers") or 5)
+    layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
+    substrate = str(ctx.get("material_substrate") or "white")
 
     # ---- Load and resize ----
     from config import ModelingMode
@@ -82,19 +94,62 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
     _log.info("[P03-Material] %d unique colors after quantization", len(unique_colors))
 
-    # ---- Solve colors via beam search ----
-    matched_rgb_unique, recipes_unique, delta_e = solve_image_colors(
-        unique_colors,
-        materials,
+    # ---- Resolve recipes: cache lookup or per-image B&B fallback ----
+    solver_t0 = time.perf_counter()
+    cache = load_material_solver_cache(
+        materials=materials,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
-        substrate="white",
+        substrate=substrate,
     )
+    solver_path: str
+    solver_meta: dict = {}
+    if cache is not None and unique_colors.shape[0] > 0:
+        matched_rgb_unique, recipes_unique, delta_e = cache.lookup(
+            unique_colors, materials
+        )
+        solver_path = "cache"
+        solver_meta = {
+            "palette_hash": cache.palette_hash,
+            "grid_resolution": cache.grid_resolution,
+            "valid_cell_count": cache.valid_cell_count,
+            "built_at": cache.metadata.get("built_at"),
+            "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
+            "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
+        }
+    else:
+        matched_rgb_unique, recipes_unique, delta_e = solve_image_colors_optimal(
+            unique_colors,
+            materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+        )
+        solver_path = "bnb_exhaustive"
+        solver_meta = {"reason": "no_cache" if cache is None else "empty_targets"}
+    solver_elapsed = time.perf_counter() - solver_t0
     _log.info(
-        "[P03-Material] Solved: mean_ΔE=%.2f, max_ΔE=%.2f",
+        "[P03-Material] Solver path=%s colors=%d mean_ΔE=%.2f max_ΔE=%.2f elapsed=%.2fs",
+        solver_path,
+        int(unique_colors.shape[0]),
         float(np.mean(delta_e)) if delta_e.size else 0.0,
         float(np.max(delta_e)) if delta_e.size else 0.0,
+        solver_elapsed,
     )
+
+    # ---- Convert layer order: solver "Bottom2Top" -> pipeline "Top2Bottom" ----
+    # 层序转换：求解器/缓存输出的 ``recipes_unique[:, 0]`` 是底层（贴基底、
+    # 即靠背板侧），``recipes_unique[:, -1]`` 是顶层（观赏面）。而 S06
+    # ``_build_voxel_matrix`` / ``_build_voxel_matrix_faceup`` 约定
+    # ``material_matrix[..., 0]`` 是观赏面，``material_matrix[..., -1]`` 贴背板。
+    # 直接把求解结果喂进 ``map_pixels_to_materials`` 会让整叠层上下颠倒，
+    # 产出的 3MF 配色与用户所见的预测色不一致，所以在此一次性反转列序。
+    # Solver/cache output uses ``Bottom2Top`` (index 0 = substrate-adjacent)
+    # while the voxel builders in S06 assume ``Top2Bottom`` (index 0 =
+    # viewing surface). Reverse the recipe columns once here so downstream
+    # ``material_matrix`` matches the pipeline convention.
+    if recipes_unique.shape[1] > 1:
+        recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
 
     # ---- Map pixels ----
     matched_rgb, material_matrix = map_pixels_to_materials(
@@ -115,6 +170,17 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     ctx["debug_data"] = None
     ctx["quantized_image"] = quantized_image
     ctx["lut_match_info"] = None
+    ctx["material_solver_info"] = {
+        "path": solver_path,
+        "layer_count": layer_count,
+        "layer_height_mm": layer_height_mm,
+        "substrate": substrate,
+        "elapsed_seconds": solver_elapsed,
+        "unique_color_count": int(unique_colors.shape[0]),
+        "mean_delta_e": float(np.mean(delta_e)) if delta_e.size else 0.0,
+        "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
+        **solver_meta,
+    }
     # mode_info is consumed by S04 (debug preview) and S12 (result assembly).
     # Material-archive mode does not run a LUT-based color matcher, so we
     # populate a placeholder match mode so the contract stays consistent.

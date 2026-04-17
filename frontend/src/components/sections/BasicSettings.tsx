@@ -18,6 +18,7 @@ import { CropModal } from "../ui/CropModal";
 import type { CropData } from "../ui/CropModal";
 import ImportConfirmDialog from "../ui/ImportConfirmDialog";
 import MaterialPickerDialog from "../ui/MaterialPickerDialog";
+import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
@@ -556,6 +557,12 @@ export default function BasicSettings() {
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
+          />
+
+          <MaterialSolverCacheDialog
+            materialDirectoryNames={selectedMaterialDirNames}
+            layerCount={materialLayerCount}
+            layerHeightMm={materialLayerHeightMm}
           />
         </div>
       ) : source_version === "legacy" ? (

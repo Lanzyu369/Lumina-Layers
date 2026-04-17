@@ -5,6 +5,7 @@ import type { SavedMaterialLibraryItem } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import Button from "./Button";
 import Checkbox from "./Checkbox";
+import { workstationInputClass } from "./panelPrimitives";
 
 interface MaterialPickerDialogProps {
   open: boolean;
@@ -33,20 +34,39 @@ export default function MaterialPickerDialog({
 }: MaterialPickerDialogProps) {
   const { t } = useI18n();
   const [staged, setStaged] = useState<string[]>(initialSelected);
+  const [query, setQuery] = useState<string>("");
 
   // Re-sync staged selection whenever the dialog opens or upstream changes.
   useEffect(() => {
     if (open) {
       setStaged(initialSelected);
+      setQuery("");
     }
   }, [open, initialSelected]);
 
   const stagedSet = useMemo(() => new Set(staged), [staged]);
-  const allDirNames = useMemo(
-    () => materials.map((m) => m.directory_name),
-    [materials],
+
+  // Filter materials by case-insensitive substring match against both the
+  // user-facing material name and the directory name, so searches work for
+  // localized names as well as internal identifiers.
+  // 搜索同时匹配显示名与目录名，兼顾中英文名称与内部标识。
+  const visibleMaterials = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return materials;
+    return materials.filter((mat) => {
+      const name = (mat.material_name ?? "").toLowerCase();
+      const dir = (mat.directory_name ?? "").toLowerCase();
+      return name.includes(q) || dir.includes(q);
+    });
+  }, [materials, query]);
+
+  const visibleDirNames = useMemo(
+    () => visibleMaterials.map((m) => m.directory_name),
+    [visibleMaterials],
   );
-  const allSelected = allDirNames.length > 0 && allDirNames.every((name) => stagedSet.has(name));
+  const allVisibleSelected =
+    visibleDirNames.length > 0 &&
+    visibleDirNames.every((name) => stagedSet.has(name));
 
   const toggle = (dirName: string) => {
     setStaged((previous) =>
@@ -56,9 +76,25 @@ export default function MaterialPickerDialog({
     );
   };
 
-  const selectAll = () => setStaged(allDirNames);
-  const clearAll = () => setStaged([]);
+  // Select-all / clear-all operate on the currently visible subset so the
+  // action stays predictable when the user has filtered the list.
+  // 全选/清空只作用于当前过滤后的可见项，避免误操作被搜索隐藏的耗材。
+  const selectAllVisible = () => {
+    setStaged((previous) => {
+      const merged = new Set(previous);
+      for (const name of visibleDirNames) merged.add(name);
+      return Array.from(merged);
+    });
+  };
+  const clearAllVisible = () => {
+    const visibleSet = new Set(visibleDirNames);
+    setStaged((previous) => previous.filter((name) => !visibleSet.has(name)));
+  };
   const handleConfirm = () => onConfirm(staged);
+
+  const filterActive = query.trim().length > 0;
+  const showEmpty = !loading && materials.length === 0;
+  const showNoMatch = !loading && !showEmpty && visibleMaterials.length === 0;
 
   if (!open) return null;
 
@@ -98,19 +134,54 @@ export default function MaterialPickerDialog({
           </button>
         </div>
 
+        {/* Search */}
+        {!showEmpty && (
+          <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-700">
+            <div className="relative">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("basic_material_picker_search_placeholder")}
+                aria-label={t("basic_material_picker_search_placeholder")}
+                className={`${workstationInputClass} pr-10`}
+                data-testid="material-picker-search-input"
+              />
+              {filterActive && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label={t("basic_material_picker_search_clear")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                  data-testid="material-picker-search-clear"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
             <div className="text-xs text-slate-400 dark:text-slate-500">
               {t("basic_material_loading")}
             </div>
-          ) : materials.length === 0 ? (
+          ) : showEmpty ? (
             <div className="text-xs text-slate-400 dark:text-slate-500">
               {t("basic_material_empty")}
             </div>
+          ) : showNoMatch ? (
+            <div
+              className="text-xs text-slate-400 dark:text-slate-500"
+              data-testid="material-picker-no-match"
+            >
+              {t("basic_material_picker_no_match")}
+            </div>
           ) : (
             <div className="grid gap-2">
-              {materials.map((mat) => {
+              {visibleMaterials.map((mat) => {
                 const rgb =
                   Array.isArray(mat.estimated_rgb) && mat.estimated_rgb.length === 3
                     ? (mat.estimated_rgb as [number, number, number])
@@ -150,10 +221,10 @@ export default function MaterialPickerDialog({
             <button
               type="button"
               className="rounded px-2 py-1 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 disabled:opacity-40"
-              onClick={allSelected ? clearAll : selectAll}
-              disabled={materials.length === 0}
+              onClick={allVisibleSelected ? clearAllVisible : selectAllVisible}
+              disabled={visibleMaterials.length === 0}
             >
-              {allSelected
+              {allVisibleSelected
                 ? t("basic_material_picker_clear")
                 : t("basic_material_picker_select_all")}
             </button>

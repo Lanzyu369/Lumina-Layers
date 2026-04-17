@@ -36,6 +36,7 @@ from core.material_color_solver import (  # noqa: F401
     map_pixels_to_materials,
     srgb_to_linear as _srgb_to_linear,
     solve_image_colors,
+    solve_image_colors_optimal,
 )
 
 _log = logging.getLogger(__name__)

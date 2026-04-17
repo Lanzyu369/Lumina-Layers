@@ -227,11 +227,30 @@ def _build_sample_boxes(warped_rgb: np.ndarray, spec: SingleStageSpec) -> list[d
 
 
 
-def _sample_grid_means(
+def _sample_grid_linear_means(
     warped_rgb: np.ndarray,
     spec: SingleStageSpec,
     sample_boxes: list[dict[str, int]] | None = None,
 ) -> np.ndarray:
+    """Compute per-grid-cell representative colors in **linear RGB** space.
+    在线性 RGB 空间计算每个栅格中心的代表颜色。
+
+    Uses the per-channel median of the linearized ROI pixels. Median (instead
+    of mean) rejects print-defect/dust outliers; linear-space aggregation
+    avoids the ~5-10% gamma bias caused by averaging in sRGB (gamma-encoded)
+    space before linearization.
+
+    中位数替代均值可剔除打印瑕疵/灰尘等异常像素；在线性空间聚合可避免
+    在 sRGB（伽马编码）空间求均值再线性化导致的 5-10% 伽马偏差。
+
+    Args:
+        warped_rgb: Rectified sRGB image in uint8. (已矫正的 sRGB uint8 图像)
+        spec: Calibration grid specification. (标定栅格规格)
+        sample_boxes: Pre-computed sampling rectangles. (预计算的采样框)
+
+    Returns:
+        Array of shape ``(grid_rows, grid_cols, 3)`` in **linear RGB** [0, 1].
+    """
     samples = np.zeros((spec.grid_rows, spec.grid_cols, 3), dtype=np.float64)
     boxes = sample_boxes or _build_sample_boxes(warped_rgb, spec)
     for box in boxes:
@@ -242,7 +261,10 @@ def _sample_grid_means(
         sx1 = sx0 + int(box["width"])
         sy1 = sy0 + int(box["height"])
         roi = warped_rgb[sy0:sy1, sx0:sx1]
-        samples[row, col] = roi.reshape(-1, 3).mean(axis=0)
+        if roi.size == 0:
+            continue
+        roi_linear = _srgb_to_linear(roi.reshape(-1, 3))
+        samples[row, col] = np.median(roi_linear, axis=0)
     return samples
 
 
@@ -257,8 +279,8 @@ def _build_warp_candidates(
         ordered_points = points[np.asarray(corner_order, dtype=np.intp)]
         warped_rgb = _warp_image(image_rgb, ordered_points, spec)
         sample_boxes = _build_sample_boxes(warped_rgb, spec)
-        srgb_samples = _sample_grid_means(warped_rgb, spec, sample_boxes)
-        linear_samples = _srgb_to_linear(srgb_samples.reshape(-1, 3))
+        linear_grid = _sample_grid_linear_means(warped_rgb, spec, sample_boxes)
+        linear_samples = linear_grid.reshape(-1, 3)
         candidates.append(
             _WarpCandidate(
                 orientation_label=orientation_label,
@@ -286,52 +308,96 @@ def _fit_component(
     white_obs: np.ndarray,
     black_obs: np.ndarray,
 ) -> tuple[float, float, float, float, float]:
+    """Fit Beer-Lambert ``E`` and ``k`` against white/black substrate observations.
+    基于白底/黑底观测拟合 Beer-Lambert 模型的 ``E`` 和 ``k``。
+
+    Physical model per channel:
+        ``pred(t, C0) = E + (C0 - E) * exp(-k * t)``
+
+    Design choices (precision-oriented):
+      - ``C0_white``/``C0_black`` are locked to the measured zero-thickness
+        samples instead of being free variables. Letting the optimizer drift
+        ``C0`` away from its direct measurement merely absorbs model noise
+        into C0 and biases ``E``/``k``. (C0 采用零厚度格的实测值而非自由参数)
+      - The initial ``k`` estimate applies a single aligned mask to both
+        ``ratio`` and its corresponding ``thickness_mm`` — previously the
+        filter masks got out of sync, causing a misalignment that produced
+        noisy initial ``k`` values. (修复 k 初值估计时 ratio 与 t 错位的 bug)
+
+    Args:
+        thickness_mm: Per-sample thickness in mm, shape (N,). (每个样本的厚度 mm)
+        white_obs: Linear RGB observations on white substrate, shape (N,). (白底线性观测)
+        black_obs: Linear RGB observations on black substrate, shape (N,). (黑底线性观测)
+
+    Returns:
+        ``(E, k, C0_white, C0_black, rmse_linear)``. ``C0_*`` are the
+        measured zero-thickness samples (not fitted). (C0 为实测值，非拟合结果)
+    """
     zero_mask = thickness_mm == float(np.min(thickness_mm))
     max_mask = thickness_mm == float(np.max(thickness_mm))
-    c0_white_init = float(np.mean(white_obs[zero_mask]))
-    c0_black_init = float(np.mean(black_obs[zero_mask]))
-    e_init = float(np.mean(np.concatenate([white_obs[max_mask], black_obs[max_mask]])))
-    e_init = float(np.clip(e_init, 0.0, 1.0))
+    # Lock C0 to measured zero-thickness samples (may be multiple; use mean).
+    c0_white = float(np.clip(np.mean(white_obs[zero_mask]), 0.0, 1.0))
+    c0_black = float(np.clip(np.mean(black_obs[zero_mask]), 0.0, 1.0))
+    # Initial E from maximum-thickness samples (closest to equilibrium color).
+    e_init = float(
+        np.clip(
+            np.mean(np.concatenate([white_obs[max_mask], black_obs[max_mask]])),
+            0.0,
+            1.0,
+        )
+    )
+
+    # Initial k: estimate from the closed-form ratio for each positive-thickness
+    # sample. Apply filter masks consistently across ``ratio`` and ``t`` so
+    # indices stay aligned (previously broken).
     k_init = 3.0
-    for c0_init, obs in ((c0_white_init, white_obs), (c0_black_init, black_obs)):
-        valid = (thickness_mm > 0) & (np.abs(c0_init - e_init) > 1e-6) & (np.abs(obs - e_init) > 1e-6)
-        if not np.any(valid):
+    for c0_value, obs in ((c0_white, white_obs), (c0_black, black_obs)):
+        base_mask = (
+            (thickness_mm > 0)
+            & (np.abs(c0_value - e_init) > 1e-6)
+            & (np.abs(obs - e_init) > 1e-6)
+        )
+        if not np.any(base_mask):
             continue
-        ratio = (obs[valid] - e_init) / (c0_init - e_init)
-        ratio = ratio[np.isfinite(ratio)]
-        ratio = ratio[(ratio > 1e-6) & (ratio < 0.999999)]
+        obs_valid = obs[base_mask]
+        t_valid = thickness_mm[base_mask]
+        ratio = (obs_valid - e_init) / (c0_value - e_init)
+        keep = np.isfinite(ratio) & (ratio > 1e-6) & (ratio < 0.999999)
+        ratio = ratio[keep]
+        t_valid = t_valid[keep]
         if ratio.size == 0:
             continue
-        t_valid = thickness_mm[valid][: ratio.size]
         estimates = -np.log(ratio) / np.maximum(t_valid, 1e-6)
         estimates = estimates[np.isfinite(estimates) & (estimates > 1e-6)]
         if estimates.size:
             k_init = float(np.median(estimates))
             break
-    init = np.array([
-        e_init,
-        float(np.clip(k_init, 1e-4, 200.0)),
-        float(np.clip(c0_white_init, 0.0, 1.0)),
-        float(np.clip(c0_black_init, 0.0, 1.0)),
-    ])
+
+    init = np.array(
+        [
+            e_init,
+            float(np.clip(k_init, 1e-4, 200.0)),
+        ]
+    )
 
     def _residuals(x: np.ndarray) -> np.ndarray:
-        e, k, c0_white, c0_black = x
-        pred_white = e + (c0_white - e) * np.exp(-k * thickness_mm)
-        pred_black = e + (c0_black - e) * np.exp(-k * thickness_mm)
+        e, k = x
+        decay = np.exp(-k * thickness_mm)
+        pred_white = e + (c0_white - e) * decay
+        pred_black = e + (c0_black - e) * decay
         return np.concatenate([pred_white - white_obs, pred_black - black_obs])
 
     result = least_squares(
         _residuals,
         init,
-        bounds=(np.array([0.0, 1e-6, 0.0, 0.0]), np.array([1.0, 200.0, 1.0, 1.0])),
+        bounds=(np.array([0.0, 1e-6]), np.array([1.0, 200.0])),
         method="trf",
         max_nfev=2000,
     )
     residual = _residuals(result.x)
     rmse = float(np.sqrt(np.mean(np.square(residual)))) if residual.size else 0.0
-    e, k, c0_white, c0_black = result.x
-    return float(e), float(k), float(c0_white), float(c0_black), rmse
+    e, k = result.x
+    return float(e), float(k), c0_white, c0_black, rmse
 
 
 
@@ -503,6 +569,87 @@ def _substrate_anchor_penalty(
 
 
 _ORIENTATION_RELIABLE_DELTA_E_GAP = 0.3
+# Per-substrate signal-strength threshold below which the substrate is
+# considered "flat" (no usable orientation gradient). Used only for
+# diagnostic reporting and warning messages — NOT for restricting the
+# candidate set, since real-world materials with low absorption can produce
+# legitimately small per-cell variance even when the orientation IS
+# determinable. Empirically: white-on-white captures sit around 0.005, while
+# even low-contrast colored materials produce >0.02. We pick 0.015 as the
+# diagnostic boundary. (仅用于诊断与提示，不再用于强制收缩候选集)
+_FLAT_SUBSTRATE_SIGNAL_THRESHOLD = 0.015
+_VALID_ORIENTATION_LABELS: frozenset[str] = frozenset(
+    label for label, _ in _CORNER_ORIENTATION_CANDIDATES
+)
+
+
+def _candidate_signal_strength(candidate: _WarpCandidate) -> float:
+    """Per-substrate signal strength = std of linear samples across cells.
+    单基底"信号强度" = 各采样格线性 RGB 的标准差。
+
+    Used to diagnose when the orientation gradient is too weak to be
+    distinguishable from noise (e.g. a white material on a white substrate).
+    用于诊断"梯度信号是否过弱"（如白底拍白色耗材），仅作为警示，不直接收缩候选集。
+    """
+    samples = candidate.linear_samples
+    if samples.size == 0:
+        return 0.0
+    return float(np.std(samples))
+
+
+def _select_candidates(
+    candidates: list[_WarpCandidate],
+    *,
+    manual_label: str | None,
+    signal_threshold: float = _FLAT_SUBSTRATE_SIGNAL_THRESHOLD,
+) -> tuple[list[_WarpCandidate], dict[str, Any]]:
+    """Filter the candidate set for one substrate.
+    针对单一基底过滤方向候选集合。
+
+    Resolution order (优先级):
+      1. ``manual_label`` (if set and valid) wins absolutely — restricts the
+         candidate set to that single orientation.
+      2. Otherwise the full candidate set is returned. Signal strength is
+         still computed and surfaced as diagnostic info, but is *not* used
+         to restrict candidates (low signal can be a legitimate property
+         of low-absorption materials, not necessarily an orientation
+         ambiguity).
+
+    Returns:
+        ``(filtered_candidates, info)`` where ``info`` is a dict with
+        ``signal_strength``, ``flat``, ``manual_override``, ``locked_to``.
+    """
+    if not candidates:
+        return [], {"signal_strength": 0.0, "flat": False, "manual_override": None, "locked_to": None}
+
+    # MAX over all 8 candidates: the "wrong" orientations distort cell layout
+    # (e.g. a rotated capture warped under identity gets squished and mixes
+    # adjacent cells, deflating the per-orientation std). Only the
+    # best-aligned orientation reflects the true substrate gradient.
+    # 取所有候选方向中 std 的最大值，仅最佳对齐方向能反映真实梯度幅度。
+    signal = max((_candidate_signal_strength(c) for c in candidates), default=0.0)
+    flat = signal < signal_threshold
+
+    info: dict[str, Any] = {
+        "signal_strength": round(signal, 6),
+        "flat": flat,
+        "manual_override": None,
+        "locked_to": None,
+    }
+
+    if manual_label:
+        if manual_label not in _VALID_ORIENTATION_LABELS:
+            valid = ", ".join(sorted(_VALID_ORIENTATION_LABELS))
+            raise ValueError(
+                f"Invalid orientation label {manual_label!r}; expected one of: {valid}"
+            )
+        chosen = [c for c in candidates if c.orientation_label == manual_label]
+        if chosen:
+            info["manual_override"] = manual_label
+            info["locked_to"] = manual_label
+            return chosen, info
+
+    return candidates, info
 
 
 def _build_orientation_ranking(
@@ -551,6 +698,9 @@ def extract_stage_a_material_from_gradient_cards(
     black_corner_points: list[tuple[float, float]] | list[list[float]],
     dataset_zip_path: str,
     output_path: str | None = None,
+    *,
+    manual_white_orientation: str | None = None,
+    manual_black_orientation: str | None = None,
 ) -> GradientCardStageAResult:
     """Extract Stage A material data from white/black gradient-card images.
     从白底/黑底梯度卡图像中提取 Stage A 耗材参数。
@@ -562,6 +712,12 @@ def extract_stage_a_material_from_gradient_cards(
         black_corner_points: Black image corners in TL/TR/BR/BL order. (黑底图四角，顺序 TL/TR/BR/BL)
         dataset_zip_path: Generated gradient-card kit zip path. (梯度卡套件 ZIP 路径)
         output_path: Optional temporary Stage A JSON output path. (可选的临时 Stage A JSON 输出路径)
+        manual_white_orientation: Optional manual orientation label for the
+            white capture, bypassing auto-detection. Must be one of
+            ``identity``, ``rotate_90_cw``, ``rotate_180``, ``rotate_90_ccw``,
+            ``flip_horizontal``, ``flip_vertical``, ``transpose``,
+            ``transverse``. (可选：手动指定白底方向，覆盖自动检测)
+        manual_black_orientation: Same for the black capture. (黑底方向，同上)
 
     Returns:
         GradientCardStageAResult: Extraction result bundle. (提取结果)
@@ -570,8 +726,16 @@ def extract_stage_a_material_from_gradient_cards(
     spec = _coerce_spec(manifest)
     white_points = _coerce_points(white_corner_points)
     black_points = _coerce_points(black_corner_points)
-    white_candidates = _build_warp_candidates(white_image_rgb, white_points, spec)
-    black_candidates = _build_warp_candidates(black_image_rgb, black_points, spec)
+    all_white_candidates = _build_warp_candidates(white_image_rgb, white_points, spec)
+    all_black_candidates = _build_warp_candidates(black_image_rgb, black_points, spec)
+    white_candidates, white_orientation_info = _select_candidates(
+        all_white_candidates,
+        manual_label=manual_white_orientation,
+    )
+    black_candidates, black_orientation_info = _select_candidates(
+        all_black_candidates,
+        manual_label=manual_black_orientation,
+    )
     step_layers = _canonical_step_layers(spec).reshape(-1)
     thickness_mm = step_layers * float(spec.layer_height_mm)
     material_label = str(manifest.get("material_default") or "Sample")
@@ -619,8 +783,31 @@ def extract_stage_a_material_from_gradient_cards(
     best = all_results[0]
     _, white_candidate, black_candidate, params_payload, fit_summary, material_summary, warnings = best
     orientation_ranking = _build_orientation_ranking(all_results)
-    if orientation_ranking["orientation_reliable"] is False:
+    orientation_ranking["white_signal_strength"] = white_orientation_info["signal_strength"]
+    orientation_ranking["black_signal_strength"] = black_orientation_info["signal_strength"]
+    orientation_ranking["white_orientation_info"] = white_orientation_info
+    orientation_ranking["black_orientation_info"] = black_orientation_info
+    # The "delta_e_gap" reliability check is meaningful only when more than
+    # one combination was actually evaluated; when manual override or flat-
+    # substrate fallback collapses one side to a single candidate, the gap is
+    # an artefact of that collapse, not a real ambiguity signal.
+    # 候选集合被收紧到 1 个时，gap 不再代表真实的方向歧义，跳过该警告。
+    multi_combination_search = len(all_results) >= 2
+    if multi_combination_search and orientation_ranking["orientation_reliable"] is False:
         warnings.append("方向检测置信度较低，最优与次优方向的 ΔE 差距很小，请确认角点和图片方向。")
+    # Soft warnings when a substrate has near-zero gradient signal AND was
+    # not manually pinned. The auto-detector's choice may be unreliable —
+    # nudge the user toward the manual override path.
+    if white_orientation_info["flat"] and white_orientation_info["manual_override"] is None:
+        warnings.append(
+            "白底采样格颜色变化极小（疑似白色耗材打白底），自动方向检测可能不可靠；"
+            "如发现拟合误差偏高，请使用 manual_white_orientation 手动指定方向。"
+        )
+    if black_orientation_info["flat"] and black_orientation_info["manual_override"] is None:
+        warnings.append(
+            "黑底采样格颜色变化极小，自动方向检测可能不可靠；"
+            "如发现拟合误差偏高，请使用 manual_black_orientation 手动指定方向。"
+        )
     fit_summary["orientation_ranking"] = orientation_ranking
     white_warp_rgb = white_candidate.warped_rgb
     black_warp_rgb = black_candidate.warped_rgb
@@ -638,6 +825,8 @@ def extract_stage_a_material_from_gradient_cards(
         "black_detected_orientation": black_candidate.orientation_label,
         "white_detected_corner_order": [int(value) for value in white_candidate.corner_order],
         "black_detected_corner_order": [int(value) for value in black_candidate.corner_order],
+        "white_orientation_info": white_orientation_info,
+        "black_orientation_info": black_orientation_info,
         "orientation_ranking": orientation_ranking,
         "spec": asdict(spec),
     }

@@ -8,6 +8,11 @@ import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
+  MANUAL_ORIENTATION_LABELS,
+  type ManualOrientationLabel,
+  type SubstrateOrientationInfo,
+} from "../api/types";
+import {
   PanelIntro,
   StatusBanner,
   mutedSectionCardClass,
@@ -35,6 +40,102 @@ const toHex = (rgb: [number, number, number]) =>
 
 const formatMetricValue = (value: number | null | undefined, digits = 3) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+
+const AUTO_ORIENTATION_VALUE = "__auto__";
+
+const selectClass =
+  "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
+
+const badgeClass =
+  "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4";
+
+const badgeToneFlat = `${badgeClass} bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300`;
+const badgeToneManual = `${badgeClass} bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300`;
+
+const orientationOptionKey = (label: ManualOrientationLabel) =>
+  `mat_gradient_orientation_option_${label}` as const;
+
+const OrientationSelect = ({
+  label,
+  value,
+  onChange,
+  testId,
+}: {
+  label: string;
+  value: ManualOrientationLabel | null;
+  onChange: (value: ManualOrientationLabel | null) => void;
+  testId: string;
+}) => {
+  const { t } = useI18n();
+  const selectValue = value ?? AUTO_ORIENTATION_VALUE;
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-600 dark:text-slate-300">
+        {label}
+      </span>
+      <select
+        data-testid={testId}
+        value={selectValue}
+        onChange={(event) => {
+          const next = event.target.value;
+          onChange(
+            next === AUTO_ORIENTATION_VALUE
+              ? null
+              : (next as ManualOrientationLabel),
+          );
+        }}
+        className={selectClass}
+      >
+        <option value={AUTO_ORIENTATION_VALUE}>
+          {t("mat_gradient_orientation_option_auto")}
+        </option>
+        {MANUAL_ORIENTATION_LABELS.map((orientation) => (
+          <option key={orientation} value={orientation}>
+            {t(orientationOptionKey(orientation))}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+};
+
+const SubstrateSignalCard = ({
+  label,
+  info,
+  testId,
+}: {
+  label: string;
+  info: SubstrateOrientationInfo | null | undefined;
+  testId: string;
+}) => {
+  const { t } = useI18n();
+  if (!info) {
+    return null;
+  }
+  return (
+    <div
+      data-testid={testId}
+      className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-700/80 dark:bg-slate-950/50"
+    >
+      <dt className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+        <span>{label}</span>
+        {info.flat ? (
+          <span data-testid={`${testId}-flat-badge`} className={badgeToneFlat}>
+            {t("mat_gradient_signal_flat_badge")}
+          </span>
+        ) : null}
+        {info.manual_override ? (
+          <span data-testid={`${testId}-manual-badge`} className={badgeToneManual}>
+            {t("mat_gradient_manual_override_badge")}
+          </span>
+        ) : null}
+      </dt>
+      <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+        {formatMetricValue(info.signal_strength, 4)}
+      </dd>
+    </div>
+  );
+};
 
 export default function GradientCardExtractPanel() {
   const { t } = useI18n();
@@ -66,6 +167,8 @@ export default function GradientCardExtractPanel() {
     fitSummary,
     materialSummary,
     orientationRanking,
+    manualWhiteOrientation,
+    manualBlackOrientation,
     materialName,
     verificationTargetDirectoryName,
     verificationTargetCount,
@@ -87,6 +190,8 @@ export default function GradientCardExtractPanel() {
     clearWhiteCornerPoints,
     clearBlackCornerPoints,
     setMaterialName,
+    setManualWhiteOrientation,
+    setManualBlackOrientation,
     clearMaterialVerification,
     submitExtract,
     submitSave,
@@ -126,6 +231,11 @@ export default function GradientCardExtractPanel() {
   const bestCandidate = orientationRanking?.top_candidates?.[0] ?? null;
   const orientationReliable = orientationRanking?.orientation_reliable ?? null;
   const deltaEGap = orientationRanking?.delta_e_gap ?? null;
+  const whiteOrientationInfo = orientationRanking?.white_orientation_info ?? null;
+  const blackOrientationInfo = orientationRanking?.black_orientation_info ?? null;
+  const flatSubstrateHintVisible =
+    (whiteOrientationInfo?.flat && !whiteOrientationInfo.manual_override) ||
+    (blackOrientationInfo?.flat && !blackOrientationInfo.manual_override);
   const isVerificationMode = !!verificationTargetDirectoryName;
   const verificationRunCount = Math.max(
     1,
@@ -289,6 +399,34 @@ export default function GradientCardExtractPanel() {
                   onClick={clearBlackCornerPoints}
                   disabled={blackCornerPoints.length === 0}
                   className="w-full"
+                />
+              </div>
+            </div>
+
+            <div
+              data-testid="orientation-control-card"
+              className={`${mutedSectionCardClass} flex flex-col gap-3`}
+            >
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  {t("mat_gradient_manual_orientation_title")}
+                </h4>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {t("mat_gradient_manual_orientation_desc")}
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <OrientationSelect
+                  label={t("mat_gradient_manual_white_orientation_label")}
+                  value={manualWhiteOrientation}
+                  onChange={setManualWhiteOrientation}
+                  testId="manual-white-orientation-select"
+                />
+                <OrientationSelect
+                  label={t("mat_gradient_manual_black_orientation_label")}
+                  value={manualBlackOrientation}
+                  onChange={setManualBlackOrientation}
+                  testId="manual-black-orientation-select"
                 />
               </div>
             </div>
@@ -562,7 +700,25 @@ export default function GradientCardExtractPanel() {
                             {formatMetricValue(deltaEGap, 4)}
                           </dd>
                         </div>
+                        <SubstrateSignalCard
+                          label={t("mat_gradient_white_signal_label")}
+                          info={whiteOrientationInfo}
+                          testId="white-orientation-signal"
+                        />
+                        <SubstrateSignalCard
+                          label={t("mat_gradient_black_signal_label")}
+                          info={blackOrientationInfo}
+                          testId="black-orientation-signal"
+                        />
                       </dl>
+                      {flatSubstrateHintVisible ? (
+                        <StatusBanner
+                          data-testid="orientation-flat-substrate-hint"
+                          tone="warning"
+                        >
+                          {t("mat_gradient_signal_flat_hint")}
+                        </StatusBanner>
+                      ) : null}
                     </div>
                   )}
                 </div>

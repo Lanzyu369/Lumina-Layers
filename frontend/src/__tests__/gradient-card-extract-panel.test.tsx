@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import GradientCardExtractPanel from "../components/GradientCardExtractPanel";
+import { extractGradientCardStageA } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
@@ -25,6 +26,7 @@ vi.mock("../components/GradientCardCanvasPreview", () => ({
 }));
 
 beforeEach(() => {
+  vi.clearAllMocks();
   useSingleStageStore.setState({
     workflow: "single-stage",
     datasetFile: null,
@@ -58,6 +60,8 @@ beforeEach(() => {
     materialFileUrl: null,
     savedStageAParamsUrl: null,
     orientationRanking: null,
+    manualWhiteOrientation: null,
+    manualBlackOrientation: null,
     savedMaterialSummary: null,
   });
 });
@@ -269,5 +273,227 @@ describe("GradientCardExtractPanel", () => {
     expect(
       screen.getByRole("button", { name: /取消复验|cancel re-verification/i }),
     ).toBeInTheDocument();
+  });
+
+  it("defaults the manual orientation dropdowns to auto-detection", () => {
+    render(<GradientCardExtractPanel />);
+
+    const whiteSelect = screen.getByTestId(
+      "manual-white-orientation-select",
+    ) as HTMLSelectElement;
+    const blackSelect = screen.getByTestId(
+      "manual-black-orientation-select",
+    ) as HTMLSelectElement;
+    // "__auto__" is the sentinel value the component uses to represent
+    // "no manual override" — selecting it means the store holds null.
+    expect(whiteSelect.value).toBe("__auto__");
+    expect(blackSelect.value).toBe("__auto__");
+  });
+
+  it("propagates the manual white orientation selection to the extractor API call", async () => {
+    const extractMock = vi.mocked(extractGradientCardStageA);
+    extractMock.mockResolvedValue({
+      session_id: "sess-1",
+      status: "ok",
+      message: "",
+      stage_a_params_url: "/api/files/stage-a.json",
+      white_warp_preview_url: "/api/files/white-warp.png",
+      black_warp_preview_url: "/api/files/black-warp.png",
+      fit_summary: {
+        substrate_count: 2,
+        channel_count: 1,
+        substrates: ["black", "white"],
+        colors: ["PLA Basic"],
+        overall_validation: { mean_delta_e: 0.5, max_delta_e: 1.0, rmse_linear: 0.01 },
+        warnings: [],
+      },
+      material_summary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        warp_width_px: 1240,
+        warp_height_px: 620,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [200, 200, 200],
+        estimated_k: [1.2, 1.3, 1.4],
+      },
+      warnings: [],
+    });
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "dataset.zip", { type: "application/zip" }),
+      whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+      blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    // User picks a manual orientation for the white capture.
+    fireEvent.change(screen.getByTestId("manual-white-orientation-select"), {
+      target: { value: "rotate_180" },
+    });
+
+    // Fire the extract action directly via the store to avoid pulling in
+    // the image upload flow, then assert the API client received the
+    // manually selected orientation. Wrap in act(...) because submitExtract
+    // triggers multiple React state updates (isExtracting, response fields).
+    await act(async () => {
+      await useSingleStageStore.getState().submitExtract();
+    });
+
+    expect(extractMock).toHaveBeenCalledTimes(1);
+    expect(extractMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manualWhiteOrientation: "rotate_180",
+        manualBlackOrientation: null,
+      }),
+    );
+  });
+
+  it("shows per-substrate signal cards and the flat hint when the white substrate is flagged flat", () => {
+    useSingleStageStore.setState({
+      materialSummary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [240, 240, 240],
+        estimated_k: [2.5, 2.7, 3.0],
+      },
+      fitSummary: {
+        substrate_count: 2,
+        channel_count: 1,
+        substrates: ["black", "white"],
+        colors: ["PLA Basic"],
+        overall_validation: { mean_delta_e: 3.2, max_delta_e: 8.0, rmse_linear: 0.08 },
+        warnings: [],
+      },
+      orientationRanking: {
+        orientation_reliable: true,
+        delta_e_gap: 1.5,
+        top_candidates: [
+          {
+            white_orientation: "identity",
+            black_orientation: "identity",
+            anchor_penalty: 0.01,
+            mean_delta_e: 3.2,
+            rmse_linear: 0.08,
+            max_delta_e: 8.0,
+          },
+        ],
+        white_signal_strength: 0.005,
+        black_signal_strength: 0.12,
+        white_orientation_info: {
+          signal_strength: 0.005,
+          flat: true,
+          manual_override: null,
+          locked_to: null,
+        },
+        black_orientation_info: {
+          signal_strength: 0.12,
+          flat: false,
+          manual_override: null,
+          locked_to: null,
+        },
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    // Signal cards render for both substrates with the correct rounded values.
+    expect(screen.getByTestId("white-orientation-signal")).toHaveTextContent("0.0050");
+    expect(screen.getByTestId("black-orientation-signal")).toHaveTextContent("0.1200");
+    // Flat badge only appears on the white card.
+    expect(screen.getByTestId("white-orientation-signal-flat-badge")).toBeInTheDocument();
+    expect(screen.queryByTestId("black-orientation-signal-flat-badge")).not.toBeInTheDocument();
+    // The recovery hint banner is shown, steering the user to manual override.
+    expect(screen.getByTestId("orientation-flat-substrate-hint")).toBeInTheDocument();
+  });
+
+  it("shows the manual badge and suppresses the flat hint once a manual override is in effect", () => {
+    useSingleStageStore.setState({
+      manualWhiteOrientation: "rotate_90_cw",
+      materialSummary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [240, 240, 240],
+        estimated_k: [2.5, 2.7, 3.0],
+      },
+      fitSummary: {
+        substrate_count: 2,
+        channel_count: 1,
+        substrates: ["black", "white"],
+        colors: ["PLA Basic"],
+        overall_validation: { mean_delta_e: 0.3, max_delta_e: 0.8, rmse_linear: 0.02 },
+        warnings: [],
+      },
+      orientationRanking: {
+        orientation_reliable: true,
+        delta_e_gap: 0.0,
+        top_candidates: [
+          {
+            white_orientation: "rotate_90_cw",
+            black_orientation: "identity",
+            anchor_penalty: 0.01,
+            mean_delta_e: 0.3,
+            rmse_linear: 0.02,
+            max_delta_e: 0.8,
+          },
+        ],
+        white_signal_strength: 0.005,
+        black_signal_strength: 0.12,
+        white_orientation_info: {
+          signal_strength: 0.005,
+          flat: true,
+          manual_override: "rotate_90_cw",
+          locked_to: "rotate_90_cw",
+        },
+        black_orientation_info: {
+          signal_strength: 0.12,
+          flat: false,
+          manual_override: null,
+          locked_to: null,
+        },
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    // Manual badge visible; flat badge still visible (substrate IS flat), but
+    // the recovery hint is suppressed because the user already overrode.
+    expect(screen.getByTestId("white-orientation-signal-flat-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("white-orientation-signal-manual-badge")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("orientation-flat-substrate-hint"),
+    ).not.toBeInTheDocument();
   });
 });

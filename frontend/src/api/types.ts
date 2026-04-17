@@ -597,10 +597,34 @@ export interface OrientationCandidate {
   max_delta_e: number;
 }
 
+export const MANUAL_ORIENTATION_LABELS = [
+  "identity",
+  "rotate_90_cw",
+  "rotate_180",
+  "rotate_90_ccw",
+  "flip_horizontal",
+  "flip_vertical",
+  "transpose",
+  "transverse",
+] as const;
+
+export type ManualOrientationLabel = (typeof MANUAL_ORIENTATION_LABELS)[number];
+
+export interface SubstrateOrientationInfo {
+  signal_strength: number;
+  flat: boolean;
+  manual_override: ManualOrientationLabel | null;
+  locked_to: ManualOrientationLabel | null;
+}
+
 export interface OrientationRanking {
   orientation_reliable: boolean;
   delta_e_gap: number;
   top_candidates: OrientationCandidate[];
+  white_signal_strength?: number | null;
+  black_signal_strength?: number | null;
+  white_orientation_info?: SubstrateOrientationInfo | null;
+  black_orientation_info?: SubstrateOrientationInfo | null;
 }
 
 export interface GradientCardStageAExtractResponse {
@@ -666,6 +690,64 @@ export interface GradientCardMaterialLibraryResponse {
   status: string;
   message: string;
   materials: SavedMaterialLibraryItem[];
+}
+
+// ========== Material solver cache (64³ Lab-grid recipe lookup) ==========
+
+/** Metadata for one persisted material-solver cache entry. */
+export interface MaterialSolverCacheEntry {
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  grid_resolution: number;
+  total_combinations: number;
+  valid_cell_count: number;
+  total_cell_count: number;
+  mean_delta_e: number;
+  max_delta_e: number;
+  build_time_seconds: number;
+  built_at?: string | null;
+  cache_file_size_bytes: number;
+  cache_file_path?: string | null;
+}
+
+/** Status response for a specific ``(palette, N, t, substrate)`` combination. */
+export interface MaterialSolverCacheStatusResponse {
+  status: string;
+  message: string;
+  cached: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  entry?: MaterialSolverCacheEntry | null;
+}
+
+/** Response after an explicit cache build. */
+export interface MaterialSolverCacheBuildResponse {
+  status: string;
+  message: string;
+  entry: MaterialSolverCacheEntry;
+}
+
+/** Listing response for all persisted solver caches. */
+export interface MaterialSolverCacheListResponse {
+  status: string;
+  message: string;
+  entries: MaterialSolverCacheEntry[];
+}
+
+/** Delete response for a solver cache entry. */
+export interface MaterialSolverCacheDeleteResponse {
+  status: string;
+  message: string;
+  deleted: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
 }
 
 export interface ManualFixResponse {

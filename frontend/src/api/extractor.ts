@@ -7,6 +7,7 @@ import type {
   GradientCardMaterialSaveResponse,
   GradientCardStageAExtractResponse,
   ManualFixResponse,
+  ManualOrientationLabel,
   SingleStageExtractResponse,
   StageAFitResponse,
 } from "./types";
@@ -54,6 +55,8 @@ export async function extractGradientCardStageA(params: {
   blackImage: File;
   whiteCornerPoints: Array<[number, number]>;
   blackCornerPoints: Array<[number, number]>;
+  manualWhiteOrientation?: ManualOrientationLabel | null;
+  manualBlackOrientation?: ManualOrientationLabel | null;
 }): Promise<GradientCardStageAExtractResponse> {
   const fd = new FormData();
   fd.append("dataset_zip", params.datasetZip);
@@ -61,6 +64,12 @@ export async function extractGradientCardStageA(params: {
   fd.append("black_image", params.blackImage);
   fd.append("white_corner_points", JSON.stringify(params.whiteCornerPoints));
   fd.append("black_corner_points", JSON.stringify(params.blackCornerPoints));
+  if (params.manualWhiteOrientation) {
+    fd.append("manual_white_orientation", params.manualWhiteOrientation);
+  }
+  if (params.manualBlackOrientation) {
+    fd.append("manual_black_orientation", params.manualBlackOrientation);
+  }
   const response = await apiClient.post<GradientCardStageAExtractResponse>(
     "/extractor/extract-gradient-card-stage-a",
     fd,

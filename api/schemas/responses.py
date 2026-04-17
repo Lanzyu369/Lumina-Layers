@@ -158,12 +158,31 @@ class OrientationCandidateResponse(BaseModel):
     max_delta_e: float
 
 
+class SubstrateOrientationInfoResponse(BaseModel):
+    """Per-substrate orientation diagnostics.
+    单基底方向诊断信息。
+
+    Surfaced to the frontend so the user can tell when the auto-detector
+    fell back to ``identity`` due to a flat (low-signal) substrate, or when
+    a manual override is currently in effect.
+    """
+
+    signal_strength: float = 0.0
+    flat: bool = False
+    manual_override: str | None = None
+    locked_to: str | None = None
+
+
 class OrientationRankingResponse(BaseModel):
     """Orientation detection reliability ranking."""
 
     orientation_reliable: bool
     delta_e_gap: float
     top_candidates: list[OrientationCandidateResponse] = Field(default_factory=list)
+    white_signal_strength: float | None = None
+    black_signal_strength: float | None = None
+    white_orientation_info: SubstrateOrientationInfoResponse | None = None
+    black_orientation_info: SubstrateOrientationInfoResponse | None = None
 
 
 class GradientCardStageAExtractResponse(BaseModel):
@@ -241,6 +260,85 @@ class GradientCardMaterialLibraryResponse(BaseModel):
     status: str
     message: str
     materials: list[SavedMaterialLibraryItemResponse] = Field(default_factory=list)
+
+
+class MaterialSolverCacheEntryResponse(BaseModel):
+    """Metadata for a single persisted material-solver cache entry.
+    单个耗材求解器缓存条目的元数据。
+
+    The ``palette_fingerprint`` identifies which saved materials were combined.
+    ``total_combinations`` and ``valid_cell_count`` describe the enumeration
+    coverage; ``mean_delta_e`` / ``max_delta_e`` summarise bucket-center quality.
+    """
+
+    palette_hash: str
+    material_directory_names: list[str] = Field(default_factory=list)
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    grid_resolution: int
+    total_combinations: int
+    valid_cell_count: int
+    total_cell_count: int
+    mean_delta_e: float
+    max_delta_e: float
+    build_time_seconds: float
+    built_at: str | None = None
+    cache_file_size_bytes: int = 0
+    cache_file_path: str | None = None
+
+
+class MaterialSolverCacheStatusResponse(BaseModel):
+    """Status check for a specific ``(palette, N, t, substrate)`` combination.
+    针对指定 ``(调色板, 层数, 层厚, 基底)`` 组合的缓存状态。
+
+    ``cached`` is ``True`` when a compatible cache exists on disk; in that
+    case ``entry`` carries the loaded metadata. Otherwise ``entry`` is ``None``
+    and the caller should call the build endpoint to create it.
+    """
+
+    status: str
+    message: str
+    cached: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    entry: MaterialSolverCacheEntryResponse | None = None
+
+
+class MaterialSolverCacheBuildResponse(BaseModel):
+    """Response after an explicit cache build.
+    显式构建缓存后的响应。
+    """
+
+    status: str
+    message: str
+    entry: MaterialSolverCacheEntryResponse
+
+
+class MaterialSolverCacheListResponse(BaseModel):
+    """Listing response for all persisted solver caches.
+    所有已持久化求解器缓存的列表响应。
+    """
+
+    status: str
+    message: str
+    entries: list[MaterialSolverCacheEntryResponse] = Field(default_factory=list)
+
+
+class MaterialSolverCacheDeleteResponse(BaseModel):
+    """Delete response for a solver cache entry.
+    求解器缓存条目的删除响应。
+    """
+
+    status: str
+    message: str
+    deleted: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
 
 
 class RecipePredictResponse(BaseModel):
