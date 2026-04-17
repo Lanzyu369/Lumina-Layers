@@ -56,6 +56,11 @@ from api.schemas.slicer import (
     SlicerLaunchRequest,
     SlicerLaunchResponse,
 )
+from api.schemas.session import (
+    SessionCloseResponse,
+    SessionHeartbeatResponse,
+    SessionRequest,
+)
 from api.schemas.responses import (
     BatchItemResult,
     BatchResponse,
@@ -113,6 +118,10 @@ __all__ = [
     "SlicerDetectResponse",
     "SlicerLaunchRequest",
     "SlicerLaunchResponse",
+    # --- Session models ---
+    "SessionRequest",
+    "SessionHeartbeatResponse",
+    "SessionCloseResponse",
     # --- System models ---
     "CacheCleanupDetails",
     "ClearCacheResponse",

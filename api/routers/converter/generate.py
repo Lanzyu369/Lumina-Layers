@@ -65,6 +65,25 @@ class _GenerateBody(BaseModel):
     params: ConvertGenerateRequest
 
 
+def _remove_temp_path(path: str | None) -> None:
+    """Best-effort delete for route-owned temporary files."""
+
+    if not path:
+        return
+    try:
+        if os.path.exists(path):
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+def _remove_temp_paths(paths: list[str] | set[str]) -> None:
+    """Best-effort delete for multiple route-owned temporary files."""
+
+    for path in paths:
+        _remove_temp_path(path)
+
+
 def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[str, object]] | None:
     """Normalize recipe overrides into per-region dict items.
     将配方覆盖归一化为按单区域展开的字典条目。
@@ -694,6 +713,12 @@ async def _generate_large_format_raster(
         px_w, px_h = img.size
         full_img = img.copy()
 
+    successful_paths: list[tuple[str, str]] = []
+    route_local_cleanup_paths: set[str] = set()
+    cleanup_paths: set[str] = set()
+    errors: list[str] = []
+    zip_path: str | None = None
+    zip_ready = False
     full_material_matrix: np.ndarray | None = None
     full_recipe_override_masks: dict[str, np.ndarray] | None = None
     override_target_w = 0
@@ -738,109 +763,119 @@ async def _generate_large_format_raster(
         else None
     )
 
-    futures = []
-    tile_labels: list[str] = []
-    for r in range(rows):
-        for c in range(cols):
-            x0_mm = c * tile_width_mm
-            y0_mm = r * tile_height_mm
-            x1_mm = min(x0_mm + tile_width_mm, total_width_mm)
-            y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
-            cur_tile_w = x1_mm - x0_mm
+    try:
+        futures = []
+        tile_labels: list[str] = []
+        for r in range(rows):
+            for c in range(cols):
+                x0_mm = c * tile_width_mm
+                y0_mm = r * tile_height_mm
+                x1_mm = min(x0_mm + tile_width_mm, total_width_mm)
+                y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
+                cur_tile_w = x1_mm - x0_mm
 
-            px_x0 = int(round(x0_mm * px_per_mm_x))
-            px_y0 = int(round(y0_mm * px_per_mm_y))
-            px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
-            px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
+                px_x0 = int(round(x0_mm * px_per_mm_x))
+                px_y0 = int(round(y0_mm * px_per_mm_y))
+                px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+                px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
-            tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
-            fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-            os.close(fd)
-            tile_img.save(tile_path)
-            store.register_temp_file(sid, tile_path)
+                tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
+                fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+                os.close(fd)
+                tile_img.save(tile_path)
+                route_local_cleanup_paths.add(tile_path)
 
-            tile_params = dict(shared_params, target_width_mm=cur_tile_w)
-            if hm_gray is not None:
-                hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
-                fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-                os.close(fd2)
-                Image.fromarray(hm_tile).save(hm_tile_path)
-                store.register_temp_file(sid, hm_tile_path)
-                tile_params["heightmap_path"] = hm_tile_path
-            if full_material_matrix is not None and override_target_w > 0 and override_target_h > 0:
-                ov_x0 = int(round(x0_mm * (override_target_w / total_width_mm)))
-                ov_y0 = int(round(y0_mm * (override_target_h / total_height_mm)))
-                ov_x1 = min(int(round(x1_mm * (override_target_w / total_width_mm))), override_target_w)
-                ov_y1 = min(int(round(y1_mm * (override_target_h / total_height_mm))), override_target_h)
-                material_matrix_tile = full_material_matrix[ov_y0:ov_y1, ov_x0:ov_x1, :]
-                fd_mm, mm_tile_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
-                os.close(fd_mm)
-                np.save(mm_tile_path, material_matrix_tile)
-                store.register_temp_file(sid, mm_tile_path)
-                tile_params["material_matrix_path"] = mm_tile_path
-                tile_params["recipe_override_masks_path"] = None
+                tile_params = dict(shared_params, target_width_mm=cur_tile_w)
+                if hm_gray is not None:
+                    hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
+                    fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+                    os.close(fd2)
+                    Image.fromarray(hm_tile).save(hm_tile_path)
+                    route_local_cleanup_paths.add(hm_tile_path)
+                    tile_params["heightmap_path"] = hm_tile_path
+                if full_material_matrix is not None and override_target_w > 0 and override_target_h > 0:
+                    ov_x0 = int(round(x0_mm * (override_target_w / total_width_mm)))
+                    ov_y0 = int(round(y0_mm * (override_target_h / total_height_mm)))
+                    ov_x1 = min(int(round(x1_mm * (override_target_w / total_width_mm))), override_target_w)
+                    ov_y1 = min(int(round(y1_mm * (override_target_h / total_height_mm))), override_target_h)
+                    material_matrix_tile = full_material_matrix[ov_y0:ov_y1, ov_x0:ov_x1, :]
+                    fd_mm, mm_tile_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+                    os.close(fd_mm)
+                    np.save(mm_tile_path, material_matrix_tile)
+                    route_local_cleanup_paths.add(mm_tile_path)
+                    tile_params["material_matrix_path"] = mm_tile_path
+                    tile_params["recipe_override_masks_path"] = None
 
-                selected_mask_tiles: dict[str, np.ndarray] = {}
-                for region_id, mask in (full_recipe_override_masks or {}).items():
-                    if mask.shape != (override_target_h, override_target_w):
-                        continue
-                    mask_tile = mask[ov_y0:ov_y1, ov_x0:ov_x1]
-                    if mask_tile.any():
-                        selected_mask_tiles[region_id] = mask_tile
-                if selected_mask_tiles:
-                    fd_masks, masks_tile_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-                    os.close(fd_masks)
-                    with open(masks_tile_path, "wb") as f:
-                        pickle.dump(selected_mask_tiles, f)
-                    store.register_temp_file(sid, masks_tile_path)
-                    tile_params["recipe_override_masks_path"] = masks_tile_path
+                    selected_mask_tiles: dict[str, np.ndarray] = {}
+                    for region_id, mask in (full_recipe_override_masks or {}).items():
+                        if mask.shape != (override_target_h, override_target_w):
+                            continue
+                        mask_tile = mask[ov_y0:ov_y1, ov_x0:ov_x1]
+                        if mask_tile.any():
+                            selected_mask_tiles[region_id] = mask_tile
+                    if selected_mask_tiles:
+                        fd_masks, masks_tile_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+                        os.close(fd_masks)
+                        with open(masks_tile_path, "wb") as f:
+                            pickle.dump(selected_mask_tiles, f)
+                        route_local_cleanup_paths.add(masks_tile_path)
+                        tile_params["recipe_override_masks_path"] = masks_tile_path
 
-            label = format_large_format_tile_label(
-                source_basename=source_basename,
-                tile_label=f"R{r + 1}C{c + 1}",
-            )
-            tile_labels.append(label)
-            futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
+                label = format_large_format_tile_label(
+                    source_basename=source_basename,
+                    tile_label=f"R{r + 1}C{c + 1}",
+                )
+                tile_labels.append(label)
+                futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
 
-    successful_paths: list[tuple[str, str]] = []
-    errors: list[str] = []
-    for label, fut in zip(tile_labels, futures):
-        try:
-            result = await fut
-            tp = result.get("threemf_path")
-            if tp and os.path.exists(tp):
-                successful_paths.append((label, tp))
-            else:
-                errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
-        except ROUTER_HANDLED_ERRORS as e:
-            errors.append(f"{label}: {e}")
+        for label, fut in zip(tile_labels, futures):
+            try:
+                result = await fut
+                glb_path = result.get("glb_path")
+                if glb_path and os.path.exists(glb_path):
+                    cleanup_paths.add(glb_path)
 
-    if not successful_paths:
-        detail = "All tiles failed"
+                tp = result.get("threemf_path")
+                if tp and os.path.exists(tp):
+                    successful_paths.append((label, tp))
+                    cleanup_paths.add(tp)
+                else:
+                    errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
+            except ROUTER_HANDLED_ERRORS as e:
+                errors.append(f"{label}: {e}")
+
+        if not successful_paths:
+            detail = "All tiles failed"
+            if errors:
+                detail += ": " + "; ".join(errors[:5])
+            raise HTTPException(status_code=500, detail=detail)
+
+        fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
+        os.close(fd)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for label, tp in successful_paths:
+                zf.write(tp, f"{label}.3mf")
+        store.register_temp_file(sid, zip_path)
+        download_id = registry.register_path(sid, zip_path)
+        zip_ready = True
+
+        msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"
         if errors:
-            detail += ": " + "; ".join(errors[:5])
-        raise HTTPException(status_code=500, detail=detail)
-
-    fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
-    os.close(fd)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for label, tp in successful_paths:
-            zf.write(tp, f"{label}.3mf")
-    store.register_temp_file(sid, zip_path)
-    download_id = registry.register_path(sid, zip_path)
-
-    msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"
-    if errors:
-        msg += f" — {len(errors)} failed"
-    return {
-        "status": "ok",
-        "message": msg,
-        "download_url": f"/api/files/{download_id}",
-        "tile_count": len(successful_paths),
-        "grid_cols": cols,
-        "grid_rows": rows,
-        "warnings": list(warnings or []),
-    }
+            msg += f" — {len(errors)} failed"
+        return {
+            "status": "ok",
+            "message": msg,
+            "download_url": f"/api/files/{download_id}",
+            "tile_count": len(successful_paths),
+            "grid_cols": cols,
+            "grid_rows": rows,
+            "warnings": list(warnings or []),
+        }
+    finally:
+        _remove_temp_paths(route_local_cleanup_paths)
+        _remove_temp_paths(cleanup_paths)
+        if zip_path is not None and not zip_ready:
+            _remove_temp_path(zip_path)
 
 
 def _rasterize_svg_for_large_format_fallback(
@@ -859,7 +894,6 @@ def _rasterize_svg_for_large_format_fallback(
     fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
     os.close(fd)
     Image.fromarray(raster_rgba).save(png_path)
-    store.register_temp_file(sid, png_path)
     return png_path, density_warnings
 
 
@@ -955,25 +989,28 @@ async def convert_generate_large_format(
             fallback_warnings = warnings + [SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING]
             if not prefer_raster_svg:
                 fallback_warnings += density_warnings
-            result = await _generate_large_format_raster(
-                image_path=fallback_png_path,
-                lut_path=lut_path,
-                source_basename=source_basename,
-                recipe_overrides=recipe_overrides,
-                recipe_override_masks_path=recipe_override_masks_path,
-                material_matrix_path=material_matrix_path,
-                total_width_mm=total_w_mm,
-                total_height_mm=total_h_mm,
-                tile_width_mm=tile_w_mm,
-                tile_height_mm=tile_h_mm,
-                request=request,
-                session_data=session_data,
-                sid=sid,
-                store=store,
-                registry=registry,
-                pool=pool,
-                warnings=fallback_warnings,
-            )
+            try:
+                result = await _generate_large_format_raster(
+                    image_path=fallback_png_path,
+                    lut_path=lut_path,
+                    source_basename=source_basename,
+                    recipe_overrides=recipe_overrides,
+                    recipe_override_masks_path=recipe_override_masks_path,
+                    material_matrix_path=material_matrix_path,
+                    total_width_mm=total_w_mm,
+                    total_height_mm=total_h_mm,
+                    tile_width_mm=tile_w_mm,
+                    tile_height_mm=tile_h_mm,
+                    request=request,
+                    session_data=session_data,
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=pool,
+                    warnings=fallback_warnings,
+                )
+            finally:
+                _remove_temp_path(fallback_png_path)
     else:
         result = await _generate_large_format_raster(
             image_path=image_path,
@@ -1045,6 +1082,7 @@ async def convert_batch(
     # Submit each batch item sequentially to the process pool
     for upload_file in images:
         filename = upload_file.filename or "unknown"
+        temp_path: str | None = None
         try:
             # 1. File upload (I/O, main thread)
             temp_path = await ensure_png_tempfile(upload_file)
@@ -1103,29 +1141,40 @@ async def convert_batch(
                     error=str(e),
                 )
             )
+        finally:
+            _remove_temp_path(temp_path)
 
     # Package successful 3MF files into a ZIP (main thread)
-    fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
-    os.close(fd)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for idx, (path_3mf, src_filename) in enumerate(successful_entries, start=1):
-            base_name = os.path.splitext(os.path.basename(src_filename))[0] or "item"
-            arcname = f"{idx:03d}_{base_name}.3mf"
-            zf.write(path_3mf, arcname)
+    cleanup_3mf_paths = [path_3mf for path_3mf, _src_filename in successful_entries]
+    zip_path: str | None = None
+    zip_ready = False
+    try:
+        fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
+        os.close(fd)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for idx, (path_3mf, src_filename) in enumerate(successful_entries, start=1):
+                base_name = os.path.splitext(os.path.basename(src_filename))[0] or "item"
+                arcname = f"{idx:03d}_{base_name}.3mf"
+                zf.write(path_3mf, arcname)
 
-    # Register ZIP via FileRegistry (main thread)
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        zip_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
+        # Register ZIP via FileRegistry (main thread)
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            zip_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        zip_ready = True
 
-    success_count = sum(1 for r in results if r.status == "success")
-    total_count = len(results)
+        success_count = sum(1 for r in results if r.status == "success")
+        total_count = len(results)
 
-    return BatchResponse(
-        status="ok" if success_count > 0 else "failed",
-        message=f"Batch complete: {success_count}/{total_count} succeeded",
-        download_url=f"/api/files/{download_id}",
-        results=results,
-    )
+        return BatchResponse(
+            status="ok" if success_count > 0 else "failed",
+            message=f"Batch complete: {success_count}/{total_count} succeeded",
+            download_url=f"/api/files/{download_id}",
+            results=results,
+        )
+    finally:
+        _remove_temp_paths(cleanup_3mf_paths)
+        if zip_path is not None and not zip_ready:
+            _remove_temp_path(zip_path)

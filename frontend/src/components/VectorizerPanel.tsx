@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { useI18n } from "../i18n/context";
@@ -18,6 +18,26 @@ import ZoomViewport from "./ui/ZoomViewport";
 import { cx, resolveSectionCardClass } from "./ui/panelPrimitives";
 
 const ACCEPT_FORMATS = "image/png,image/jpeg,image/webp,image/bmp";
+const VECTORIZER_RESET_DELAY_MS = 0;
+
+let pendingVectorizerResetTimer: number | null = null;
+
+function cancelPendingVectorizerReset(): void {
+  if (pendingVectorizerResetTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(pendingVectorizerResetTimer);
+  pendingVectorizerResetTimer = null;
+}
+
+function scheduleVectorizerReset(): void {
+  cancelPendingVectorizerReset();
+  pendingVectorizerResetTimer = window.setTimeout(() => {
+    pendingVectorizerResetTimer = null;
+    useVectorizerStore.getState().reset();
+  }, VECTORIZER_RESET_DELAY_MS);
+}
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -92,6 +112,13 @@ export default function VectorizerPanel() {
   const cancel = useVectorizerStore((s) => s.cancel);
 
   const compareZoom = usePanZoom();
+
+  useEffect(() => {
+    cancelPendingVectorizerReset();
+    return () => {
+      scheduleVectorizerReset();
+    };
+  }, []);
 
   const handleFileSelect = useCallback(
     (file: File) => setImageFile(file),

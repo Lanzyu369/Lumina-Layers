@@ -339,3 +339,83 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][1] == "/tmp/uploaded.png"  # image_path
         assert call_args[0][2] == "/tmp/fake.npy"  # lut_path
         assert call_args[0][3] == 80.0  # target_width_mm
+
+
+class TestBatchCleanup:
+    """Verify batch route removes uploaded temps and packaged intermediates."""
+
+    def test_batch_deletes_uploaded_png_temps_on_success_and_failure(self) -> None:
+        temp_success = _make_fake_3mf(".png")
+        temp_failure = _make_fake_3mf(".png")
+        fake_3mf = _make_fake_3mf()
+        temp_paths = iter([temp_success, temp_failure])
+        call_count = 0
+
+        async def _mock_submit(fn, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"threemf_path": fake_3mf, "status_msg": "OK"}
+            raise RuntimeError("boom")
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(side_effect=lambda _upload: next(temp_paths)),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("ok.png")),
+                    ("images", _make_test_image_buf("fail.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        assert not os.path.exists(temp_success)
+        assert not os.path.exists(temp_failure)
+        assert not os.path.exists(fake_3mf)
+
+    def test_batch_deletes_all_successful_3mf_files_after_zip_packaging(self) -> None:
+        temp_one = _make_fake_3mf(".png")
+        temp_two = _make_fake_3mf(".png")
+        fake_3mf_one = _make_fake_3mf()
+        fake_3mf_two = _make_fake_3mf()
+        temp_paths = iter([temp_one, temp_two])
+        output_paths = iter([fake_3mf_one, fake_3mf_two])
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return {"threemf_path": next(output_paths), "status_msg": "OK"}
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(side_effect=lambda _upload: next(temp_paths)),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("img1.png")),
+                    ("images", _make_test_image_buf("img2.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        assert not os.path.exists(fake_3mf_one)
+        assert not os.path.exists(fake_3mf_two)

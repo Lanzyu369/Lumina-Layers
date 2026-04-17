@@ -68,6 +68,9 @@ function CameraDebugHelper() {
       console.log("📷 Camera Debug:", JSON.stringify(info, null, 2));
       return info;
     };
+    return () => {
+      delete window.__luminaCameraDebug;
+    };
   }, [camera, controls]);
   return null;
 }

@@ -191,3 +191,127 @@ def test_cleanup_expired_removes_only_expired_entries(sid: str, filename: str) -
         for p in (expired_path, active_path, session_bound_path):
             if os.path.exists(p):
                 os.unlink(p)
+
+
+def test_ttl_resolve_renews_expiry_and_exposes_entry_metadata() -> None:
+    """TTL entries should store ttl_seconds and extend expiry on successful resolve()."""
+    registry = FileRegistry()
+    path = _create_temp_file()
+
+    try:
+        with patch("api.file_registry.time.time", return_value=100.0):
+            file_id = registry.register_path("session-1", path, "lease.bin", ttl_seconds=10)
+
+        entry = registry.get_entry(file_id)
+        assert entry is not None
+        assert entry["ttl_seconds"] == 10
+        assert entry["expires_at"] == 110.0
+
+        with patch("api.file_registry.time.time", return_value=105.0):
+            assert registry.resolve(file_id) == (path, "lease.bin")
+
+        renewed_entry = registry.get_entry(file_id)
+        assert renewed_entry is not None
+        assert renewed_entry["expires_at"] == 115.0
+
+        with patch("api.file_registry.time.time", return_value=114.0):
+            assert registry.resolve(file_id) == (path, "lease.bin")
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def test_expired_resolve_keeps_tracking_when_delete_fails_and_file_still_exists() -> None:
+    """Expired resolve() should retain tracking if delete fails and the file still exists."""
+    registry = FileRegistry()
+    path = _create_temp_file()
+
+    try:
+        with patch("api.file_registry.time.time", return_value=100.0):
+            file_id = registry.register_path("session-1", path, "locked.bin", ttl_seconds=1)
+
+        with patch("api.file_registry.time.time", return_value=102.0), patch(
+            "api.file_registry.os.remove",
+            side_effect=PermissionError("locked"),
+        ):
+            assert registry.resolve(file_id) is None
+
+        entry = registry.get_entry(file_id)
+        assert entry is not None
+        assert entry["path"] == path
+        assert os.path.exists(path) is True
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def test_cleanup_session_preserves_tracking_when_delete_fails() -> None:
+    """cleanup_session() should retain failed session-bound entries as expired retry candidates."""
+    registry = FileRegistry()
+    path = _create_temp_file()
+
+    try:
+        with patch("api.file_registry.time.time", return_value=100.0):
+            file_id = registry.register_path("session-1", path, "locked.bin")
+
+        with patch("api.file_registry.time.time", return_value=120.0), patch(
+            "api.file_registry.os.remove",
+            side_effect=PermissionError("locked"),
+        ):
+            cleaned = registry.cleanup_session("session-1")
+
+        assert cleaned == 0
+        entry = registry.get_entry(file_id)
+        assert entry is not None
+        assert entry["lifecycle"] == "session_bound"
+        assert entry["session_id"] == "session-1"
+        assert entry["expires_at"] == 120.0
+        assert os.path.exists(path) is True
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def test_cleanup_session_except_keeps_selected_file_ids() -> None:
+    """cleanup_session_except() should preserve requested file IDs and remove the rest."""
+    registry = FileRegistry()
+    kept_path = _create_temp_file()
+    removed_path = _create_temp_file()
+
+    try:
+        kept_id = registry.register_path("session-1", kept_path, "keep.bin")
+        removed_id = registry.register_path("session-1", removed_path, "remove.bin")
+
+        cleaned = registry.cleanup_session_except("session-1", keep_file_ids={kept_id})
+
+        assert cleaned == 1
+        assert registry.resolve(kept_id) == (kept_path, "keep.bin")
+        assert registry.resolve(removed_id) is None
+        assert os.path.exists(kept_path) is True
+        assert os.path.exists(removed_path) is False
+    finally:
+        for path in (kept_path, removed_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+
+def test_clear_all_preserves_tracking_when_delete_fails() -> None:
+    """clear_all() should retain metadata for files that still exist after delete failure."""
+    registry = FileRegistry()
+    path = _create_temp_file()
+
+    try:
+        file_id = registry.register_path("session-1", path, "locked.bin")
+
+        with patch(
+            "api.file_registry.os.remove",
+            side_effect=PermissionError("locked"),
+        ):
+            cleaned = registry.clear_all()
+
+        assert cleaned == 0
+        assert registry.get_entry(file_id) is not None
+        assert os.path.exists(path) is True
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)

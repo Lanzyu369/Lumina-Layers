@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 from api.app import create_app
 from api.dependencies import get_file_registry
+from api.file_registry import FileRegistry
 from api.routers.five_color import _engine_cache
 
 client = TestClient(create_app())
@@ -489,3 +490,68 @@ def test_generate_swatch_registry_session_id_is_unique_even_with_same_request_id
     assert len(set(bytes_session_ids)) == 2
     assert all(session_id.startswith("recipe-swatch:req-repeat:") for session_id in path_session_ids)
     assert all(session_id.startswith("recipe-swatch:req-repeat:") for session_id in bytes_session_ids)
+
+
+def test_generate_swatch_registers_ttl_entries_and_cleanup_expired(tmp_path, monkeypatch):
+    """Swatch exports should be TTL-backed and cleaned by registry expiry."""
+    engine = _FakeSwatchEngine()
+    registry = FileRegistry()
+    clock = {"now": 30_000.0}
+    swatch_path = tmp_path / "swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    client.app.dependency_overrides[get_file_registry] = lambda: registry
+    try:
+        with (
+            patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+            patch(
+                "core.recipe_swatch.generate_recipe_swatch",
+                side_effect=_fake_generate_recipe_swatch,
+            ),
+            patch("api.file_bridge.pil_to_png_bytes", return_value=b"png-bytes"),
+        ):
+            response = client.post(
+                "/api/five-color/generate-swatch",
+                json={
+                    "lut_name": "test_lut",
+                    "recipes": [
+                        {
+                            "selected_indices": [0, 1, 2, 3, 4],
+                            "result_hex": "#123456",
+                            "base_color_names": ["ignored"] * 6,
+                            "base_color_hexes": ["#000000"] * 6,
+                        }
+                    ],
+                },
+            )
+    finally:
+        client.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    download_id = body["download_url"].rsplit("/", 1)[-1]
+    preview_id = body["preview_url"].rsplit("/", 1)[-1]
+
+    download_entry = registry.get_entry(download_id)
+    preview_entry = registry.get_entry(preview_id)
+    assert download_entry is not None
+    assert preview_entry is not None
+    assert download_entry["ttl_seconds"] == 8 * 60 * 60
+    assert preview_entry["ttl_seconds"] == 8 * 60 * 60
+
+    clock["now"] += (8 * 60 * 60) + 1
+    removed = registry.cleanup_expired()
+
+    assert removed == 2
+    assert registry.resolve(download_id) is None
+    assert registry.resolve(preview_id) is None
+    assert not swatch_path.exists()

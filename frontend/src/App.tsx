@@ -4,6 +4,7 @@ import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
 import { useAutoPreview } from "./hooks/useAutoPreview";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
+import { useSessionLease } from "./hooks/useSessionLease";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
@@ -24,6 +25,8 @@ import LutManagerPanel from "./components/LutManagerPanel";
 import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
+import { useSingleStageStore } from "./stores/singleStageStore";
+import { useConverterStore } from "./stores/converter";
 import { useShallow } from "zustand/react/shallow";
 
 /* ---------- Error Boundary ---------- */
@@ -183,6 +186,11 @@ function WidgetToggles() {
 
 function AppContent() {
   const { t } = useI18n();
+  const converterSessionId = useConverterStore((s) => s.sessionId);
+  const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
+
+  useSessionLease(converterSessionId);
+  useSessionLease(singleStageSessionId);
   useAutoPreview();
   usePuzzleLayoutPreview();
   const workspace = useWorkspaceMode();

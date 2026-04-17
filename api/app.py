@@ -17,7 +17,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
@@ -50,6 +50,7 @@ from api.routers import (
     five_color_router,
     health_router,
     lut_router,
+    session_router,
     slicer_router,
     single_stage_router,
     system_router,
@@ -57,6 +58,26 @@ from api.routers import (
 )
 
 log = get_logger(__name__)
+
+
+def _run_cleanup_pass(
+    active_session_store=None,
+    active_file_registry=None,
+) -> tuple[list[str], list[str], int]:
+    """Run one cleanup pass for expired sessions and registry files.
+    执行一次过期 session 与 registry 文件清理。
+    """
+    store = session_store if active_session_store is None else active_session_store
+    registry = file_registry if active_file_registry is None else active_file_registry
+
+    expired_sids = store.cleanup_expired()
+    registry_cleanup_sids = list(
+        dict.fromkeys([*expired_sids, *store.get_registry_cleanup_candidate_session_ids()])
+    )
+    for sid in registry_cleanup_sids:
+        registry.cleanup_session(sid)
+    expired_files = registry.cleanup_expired()
+    return expired_sids, registry_cleanup_sids, expired_files
 
 
 @asynccontextmanager
@@ -87,14 +108,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """
         while True:
             await asyncio.sleep(60)
-            expired_sids = session_store.cleanup_expired()
-            for sid in expired_sids:
-                file_registry.cleanup_session(sid)
-            expired_files = file_registry.cleanup_expired()
+            expired_sids, registry_cleanup_sids, expired_files = _run_cleanup_pass()
             if expired_sids:
                 log.info(
                     "Expired sessions cleaned",
                     extra={"event": "session_cleanup", "cleaned_sessions": len(expired_sids)},
+                )
+            inactive_registry_cleanup_count = len(
+                [sid for sid in registry_cleanup_sids if sid not in expired_sids]
+            )
+            if inactive_registry_cleanup_count:
+                log.info(
+                    "Inactive session registry files cleaned",
+                    extra={
+                        "event": "inactive_session_registry_cleanup",
+                        "cleaned_sessions": inactive_registry_cleanup_count,
+                    },
                 )
             if expired_files:
                 log.info(
@@ -180,17 +209,32 @@ def create_app() -> FastAPI:
     app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
+    app.include_router(session_router)
     app.include_router(slicer_router)
     app.include_router(single_stage_router)
     app.include_router(system_router)
     app.include_router(vectorizer_router)
 
     @app.get("/api/files/{file_id}")
-    def serve_file(file_id: str):
+    def serve_file(
+        file_id: str,
+        registry=Depends(get_file_registry),
+        store=Depends(get_session_store),
+    ):
         """Serve a registered file by file_id."""
-        result = file_registry.resolve(file_id)
+        entry = registry.get_entry(file_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="File not found or expired")
+
+        result = registry.resolve(file_id)
         if result is None:
             raise HTTPException(status_code=404, detail="File not found or expired")
+
+        if entry.get("lifecycle") == "session_bound":
+            session_id = entry.get("session_id")
+            if not session_id or store.touch(session_id) is None:
+                raise HTTPException(status_code=404, detail="File not found or expired")
+
         path, filename = result
         return file_to_response(path, filename)
 

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import {
   rasterizeMeshToGrid,
@@ -7,6 +7,49 @@ import {
   extrudeRectangles,
 } from "./OutlineFrame3D";
 import { debugThreeLog, summarizeMeshList } from "../utils/threeDebug";
+
+const GEOMETRY_DISPOSE_DELAY_MS = 0;
+const pendingCloisonneWireGeometryDisposals = new Map<
+  THREE.BufferGeometry,
+  ReturnType<typeof setTimeout>
+>();
+
+function cancelPendingCloisonneWireGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry) {
+    return;
+  }
+
+  const timer = pendingCloisonneWireGeometryDisposals.get(geometry);
+  if (timer === undefined) {
+    return;
+  }
+
+  clearTimeout(timer);
+  pendingCloisonneWireGeometryDisposals.delete(geometry);
+}
+
+function scheduleCloisonneWireGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry || pendingCloisonneWireGeometryDisposals.has(geometry)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    pendingCloisonneWireGeometryDisposals.delete(geometry);
+    geometry.dispose();
+  }, GEOMETRY_DISPOSE_DELAY_MS);
+  pendingCloisonneWireGeometryDisposals.set(geometry, timer);
+}
+
+export function resetCloisonneWireGeometryDisposeForTests(): void {
+  for (const timer of pendingCloisonneWireGeometryDisposals.values()) {
+    clearTimeout(timer);
+  }
+  pendingCloisonneWireGeometryDisposals.clear();
+}
 
 // ========== Exported pure utility functions (testable without React) ==========
 
@@ -500,6 +543,13 @@ export default function CloisonneWire3D({
 
     return geo;
   }, [enabled, wireWidthMm, wireHeightMm, colorMeshes, backingPlateMesh, spacerThick]);
+
+  useEffect(() => {
+    cancelPendingCloisonneWireGeometryDispose(geometry);
+    return () => {
+      scheduleCloisonneWireGeometryDispose(geometry);
+    };
+  }, [geometry]);
 
   if (!geometry) return null;
 

@@ -24,6 +24,48 @@ const TOP_OFFSET = 0.1;
 
 /** Number of segments for the circular hole. (圆形孔洞的分段数) */
 const HOLE_SEGMENTS = 32;
+const GEOMETRY_DISPOSE_DELAY_MS = 0;
+const pendingKeychainRingGeometryDisposals = new Map<
+  THREE.BufferGeometry,
+  ReturnType<typeof setTimeout>
+>();
+
+function cancelPendingKeychainRingGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry) {
+    return;
+  }
+
+  const timer = pendingKeychainRingGeometryDisposals.get(geometry);
+  if (timer === undefined) {
+    return;
+  }
+
+  clearTimeout(timer);
+  pendingKeychainRingGeometryDisposals.delete(geometry);
+}
+
+function scheduleKeychainRingGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry || pendingKeychainRingGeometryDisposals.has(geometry)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    pendingKeychainRingGeometryDisposals.delete(geometry);
+    geometry.dispose();
+  }, GEOMETRY_DISPOSE_DELAY_MS);
+  pendingKeychainRingGeometryDisposals.set(geometry, timer);
+}
+
+export function resetKeychainRingGeometryDisposeForTests(): void {
+  for (const timer of pendingKeychainRingGeometryDisposals.values()) {
+    clearTimeout(timer);
+  }
+  pendingKeychainRingGeometryDisposals.clear();
+}
 
 export interface KeychainRing3DProps {
   enabled: boolean;
@@ -155,16 +197,25 @@ function KeychainRing3D({
   const dragStartOffset = useRef({ x: 0, y: 0 });
   const intersectPoint = useRef(new THREE.Vector3());
   const isDraggingRef = useRef(false);
+  const isHoveredRef = useRef(false);
 
   // Store setters
   const setLoopOffsetX = useConverterStore((s) => s.setLoopOffsetX);
   const setLoopOffsetY = useConverterStore((s) => s.setLoopOffsetY);
+  const shouldRenderGeometry = enabled && modelBounds !== null;
 
   // Memoize geometry — only regenerate when width/length/hole change (Req 6.1)
   const geometry = useMemo(
-    () => createKeychainRingGeometry(width, length, hole),
-    [width, length, hole],
+    () => (shouldRenderGeometry ? createKeychainRingGeometry(width, length, hole) : null),
+    [shouldRenderGeometry, width, length, hole],
   );
+
+  useEffect(() => {
+    cancelPendingKeychainRingGeometryDispose(geometry);
+    return () => {
+      scheduleKeychainRingGeometryDispose(geometry);
+    };
+  }, [geometry]);
 
   // Memoize position — recompute when preset/offset/bounds change (Req 2.2, 3.4)
   const position = useMemo(() => {
@@ -187,6 +238,22 @@ function KeychainRing3D({
     [],
   );
 
+  const setControlsEnabled = useCallback(
+    (nextEnabled: boolean) => {
+      if (controls) {
+        (controls as unknown as { enabled: boolean }).enabled = nextEnabled;
+      }
+    },
+    [controls],
+  );
+
+  const restoreInteractionState = useCallback(() => {
+    isDraggingRef.current = false;
+    isHoveredRef.current = false;
+    setControlsEnabled(true);
+    document.body.style.cursor = "default";
+  }, [setControlsEnabled]);
+
   // --- Drag handlers (Req 7.1–7.6) ---
   // Uses window-level pointermove/pointerup to prevent losing grip on fast drag.
   // 使用 window 级别的 pointermove/pointerup 防止快速拖拽时丢失跟踪。
@@ -202,12 +269,10 @@ function KeychainRing3D({
       dragStartOffset.current = { x: offsetX, y: offsetY };
 
       // Disable OrbitControls during drag (Req 7.3)
-      if (controls) {
-        (controls as unknown as { enabled: boolean }).enabled = false;
-      }
+      setControlsEnabled(false);
       document.body.style.cursor = "grabbing";
     },
-    [controls, offsetX, offsetY],
+    [offsetX, offsetY, setControlsEnabled],
   );
 
   // Window-level pointermove + pointerup during drag — never loses tracking.
@@ -245,9 +310,7 @@ function KeychainRing3D({
       setIsDragging(false);
 
       // Restore OrbitControls (Req 7.5)
-      if (controls) {
-        (controls as unknown as { enabled: boolean }).enabled = true;
-      }
+      setControlsEnabled(true);
       document.body.style.cursor = isHovered ? "grab" : "default";
     };
 
@@ -257,13 +320,14 @@ function KeychainRing3D({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [isDragging, camera, gl, controls, isHovered, clamp, setLoopOffsetX, setLoopOffsetY]);
+  }, [isDragging, camera, gl, isHovered, clamp, setControlsEnabled, setLoopOffsetX, setLoopOffsetY]);
 
   // --- Hover handlers (Req 7.7) ---
 
   const handlePointerOver = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
+      isHoveredRef.current = true;
       setIsHovered(true);
       if (!isDragging) {
         document.body.style.cursor = "grab";
@@ -275,6 +339,7 @@ function KeychainRing3D({
   const handlePointerOut = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
+      isHoveredRef.current = false;
       setIsHovered(false);
       if (!isDragging) {
         document.body.style.cursor = "default";
@@ -289,6 +354,32 @@ function KeychainRing3D({
     : isHovered
       ? DRAG_VISUAL.hover
       : DRAG_VISUAL.default;
+
+  const canRenderRing = Boolean(enabled && geometry && modelBounds && position && basePosition);
+
+  useEffect(() => {
+    if (canRenderRing || (!isDragging && !isHovered)) {
+      return;
+    }
+
+    if (isDragging) {
+      setIsDragging(false);
+    }
+    if (isHovered) {
+      setIsHovered(false);
+    }
+    restoreInteractionState();
+  }, [canRenderRing, isDragging, isHovered, restoreInteractionState]);
+
+  useEffect(() => {
+    return () => {
+      if (!isDraggingRef.current && !isHoveredRef.current) {
+        return;
+      }
+
+      restoreInteractionState();
+    };
+  }, [restoreInteractionState]);
 
   // Return null when modelBounds is null (Req 6.2) or params invalid (Req 6.3)
   if (!enabled || !geometry || !modelBounds || !position || !basePosition) {

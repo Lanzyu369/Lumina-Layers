@@ -367,4 +367,18 @@ beforeEach(() => {
       expect(mockGl.setClearColor).toHaveBeenCalledWith("#e8e8ec");
     });
   });
+
+  describe("camera debug helper cleanup", () => {
+    it("removes window.__luminaCameraDebug on unmount", () => {
+      const { unmount } = render(<Scene3D />);
+
+      expect(window.__luminaCameraDebug).toBeTypeOf("function");
+
+      const debugRef = window.__luminaCameraDebug;
+      unmount();
+
+      expect(window.__luminaCameraDebug).toBeUndefined();
+      expect(debugRef).toBeTypeOf("function");
+    });
+  });
 });

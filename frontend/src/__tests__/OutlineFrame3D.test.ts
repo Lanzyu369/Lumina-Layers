@@ -1,6 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { StrictMode, createElement } from "react";
+import { act, render } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
+vi.mock("@react-three/fiber", () => ({
+  useFrame: vi.fn(),
+}));
 import {
+  default as OutlineFrame3D,
   rasterizeMeshToGrid,
   dilateGrid,
   createRingMask,
@@ -9,6 +15,7 @@ import {
   extractBoundaryContour,
   offsetContour,
   createOutlineRingGeometry,
+  resetOutlineFrameGeometryDisposeForTests,
 } from "../components/OutlineFrame3D";
 import { translations } from "../i18n/translations";
 
@@ -48,9 +55,85 @@ function makeBoxGeometry(w: number, d: number, height: number): THREE.BufferGeom
   return makeGeometry(vertices, indices);
 }
 
+function makeBoxMesh(w: number, d: number, height: number): THREE.Mesh {
+  return new THREE.Mesh(makeBoxGeometry(w, d, height));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  resetOutlineFrameGeometryDisposeForTests();
+});
+
 // ========== Unit Tests ==========
 
 describe("OutlineFrame3D — Unit Tests", () => {
+  describe("geometry lifecycle", () => {
+    it("does not dispose the active geometry during StrictMode mount replay", () => {
+      vi.useFakeTimers();
+      const backingPlateMesh = makeBoxMesh(10, 20, 5);
+      const disposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, "dispose");
+      const { unmount } = render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(OutlineFrame3D, {
+            enabled: true,
+            outlineWidth: 1,
+            backingPlateMesh,
+            modelMaxZ: 5,
+          }),
+        ),
+      );
+
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(disposeSpy).not.toHaveBeenCalled();
+
+      unmount();
+      act(() => {
+        vi.runAllTimers();
+      });
+    });
+
+    it("disposes replaced geometry only after the deferred timer flushes", () => {
+      vi.useFakeTimers();
+      const backingPlateMesh = makeBoxMesh(10, 20, 5);
+      const disposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, "dispose");
+      const { rerender, unmount } = render(
+        createElement(OutlineFrame3D, {
+          enabled: true,
+          outlineWidth: 1,
+          backingPlateMesh,
+          modelMaxZ: 5,
+        }),
+      );
+
+      rerender(
+        createElement(OutlineFrame3D, {
+          enabled: true,
+          outlineWidth: 2,
+          backingPlateMesh,
+          modelMaxZ: 5,
+        }),
+      );
+
+      expect(disposeSpy).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
+
+      unmount();
+      act(() => {
+        vi.runAllTimers();
+      });
+    });
+  });
 
   // ---- rasterizeMeshToGrid ----
 

@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 import numpy as np
 from PIL import Image
+import pytest
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
@@ -1075,16 +1076,42 @@ class TestLargeFormatDimensionsAndRouting:
         registry = FileRegistry()
         sid = store.create()
         store.put(sid, "preview_cache", {"target_w": 8, "target_h": 4})
+        store.put(sid, "heightmap_grayscale", np.arange(20 * 20, dtype=np.uint8).reshape(20, 20))
         mock_pool = MagicMock(spec=WorkerPoolManager)
-        mock_pool.submit = AsyncMock(
-            return_value={
+        captured_paths: list[str] = []
+        captured_shapes: dict[str, tuple[int, ...]] = {}
+
+        async def _mock_submit(_fn, _tile_path, _lut_path, tile_params):
+            matrix_path = tile_params["material_matrix_path"]
+            masks_path = tile_params["recipe_override_masks_path"]
+            heightmap_path = tile_params["heightmap_path"]
+            captured_paths.extend(
+                [
+                    _tile_path,
+                    heightmap_path,
+                    matrix_path,
+                    masks_path,
+                ]
+            )
+            captured_shapes["matrix"] = tuple(np.load(matrix_path).shape)
+            with open(masks_path, "rb") as mask_file:
+                sliced_masks = pickle.load(mask_file)
+            captured_shapes["mask"] = tuple(sliced_masks["region-1"].shape)
+            with Image.open(heightmap_path) as hm_img:
+                captured_shapes["heightmap"] = hm_img.size
+            with Image.open(_tile_path) as tile_img:
+                captured_shapes["tile"] = tile_img.size
+            return {
                 "threemf_path": threemf_path,
                 "status_msg": "ok",
             }
-        )
+
+        mock_pool.submit = AsyncMock(side_effect=_mock_submit)
         request = LargeFormatConvertGenerateRequest(
             lut_name="test_lut",
             modeling_mode=ModelingMode.HIGH_FIDELITY,
+            enable_relief=True,
+            height_mode="heightmap",
         )
 
         try:
@@ -1107,7 +1134,10 @@ class TestLargeFormatDimensionsAndRouting:
                     tile_width_mm=40.0,
                     tile_height_mm=40.0,
                     request=request,
-                    session_data={"preview_cache": {"target_w": 8, "target_h": 4}},
+                    session_data={
+                        "preview_cache": {"target_w": 8, "target_h": 4},
+                        "heightmap_grayscale": np.arange(20 * 20, dtype=np.uint8).reshape(20, 20),
+                    },
                     sid=sid,
                     store=store,
                     registry=registry,
@@ -1115,19 +1145,195 @@ class TestLargeFormatDimensionsAndRouting:
                 )
             )
 
-            first_tile_params = mock_pool.submit.await_args_list[0].args[3]
-            sliced_matrix = np.load(first_tile_params["material_matrix_path"])
-            assert sliced_matrix.shape == (4, 4, 5)
-            with open(first_tile_params["recipe_override_masks_path"], "rb") as mask_file:
-                sliced_masks = pickle.load(mask_file)
-            assert sliced_masks["region-1"].shape == (4, 4)
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            zip_path, _filename = registry.resolve(download_id)
+            assert os.path.exists(zip_path)
+            assert captured_shapes["matrix"] == (4, 4, 5)
+            assert captured_shapes["mask"] == (4, 4)
+            assert captured_shapes["tile"] == (10, 20)
+            assert captured_shapes["heightmap"] == (10, 20)
+            assert captured_paths
+            assert all(not os.path.exists(path) for path in captured_paths)
+            assert set(store.get_temp_file_paths(sid)) == {zip_path}
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_svg_fallback_success_cleans_route_local_png(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=False)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": ["Raster fallback was used for this large-format SVG request."],
+        }
+        captured = {"fallback_path": None}
+
+        def _fake_raster_helper(**kwargs):
+            captured["fallback_path"] = kwargs["image_path"]
+            assert os.path.exists(kwargs["image_path"])
+            return raster_response
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_raster",
+            side_effect=_fake_raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        assert response.status_code == 200
+        assert captured["fallback_path"] is not None
+        assert not os.path.exists(captured["fallback_path"])
+
+    def test_large_format_raster_helper_deletes_tile_3mf_and_glb_after_packaging(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+        fd_glb, glb_path = tempfile.mkstemp(suffix=".glb")
+        os.close(fd_glb)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+        with open(glb_path, "wb") as glb_file:
+            glb_file.write(b"glb")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    material_matrix_path=None,
+                    total_width_mm=40.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
 
             download_id = result["download_url"].rsplit("/", 1)[-1]
             zip_path, _filename = registry.resolve(download_id)
             assert os.path.exists(zip_path)
+            assert not os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
         finally:
             store.clear_all()
-            for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
+            for path in (image_path, lut_path, threemf_path, glb_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_raster_helper_cleans_collected_outputs_when_zip_creation_fails(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+        fd_glb, glb_path = tempfile.mkstemp(suffix=".glb")
+        os.close(fd_glb)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+        with open(glb_path, "wb") as glb_file:
+            glb_file.write(b"glb")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "ok",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            with patch("api.routers.converter.generate.zipfile.ZipFile", side_effect=RuntimeError("zip failed")):
+                with pytest.raises(RuntimeError, match="zip failed"):
+                    asyncio.run(
+                        _generate_large_format_raster(
+                            image_path=image_path,
+                            lut_path=lut_path,
+                            source_basename="poster",
+                            recipe_overrides=None,
+                            recipe_override_masks_path=None,
+                            material_matrix_path=None,
+                            total_width_mm=40.0,
+                            total_height_mm=40.0,
+                            tile_width_mm=40.0,
+                            tile_height_mm=40.0,
+                            request=request,
+                            session_data={},
+                            sid=sid,
+                            store=store,
+                            registry=registry,
+                            pool=mock_pool,
+                        )
+                    )
+
+            assert not os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, threemf_path, glb_path):
                 if os.path.exists(path):
                     os.unlink(path)
 

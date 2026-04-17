@@ -62,6 +62,8 @@ class WorkerPoolManager:
         """Initialize the process pool.
         初始化进程池。
         """
+        if self._pool is not None:
+            return
         self._pool = ProcessPoolExecutor(
             max_workers=self._max_workers,
             initializer=_worker_init,

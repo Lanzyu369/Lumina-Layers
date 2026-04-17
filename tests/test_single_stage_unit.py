@@ -166,6 +166,164 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert captured["layer_height_mm"] == 0.1
 
 
+def test_calibration_generate_registers_stateless_outputs_with_ttl(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    clock = {"now": 10_000.0}
+    board_path = tmp_path / "board.3mf"
+    board_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_calibration_board",
+        lambda **kwargs: (
+            str(board_path),
+            Image.new("RGB", (8, 8), (255, 255, 255)),
+            "ok",
+        ),
+    )
+
+    response = client.post(
+        "/api/calibration/generate",
+        json={
+            "color_mode": "4-Color (RYBW)",
+            "block_size": 5,
+            "gap": 0.82,
+            "backing": "White",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    download_id = body["download_url"].rsplit("/", 1)[-1]
+    preview_id = body["preview_url"].rsplit("/", 1)[-1]
+
+    download_entry = registry.get_entry(download_id)
+    preview_entry = registry.get_entry(preview_id)
+    assert download_entry is not None
+    assert preview_entry is not None
+    assert download_entry["ttl_seconds"] == 8 * 60 * 60
+    assert preview_entry["ttl_seconds"] == 8 * 60 * 60
+
+    clock["now"] += (8 * 60 * 60) + 1
+    removed = registry.cleanup_expired()
+
+    assert removed == 2
+    assert registry.resolve(download_id) is None
+    assert registry.resolve(preview_id) is None
+    assert not board_path.exists()
+
+
+def test_calibration_generate_uses_unique_registry_session_ids_per_request(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    first_board_path = tmp_path / "board-1.3mf"
+    second_board_path = tmp_path / "board-2.3mf"
+    first_board_path.write_bytes(b"3mf-1")
+    second_board_path.write_bytes(b"3mf-2")
+    call_count = {"count": 0}
+
+    def _fake_generate_calibration_board(**kwargs):
+        call_count["count"] += 1
+        path = first_board_path if call_count["count"] == 1 else second_board_path
+        return str(path), Image.new("RGB", (8, 8), (255, 255, 255)), "ok"
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_calibration_board",
+        _fake_generate_calibration_board,
+    )
+
+    payload = {
+        "color_mode": "4-Color (RYBW)",
+        "block_size": 5,
+        "gap": 0.82,
+        "backing": "White",
+    }
+    response_one = client.post("/api/calibration/generate", json=payload)
+    response_two = client.post("/api/calibration/generate", json=payload)
+
+    assert response_one.status_code == 200
+    assert response_two.status_code == 200
+
+    download_id_one = response_one.json()["download_url"].rsplit("/", 1)[-1]
+    download_id_two = response_two.json()["download_url"].rsplit("/", 1)[-1]
+    entry_one = registry.get_entry(download_id_one)
+    entry_two = registry.get_entry(download_id_two)
+    assert entry_one is not None
+    assert entry_two is not None
+    assert entry_one["session_id"] != entry_two["session_id"]
+
+
+def test_generate_single_stage_kit_route_registers_ttl_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    clock = {"now": 20_000.0}
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+            "substrate_id": "white",
+            "substrate_display_name": "White",
+            "material_default": "PLA Basic",
+            "layer_height_mm": 0.1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    file_ids = [
+        body["kit_download_url"].rsplit("/", 1)[-1],
+        body["manifest_url"].rsplit("/", 1)[-1],
+        body["preview_url"].rsplit("/", 1)[-1],
+    ]
+    entries = [registry.get_entry(file_id) for file_id in file_ids]
+    assert all(entry is not None for entry in entries)
+    assert all(entry["ttl_seconds"] == 8 * 60 * 60 for entry in entries)
+
+    clock["now"] += (8 * 60 * 60) + 1
+    removed = registry.cleanup_expired()
+
+    assert removed == 3
+    assert all(registry.resolve(file_id) is None for file_id in file_ids)
+    assert not kit_path.exists()
+    assert not manifest_path.exists()
+
+
 def test_build_stage_matrix_creates_flat_face_down_board() -> None:
     spec = SingleStageSpec(
         grid_cols=2,

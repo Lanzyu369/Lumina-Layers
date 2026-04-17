@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createElement } from "react";
+import { StrictMode, createElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useVectorizerStore } from "../stores/vectorizerStore";
 import VectorizerPanel, { buildFileUrl } from "../components/VectorizerPanel";
@@ -276,6 +276,86 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(anchorMock.href).toBe("/api/files/vectorized.svg");
     expect(anchorMock.download).toBe("vectorized.svg");
     expect(anchorMock.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reset vectorizer resources during StrictMode initial mount", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const abortSpy = vi.spyOn(controller, "abort");
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURLSpy = vi.fn();
+
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURLSpy,
+    });
+
+    useVectorizerStore.setState({
+      imageFile: new File(["img"], "vectorizer.png", { type: "image/png" }),
+      imagePreviewUrl: "blob:vectorizer-preview",
+      isProcessing: true,
+      abortController: controller,
+    });
+
+    render(createElement(StrictMode, null, createElement(VectorizerPanel)));
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(abortSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+    expect(useVectorizerStore.getState().imagePreviewUrl).toBe("blob:vectorizer-preview");
+    expect(useVectorizerStore.getState().abortController).toBe(controller);
+
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
+  });
+
+  it("resets vectorizer resources after a real unmount once the delay flushes", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const abortSpy = vi.spyOn(controller, "abort");
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURLSpy = vi.fn();
+
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURLSpy,
+    });
+
+    useVectorizerStore.setState({
+      imageFile: new File(["img"], "vectorizer.png", { type: "image/png" }),
+      imagePreviewUrl: "blob:vectorizer-preview",
+      isProcessing: true,
+      abortController: controller,
+    });
+
+    const view = render(
+      createElement(StrictMode, null, createElement(VectorizerPanel)),
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(abortSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+
+    view.unmount();
+
+    expect(abortSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(abortSpy).toHaveBeenCalledOnce();
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:vectorizer-preview");
+    expect(useVectorizerStore.getState().imagePreviewUrl).toBeNull();
+    expect(useVectorizerStore.getState().abortController).toBeNull();
+
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
   });
 });
 

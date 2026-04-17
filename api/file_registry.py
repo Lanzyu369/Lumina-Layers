@@ -38,6 +38,7 @@ class FileRegistry:
                 "session_id": session_id,
                 "created_at": now,
                 "expires_at": expires_at,
+                "ttl_seconds": ttl_seconds,
                 "lifecycle": "ephemeral" if ttl_seconds is not None else "session_bound",
             }
         return file_id
@@ -73,62 +74,76 @@ class FileRegistry:
             entry = self._registry.get(file_id)
             if entry is None:
                 return None
+            path = entry["path"]
+            filename = entry["filename"]
             expires_at = entry.get("expires_at")
-            if expires_at is not None and now >= expires_at:
-                path = entry.get("path")
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                self._registry.pop(file_id, None)
-                return None
-        path = entry["path"]
-        if not os.path.exists(path):
+            ttl_seconds = entry.get("ttl_seconds")
+
+        if expires_at is not None and now >= expires_at:
+            cleaned = self._delete_path(path)
+            with self._lock:
+                current = self._registry.get(file_id)
+                if current is not None and current.get("path") == path and cleaned:
+                    self._registry.pop(file_id, None)
             return None
-        return path, entry["filename"]
+
+        if not os.path.exists(path):
+            with self._lock:
+                current = self._registry.get(file_id)
+                if current is not None and current.get("path") == path:
+                    self._registry.pop(file_id, None)
+            return None
+
+        with self._lock:
+            current = self._registry.get(file_id)
+            if current is None or current.get("path") != path:
+                return None
+            current_ttl_seconds = current.get("ttl_seconds")
+            if current_ttl_seconds is not None:
+                current["expires_at"] = now + current_ttl_seconds
+            return current["path"], current["filename"]
+
+    def get_entry(self, file_id: str) -> dict | None:
+        """Return a shallow copy of a registry entry.
+        返回指定条目的只读浅拷贝。
+        """
+        with self._lock:
+            entry = self._registry.get(file_id)
+            if entry is None:
+                return None
+            return dict(entry)
+
+    def get_session_entries(self, session_id: str) -> dict[str, dict]:
+        """Return shallow copies of all entries owned by a session.
+        返回指定 session 拥有的所有条目的浅拷贝。
+        """
+        with self._lock:
+            return {
+                file_id: dict(entry)
+                for file_id, entry in self._registry.items()
+                if entry.get("session_id") == session_id
+            }
 
     def cleanup_expired(self) -> int:
         """删除所有已过期条目及磁盘文件，返回清理数量。"""
         now = time.time()
-        removed = 0
         with self._lock:
             expired_ids = [
                 fid
                 for fid, entry in self._registry.items()
                 if entry.get("expires_at") is not None and now >= entry["expires_at"]
             ]
-            for fid in expired_ids:
-                entry = self._registry.get(fid)
-                if entry is None:
-                    continue
-                path = entry.get("path")
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                self._registry.pop(fid, None)
-                removed += 1
-        return removed
+        return self._cleanup_entries(expired_ids)
 
     def cleanup_session(self, session_id: str) -> int:
         """Clean up all registered files for a session and delete from disk.
         清理指定 session 的所有注册文件并删除磁盘文件，返回清理数量。
         """
-        to_remove: list[tuple[str, str | None]] = []
         with self._lock:
-            for fid, entry in self._registry.items():
-                if entry["session_id"] == session_id:
-                    to_remove.append((fid, entry.get("path")))
-            for fid, path in to_remove:
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                self._registry.pop(fid, None)
-        return len(to_remove)
+            file_ids = [
+                fid for fid, entry in self._registry.items() if entry["session_id"] == session_id
+            ]
+        return self._cleanup_entries(file_ids, expire_failed_session_bound=True)
 
     def cleanup_session_except(self, session_id: str, keep_file_ids: set[str] | None = None) -> int:
         """Delete all registered files for a session except those in *keep_file_ids*.
@@ -136,31 +151,70 @@ class FileRegistry:
         """
         if keep_file_ids is None:
             keep_file_ids = set()
-        to_remove: list[tuple[str, str | None]] = []
         with self._lock:
-            for fid, entry in self._registry.items():
-                if entry["session_id"] == session_id and fid not in keep_file_ids:
-                    to_remove.append((fid, entry.get("path")))
-            for fid, path in to_remove:
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                self._registry.pop(fid, None)
-        return len(to_remove)
+            file_ids = [
+                fid
+                for fid, entry in self._registry.items()
+                if entry["session_id"] == session_id and fid not in keep_file_ids
+            ]
+        return self._cleanup_entries(file_ids, expire_failed_session_bound=True)
 
     def clear_all(self) -> int:
         """清除所有注册文件并删除磁盘文件，返回清理数量。"""
         with self._lock:
-            count = 0
-            for fid, entry in list(self._registry.items()):
+            file_ids = list(self._registry.keys())
+        return self._cleanup_entries(file_ids)
+
+    def _cleanup_entries(
+        self,
+        file_ids: list[str],
+        expire_failed_session_bound: bool = False,
+    ) -> int:
+        """Delete registry entries in two phases so filesystem I/O stays outside the lock.
+        两阶段删除 registry 条目，将文件系统 I/O 移到锁外。
+        """
+        snapshots: list[tuple[str, str]] = []
+        with self._lock:
+            for file_id in file_ids:
+                entry = self._registry.get(file_id)
+                if entry is None:
+                    continue
                 path = entry.get("path")
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                        count += 1
-                    except OSError:
-                        pass
-                self._registry.pop(fid, None)
-            return count
+                if not path:
+                    self._registry.pop(file_id, None)
+                    continue
+                snapshots.append((file_id, path))
+
+        outcomes = [
+            (file_id, path, self._delete_path(path))
+            for file_id, path in snapshots
+        ]
+
+        removed = 0
+        with self._lock:
+            for file_id, path, cleaned in outcomes:
+                current = self._registry.get(file_id)
+                if current is None or current.get("path") != path:
+                    continue
+                if cleaned:
+                    self._registry.pop(file_id, None)
+                    removed += 1
+                    continue
+                if expire_failed_session_bound and current.get("lifecycle") == "session_bound":
+                    current["expires_at"] = time.time()
+        return removed
+
+    def _delete_path(self, path: str) -> bool:
+        """Delete one path outside the registry lock.
+        在 registry 锁外删除单个路径。
+        """
+        if not os.path.exists(path):
+            return True
+
+        try:
+            os.remove(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except (PermissionError, OSError):
+            return not os.path.exists(path)

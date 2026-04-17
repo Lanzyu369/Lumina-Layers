@@ -8,6 +8,7 @@ max_workers defaults, and RuntimeError when pool not started.
 
 import asyncio
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -53,6 +54,19 @@ class TestWorkerPoolLifecycle:
             assert pool.is_alive is True
         finally:
             pool.shutdown(wait=True)
+
+    def test_start_is_idempotent_when_pool_is_already_alive(self) -> None:
+        pool = WorkerPoolManager(max_workers=2)
+        sentinel_pool = object()
+
+        with patch("api.worker_pool.ProcessPoolExecutor", return_value=sentinel_pool) as executor_cls:
+            pool.start()
+            first_pool = pool._pool
+            pool.start()
+
+        assert first_pool is sentinel_pool
+        assert pool._pool is sentinel_pool
+        executor_cls.assert_called_once()
 
     def test_not_alive_after_shutdown(self) -> None:
         pool = WorkerPoolManager(max_workers=2)

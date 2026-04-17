@@ -1,11 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { StrictMode, createElement } from "react";
+import { act, render } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
 import {
+  default as CloisonneWire3D,
   WIRE_COLOR,
   WIRE_METALNESS,
   WIRE_ROUGHNESS,
   detectColorEdges,
   rasterizeColorMeshesToGrid,
+  resetCloisonneWireGeometryDisposeForTests,
 } from "../components/CloisonneWire3D";
 
 // ========== Helpers ==========
@@ -44,9 +48,99 @@ function createRectMesh(
   return new THREE.Mesh(geometry);
 }
 
+function createBackingPlateMesh(): THREE.Mesh {
+  return new THREE.Mesh(new THREE.BoxGeometry(8, 4, 1));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  resetCloisonneWireGeometryDisposeForTests();
+});
+
 // ========== Unit Tests ==========
 
 describe("CloisonneWire3D — Unit Tests", () => {
+  describe("geometry lifecycle", () => {
+    it("does not dispose the active geometry during StrictMode mount replay", () => {
+      vi.useFakeTimers();
+      const colorMeshes = [
+        createRectMesh(0, 0, 4, 4),
+        createRectMesh(4, 0, 4, 4),
+      ];
+      const backingPlateMesh = createBackingPlateMesh();
+      const disposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, "dispose");
+      const { unmount } = render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(CloisonneWire3D, {
+            enabled: true,
+            wireWidthMm: 1,
+            wireHeightMm: 0.6,
+            colorMeshes,
+            backingPlateMesh,
+            spacerThick: 1.2,
+          }),
+        ),
+      );
+
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(disposeSpy).not.toHaveBeenCalled();
+
+      unmount();
+      act(() => {
+        vi.runAllTimers();
+      });
+    });
+
+    it("disposes replaced geometry only after the deferred timer flushes", () => {
+      vi.useFakeTimers();
+      const colorMeshes = [
+        createRectMesh(0, 0, 4, 4),
+        createRectMesh(4, 0, 4, 4),
+      ];
+      const backingPlateMesh = createBackingPlateMesh();
+      const disposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, "dispose");
+      const { rerender, unmount } = render(
+        createElement(CloisonneWire3D, {
+          enabled: true,
+          wireWidthMm: 1,
+          wireHeightMm: 0.6,
+          colorMeshes,
+          backingPlateMesh,
+          spacerThick: 1.2,
+        }),
+      );
+
+      rerender(
+        createElement(CloisonneWire3D, {
+          enabled: true,
+          wireWidthMm: 2,
+          wireHeightMm: 0.6,
+          colorMeshes,
+          backingPlateMesh,
+          spacerThick: 1.2,
+        }),
+      );
+
+      expect(disposeSpy).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
+
+      unmount();
+      act(() => {
+        vi.runAllTimers();
+      });
+    });
+  });
 
   // ---- Gold color constant ----
 

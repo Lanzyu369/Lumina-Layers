@@ -18,77 +18,252 @@ class SessionStore:
         self._store: Dict[str, Dict[str, Any]] = {}
         self._timestamps: Dict[str, float] = {}
         self._temp_files: Dict[str, list[str]] = {}
+        self._closing_sessions: set[str] = set()
+        self._retired_sessions: Dict[str, float] = {}
         self._lock: threading.Lock = threading.Lock()
-        self._ttl: int = ttl
+        self._lease_seconds: int = ttl
 
     def create(self) -> str:
         """创建新 session，返回 session_id (UUID4)。"""
         session_id = str(uuid.uuid4())
         with self._lock:
+            self._prune_retired_locked()
             self._store[session_id] = {}
-            self._timestamps[session_id] = time.time()
+            self._timestamps[session_id] = self._renew_lease_locked(session_id)
             self._temp_files[session_id] = []
         return session_id
 
     def get(self, session_id: str) -> Optional[Dict[str, Any]]:
         """获取 session 数据，更新访问时间戳。不存在返回 None。"""
         with self._lock:
+            self._prune_retired_locked()
+            if session_id in self._retired_sessions:
+                return None
             if session_id not in self._store:
                 return None
-            self._timestamps[session_id] = time.time()
+            if session_id in self._closing_sessions:
+                return None
+            self._renew_lease_locked(session_id)
             return self._store[session_id]
 
     def put(self, session_id: str, key: str, value: Any) -> None:
         """写入 session 数据字段。session 不存在时自动创建。"""
         with self._lock:
+            self._prune_retired_locked()
+            if session_id in self._retired_sessions:
+                return
+            if session_id in self._closing_sessions:
+                return
             if session_id not in self._store:
                 self._store[session_id] = {}
-                self._timestamps[session_id] = time.time()
                 self._temp_files[session_id] = []
+            self._renew_lease_locked(session_id)
             self._store[session_id][key] = value
-            self._timestamps[session_id] = time.time()
 
     def register_temp_file(self, session_id: str, path: str) -> None:
         """注册临时文件路径，session 清理时一并删除。"""
         with self._lock:
+            self._prune_retired_locked()
+            if session_id in self._retired_sessions:
+                return
+            if session_id in self._closing_sessions:
+                return
             if session_id in self._temp_files:
                 self._temp_files[session_id].append(path)
+
+    def touch(self, session_id: str) -> float | None:
+        """Renew the session lease and return the new expiry timestamp.
+        续期指定 session 的租约，并返回新的过期时间戳。
+        """
+        with self._lock:
+            self._prune_retired_locked()
+            if session_id in self._retired_sessions:
+                return None
+            if session_id not in self._store:
+                return None
+            if session_id in self._closing_sessions:
+                return None
+            return self._renew_lease_locked(session_id)
+
+    def close(self, session_id: str) -> int:
+        """Close a session immediately and clean its tracked temp files.
+        立即关闭指定 session，并清理其追踪的临时文件。
+        """
+        return self.close_except(session_id, keep_paths=None)
+
+    def cleanup_temp_files_except(self, session_id: str, keep_paths: set[str] | None = None) -> int:
+        """Clean tracked temp files while preserving the session itself.
+        清理追踪的临时文件，但保留 session 数据本身。
+        """
+        cleaned, _ = self._cleanup_session(session_id, keep_paths=keep_paths, remove_session=False)
+        return cleaned
+
+    def close_except(self, session_id: str, keep_paths: set[str] | None = None) -> int:
+        """Close a session while preserving selected temp-file paths.
+        关闭指定 session，并保留 keep_paths 中的临时文件路径。
+        """
+        cleaned, _ = self._cleanup_session(session_id, keep_paths=keep_paths, remove_session=True)
+        return cleaned
 
     def cleanup_expired(self) -> list[str]:
         """Clean up expired sessions and return their IDs.
         清理过期 session，返回已清理的 session ID 列表。
         """
         now = time.time()
-        expired: list[str] = []
         with self._lock:
-            for sid, ts in self._timestamps.items():
-                if now - ts > self._ttl:
-                    expired.append(sid)
-            for sid in expired:
-                self._remove_session(sid)
-        return expired
-
-    def _remove_session(self, session_id: str) -> None:
-        """内部方法：删除 session 及其临时文件（需在锁内调用）。"""
-        for path in self._temp_files.get(session_id, []):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
-        self._store.pop(session_id, None)
-        self._timestamps.pop(session_id, None)
-        self._temp_files.pop(session_id, None)
+            self._prune_retired_locked(now)
+            expired_candidates = [
+                sid for sid, expires_at in self._timestamps.items() if now >= expires_at
+            ]
+        cleaned_sessions: list[str] = []
+        for sid in expired_candidates:
+            _, closed = self._cleanup_session(sid, keep_paths=None, remove_session=True)
+            if closed:
+                cleaned_sessions.append(sid)
+        return cleaned_sessions
 
     def clear_all(self) -> int:
         """清除所有会话及其临时文件，返回清理的会话数量。"""
         with self._lock:
-            count = len(self._store)
-            for sid in list(self._store.keys()):
-                self._remove_session(sid)
-            return count
+            self._prune_retired_locked()
+            session_ids = list(self._store.keys())
+        cleaned_sessions = 0
+        for sid in session_ids:
+            _, closed = self._cleanup_session(sid, keep_paths=None, remove_session=True)
+            if closed:
+                cleaned_sessions += 1
+        return cleaned_sessions
 
     def exists(self, session_id: str) -> bool:
         """检查 session 是否存在。"""
         with self._lock:
-            return session_id in self._store
+            self._prune_retired_locked()
+            if session_id in self._retired_sessions:
+                return False
+            return session_id in self._store and session_id not in self._closing_sessions
+
+    def get_temp_file_paths(self, session_id: str) -> list[str]:
+        """Return a snapshot of tracked temp-file paths for a session.
+        返回指定 session 当前追踪的临时文件路径快照。
+        """
+        with self._lock:
+            return list(self._temp_files.get(session_id, []))
+
+    def get_inactive_session_ids(self) -> list[str]:
+        """Return inactive session IDs that are still tracked for follow-up cleanup.
+        返回当前仍被追踪、且已进入 inactive/closing 状态的 session ID 列表。
+        """
+        with self._lock:
+            self._prune_retired_locked()
+            return sorted(sid for sid in self._closing_sessions if sid in self._store)
+
+    def get_registry_cleanup_candidate_session_ids(self) -> list[str]:
+        """Return session IDs whose registry files still need periodic cleanup attempts.
+        返回其 registry 文件仍需周期性重试清理的 session ID 列表。
+        """
+        with self._lock:
+            self._prune_retired_locked()
+            candidate_ids = set(self._retired_sessions)
+            candidate_ids.update(sid for sid in self._closing_sessions if sid in self._store)
+            return sorted(candidate_ids)
+
+    def _renew_lease_locked(self, session_id: str) -> float:
+        """Renew the stored lease expiry for a session.
+        在锁内更新 session 的租约过期时间。
+        """
+        expires_at = time.time() + self._lease_seconds
+        self._timestamps[session_id] = expires_at
+        return expires_at
+
+    def _prune_retired_locked(self, now: float | None = None) -> None:
+        """Drop expired tombstones so retired session tracking stays bounded.
+        清理过期的 tombstone，避免 retired session 跟踪无限增长。
+        """
+        current_time = time.time() if now is None else now
+        expired_sids = [
+            sid for sid, expires_at in self._retired_sessions.items() if current_time >= expires_at
+        ]
+        for sid in expired_sids:
+            self._retired_sessions.pop(sid, None)
+
+    def _cleanup_session(
+        self,
+        session_id: str,
+        keep_paths: set[str] | None = None,
+        remove_session: bool = True,
+    ) -> tuple[int, bool]:
+        """Run session temp-file cleanup with filesystem work outside the store lock.
+        执行 session 临时文件清理，并将文件系统操作移到锁外。
+        """
+        keep_paths = keep_paths or set()
+        with self._lock:
+            self._prune_retired_locked()
+            if session_id not in self._store:
+                return 0, True
+            if remove_session:
+                self._closing_sessions.add(session_id)
+            snapshot_paths = list(self._temp_files.get(session_id, []))
+
+        attempted_paths = [path for path in snapshot_paths if path not in keep_paths]
+        cleaned, failed_paths = self._delete_paths(attempted_paths)
+        attempted_path_set = set(attempted_paths)
+        failed_path_set = set(failed_paths)
+
+        with self._lock:
+            self._prune_retired_locked()
+            if session_id not in self._store:
+                self._closing_sessions.discard(session_id)
+                return cleaned, True
+
+            current_paths = list(self._temp_files.get(session_id, []))
+            updated_paths: list[str] = []
+            can_close = True
+
+            for path in current_paths:
+                if path in keep_paths or path in failed_path_set:
+                    updated_paths.append(path)
+                    if path in failed_path_set:
+                        can_close = False
+                    continue
+                if path in attempted_path_set:
+                    continue
+                updated_paths.append(path)
+                if remove_session and path not in keep_paths:
+                    can_close = False
+
+            self._temp_files[session_id] = updated_paths
+
+            if remove_session and can_close:
+                self._store.pop(session_id, None)
+                self._timestamps.pop(session_id, None)
+                self._temp_files.pop(session_id, None)
+                self._closing_sessions.discard(session_id)
+                self._retired_sessions[session_id] = time.time() + self._lease_seconds
+                return cleaned, True
+
+            return cleaned, False
+
+    def _delete_paths(self, paths: list[str]) -> tuple[int, list[str]]:
+        """Delete paths outside the store lock and report failures that still exist.
+        在锁外删除路径，并报告删除失败后仍存在的路径。
+        """
+        cleaned = 0
+        failed_paths: list[str] = []
+
+        for path in paths:
+            if not os.path.exists(path):
+                cleaned += 1
+                continue
+
+            try:
+                os.remove(path)
+                cleaned += 1
+            except FileNotFoundError:
+                cleaned += 1
+            except (PermissionError, OSError):
+                if os.path.exists(path):
+                    failed_paths.append(path)
+                else:
+                    cleaned += 1
+
+        return cleaned, failed_paths

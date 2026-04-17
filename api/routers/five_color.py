@@ -32,6 +32,7 @@ from core.five_color_combination import (
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/five-color", tags=["Five-Color"])
+STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
 
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
@@ -286,12 +287,21 @@ def generate_swatch(
         if request_id
         else f"recipe-swatch:{unique_suffix}"
     )
-    download_id = registry.register_path(sid, output_path)
+    download_id = registry.register_path(
+        sid,
+        output_path,
+        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+    )
 
     preview_url: str | None = None
     if legend_img is not None:
         preview_bytes = pil_to_png_bytes(legend_img)
-        preview_id = registry.register_bytes(sid, preview_bytes, "swatch_legend.png")
+        preview_id = registry.register_bytes(
+            sid,
+            preview_bytes,
+            "swatch_legend.png",
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
         preview_url = f"/api/files/{preview_id}"
 
     return RecipeSwatchResponse(

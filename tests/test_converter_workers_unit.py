@@ -398,3 +398,58 @@ def test_worker_generate_large_format_svg_native_raises_when_all_tiles_are_empty
     ):
         with pytest.raises(ValueError, match="All SVG large-format tiles were empty after slicing"):
             worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+
+def test_worker_generate_large_format_svg_native_cleans_current_tile_file_on_export_exception() -> None:
+    """Native SVG worker should delete the current tile file if export fails before append."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+        def build_mesh(self, **_kwargs):
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    fake_tiles = [
+        SimpleNamespace(
+            label="R1C1",
+            analysis=SimpleNamespace(preview_colors={0: [255, 0, 0, 255]}, slot_names=["Slot1"]),
+        ),
+    ]
+    created_paths: list[str] = []
+
+    def _fake_export_scene_with_bambu_metadata(*, output_path: str, **_kwargs) -> None:
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+        created_paths.append(output_path)
+        raise RuntimeError("tile export failed")
+
+    params = {
+        "tile_name_prefix": "poster-art",
+        "total_width_mm": 120.0,
+        "total_height_mm": 80.0,
+        "tile_width_mm": 60.0,
+        "tile_height_mm": 80.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+    }
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=fake_tiles),
+        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export_scene_with_bambu_metadata),
+    ):
+        with pytest.raises(RuntimeError, match="tile export failed"):
+            worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+    assert created_paths
+    assert all(not os.path.exists(path) for path in created_paths)

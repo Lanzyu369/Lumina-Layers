@@ -43,7 +43,6 @@ import {
   resetReplacements as apiResetReplacements,
   autoDetectColors as apiAutoDetectColors,
   cleanupSessionFiles as apiCleanupSessionFiles,
-  beaconCleanupSessionFiles,
   uploadLut as apiUploadLut,
 } from "../../api/converter";
 import type { LutColorEntry, LutInfo } from "../../api/types";
@@ -4462,12 +4461,3 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     },
   }),
 );
-
-if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => {
-    const { sessionId } = useConverterStore.getState();
-    if (sessionId) {
-      beaconCleanupSessionFiles(sessionId);
-    }
-  });
-}

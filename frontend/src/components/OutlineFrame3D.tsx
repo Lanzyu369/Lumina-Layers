@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { debugThreeLog, getThreePerfDebugConfig } from "../utils/threeDebug";
@@ -7,6 +7,48 @@ import { debugThreeLog, getThreePerfDebugConfig } from "../utils/threeDebug";
 
 /** Animation speed: hue cycles per second. */
 const ANIM_SPEED = 0.001;
+const GEOMETRY_DISPOSE_DELAY_MS = 0;
+const pendingOutlineFrameGeometryDisposals = new Map<
+  THREE.BufferGeometry,
+  ReturnType<typeof setTimeout>
+>();
+
+function cancelPendingOutlineFrameGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry) {
+    return;
+  }
+
+  const timer = pendingOutlineFrameGeometryDisposals.get(geometry);
+  if (timer === undefined) {
+    return;
+  }
+
+  clearTimeout(timer);
+  pendingOutlineFrameGeometryDisposals.delete(geometry);
+}
+
+function scheduleOutlineFrameGeometryDispose(
+  geometry: THREE.BufferGeometry | null,
+): void {
+  if (!geometry || pendingOutlineFrameGeometryDisposals.has(geometry)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    pendingOutlineFrameGeometryDisposals.delete(geometry);
+    geometry.dispose();
+  }, GEOMETRY_DISPOSE_DELAY_MS);
+  pendingOutlineFrameGeometryDisposals.set(geometry, timer);
+}
+
+export function resetOutlineFrameGeometryDisposeForTests(): void {
+  for (const timer of pendingOutlineFrameGeometryDisposals.values()) {
+    clearTimeout(timer);
+  }
+  pendingOutlineFrameGeometryDisposals.clear();
+}
 
 // ========== Exported pure utility functions (testable without React) ==========
 
@@ -622,6 +664,13 @@ export default function OutlineFrame3D({
 
     return geo;
   }, [enabled, backingPlateMesh, outlineWidth, modelMaxZ]);
+
+  useEffect(() => {
+    cancelPendingOutlineFrameGeometryDispose(geometry);
+    return () => {
+      scheduleOutlineFrameGeometryDispose(geometry);
+    };
+  }, [geometry]);
 
   // Flowing RGB animation with brightness pulse for visibility.
   // RGB 炫彩灯带动画 + 亮度脉动，提高选区可见性。
