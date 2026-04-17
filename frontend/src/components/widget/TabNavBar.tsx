@@ -12,10 +12,12 @@ interface TabNavBarProps {
   compact?: boolean;
 }
 
-type PrimaryTabId = 'converter' | 'lut-management' | 'vectorizer' | 'settings';
+type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'settings';
 type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-compare' | 'five-color';
+type MaterialSubTabId = 'gradient-card-generate' | 'gradient-card-extract' | 'material-library';
 
 const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-compare', 'five-color'];
+const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'gradient-card-generate', 'gradient-card-extract'];
 
 const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   'converter': (
@@ -26,6 +28,11 @@ const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   'lut-management': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+    </svg>
+  ),
+  'material-management': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10M7 12h10M7 17h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" />
     </svg>
   ),
   'vectorizer': (
@@ -44,7 +51,7 @@ const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   )
 };
 
-const SECONDARY_TAB_ICONS: Record<LutSubTabId, React.ReactNode> = {
+const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNode> = {
   'calibration': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -70,11 +77,27 @@ const SECONDARY_TAB_ICONS: Record<LutSubTabId, React.ReactNode> = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
     </svg>
   ),
+  'gradient-card-generate': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m6-6H6m12-7H6a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2z" />
+    </svg>
+  ),
+  'gradient-card-extract': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 12l-4-4m4 4l4-4M6 20h12" />
+    </svg>
+  ),
+  'material-library': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H9l1.5 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+    </svg>
+  ),
 };
 
 const PRIMARY_TAB_LIST: { id: PrimaryTabId; titleKey: string }[] = [
   { id: 'converter', titleKey: 'tab.converter' },
   { id: 'lut-management', titleKey: 'tab.lutManagement' },
+  { id: 'material-management', titleKey: 'tab.materialManagement' },
   { id: 'vectorizer', titleKey: 'tab.vectorizer' },
   { id: 'settings', titleKey: 'tab.settings' },
 ];
@@ -87,14 +110,34 @@ const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
   { id: 'five-color', titleKey: 'tab.fiveColor' },
 ];
 
+const MATERIAL_SECONDARY_TAB_LIST: { id: MaterialSubTabId; titleKey: string }[] = [
+  { id: 'material-library', titleKey: 'tab.materialLibrary' },
+  { id: 'gradient-card-generate', titleKey: 'tab.gradientCardGenerate' },
+  { id: 'gradient-card-extract', titleKey: 'tab.gradientCardExtract' },
+];
+
 function isLutSubTab(tab: TabId): tab is LutSubTabId {
   return LUT_SUB_TAB_IDS.includes(tab as LutSubTabId);
 }
 
+function isMaterialSubTab(tab: TabId): tab is MaterialSubTabId {
+  return MATERIAL_SUB_TAB_IDS.includes(tab as MaterialSubTabId);
+}
+
 export default function TabNavBar({ activeTab, onTabChange, compact = false }: TabNavBarProps) {
   const { t } = useI18n();
-  const activePrimaryTab: PrimaryTabId = isLutSubTab(activeTab) ? 'lut-management' : activeTab;
+  const activePrimaryTab: PrimaryTabId = isLutSubTab(activeTab)
+    ? 'lut-management'
+    : isMaterialSubTab(activeTab)
+      ? 'material-management'
+      : activeTab;
   const showLutSubTabs = activePrimaryTab === 'lut-management';
+  const showMaterialSubTabs = activePrimaryTab === 'material-management';
+  const secondaryTabList = showLutSubTabs
+    ? LUT_SECONDARY_TAB_LIST
+    : showMaterialSubTabs
+      ? MATERIAL_SECONDARY_TAB_LIST
+      : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
@@ -109,6 +152,10 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                 onClick={() => {
                   if (id === 'lut-management') {
                     onTabChange(isLutSubTab(activeTab) ? activeTab : 'calibration');
+                    return;
+                  }
+                  if (id === 'material-management') {
+                    onTabChange(isMaterialSubTab(activeTab) ? activeTab : 'material-library');
                     return;
                   }
                   onTabChange(id);
@@ -138,10 +185,10 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
         </div>
       </nav>
 
-      {showLutSubTabs && (
+      {secondaryTabList && (
         <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
           <div className="flex min-w-max items-center gap-1">
-            {LUT_SECONDARY_TAB_LIST.map(({ id, titleKey }) => {
+            {secondaryTabList.map(({ id, titleKey }) => {
               const isActive = id === activeTab;
               return (
                 <button

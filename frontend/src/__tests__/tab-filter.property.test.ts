@@ -10,21 +10,32 @@
  * WidgetId set defined in TAB_WIDGET_MAP[tabId] — no more, no less.
  */
 
-import { describe, it, expect } from 'vitest';
-import * as fc from 'fast-check';
-import { WIDGET_REGISTRY, TAB_WIDGET_MAP } from '../stores/widgetStore';
-import type { TabId } from '../types/widget';
+import { describe, it, expect } from "vitest";
+import * as fc from "fast-check";
+import { WIDGET_REGISTRY, TAB_WIDGET_MAP } from "../stores/widgetStore";
+import type { TabId } from "../types/widget";
 
 // All valid TabIds
-const ALL_TAB_IDS: TabId[] = ['converter', 'calibration', 'extractor', 'lut-manager', 'lut-compare', 'five-color', 'vectorizer', 'settings'];
+const ALL_TAB_IDS: TabId[] = [
+  "converter",
+  "calibration",
+  "extractor",
+  "gradient-card-generate",
+  "gradient-card-extract",
+  "lut-manager",
+  "lut-compare",
+  "five-color",
+  "vectorizer",
+  "settings",
+];
 
-describe('Granular Floating Widgets — Property-Based Tests', () => {
+describe("Granular Floating Widgets — Property-Based Tests", () => {
   // Feature: granular-floating-widgets, Property 1: TAB 页面过滤正确性
-  describe('Property 1: TAB 页面过滤正确性', () => {
+  describe("Property 1: TAB 页面过滤正确性", () => {
     // Arbitrary that picks a random valid TabId
     const tabIdArb = fc.constantFrom(...ALL_TAB_IDS);
 
-    it('filtered widget set equals exactly TAB_WIDGET_MAP[tabId] for any TabId', () => {
+    it("filtered widget set equals exactly TAB_WIDGET_MAP[tabId] for any TabId", () => {
       // **Validates: Requirements 1.2, 2.4, 3.5, 5.2**
       fc.assert(
         fc.property(tabIdArb, (tabId) => {
@@ -32,7 +43,7 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
 
           // Simulate the filtering logic from WidgetWorkspace
           const filteredRegistry = WIDGET_REGISTRY.filter((c) =>
-            expectedWidgetIds.includes(c.id)
+            expectedWidgetIds.includes(c.id),
           );
           const filteredIds = filteredRegistry.map((c) => c.id);
 
@@ -50,24 +61,23 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
             expect(filteredIds).toContain(expectedId);
           }
         }),
-        { numRuns: 100 }
+        { numRuns: 100 },
       );
     });
 
-    it('no widget from other tabs leaks into the filtered set', () => {
+    it("no widget from other tabs leaks into the filtered set", () => {
       // **Validates: Requirements 1.2, 2.4, 3.5, 5.2**
       fc.assert(
         fc.property(tabIdArb, (tabId) => {
           const expectedWidgetIds = TAB_WIDGET_MAP[tabId];
 
           const filteredRegistry = WIDGET_REGISTRY.filter((c) =>
-            expectedWidgetIds.includes(c.id)
+            expectedWidgetIds.includes(c.id),
           );
           const filteredIdSet = new Set(filteredRegistry.map((c) => c.id));
 
           // Collect all widget IDs that belong to OTHER tabs
-          const otherTabWidgetIds = ALL_TAB_IDS
-            .filter((t) => t !== tabId)
+          const otherTabWidgetIds = ALL_TAB_IDS.filter((t) => t !== tabId)
             .flatMap((t) => TAB_WIDGET_MAP[t])
             .filter((id) => !expectedWidgetIds.includes(id)); // exclude shared IDs
 
@@ -76,7 +86,7 @@ describe('Granular Floating Widgets — Property-Based Tests', () => {
             expect(filteredIdSet.has(otherId)).toBe(false);
           }
         }),
-        { numRuns: 100 }
+        { numRuns: 100 },
       );
     });
   });

@@ -11,79 +11,30 @@ import {
 import { clampValue } from "./converter";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
+const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
 
-const PALETTE_PRESETS: Record<
-  CalibrationColorMode,
-  Array<{ color: string; hex_color: string }>
-> = {
-  [CalibrationColorModeEnum.BW]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Black", hex_color: "#000000" },
-  ],
-  [CalibrationColorModeEnum.FOUR_COLOR_CMYW]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Cyan", hex_color: "#0086D6" },
-    { color: "Magenta", hex_color: "#EC008C" },
-    { color: "Yellow", hex_color: "#F4EE2A" },
-  ],
-  [CalibrationColorModeEnum.FOUR_COLOR_RYBW]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Red", hex_color: "#DC143C" },
-    { color: "Yellow", hex_color: "#FFE600" },
-    { color: "Blue", hex_color: "#0064F0" },
-  ],
-  [CalibrationColorModeEnum.FIVE_COLOR_EXT]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Red", hex_color: "#DC143C" },
-    { color: "Yellow", hex_color: "#FFE600" },
-    { color: "Blue", hex_color: "#0064F0" },
-    { color: "Black", hex_color: "#141414" },
-  ],
-  [CalibrationColorModeEnum.SIX_COLOR]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Cyan", hex_color: "#0086D6" },
-    { color: "Magenta", hex_color: "#EC008C" },
-    { color: "Green", hex_color: "#00AE42" },
-    { color: "Yellow", hex_color: "#F4EE2A" },
-    { color: "Black", hex_color: "#000000" },
-  ],
-  [CalibrationColorModeEnum.SIX_COLOR_RYBW]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Red", hex_color: "#DC143C" },
-    { color: "Yellow", hex_color: "#FFE600" },
-    { color: "Blue", hex_color: "#0064F0" },
-    { color: "Green", hex_color: "#00AE42" },
-    { color: "Black", hex_color: "#000000" },
-  ],
-  [CalibrationColorModeEnum.EIGHT_COLOR]: [
-    { color: "White", hex_color: "#FFFFFF" },
-    { color: "Cyan", hex_color: "#0086D6" },
-    { color: "Magenta", hex_color: "#EC008C" },
-    { color: "Yellow", hex_color: "#F4EE2A" },
-    { color: "Black", hex_color: "#000000" },
-    { color: "Red", hex_color: "#C12E1F" },
-    { color: "Deep Blue", hex_color: "#0A2989" },
-    { color: "Green", hex_color: "#00AE42" },
-  ],
-};
+function normalizeSingleStageLayerHeight(value: number): number {
+  return SINGLE_STAGE_LAYER_HEIGHT_OPTIONS.includes(
+    value as (typeof SINGLE_STAGE_LAYER_HEIGHT_OPTIONS)[number],
+  )
+    ? value
+    : 0.04;
+}
 
-function buildSingleStagePalette(
-  colorMode: CalibrationColorMode,
-  materialDefault: string,
-) {
-  return (
-    PALETTE_PRESETS[colorMode] ??
-    PALETTE_PRESETS[CalibrationColorModeEnum.FOUR_COLOR_RYBW]
-  ).map((entry) => ({
-    color: entry.color,
-    material: materialDefault,
-    hex_color: entry.hex_color,
-    color_name: entry.color,
-  }));
+function buildSingleStagePalette(materialDefault: string) {
+  return [
+    {
+      color: "Sample",
+      material: materialDefault,
+      hex_color: "#808080",
+      color_name: "Sample",
+    },
+  ];
 }
 
 export interface CalibrationState {
   workflow: CalibrationWorkflow;
+  lastSubmittedWorkflow: CalibrationWorkflow | null;
   color_mode: CalibrationColorMode;
   block_size: number;
   gap: number;
@@ -92,6 +43,7 @@ export interface CalibrationState {
   substrateId: string;
   substrateDisplayName: string;
   materialDefault: string;
+  singleStageLayerHeightMm: number;
   isLoading: boolean;
   error: string | null;
   downloadUrl: string | null;
@@ -119,6 +71,9 @@ export interface CalibrationActions {
   setSubstrateId: (value: string) => void;
   setSubstrateDisplayName: (value: string) => void;
   setMaterialDefault: (value: string) => void;
+  setSingleStageLayerHeightMm: (value: number) => void;
+  submitLegacyGenerate: () => Promise<void>;
+  submitSingleStageGenerate: () => Promise<void>;
   submitGenerate: () => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -126,6 +81,7 @@ export interface CalibrationActions {
 
 const DEFAULT_STATE: CalibrationState = {
   workflow: "legacy",
+  lastSubmittedWorkflow: null,
   color_mode: CalibrationColorModeEnum.FOUR_COLOR_RYBW,
   block_size: 5,
   gap: 0.82,
@@ -134,6 +90,7 @@ const DEFAULT_STATE: CalibrationState = {
   substrateId: "white",
   substrateDisplayName: "White",
   materialDefault: "PLA Basic",
+  singleStageLayerHeightMm: 0.04,
   isLoading: false,
   error: null,
   downloadUrl: null,
@@ -184,33 +141,13 @@ export const useCalibrationStore = create<
     set({ substrateDisplayName: value }),
 
   setMaterialDefault: (value: string) => set({ materialDefault: value }),
+  setSingleStageLayerHeightMm: (value: number) =>
+    set({ singleStageLayerHeightMm: normalizeSingleStageLayerHeight(value) }),
 
-  submitGenerate: async () => {
+  submitLegacyGenerate: async () => {
     const state = get();
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, error: null, lastSubmittedWorkflow: "legacy" });
     try {
-      if (state.workflow === "single-stage") {
-        const response = await generateSingleStageKit({
-          palette: buildSingleStagePalette(
-            state.color_mode,
-            state.materialDefault,
-          ),
-          substrate_id: state.substrateId,
-          substrate_display_name: state.substrateDisplayName,
-          material_default: state.materialDefault,
-        });
-        set({
-          downloadUrl: response.kit_download_url,
-          previewImageUrl: response.preview_url ?? null,
-          modelUrl: null,
-          manifestUrl: response.manifest_url,
-          singleStageJobs: response.jobs ?? [],
-          statusMessage: response.message,
-          isLoading: false,
-        });
-        return;
-      }
-
       const response = await calibrationGenerate({
         color_mode: state.color_mode,
         block_size: state.block_size,
@@ -234,6 +171,48 @@ export const useCalibrationStore = create<
         isLoading: false,
       });
     }
+  },
+
+  submitSingleStageGenerate: async () => {
+    const state = get();
+    set({
+      isLoading: true,
+      error: null,
+      lastSubmittedWorkflow: "single-stage",
+    });
+    try {
+      const response = await generateSingleStageKit({
+        palette: buildSingleStagePalette(state.materialDefault),
+        substrate_id: state.substrateId,
+        substrate_display_name: state.substrateDisplayName,
+        material_default: state.materialDefault,
+        layer_height_mm: state.singleStageLayerHeightMm,
+      });
+      set({
+        downloadUrl: response.kit_download_url,
+        previewImageUrl: response.preview_url ?? null,
+        modelUrl: null,
+        manifestUrl: response.manifest_url,
+        singleStageJobs: response.jobs ?? [],
+        statusMessage: response.message,
+        isLoading: false,
+      });
+    } catch (err) {
+      set({
+        error:
+          err instanceof Error ? err.message : "Calibration generation failed",
+        isLoading: false,
+      });
+    }
+  },
+
+  submitGenerate: async () => {
+    if (get().workflow === "single-stage") {
+      await get().submitSingleStageGenerate();
+      return;
+    }
+
+    await get().submitLegacyGenerate();
   },
 
   setError: (error: string | null) => set({ error }),

@@ -6,6 +6,8 @@ import {
   ModelingMode,
   StructureMode,
 } from "../../api/types";
+import type { SavedMaterialLibraryItem } from "../../api/types";
+import { listGradientCardMaterials } from "../../api/extractor";
 import UnifiedUploader from "../ui/UnifiedUploader";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
@@ -15,12 +17,15 @@ import RadioGroup from "../ui/RadioGroup";
 import { CropModal } from "../ui/CropModal";
 import type { CropData } from "../ui/CropModal";
 import ImportConfirmDialog from "../ui/ImportConfirmDialog";
+import MaterialPickerDialog from "../ui/MaterialPickerDialog";
+import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
+import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import type { RecipeFileSource } from "../../recipe/importRecipe";
-import { StatusBanner } from "../ui/panelPrimitives";
+import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -115,11 +120,17 @@ export default function BasicSettings() {
     previewImageUrl,
     previewWarnings,
     generatedLargeFormatWarnings,
+    selectedMaterialDirNames,
+    materialLayerCount,
+    materialLayerHeightMm,
     setColorLayers,
     setLayerHeightMm,
     setModelEnable,
     setModelOnly,
     setSourceVersion,
+    setSelectedMaterialDirNames,
+    setMaterialLayerCount,
+    setMaterialLayerHeightMm,
     setNativeBrandKey,
     setNativeSupportedMode,
     setNativeDbNames,
@@ -158,11 +169,17 @@ export default function BasicSettings() {
     previewImageUrl: s.previewImageUrl,
     previewWarnings: s.previewWarnings,
     generatedLargeFormatWarnings: s.largeFormatWarnings,
+    selectedMaterialDirNames: s.selectedMaterialDirNames,
+    materialLayerCount: s.materialLayerCount,
+    materialLayerHeightMm: s.materialLayerHeightMm,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
     setModelEnable: s.setModelEnable,
     setModelOnly: s.setModelOnly,
     setSourceVersion: s.setSourceVersion,
+    setSelectedMaterialDirNames: s.setSelectedMaterialDirNames,
+    setMaterialLayerCount: s.setMaterialLayerCount,
+    setMaterialLayerHeightMm: s.setMaterialLayerHeightMm,
     setNativeBrandKey: s.setNativeBrandKey,
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
@@ -178,6 +195,9 @@ export default function BasicSettings() {
         selectedNativeDbNames,
         color_layers,
         layer_height_mm,
+        selectedMaterialDirNames,
+        materialLayerCount,
+        materialLayerHeightMm,
       }),
     [
       source_version,
@@ -187,6 +207,9 @@ export default function BasicSettings() {
       selectedNativeDbNames,
       color_layers,
       layer_height_mm,
+      selectedMaterialDirNames,
+      materialLayerCount,
+      materialLayerHeightMm,
     ],
   );
 
@@ -257,6 +280,60 @@ export default function BasicSettings() {
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
     { label: t("basic_source_version_native"), value: "native" },
+    { label: t("basic_source_version_material"), value: "material" },
+  ];
+
+  // --- Material library for material-archive mode ---
+  const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
+  const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
+  useEffect(() => {
+    if (source_version !== "material") return;
+    let cancelled = false;
+    setMaterialLibraryLoading(true);
+    listGradientCardMaterials()
+      .then((res) => {
+        if (!cancelled) setMaterialLibrary(res.materials ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setMaterialLibrary([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMaterialLibraryLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [source_version]);
+
+  const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
+  const handleMaterialPickerConfirm = useCallback(
+    (next: string[]) => {
+      setSelectedMaterialDirNames(next);
+      setMaterialPickerOpen(false);
+    },
+    [setSelectedMaterialDirNames],
+  );
+
+  // Compact summary for the trigger button: shows the first few material names
+  // plus a "+N more" suffix when truncated.
+  const MATERIAL_SUMMARY_LIMIT = 2;
+  const materialSummary = useMemo(() => {
+    if (selectedMaterialDirNames.length === 0) {
+      return null;
+    }
+    const lookup = new Map(materialLibrary.map((mat) => [mat.directory_name, mat.material_name]));
+    const visible = selectedMaterialDirNames
+      .slice(0, MATERIAL_SUMMARY_LIMIT)
+      .map((dirName) => lookup.get(dirName) ?? dirName);
+    const remaining = selectedMaterialDirNames.length - visible.length;
+    const more = remaining > 0
+      ? tRuntime("basic_material_picker_summary_more", { count: remaining })
+      : null;
+    return { visible, more };
+  }, [selectedMaterialDirNames, materialLibrary]);
+
+  const materialLayerHeightOptions = [
+    { label: "0.04 mm", value: "0.04" },
+    { label: "0.08 mm", value: "0.08" },
+    { label: "0.10 mm", value: "0.1" },
   ];
   const nativeBrandOptions = nativeBrandGroups
     .map((group) => ({
@@ -414,10 +491,81 @@ export default function BasicSettings() {
         label={t("basic_source_version_label")}
         value={source_version}
         options={sourceVersionOptions}
-        onChange={(value) => setSourceVersion(value as "legacy" | "native")}
+        onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
       />
 
-      {source_version === "legacy" ? (
+      {source_version === "material" ? (
+        <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+            {t("basic_material_select_label")}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setMaterialPickerOpen(true)}
+            data-testid="material-picker-trigger"
+            className={`${workstationInputClass} flex items-center justify-between gap-3 text-left`}
+          >
+            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              {materialSummary === null ? (
+                <span className="text-slate-400 dark:text-slate-500">
+                  {t("basic_material_picker_open")}
+                </span>
+              ) : (
+                <>
+                  {materialSummary.visible.map((name) => (
+                    <span
+                      key={name}
+                      className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      {name}
+                    </span>
+                  ))}
+                  {materialSummary.more && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      {materialSummary.more}
+                    </span>
+                  )}
+                </>
+              )}
+            </span>
+            <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
+              {t("basic_material_selected_count")}: {selectedMaterialDirNames.length}
+            </span>
+          </button>
+
+          <MaterialPickerDialog
+            open={materialPickerOpen}
+            materials={materialLibrary}
+            loading={materialLibraryLoading}
+            initialSelected={selectedMaterialDirNames}
+            onConfirm={handleMaterialPickerConfirm}
+            onCancel={() => setMaterialPickerOpen(false)}
+          />
+
+          <Slider
+            label={t("basic_material_layer_count_label")}
+            value={materialLayerCount}
+            min={5}
+            max={10}
+            step={1}
+            onChange={(v) => setMaterialLayerCount(Math.round(v))}
+          />
+
+          <Dropdown
+            label={t("basic_material_layer_height_label")}
+            value={String(materialLayerHeightMm)}
+            options={materialLayerHeightOptions}
+            onChange={(v) => setMaterialLayerHeightMm(Number(v))}
+          />
+
+          <MaterialSolverCacheDialog
+            materialDirectoryNames={selectedMaterialDirNames}
+            layerCount={materialLayerCount}
+            layerHeightMm={materialLayerHeightMm}
+          />
+        </div>
+      ) : source_version === "legacy" ? (
         <>
           <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
             <div className="min-w-0 flex-1">
@@ -490,7 +638,7 @@ export default function BasicSettings() {
             </div>
           )}
         </>
-      ) : (
+      ) : source_version === "native" ? (
         <>
           <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
             <div className="min-w-0 flex-1">
@@ -586,7 +734,7 @@ export default function BasicSettings() {
             </div>
           )}
         </>
-      )}
+      ) : null}
 
       <Slider
         label={t("basic_width")}

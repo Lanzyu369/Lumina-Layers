@@ -1529,13 +1529,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT管理",
     en: "LUT Management",
   },
+  "tab.materialManagement": {
+    zh: "耗材管理",
+    en: "Material Management",
+  },
   "tab.calibration": {
-    zh: "校准",
-    en: "Calibration",
+    zh: "LUT校准",
+    en: "LUT Calibration",
   },
   "tab.extractor": {
-    zh: "提取器",
-    en: "Extractor",
+    zh: "LUT提取",
+    en: "LUT Extractor",
+  },
+  "tab.gradientCardGenerate": {
+    zh: "梯度卡生成",
+    en: "Gradient Card Generate",
+  },
+  "tab.gradientCardExtract": {
+    zh: "梯度卡提取",
+    en: "Gradient Card Extract",
+  },
+  "tab.materialLibrary": {
+    zh: "耗材库",
+    en: "Material Library",
   },
   "tab.lutManager": {
     zh: "LUT 合并",
@@ -2209,8 +2225,180 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Legacy LUT",
   },
   basic_source_version_native: {
-    zh: "反推LUT",
+    zh: "\u53cd\u63a8LUT",
     en: "Inferred LUT",
+  },
+  basic_source_version_material: {
+    zh: "\u8017\u6750\u6863\u6848",
+    en: "Material Archive",
+  },
+  basic_material_select_label: {
+    zh: "\u9009\u62e9\u8017\u6750",
+    en: "Select Materials",
+  },
+  basic_material_loading: {
+    zh: "\u52a0\u8f7d\u8017\u6750\u5e93\u2026",
+    en: "Loading materials\u2026",
+  },
+  basic_material_empty: {
+    zh: "\u65e0\u53ef\u7528\u8017\u6750\uff0c\u8bf7\u5148\u5728\u300c\u8017\u6750\u63d0\u53d6\u300d\u4e2d\u521b\u5efa",
+    en: "No materials available. Create one in Material Extraction first.",
+  },
+  basic_material_selected_count: {
+    zh: "\u5df2\u9009\u8017\u6750",
+    en: "Selected",
+  },
+  basic_material_layer_count_label: {
+    zh: "\u53e0\u8272\u5c42\u6570",
+    en: "Color Layers",
+  },
+  basic_material_layer_height_label: {
+    zh: "\u5c42\u9ad8",
+    en: "Layer Height",
+  },
+  basic_material_picker_open: {
+    zh: "\u9009\u62e9\u8017\u6750\u2026",
+    en: "Choose materials\u2026",
+  },
+  basic_material_picker_summary_more: {
+    zh: "\u7b49 {count} \u79cd",
+    en: "+{count} more",
+  },
+  basic_material_picker_dialog_title: {
+    zh: "\u9009\u62e9\u8017\u6750",
+    en: "Choose Materials",
+  },
+  basic_material_picker_dialog_subtitle: {
+    zh: "\u52fe\u9009\u8981\u53c2\u4e0e\u8c03\u8272\u7684\u8017\u6750\uff08\u53ef\u591a\u9009\uff09",
+    en: "Pick materials to use for color blending (multi-select)",
+  },
+  basic_material_picker_done: {
+    zh: "\u5b8c\u6210",
+    en: "Done",
+  },
+  basic_material_picker_clear: {
+    zh: "\u6e05\u7a7a",
+    en: "Clear all",
+  },
+  basic_material_picker_select_all: {
+    zh: "\u5168\u9009",
+    en: "Select all",
+  },
+  basic_material_picker_close: {
+    zh: "\u5173\u95ed",
+    en: "Close",
+  },
+  basic_material_picker_search_placeholder: {
+    zh: "\u641c\u7d22\u8017\u6750\u540d\u79f0\u2026",
+    en: "Search materials\u2026",
+  },
+  basic_material_picker_search_clear: {
+    zh: "\u6e05\u9664\u641c\u7d22",
+    en: "Clear search",
+  },
+  basic_material_picker_no_match: {
+    zh: "\u6ca1\u6709\u5339\u914d\u7684\u8017\u6750",
+    en: "No materials match your search",
+  },
+  basic_material_cache_section_title: {
+    zh: "穷举缓存",
+    en: "Exhaustive Cache",
+  },
+  basic_material_cache_open_button: {
+    zh: "\u7a77\u4e3e\u7f13\u5b58\u2026",
+    en: "Exhaustive cache\u2026",
+  },
+  basic_material_cache_section_description: {
+    zh: "为当前耗材组合构建 64³ Lab 网格配方库，后续出图直接查表。",
+    en: "Build a 64³ Lab-grid recipe library for this palette so future conversions are served from cache.",
+  },
+  basic_material_cache_status_idle: {
+    zh: "请选择至少一种耗材后查看缓存状态。",
+    en: "Select at least one material to view cache status.",
+  },
+  basic_material_cache_status_checking: {
+    zh: "正在检查缓存\u2026",
+    en: "Checking cache\u2026",
+  },
+  basic_material_cache_status_ready: {
+    zh: "缓存已就绪",
+    en: "Cache ready",
+  },
+  basic_material_cache_status_missing: {
+    zh: "缓存未构建",
+    en: "Cache not built",
+  },
+  basic_material_cache_status_error: {
+    zh: "缓存状态查询失败",
+    en: "Failed to query cache status",
+  },
+  basic_material_cache_fallback_hint: {
+    zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
+    en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
+  },
+  basic_material_cache_build_button: {
+    zh: "立即构建缓存",
+    en: "Build cache now",
+  },
+  basic_material_cache_building_label: {
+    zh: "正在构建\u2026",
+    en: "Building\u2026",
+  },
+  basic_material_cache_building_hint: {
+    zh: "穷举 {combinations} 种组合并落盘，大约需要 {seconds} 秒。",
+    en: "Enumerating {combinations} combinations and writing to disk — about {seconds} seconds.",
+  },
+  basic_material_cache_rebuild_button: {
+    zh: "重新构建",
+    en: "Rebuild",
+  },
+  basic_material_cache_delete_button: {
+    zh: "删除缓存",
+    en: "Delete cache",
+  },
+  basic_material_cache_confirm_delete: {
+    zh: "确认删除当前组合的缓存？",
+    en: "Delete the cache for this combination?",
+  },
+  basic_material_cache_built_at_label: {
+    zh: "构建时间",
+    en: "Built at",
+  },
+  basic_material_cache_size_label: {
+    zh: "缓存大小",
+    en: "Cache size",
+  },
+  basic_material_cache_coverage_label: {
+    zh: "覆盖格数",
+    en: "Cell coverage",
+  },
+  basic_material_cache_mean_delta_e_label: {
+    zh: "平均 ΔE",
+    en: "Mean ΔE",
+  },
+  basic_material_cache_max_delta_e_label: {
+    zh: "最大 ΔE",
+    en: "Max ΔE",
+  },
+  basic_material_cache_build_time_label: {
+    zh: "构建耗时",
+    en: "Build time",
+  },
+  basic_material_cache_units_seconds: {
+    zh: "{seconds} 秒",
+    en: "{seconds} s",
+  },
+  basic_material_cache_units_mb: {
+    zh: "{mb} MB",
+    en: "{mb} MB",
+  },
+  basic_material_cache_build_error: {
+    zh: "构建失败：{message}",
+    en: "Build failed: {message}",
+  },
+  basic_material_cache_delete_error: {
+    zh: "删除失败：{message}",
+    en: "Delete failed: {message}",
   },
   basic_source_kind_label: {
     zh: "颜色源类型",
@@ -2547,6 +2735,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   action_upload_hint: {
     zh: "请先上传图片并选择 LUT",
     en: "Please upload an image and select a LUT first",
+  },
+  action_upload_hint_material: {
+    zh: "请先上传图片并选择耗材",
+    en: "Please upload an image and select materials first",
   },
   action_batch_upload_hint: {
     zh: "请先添加图片并选择 LUT",
@@ -3986,6 +4178,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "默认材料",
     en: "Default Material",
   },
+  cal_single_stage_layer_height_label: {
+    zh: "层高",
+    en: "Layer Height",
+  },
   cal_generate_single_stage_btn: {
     zh: "生成 Single-Stage Kit",
     en: "Generate Single-Stage Kit",
@@ -4005,6 +4201,406 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   cal_single_stage_jobs_desc: {
     zh: "每个颜色都会生成一个可打印的 3MF 任务",
     en: "One printable 3MF job is generated per color",
+  },
+  mat_gradient_generate_title: {
+    zh: "生成梯度卡",
+    en: "Generate Gradient Card",
+  },
+  mat_gradient_generate_desc: {
+    zh: "生成用于耗材表征的共享梯度卡套件，并保留 manifest、层高等元数据。",
+    en: "Generate a shared gradient card kit for material characterization while preserving manifest metadata such as layer height.",
+  },
+  mat_gradient_extract_title: {
+    zh: "提取梯度卡数据",
+    en: "Extract Gradient Card Data",
+  },
+  mat_gradient_extract_desc: {
+    zh: "上传梯度卡套件 ZIP、白底图和黑底图，分别点选四角并提取 Stage A 耗材参数。",
+    en: "Upload the gradient card kit ZIP plus white/black substrate images, mark four corners on each, and extract Stage A material parameters.",
+  },
+  mat_gradient_dataset_selected: {
+    zh: "已选数据集",
+    en: "Selected Dataset",
+  },
+  mat_gradient_select_dataset_btn: {
+    zh: "选择数据集 ZIP",
+    en: "Choose Dataset ZIP",
+  },
+  mat_gradient_no_dataset_selected: {
+    zh: "尚未选择数据集 ZIP",
+    en: "No dataset ZIP selected",
+  },
+  mat_gradient_extract_output_title: {
+    zh: "提取输出",
+    en: "Extraction Output",
+  },
+  mat_gradient_fit_output_title: {
+    zh: "拟合输出",
+    en: "Fit Output",
+  },
+  mat_gradient_upload_title: {
+    zh: "上传与点角",
+    en: "Upload and Corner Marking",
+  },
+  mat_gradient_upload_desc: {
+    zh: "先上传套件 ZIP 与两张梯度卡照片，再分别在白底图和黑底图上点选四角。",
+    en: "Upload the kit ZIP and both gradient card photos, then mark four corners on the white and black images.",
+  },
+  mat_gradient_white_image_label: {
+    zh: "白底梯度卡图片",
+    en: "White Gradient Card Image",
+  },
+  mat_gradient_black_image_label: {
+    zh: "黑底梯度卡图片",
+    en: "Black Gradient Card Image",
+  },
+  mat_gradient_no_image_selected: {
+    zh: "尚未选择图片",
+    en: "No image selected",
+  },
+  mat_gradient_select_image_btn: {
+    zh: "选择图片",
+    en: "Choose Image",
+  },
+  mat_gradient_rotate_image_btn: {
+    zh: "旋转 90°",
+    en: "Rotate 90°",
+  },
+  mat_gradient_clear_points_btn: {
+    zh: "清除角点",
+    en: "Clear Corners",
+  },
+  mat_gradient_corner_hint_prefix: {
+    zh: "已标记角点",
+    en: "Corners Marked",
+  },
+  mat_gradient_corner_complete: {
+    zh: "四角已完成，可开始提取。",
+    en: "All four corners are set and ready for extraction.",
+  },
+  mat_gradient_white_canvas_title: {
+    zh: "白底梯度卡",
+    en: "White Gradient Card",
+  },
+  mat_gradient_black_canvas_title: {
+    zh: "黑底梯度卡",
+    en: "Black Gradient Card",
+  },
+  mat_gradient_empty_white_canvas: {
+    zh: "上传白底梯度卡图片后，在这里点选四角。",
+    en: "Upload the white gradient card image to mark its four corners here.",
+  },
+  mat_gradient_empty_black_canvas: {
+    zh: "上传黑底梯度卡图片后，在这里点选四角。",
+    en: "Upload the black gradient card image to mark its four corners here.",
+  },
+  mat_gradient_compute_btn: {
+    zh: "提取 Stage A 耗材参数",
+    en: "Extract Stage A Material Parameters",
+  },
+  mat_gradient_material_name_label: {
+    zh: "耗材名称",
+    en: "Material Name",
+  },
+  mat_gradient_material_name_placeholder: {
+    zh: "输入要保存的耗材名称",
+    en: "Enter the material name to save",
+  },
+  mat_gradient_save_material_btn: {
+    zh: "保存耗材档案",
+    en: "Save Material Archive",
+  },
+  mat_gradient_warp_preview_title: {
+    zh: "透视校正预览",
+    en: "Perspective Warp Preview",
+  },
+  mat_gradient_sample_boxes_hint: {
+    zh: "方框表示实际取色区域。",
+    en: "Boxes indicate the actual sampled regions.",
+  },
+  mat_gradient_estimated_color_title: {
+    zh: "计算出的耗材颜色",
+    en: "Estimated Material Color",
+  },
+  mat_gradient_rgb_label: {
+    zh: "RGB",
+    en: "RGB",
+  },
+  mat_gradient_hex_label: {
+    zh: "HEX",
+    en: "HEX",
+  },
+  mat_gradient_mean_delta_e_label: {
+    zh: "平均 ΔE",
+    en: "Mean ΔE",
+  },
+  mat_gradient_max_delta_e_label: {
+    zh: "最大 ΔE",
+    en: "Max ΔE",
+  },
+  mat_gradient_rmse_linear_label: {
+    zh: "线性 RMSE",
+    en: "Linear RMSE",
+  },
+  mat_gradient_channel_rmse_label: {
+    zh: "通道 RMSE",
+    en: "Channel RMSE",
+  },
+  mat_gradient_channel_rmse_value: {
+    zh: "红 {r} / 绿 {g} / 蓝 {b}",
+    en: "R {r} / G {g} / B {b}",
+  },
+  mat_gradient_orientation_title: {
+    zh: "方向检测",
+    en: "Orientation Detection",
+  },
+  mat_gradient_orientation_reliable: {
+    zh: "可靠",
+    en: "Reliable",
+  },
+  mat_gradient_orientation_unreliable: {
+    zh: "置信度低",
+    en: "Low Confidence",
+  },
+  mat_gradient_white_orientation_label: {
+    zh: "白底方向",
+    en: "White Orientation",
+  },
+  mat_gradient_black_orientation_label: {
+    zh: "黑底方向",
+    en: "Black Orientation",
+  },
+  mat_gradient_delta_e_gap_label: {
+    zh: "ΔE 差距",
+    en: "ΔE Gap",
+  },
+  mat_gradient_manual_orientation_title: {
+    zh: "方向控制（高级）",
+    en: "Orientation Control (Advanced)",
+  },
+  mat_gradient_manual_orientation_desc: {
+    zh: "默认自动检测方向。若自动结果不理想（尤其是白色耗材打白底），可在此手动指定采样方向。",
+    en: "Defaults to automatic detection. If auto-detection is unreliable (especially for a white material on a white substrate), you can pin the sampling orientation here.",
+  },
+  mat_gradient_manual_white_orientation_label: {
+    zh: "白底方向覆盖",
+    en: "White Orientation Override",
+  },
+  mat_gradient_manual_black_orientation_label: {
+    zh: "黑底方向覆盖",
+    en: "Black Orientation Override",
+  },
+  mat_gradient_orientation_option_auto: {
+    zh: "自动检测",
+    en: "Auto (recommended)",
+  },
+  mat_gradient_orientation_option_identity: {
+    zh: "原样",
+    en: "Identity",
+  },
+  mat_gradient_orientation_option_rotate_90_cw: {
+    zh: "顺时针 90°",
+    en: "Rotate 90° CW",
+  },
+  mat_gradient_orientation_option_rotate_180: {
+    zh: "旋转 180°",
+    en: "Rotate 180°",
+  },
+  mat_gradient_orientation_option_rotate_90_ccw: {
+    zh: "逆时针 90°",
+    en: "Rotate 90° CCW",
+  },
+  mat_gradient_orientation_option_flip_horizontal: {
+    zh: "水平翻转",
+    en: "Flip Horizontal",
+  },
+  mat_gradient_orientation_option_flip_vertical: {
+    zh: "垂直翻转",
+    en: "Flip Vertical",
+  },
+  mat_gradient_orientation_option_transpose: {
+    zh: "沿主对角线转置",
+    en: "Transpose",
+  },
+  mat_gradient_orientation_option_transverse: {
+    zh: "沿副对角线转置",
+    en: "Transverse",
+  },
+  mat_gradient_white_signal_label: {
+    zh: "白底信号",
+    en: "White Signal",
+  },
+  mat_gradient_black_signal_label: {
+    zh: "黑底信号",
+    en: "Black Signal",
+  },
+  mat_gradient_signal_flat_badge: {
+    zh: "信号过弱",
+    en: "Low Signal",
+  },
+  mat_gradient_manual_override_badge: {
+    zh: "手动指定",
+    en: "Manual",
+  },
+  mat_gradient_signal_flat_hint: {
+    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在「方向控制」中手动指定方向。",
+    en: 'This substrate\'s gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — consider setting the orientation manually under "Orientation Control".',
+  },
+  mat_gradient_saved_material_title: {
+    zh: "已保存的耗材档案",
+    en: "Saved Material Archive",
+  },
+  mat_gradient_download_material_btn: {
+    zh: "下载 material.json",
+    en: "Download material.json",
+  },
+  mat_gradient_library_title: {
+    zh: "耗材库",
+    en: "Material Library",
+  },
+  mat_gradient_library_desc: {
+    zh: "浏览已保存的 Stage A 耗材档案，并下载 material.json 或 Stage A 参数。",
+    en: "Browse saved Stage A material archives and download material.json or Stage A parameters.",
+  },
+  mat_gradient_library_refresh_btn: {
+    zh: "刷新耗材库",
+    en: "Refresh Library",
+  },
+  mat_gradient_library_loading: {
+    zh: "正在加载耗材库...",
+    en: "Loading material library...",
+  },
+  mat_gradient_library_load_failed: {
+    zh: "加载耗材库失败",
+    en: "Failed to load material library",
+  },
+  mat_gradient_library_empty: {
+    zh: "还没有已保存的耗材档案。先在“梯度卡提取”里保存一个耗材。",
+    en: "No saved material archives yet. Save one from Gradient Card Extract first.",
+  },
+  mat_gradient_library_updated_at_label: {
+    zh: "最近验证",
+    en: "Last Verified",
+  },
+  mat_gradient_library_created_at_label: {
+    zh: "创建时间",
+    en: "Created",
+  },
+  mat_gradient_library_verification_count_label: {
+    zh: "验证次数",
+    en: "Verification Runs",
+  },
+  mat_gradient_library_directory_label: {
+    zh: "目录名",
+    en: "Directory",
+  },
+  mat_gradient_library_fit_error_label: {
+    zh: "拟合误差",
+    en: "Fit Error",
+  },
+  mat_gradient_library_layer_height_label: {
+    zh: "层高",
+    en: "Layer Height",
+  },
+  mat_gradient_library_reverify_btn: {
+    zh: "再次验证",
+    en: "Re-Verify",
+  },
+  mat_gradient_library_delete_btn: {
+    zh: "删除耗材",
+    en: "Delete Material",
+  },
+  mat_gradient_library_delete_confirm: {
+    zh: "确认删除耗材“{materialName}”？此操作不可撤销。",
+    en: 'Delete material "{materialName}"? This action cannot be undone.',
+  },
+  mat_gradient_library_show_history_btn: {
+    zh: "展开验证历史",
+    en: "Show Verification History",
+  },
+  mat_gradient_library_hide_history_btn: {
+    zh: "收起验证历史",
+    en: "Hide Verification History",
+  },
+  mat_gradient_library_history_title: {
+    zh: "验证历史",
+    en: "Verification History",
+  },
+  mat_gradient_library_history_empty: {
+    zh: "当前还没有可展示的验证历史摘要。",
+    en: "No verification history summary is available yet.",
+  },
+  mat_gradient_library_history_run_label: {
+    zh: "第 {index} 次验证",
+    en: "Run {index}",
+  },
+  mat_gradient_library_history_time_label: {
+    zh: "验证时间",
+    en: "Verified At",
+  },
+  mat_gradient_library_history_color_label: {
+    zh: "估算颜色",
+    en: "Estimated Color",
+  },
+  mat_gradient_library_history_rmse_label: {
+    zh: "线性 RMSE",
+    en: "Linear RMSE",
+  },
+  mat_gradient_library_history_e_label: {
+    zh: "E 参数",
+    en: "E Parameters",
+  },
+  mat_gradient_library_history_k_label: {
+    zh: "k 参数",
+    en: "k Parameters",
+  },
+  mat_gradient_library_history_white_c0_label: {
+    zh: "白底 C0",
+    en: "White C0",
+  },
+  mat_gradient_library_history_black_c0_label: {
+    zh: "黑底 C0",
+    en: "Black C0",
+  },
+  mat_gradient_library_history_orientation_label: {
+    zh: "识别方向",
+    en: "Detected Orientation",
+  },
+  mat_gradient_library_history_orientation_value: {
+    zh: "白底 {white} / 黑底 {black}",
+    en: "White {white} / Black {black}",
+  },
+  mat_gradient_verification_mode_title: {
+    zh: "当前正在进行耗材复验",
+    en: "Material Re-Verification Active",
+  },
+  mat_gradient_verification_mode_desc: {
+    zh: "目标耗材：{materialName}。当前已累计 {count} 次验证；本次保存后会继续聚合参数。",
+    en: "Target material: {materialName}. There are already {count} verification runs; saving this run will further aggregate the parameters.",
+  },
+  mat_gradient_verification_name_label: {
+    zh: "复验目标耗材",
+    en: "Verification Target Material",
+  },
+  mat_gradient_verification_name_desc: {
+    zh: "当前为已有耗材做复验。已累计 {count} 次验证，本次结果会并入同一档案。",
+    en: "You are re-verifying an existing material. There are already {count} runs and this result will be merged into the same archive.",
+  },
+  mat_gradient_save_verification_btn: {
+    zh: "保存验证结果",
+    en: "Save Verification Result",
+  },
+  mat_gradient_save_merge_btn: {
+    zh: "合并结果",
+    en: "Merge Result",
+  },
+  mat_gradient_save_override_btn: {
+    zh: "覆盖结果",
+    en: "Override",
+  },
+  mat_gradient_cancel_verification_btn: {
+    zh: "取消复验",
+    en: "Cancel Re-Verification",
   },
   ext_workflow_label: {
     zh: "工作流模式",

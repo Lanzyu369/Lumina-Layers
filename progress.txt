@@ -1,0 +1,49 @@
+# Material Solver Cache + B&B — Progress Log
+
+## Goal
+Replace beam-search pruning (which loses global optima) with:
+1. Exhaustive B&B solver (MITM-decomposed + transmittance cutoff) — guaranteed optimal
+2. Disk-backed 64³ Lab-grid cache per (palette, N, t, substrate) — first-hit rebuild, then reuse
+
+## Key Design Decisions (from user Q&A 2026-04-17)
+- Cache build trigger: MANUAL ONLY (button). No auto-build on material select.
+- Cache miss fallback: per-image B&B (always optimal, never silently degrades quality).
+- Buffer layers: `buffer_layers=1` by default → α_cutoff tuned so one extra "invisible" bottom layer is free.
+- Cache format: 64³ Lab grid, .npz + .meta.json sidecar, under `materials/_solver_cache/`.
+- Cache key: sha256(sorted(material fingerprints) + N + t + substrate)[:16]
+  Material fingerprint = sha256(dir_name + E[6dp] + k[6dp] + C0_white[6dp] + C0_black[6dp])
+
+## Algorithm: solve_optimal_bnb (MITM + transmittance pruning)
+1. Precompute per-material affine: a_i=exp(-k_i*t), b_i=E_i*(1-a_i)
+2. Enumerate top suffixes (M^(N/2)): arrays of (α_top, β_top, recipe_top)
+3. Enumerate bottom prefixes (M^(N-N/2)): apply to substrate → bot_colors
+4. Partition top suffixes:
+   - SATURATED (max(α_top) < α_cutoff): bottom is irrelevant → evaluate once with canonical bottom
+   - ACTIVE: evaluate with all bottoms
+5. For each target color: track best (recipe, pred_color, ΔE)
+
+## Performance Targets
+- 6 mat × 10 layers, K=16 targets: ≤ 3s
+- 10 mat × 10 layers, K=16 targets: ≤ 30s (with α-cutoff typical saturation)
+- Cache build (64³ grid = 262K targets), 10×10: ≤ 90s
+- Must be ≤ current beam search ΔE on ALL test cases (regression check)
+
+## Current Phase
+- [x] Architecture design confirmed
+- [ ] Phase 1: solve_optimal_bnb + unit tests
+- [ ] Phase 2: material_cache module + tests
+- [ ] Phase 3: API endpoints + pipeline integration
+- [ ] Phase 4: Frontend UI + i18n + tests
+
+## Files (planned)
+- core/material_color_solver.py — extend with solve_optimal_bnb, MaterialAffineSet helpers
+- core/material_cache.py — NEW: MaterialSolverCache class + build/load/lookup
+- tests/test_material_solver_optimal_unit.py — NEW: B&B optimality + MITM correctness
+- tests/test_material_cache_unit.py — NEW: cache roundtrip, fingerprint, grid lookup
+- core/pipeline/p03_core_processing.py — wire cache → B&B fallback
+- api/routers/single_stage.py — add cache-status GET + build-cache POST
+- api/schemas/responses.py — cache status response schema
+- frontend/src/api/materialCache.ts — NEW client
+- frontend/src/stores/singleStageStore.ts (or separate) — cache state
+- frontend/src/components/MaterialCacheStatus.tsx — NEW component
+- frontend/src/i18n/translations.ts — i18n keys

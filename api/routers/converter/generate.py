@@ -263,10 +263,14 @@ async def convert_generate(
     # Retrieve paths stored during preview
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
+    session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
-    if not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+    if session_material_source != "material_archive":
+        if not lut_path or not os.path.exists(lut_path):
+            raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+    else:
+        lut_path = "__material_archive__"
 
     # Merge replacement_regions: prefer session state, fall back to request body
     replacement_regions = session_data.get("replacement_regions") or None
@@ -398,7 +402,12 @@ async def convert_generate(
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
+        "material_source": session_material_source,
     }
+    if session_material_source == "material_archive":
+        params["selected_materials"] = session_data.get("selected_materials") or []
+        params["material_layer_count"] = session_data.get("material_layer_count")
+        params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
 
     # 3. CPU computation offloaded to process pool (only paths and scalars)
     worker_t0 = time.perf_counter()

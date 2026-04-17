@@ -2,7 +2,12 @@ import apiClient from "./client";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
+  GradientCardMaterialDeleteResponse,
+  GradientCardMaterialLibraryResponse,
+  GradientCardMaterialSaveResponse,
+  GradientCardStageAExtractResponse,
   ManualFixResponse,
+  ManualOrientationLabel,
   SingleStageExtractResponse,
   StageAFitResponse,
 } from "./types";
@@ -40,6 +45,76 @@ export async function extractColors(
     "/extractor/extract",
     fd,
     { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function extractGradientCardStageA(params: {
+  datasetZip: File;
+  whiteImage: File;
+  blackImage: File;
+  whiteCornerPoints: Array<[number, number]>;
+  blackCornerPoints: Array<[number, number]>;
+  manualWhiteOrientation?: ManualOrientationLabel | null;
+  manualBlackOrientation?: ManualOrientationLabel | null;
+}): Promise<GradientCardStageAExtractResponse> {
+  const fd = new FormData();
+  fd.append("dataset_zip", params.datasetZip);
+  fd.append("white_image", params.whiteImage);
+  fd.append("black_image", params.blackImage);
+  fd.append("white_corner_points", JSON.stringify(params.whiteCornerPoints));
+  fd.append("black_corner_points", JSON.stringify(params.blackCornerPoints));
+  if (params.manualWhiteOrientation) {
+    fd.append("manual_white_orientation", params.manualWhiteOrientation);
+  }
+  if (params.manualBlackOrientation) {
+    fd.append("manual_black_orientation", params.manualBlackOrientation);
+  }
+  const response = await apiClient.post<GradientCardStageAExtractResponse>(
+    "/extractor/extract-gradient-card-stage-a",
+    fd,
+    { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function saveGradientCardMaterial(params: {
+  sessionId: string;
+  materialName: string;
+  targetDirectoryName?: string | null;
+  saveMode?: "merge" | "override";
+}): Promise<GradientCardMaterialSaveResponse> {
+  const fd = new FormData();
+  fd.append("session_id", params.sessionId);
+  fd.append("material_name", params.materialName);
+  if (params.targetDirectoryName) {
+    fd.append("target_directory_name", params.targetDirectoryName);
+  }
+  if (params.saveMode) {
+    fd.append("save_mode", params.saveMode);
+  }
+  const response = await apiClient.post<GradientCardMaterialSaveResponse>(
+    "/extractor/save-gradient-card-material",
+    fd,
+    { timeout: 600_000 },
+  );
+  return response.data;
+}
+
+export async function deleteGradientCardMaterial(
+  directoryName: string,
+): Promise<GradientCardMaterialDeleteResponse> {
+  const response = await apiClient.delete<GradientCardMaterialDeleteResponse>(
+    `/extractor/gradient-card-materials/${encodeURIComponent(directoryName)}`,
+    { timeout: 60_000 },
+  );
+  return response.data;
+}
+
+export async function listGradientCardMaterials(): Promise<GradientCardMaterialLibraryResponse> {
+  const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
+    "/extractor/gradient-card-materials",
+    { timeout: 60_000 },
   );
   return response.data;
 }
@@ -139,9 +214,10 @@ export async function extractSingleStageDataset(
 }
 
 /** Fit Stage A from either an extraction session or a raw stage JSON file. */
-export async function fitStageA(
-  params: { sessionId?: string | null; stageJsonFile?: File | null },
-): Promise<StageAFitResponse> {
+export async function fitStageA(params: {
+  sessionId?: string | null;
+  stageJsonFile?: File | null;
+}): Promise<StageAFitResponse> {
   const fd = new FormData();
   if (params.sessionId) {
     fd.append("session_id", params.sessionId);

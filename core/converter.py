@@ -210,6 +210,10 @@ def convert_image_to_3d(
     progress=None,
     enable_fridge_magnet: bool = False,
     fridge_magnets: Optional[List[Dict]] = None,
+    material_source: str = "lut",
+    selected_materials: Optional[List[str]] = None,
+    material_layer_count: Optional[int] = None,
+    material_layer_height_mm: Optional[float] = None,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -259,6 +263,10 @@ def generate_preview_cached(
     is_dark: bool = True,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
+    material_source: str = "lut",
+    selected_materials: Optional[List[str]] = None,
+    material_layer_count: Optional[int] = None,
+    material_layer_height_mm: Optional[float] = None,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -365,6 +373,10 @@ def generate_final_model(
     progress=None,
     enable_fridge_magnet: bool = False,
     fridge_magnets: Optional[List[Dict]] = None,
+    material_source: str = "lut",
+    selected_materials: Optional[List[str]] = None,
+    material_layer_count: Optional[int] = None,
+    material_layer_height_mm: Optional[float] = None,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -399,6 +411,8 @@ def generate_final_model(
             "Backing will be separated as individual object",
             extra={"event": "core_converter_backing_separated"},
         )
+    elif material_source == "material_archive":
+        backing_color_id = 0
     else:
         color_conf = ColorSystem.get(color_mode)
         backing_color_id = color_conf["map"].get(backing_color_name, 0)
@@ -475,6 +489,10 @@ def generate_final_model(
         progress=progress,
         enable_fridge_magnet=enable_fridge_magnet,
         fridge_magnets=fridge_magnets,
+        material_source=material_source,
+        selected_materials=selected_materials,
+        material_layer_count=material_layer_count,
+        material_layer_height_mm=material_layer_height_mm,
     )
 
 

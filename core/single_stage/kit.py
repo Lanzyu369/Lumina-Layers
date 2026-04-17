@@ -13,7 +13,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -170,6 +170,43 @@ def _resolve_substrate_rgb(
     return (235, 235, 235)
 
 
+def _format_hex_rgb(rgb: tuple[int, int, int]) -> str:
+    return "#" + "".join(f"{int(channel):02X}" for channel in rgb)
+
+
+def _build_shared_stage_entry(
+    palette: list[PaletteEntry],
+    substrate_id: str,
+    substrate_display_name: str,
+    material_default: str,
+) -> PaletteEntry:
+    substrate_tokens = {
+        _sanitize_token(substrate_id),
+        _sanitize_token(substrate_display_name),
+    }
+
+    reference_entry = palette[0]
+    for entry in palette:
+        candidates = [entry.color_name, entry.color]
+        if any(
+            candidate and _sanitize_token(candidate) not in substrate_tokens
+            for candidate in candidates
+        ):
+            reference_entry = entry
+            break
+
+    reference_rgb = _resolve_rgb(reference_entry)
+    reference_material = (
+        (reference_entry.material or material_default).strip() or material_default
+    )
+    return PaletteEntry(
+        color="Sample",
+        material=reference_material,
+        hex_color=_format_hex_rgb(reference_rgb),
+        color_name="Sample",
+    )
+
+
 def _generate_voxel_mesh(
     voxel_matrix: np.ndarray,
     material_index: int,
@@ -241,6 +278,20 @@ def _generate_voxel_mesh(
     return mesh
 
 
+def _apply_face_down_x_mirror(scene, model_width_mm: float) -> None:
+    mirror = np.array(
+        [
+            [-1.0, 0.0, 0.0, model_width_mm],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    for geom_name in list(scene.geometry.keys()):
+        scene.geometry[geom_name].apply_transform(mirror)
+
+
 def _build_stage_matrix(spec: SingleStageSpec) -> np.ndarray:
     block_px = int(round(spec.block_mm / spec.pixel_mm))
     gap_px = int(round(spec.gap_mm / spec.pixel_mm))
@@ -249,8 +300,7 @@ def _build_stage_matrix(spec: SingleStageSpec) -> np.ndarray:
     height = spec.grid_rows * block_px + (spec.grid_rows - 1) * gap_px + 2 * margin_px
     total_layers = spec.base_layers + spec.max_step_layers
 
-    voxel = np.full((total_layers, height, width), -1, dtype=np.int16)
-    voxel[: spec.base_layers, :, :] = 0
+    voxel = np.zeros((total_layers, height, width), dtype=np.int16)
 
     for index, step_layers in enumerate(spec.step_layers):
         row = index // spec.grid_cols
@@ -261,11 +311,7 @@ def _build_stage_matrix(spec: SingleStageSpec) -> np.ndarray:
         y1 = y0 + block_px
         if step_layers <= 0:
             continue
-        voxel[
-            spec.base_layers : spec.base_layers + step_layers,
-            y0:y1,
-            x0:x1,
-        ] = 1
+        voxel[:step_layers, y0:y1, x0:x1] = 1
 
     return voxel
 
@@ -303,8 +349,10 @@ def _build_stage_scene(
         mesh.metadata["name"] = name
         scene.add_geometry(mesh, node_name=name, geom_name=name)
 
+    _apply_face_down_x_mirror(scene, spec.board_width_mm)
+
     preview = np.full((voxel.shape[1], voxel.shape[2], 3), substrate_rgb, dtype=np.uint8)
-    preview[voxel[spec.base_layers] == 1] = _resolve_rgb(entry)
+    preview[voxel[0] == 1] = _resolve_rgb(entry)
     return scene, Image.fromarray(preview)
 
 
@@ -370,74 +418,56 @@ def generate_single_stage_kit(
     substrate_display_name: str = "White",
     material_default: str = "PLA Basic",
     spec: SingleStageSpec = SINGLE_STAGE_SPEC,
+    layer_height_mm: float | None = None,
 ) -> SingleStageKitResult:
     """Generate a ChromaPrint3D-aligned single-stage kit zip."""
     if not palette:
         raise ValueError("Single-stage kit requires at least one palette entry.")
 
+    if layer_height_mm is not None:
+        spec = replace(spec, layer_height_mm=layer_height_mm)
+
     os.makedirs(MODELS_DIR, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix="single_stage_", dir=TEMP_DIR))
-    jobs_dir = work_dir / "jobs"
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-
-    substrate_rgb = _resolve_substrate_rgb(substrate_id, substrate_display_name, palette)
-    preview_tiles: list[tuple[str, Image.Image]] = []
-    jobs: list[dict[str, str]] = []
 
     try:
-        for entry in palette:
-            entry_material = (entry.material or material_default).strip() or material_default
-            normalized_entry = PaletteEntry(
-                color=entry.color,
-                material=entry_material,
-                hex_color=entry.hex_color,
-                color_name=entry.color_name,
-            )
-            color_label = normalized_entry.color_name or normalized_entry.color
-            job_token = _sanitize_token(color_label)
-            job_filename = (
-                f"single_stage_{_sanitize_token(substrate_id)}_{job_token}.3mf"
-            )
-            job_path = jobs_dir / job_filename
+        substrate_rgb = _resolve_substrate_rgb(substrate_id, substrate_display_name, palette)
+        shared_entry = _build_shared_stage_entry(
+            palette,
+            substrate_id,
+            substrate_display_name,
+            material_default,
+        )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_filename = f"single_stage_{_sanitize_token(substrate_id)}_{timestamp}.3mf"
+        model_path = work_dir / model_filename
 
-            scene, preview = _build_stage_scene(
-                normalized_entry,
-                substrate_id,
-                substrate_display_name,
-                substrate_rgb,
-                spec,
-            )
-            export_scene_with_bambu_metadata(
-                scene=scene,
-                output_path=str(job_path),
-                slot_names=list(scene.geometry.keys()),
-                preview_colors={
-                    name: tuple(scene.geometry[name].visual.face_colors[0][:4])
-                    for name in scene.geometry.keys()
-                },
-                settings={
-                    "layer_height": f"{spec.layer_height_mm:.2f}",
-                    "initial_layer_height": f"{spec.layer_height_mm:.2f}",
-                    "wall_loops": "1",
-                    "top_shell_layers": "0",
-                    "bottom_shell_layers": "0",
-                    "sparse_infill_density": "100%",
-                    "sparse_infill_pattern": "zig-zag",
-                },
-                color_mode="BW (Black & White)",
-            )
-
-            jobs.append(
-                {
-                    "color": normalized_entry.color,
-                    "color_name": color_label,
-                    "material": entry_material,
-                    "substrate_id": substrate_id,
-                    "substrate_display_name": substrate_display_name,
-                    "filename": job_filename,
-                }
-            )
-            preview_tiles.append((color_label, preview))
+        scene, preview_image = _build_stage_scene(
+            shared_entry,
+            substrate_id,
+            substrate_display_name,
+            substrate_rgb,
+            spec,
+        )
+        export_scene_with_bambu_metadata(
+            scene=scene,
+            output_path=str(model_path),
+            slot_names=list(scene.geometry.keys()),
+            preview_colors={
+                name: tuple(scene.geometry[name].visual.face_colors[0][:4])
+                for name in scene.geometry.keys()
+            },
+            settings={
+                "layer_height": f"{spec.layer_height_mm:.2f}",
+                "initial_layer_height": f"{spec.layer_height_mm:.2f}",
+                "wall_loops": "1",
+                "top_shell_layers": "0",
+                "bottom_shell_layers": "0",
+                "sparse_infill_density": "100%",
+                "sparse_infill_pattern": "zig-zag",
+            },
+            color_mode="BW (Black & White)",
+        )
 
         manifest = {
             "schema_version": "1.0",
@@ -452,9 +482,9 @@ def generate_single_stage_kit(
                 "dataset_layout": "{substrate_id}/{color_name}/",
                 "color_source": "folder_name",
             },
-            "jobs": jobs,
+            "shared_model_filename": model_filename,
+            "jobs": [],
         }
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         manifest_path = Path(MODELS_DIR) / f"Lumina_SingleStage_Manifest_{timestamp}.json"
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False),
@@ -468,29 +498,28 @@ def generate_single_stage_kit(
                 [
                     "Lumina Single-Stage Kit",
                     "",
-                    "1. Print one 3MF job per color.",
+                    "1. Print the shared 3MF board with the single material sample you want to characterize.",
                     "2. Photograph each printed board with a ColorChecker in frame.",
                     "3. Label each image with LabelMe.",
                     "4. Required polygons: ColorChecker, stage.",
-                    "5. Zip the dataset using {substrate_id}/{color_name}/ structure.",
+                    "5. Place captures under dataset_template/{substrate_id}/Sample/ and zip using {substrate_id}/{color_name}/ structure.",
                 ]
             ),
         )
 
         template_root = work_dir / "dataset_template" / substrate_id
-        for job in jobs:
-            placeholder = template_root / job["color_name"] / "PUT_PHOTOS_AND_LABELME_JSON_HERE.txt"
-            _write_text(
-                placeholder,
-                "Place images and matching LabelMe JSON files in this folder.\n",
-            )
+        template_label = shared_entry.color_name or shared_entry.color or "Sample"
+        placeholder = template_root / template_label / "PUT_PHOTOS_AND_LABELME_JSON_HERE.txt"
+        _write_text(
+            placeholder,
+            "Place images and matching LabelMe JSON files in this folder.\n",
+        )
 
         ref_json, ref_desc = _resolve_colorchecker_bundle()
 
         zip_path = Path(MODELS_DIR) / f"Lumina_SingleStage_Kit_{timestamp}.zip"
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for job in jobs:
-                archive.write(jobs_dir / job["filename"], f"jobs/{job['filename']}")
+            archive.write(model_path, model_filename)
             archive.write(manifest_path, "manifest.json")
             archive.write(readme_path, "README_single_stage.txt")
             for placeholder in template_root.rglob("*"):
@@ -504,13 +533,12 @@ def generate_single_stage_kit(
             if ref_desc is not None:
                 archive.write(ref_desc, "colorchecker/desc.txt")
 
-        preview_image = _compose_preview_grid(preview_tiles)
         return SingleStageKitResult(
             zip_path=str(zip_path),
             manifest_path=str(manifest_path),
             preview_image=preview_image,
-            jobs=jobs,
-            message=f"Single-stage kit generated for {len(jobs)} colors.",
+            jobs=[],
+            message="Single-stage shared 3MF packaged into kit zip.",
         )
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

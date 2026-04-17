@@ -133,6 +133,7 @@ def calibration_generate_single_stage_kit(
             substrate_id=request.substrate_id,
             substrate_display_name=request.substrate_display_name,
             material_default=request.material_default,
+            layer_height_mm=request.layer_height_mm,
         )
     except Exception as e:
         _handle_core_error(e, "Single-stage kit generation")

@@ -52,6 +52,7 @@ describe("Widget Workspace Layout", () => {
     render(<App />);
     expect(screen.getByTestId("tab-converter")).toBeInTheDocument();
     expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-vectorizer")).toBeInTheDocument();
     expect(screen.getByTestId("tab-settings")).toBeInTheDocument();
 
@@ -82,5 +83,19 @@ describe("Widget Workspace Layout", () => {
 
     fireEvent.click(screen.getByTestId("subtab-five-color"));
     expect(useWidgetStore.getState().activeTab).toBe("five-color");
+  });
+
+  it("shows Material Management sub-tabs and switches to gradient-card pages", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId("tab-material-management"));
+    expect(screen.getByTestId("subtab-gradient-card-generate")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-gradient-card-extract")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("subtab-gradient-card-extract"));
+    expect(useWidgetStore.getState().activeTab).toBe("gradient-card-extract");
+
+    fireEvent.click(screen.getByTestId("subtab-gradient-card-generate"));
+    expect(useWidgetStore.getState().activeTab).toBe("gradient-card-generate");
   });
 });

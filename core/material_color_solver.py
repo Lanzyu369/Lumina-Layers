@@ -1,0 +1,753 @@
+"""Material color solver — Beer-Lambert beam-search for per-pixel layer recipes.
+耗材颜色求解器 — 基于 Beer-Lambert 模型的波束搜索，求解每像素叠层配方。
+
+Given a set of materials (each with fitted E, k, C0 parameters) and a target
+layer count, this module solves for the optimal per-pixel layer recipe that
+best reproduces a target color.
+
+The solver uses a beam-search strategy: for each unique quantized color, it
+explores layer-by-layer expansions of partial recipes, pruning to the top-B
+candidates at each step.  This avoids the M^N combinatorial explosion of
+exhaustive enumeration while still finding near-optimal solutions.
+
+Public API
+----------
+- ``MaterialParams``   — dataclass holding Beer-Lambert parameters for one material
+- ``forward_model``    — predict linear RGB for a full N-layer recipe
+- ``solve_image_colors`` — solve optimal recipes for a batch of unique colors
+- ``map_pixels_to_materials`` — map every image pixel to its solved recipe
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+ALLOWED_LAYER_HEIGHTS_MM: tuple[float, ...] = (0.04, 0.08, 0.1)
+DEFAULT_LAYER_HEIGHT_MM: float = 0.08
+DEFAULT_LAYER_COUNT: int = 5
+MIN_LAYER_COUNT: int = 5
+MAX_LAYER_COUNT: int = 10
+DEFAULT_BEAM_WIDTH: int = 32
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MaterialParams:
+    """Loaded Beer-Lambert parameters for one material.
+    单种耗材的 Beer-Lambert 参数。
+
+    Attributes:
+        name: Human-readable material name (e.g. "PLA Red"). (耗材名称)
+        directory_name: On-disk directory name under ``materials/``. (目录名)
+        E: (3,) equilibrium color in linear RGB. (平衡色 linear RGB)
+        k: (3,) absorption coefficient per channel. (吸收系数)
+        C0_white: (3,) zero-thickness color on white substrate in linear RGB.
+            (白底零厚度颜色 linear RGB)
+        estimated_rgb: (3,) sRGB uint8 estimated material color for preview.
+            (预览用 sRGB uint8 预估耗材颜色)
+    """
+
+    name: str
+    directory_name: str
+    E: np.ndarray       # (3,) float64, linear
+    k: np.ndarray       # (3,) float64
+    C0_white: np.ndarray  # (3,) float64, linear
+    estimated_rgb: np.ndarray  # (3,) uint8
+
+
+# ---------------------------------------------------------------------------
+# sRGB ↔ linear helpers
+# ---------------------------------------------------------------------------
+
+
+def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
+    """Convert sRGB uint8 to linear float64 in [0, 1].
+    将 sRGB uint8 转换为 [0, 1] 范围的线性 float64。
+    """
+    c = arr.astype(np.float64) / 255.0
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb_float(arr: np.ndarray) -> np.ndarray:
+    """Convert linear float64 to sRGB float64 in [0, 1].
+    将线性 float64 转换为 [0, 1] 范围的 sRGB float64。
+    """
+    c = np.clip(arr.astype(np.float64), 0.0, 1.0)
+    return np.where(c <= 0.0031308, 12.92 * c, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+
+
+def linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
+    """Convert linear float64 to sRGB uint8.
+    将线性 float64 转换为 sRGB uint8。
+    """
+    srgb = linear_to_srgb_float(arr)
+    return np.clip(np.round(srgb * 255.0), 0, 255).astype(np.uint8)
+
+
+def rgb_to_lab(srgb_uint8: np.ndarray) -> np.ndarray:
+    """Convert sRGB uint8 array (N, 3) to CIE Lab float64 (N, 3).
+    将 sRGB uint8 (N, 3) 转换为 CIE Lab float64 (N, 3)。
+    """
+    srgb_f32 = srgb_uint8.astype(np.float32) / 255.0
+    lab = cv2.cvtColor(srgb_f32.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB)
+    return lab.reshape(-1, 3).astype(np.float64)
+
+
+# ---------------------------------------------------------------------------
+# Beer-Lambert forward model
+# ---------------------------------------------------------------------------
+
+
+def beer_lambert_layer(
+    C_prev: np.ndarray,
+    E: np.ndarray,
+    k: np.ndarray,
+    thickness_mm: float,
+) -> np.ndarray:
+    """Apply one Beer-Lambert layer on top of the current color.
+    在当前颜色上叠加一层 Beer-Lambert 耗材。
+
+    C(t) = E + (C_prev − E) × exp(−k × t)
+
+    Args:
+        C_prev: (..., 3) current color in linear RGB. (当前线性 RGB 颜色)
+        E: (3,) equilibrium color. (平衡色)
+        k: (3,) absorption coefficient. (吸收系数)
+        thickness_mm: Layer thickness in mm. (层厚度 mm)
+
+    Returns:
+        (..., 3) new color after the layer. (叠层后的新颜色)
+    """
+    return E + (C_prev - E) * np.exp(-k * thickness_mm)
+
+
+def forward_model(
+    recipe: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate_linear: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute the predicted linear RGB for a full N-layer recipe.
+    正向计算 N 层配方的预测线性 RGB。
+
+    Args:
+        recipe: (N,) int array of material indices (0-based). (材料索引数组)
+        materials: List of available materials. (耗材列表)
+        layer_height_mm: Thickness of each layer in mm. (每层厚度 mm)
+        substrate_linear: (3,) substrate color in linear RGB; defaults to white.
+            (基底颜色 linear RGB，默认白)
+
+    Returns:
+        (3,) predicted color in linear RGB. (预测颜色 linear RGB)
+    """
+    if substrate_linear is None:
+        substrate_linear = np.ones(3, dtype=np.float64)
+    C = substrate_linear.copy()
+    for layer_idx in range(len(recipe)):
+        mat_id = int(recipe[layer_idx])
+        mat = materials[mat_id]
+        C = beer_lambert_layer(C, mat.E, mat.k, layer_height_mm)
+    return C
+
+
+# ---------------------------------------------------------------------------
+# Beam-search solver
+# ---------------------------------------------------------------------------
+
+
+def _solve_single_color_beam(
+    target_lab: np.ndarray,
+    target_linear: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate_linear: np.ndarray,
+    beam_width: int,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Beam-search solver for one target color.
+    单色波束搜索求解器。
+
+    对一个目标颜色，逐层展开候选配方，每步保留 ΔE 最小的 beam_width 个候选。
+
+    Args:
+        target_lab: (3,) target color in CIE Lab. (目标 Lab 颜色)
+        target_linear: (3,) target color in linear RGB. (目标线性 RGB)
+        materials: Available materials. (可用耗材列表)
+        layer_count: Number of layers. (层数)
+        layer_height_mm: Thickness per layer in mm. (每层厚度 mm)
+        substrate_linear: (3,) substrate color in linear RGB. (基底颜色)
+        beam_width: Max candidates to keep per step. (每步最大候选数)
+
+    Returns:
+        (recipe, predicted_linear, delta_e): Best recipe found.
+            recipe: (N,) int32 material indices.
+            predicted_linear: (3,) predicted linear RGB.
+            delta_e: float ΔE (CIE76) between target and prediction.
+    """
+    M = len(materials)
+
+    # Pre-extract E and k arrays for vectorized computation: (M, 3) each
+    all_E = np.stack([m.E for m in materials], axis=0)     # (M, 3)
+    all_k = np.stack([m.k for m in materials], axis=0)     # (M, 3)
+
+    # Initialize beam: one candidate starting from substrate
+    # Each candidate: (current_linear (3,), partial_recipe list[int])
+    beam_colors = substrate_linear.reshape(1, 3).copy()  # (B, 3)
+    beam_recipes: list[list[int]] = [[]]
+
+    for _layer in range(layer_count):
+        B = beam_colors.shape[0]
+        # Expand: each of B candidates × M materials → B*M candidates
+        # beam_colors: (B, 3) → repeat for M → (B*M, 3)
+        expanded_colors = np.repeat(beam_colors, M, axis=0)  # (B*M, 3)
+
+        # Tile E and k for each beam entry
+        tiled_E = np.tile(all_E, (B, 1))  # (B*M, 3)
+        tiled_k = np.tile(all_k, (B, 1))  # (B*M, 3)
+
+        # Vectorized Beer-Lambert
+        new_colors = tiled_E + (expanded_colors - tiled_E) * np.exp(-tiled_k * layer_height_mm)
+
+        # Compute ΔE in Lab space for scoring
+        new_srgb = linear_to_srgb_uint8(new_colors)
+        new_lab = rgb_to_lab(new_srgb)
+        delta_e = np.linalg.norm(new_lab - target_lab.reshape(1, 3), axis=1)  # (B*M,)
+
+        # Build expanded recipe lists
+        mat_ids = np.tile(np.arange(M), B)  # (B*M,)
+        expanded_recipes = []
+        for b_idx in range(B):
+            for m_idx in range(M):
+                expanded_recipes.append(beam_recipes[b_idx] + [m_idx])
+
+        # Prune to top beam_width
+        if len(delta_e) <= beam_width:
+            keep = np.arange(len(delta_e))
+        else:
+            keep = np.argpartition(delta_e, beam_width)[:beam_width]
+            # Sort the kept indices for deterministic ordering
+            keep = keep[np.argsort(delta_e[keep])]
+
+        beam_colors = new_colors[keep]
+        beam_recipes = [expanded_recipes[i] for i in keep]
+
+    # Final selection: best ΔE
+    final_srgb = linear_to_srgb_uint8(beam_colors)
+    final_lab = rgb_to_lab(final_srgb)
+    final_delta_e = np.linalg.norm(final_lab - target_lab.reshape(1, 3), axis=1)
+    best_idx = int(np.argmin(final_delta_e))
+
+    best_recipe = np.asarray(beam_recipes[best_idx], dtype=np.int32)
+    best_color = beam_colors[best_idx]
+    best_de = float(final_delta_e[best_idx])
+    return best_recipe, best_color, best_de
+
+
+def solve_image_colors(
+    unique_colors_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
+    substrate: str = "white",
+    beam_width: int = DEFAULT_BEAM_WIDTH,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Solve optimal recipes for a set of unique quantized colors.
+    对一组量化后的唯一颜色求解最优配方。
+
+    For each unique color, runs a beam-search through the space of possible
+    N-layer recipes and returns the best match (lowest CIE76 ΔE).
+
+    Args:
+        unique_colors_srgb: (C, 3) uint8 unique colors. (唯一颜色 sRGB)
+        materials: List of selected materials. (已选耗材列表)
+        layer_count: Number of layers per pixel (5-10). (每像素层数)
+        layer_height_mm: Thickness of each layer in mm. (每层厚度 mm)
+        substrate: Substrate type, "white" or "black". (基底类型)
+        beam_width: Beam search width. (波束宽度)
+
+    Returns:
+        matched_rgb: (C, 3) uint8 — predicted sRGB for each unique color.
+            (每个唯一色的预测 sRGB)
+        recipes: (C, N) int32 — material index per layer for each color.
+            (每个唯一色的配方)
+        delta_e: (C,) float64 — ΔE for each color. (每个唯一色的 ΔE)
+    """
+    if layer_count < MIN_LAYER_COUNT or layer_count > MAX_LAYER_COUNT:
+        raise ValueError(
+            f"layer_count must be {MIN_LAYER_COUNT}-{MAX_LAYER_COUNT}, got {layer_count}"
+        )
+    if not materials:
+        raise ValueError("At least one material must be provided")
+    if layer_height_mm not in ALLOWED_LAYER_HEIGHTS_MM:
+        raise ValueError(
+            f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, got {layer_height_mm}"
+        )
+
+    C_count = unique_colors_srgb.shape[0]
+    if C_count == 0:
+        return (
+            np.zeros((0, 3), dtype=np.uint8),
+            np.zeros((0, layer_count), dtype=np.int32),
+            np.zeros((0,), dtype=np.float64),
+        )
+
+    # Substrate color in linear RGB
+    if substrate == "white":
+        substrate_linear = np.ones(3, dtype=np.float64)
+    elif substrate == "black":
+        substrate_linear = np.zeros(3, dtype=np.float64)
+    else:
+        substrate_linear = np.ones(3, dtype=np.float64)
+
+    # Pre-compute Lab for all target colors
+    target_labs = rgb_to_lab(unique_colors_srgb)
+    target_linears = srgb_to_linear(unique_colors_srgb)
+
+    matched_rgb = np.zeros((C_count, 3), dtype=np.uint8)
+    recipes = np.zeros((C_count, layer_count), dtype=np.int32)
+    delta_e_arr = np.zeros(C_count, dtype=np.float64)
+
+    _log.info(
+        "[MaterialSolver] Solving %d unique colors with %d materials, %d layers, "
+        "%.2f mm/layer, beam=%d",
+        C_count,
+        len(materials),
+        layer_count,
+        layer_height_mm,
+        beam_width,
+    )
+
+    for i in range(C_count):
+        recipe, pred_linear, de = _solve_single_color_beam(
+            target_lab=target_labs[i],
+            target_linear=target_linears[i],
+            materials=materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate_linear=substrate_linear,
+            beam_width=beam_width,
+        )
+        matched_rgb[i] = linear_to_srgb_uint8(pred_linear.reshape(1, 3))[0]
+        recipes[i] = recipe
+        delta_e_arr[i] = de
+
+    mean_de = float(np.mean(delta_e_arr)) if C_count > 0 else 0.0
+    max_de = float(np.max(delta_e_arr)) if C_count > 0 else 0.0
+    _log.info(
+        "[MaterialSolver] Done: mean_ΔE=%.2f, max_ΔE=%.2f",
+        mean_de,
+        max_de,
+    )
+    return matched_rgb, recipes, delta_e_arr
+
+
+# ---------------------------------------------------------------------------
+# Pixel mapping (replicates the role of map_pixels_to_lut for material mode)
+# ---------------------------------------------------------------------------
+
+
+def map_pixels_to_materials(
+    quantized_image: np.ndarray,
+    unique_colors: np.ndarray,
+    matched_rgb_unique: np.ndarray,
+    recipes_unique: np.ndarray,
+    target_h: int,
+    target_w: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map all image pixels to their solved recipes.
+    将图像所有像素映射到求解的配方。
+
+    Uses integer-code lookup (R*65536 + G*256 + B) for fast matching between
+    the quantized image and the unique-color solution table.
+
+    Args:
+        quantized_image: (H, W, 3) uint8 quantized image. (量化图像)
+        unique_colors: (C, 3) uint8 unique colors. (唯一颜色)
+        matched_rgb_unique: (C, 3) uint8 matched colors from solver. (求解匹配色)
+        recipes_unique: (C, N) int32 recipes from solver. (求解配方)
+        target_h: Image height. (图像高度)
+        target_w: Image width. (图像宽度)
+
+    Returns:
+        matched_rgb: (H, W, 3) uint8 matched RGB image. (匹配 RGB 图像)
+        material_matrix: (H, W, N) int32 material matrix. (材料矩阵)
+    """
+    layer_count = recipes_unique.shape[1]
+
+    unique_codes = (
+        unique_colors[:, 0].astype(np.int32) * 65536
+        + unique_colors[:, 1].astype(np.int32) * 256
+        + unique_colors[:, 2].astype(np.int32)
+    )
+    sort_idx = np.argsort(unique_codes)
+    sorted_codes = unique_codes[sort_idx]
+    sorted_matched = matched_rgb_unique[sort_idx]
+    sorted_recipes = recipes_unique[sort_idx]
+
+    flat_quantized = quantized_image.reshape(-1, 3)
+    pixel_codes = (
+        flat_quantized[:, 0].astype(np.int32) * 65536
+        + flat_quantized[:, 1].astype(np.int32) * 256
+        + flat_quantized[:, 2].astype(np.int32)
+    )
+    insert_positions = np.searchsorted(sorted_codes, pixel_codes)
+    matched_rgb = sorted_matched[insert_positions].reshape(target_h, target_w, 3)
+    material_matrix = sorted_recipes[insert_positions].reshape(target_h, target_w, layer_count)
+
+    return matched_rgb, material_matrix
+
+
+# ---------------------------------------------------------------------------
+# Optimal MITM B&B solver — guaranteed-optimal replacement for beam search
+# 最优 MITM 分支定界求解器 —— 波束搜索的全局最优替代方案
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _MaterialAffineSet:
+    """Per-material affine parameters for a fixed layer height.
+    在给定层厚下每种耗材的仿射参数。
+
+    A single Beer-Lambert layer applied on top of a color ``C_prev`` is:
+        ``C_new = a * C_prev + b`` where ``a = exp(-k * t)`` and ``b = E * (1 - a)``.
+
+    Composing layers bottom-to-top keeps the map affine: any recipe of length N
+    is a single 3-channel affine ``C_final = α_total * C_0 + β_total`` applied
+    to the substrate ``C_0``. This factorization is what makes meet-in-the-middle
+    enumeration tractable for large N.
+
+    Attributes:
+        a: (M, 3) per-channel transmittance factor. (每通道透光系数)
+        b: (M, 3) per-channel emission contribution. (每通道发色贡献)
+    """
+
+    a: np.ndarray  # (M, 3) float64
+    b: np.ndarray  # (M, 3) float64
+
+
+def _compute_material_affines(
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+) -> _MaterialAffineSet:
+    """Pre-compute per-material affine parameters ``(a, b)`` for a layer height.
+    预计算每种耗材在给定层厚下的 Beer-Lambert 仿射参数 ``(a, b)``。
+
+    Args:
+        materials: Available materials. (可用耗材列表)
+        layer_height_mm: Thickness of one layer in mm. (单层厚度 mm)
+
+    Returns:
+        _MaterialAffineSet with (M, 3) ``a`` and ``b`` arrays.
+    """
+    k_stack = np.stack([m.k for m in materials], axis=0).astype(np.float64)
+    e_stack = np.stack([m.E for m in materials], axis=0).astype(np.float64)
+    a = np.exp(-k_stack * float(layer_height_mm))
+    b = e_stack * (1.0 - a)
+    return _MaterialAffineSet(a=a, b=b)
+
+
+def _enumerate_cumulative_affines(
+    affines: _MaterialAffineSet,
+    depth: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Enumerate every ``M**depth`` ordered layer sequence and its cumulative affine.
+    枚举所有 ``M**depth`` 种有序层序列及其累积仿射参数。
+
+    The layer sequence is applied bottom-to-top: the cumulative affine after
+    adding layer ``i`` on top of a partial ``(α, β)`` is:
+        ``α_new = a_i * α``
+        ``β_new = a_i * β + b_i``
+
+    Args:
+        affines: Per-material affines. (每耗材仿射参数)
+        depth: Number of layers to enumerate. ``0`` yields the identity row.
+            (枚举层数，0 表示恒等映射)
+
+    Returns:
+        alpha: (M**depth, 3) cumulative transmittance. (累积透光系数)
+        beta: (M**depth, 3) cumulative emission. (累积发色量)
+        recipes: (M**depth, depth) int8 material indices. ``recipes[:, 0]``
+            is the bottom layer (applied first); ``recipes[:, -1]`` is the top.
+            (层序配方：第 0 列为底层、最后一列为顶层)
+    """
+    if depth < 0:
+        raise ValueError(f"depth must be non-negative, got {depth}")
+    M = affines.a.shape[0]
+    # Identity row: one empty recipe with α=1, β=0.
+    alpha = np.ones((1, 3), dtype=np.float64)
+    beta = np.zeros((1, 3), dtype=np.float64)
+    recipes = np.empty((1, 0), dtype=np.int8)
+
+    for layer_pos in range(depth):
+        K = alpha.shape[0]
+        # Each of K current states expands into M new states (one per material).
+        # Broadcasting pattern: state[k] repeated M times, material[m] tiled K times.
+        state_alpha = np.repeat(alpha, M, axis=0)            # (K*M, 3)
+        state_beta = np.repeat(beta, M, axis=0)              # (K*M, 3)
+        mat_a = np.tile(affines.a, (K, 1))                   # (K*M, 3)
+        mat_b = np.tile(affines.b, (K, 1))                   # (K*M, 3)
+
+        alpha = mat_a * state_alpha                           # (K*M, 3)
+        beta = mat_a * state_beta + mat_b                     # (K*M, 3)
+
+        # Extend recipes: append layer index as the new top-most column.
+        old_recipes = np.repeat(recipes, M, axis=0)           # (K*M, layer_pos)
+        new_col = np.tile(np.arange(M, dtype=np.int8), K).reshape(-1, 1)
+        recipes = np.concatenate([old_recipes, new_col], axis=1)
+
+    return alpha, beta, recipes
+
+
+def _pick_mitm_split(layer_count: int, num_materials: int) -> tuple[int, int]:
+    """Choose ``(bottom_depth, top_depth)`` for MITM enumeration.
+    选择 MITM 分裂比例 ``(底层深度, 顶层深度)``。
+
+    Goal: keep both halves' enumeration count (M**depth) close to sqrt(M**N),
+    while deliberately putting the larger half on the TOP side so that the
+    transmittance-cutoff pruning (which lives on top suffixes) is more effective.
+    When ``layer_count`` is odd the extra layer goes to the top half.
+
+    For very small palettes / layer counts the split may be unbalanced
+    (``bottom_depth == 0``); the solver handles that case naturally.
+    """
+    if layer_count <= 0:
+        return (0, 0)
+    top_depth = (layer_count + 1) // 2
+    bottom_depth = layer_count - top_depth
+    # Cap bottom_depth so the bottom prefix table stays modest even for very
+    # opaque palettes (rare here since both halves are already balanced).
+    return (bottom_depth, top_depth)
+
+
+# Physical noise floor in linear RGB: the maximum perturbation that a
+# saturated-top recipe's canonical-bottom approximation can introduce. At this
+# level, the amplified Lab ΔE stays well below 1 for typical gamuts, so the
+# overall solver remains "optimal within sub-ΔE noise".
+_LINEAR_RGB_NOISE_FLOOR: float = 0.004
+
+
+def _resolve_alpha_cutoff(
+    affines: _MaterialAffineSet,
+    alpha_cutoff: float | None,
+    buffer_layers: int,
+) -> float:
+    """Resolve the numerical transmittance cutoff.
+    计算数值透光度阈值。
+
+    The cutoff is the max α (top-half transmittance product, per channel) at
+    which the solver treats the bottom half as "don't-care" (canonical fill).
+    Swapping bottoms can perturb the final linear RGB by up to ``α_top × 1``,
+    so an α_top below ``cutoff`` bounds the perturbation to ``cutoff``.
+
+    Precedence:
+      1. Explicit ``alpha_cutoff`` always wins (including ``0.0`` for strict).
+      2. ``buffer_layers <= 0``: cutoff is ``0`` — strict exhaustive search.
+      3. ``buffer_layers >= 1``: cutoff = ``NOISE_FLOOR * buffer_layers``.
+         The noise floor is a fixed linear-RGB tolerance (~0.004, sub-ΔE);
+         each extra buffer layer linearly relaxes the tolerance, trading a
+         small ΔE drift for faster enumeration.
+
+    Note: The default is ``buffer_layers=0`` (strict); callers who explicitly
+    ask for slack can pass higher values to prune aggressively.
+    """
+    if alpha_cutoff is not None:
+        if alpha_cutoff < 0.0:
+            raise ValueError(f"alpha_cutoff must be >= 0, got {alpha_cutoff}")
+        return float(alpha_cutoff)
+    if buffer_layers <= 0:
+        return 0.0
+    return _LINEAR_RGB_NOISE_FLOOR * int(buffer_layers)
+
+
+def solve_image_colors_optimal(
+    unique_colors_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
+    substrate: str = "white",
+    *,
+    alpha_cutoff: float | None = None,
+    buffer_layers: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Guaranteed-optimal MITM B&B solver for a batch of unique target colors.
+    批量唯一色的保证最优 MITM 分支定界求解器。
+
+    Splits the N-layer recipe into a bottom prefix and top suffix, enumerates
+    both halves into cumulative-affine tables, and evaluates every composition
+    ``final = α_top * (α_bot * C_0 + β_bot) + β_top``.  Optionally applies a
+    transmittance cutoff on the top suffix's α product to skip the full
+    bottom-sweep for "saturated" tops whose bottom contribution is provably
+    below ``alpha_cutoff`` in linear RGB.
+
+    With the default ``buffer_layers=0`` the cutoff is ``0``: the search is a
+    strict exhaustive MITM enumeration and the result is globally optimal.
+    Callers who need to trade a small ΔE for speed can set ``buffer_layers>=1``
+    (each unit relaxes the cutoff by one linear-RGB noise floor ≈ 0.004, so
+    ``buffer_layers=1`` keeps the ΔE regression typically under 1).
+
+    Args:
+        unique_colors_srgb: (C, 3) uint8 unique target colors. (目标唯一色)
+        materials: Selected materials. (已选耗材)
+        layer_count: Number of layers per pixel (5-10). (每像素层数)
+        layer_height_mm: Thickness of each layer in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底类型)
+        alpha_cutoff: Optional explicit numeric cutoff on ``max(α_top)``.
+            When ``None`` the cutoff is derived from ``buffer_layers``.
+            (透光度数值阈值，默认由 buffer_layers 推导)
+        buffer_layers: Approximation slack expressed in "invisible layer count".
+            ``0`` (default) gives strict exhaustive — globally optimal.
+            ``>=1`` relaxes the cutoff for faster solves; every unit allows
+            ~one noise-floor (~0.004 linear RGB) of bottom-swap drift.
+            (允许的"不可见层"数量；0 表示严格穷举并保证最优)
+
+    Returns:
+        matched_rgb: (C, 3) uint8 predicted sRGB for each target. (预测 sRGB)
+        recipes: (C, N) int32 material index per layer; column 0 is bottom,
+            column ``N-1`` is top. (配方：第 0 列为底层、最后一列为顶层)
+        delta_e: (C,) float64 CIE76 ΔE between target and prediction.
+            (CIE76 ΔE)
+    """
+    if layer_count < MIN_LAYER_COUNT or layer_count > MAX_LAYER_COUNT:
+        raise ValueError(
+            f"layer_count must be {MIN_LAYER_COUNT}-{MAX_LAYER_COUNT}, got {layer_count}"
+        )
+    if not materials:
+        raise ValueError("At least one material must be provided (materials is empty)")
+    if layer_height_mm not in ALLOWED_LAYER_HEIGHTS_MM:
+        raise ValueError(
+            f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, got {layer_height_mm}"
+        )
+
+    C_count = unique_colors_srgb.shape[0]
+    if C_count == 0:
+        return (
+            np.zeros((0, 3), dtype=np.uint8),
+            np.zeros((0, layer_count), dtype=np.int32),
+            np.zeros((0,), dtype=np.float64),
+        )
+
+    substrate_linear = (
+        np.zeros(3, dtype=np.float64)
+        if substrate == "black"
+        else np.ones(3, dtype=np.float64)
+    )
+
+    target_labs = rgb_to_lab(unique_colors_srgb)                     # (C, 3) float64
+    affines = _compute_material_affines(materials, layer_height_mm)
+    cutoff = _resolve_alpha_cutoff(affines, alpha_cutoff, buffer_layers)
+
+    bottom_depth, top_depth = _pick_mitm_split(layer_count, len(materials))
+
+    # Bottom half: enumerate prefixes and convert to colors applied on substrate.
+    bot_alpha, bot_beta, bot_recipes = _enumerate_cumulative_affines(
+        affines, bottom_depth
+    )
+    bot_colors = bot_alpha * substrate_linear + bot_beta             # (K_bot, 3)
+
+    # Top half: enumerate suffixes; they act on the bottom color via affine.
+    top_alpha, top_beta, top_recipes = _enumerate_cumulative_affines(
+        affines, top_depth
+    )
+
+    # Partition top suffixes by transmittance cutoff.
+    top_alpha_max = top_alpha.max(axis=1)                            # (K_top,)
+    saturated_mask = top_alpha_max < cutoff
+    sat_alpha = top_alpha[saturated_mask]
+    sat_beta = top_beta[saturated_mask]
+    sat_recipes_top = top_recipes[saturated_mask]
+    act_alpha = top_alpha[~saturated_mask]
+    act_beta = top_beta[~saturated_mask]
+    act_recipes_top = top_recipes[~saturated_mask]
+
+    # Canonical bottom used for saturated tops (any bottom within noise tolerance).
+    canonical_bot_color = bot_colors[0]                              # (3,)
+    canonical_bot_recipe = bot_recipes[0]                            # (bottom_depth,)
+
+    best_de = np.full(C_count, np.inf, dtype=np.float64)
+    best_pred_linear = np.zeros((C_count, 3), dtype=np.float64)
+    best_recipes = np.zeros((C_count, layer_count), dtype=np.int32)
+
+    # -- Saturated tops pass: bottom is irrelevant within cutoff noise. --------
+    if sat_alpha.shape[0] > 0:
+        sat_final_linear = sat_alpha * canonical_bot_color + sat_beta   # (K_sat, 3)
+        sat_final_srgb = linear_to_srgb_uint8(sat_final_linear)
+        sat_final_lab = rgb_to_lab(sat_final_srgb)                      # (K_sat, 3)
+        # Per-target ΔE: (C, K_sat).
+        sat_delta_e = np.linalg.norm(
+            sat_final_lab[None, :, :] - target_labs[:, None, :], axis=2
+        )
+        sat_best_idx = np.argmin(sat_delta_e, axis=1)                   # (C,)
+        sat_best_de = sat_delta_e[np.arange(C_count), sat_best_idx]     # (C,)
+        update_mask = sat_best_de < best_de
+        best_de[update_mask] = sat_best_de[update_mask]
+        # Update predicted and recipe for improved targets.
+        for i in np.where(update_mask)[0]:
+            j = int(sat_best_idx[i])
+            best_pred_linear[i] = sat_final_linear[j]
+            if bottom_depth > 0:
+                best_recipes[i, :bottom_depth] = canonical_bot_recipe
+            best_recipes[i, bottom_depth:] = sat_recipes_top[j]
+
+    # -- Active tops pass: chunked full sweep over every bottom. ---------------
+    K_bot = bot_colors.shape[0]
+    K_act = act_alpha.shape[0]
+    if K_act > 0 and K_bot > 0:
+        # Chunk size balances memory vs. call overhead. Per-chunk memory is
+        # roughly chunk * K_bot * 24 bytes for the linear RGB block; 32 MiB target.
+        max_chunk_bytes = 32 * 1024 * 1024
+        chunk = max(1, min(K_act, max_chunk_bytes // max(1, K_bot * 24)))
+        for chunk_start in range(0, K_act, chunk):
+            chunk_end = min(chunk_start + chunk, K_act)
+            sub = chunk_end - chunk_start
+            chunk_alpha = act_alpha[chunk_start:chunk_end]               # (sub, 3)
+            chunk_beta = act_beta[chunk_start:chunk_end]                 # (sub, 3)
+            chunk_recipes = act_recipes_top[chunk_start:chunk_end]       # (sub, top_depth)
+            # final_linear: (sub, K_bot, 3) = α*bot + β broadcast.
+            final_linear = (
+                chunk_alpha[:, None, :] * bot_colors[None, :, :]
+                + chunk_beta[:, None, :]
+            )
+            flat_linear = final_linear.reshape(-1, 3)                    # (sub*K_bot, 3)
+            flat_srgb = linear_to_srgb_uint8(flat_linear)
+            flat_lab = rgb_to_lab(flat_srgb)                             # (sub*K_bot, 3)
+            final_lab = flat_lab.reshape(sub, K_bot, 3)
+            # ΔE to every target: (C, sub, K_bot).
+            delta_e = np.linalg.norm(
+                final_lab[None, :, :, :] - target_labs[:, None, None, :],
+                axis=3,
+            )
+            # Flatten (sub, K_bot) → L, pick argmin per target.
+            L = sub * K_bot
+            delta_flat = delta_e.reshape(C_count, L)
+            local_best_idx = np.argmin(delta_flat, axis=1)               # (C,)
+            local_best_de = delta_flat[np.arange(C_count), local_best_idx]
+            update_mask = local_best_de < best_de
+            if not np.any(update_mask):
+                continue
+            top_idx = local_best_idx // K_bot
+            bot_idx = local_best_idx % K_bot
+            best_de[update_mask] = local_best_de[update_mask]
+            for i in np.where(update_mask)[0]:
+                t_i = int(top_idx[i])
+                b_i = int(bot_idx[i])
+                best_pred_linear[i] = final_linear[t_i, b_i]
+                if bottom_depth > 0:
+                    best_recipes[i, :bottom_depth] = bot_recipes[b_i]
+                best_recipes[i, bottom_depth:] = chunk_recipes[t_i]
+
+    matched_rgb = linear_to_srgb_uint8(best_pred_linear)
+    return matched_rgb, best_recipes, best_de

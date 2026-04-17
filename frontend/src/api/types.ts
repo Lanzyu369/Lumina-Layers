@@ -89,6 +89,10 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   hue_weight?: number;
   chroma_gate?: number;
   is_dark?: boolean;
+  material_source?: "lut" | "material_archive";
+  selected_materials?: string[];
+  material_layer_count?: number;
+  material_layer_height_mm?: number;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
@@ -264,10 +268,12 @@ export interface PreviewResponse {
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
-export type LargeFormatConvertGenerateRequest =
-  Omit<ConvertGenerateRequest, "target_width_mm"> & {
-    target_width_mm?: number;
-  };
+export type LargeFormatConvertGenerateRequest = Omit<
+  ConvertGenerateRequest,
+  "target_width_mm"
+> & {
+  target_width_mm?: number;
+};
 
 export interface LargeFormatGenerateRequest {
   target_height_mm?: number;
@@ -409,6 +415,7 @@ export interface SingleStageKitGenerateRequest {
   substrate_id: string;
   substrate_display_name: string;
   material_default: string;
+  layer_height_mm: number;
 }
 
 export interface SingleStageKitResponse {
@@ -527,8 +534,15 @@ export interface StageAFitSummary {
   channel_count: number;
   substrates: string[];
   colors: string[];
-  overall_validation: Record<string, unknown>;
+  overall_validation: StageAOverallValidationSummary;
   warnings: string[];
+}
+
+export interface StageAOverallValidationSummary {
+  mean_delta_e?: number | null;
+  max_delta_e?: number | null;
+  rmse_linear?: number | null;
+  channel_rmse?: number[];
 }
 
 export interface StageAFitResponse {
@@ -536,6 +550,204 @@ export interface StageAFitResponse {
   message: string;
   stage_a_params_url: string;
   fit_summary: StageAFitSummary;
+}
+
+export interface GradientCardMaterialSummary {
+  sample_count: number;
+  per_substrate_sample_count: number;
+  grid_rows: number;
+  grid_cols: number;
+  layer_height_mm: number;
+  warp_width_px?: number | null;
+  warp_height_px?: number | null;
+  thickness_layers: number[];
+  sample_boxes: GradientCardSampleBox[];
+  white_zero_rgb: number[];
+  black_zero_rgb: number[];
+  estimated_rgb: number[];
+  estimated_k: number[];
+}
+
+export interface GradientCardSampleBox {
+  row: number;
+  col: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  thickness_layers: number;
+}
+
+export interface SavedMaterialSummary {
+  material_name: string;
+  directory_name: string;
+  archive_path: string;
+  stage_a_params_path: string;
+  verification_count?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OrientationCandidate {
+  white_orientation: string;
+  black_orientation: string;
+  anchor_penalty: number;
+  mean_delta_e: number;
+  rmse_linear: number;
+  max_delta_e: number;
+}
+
+export const MANUAL_ORIENTATION_LABELS = [
+  "identity",
+  "rotate_90_cw",
+  "rotate_180",
+  "rotate_90_ccw",
+  "flip_horizontal",
+  "flip_vertical",
+  "transpose",
+  "transverse",
+] as const;
+
+export type ManualOrientationLabel = (typeof MANUAL_ORIENTATION_LABELS)[number];
+
+export interface SubstrateOrientationInfo {
+  signal_strength: number;
+  flat: boolean;
+  manual_override: ManualOrientationLabel | null;
+  locked_to: ManualOrientationLabel | null;
+}
+
+export interface OrientationRanking {
+  orientation_reliable: boolean;
+  delta_e_gap: number;
+  top_candidates: OrientationCandidate[];
+  white_signal_strength?: number | null;
+  black_signal_strength?: number | null;
+  white_orientation_info?: SubstrateOrientationInfo | null;
+  black_orientation_info?: SubstrateOrientationInfo | null;
+}
+
+export interface GradientCardStageAExtractResponse {
+  session_id: string;
+  status: string;
+  message: string;
+  stage_a_params_url: string;
+  white_warp_preview_url?: string | null;
+  black_warp_preview_url?: string | null;
+  fit_summary: StageAFitSummary;
+  material_summary: GradientCardMaterialSummary;
+  orientation_ranking?: OrientationRanking | null;
+  warnings: string[];
+}
+
+export interface GradientCardMaterialSaveResponse {
+  status: string;
+  message: string;
+  material_file_url: string;
+  stage_a_params_url: string;
+  material_summary: SavedMaterialSummary;
+}
+
+export interface GradientCardMaterialDeleteResponse {
+  status: string;
+  message: string;
+  directory_name: string;
+  material_name: string;
+}
+
+export interface SavedMaterialVerificationHistoryItem {
+  verification_index: number;
+  captured_at?: string | null;
+  mean_delta_e?: number | null;
+  rmse_linear?: number | null;
+  estimated_rgb: number[];
+  estimated_k: number[];
+  e_values: number[];
+  k_values: number[];
+  white_c0_values: number[];
+  black_c0_values: number[];
+  white_detected_orientation?: string | null;
+  black_detected_orientation?: string | null;
+}
+
+export interface SavedMaterialLibraryItem {
+  material_name: string;
+  directory_name: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  archive_path: string;
+  stage_a_params_path?: string | null;
+  material_file_url: string;
+  stage_a_params_url?: string | null;
+  estimated_rgb: number[];
+  layer_height_mm?: number | null;
+  mean_delta_e?: number | null;
+  verification_count?: number;
+  verification_history?: SavedMaterialVerificationHistoryItem[];
+}
+
+export interface GradientCardMaterialLibraryResponse {
+  status: string;
+  message: string;
+  materials: SavedMaterialLibraryItem[];
+}
+
+// ========== Material solver cache (64³ Lab-grid recipe lookup) ==========
+
+/** Metadata for one persisted material-solver cache entry. */
+export interface MaterialSolverCacheEntry {
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  grid_resolution: number;
+  total_combinations: number;
+  valid_cell_count: number;
+  total_cell_count: number;
+  mean_delta_e: number;
+  max_delta_e: number;
+  build_time_seconds: number;
+  built_at?: string | null;
+  cache_file_size_bytes: number;
+  cache_file_path?: string | null;
+}
+
+/** Status response for a specific ``(palette, N, t, substrate)`` combination. */
+export interface MaterialSolverCacheStatusResponse {
+  status: string;
+  message: string;
+  cached: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  entry?: MaterialSolverCacheEntry | null;
+}
+
+/** Response after an explicit cache build. */
+export interface MaterialSolverCacheBuildResponse {
+  status: string;
+  message: string;
+  entry: MaterialSolverCacheEntry;
+}
+
+/** Listing response for all persisted solver caches. */
+export interface MaterialSolverCacheListResponse {
+  status: string;
+  message: string;
+  entries: MaterialSolverCacheEntry[];
+}
+
+/** Delete response for a solver cache entry. */
+export interface MaterialSolverCacheDeleteResponse {
+  status: string;
+  message: string;
+  deleted: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
 }
 
 export interface ManualFixResponse {

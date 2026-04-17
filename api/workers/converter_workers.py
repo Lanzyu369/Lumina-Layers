@@ -72,6 +72,10 @@ def worker_generate_preview(
     model_margin: float | None = None,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
+    material_source: str = "lut",
+    selected_materials: list[str] | None = None,
+    material_layer_count: int | None = None,
+    material_layer_height_mm: float | None = None,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -144,6 +148,10 @@ def worker_generate_preview(
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
+            material_source=material_source,
+            selected_materials=selected_materials,
+            material_layer_count=material_layer_count,
+            material_layer_height_mm=material_layer_height_mm,
         )
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
         log.exception(
@@ -161,6 +169,18 @@ def worker_generate_preview(
         "preview_png_path": None,
         "cache_data_path": None,
     }
+
+    if preview_img is None:
+        log.warning(
+            "Worker preview returned no image",
+            extra={
+                "event": "worker_preview_no_image",
+                "status_msg": status_msg,
+            },
+        )
+        # Surface the domain error to the API layer so the 500 response
+        # includes the actual pipeline error instead of an opaque fallback.
+        raise RuntimeError(status_msg or "Preview generation failed")
 
     import time as _time
 

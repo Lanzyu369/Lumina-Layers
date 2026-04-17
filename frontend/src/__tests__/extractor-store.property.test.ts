@@ -581,6 +581,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           gap: 0.82,
           backing: BackingColor.WHITE,
           eight_color_full_export: false,
+          singleStageLayerHeightMm: 0.04,
         });
 
         return JSON.stringify(before) === JSON.stringify(after);

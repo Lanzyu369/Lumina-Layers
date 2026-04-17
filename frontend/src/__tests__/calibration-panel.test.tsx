@@ -13,6 +13,7 @@ vi.mock("../api/calibration", () => ({
 beforeEach(() => {
   useCalibrationStore.setState({
     workflow: "legacy",
+    lastSubmittedWorkflow: "legacy",
     color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
     block_size: 5,
     gap: 0.82,
@@ -21,6 +22,7 @@ beforeEach(() => {
     substrateId: "white",
     substrateDisplayName: "White",
     materialDefault: "PLA Basic",
+    singleStageLayerHeightMm: 0.04,
     isLoading: false,
     error: null,
     downloadUrl: null,
@@ -33,50 +35,16 @@ beforeEach(() => {
 });
 
 describe("CalibrationPanel", () => {
-  it("renders workflow selector and legacy controls by default", () => {
+  it("renders legacy LUT controls and no gradient-card workflow selector", () => {
     render(<CalibrationPanel />);
 
     expect(screen.getByTestId("calibration-panel")).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox").length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("renders single-stage fields when workflow is single-stage", () => {
-    useCalibrationStore.setState({ workflow: "single-stage" });
-    render(<CalibrationPanel />);
-
-    expect(screen.getByTestId("single-stage-config")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("white")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("White")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("PLA Basic")).toBeInTheDocument();
-  });
-
-  it("shows manifest link when single-stage output exists", () => {
-    useCalibrationStore.setState({
-      workflow: "single-stage",
-      downloadUrl: "/api/files/kit.zip",
-      manifestUrl: "/api/files/manifest.json",
-      singleStageJobs: [
-        {
-          color: "White",
-          color_name: "White",
-          material: "PLA Basic",
-          substrate_id: "white",
-          substrate_display_name: "White",
-          filename: "single_stage_white_white.3mf",
-        },
-      ],
-    });
-    render(<CalibrationPanel />);
-
-    expect(screen.getByTestId("download-link")).toHaveAttribute(
-      "href",
-      "/api/files/kit.zip",
-    );
-    expect(screen.getByTestId("manifest-link")).toHaveAttribute(
-      "href",
-      "/api/files/manifest.json",
-    );
-    expect(screen.getByTestId("single-stage-jobs")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: /color mode|颜色模式/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: /layer height|层高/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides the exhaustive export switch outside 8-Color Max mode", () => {
@@ -105,7 +73,7 @@ describe("CalibrationPanel", () => {
 
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
-    expect(selects[2]).toBeDisabled();
+    expect(selects[1]).toBeDisabled();
   });
 
   it("enables all controls in BW mode", () => {
@@ -117,8 +85,8 @@ describe("CalibrationPanel", () => {
 
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
+    expect(selects[0]).not.toBeDisabled();
     expect(selects[1]).not.toBeDisabled();
-    expect(selects[2]).not.toBeDisabled();
   });
 
   it("enables all controls in 4-Color mode", () => {
@@ -129,8 +97,8 @@ describe("CalibrationPanel", () => {
 
     expect(sliders[0]).not.toBeDisabled();
     expect(sliders[1]).not.toBeDisabled();
+    expect(selects[0]).not.toBeDisabled();
     expect(selects[1]).not.toBeDisabled();
-    expect(selects[2]).not.toBeDisabled();
   });
 
   it("disables generate button when isLoading is true", () => {

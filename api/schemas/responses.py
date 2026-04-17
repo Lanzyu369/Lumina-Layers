@@ -105,6 +105,242 @@ class StageAFitResponse(BaseModel):
     fit_summary: StageAFitSummaryResponse
 
 
+class GradientCardSampleBoxResponse(BaseModel):
+    """Warped sample ROI geometry for gradient-card extraction."""
+
+    row: int
+    col: int
+    x: int
+    y: int
+    width: int
+    height: int
+    thickness_layers: int
+
+
+class GradientCardMaterialSummaryResponse(BaseModel):
+    """Summary of extracted gradient-card material data."""
+
+    sample_count: int
+    per_substrate_sample_count: int
+    grid_rows: int
+    grid_cols: int
+    layer_height_mm: float
+    warp_width_px: int | None = None
+    warp_height_px: int | None = None
+    thickness_layers: list[int] = Field(default_factory=list)
+    sample_boxes: list[GradientCardSampleBoxResponse] = Field(default_factory=list)
+    white_zero_rgb: list[int] = Field(default_factory=list)
+    black_zero_rgb: list[int] = Field(default_factory=list)
+    estimated_rgb: list[int] = Field(default_factory=list)
+    estimated_k: list[float] = Field(default_factory=list)
+
+
+class SavedMaterialSummaryResponse(BaseModel):
+    """Summary of a saved material archive."""
+
+    material_name: str
+    directory_name: str
+    archive_path: str
+    stage_a_params_path: str
+    verification_count: int = 1
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class OrientationCandidateResponse(BaseModel):
+    """One orientation candidate in the ranking."""
+
+    white_orientation: str
+    black_orientation: str
+    anchor_penalty: float = 0.0
+    mean_delta_e: float
+    rmse_linear: float
+    max_delta_e: float
+
+
+class SubstrateOrientationInfoResponse(BaseModel):
+    """Per-substrate orientation diagnostics.
+    单基底方向诊断信息。
+
+    Surfaced to the frontend so the user can tell when the auto-detector
+    fell back to ``identity`` due to a flat (low-signal) substrate, or when
+    a manual override is currently in effect.
+    """
+
+    signal_strength: float = 0.0
+    flat: bool = False
+    manual_override: str | None = None
+    locked_to: str | None = None
+
+
+class OrientationRankingResponse(BaseModel):
+    """Orientation detection reliability ranking."""
+
+    orientation_reliable: bool
+    delta_e_gap: float
+    top_candidates: list[OrientationCandidateResponse] = Field(default_factory=list)
+    white_signal_strength: float | None = None
+    black_signal_strength: float | None = None
+    white_orientation_info: SubstrateOrientationInfoResponse | None = None
+    black_orientation_info: SubstrateOrientationInfoResponse | None = None
+
+
+class GradientCardStageAExtractResponse(BaseModel):
+    """Gradient-card Stage A extraction response."""
+
+    session_id: str
+    status: str
+    message: str
+    stage_a_params_url: str
+    white_warp_preview_url: str | None = None
+    black_warp_preview_url: str | None = None
+    fit_summary: StageAFitSummaryResponse
+    material_summary: GradientCardMaterialSummaryResponse
+    orientation_ranking: OrientationRankingResponse | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class GradientCardMaterialSaveResponse(BaseModel):
+    """Gradient-card material archive save response."""
+
+    status: str
+    message: str
+    material_file_url: str
+    stage_a_params_url: str
+    material_summary: SavedMaterialSummaryResponse
+
+
+class GradientCardMaterialDeleteResponse(BaseModel):
+    """Gradient-card material archive delete response."""
+
+    status: str
+    message: str
+    directory_name: str
+    material_name: str
+
+
+class SavedMaterialVerificationHistoryItemResponse(BaseModel):
+    """Summary row for a single saved material verification run."""
+
+    verification_index: int
+    captured_at: str | None = None
+    mean_delta_e: float | None = None
+    rmse_linear: float | None = None
+    estimated_rgb: list[int] = Field(default_factory=list)
+    estimated_k: list[float] = Field(default_factory=list)
+    e_values: list[float] = Field(default_factory=list)
+    k_values: list[float] = Field(default_factory=list)
+    white_c0_values: list[float] = Field(default_factory=list)
+    black_c0_values: list[float] = Field(default_factory=list)
+    white_detected_orientation: str | None = None
+    black_detected_orientation: str | None = None
+
+
+class SavedMaterialLibraryItemResponse(BaseModel):
+    """Summary row for a saved Stage A material archive."""
+
+    material_name: str
+    directory_name: str
+    created_at: str | None = None
+    updated_at: str | None = None
+    archive_path: str
+    stage_a_params_path: str | None = None
+    material_file_url: str
+    stage_a_params_url: str | None = None
+    estimated_rgb: list[int] = Field(default_factory=list)
+    layer_height_mm: float | None = None
+    mean_delta_e: float | None = None
+    verification_count: int = 1
+    verification_history: list[SavedMaterialVerificationHistoryItemResponse] = Field(default_factory=list)
+
+
+class GradientCardMaterialLibraryResponse(BaseModel):
+    """Saved gradient-card material archive library response."""
+
+    status: str
+    message: str
+    materials: list[SavedMaterialLibraryItemResponse] = Field(default_factory=list)
+
+
+class MaterialSolverCacheEntryResponse(BaseModel):
+    """Metadata for a single persisted material-solver cache entry.
+    单个耗材求解器缓存条目的元数据。
+
+    The ``palette_fingerprint`` identifies which saved materials were combined.
+    ``total_combinations`` and ``valid_cell_count`` describe the enumeration
+    coverage; ``mean_delta_e`` / ``max_delta_e`` summarise bucket-center quality.
+    """
+
+    palette_hash: str
+    material_directory_names: list[str] = Field(default_factory=list)
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    grid_resolution: int
+    total_combinations: int
+    valid_cell_count: int
+    total_cell_count: int
+    mean_delta_e: float
+    max_delta_e: float
+    build_time_seconds: float
+    built_at: str | None = None
+    cache_file_size_bytes: int = 0
+    cache_file_path: str | None = None
+
+
+class MaterialSolverCacheStatusResponse(BaseModel):
+    """Status check for a specific ``(palette, N, t, substrate)`` combination.
+    针对指定 ``(调色板, 层数, 层厚, 基底)`` 组合的缓存状态。
+
+    ``cached`` is ``True`` when a compatible cache exists on disk; in that
+    case ``entry`` carries the loaded metadata. Otherwise ``entry`` is ``None``
+    and the caller should call the build endpoint to create it.
+    """
+
+    status: str
+    message: str
+    cached: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    entry: MaterialSolverCacheEntryResponse | None = None
+
+
+class MaterialSolverCacheBuildResponse(BaseModel):
+    """Response after an explicit cache build.
+    显式构建缓存后的响应。
+    """
+
+    status: str
+    message: str
+    entry: MaterialSolverCacheEntryResponse
+
+
+class MaterialSolverCacheListResponse(BaseModel):
+    """Listing response for all persisted solver caches.
+    所有已持久化求解器缓存的列表响应。
+    """
+
+    status: str
+    message: str
+    entries: list[MaterialSolverCacheEntryResponse] = Field(default_factory=list)
+
+
+class MaterialSolverCacheDeleteResponse(BaseModel):
+    """Delete response for a solver cache entry.
+    求解器缓存条目的删除响应。
+    """
+
+    status: str
+    message: str
+    deleted: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+
+
 class RecipePredictResponse(BaseModel):
     """Recipe color prediction response."""
 

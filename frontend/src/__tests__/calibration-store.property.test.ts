@@ -1,6 +1,13 @@
-import { describe, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import * as fc from "fast-check";
+import {
+  calibrationGenerate,
+  generateSingleStageKit,
+} from "../api/calibration";
+import { CalibrationColorMode, BackingColor } from "../api/types";
+import { useCalibrationStore } from "../stores/calibrationStore";
 import { clampValue } from "../stores/converter";
+import { useConverterStore } from "../stores/converter";
 
 // **Validates: Requirements 6.3**
 describe("Feature: calibration-tab-integration, Property 4: clampValue 通用正确性", () => {
@@ -23,8 +30,6 @@ describe("Feature: calibration-tab-integration, Property 4: clampValue 通用正
     );
   });
 });
-
-import { useCalibrationStore } from "../stores/calibrationStore";
 
 // **Validates: Requirements 6.1, 6.2**
 describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制正确性", () => {
@@ -72,9 +77,6 @@ describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制�
     );
   });
 });
-
-import { useConverterStore } from "../stores/converter";
-import { CalibrationColorMode, BackingColor } from "../api/types";
 
 // ========== Helpers ==========
 
@@ -234,11 +236,13 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
 
         // Reset CalibrationStore to defaults
         useCalibrationStore.setState({
+          workflow: "legacy",
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
           gap: 0.82,
           backing: BackingColor.WHITE,
           eight_color_full_export: false,
+          singleStageLayerHeightMm: 0.04,
           isLoading: false,
           error: null,
           downloadUrl: null,
@@ -306,14 +310,13 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
   });
 });
 
-import { vi, beforeEach, afterEach } from "vitest";
-import { calibrationGenerate } from "../api/calibration";
-
 vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
+  generateSingleStageKit: vi.fn(),
 }));
 
 const mockCalibrationGenerate = vi.mocked(calibrationGenerate);
+const mockGenerateSingleStageKit = vi.mocked(generateSingleStageKit);
 
 // **Validates: Requirements 3.1**
 describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 Store 状态一致性", () => {
@@ -321,17 +324,24 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
     vi.clearAllMocks();
     // Reset store to defaults before each test
     useCalibrationStore.setState({
+      workflow: "legacy",
       color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
       block_size: 5,
       gap: 0.82,
       backing: BackingColor.WHITE,
       eight_color_full_export: false,
+      substrateId: "white",
+      substrateDisplayName: "White",
+      materialDefault: "PLA Basic",
+      singleStageLayerHeightMm: 0.04,
       isLoading: false,
       error: null,
       downloadUrl: null,
       previewImageUrl: null,
       modelUrl: null,
       statusMessage: null,
+      manifestUrl: null,
+      singleStageJobs: [],
     });
   });
 
@@ -397,5 +407,37 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       }),
       { numRuns: 100 },
     );
+  });
+
+  it("submitGenerate sends single-stage layer height when workflow is single-stage", async () => {
+    useCalibrationStore.setState({
+      workflow: "single-stage",
+      color_mode: CalibrationColorMode.EIGHT_COLOR,
+      substrateId: "white",
+      substrateDisplayName: "White",
+      materialDefault: "PLA Basic",
+      singleStageLayerHeightMm: 0.1,
+    });
+
+    mockGenerateSingleStageKit.mockResolvedValueOnce({
+      status: "ok",
+      message: "success",
+      kit_download_url: "/test.zip",
+      preview_url: null,
+      manifest_url: "/manifest.json",
+      jobs: [],
+    });
+
+    await useCalibrationStore.getState().submitGenerate();
+
+    const callArgs =
+      mockGenerateSingleStageKit.mock.calls[
+        mockGenerateSingleStageKit.mock.calls.length - 1
+      ][0];
+    expect(callArgs.layer_height_mm).toBe(0.1);
+    expect(callArgs.palette.map((entry) => entry.color_name)).toEqual([
+      "Sample",
+    ]);
+    expect(useCalibrationStore.getState().singleStageJobs).toEqual([]);
   });
 });

@@ -217,7 +217,10 @@ def run(ctx: dict) -> dict:
     matched_rgb = ctx["matched_rgb"]
     material_matrix = ctx["material_matrix"]
     mask_solid = ctx["mask_solid"]
-    processor = ctx["processor"]
+    # processor is unset in material-archive mode (S02 short-circuits and never
+    # constructs a LuminaImageProcessor). All processor-dependent paths below
+    # guard with `if processor is not None` and skip with a warning when absent.
+    processor = ctx.get("processor")
     color_replacements = ctx.get("color_replacements")
     replacement_regions = ctx.get("replacement_regions")
     matched_rgb_path = ctx.get("matched_rgb_path")
@@ -240,7 +243,7 @@ def run(ctx: dict) -> dict:
             else:
                 # Detect pixels that differ between original and override
                 diff_mask = np.any(matched_rgb != override_rgb, axis=-1) & mask_solid
-                if np.any(diff_mask):
+                if np.any(diff_mask) and processor is not None:
                     diff_pixels = override_rgb[diff_mask]  # (N, 3)
                     unique_colors = np.unique(diff_pixels, axis=0)
                     for color in unique_colors:
@@ -252,6 +255,12 @@ def run(ctx: dict) -> dict:
                     _log.info(
                         f"[S03] matched_rgb override applied: "
                         f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
+                    )
+                elif np.any(diff_mask):
+                    _log.info(
+                        "[S03] matched_rgb override: %d differing pixels skipped "
+                        "(no LUT processor in material-archive mode)",
+                        int(np.sum(diff_mask)),
                     )
                 matched_rgb = override_rgb
         except (OSError, ValueError, TypeError) as e:
@@ -285,6 +294,12 @@ def run(ctx: dict) -> dict:
             # _apply_regions_to_raster_outputs skipping them silently
             replacement_regions = [r for r in replacement_regions if r.get("mask") is not None]
 
+    if effective_color_replacements and processor is None:
+        _log.warning(
+            "[S03] %d color replacements skipped (no LUT processor in material-archive mode)",
+            len(effective_color_replacements),
+        )
+        effective_color_replacements = {}
     if effective_color_replacements:
         from core.color_replacement import ColorReplacementManager
 
@@ -382,7 +397,12 @@ def run(ctx: dict) -> dict:
                         _log.warning("[S03] Recipe color prediction failed for %s: %s", region_id, exc)
 
     # ---- Apply region replacements in-order ----
-    if replacement_regions:
+    if replacement_regions and processor is None:
+        _log.warning(
+            "[S03] %d replacement regions skipped (no LUT processor in material-archive mode)",
+            len(replacement_regions),
+        )
+    elif replacement_regions:
 
         def _resolve_lut_index_for_rgb(replacement_rgb):
             repl_lab = processor._rgb_to_lab(np.array([replacement_rgb], dtype=np.uint8))

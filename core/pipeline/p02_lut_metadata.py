@@ -38,6 +38,16 @@ def run(ctx: dict) -> dict:
     actual_lut_path = ctx['actual_lut_path']
     color_mode = ctx['color_mode']
 
+    # ---- Material-archive branch: skip LUT metadata ----
+    if ctx.get("material_source") == "material_archive":
+        if "color_conf" not in ctx:
+            ctx["color_conf"] = ColorSystem.get(color_mode)
+        ctx["lut_metadata"] = None
+        _elapsed = time.perf_counter() - _t0
+        ctx.setdefault('_preview_timings', {})['p02_s'] = _elapsed
+        print(f"[P02] material_archive mode, skipping LUT metadata: {_elapsed:.3f}s")
+        return ctx
+
     # ---- 颜色系统配置 ----
     color_conf = ColorSystem.get(color_mode)
 
