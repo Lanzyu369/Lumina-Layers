@@ -391,6 +391,37 @@ describe("Feature: extractor-calibration-tab, Property 4: clearCornerPoints 重�
     resetExtractorStore();
   });
 
+  // Regression: uploading a new image must reset correction params to defaults,
+  // so stale offset/zoom/distortion/vignette values from a previous session do
+  // not silently influence the new extraction.
+  it("setImageFile resets correction params (offset_x/y, zoom, distortion, vignette, auto_wb) to defaults", () => {
+    useExtractorStore.setState({
+      offset_x: 15,
+      offset_y: -20,
+      zoom: 1.15,
+      distortion: 0.1,
+      vignette_correction: true,
+      auto_wb: true,
+      originalPreviewUrl: "blob:stale",
+    });
+
+    const file = new File([new Uint8Array([1, 2, 3])], "new.png", {
+      type: "image/png",
+    });
+    useExtractorStore.getState().setImageFile(file);
+
+    const s = useExtractorStore.getState();
+    expect(s.offset_x).toBe(0);
+    expect(s.offset_y).toBe(0);
+    expect(s.zoom).toBeCloseTo(1.0);
+    expect(s.distortion).toBeCloseTo(0.0);
+    expect(s.vignette_correction).toBe(false);
+    expect(s.auto_wb).toBe(false);
+    expect(s.originalPreviewUrl).toBeNull();
+
+    resetExtractorStore();
+  });
+
   // Guard: clearing corners must NOT wipe the user's uploaded image, the
   // selected color mode/page, tuning parameters, or multi-page extraction
   // progress. Otherwise users mid-way through a multi-page workflow (e.g.
@@ -451,6 +482,13 @@ describe("Feature: extractor-calibration-tab, Property 4: clearCornerPoints 重�
     expect(state.extractedEightColorFullPages).toEqual([1, 2, 3]);
     expect(state.page1Extracted_5c).toBe(true);
     expect(state.page2Extracted_5c).toBe(false);
+    // Preview URLs and palette are cleared by clearCornerPoints
+    expect(state.warp_view_url).toBeNull();
+    expect(state.lut_preview_url).toBeNull();
+    expect(state.lut_download_url).toBeNull();
+    expect(state.defaultPalette.length).toBe(0);
+    expect(state.paletteConfirmed).toBe(false);
+    expect(state.paletteConfirmError).toBeNull();
 
     resetExtractorStore();
   });
@@ -730,6 +768,139 @@ describe("Feature: extractor-calibration-tab, Property 10: 标签页切换状态
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+describe("Extractor corner nudge tool", () => {
+  it("addCornerPoint sets active_corner_index to the newly placed corner", () => {
+    const store = useExtractorStore.getState();
+    store.addCornerPoint([10, 20]);
+    expect(useExtractorStore.getState().active_corner_index).toBe(0);
+    store.addCornerPoint([30, 40]);
+    expect(useExtractorStore.getState().active_corner_index).toBe(1);
+    store.addCornerPoint([50, 60]);
+    expect(useExtractorStore.getState().active_corner_index).toBe(2);
+    store.addCornerPoint([70, 80]);
+    expect(useExtractorStore.getState().active_corner_index).toBe(3);
+    resetExtractorStore();
+  });
+
+  it("clearCornerPoints resets active_corner_index to null", () => {
+    useExtractorStore.setState({
+      corner_points: [
+        [0, 0],
+        [1, 0],
+      ],
+      active_corner_index: 1,
+    });
+    useExtractorStore.getState().clearCornerPoints();
+    expect(useExtractorStore.getState().active_corner_index).toBeNull();
+    resetExtractorStore();
+  });
+
+  it("setNudgeStep clamps value to [1, 10] and rounds to integer", () => {
+    fc.assert(
+      fc.property(
+        fc.double({
+          min: -1000,
+          max: 1000,
+          noNaN: true,
+          noDefaultInfinity: true,
+        }),
+        (value) => {
+          useExtractorStore.getState().setNudgeStep(value);
+          const { nudge_step } = useExtractorStore.getState();
+          resetExtractorStore();
+          return (
+            Number.isInteger(nudge_step) &&
+            nudge_step >= 1 &&
+            nudge_step <= 10
+          );
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it("setActiveCornerIndex rejects out-of-range indices but accepts valid ones and null", () => {
+    useExtractorStore.setState({
+      corner_points: [
+        [0, 0],
+        [1, 0],
+      ],
+      active_corner_index: 0,
+    });
+    const store = useExtractorStore.getState();
+    store.setActiveCornerIndex(5);
+    expect(useExtractorStore.getState().active_corner_index).toBe(0);
+    store.setActiveCornerIndex(-1);
+    expect(useExtractorStore.getState().active_corner_index).toBe(0);
+    store.setActiveCornerIndex(1);
+    expect(useExtractorStore.getState().active_corner_index).toBe(1);
+    store.setActiveCornerIndex(null);
+    expect(useExtractorStore.getState().active_corner_index).toBeNull();
+    resetExtractorStore();
+  });
+
+  it("nudgeActiveCorner shifts only the active corner by nudge_step pixels", () => {
+    useExtractorStore.setState({
+      corner_points: [
+        [100, 200],
+        [300, 400],
+      ],
+      active_corner_index: 1,
+      nudge_step: 3,
+      imageNaturalWidth: 1000,
+      imageNaturalHeight: 1000,
+    });
+    useExtractorStore.getState().nudgeActiveCorner(1, 0);
+    let state = useExtractorStore.getState();
+    expect(state.corner_points[0]).toEqual([100, 200]);
+    expect(state.corner_points[1]).toEqual([303, 400]);
+    useExtractorStore.getState().nudgeActiveCorner(0, -1);
+    state = useExtractorStore.getState();
+    expect(state.corner_points[1]).toEqual([303, 397]);
+    resetExtractorStore();
+  });
+
+  it("nudgeActiveCorner is a no-op when active_corner_index is null or out of range", () => {
+    useExtractorStore.setState({
+      corner_points: [
+        [10, 10],
+        [20, 20],
+      ],
+      active_corner_index: null,
+      nudge_step: 5,
+    });
+    useExtractorStore.getState().nudgeActiveCorner(1, 1);
+    expect(useExtractorStore.getState().corner_points).toEqual([
+      [10, 10],
+      [20, 20],
+    ]);
+    useExtractorStore.setState({ active_corner_index: 5 });
+    useExtractorStore.getState().nudgeActiveCorner(1, 1);
+    expect(useExtractorStore.getState().corner_points).toEqual([
+      [10, 10],
+      [20, 20],
+    ]);
+    resetExtractorStore();
+  });
+
+  it("nudgeActiveCorner clamps resulting coordinates to image natural bounds", () => {
+    useExtractorStore.setState({
+      corner_points: [[0, 0]],
+      active_corner_index: 0,
+      nudge_step: 10,
+      imageNaturalWidth: 5,
+      imageNaturalHeight: 5,
+    });
+    useExtractorStore.getState().nudgeActiveCorner(-1, -1);
+    expect(useExtractorStore.getState().corner_points[0]).toEqual([0, 0]);
+    useExtractorStore.getState().nudgeActiveCorner(1, 1);
+    expect(useExtractorStore.getState().corner_points[0]).toEqual([4, 4]);
+    useExtractorStore.getState().nudgeActiveCorner(1, 1);
+    expect(useExtractorStore.getState().corner_points[0]).toEqual([4, 4]);
+    resetExtractorStore();
   });
 });
 

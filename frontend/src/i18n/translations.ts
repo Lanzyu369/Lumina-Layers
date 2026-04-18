@@ -521,6 +521,53 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校正参数",
     en: "Correction",
   },
+  ext_nudge_section: {
+    zh: "角点位置微调",
+    en: "Corner Fine-Tune",
+  },
+  ext_nudge_step_label: {
+    zh: "微调步长 (像素)",
+    en: "Step (px)",
+  },
+  ext_nudge_active_corner_label: {
+    zh: "当前调整角点",
+    en: "Active Corner",
+  },
+  ext_nudge_hint_empty: {
+    zh: "请先在画布上放置角点",
+    en: "Place corners on the canvas first",
+  },
+  ext_nudge_up: {
+    zh: "上移",
+    en: "Up",
+  },
+  ext_nudge_down: {
+    zh: "下移",
+    en: "Down",
+  },
+  ext_nudge_left: {
+    zh: "左移",
+    en: "Left",
+  },
+  ext_nudge_right: {
+    zh: "右移",
+    en: "Right",
+  },
+  ext_nudge_keyboard_hint: {
+    zh: "提示：可使用键盘方向键进行微调",
+    en: "Tip: arrow keys also nudge the active corner",
+  },
+  ext_corner_pos_tl: { zh: "左上", en: "Top-Left" },
+  ext_corner_pos_tr: { zh: "右上", en: "Top-Right" },
+  ext_corner_pos_br: { zh: "右下", en: "Bottom-Right" },
+  ext_corner_pos_bl: { zh: "左下", en: "Bottom-Left" },
+  ext_color_white: { zh: "白色", en: "White" },
+  ext_color_black: { zh: "黑色", en: "Black" },
+  ext_color_cyan: { zh: "青色", en: "Cyan" },
+  ext_color_magenta: { zh: "品红", en: "Magenta" },
+  ext_color_yellow: { zh: "黄色", en: "Yellow" },
+  ext_color_red: { zh: "红色", en: "Red" },
+  ext_color_blue: { zh: "蓝色", en: "Blue" },
   ext_vignette: {
     zh: "暗角校正",
     en: "Vignette",
@@ -1384,8 +1431,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Generating preview…",
   },
   preview_debug_main_2d: {
-    zh: "主 2D 预览",
-    en: "Main 2D Preview",
+    zh: "2D 预览",
+    en: "2D Preview",
+  },
+  color_2d_hold_view_original: {
+    zh: "按住查看原图",
+    en: "Hold to view original",
   },
   preview_debug_action_2d: {
     zh: "操作栏 2D 小预览",
@@ -2155,8 +2206,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Extractor Canvas ====================
   ext_canvas_warp_view: {
-    zh: "透视校正",
-    en: "Warp View",
+    zh: "定位标记图",
+    en: "Corner Markers",
   },
   ext_canvas_lut_preview: {
     zh: "LUT 预览 / 点击色块修正颜色",
@@ -2215,6 +2266,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_lut_upload: {
     zh: "上传",
     en: "Upload",
+  },
+  basic_lut_refresh: {
+    zh: "刷新",
+    en: "Refresh",
+  },
+  basic_lut_refresh_tooltip: {
+    zh: "重新读取 LUT 目录",
+    en: "Reload LUT directory",
   },
   basic_lut_upload_success: {
     zh: "LUT 上传成功",

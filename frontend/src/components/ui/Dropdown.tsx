@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
 
@@ -9,6 +9,7 @@ interface DropdownProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  labelAccessory?: ReactNode;
 }
 
 export default function Dropdown({
@@ -18,6 +19,7 @@ export default function Dropdown({
   onChange,
   disabled = false,
   placeholder,
+  labelAccessory,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -35,25 +37,35 @@ export default function Dropdown({
     const rect = triggerRef.current.getBoundingClientRect();
     const viewportPadding = 16;
     const maxMenuHeight = 288; // max-h-72 = 18rem = 288px
-    const preferredWidth = Math.max(rect.width, 420);
+    // 估算实际菜单高度：每项约 44px（py-2.5 + leading-6），外层 padding 约 16px。
+    // 选项少时远小于 maxMenuHeight，避免仅因未到 288px 就误判向上展开。
+    const ITEM_HEIGHT = 44;
+    const MENU_PADDING = 16;
+    const estimatedMenuHeight = Math.min(
+      maxMenuHeight,
+      options.length * ITEM_HEIGHT + MENU_PADDING,
+    );
+    // 菜单宽度贴合触发器，避免在窄侧栏里被强制撑到最小宽度而溢出卡片边界。
     const maxWidth = window.innerWidth - viewportPadding * 2;
-    const nextWidth = Math.min(preferredWidth, maxWidth);
+    const nextWidth = Math.min(rect.width, maxWidth);
     const nextLeft = Math.min(
       Math.max(rect.left, viewportPadding),
       window.innerWidth - viewportPadding - nextWidth,
     );
-    
-    // 检查下方空间是否足够，不够则向上展开
+
+    // 只有当菜单实际装不下时才考虑向上展开；并且向上要比向下空间更大才翻转。
     const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
-    const shouldOpenUpward = spaceBelow < maxMenuHeight && spaceAbove > spaceBelow;
-    
+    const shouldOpenUpward =
+      spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    const upwardHeight = Math.min(estimatedMenuHeight, Math.max(spaceAbove, 0));
+
     setMenuPos({
-      top: shouldOpenUpward ? rect.top - maxMenuHeight - 6 : rect.bottom + 6,
+      top: shouldOpenUpward ? rect.top - upwardHeight - 6 : rect.bottom + 6,
       left: nextLeft,
       width: nextWidth,
     });
-  }, []);
+  }, [options.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -93,7 +105,14 @@ export default function Dropdown({
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label className={workstationFieldLabelClass}>{label}</label>
+      {labelAccessory ? (
+        <div className="flex items-center gap-2">
+          <label className={workstationFieldLabelClass}>{label}</label>
+          {labelAccessory}
+        </div>
+      ) : (
+        <label className={workstationFieldLabelClass}>{label}</label>
+      )}
       <button
         ref={triggerRef}
         type="button"

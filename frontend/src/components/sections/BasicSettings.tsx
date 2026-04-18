@@ -26,7 +26,7 @@ import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import type { RecipeFileSource } from "../../recipe/importRecipe";
-import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
+import { StatusBanner, cx, workstationInputClass } from "../ui/panelPrimitives";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -272,6 +272,7 @@ export default function BasicSettings() {
   const setCropModalOpen = useConverterStore((s) => s.setCropModalOpen);
   const submitCrop = useConverterStore((s) => s.submitCrop);
   const uploadLut = useConverterStore((s) => s.uploadLut);
+  const fetchLutCatalog = useConverterStore((s) => s.fetchLutCatalog);
   const removeBatchFile = useConverterStore((s) => s.removeBatchFile);
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
@@ -406,6 +407,17 @@ export default function BasicSettings() {
     // Reset so same file can be re-uploaded
     if (lutFileRef.current) lutFileRef.current.value = "";
   };
+
+  const [isRefreshingLut, setIsRefreshingLut] = useState(false);
+  const handleRefreshLut = useCallback(async () => {
+    if (isRefreshingLut) return;
+    setIsRefreshingLut(true);
+    try {
+      await fetchLutCatalog();
+    } finally {
+      setIsRefreshingLut(false);
+    }
+  }, [fetchLutCatalog, isRefreshingLut]);
 
   const handleCropConfirm = (data: CropData) => {
     void submitCrop(data.x, data.y, data.width, data.height);
@@ -594,6 +606,18 @@ export default function BasicSettings() {
                 options={lutOptions}
                 onChange={setLutName}
                 placeholder={t("basic_lut_placeholder")}
+                labelAccessory={
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshLut()}
+                    disabled={isRefreshingLut}
+                    aria-label={t("basic_lut_refresh_tooltip")}
+                    title={t("basic_lut_refresh_tooltip")}
+                    className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
+                  >
+                    <span className={cx("text-[13px] leading-none", isRefreshingLut && "animate-spin")} aria-hidden="true">⟳</span>
+                  </button>
+                }
               />
             </div>
             <input

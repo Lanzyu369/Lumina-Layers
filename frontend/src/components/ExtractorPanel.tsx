@@ -1,5 +1,7 @@
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useExtractorStore, ACCEPT_EXTRACTOR_FORMATS } from "../stores/extractorStore";
+import { buildCornerLabels } from "./ExtractorCanvas";
 import { useI18n } from "../i18n/context";
 import {
   EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES,
@@ -13,6 +15,7 @@ import Button from "./ui/Button";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import {
+  cx,
   PanelIntro,
   StatusBanner,
   panelSurfaceClass,
@@ -51,6 +54,8 @@ export default function ExtractorPanel() {
     imageFile,
     imagePreviewUrl,
     corner_points,
+    nudge_step,
+    active_corner_index,
     offset_x,
     offset_y,
     zoom,
@@ -89,6 +94,9 @@ export default function ExtractorPanel() {
     submitExtract,
     submitMerge,
     clearCornerPoints,
+    setNudgeStep,
+    setActiveCornerIndex,
+    nudgeActiveCorner,
     updatePaletteEntry,
     submitConfirmPalette,
   } = useExtractorStore();
@@ -140,6 +148,77 @@ export default function ExtractorPanel() {
 
   const extractDisabled =
     imageFile === null || corner_points.length < 4 || isLoading;
+
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [nudgeOpen, setNudgeOpen] = useState(true);
+
+  const cornerLabels = buildCornerLabels(color_mode, page, t);
+  const placedCornerCount = corner_points.length;
+  const nudgeEnabled =
+    placedCornerCount > 0 && active_corner_index !== null;
+  const activeCornerPoint =
+    active_corner_index !== null &&
+    active_corner_index >= 0 &&
+    active_corner_index < corner_points.length
+      ? corner_points[active_corner_index]
+      : null;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key;
+      if (
+        key !== "ArrowUp" &&
+        key !== "ArrowDown" &&
+        key !== "ArrowLeft" &&
+        key !== "ArrowRight"
+      ) {
+        return;
+      }
+      // Ignore when typing into form controls or contentEditable elements.
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      const {
+        active_corner_index: activeIdx,
+        corner_points: pts,
+      } = useExtractorStore.getState();
+      if (
+        activeIdx === null ||
+        activeIdx < 0 ||
+        activeIdx >= pts.length
+      ) {
+        return;
+      }
+      e.preventDefault();
+      switch (key) {
+        case "ArrowUp":
+          nudgeActiveCorner(0, -1);
+          break;
+        case "ArrowDown":
+          nudgeActiveCorner(0, 1);
+          break;
+        case "ArrowLeft":
+          nudgeActiveCorner(-1, 0);
+          break;
+        case "ArrowRight":
+          nudgeActiveCorner(1, 0);
+          break;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [nudgeActiveCorner]);
 
   return (
     <motion.aside
@@ -212,22 +291,201 @@ export default function ExtractorPanel() {
           </div>
         </section>
 
-        <section className={`${sectionCardClass} flex flex-col gap-4`}>
-          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("ext_correction_section")}</h3>
-          <div className="grid gap-4 2xl:grid-cols-2">
-            <Slider label={t("ext_offset_x_label")} value={offset_x} min={-30} max={30} step={1} onChange={setOffsetX} />
-            <Slider label={t("ext_offset_y_label")} value={offset_y} min={-30} max={30} step={1} onChange={setOffsetY} />
-            <Slider label={t("ext_zoom_label")} value={zoom} min={0.8} max={1.2} step={0.01} onChange={setZoom} />
-            <Slider label={t("ext_distortion_label")} value={distortion} min={-0.2} max={0.2} step={0.01} onChange={setDistortion} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Checkbox label={t("ext_vignette_label")} checked={vignette_correction} onChange={setVignetteCorrection} />
-            <Checkbox label={t("ext_auto_wb_label")} checked={auto_wb} onChange={(v) => void setAutoWb(v)} />
-          </div>
+        <section
+          data-testid="correction-section"
+          className={`${sectionCardClass} flex flex-col`}
+        >
+          <button
+            type="button"
+            onClick={() => setCorrectionOpen((prev) => !prev)}
+            aria-expanded={correctionOpen}
+            aria-controls="correction-panel"
+            data-testid="correction-toggle"
+            className="flex w-full items-center justify-between gap-3 text-left"
+          >
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              {t("ext_correction_section")}
+            </h3>
+            <motion.svg
+              animate={{ rotate: correctionOpen ? 90 : 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </motion.svg>
+          </button>
+          <AnimatePresence initial={false}>
+            {correctionOpen && (
+              <motion.div
+                id="correction-panel"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+                className="overflow-hidden"
+              >
+                <div className="flex flex-col gap-4 pt-4">
+                  <div className="grid gap-4 2xl:grid-cols-2">
+                    <Slider label={t("ext_offset_x_label")} value={offset_x} min={-30} max={30} step={1} onChange={setOffsetX} />
+                    <Slider label={t("ext_offset_y_label")} value={offset_y} min={-30} max={30} step={1} onChange={setOffsetY} />
+                    <Slider label={t("ext_zoom_label")} value={zoom} min={0.8} max={1.2} step={0.01} onChange={setZoom} />
+                    <Slider label={t("ext_distortion_label")} value={distortion} min={-0.2} max={0.2} step={0.01} onChange={setDistortion} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Checkbox label={t("ext_vignette_label")} checked={vignette_correction} onChange={setVignetteCorrection} />
+                    <Checkbox label={t("ext_auto_wb_label")} checked={auto_wb} onChange={(v) => void setAutoWb(v)} />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </section>
 
-        <section className={`${sectionCardClass} grid gap-3 sm:grid-cols-2`}>
-          <div data-testid="extract-button">
+        <section
+          data-testid="corner-nudge-section"
+          className={`${sectionCardClass} flex flex-col`}
+        >
+          <button
+            type="button"
+            onClick={() => setNudgeOpen((prev) => !prev)}
+            aria-expanded={nudgeOpen}
+            aria-controls="corner-nudge-panel"
+            data-testid="corner-nudge-toggle"
+            className="flex w-full items-center justify-between gap-3 text-left"
+          >
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              {t("ext_nudge_section")}
+            </h3>
+            <motion.svg
+              animate={{ rotate: nudgeOpen ? 90 : 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </motion.svg>
+          </button>
+          {nudgeOpen && (
+            <div id="corner-nudge-panel" className="flex flex-col gap-4 pt-4">
+              {placedCornerCount === 0 ? (
+                <StatusBanner tone="info">
+                  {t("ext_nudge_hint_empty")}
+                </StatusBanner>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    {t("ext_nudge_active_corner_label")}
+                  </span>
+                  <div
+                    role="radiogroup"
+                    aria-label={t("ext_nudge_active_corner_label")}
+                    className="grid grid-cols-2 gap-2"
+                    data-testid="corner-nudge-checkboxes"
+                  >
+                    {/* Display order matches geometric layout (TL, TR, BL, BR) */}
+                    {[0, 1, 3, 2].map((idx) => {
+                      const label = cornerLabels[idx];
+                      const placed = idx < placedCornerCount;
+                      const selected =
+                        placed && active_corner_index === idx;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={!placed}
+                          onClick={() => setActiveCornerIndex(idx)}
+                          className={cx(
+                            "flex min-h-11 items-center justify-center rounded-2xl border px-3 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-blue-500 bg-blue-500 text-white shadow-[var(--shadow-control-hover)]"
+                              : "border-slate-200/80 bg-white/70 text-slate-700 hover:border-slate-300 hover:bg-white/90 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-200 dark:hover:border-slate-600",
+                            !placed && "cursor-not-allowed opacity-45",
+                          )}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <Slider
+                label={t("ext_nudge_step_label")}
+                value={nudge_step}
+                min={1}
+                max={10}
+                step={1}
+                onChange={setNudgeStep}
+              />
+
+              <div
+                className="grid grid-cols-3 gap-2"
+                data-testid="corner-nudge-buttons"
+              >
+                <div />
+                <Button
+                  label={`↑ ${t("ext_nudge_up")}`}
+                  variant="secondary"
+                  onClick={() => nudgeActiveCorner(0, -1)}
+                  disabled={!nudgeEnabled}
+                  className="w-full"
+                />
+                <div />
+                <Button
+                  label={`← ${t("ext_nudge_left")}`}
+                  variant="secondary"
+                  onClick={() => nudgeActiveCorner(-1, 0)}
+                  disabled={!nudgeEnabled}
+                  className="w-full"
+                />
+                <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
+                  {activeCornerPoint
+                    ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})`
+                    : "—"}
+                </div>
+                <Button
+                  label={`${t("ext_nudge_right")} →`}
+                  variant="secondary"
+                  onClick={() => nudgeActiveCorner(1, 0)}
+                  disabled={!nudgeEnabled}
+                  className="w-full"
+                />
+                <div />
+                <Button
+                  label={`↓ ${t("ext_nudge_down")}`}
+                  variant="secondary"
+                  onClick={() => nudgeActiveCorner(0, 1)}
+                  disabled={!nudgeEnabled}
+                  className="w-full"
+                />
+                <div />
+              </div>
+
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t("ext_nudge_keyboard_hint")}
+              </p>
+            </div>
+          )}
+        </section>
+
+        <section className={`${sectionCardClass} flex flex-col gap-3 lg:flex-row`}>
+          <div data-testid="extract-button" className="lg:flex-1 lg:min-w-0">
             <Button
               label={t("ext_extract_btn_label")}
               variant="primary"
@@ -237,7 +495,7 @@ export default function ExtractorPanel() {
               className="w-full"
             />
           </div>
-          <div data-testid="clear-corners-button">
+          <div data-testid="clear-corners-button" className="lg:flex-1 lg:min-w-0">
             <Button
               label={t("ext_clear_corners")}
               variant="secondary"

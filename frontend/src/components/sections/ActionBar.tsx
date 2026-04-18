@@ -244,19 +244,8 @@ export default function ActionBar() {
       className="pointer-events-none absolute inset-0 border-2"
       style={{ borderColor: "var(--warning-border)" }}
       aria-hidden="true"
-    >
-      <div
-        className="absolute left-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold"
-        style={{
-          borderColor: "var(--warning-border)",
-          background: "var(--warning-soft)",
-          color: "var(--surface-text-muted)",
-        }}
-      >
-        {t("preview_debug_action_2d")}
-      </div>
-    </div>
-  ), [t])
+    />
+  ), [])
 
   const handlePreviewSurfaceReady = useCallback((payload: CanvasPreviewSurfaceReadyPayload | null) => {
     setPreviewCanvasBuffer(payload?.previewBuffer ?? null)

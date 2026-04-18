@@ -133,7 +133,29 @@ def _kill_pid_tree(pid):
     )
 
 def _get_process_cmdline(pid: int) -> str:
-    """获取进程命令行（用于验证身份）"""
+    """获取进程命令行（用于验证身份）
+
+    Windows 11 23H2+ 已移除 wmic，这里优先用 PowerShell 的 CIM 查询，
+    失败时回退到旧版 Get-WmiObject，最后回退到已弃用的 wmic。
+    """
+    # 优先：PowerShell + CIM（现代 Windows 可用）
+    ps_script = (
+        f"$ErrorActionPreference='SilentlyContinue';"
+        f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}';"
+        f"if (-not $p) {{ $p = Get-WmiObject Win32_Process -Filter 'ProcessId={pid}' }};"
+        f"if ($p) {{ Write-Output $p.CommandLine }}"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True, text=True, encoding="utf-8", errors="ignore",
+            creationflags=0x08000000, timeout=5,
+        ).stdout
+        if out and out.strip():
+            return out.strip()
+    except Exception:
+        pass
+    # 回退：旧系统的 wmic
     try:
         out = subprocess.run(
             ["wmic", "process", "where", f"ProcessId={pid}",

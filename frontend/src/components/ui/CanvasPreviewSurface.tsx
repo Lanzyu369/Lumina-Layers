@@ -315,68 +315,58 @@ export default function CanvasPreviewSurface({
     emitHoverSample(null)
   }, [emitHoverSample])
 
-  // React's synthetic `onWheel` registers as a passive listener at the root,
-  // so `event.preventDefault()` inside a React handler cannot stop the page
-  // from scrolling while the user zooms the preview. We therefore attach a
-  // native `wheel` listener with `{ passive: false }` directly on the
-  // container element.
-  // React 合成事件 `onWheel` 在根节点是 passive 注册的，React 回调里调用
-  // `event.preventDefault()` 无法阻止页面滚动。因此我们改为在容器上直接挂
-  // 一个 `{ passive: false }` 的原生 `wheel` 监听器。
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container || !wheelZoomEnabled) {
+  // Native non-passive wheel listener: React delegates wheel as passive
+  // since v17, so preventDefault() inside a synthetic onWheel handler is a
+  // no-op and the surrounding ActionBar dock still consumes the wheel while
+  // the user tries to zoom the embedded 2D preview. Binding via
+  // addEventListener with { passive: false } guarantees zoom-in-preview
+  // does not also scroll the surrounding dock. stopPropagation() keeps any
+  // other parent scroll containers unaffected.
+  const handleWheelRef = useRef<(event: globalThis.WheelEvent) => void>(() => {})
+  handleWheelRef.current = (event: globalThis.WheelEvent) => {
+    if (!wheelZoomEnabled) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    if (interactionsDisabled) {
+      lastPointerClientRef.current = null
+      emitHoverSample(null)
+      return
+    }
+    lastPointerClientRef.current = null
+    emitHoverSample(null)
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) {
       return
     }
 
-    const handleNativeWheel = (event: globalThis.WheelEvent) => {
-      event.preventDefault()
-      if (interactionsDisabled) {
-        lastPointerClientRef.current = null
-        emitHoverSample(null)
-        return
-      }
-      lastPointerClientRef.current = null
-      emitHoverSample(null)
-      const rect = container.getBoundingClientRect()
-
-      const mousePos = {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      }
-      const currentScale = scaleRef.current
-      const currentTranslate = translateRef.current
-      const nextScale = clampCanvasPreviewScale(
-        wheelZoomStepMultiplier
-          ? currentScale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
-          : currentScale * (1 - event.deltaY * wheelZoomSensitivity),
-        minScale,
-        maxScale,
-      )
-      const nextTranslate = computeCanvasPreviewZoomTranslate(
-        mousePos,
-        currentTranslate,
-        currentScale,
-        nextScale,
-      )
-
-      setScale(nextScale)
-      setTranslate(nextTranslate)
+    const mousePos = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     }
+    const nextScale = clampCanvasPreviewScale(
+      wheelZoomStepMultiplier
+        ? scale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
+        : scale * (1 - event.deltaY * wheelZoomSensitivity),
+      minScale,
+      maxScale,
+    )
+    const nextTranslate = computeCanvasPreviewZoomTranslate(mousePos, translate, scale, nextScale)
 
-    container.addEventListener("wheel", handleNativeWheel, { passive: false })
-    return () => {
-      container.removeEventListener("wheel", handleNativeWheel)
+    setScale(nextScale)
+    setTranslate(nextTranslate)
+  }
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) {
+      return
     }
-  }, [
-    emitHoverSample,
-    interactionsDisabled,
-    maxScale,
-    minScale,
-    wheelZoomEnabled,
-    wheelZoomSensitivity,
-    wheelZoomStepMultiplier,
-  ])
+    const listener = (event: globalThis.WheelEvent) => handleWheelRef.current(event)
+    container.addEventListener("wheel", listener, { passive: false })
+    return () => container.removeEventListener("wheel", listener)
+  }, [])
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -504,6 +494,7 @@ export default function CanvasPreviewSurface({
         ref={containerRef}
         data-testid={dataTestId}
         className={`relative h-full w-full overflow-hidden ${className ?? ""} ${surfaceClassName ?? "cursor-grab active:cursor-grabbing"}`.trim()}
+        onContextMenu={(event) => event.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

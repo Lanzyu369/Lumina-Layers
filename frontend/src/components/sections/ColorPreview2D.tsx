@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
 import { useI18n } from '../../i18n/context';
 import CanvasPreviewSurface from '../ui/CanvasPreviewSurface';
+import { cx } from '../ui/panelPrimitives';
 import type { CanvasPreviewHoverSample } from '../ui/canvasPreviewUtils';
 import PreviewHoverInspector from '../ui/PreviewHoverInspector';
 import {
@@ -97,7 +98,10 @@ export default function ColorPreview2D({
   // region detection, color highlighting, or selection mode switching.
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl);
+  const originalUploadUrl = useConverterStore((s) => s.imagePreviewUrl);
   const stableImageUrl = previewBaseImageUrl ?? previewImageUrl;
+  const [showOriginal, setShowOriginal] = useState(false);
+  const releaseOriginalView = useCallback(() => setShowOriginal(false), []);
 
   // Preload mechanism: keep current displayUrl until new image is fully loaded,
   // preventing visible flash when stableImageUrl changes after replacement.
@@ -686,6 +690,48 @@ export default function ColorPreview2D({
         </div>
       </div>
 
+      {originalUploadUrl && (
+        <button
+          type="button"
+          aria-label={t('color_2d_hold_view_original')}
+          title={t('color_2d_hold_view_original')}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setShowOriginal(true);
+          }}
+          onPointerUp={releaseOriginalView}
+          onPointerLeave={releaseOriginalView}
+          onPointerCancel={releaseOriginalView}
+          onContextMenu={(e) => e.preventDefault()}
+          data-testid="color-preview-2d-hold-original"
+          data-active={showOriginal || undefined}
+          className={cx(
+            "pointer-events-auto absolute right-2 top-10 z-30 flex h-7 w-7 items-center justify-center rounded-md border",
+            "border-slate-300/80 bg-slate-100/90 text-slate-700 shadow-sm transition-colors",
+            "hover:bg-slate-200/90 active:bg-slate-300/90",
+            "dark:border-slate-700/80 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:bg-slate-800/90",
+            showOriginal && "bg-slate-300/90 dark:bg-slate-700/90",
+          )}
+          style={{ touchAction: 'none' }}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="4" width="8" height="16" rx="1.5" />
+            <rect x="13" y="4" width="8" height="16" rx="1.5" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+      )}
+
       {zoom !== 1 && (
         <div className="absolute left-2 top-2 z-20 rounded-full bg-slate-900/60 px-2 py-0.5 text-[10px] text-slate-100 backdrop-blur-sm">
           {Math.round(zoom * 100)}%
@@ -713,7 +759,7 @@ export default function ColorPreview2D({
   return (
     <>
       <CanvasPreviewSurface
-        src={displayUrl}
+        src={showOriginal && originalUploadUrl ? originalUploadUrl : displayUrl}
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
         className="h-full w-full bg-slate-200/60 dark:bg-slate-900/60"
@@ -730,7 +776,7 @@ export default function ColorPreview2D({
         onClickSample={handleClick}
         onSurfaceReady={handleSurfaceReady}
         onScaleChange={setZoom}
-        canStartDrag={(event, context) => event.button !== 2 && (event.button === 1 || context.scale > 1)}
+        canStartDrag={(event) => event.button === 2}
       />
       {hoverInspectorOverlay}
     </>

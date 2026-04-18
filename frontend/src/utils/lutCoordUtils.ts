@@ -82,6 +82,58 @@ export function lutClickToCell(
 }
 
 /**
+ * Sample the pixel color at the center of a LUT grid cell.
+ * 采样 LUT 网格单元格中心的像素颜色。
+ *
+ * Draws the image onto an offscreen canvas, reads a single pixel at the cell
+ * center (in natural coordinates), and returns its hex string. Returns null
+ * when the image is not yet loaded, gridSize is invalid, or the canvas read
+ * fails (e.g., CORS-tainted image).
+ * 将图像绘制到离屏 canvas，读取单元格中心处的像素（使用自然坐标），
+ * 并返回十六进制颜色字符串。图像尚未加载、gridSize 非法或 canvas 读取
+ * 失败（如 CORS 污染）时返回 null。
+ *
+ * @param image - HTMLImageElement of the LUT preview. (LUT 预览图像元素)
+ * @param row - Zero-based row index. (行索引)
+ * @param col - Zero-based column index. (列索引)
+ * @param gridSize - Number of rows/columns. (行列数)
+ * @returns Lowercase hex color string (e.g. "#ff0044") or null. (小写十六进制颜色或 null)
+ */
+export function sampleCellHexColor(
+  image: HTMLImageElement,
+  row: number,
+  col: number,
+  gridSize: number,
+): string | null {
+  if (gridSize <= 0) return null;
+  const { naturalWidth, naturalHeight } = image;
+  if (naturalWidth <= 0 || naturalHeight <= 0) return null;
+
+  const cx = Math.min(
+    Math.floor(((col + 0.5) / gridSize) * naturalWidth),
+    naturalWidth - 1,
+  );
+  const cy = Math.min(
+    Math.floor(((row + 0.5) / gridSize) * naturalHeight),
+    naturalHeight - 1,
+  );
+
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = naturalWidth;
+    canvas.height = naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0);
+    const { data } = ctx.getImageData(cx, cy, 1, 1);
+    const toHex = (v: number) => v.toString(16).padStart(2, "0");
+    return `#${toHex(data[0])}${toHex(data[1])}${toHex(data[2])}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Compute the pixel position and size of a selected grid cell overlay.
  * 计算选中色块在渲染图像上的覆盖层像素位置和尺寸。
  *

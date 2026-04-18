@@ -3,59 +3,70 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { useExtractorStore } from "../stores/extractorStore";
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
 import { useI18n } from "../i18n/context";
-import { getObjectFitRect, lutClickToCell, getCellOverlayStyle, type RenderedImageRect } from "../utils/lutCoordUtils";
+import { getObjectFitRect, lutClickToCell, getCellOverlayStyle, sampleCellHexColor, type RenderedImageRect } from "../utils/lutCoordUtils";
+import { hexToRgb } from "../utils/colorUtils";
 import { UI_COLOR_TOKENS } from "../theme/uiTokens";
 
 // ========== Corner Labels Mapping (exported for testing) ==========
 
-export const CORNER_LABELS: Record<string, string[]> = {
+/**
+ * Position i18n keys in canonical placement order (TL, TR, BR, BL).
+ * 角点位置国际化键（按落点顺序：左上、右上、右下、左下）。
+ */
+export const CORNER_POSITION_KEYS = [
+  "ext_corner_pos_tl",
+  "ext_corner_pos_tr",
+  "ext_corner_pos_br",
+  "ext_corner_pos_bl",
+] as const;
+
+/**
+ * Per-color-mode mapping to color-name i18n keys. `null` = position only.
+ * 每个颜色模式对应的颜色名 i18n 键数组；为 null 时仅显示位置。
+ */
+const CORNER_COLOR_KEYS: Record<string, Array<string | null>> = {
   "BW (Black & White)": [
-    "白色 (左上) / White (TL)",
-    "黑色 (右上) / Black (TR)",
-    "黑色 (右下) / Black (BR)",
-    "黑色 (左下) / Black (BL)",
+    "ext_color_white",
+    "ext_color_black",
+    "ext_color_black",
+    "ext_color_black",
   ],
   "4-Color (CMYW)": [
-    "白色 (左上) / White (TL)",
-    "青色 (右上) / Cyan (TR)",
-    "品红 (右下) / Magenta (BR)",
-    "黄色 (左下) / Yellow (BL)",
+    "ext_color_white",
+    "ext_color_cyan",
+    "ext_color_magenta",
+    "ext_color_yellow",
   ],
-  "4-Color (RYBW)": [
-    "左上 / TL",
-    "右上 / TR",
-    "右下 / BR",
-    "左下 / BL",
-  ],
+  "4-Color (RYBW)": [null, null, null, null],
   "6-Color (CMYWGK 1296)": [
-    "白色 (左上) / White (TL)",
-    "青色 (右上) / Cyan (TR)",
-    "品红 (右下) / Magenta (BR)",
-    "黄色 (左下) / Yellow (BL)",
+    "ext_color_white",
+    "ext_color_cyan",
+    "ext_color_magenta",
+    "ext_color_yellow",
   ],
   "6-Color (RYBWGK 1296)": [
-    "白色 (左上) / White (TL)",
-    "红色 (右上) / Red (TR)",
-    "蓝色 (右下) / Blue (BR)",
-    "黄色 (左下) / Yellow (BL)",
+    "ext_color_white",
+    "ext_color_red",
+    "ext_color_blue",
+    "ext_color_yellow",
   ],
-  "8-Color Max": ["TL", "TR", "BR", "BL"],
+  "8-Color Max": [null, null, null, null],
   // 5-Color Extended page 1 uses the RYBW-style corners (TL=White, TR=Red,
   // BR=Blue, BL=Yellow) — matching ``ColorSystem.FIVE_COLOR_EXTENDED``'s
   // ``corner_labels`` on the backend. Page 2 swaps TL to Blue and BR to Black
   // (see ``core/extractor.py::draw_corner_points``). Use
-  // ``resolveCornerLabels`` to pick the right list; this entry is the page-1
+  // ``buildCornerLabels`` to pick the right list; this entry is the page-1
   // default.
   // 5-Color Extended 第 1 页使用 RYBW 式角点（左上=白，右上=红，右下=蓝，
   // 左下=黄）—— 与后端 ``ColorSystem.FIVE_COLOR_EXTENDED`` 的
   // ``corner_labels`` 一致。第 2 页左上变为蓝、右下变为黑（见
-  // ``core/extractor.py::draw_corner_points``）。请用 ``resolveCornerLabels``
+  // ``core/extractor.py::draw_corner_points``）。请用 ``buildCornerLabels``
   // 选择正确列表；此条目为第 1 页的默认值。
   "5-Color Extended": [
-    "白色 (左上) / White (TL)",
-    "红色 (右上) / Red (TR)",
-    "蓝色 (右下) / Blue (BR)",
-    "黄色 (左下) / Yellow (BL)",
+    "ext_color_white",
+    "ext_color_red",
+    "ext_color_blue",
+    "ext_color_yellow",
   ],
 };
 
@@ -76,39 +87,46 @@ export const CORNER_LABELS: Record<string, string[]> = {
 //   - 第 2 页角点：蓝 / 红 / 黑 / 黄。
 // 该表必须与后端 ``core/extractor.py::draw_corner_points`` 的
 // "5-Color Extended" 分支保持一致。
-export const CORNER_LABELS_5C_EXT_PAGE2: string[] = [
-  "蓝色 (左上) / Blue (TL)",
-  "红色 (右上) / Red (TR)",
-  "黑色 (右下) / Black (BR)",
-  "黄色 (左下) / Yellow (BL)",
+export const CORNER_COLOR_KEYS_5C_EXT_PAGE2: Array<string | null> = [
+  "ext_color_blue",
+  "ext_color_red",
+  "ext_color_black",
+  "ext_color_yellow",
 ];
 
-// ========== Page-aware label resolver (exported for testing) ==========
+// ========== Page-aware label builder (exported for testing) ==========
 
 /**
- * Resolve the 4 corner labels for a given color mode + page combination.
+ * Build localized corner labels for the given color mode + page combination.
  *
  * Only 5-Color Extended is page-aware; every other mode ignores ``page`` and
- * returns its entry from ``CORNER_LABELS``. Unknown modes fall back to the
- * RYBW 4-corner list, matching the previous behavior of
- * ``CORNER_LABELS[mode] ?? CORNER_LABELS["4-Color (RYBW)"]``.
+ * returns its entry from ``CORNER_COLOR_KEYS``. Unknown modes fall back to the
+ * RYBW 4-corner list.
  *
- * 根据颜色模式 + 页码解析 4 个角点的标签。只有 5-Color Extended 会依赖
- * ``page``，其他模式忽略该参数并返回 ``CORNER_LABELS`` 中的对应条目。未知
- * 模式回退到 RYBW 四角，与原来 ``CORNER_LABELS[mode] ?? CORNER_LABELS["4-Color (RYBW)"]``
- * 的行为一致。
+ * 根据颜色模式 + 页码构建本地化的角点标签。只有 5-Color Extended 会依赖
+ * ``page``，其他模式忽略该参数并返回 ``CORNER_COLOR_KEYS`` 中的对应条目。
+ * 未知模式回退到 RYBW 四角。
  */
-export function resolveCornerLabels(
-  color_mode: string,
+export function buildCornerLabels(
+  colorMode: string,
   page: string,
+  t: (key: string) => string,
 ): string[] {
+  let colorKeys: Array<string | null>;
   if (
-    color_mode === ExtractorColorMode.FIVE_COLOR_EXT &&
+    colorMode === ExtractorColorMode.FIVE_COLOR_EXT &&
     page === ExtractorPage.PAGE_2
   ) {
-    return CORNER_LABELS_5C_EXT_PAGE2;
+    colorKeys = CORNER_COLOR_KEYS_5C_EXT_PAGE2;
+  } else {
+    colorKeys = CORNER_COLOR_KEYS[colorMode] ?? CORNER_COLOR_KEYS["4-Color (RYBW)"];
   }
-  return CORNER_LABELS[color_mode] ?? CORNER_LABELS["4-Color (RYBW)"];
+  return CORNER_POSITION_KEYS.map((posKey, idx) => {
+    const pos = t(posKey);
+    const colorKey = colorKeys[idx];
+    if (!colorKey) return pos;
+    return `${t(colorKey)}（${pos}）`;
+  });
 }
 
 // ========== Coordinate Conversion (exported for testing) ==========
@@ -260,7 +278,7 @@ export default function ExtractorCanvas() {
 
   // ---------- Derive hint text ----------
   const cornerCount = corner_points.length;
-  const labels = resolveCornerLabels(color_mode, page);
+  const labels = buildCornerLabels(color_mode, page, t);
   const hintText =
     cornerCount >= 4
       ? t("ext_canvas_positioning_done")
@@ -287,6 +305,11 @@ export default function ExtractorCanvas() {
       if (cell) {
         setSelectedCell(cell);
         setRenderedRect(rendered);
+        // 采样该色块当前颜色作为取色器初始值，便于用户基于真实颜色微调。
+        const sampled = sampleCellHexColor(img, cell[0], cell[1], gridSize);
+        if (sampled) {
+          setFixColor(sampled);
+        }
       }
       // 留白区域点击被忽略
     },
@@ -377,7 +400,10 @@ export default function ExtractorCanvas() {
               onChange={(e) => setFixColor(e.target.value)}
               className="h-8 w-10 cursor-pointer rounded-xl border border-slate-300 bg-transparent dark:border-slate-500"
             />
-            <span className="font-mono text-xs text-slate-500 dark:text-slate-400">{fixColor}</span>
+            <span className="font-mono text-xs text-slate-500 dark:text-slate-400">{(() => {
+              const [r, g, b] = hexToRgb(fixColor);
+              return `RGB(${r}, ${g}, ${b})`;
+            })()}</span>
             <button
               data-testid="fix-submit-button"
               onClick={handleFixSubmit}

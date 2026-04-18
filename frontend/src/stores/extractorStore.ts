@@ -85,6 +85,10 @@ export interface ExtractorState {
   // 角点
   corner_points: Array<[number, number]>;
 
+  // 角点微调（像素步长 1..10；当前被方向键/按钮作用的角点下标）
+  nudge_step: number;
+  active_corner_index: number | null;
+
   // 提取参数
   offset_x: number;
   offset_y: number;
@@ -138,6 +142,9 @@ export interface ExtractorActions {
   setEightColorFullExport: (enabled: boolean) => void;
   addCornerPoint: (point: [number, number]) => void;
   clearCornerPoints: () => void;
+  setNudgeStep: (value: number) => void;
+  setActiveCornerIndex: (index: number | null) => void;
+  nudgeActiveCorner: (dx: number, dy: number) => void;
   setOffsetX: (value: number) => void;
   setOffsetY: (value: number) => void;
   setZoom: (value: number) => void;
@@ -169,6 +176,8 @@ const DEFAULT_STATE: ExtractorState = {
   page: ExtractorPageEnum.PAGE_1,
   eight_color_full_export: false,
   corner_points: [],
+  nudge_step: 3,
+  active_corner_index: null,
   offset_x: 0,
   offset_y: 0,
   zoom: 1.0,
@@ -212,6 +221,14 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         URL.revokeObjectURL(prev);
       }
 
+      const correctionDefaults = {
+        offset_x: DEFAULT_STATE.offset_x,
+        offset_y: DEFAULT_STATE.offset_y,
+        zoom: DEFAULT_STATE.zoom,
+        distortion: DEFAULT_STATE.distortion,
+        vignette_correction: DEFAULT_STATE.vignette_correction,
+      } as const;
+
       if (!file) {
         set({
           imageFile: null,
@@ -219,6 +236,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           imageNaturalWidth: null,
           imageNaturalHeight: null,
           corner_points: [],
+          active_corner_index: null,
           session_id: null,
           lut_download_url: null,
           warp_view_url: null,
@@ -228,6 +246,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           paletteConfirmError: null,
           auto_wb: false,
           originalPreviewUrl: null,
+          ...correctionDefaults,
         });
         return;
       }
@@ -239,6 +258,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           imageNaturalWidth: null,
           imageNaturalHeight: null,
           corner_points: [],
+          active_corner_index: null,
           session_id: null,
           lut_download_url: null,
           warp_view_url: null,
@@ -248,6 +268,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           paletteConfirmError: null,
           auto_wb: false,
           originalPreviewUrl: null,
+          ...correctionDefaults,
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
@@ -282,6 +303,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         imageNaturalHeight: null,
         // Clear previous corner points and extraction results
         corner_points: [],
+        active_corner_index: null,
         session_id: null,
         lut_download_url: null,
         warp_view_url: null,
@@ -291,6 +313,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         paletteConfirmError: null,
         auto_wb: false,
         originalPreviewUrl: null,
+        ...correctionDefaults,
       });
     },
 
@@ -324,6 +347,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           imageNaturalWidth: width,
           imageNaturalHeight: height,
           corner_points: [],
+          active_corner_index: null,
           isLoading: false,
           auto_wb: false,
           originalPreviewUrl: null,
@@ -386,7 +410,11 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     addCornerPoint: (point: [number, number]) => {
       const { corner_points } = get();
       if (corner_points.length >= 4) return;
-      set({ corner_points: [...corner_points, point] });
+      const next = [...corner_points, point];
+      set({
+        corner_points: next,
+        active_corner_index: next.length - 1,
+      });
     },
 
     clearCornerPoints: () =>
@@ -401,13 +429,72 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       // 回到角点标定画布。
       set({
         corner_points: [],
+        active_corner_index: null,
         warp_view_url: null,
         lut_preview_url: null,
         lut_download_url: null,
         session_id: null,
         error: null,
         manualFixError: null,
+        defaultPalette: [],
+        paletteConfirmed: false,
+        paletteConfirmError: null,
       }),
+
+    setNudgeStep: (value: number) => {
+      const clamped = Math.max(1, Math.min(10, Math.round(value)));
+      set({ nudge_step: clamped });
+    },
+
+    setActiveCornerIndex: (index: number | null) => {
+      const { corner_points } = get();
+      if (index === null) {
+        set({ active_corner_index: null });
+        return;
+      }
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= corner_points.length
+      ) {
+        return;
+      }
+      set({ active_corner_index: index });
+    },
+
+    nudgeActiveCorner: (dx: number, dy: number) => {
+      const {
+        corner_points,
+        active_corner_index,
+        nudge_step,
+        imageNaturalWidth,
+        imageNaturalHeight,
+      } = get();
+      if (
+        active_corner_index === null ||
+        active_corner_index < 0 ||
+        active_corner_index >= corner_points.length
+      ) {
+        return;
+      }
+      const [x, y] = corner_points[active_corner_index];
+      let nx = x + dx * nudge_step;
+      let ny = y + dy * nudge_step;
+      if (imageNaturalWidth && imageNaturalWidth > 0) {
+        nx = Math.max(0, Math.min(imageNaturalWidth - 1, nx));
+      } else {
+        nx = Math.max(0, nx);
+      }
+      if (imageNaturalHeight && imageNaturalHeight > 0) {
+        ny = Math.max(0, Math.min(imageNaturalHeight - 1, ny));
+      } else {
+        ny = Math.max(0, ny);
+      }
+      const next = corner_points.map((pt, i) =>
+        i === active_corner_index ? ([nx, ny] as [number, number]) : pt,
+      );
+      set({ corner_points: next });
+    },
 
     setOffsetX: (value: number) =>
       set({ offset_x: clampValue(value, -30, 30) }),

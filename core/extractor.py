@@ -69,7 +69,7 @@ def _linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     return np.clip(np.round(srgb * 255.0), 0, 255).astype(np.uint8)
 
 
-_ROI_FRAC = 0.6
+_ROI_FRAC = 0.4
 _MIN_HALF_ROI = 4
 
 
@@ -671,7 +671,7 @@ def run_extraction(
                 draw_cx = int(np.clip(cx, 0, DST_SIZE - 1))
                 draw_cy = int(np.clip(cy, 0, DST_SIZE - 1))
                 cv2.drawMarker(vis, (draw_cx, draw_cy), (0, 255, 0), cv2.MARKER_CROSS, marker_size, 1)
-                _draw_dashed_rect(vis, (x0, y0), (x1, y1), (0, 255, 0), 1, 4)
+                cv2.rectangle(vis, (x0, y0), (x1, y1), (0, 255, 0), 1)
             else:
                 avg = [0, 0, 0]
             extracted[r, c] = avg

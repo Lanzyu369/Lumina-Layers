@@ -3,10 +3,18 @@ import { render, screen, cleanup } from "@testing-library/react";
 import fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
 import {
-  CORNER_LABELS,
-  CORNER_LABELS_5C_EXT_PAGE2,
-  resolveCornerLabels,
+  buildCornerLabels,
+  CORNER_COLOR_KEYS_5C_EXT_PAGE2,
 } from "../components/ExtractorCanvas";
+import { translations } from "../i18n/translations";
+
+// Lightweight `t` that mirrors the i18n context's zh fallback so tests remain
+// independent of React context while still validating translated output.
+function tZh(key: string): string {
+  const entry = translations[key];
+  if (!entry) return key;
+  return entry.zh ?? key;
+}
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
 
 // ========== Mock browser APIs ==========
@@ -115,12 +123,12 @@ describe("Feature: extractor-calibration-tab, Property 2: 角点提示标签正�
   it("For any CalibrationColorMode and corner count 0..3, the hint label equals CORNER_LABELS[color_mode][corner_count]", () => {
     fc.assert(
       fc.property(arbExtractorColorMode, arbCornerCount, (colorMode, cornerCount) => {
-        const labels = CORNER_LABELS[colorMode] ?? CORNER_LABELS["4-Color (RYBW)"];
+        const labels = buildCornerLabels(colorMode, ExtractorPage.PAGE_1, tZh);
         const expectedLabel = labels[cornerCount];
 
         // The component builds hint text as:
         // `请点击第 ${cornerCount + 1} 个角点: ${labels[cornerCount]}`
-        // We verify the CORNER_LABELS mapping is correct and the label exists
+        // We verify the CORNER_COLOR_KEYS mapping is correct and the label exists
         const isValidLabel = typeof expectedLabel === "string" && expectedLabel.length > 0;
 
         // Verify the label index is within bounds
@@ -170,57 +178,67 @@ describe("Feature: extractor-calibration-tab, Property 2: 角点提示标签正�
   // Regression: 5-Color Extended uses two different calibration sheets.
   //   - Page 1 corners: White / Red / Blue / Yellow (RYBW 4-corner).
   //   - Page 2 corners: Blue  / Red / Black / Yellow.
-  // The single-list ``CORNER_LABELS["5-Color Extended"]`` was historically
+  // The single-list ``CORNER_COLOR_KEYS["5-Color Extended"]`` was historically
   // White/Red/BLACK/Yellow regardless of page — so page 2 corner 1 said
   // "White (TL)" when the user was actually looking at a Blue TL marker, and
   // page 1 corner 3 said "Black (BR)" when the real marker is Blue. The
-  // resolver below must match ``core/extractor.py::draw_corner_points`` and
+  // builder below must match ``core/extractor.py::draw_corner_points`` and
   // ``ColorSystem.FIVE_COLOR_EXTENDED``.
   // 回归：5-Color Extended 跨两张校准板：
   //   - 第 1 页角点：白 / 红 / 蓝 / 黄（RYBW 四角）。
   //   - 第 2 页角点：蓝 / 红 / 黑 / 黄。
-  // 历史代码在两页共用同一条 CORNER_LABELS，导致第 2 页角点 1 提示「白 (TL)」
+  // 历史代码在两页共用同一条 CORNER_COLOR_KEYS，导致第 2 页角点 1 提示「白 (TL)」
   // 但实际标记是蓝色，第 1 页角点 3 提示「黑 (BR)」但实际标记是蓝色。下面的
-  // 解析器必须与后端 ``core/extractor.py::draw_corner_points`` 和
+  // 构建器必须与后端 ``core/extractor.py::draw_corner_points`` 和
   // ``ColorSystem.FIVE_COLOR_EXTENDED`` 保持一致。
   describe("5-Color Extended corner labels match the backend (page-aware)", () => {
     it("page 1 hints match the RYBW 4-corner layout: White / Red / Blue / Yellow", () => {
-      const labels = resolveCornerLabels(
+      const labels = buildCornerLabels(
         ExtractorColorMode.FIVE_COLOR_EXT,
         ExtractorPage.PAGE_1,
+        tZh,
       );
-      expect(labels[0]).toContain("White");
+      // tZh is a zh-only translator; assert on the Chinese forms here.
+      // The important regression guards are the not.toContain checks on
+      // corner 3 which must say Blue/蓝色, never Black/黑色 on page 1.
       expect(labels[0]).toContain("白色");
-      expect(labels[1]).toContain("Red");
-      expect(labels[2]).toContain("Blue");
-      // Explicitly guard against the historical wrong value.
+      expect(labels[1]).toContain("红色");
+      expect(labels[2]).toContain("蓝色");
       expect(labels[2]).not.toContain("Black");
       expect(labels[2]).not.toContain("黑色");
-      expect(labels[3]).toContain("Yellow");
+      expect(labels[3]).toContain("黄色");
     });
 
     it("page 2 corner 1 says Blue (not White) and corner 3 says Black (not Blue)", () => {
-      const labels = resolveCornerLabels(
+      const labels = buildCornerLabels(
         ExtractorColorMode.FIVE_COLOR_EXT,
         ExtractorPage.PAGE_2,
+        tZh,
       );
       // Corner 1 (TL) — the specific bug the user reported.
-      expect(labels[0]).toContain("Blue");
       expect(labels[0]).toContain("蓝色");
       expect(labels[0]).not.toContain("White");
       expect(labels[0]).not.toContain("白色");
       // Corner 2 (TR)
-      expect(labels[1]).toContain("Red");
+      expect(labels[1]).toContain("红色");
       // Corner 3 (BR)
-      expect(labels[2]).toContain("Black");
       expect(labels[2]).toContain("黑色");
       // Corner 4 (BL)
-      expect(labels[3]).toContain("Yellow");
-      // Full identity against the exported table.
-      expect(labels).toEqual(CORNER_LABELS_5C_EXT_PAGE2);
+      expect(labels[3]).toContain("黄色");
+      // Full identity against the exported color-key table.
+      const positionKeys = [
+        "ext_corner_pos_tl",
+        "ext_corner_pos_tr",
+        "ext_corner_pos_br",
+        "ext_corner_pos_bl",
+      ];
+      const builtFromKeys = CORNER_COLOR_KEYS_5C_EXT_PAGE2.map((key, idx) =>
+        key ? `${tZh(key)}（${tZh(positionKeys[idx])}）` : tZh(positionKeys[idx]),
+      );
+      expect(labels).toEqual(builtFromKeys);
     });
 
-    it("other color modes ignore the page argument and return CORNER_LABELS[mode]", () => {
+    it("other color modes ignore the page argument and return CORNER_COLOR_KEYS[mode]", () => {
       for (const mode of [
         ExtractorColorMode.BW,
         ExtractorColorMode.FOUR_COLOR_CMYW,
@@ -234,14 +252,14 @@ describe("Feature: extractor-calibration-tab, Property 2: 角点提示标签正�
           ExtractorPage.PAGE_2,
           ExtractorPage.PAGE_3,
         ]) {
-          expect(resolveCornerLabels(mode, page)).toEqual(CORNER_LABELS[mode]);
+          expect(buildCornerLabels(mode, page, tZh)).toEqual(buildCornerLabels(mode, ExtractorPage.PAGE_1, tZh));
         }
       }
     });
 
     it("unknown color modes fall back to the RYBW 4-corner list", () => {
-      expect(resolveCornerLabels("Totally Unknown Mode", ExtractorPage.PAGE_1)).toEqual(
-        CORNER_LABELS["4-Color (RYBW)"],
+      expect(buildCornerLabels("Totally Unknown Mode", ExtractorPage.PAGE_1, tZh)).toEqual(
+        buildCornerLabels(ExtractorColorMode.FOUR_COLOR_RYBW, ExtractorPage.PAGE_1, tZh),
       );
     });
   });
@@ -295,7 +313,7 @@ describe("Feature: extractor-calibration-tab, Property 2: 角点提示标签正�
         render(<ExtractorCanvas />);
 
         const hint = screen.getByTestId("corner-hint");
-        const labels = CORNER_LABELS[colorMode] ?? CORNER_LABELS["4-Color (RYBW)"];
+        const labels = buildCornerLabels(colorMode, ExtractorPage.PAGE_1, tZh);
         const expectedLabel = labels[cornerCount];
 
         expect(hint.textContent).toContain(expectedLabel);

@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   getObjectFitRect,
   lutClickToCell,
   getCellOverlayStyle,
+  sampleCellHexColor,
   type RenderedImageRect,
 } from "../utils/lutCoordUtils";
 
@@ -114,5 +115,55 @@ describe("getCellOverlayStyle", () => {
       width: cellSize,
       height: cellSize,
     });
+  });
+});
+
+// ========== sampleCellHexColor ==========
+
+describe("sampleCellHexColor", () => {
+  function makeFakeImage(
+    naturalWidth: number,
+    naturalHeight: number,
+    pixelAt: (x: number, y: number) => [number, number, number],
+  ): HTMLImageElement {
+    // Stub getContext on a real canvas so drawImage + getImageData work in jsdom.
+    const img = { naturalWidth, naturalHeight } as unknown as HTMLImageElement;
+    const originalCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      if (tag !== "canvas") return originalCreate(tag);
+      const canvas = originalCreate("canvas");
+      canvas.getContext = (() => ({
+        drawImage: () => {},
+        getImageData: (x: number, y: number) => {
+          const [r, g, b] = pixelAt(x, y);
+          return { data: new Uint8ClampedArray([r, g, b, 255]) };
+        },
+      })) as unknown as HTMLCanvasElement["getContext"];
+      return canvas;
+    });
+    return img;
+  }
+
+  it("返回被点击色块中心像素的十六进制颜色", () => {
+    // 4×4 grid 的图像，每个 cell 中心 (x=(col+0.5)*W/4) 的像素设置成不同颜色
+    const img = makeFakeImage(40, 40, (x, y) => {
+      // cell (1, 2) 中心 = (25, 15)
+      if (x === 25 && y === 15) return [255, 128, 0];
+      return [0, 0, 0];
+    });
+    const hex = sampleCellHexColor(img, 1, 2, 4);
+    expect(hex).toBe("#ff8000");
+    vi.restoreAllMocks();
+  });
+
+  it("gridSize 非法时返回 null", () => {
+    const img = { naturalWidth: 40, naturalHeight: 40 } as HTMLImageElement;
+    expect(sampleCellHexColor(img, 0, 0, 0)).toBeNull();
+    expect(sampleCellHexColor(img, 0, 0, -1)).toBeNull();
+  });
+
+  it("图像尚未加载 (naturalWidth=0) 时返回 null", () => {
+    const img = { naturalWidth: 0, naturalHeight: 0 } as HTMLImageElement;
+    expect(sampleCellHexColor(img, 0, 0, 32)).toBeNull();
   });
 });
