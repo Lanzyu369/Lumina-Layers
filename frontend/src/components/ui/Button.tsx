@@ -7,6 +7,7 @@ interface ButtonProps {
   disabled?: boolean;
   loading?: boolean;
   variant?: "primary" | "secondary";
+  size?: "sm" | "md";
   className?: string;
 }
 
@@ -16,6 +17,7 @@ export default function Button({
   disabled = false,
   loading = false,
   variant = "primary",
+  size = "md",
   className,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
@@ -24,6 +26,11 @@ export default function Button({
     variant === "primary"
       ? "bg-blue-600 text-white shadow-[0_12px_24px_rgba(37,99,235,0.22)] hover:bg-blue-700"
       : "border border-slate-200/80 bg-white/70 text-slate-700 shadow-[var(--shadow-control)] hover:bg-white hover:shadow-[var(--shadow-control-hover)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900";
+
+  const sizeClasses =
+    size === "sm"
+      ? "min-h-8 rounded-xl px-3 py-1.5 text-xs"
+      : "min-h-11 rounded-2xl px-4 py-2.5 text-sm";
 
   return (
     <motion.button
@@ -34,7 +41,8 @@ export default function Button({
       onClick={onClick}
       disabled={isDisabled}
       className={cx(
-        "relative inline-flex min-h-11 flex-shrink-0 items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
+        "relative inline-flex flex-shrink-0 items-center justify-center gap-2 font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
+        sizeClasses,
         variantClasses,
         className
       )}

@@ -3000,6 +3000,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "清空替换",
     en: "Clear Remaps",
   },
+  palette_group_history: {
+    zh: "历史",
+    en: "History",
+  },
+  palette_group_mode: {
+    zh: "选择模式",
+    en: "Mode",
+  },
+  palette_group_free: {
+    zh: "自由色",
+    en: "Free Color",
+  },
+  palette_group_recipe: {
+    zh: "配方",
+    en: "Recipe",
+  },
   palette_list_label: {
     zh: "调色板颜色列表",
     en: "Palette color list",

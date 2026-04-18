@@ -1510,6 +1510,20 @@ const DEFAULT_LAYER_IMAGES_STATE = {
   layerImagesSourceKey: null as string | null,
 };
 
+/**
+ * Partial invalidation for cached per-layer preview images after a color
+ * replacement. Preserves `layerImagesOpen` (user panel visibility) and
+ * `layerImagesLoading`, but drops stale image URLs and source key so the
+ * next hover/fetch refreshes layer data against the new preview.
+ * 颜色替换后用于失效分层预览图缓存的局部状态：保留用户面板可见性与
+ * 加载状态，清除过期的图片 URL 与 source key，确保下次悬停/拉取
+ * 能针对新预览刷新分层数据。
+ */
+const INVALIDATE_LAYER_IMAGES_AFTER_REPLACE = {
+  layerImages: [] as { layer_index: number; name: string; url: string }[],
+  layerImagesSourceKey: null as string | null,
+} as const;
+
 const DEFAULT_PUZZLE_PREVIEW_STATE = {
   puzzleOverlayUrl: null,
   puzzleWarnings: [] as string[],
@@ -3017,6 +3031,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           replacePreviewLoading: false,
           threemfDiskPath: null,
           downloadUrl: null,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
 
         // 更新 3D 预览 GLB URL（仅当后端返回非空 URL 时）
@@ -3096,6 +3111,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           previewGlbUrl: response.preview_glb_url
             ? normalizeResourceUrl(response.preview_glb_url)
             : current.previewGlbUrl,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           color_layers: Math.max(current.color_layers ?? 0, resolvedLayers),
           layer_height_mm: resolvedHeight,
           recipe_overrides: [
@@ -3178,6 +3194,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               const updates: Partial<ConverterState> = {
                 previewImageUrl: normalizeResourceUrl(response.preview_url),
                 previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+                ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
               };
               if (response.preview_glb_url) {
                 updates.previewGlbUrl = normalizeResourceUrl(
@@ -4428,6 +4445,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           replacePreviewLoading: false,
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -4485,6 +4503,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           replacePreviewLoading: false,
           previewImageUrl: lastPreviewUrl,
           previewBaseImageUrl: lastPreviewUrl,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (lastGlbUrl) {
           updates.previewGlbUrl = lastGlbUrl;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useConverterStore } from "../../stores/converter";
 import type { PaletteEntry } from "../../api/types";
 import Slider from "../ui/Slider";
@@ -8,6 +8,65 @@ import CustomRecipeDialog from "../ui/CustomRecipeDialog";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
+
+// ========== ToolbarGroup ==========
+
+type ToolbarGroupTint = "slate" | "sky" | "rose" | "amber" | "emerald";
+
+const TOOLBAR_GROUP_TINT_CLASS: Record<ToolbarGroupTint, string> = {
+  slate:
+    "bg-slate-100/70 border-slate-200/70 dark:bg-slate-800/40 dark:border-slate-700/50",
+  sky:
+    "bg-sky-50/80 border-sky-200/70 dark:bg-sky-950/30 dark:border-sky-900/50",
+  rose:
+    "bg-rose-50/80 border-rose-200/70 dark:bg-rose-950/30 dark:border-rose-900/50",
+  amber:
+    "bg-amber-50/80 border-amber-200/70 dark:bg-amber-950/30 dark:border-amber-900/50",
+  emerald:
+    "bg-emerald-50/80 border-emerald-200/70 dark:bg-emerald-950/25 dark:border-emerald-900/50",
+};
+
+const TOOLBAR_GROUP_LABEL_TINT_CLASS: Record<ToolbarGroupTint, string> = {
+  slate: "text-slate-500 dark:text-slate-400",
+  sky: "text-sky-700 dark:text-sky-300",
+  rose: "text-rose-700 dark:text-rose-300",
+  amber: "text-amber-700 dark:text-amber-300",
+  emerald: "text-emerald-700 dark:text-emerald-300",
+};
+
+interface ToolbarGroupProps {
+  label: string;
+  tint: ToolbarGroupTint;
+  children: ReactNode;
+}
+
+/**
+ * Toolbar group card: tinted background + a small header label on top,
+ * followed by a row of compact controls aligned to a shared baseline.
+ * 工具栏分组：淡色背景 + 顶部小标题 + 同一基线的紧凑按钮行。
+ */
+function ToolbarGroup({ label, tint, children }: ToolbarGroupProps) {
+  return (
+    <div
+      className={cx(
+        "flex flex-col gap-1 rounded-xl border px-2.5 py-1.5",
+        TOOLBAR_GROUP_TINT_CLASS[tint],
+      )}
+      role="group"
+      aria-label={label}
+    >
+      <span
+        className={cx(
+          "text-[10px] font-semibold uppercase tracking-[0.1em]",
+          TOOLBAR_GROUP_LABEL_TINT_CLASS[tint],
+        )}
+      >
+        {label}
+      </span>
+      <div className="flex h-9 items-center gap-1.5">{children}</div>
+    </div>
+  );
+}
 
 // ========== PaletteItem ==========
 
@@ -242,8 +301,8 @@ export default function PalettePanel({
         </p>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-          {/* Toolbar: selected color detail + action buttons + mode buttons (single row) */}
-          <div className="shrink-0 flex flex-wrap items-center gap-2">
+          {/* Toolbar: selected color detail + grouped action buttons */}
+          <div className="shrink-0 flex flex-col gap-1.5">
             {/* Inline selected color swatches */}
             {selectedColor && (() => {
               const selectedEntry = palette.find(
@@ -252,7 +311,7 @@ export default function PalettePanel({
               if (!selectedEntry) return null;
               const remapped = colorRemapMap[selectedColor];
               return (
-                <>
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span
                     className="inline-block h-5 w-5 shrink-0 rounded-lg border border-slate-300/80 dark:border-slate-600/80"
                     style={{ backgroundColor: `#${selectedEntry.quantized_hex}` }}
@@ -274,87 +333,103 @@ export default function PalettePanel({
                       />
                     </>
                   )}
-                  <span className="mr-1 h-4 w-px bg-slate-300 dark:bg-slate-700" />
-                </>
+                </div>
               );
             })()}
 
-            <Button
-              label={t("palette_undo")}
-              variant="secondary"
-              onClick={undoColorRemap}
-              disabled={!hasHistory}
-            />
-            <Button
-              label={t("palette_clear_remaps")}
-              variant="secondary"
-              onClick={clearAllRemaps}
-              disabled={!hasRemaps}
-            />
-            <Button
-              label={t("palette_mode_select_all")}
-              variant={selectionMode === 'select-all' ? 'primary' : 'secondary'}
-              onClick={() => setSelectionMode('select-all')}
-            />
-            <Button
-              label={t("palette_mode_current")}
-              variant={selectionMode === 'current' ? 'primary' : 'secondary'}
-              onClick={() => setSelectionMode('current')}
-            />
-            <Button
-              label={t("palette_mode_multi_select")}
-              variant={selectionMode === 'multi-select' ? 'primary' : 'secondary'}
-              onClick={() => setSelectionMode('multi-select')}
-            />
-            <Button
-              label={t("palette_mode_region")}
-              variant={selectionMode === 'region' ? 'primary' : 'secondary'}
-              onClick={() => setSelectionMode('region')}
-            />
-            <Button
-              label={t("conv_free_color_btn")}
-              variant="secondary"
-              onClick={() => {
-                if (selectedColor) toggleFreeColor(selectedColor);
-              }}
-              disabled={selectedColor === null}
-            />
-            <Button
-              label={t("conv_free_color_clear_btn")}
-              variant="secondary"
-              onClick={clearFreeColors}
-              disabled={free_color_set.size === 0}
-            />
-            <Button
-              label={t("recipe_custom_button")}
-              variant="secondary"
-              onClick={() => setRecipeDialogOpen(true)}
-              disabled={!canUseCustomRecipe}
-            />
-            <div className={cx(workstationInsetCardClass, "w-full flex flex-wrap items-center gap-2 px-2 py-1.5")}>
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                {t("viewer_hover_toggle_group")}
-              </span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+            {/* Grouped toolbar: auto-fit grid keeps every group card the same width */}
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
+              <ToolbarGroup label={t("palette_group_history")} tint="slate">
+                <Button
+                  label={t("palette_undo")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={undoColorRemap}
+                  disabled={!hasHistory}
+                />
+                <Button
+                  label={t("palette_clear_remaps")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={clearAllRemaps}
+                  disabled={!hasRemaps}
+                />
+              </ToolbarGroup>
+
+              <ToolbarGroup label={t("palette_group_mode")} tint="sky">
+                <Button
+                  label={t("palette_mode_select_all")}
+                  variant={selectionMode === 'select-all' ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setSelectionMode('select-all')}
+                />
+                <Button
+                  label={t("palette_mode_current")}
+                  variant={selectionMode === 'current' ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setSelectionMode('current')}
+                />
+                <Button
+                  label={t("palette_mode_multi_select")}
+                  variant={selectionMode === 'multi-select' ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setSelectionMode('multi-select')}
+                />
+                <Button
+                  label={t("palette_mode_region")}
+                  variant={selectionMode === 'region' ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setSelectionMode('region')}
+                />
+              </ToolbarGroup>
+
+              <ToolbarGroup label={t("palette_group_free")} tint="rose">
+                <Button
+                  label={t("conv_free_color_btn")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    if (selectedColor) toggleFreeColor(selectedColor);
+                  }}
+                  disabled={selectedColor === null}
+                />
+                <Button
+                  label={t("conv_free_color_clear_btn")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={clearFreeColors}
+                  disabled={free_color_set.size === 0}
+                />
+              </ToolbarGroup>
+
+              <ToolbarGroup label={t("palette_group_recipe")} tint="amber">
+                <Button
+                  label={t("recipe_custom_button")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setRecipeDialogOpen(true)}
+                  disabled={!canUseCustomRecipe}
+                />
+              </ToolbarGroup>
+
+              <ToolbarGroup label={t("viewer_hover_toggle_group")} tint="emerald">
+                <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
+                  <Switch
+                    checked={showHoverMagnifier}
+                    onChange={(checked) => onToggleHoverMagnifier?.(checked)}
+                    ariaLabel={t("viewer_hover_toggle_magnifier")}
+                  />
                   {t("viewer_hover_toggle_magnifier")}
-                </span>
-                <Switch
-                  checked={showHoverMagnifier}
-                  onChange={(checked) => onToggleHoverMagnifier?.(checked)}
-                  ariaLabel={t("viewer_hover_toggle_magnifier")}
-                />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                </label>
+                <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-slate-600 dark:text-slate-300">
+                  <Switch
+                    checked={showHoverLayerDetails}
+                    onChange={(checked) => onToggleHoverLayerDetails?.(checked)}
+                    ariaLabel={t("viewer_hover_toggle_layers")}
+                  />
                   {t("viewer_hover_toggle_layers")}
-                </span>
-                <Switch
-                  checked={showHoverLayerDetails}
-                  onChange={(checked) => onToggleHoverLayerDetails?.(checked)}
-                  ariaLabel={t("viewer_hover_toggle_layers")}
-                />
-              </div>
+                </label>
+              </ToolbarGroup>
             </div>
           </div>
 
