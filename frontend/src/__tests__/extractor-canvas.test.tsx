@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
-import { CORNER_LABELS } from "../components/ExtractorCanvas";
+import {
+  CORNER_LABELS,
+  CORNER_LABELS_5C_EXT_PAGE2,
+  resolveCornerLabels,
+} from "../components/ExtractorCanvas";
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
 
 // ========== Mock browser APIs ==========
@@ -161,6 +165,108 @@ describe("Feature: extractor-calibration-tab, Property 2: 角点提示标签正�
       cleanup();
       resetExtractorStore();
     }
+  });
+
+  // Regression: 5-Color Extended uses two different calibration sheets.
+  //   - Page 1 corners: White / Red / Blue / Yellow (RYBW 4-corner).
+  //   - Page 2 corners: Blue  / Red / Black / Yellow.
+  // The single-list ``CORNER_LABELS["5-Color Extended"]`` was historically
+  // White/Red/BLACK/Yellow regardless of page — so page 2 corner 1 said
+  // "White (TL)" when the user was actually looking at a Blue TL marker, and
+  // page 1 corner 3 said "Black (BR)" when the real marker is Blue. The
+  // resolver below must match ``core/extractor.py::draw_corner_points`` and
+  // ``ColorSystem.FIVE_COLOR_EXTENDED``.
+  // 回归：5-Color Extended 跨两张校准板：
+  //   - 第 1 页角点：白 / 红 / 蓝 / 黄（RYBW 四角）。
+  //   - 第 2 页角点：蓝 / 红 / 黑 / 黄。
+  // 历史代码在两页共用同一条 CORNER_LABELS，导致第 2 页角点 1 提示「白 (TL)」
+  // 但实际标记是蓝色，第 1 页角点 3 提示「黑 (BR)」但实际标记是蓝色。下面的
+  // 解析器必须与后端 ``core/extractor.py::draw_corner_points`` 和
+  // ``ColorSystem.FIVE_COLOR_EXTENDED`` 保持一致。
+  describe("5-Color Extended corner labels match the backend (page-aware)", () => {
+    it("page 1 hints match the RYBW 4-corner layout: White / Red / Blue / Yellow", () => {
+      const labels = resolveCornerLabels(
+        ExtractorColorMode.FIVE_COLOR_EXT,
+        ExtractorPage.PAGE_1,
+      );
+      expect(labels[0]).toContain("White");
+      expect(labels[0]).toContain("白色");
+      expect(labels[1]).toContain("Red");
+      expect(labels[2]).toContain("Blue");
+      // Explicitly guard against the historical wrong value.
+      expect(labels[2]).not.toContain("Black");
+      expect(labels[2]).not.toContain("黑色");
+      expect(labels[3]).toContain("Yellow");
+    });
+
+    it("page 2 corner 1 says Blue (not White) and corner 3 says Black (not Blue)", () => {
+      const labels = resolveCornerLabels(
+        ExtractorColorMode.FIVE_COLOR_EXT,
+        ExtractorPage.PAGE_2,
+      );
+      // Corner 1 (TL) — the specific bug the user reported.
+      expect(labels[0]).toContain("Blue");
+      expect(labels[0]).toContain("蓝色");
+      expect(labels[0]).not.toContain("White");
+      expect(labels[0]).not.toContain("白色");
+      // Corner 2 (TR)
+      expect(labels[1]).toContain("Red");
+      // Corner 3 (BR)
+      expect(labels[2]).toContain("Black");
+      expect(labels[2]).toContain("黑色");
+      // Corner 4 (BL)
+      expect(labels[3]).toContain("Yellow");
+      // Full identity against the exported table.
+      expect(labels).toEqual(CORNER_LABELS_5C_EXT_PAGE2);
+    });
+
+    it("other color modes ignore the page argument and return CORNER_LABELS[mode]", () => {
+      for (const mode of [
+        ExtractorColorMode.BW,
+        ExtractorColorMode.FOUR_COLOR_CMYW,
+        ExtractorColorMode.FOUR_COLOR_RYBW,
+        ExtractorColorMode.SIX_COLOR,
+        ExtractorColorMode.SIX_COLOR_RYBW,
+        ExtractorColorMode.EIGHT_COLOR,
+      ]) {
+        for (const page of [
+          ExtractorPage.PAGE_1,
+          ExtractorPage.PAGE_2,
+          ExtractorPage.PAGE_3,
+        ]) {
+          expect(resolveCornerLabels(mode, page)).toEqual(CORNER_LABELS[mode]);
+        }
+      }
+    });
+
+    it("unknown color modes fall back to the RYBW 4-corner list", () => {
+      expect(resolveCornerLabels("Totally Unknown Mode", ExtractorPage.PAGE_1)).toEqual(
+        CORNER_LABELS["4-Color (RYBW)"],
+      );
+    });
+  });
+
+  it("renders the page-2-specific Blue TL hint when 5-Color Extended + page 2 + 0 corners picked", async () => {
+    const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
+
+    cleanup();
+    useExtractorStore.setState({
+      imagePreviewUrl: "blob:test-image",
+      imageNaturalWidth: 800,
+      imageNaturalHeight: 600,
+      color_mode: ExtractorColorMode.FIVE_COLOR_EXT,
+      page: ExtractorPage.PAGE_2,
+      corner_points: [],
+      warp_view_url: null,
+      lut_preview_url: null,
+    });
+
+    render(<ExtractorCanvas />);
+    const hint = screen.getByTestId("corner-hint");
+    expect(hint.textContent).toContain("蓝色");
+    expect(hint.textContent).not.toContain("白色");
+    cleanup();
+    resetExtractorStore();
   });
 
   it("For any color mode and corner count 0..3, rendered hint contains the correct CORNER_LABELS entry", async () => {
