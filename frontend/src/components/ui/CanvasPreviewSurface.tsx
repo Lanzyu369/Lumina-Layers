@@ -7,7 +7,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent,
   type ReactNode,
-  type WheelEvent,
 } from "react"
 
 import {
@@ -316,11 +315,21 @@ export default function CanvasPreviewSurface({
     emitHoverSample(null)
   }, [emitHoverSample])
 
-  const handleWheel = useCallback(
-    (event: WheelEvent<HTMLDivElement>) => {
-      if (!wheelZoomEnabled) {
-        return
-      }
+  // React's synthetic `onWheel` registers as a passive listener at the root,
+  // so `event.preventDefault()` inside a React handler cannot stop the page
+  // from scrolling while the user zooms the preview. We therefore attach a
+  // native `wheel` listener with `{ passive: false }` directly on the
+  // container element.
+  // React 合成事件 `onWheel` 在根节点是 passive 注册的，React 回调里调用
+  // `event.preventDefault()` 无法阻止页面滚动。因此我们改为在容器上直接挂
+  // 一个 `{ passive: false }` 的原生 `wheel` 监听器。
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !wheelZoomEnabled) {
+      return
+    }
+
+    const handleNativeWheel = (event: globalThis.WheelEvent) => {
       event.preventDefault()
       if (interactionsDisabled) {
         lastPointerClientRef.current = null
@@ -329,39 +338,45 @@ export default function CanvasPreviewSurface({
       }
       lastPointerClientRef.current = null
       emitHoverSample(null)
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) {
-        return
-      }
+      const rect = container.getBoundingClientRect()
 
       const mousePos = {
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       }
+      const currentScale = scaleRef.current
+      const currentTranslate = translateRef.current
       const nextScale = clampCanvasPreviewScale(
         wheelZoomStepMultiplier
-          ? scale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
-          : scale * (1 - event.deltaY * wheelZoomSensitivity),
+          ? currentScale * (event.deltaY < 0 ? wheelZoomStepMultiplier : 1 / wheelZoomStepMultiplier)
+          : currentScale * (1 - event.deltaY * wheelZoomSensitivity),
         minScale,
         maxScale,
       )
-      const nextTranslate = computeCanvasPreviewZoomTranslate(mousePos, translate, scale, nextScale)
+      const nextTranslate = computeCanvasPreviewZoomTranslate(
+        mousePos,
+        currentTranslate,
+        currentScale,
+        nextScale,
+      )
 
       setScale(nextScale)
       setTranslate(nextTranslate)
-    },
-    [
-      emitHoverSample,
-      maxScale,
-      minScale,
-      interactionsDisabled,
-      scale,
-      translate,
-      wheelZoomEnabled,
-      wheelZoomSensitivity,
-      wheelZoomStepMultiplier,
-    ],
-  )
+    }
+
+    container.addEventListener("wheel", handleNativeWheel, { passive: false })
+    return () => {
+      container.removeEventListener("wheel", handleNativeWheel)
+    }
+  }, [
+    emitHoverSample,
+    interactionsDisabled,
+    maxScale,
+    minScale,
+    wheelZoomEnabled,
+    wheelZoomSensitivity,
+    wheelZoomStepMultiplier,
+  ])
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -489,7 +504,6 @@ export default function CanvasPreviewSurface({
         ref={containerRef}
         data-testid={dataTestId}
         className={`relative h-full w-full overflow-hidden ${className ?? ""} ${surfaceClassName ?? "cursor-grab active:cursor-grabbing"}`.trim()}
-        onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

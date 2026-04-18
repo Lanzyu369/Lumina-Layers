@@ -302,6 +302,86 @@ describe("CanvasPreviewSurface", () => {
     expect(scaleChanges).toEqual([1])
   })
 
+  it("calls preventDefault on wheel so the page does not scroll while zooming", () => {
+    // Regression: React's synthetic `onWheel` is passive, so
+    // `event.preventDefault()` inside a React handler is a no-op and the
+    // page scrolls while the user zooms the preview. The component must
+    // attach a native non-passive `wheel` listener.
+    // 回归测试：React 合成 `onWheel` 是 passive 注册，React 回调里 `preventDefault`
+    // 无效，用户缩放时页面会一起滚动。组件必须注册原生非 passive 的 `wheel` 监听器。
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(<CanvasPreviewSurface src="/preview.png" alt="Preview" />)
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -120,
+      clientX: 60,
+      clientY: 40,
+      bubbles: true,
+      cancelable: true,
+    })
+    const dispatched = surface.dispatchEvent(wheelEvent)
+
+    // `dispatchEvent` returns false when any listener called preventDefault
+    // on a cancelable event.
+    expect(dispatched).toBe(false)
+    expect(wheelEvent.defaultPrevented).toBe(true)
+  })
+
+  it("does not prevent default when wheel zoom is disabled", () => {
+    // Guard: if the consumer opts out of wheel zoom, the component must
+    // leave the native wheel event alone so the page can scroll normally.
+    // 守护：消费方关闭滚轮缩放时，组件必须放行原生 wheel 事件，页面正常滚动。
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        wheelZoomEnabled={false}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    const wheelEvent = new WheelEvent("wheel", {
+      deltaY: -120,
+      clientX: 60,
+      clientY: 40,
+      bubbles: true,
+      cancelable: true,
+    })
+    surface.dispatchEvent(wheelEvent)
+
+    expect(wheelEvent.defaultPrevented).toBe(false)
+  })
+
   it("does not reload or reset lifecycle state when callback identities change but src is stable", () => {
     const readyPayloads: Array<CanvasPreviewSurfaceReadyPayload | null> = []
     const hoverSamples: Array<unknown> = []
