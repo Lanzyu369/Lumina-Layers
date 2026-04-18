@@ -106,14 +106,25 @@ def _build_default_palette(color_mode: str) -> list[dict]:
     """Build default palette array based on color mode.
     根据颜色模式构建默认调色板数组。
 
+    The raw ``color_mode`` (not the CMYW-normalized variant used by the
+    extraction pipeline) must be used here so each 6-Color subtype keeps its
+    own slot names — RYBWGK resolves to White/Red/Yellow/Blue/Green/Black,
+    CMYWGK resolves to White/Cyan/Magenta/Green/Yellow/Black. Normalizing
+    first would silently collapse RYBWGK into CMYW names in the UI.
+
+    这里必须使用原始 ``color_mode``，而不是提取管线为共享处理路径使用的
+    CMYW 归一模式。这样每个 6 色子类型都能保留自己的槽位名：RYBWGK →
+    白/红/黄/蓝/绿/黑，CMYWGK → 白/青/品红/绿/黄/黑。若先归一会让 RYBWGK 在
+    UI 上被静默展示成 CMYW 名字。
+
     Args:
-        color_mode (str): Color mode string. (颜色模式字符串)
+        color_mode (str): Raw color mode string from the request. (请求中的
+            原始颜色模式字符串，不做 6 色归一化)
 
     Returns:
         list[dict]: Default palette entries. (默认调色板条目列表)
     """
-    effective_mode = _normalize_6color_mode(color_mode)
-    color_conf = ColorSystem.get(effective_mode)
+    color_conf = ColorSystem.get(color_mode)
     slots = color_conf.get("slots", [])
     preview = color_conf.get("preview", {})
     palette = []
@@ -407,7 +418,16 @@ async def extractor_extract(
         lut_download_url=f"/api/files/{lut_download_id}",
         warp_view_url=f"/api/files/{warp_view_id}" if warp_view_id else "",
         lut_preview_url=f"/api/files/{lut_preview_id}" if lut_preview_id else "",
-        default_palette=_build_default_palette(effective_color_mode),
+        # The extraction pipeline uses ``effective_color_mode`` (CMYW-normalized
+        # for 6-Color variants to share the same processing path). The
+        # user-facing default palette must use the *raw* ``color_mode`` so
+        # RYBWGK keeps its RYBW slot names (White/Red/Yellow/Blue/Green/Black)
+        # instead of being displayed as CMYW (White/Cyan/Magenta/...).
+        # 提取管线使用 ``effective_color_mode``（6 色变体统一归一为 CMYW 共享处理
+        # 路径）。但面向用户的默认调色板必须使用原始 ``color_mode``，这样 RYBWGK
+        # 保持自己的 RYBW 槽位名（白/红/黄/蓝/绿/黑），不会被显示成 CMYW
+        # （白/青/品红/...）。
+        default_palette=_build_default_palette(color_mode),
     )
 
 
