@@ -275,6 +275,7 @@ def generate_swatch(
         structure_mode=request.structure_mode,
         printer_id=request.printer_id,
         slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
     )
 
     if not output_path:

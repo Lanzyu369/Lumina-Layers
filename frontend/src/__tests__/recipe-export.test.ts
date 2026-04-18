@@ -102,11 +102,13 @@ describe("recipe/exportRecipe", () => {
       const settings = makeSettings({
         printerModel: "custom-printer",
         slicerSoftware: "OrcaSlicer",
+        nozzleSize: "0.2",
       });
 
       const recipe = exportConverterRecipe(makeState(), settings, "fp");
       expect(recipe.device.printer_id).toBe("custom-printer");
       expect(recipe.device.slicer).toBe("OrcaSlicer");
+      expect(recipe.device.nozzle_size).toBe("0.2");
     });
 
     it("exports large format parameters", () => {

@@ -547,6 +547,33 @@ def normalize_printer_profile_id(printer_id: str) -> str:
     return trimmed.lower().replace("_", "-")
 
 
+def normalize_nozzle_size(nozzle_size: Any) -> Optional[str]:
+    """Normalize nozzle size input to a canonical one-decimal string.
+    将喷嘴尺寸输入规范化为固定一位小数的标准字符串。
+
+    Args:
+        nozzle_size (Any): Raw nozzle size, e.g. 0.2, "0.2", or "0.2mm". (原始喷嘴尺寸)
+
+    Returns:
+        Optional[str]: Canonical size like "0.2", or None when absent/invalid.
+                       (如 "0.2" 的标准尺寸，缺失或无效时返回 None)
+    """
+    if nozzle_size is None:
+        return None
+
+    if isinstance(nozzle_size, str):
+        candidate = nozzle_size.strip().lower().replace("mm", "")
+        if not candidate:
+            return None
+    else:
+        candidate = str(nozzle_size)
+
+    try:
+        return f"{float(candidate):.1f}"
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class PrinterProfile:
     """Printer hardware profile for 3MF export template selection.
@@ -564,6 +591,8 @@ class PrinterProfile:
         template_file (str): Default (BambuStudio) config template filename. (默认模板文件名)
         slicer_templates (dict[str, str]): Slicer-specific template filenames. (切片器专属模板)
         thumbnail (str): Thumbnail image filename, reserved for future use. (缩略图文件名，预留)
+        supported_nozzle_sizes (tuple[str, ...]): Supported nozzle sizes for template variants.
+            (支持生成模板变体的喷嘴尺寸)
     """
 
     id: str
@@ -577,19 +606,31 @@ class PrinterProfile:
     template_file: str
     slicer_templates: dict = field(default_factory=dict)
     thumbnail: str = ""
+    supported_nozzle_sizes: tuple[str, ...] = ("0.2", "0.4")
 
-    def get_template_file(self, slicer: str = "BambuStudio") -> str:
+    def get_template_file(self, slicer: str = "BambuStudio", nozzle_size: Optional[str | float] = None) -> str:
         """Return template filename for the given slicer.
         返回指定切片器的模板文件名。
 
         Args:
             slicer (str): Slicer identifier, e.g. "BambuStudio" or "OrcaSlicer". (切片器标识)
+            nozzle_size (Optional[str | float]): Requested nozzle size. When omitted,
+                the base template is returned. (请求的喷嘴尺寸，未提供时返回基础模板)
 
         Returns:
             str: Template filename. Falls back to default template_file. (模板文件名，回退到默认)
         """
         normalized_slicer = normalize_slicer_software_id(slicer)
-        return self.slicer_templates.get(normalized_slicer, self.template_file)
+        template_file = self.slicer_templates.get(normalized_slicer, self.template_file)
+
+        normalized_size = normalize_nozzle_size(nozzle_size)
+        if normalized_size is None or normalized_size == "0.4":
+            return template_file
+        if normalized_size not in self.supported_nozzle_sizes:
+            return template_file
+
+        stem, ext = os.path.splitext(template_file)
+        return f"{stem}_{normalized_size.replace('.', '_')}{ext}"
 
 
 # Supported slicer software list

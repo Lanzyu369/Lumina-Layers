@@ -49,12 +49,15 @@ vi.mock("../components/Scene3D", () => ({ default: () => null }));
 
 import App from "../App";
 import apiClient from "../api/client";
+import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 
 describe("App component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Restore default rejection for unmocked calls
     vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    localStorage.clear();
   });
 
   it('renders green badge when API returns status "ok"', async () => {

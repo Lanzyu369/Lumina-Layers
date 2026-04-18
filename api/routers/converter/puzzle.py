@@ -758,6 +758,7 @@ async def generate_puzzle(
             "disable_material_dilation": True,
             "printer_id": generate_params.printer_id,
             "slicer": generate_params.slicer,
+            "nozzle_size": generate_params.nozzle_size,
             "relief_global_max_height": relief_global_max_height,
         }
         log.info(
@@ -867,6 +868,7 @@ async def generate_puzzle(
             slot_names=slot_names,
             printer_id=generate_params.printer_id,
             slicer=generate_params.slicer,
+            nozzle_size=generate_params.nozzle_size,
             overview_png_bytes=overview_png_bytes,
         )
     except ROUTER_HANDLED_ERRORS as exc:

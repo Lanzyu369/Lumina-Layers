@@ -30,6 +30,7 @@ safe_text = st.text(
     min_size=0,
     max_size=100,
 )
+nozzle_sizes = st.sampled_from(["0.2", "0.4"])
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ safe_text = st.text(
     last_slicer=safe_text,
     palette_mode=safe_text,
     enable_crop_modal=st.booleans(),
+    nozzle_size=nozzle_sizes,
 )
 @settings(max_examples=100)
 def test_settings_round_trip(
@@ -54,6 +56,7 @@ def test_settings_round_trip(
     last_slicer: str,
     palette_mode: str,
     enable_crop_modal: bool,
+    nozzle_size: str,
 ) -> None:
     """Property 6: For any valid UserSettings, POST then GET SHALL return
     equivalent data.
@@ -68,6 +71,7 @@ def test_settings_round_trip(
         "last_slicer": last_slicer,
         "palette_mode": palette_mode,
         "enable_crop_modal": enable_crop_modal,
+        "nozzle_size": nozzle_size,
     }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -94,6 +98,7 @@ def test_settings_round_trip(
             assert returned["last_slicer"] == last_slicer
             assert returned["palette_mode"] == palette_mode
             assert returned["enable_crop_modal"] == enable_crop_modal
+            assert returned["nozzle_size"] == nozzle_size
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +139,7 @@ def test_settings_rejects_invalid_enable_crop_modal(bad_value) -> None:
         "last_slicer": "",
         "palette_mode": "swatch",
         "enable_crop_modal": bad_value,
+        "nozzle_size": "0.4",
     }
 
     resp = client.post("/api/system/settings", json=payload)

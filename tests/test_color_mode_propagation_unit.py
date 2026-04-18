@@ -150,6 +150,48 @@ class TestOldFormatLUTLoadCompatibility:
         finally:
             os.unlink(path)
 
+    def test_old_stored_4color_mode_is_canonicalized_by_palette(self):
+        """Stored legacy '4-Color' metadata must be canonicalized to the palette variant."""
+        entries = [{"rgb": [i, i, i], "recipe": ["White"]} for i in range(1024)]
+        data = {
+            "color_mode": "4-Color",
+            "palette": {
+                "White": {"material": "PLA Basic"},
+                "Red": {"material": "PLA Basic"},
+                "Yellow": {"material": "PLA Basic"},
+                "Blue": {"material": "PLA Basic"},
+            },
+            "entries": entries,
+        }
+        path = _write_temp_json(data)
+        try:
+            result = LUTManager._infer_color_mode_from_json(path)
+            assert result == "4-Color (RYBW)"
+        finally:
+            os.unlink(path)
+
+    def test_old_stored_6color_mode_is_canonicalized_by_palette(self):
+        """Stored legacy '6-Color' metadata must be canonicalized to the palette variant."""
+        entries = [{"rgb": [0, 0, 0], "recipe": ["White"]} for _ in range(1296)]
+        data = {
+            "color_mode": "6-Color",
+            "palette": {
+                "White": {"material": "PLA Basic"},
+                "Red": {"material": "PLA Basic"},
+                "Yellow": {"material": "PLA Basic"},
+                "Blue": {"material": "PLA Basic"},
+                "Green": {"material": "PLA Basic"},
+                "Black": {"material": "PLA Basic"},
+            },
+            "entries": entries,
+        }
+        path = _write_temp_json(data)
+        try:
+            result = LUTManager._infer_color_mode_from_json(path)
+            assert result == "6-Color (RYBWGK 1296)"
+        finally:
+            os.unlink(path)
+
     # --- Requirement 7.4: old 1024-entry CMYW palette → "4-Color (CMYW)" ---
 
     def test_old_1024_cmyw_palette_inferred_as_cmyw(self):

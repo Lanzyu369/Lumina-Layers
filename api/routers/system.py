@@ -223,8 +223,7 @@ def get_printers() -> PrinterListResponse:
                 bed_width=p.bed_width,
                 bed_depth=p.bed_depth,
                 bed_height=p.bed_height,
-                nozzle_count=p.nozzle_count,
-                is_dual_head=p.is_dual_head,
+                supported_nozzle_sizes=list(p.supported_nozzle_sizes),
                 supported_slicers=unique_slicers,
             )
         )

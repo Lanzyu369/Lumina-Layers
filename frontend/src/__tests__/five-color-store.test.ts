@@ -3,6 +3,7 @@ import {
   useFiveColorStore,
   type CollectedRecipe,
 } from "../stores/fiveColorStore";
+import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 
 vi.mock("../api/fiveColor", () => ({
   fetchBaseColors: vi.fn(),
@@ -49,6 +50,7 @@ describe("fiveColorStore LUT switching", () => {
     vi.clearAllMocks();
     window.localStorage.clear();
     resetStore();
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
   });
 
   it("clears stale collection and swatch outputs when loading a different LUT", async () => {
@@ -113,5 +115,36 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.collectedRecipes).toHaveLength(1);
     expect(state.selectedIndices).toEqual([]);
     expect(state.queryResult).toBeNull();
+  });
+
+  it("passes printer tuple from settings into swatch export", async () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      printerModel: "bambu-h2d",
+      slicerSoftware: "BambuStudio",
+      nozzleSize: "0.2",
+    });
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      collectedRecipes: [staleRecipe],
+    });
+    mockGenerateRecipeSwatch.mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      download_url: "/api/files/swatch.3mf",
+      preview_url: "/api/files/swatch.png",
+      recipe_count: 1,
+    });
+
+    await useFiveColorStore.getState().generateSwatch();
+
+    expect(mockGenerateRecipeSwatch).toHaveBeenCalledOnce();
+    expect(mockGenerateRecipeSwatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        printer_id: "bambu-h2d",
+        slicer: "BambuStudio",
+        nozzle_size: "0.2",
+      }),
+    );
   });
 });

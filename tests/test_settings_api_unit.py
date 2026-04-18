@@ -43,6 +43,7 @@ class TestGetSettings:
         assert settings["last_slicer"] == ""
         assert settings["palette_mode"] == "swatch"
         assert settings["enable_crop_modal"] is True
+        assert settings["nozzle_size"] == "0.4"
 
     def test_get_settings_file_exists(self) -> None:
         """文件存在时返回正确数据。"""
@@ -53,6 +54,7 @@ class TestGetSettings:
             "last_slicer": "bambu",
             "palette_mode": "grid",
             "enable_crop_modal": False,
+            "nozzle_size": "0.2",
         }
         mock_file = MagicMock()
         mock_file.exists.return_value = True
@@ -71,6 +73,7 @@ class TestGetSettings:
         assert settings["last_slicer"] == "bambu"
         assert settings["palette_mode"] == "grid"
         assert settings["enable_crop_modal"] is False
+        assert settings["nozzle_size"] == "0.2"
 
 
 # =========================================================================
@@ -90,6 +93,7 @@ class TestPostSettings:
             "last_slicer": "orca",
             "palette_mode": "swatch",
             "enable_crop_modal": True,
+            "nozzle_size": "0.2",
         }
         mock_file = MagicMock()
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
@@ -110,6 +114,7 @@ class TestPostSettings:
             "last_slicer": "",
             "palette_mode": "swatch",
             "enable_crop_modal": True,
+            "nozzle_size": "0.4",
         }
         mock_file = MagicMock()
         mock_file.write_text.side_effect = OSError("disk full")
@@ -152,3 +157,19 @@ class TestGetStats:
         assert data["calibrations"] == 0
         assert data["extractions"] == 0
         assert data["conversions"] == 0
+
+
+class TestGetPrinters:
+    """Verify GET /api/system/printers exposes nozzle-size metadata."""
+
+    def test_get_printers_exposes_supported_nozzle_sizes(self) -> None:
+        response = client.get("/api/system/printers")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["printers"]
+        first = data["printers"][0]
+        assert "supported_nozzle_sizes" in first
+        assert "nozzle_count" not in first
+        assert "is_dual_head" not in first

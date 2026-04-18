@@ -459,7 +459,9 @@ def get_lut_info(lut_name: str) -> LutInfoResponseV2:
     if path is None:
         raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
 
-    color_mode, color_count = LUTMerger.detect_color_mode(path)
+    detected_mode, color_count = LUTMerger.detect_color_mode(path)
+    inferred_mode = LUTManager.infer_color_mode(Path(path).name, path)
+    color_mode = inferred_mode if detected_mode in {"4-Color", "6-Color"} else detected_mode
 
     # 加载元数据（如果 load_lut_with_metadata 可用）
     metadata = LUTMetadata()

@@ -234,15 +234,20 @@ class TestRouterEndpoints:
         """POST /api/slicer/launch with valid data returns success. Requirement 3.2"""
         f = tmp_path / "model.3mf"
         f.write_text("data")
+        launch_copy = tmp_path / "launch_copy.3mf"
+        launch_copy.write_text("data")
 
         client = _make_client()
         mock_slicers = [
             DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
         ]
-        with (
-            patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers),
-            patch("api.routers.slicer.launch_slicer", return_value=(True, "Opened in Bambu Studio")),
-        ):
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
             resp = client.post(
                 "/api/slicer/launch",
                 json={
@@ -253,6 +258,8 @@ class TestRouterEndpoints:
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "success"
+        mock_copy.assert_called_once()
+        mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), mock_slicers)
 
     def test_launch_file_not_found(self):
         """POST with non-existent file returns 400. Requirement 2.3"""

@@ -103,6 +103,7 @@ describe("detectSlicers", () => {
 describe("setSelectedSlicerId", () => {
   beforeEach(() => {
     resetStore();
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
   });
 
   it("更新 selectedSlicerId 为指定值", () => {
@@ -114,6 +115,14 @@ describe("setSelectedSlicerId", () => {
     useSlicerStore.getState().setSelectedSlicerId("bambu_studio");
     useSlicerStore.getState().setSelectedSlicerId(null);
     expect(useSlicerStore.getState().selectedSlicerId).toBeNull();
+  });
+
+  it("同步更新 settingsStore 中的 slicerSoftware 以驱动生成请求", () => {
+    useSlicerStore.getState().setSelectedSlicerId("orca_slicer");
+
+    expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
+    expect(useSettingsStore.getState().slicerSoftware).toBe("OrcaSlicer");
+    expect(useSettingsStore.getState().lastSlicerId).toBe("orca_slicer");
   });
 });
 

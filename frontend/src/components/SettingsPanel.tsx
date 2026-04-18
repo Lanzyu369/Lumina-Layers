@@ -12,6 +12,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
 } from "../utils/settingsOptionIds";
@@ -44,6 +45,8 @@ export default function SettingsPanel() {
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
+  const nozzleSize = useSettingsStore((s) => s.nozzleSize);
+  const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
   const setLastBedLabel = useSettingsStore((s) => s.setLastBedLabel);
   const syncToBackend = useSettingsStore((s) => s.syncToBackend);
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
@@ -101,6 +104,7 @@ export default function SettingsPanel() {
     const nextSlicer = resolveSlicerOptionId(slicerSoftware, slicers);
     const nextPrinter = resolvePrinterOptionId(printerModel, printers, nextSlicer);
     const nextPrinterInfo = printers.find((printer) => printer.id === nextPrinter);
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, nextPrinterInfo);
 
     let didNormalize = false;
 
@@ -117,6 +121,11 @@ export default function SettingsPanel() {
       didNormalize = true;
     }
 
+    if (nextNozzleSize !== nozzleSize) {
+      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      didNormalize = true;
+    }
+
     if (didNormalize) {
       void syncToBackend();
     }
@@ -126,7 +135,9 @@ export default function SettingsPanel() {
     printersLoading,
     setLastBedLabel,
     setPrinterModel,
+    setNozzleSize,
     setSlicerSoftware,
+    nozzleSize,
     slicerSoftware,
     slicers,
     slicersLoading,
@@ -142,6 +153,10 @@ export default function SettingsPanel() {
     const selected = printers.find((p) => p.id === id);
     if (selected) {
       setLastBedLabel(`${selected.bed_width}×${selected.bed_depth} mm`);
+      const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected);
+      if (nextNozzleSize !== nozzleSize) {
+        setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      }
     }
     syncToBackend();
   };
@@ -158,7 +173,18 @@ export default function SettingsPanel() {
         `${compatible[0].bed_width}×${compatible[0].bed_depth} mm`
       );
     }
+    const resolvedPrinter =
+      compatible.find((p) => p.id === resolvedPrinterModel) ?? compatible[0];
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter);
+    if (nextNozzleSize !== nozzleSize) {
+      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+    }
     syncToBackend();
+  };
+
+  const handleNozzleSizeChange = (value: string) => {
+    setNozzleSize(value as "0.2" | "0.4");
+    void syncToBackend();
   };
 
   const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
@@ -206,7 +232,7 @@ export default function SettingsPanel() {
             {t("settings.printer_model")}
           </h4>
         </div>
-        <div className={`grid gap-4 ${workspace.isCompact ? "" : "xl:grid-cols-2"}`}>
+        <div className={`grid gap-4 ${workspace.isCompact ? "" : "xl:grid-cols-3"}`}>
           <div>
             <Dropdown
               label={t("settings.slicer_software")}
@@ -231,6 +257,18 @@ export default function SettingsPanel() {
               }))}
             />
           </div>
+          <div>
+            <Dropdown
+              label={t("settings.nozzle_size")}
+              value={resolveNozzleSizeOption(nozzleSize, selectedPrinter)}
+              onChange={handleNozzleSizeChange}
+              disabled={printersLoading || !selectedPrinter}
+              options={(selectedPrinter?.supported_nozzle_sizes ?? ["0.2", "0.4"]).map((size) => ({
+                label: `${size} mm`,
+                value: size,
+              }))}
+            />
+          </div>
         </div>
         {selectedPrinter && (
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
@@ -239,13 +277,7 @@ export default function SettingsPanel() {
             </span>
             <span className="text-slate-300 dark:text-slate-600">|</span>
             <span>
-              {t("settings.nozzle_count")}: {selectedPrinter.nozzle_count}
-            </span>
-            <span className="text-slate-300 dark:text-slate-600">|</span>
-            <span>
-              {selectedPrinter.is_dual_head
-                ? t("settings.dual_head")
-                : t("settings.single_head")}
+              {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter)} {t("common_unit_mm")}
             </span>
           </div>
         )}

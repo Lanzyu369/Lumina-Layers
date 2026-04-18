@@ -126,6 +126,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   fridge_magnets?: FridgeMagnetItem[];
   printer_id?: string;
   slicer?: string;
+  nozzle_size?: string;
   use_cached_matched_rgb?: boolean;
 };
 
@@ -1012,6 +1013,7 @@ export interface RecipeSwatchRequest {
   structure_mode?: string;
   printer_id?: string;
   slicer?: string;
+  nozzle_size?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1067,8 +1069,7 @@ export interface PrinterInfo {
   bed_width: number;
   bed_depth: number;
   bed_height: number;
-  nozzle_count: number;
-  is_dual_head: boolean;
+  supported_nozzle_sizes: string[];
   supported_slicers: string[];
 }
 
@@ -1088,6 +1089,7 @@ export interface UserSettings {
   enable_crop_modal: boolean;
   printer_model: string;
   slicer_software: string;
+  nozzle_size: string;
 }
 
 export interface UserSettingsResponse {

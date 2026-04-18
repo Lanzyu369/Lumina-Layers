@@ -18,6 +18,7 @@ import {
   StructureMode,
   type ConvertPreviewRequest,
   type ConvertGenerateRequest,
+  type LargeFormatConvertGenerateRequest,
   type LargeFormatGenerateRequest,
 } from "../api/types";
 
@@ -325,6 +326,7 @@ describe("convertGenerateLargeFormat", () => {
       tile_width_mm: 40,
       tile_height_mm: 40,
       params: {
+        source_kind: "legacy_single",
         lut_name: "gen-lut",
         auto_bg: false,
         bg_tol: 30,
@@ -353,7 +355,7 @@ describe("convertGenerateLargeFormat", () => {
         coating_height_mm: 0.08,
         enable_fridge_magnet: false,
         fridge_magnets: [],
-      },
+      } as LargeFormatConvertGenerateRequest,
     };
     const fakeResponse = {
       status: "ok",

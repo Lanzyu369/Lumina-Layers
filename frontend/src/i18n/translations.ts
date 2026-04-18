@@ -1649,6 +1649,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打印床尺寸",
     en: "Bed Size",
   },
+  "settings.nozzle_size": {
+    zh: "喷嘴尺寸",
+    en: "Nozzle Size",
+  },
   "settings.nozzle_count": {
     zh: "喷头数量",
     en: "Nozzle Count",
@@ -3960,6 +3964,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_lut_degraded: {
     zh: "LUT 已降级匹配（名称相同但指纹不一致）",
     en: "LUT matched by name but fingerprint differs — colors may vary",
+  },
+  recipe_import_warning_fridge_conflict_puzzle: {
+    zh: "导入的配方同时启用了冰箱贴模式和拼图模式。为保持状态有效，拼图模式已被禁用。",
+    en: "The imported recipe enabled both fridge magnet mode and puzzle mode. Puzzle mode has been disabled to keep the state valid.",
+  },
+  recipe_import_warning_fridge_conflict_large_format: {
+    zh: "导入的配方同时启用了冰箱贴模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
+    en: "The imported recipe enabled both fridge magnet mode and large-format tiling. Large-format mode has been disabled to keep the state valid.",
+  },
+  recipe_import_warning_puzzle_conflict_loop: {
+    zh: "导入的配方同时启用了拼图模式和挂件环。为保持状态有效，挂件环已被禁用。",
+    en: "The imported recipe enabled both puzzle mode and a keychain loop. The loop has been disabled to keep the state valid.",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",

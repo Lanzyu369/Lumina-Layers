@@ -101,7 +101,7 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
           enable_fridge_magnet: false,
           fridge_magnets: [],
         },
-        device: { printer_id: "bambu-h2d", slicer: "BambuStudio" },
+        device: { printer_id: "bambu-h2d", slicer: "BambuStudio", nozzle_size: "0.2" },
       },
     },
     integrity: {

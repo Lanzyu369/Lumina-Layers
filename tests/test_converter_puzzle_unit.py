@@ -166,6 +166,7 @@ def _build_generate_body(session_id: str) -> dict[str, Any]:
                 "coating_height_mm": 0.08,
                 "printer_id": "bambu-h2d",
                 "slicer": "BambuStudio",
+                "nozzle_size": "0.2",
             },
         },
     }
@@ -271,6 +272,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         slot_names: list[str] | None,
         printer_id: str,
         slicer: str,
+        nozzle_size: str = "0.4",
         overview_png_bytes: bytes | None = None,
     ) -> str:
         assembled_calls.append(
@@ -278,6 +280,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
                 "piece_count": len(piece_sources),
                 "printer_id": printer_id,
                 "slicer": slicer,
+                "nozzle_size": nozzle_size,
                 "slot_names": slot_names,
                 "overview_bytes": overview_png_bytes,
             }
@@ -312,6 +315,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert assembled_calls[0]["piece_count"] == 6
     assert assembled_calls[0]["printer_id"] == "bambu-h2d"
     assert assembled_calls[0]["slicer"] == "BambuStudio"
+    assert assembled_calls[0]["nozzle_size"] == "0.2"
     assert assembled_calls[0]["slot_names"] == ["White"]
     assert isinstance(assembled_calls[0]["overview_bytes"], bytes)
     assert assembled_calls[0]["overview_bytes"].startswith(b"\x89PNG")
@@ -439,6 +443,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         slot_names: list[str] | None,
         printer_id: str,
         slicer: str,
+        nozzle_size: str = "0.4",
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -513,6 +518,7 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         slot_names: list[str] | None,
         printer_id: str,
         slicer: str,
+        nozzle_size: str = "0.4",
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -596,6 +602,7 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         slot_names: list[str] | None,
         printer_id: str,
         slicer: str,
+        nozzle_size: str = "0.4",
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -744,6 +751,7 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         slot_names: list[str] | None,
         printer_id: str,
         slicer: str,
+        nozzle_size: str = "0.4",
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -854,6 +862,7 @@ def test_worker_generate_model_handles_tiny_piece_with_large_quantize_request() 
         "loop_position_preset": "top-center",
         "printer_id": "bambu-h2d",
         "slicer": "BambuStudio",
+        "nozzle_size": "0.2",
         "relief_global_max_height": None,
     }
 
@@ -1014,6 +1023,7 @@ def test_worker_generate_model_preserves_svg_puzzle_piece_dimensions_for_matched
             "loop_position_preset": "top-center",
             "printer_id": "bambu-h2d",
             "slicer": "BambuStudio",
+            "nozzle_size": "0.2",
             "relief_global_max_height": None,
         }
 

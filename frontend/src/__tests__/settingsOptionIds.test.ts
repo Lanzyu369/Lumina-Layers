@@ -6,6 +6,7 @@ import {
   getSlicerSoftwareDisplayName,
   normalizePrinterOptionId,
   normalizeSlicerOptionId,
+  resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
 } from "../utils/settingsOptionIds";
@@ -25,8 +26,7 @@ const PRINTERS: PrinterInfo[] = [
     bed_width: 350,
     bed_depth: 320,
     bed_height: 325,
-    nozzle_count: 2,
-    is_dual_head: true,
+    supported_nozzle_sizes: ["0.2", "0.4"],
     supported_slicers: ["BambuStudio", "OrcaSlicer"],
   },
   {
@@ -36,8 +36,7 @@ const PRINTERS: PrinterInfo[] = [
     bed_width: 256,
     bed_depth: 256,
     bed_height: 256,
-    nozzle_count: 1,
-    is_dual_head: false,
+    supported_nozzle_sizes: ["0.4"],
     supported_slicers: ["ElegooSlicer"],
   },
   {
@@ -47,8 +46,7 @@ const PRINTERS: PrinterInfo[] = [
     bed_width: 250,
     bed_depth: 250,
     bed_height: 250,
-    nozzle_count: 1,
-    is_dual_head: false,
+    supported_nozzle_sizes: ["0.4"],
     supported_slicers: ["AnycubicSlicerNext"],
   },
 ];
@@ -94,5 +92,11 @@ describe("settingsOptionIds", () => {
     expect(filterCompatiblePrinters(PRINTERS, "OrcaSlicer")[0]?.id).toBe("bambu-h2d");
     expect(filterCompatiblePrinters(PRINTERS, "AnycubicSlicerNext")).toHaveLength(1);
     expect(filterCompatiblePrinters(PRINTERS, "AnycubicSlicerNext")[0]?.id).toBe("anycubic-kobra-s1");
+  });
+
+  it("resolves unsupported nozzle size to the first supported option", () => {
+    expect(resolveNozzleSizeOption("0.2", PRINTERS[1])).toBe("0.4");
+    expect(resolveNozzleSizeOption("0.2", PRINTERS[0])).toBe("0.2");
+    expect(resolveNozzleSizeOption("", undefined)).toBe("0.4");
   });
 });

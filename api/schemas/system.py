@@ -14,8 +14,7 @@ class PrinterInfo(BaseModel):
     bed_width: int
     bed_depth: int
     bed_height: int
-    nozzle_count: int
-    is_dual_head: bool
+    supported_nozzle_sizes: list[str] = ["0.2", "0.4"]
     supported_slicers: list[str] = []
 
 
@@ -65,6 +64,7 @@ class UserSettings(BaseModel):
     enable_crop_modal: StrictBool = True
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
+    nozzle_size: str = "0.4"
 
 
 class UserSettingsResponse(BaseModel):

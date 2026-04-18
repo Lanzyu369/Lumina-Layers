@@ -100,7 +100,7 @@ function createTestRecipe(): LuminaRecipe {
           irregularity_strength: 0.35,
           min_neck_width_mm: 1.2,
         },
-        device: { printer_id: "bambu-h2d", slicer: "BambuStudio" },
+        device: { printer_id: "bambu-h2d", slicer: "BambuStudio", nozzle_size: "0.2" },
       },
     },
     integrity: {

@@ -41,6 +41,13 @@ const DETECTED_SLICER_ID_MAP: Record<string, string> = {
   Cura: "cura",
 };
 
+const SOFTWARE_ID_BY_DETECTED_SLICER_ID: Record<string, string> = Object.fromEntries(
+  Object.entries(DETECTED_SLICER_ID_MAP).map(([softwareId, detectedId]) => [
+    detectedId,
+    softwareId,
+  ]),
+);
+
 const SLICER_SOFTWARE_DISPLAY_NAME_MAP: Record<string, string> = {
   BambuStudio: "Bambu Studio",
   OrcaSlicer: "OrcaSlicer",
@@ -60,6 +67,14 @@ export function normalizeSlicerOptionId(value: string): string {
 export function getDetectedSlicerIdForSoftware(value: string): string | null {
   const canonicalId = normalizeSlicerOptionId(value);
   return DETECTED_SLICER_ID_MAP[canonicalId] ?? null;
+}
+
+export function getSoftwareIdForDetectedSlicerId(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return SOFTWARE_ID_BY_DETECTED_SLICER_ID[trimmed] ?? null;
 }
 
 export function getSlicerSoftwareDisplayName(value: string): string {
@@ -111,4 +126,17 @@ export function resolvePrinterOptionId(
     return normalized;
   }
   return compatiblePrinters[0]?.id ?? printers[0]?.id ?? normalized;
+}
+
+export function resolveNozzleSizeOption(
+  currentValue: string,
+  printer: PrinterInfo | undefined,
+): string {
+  const normalized = currentValue.trim() || "0.4";
+  const supported = printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
+
+  if (supported.includes(normalized)) {
+    return normalized;
+  }
+  return supported[0] ?? normalized;
 }

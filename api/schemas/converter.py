@@ -399,6 +399,7 @@ class ConvertGenerateRequest(LutSourceSelection):
     free_color_set: Optional[Set[str]] = Field(None, description="自由色集合 (hex)")
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
+    nozzle_size: str = Field("0.4", description="Printer nozzle size")
     use_cached_matched_rgb: bool = Field(
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",

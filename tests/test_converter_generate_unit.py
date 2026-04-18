@@ -321,6 +321,7 @@ class TestGenerateParameterCompleteness:
                 "coating_height_mm": 0.1,
                 "printer_id": "orca-p1s",
                 "slicer": "OrcaSlicer",
+                "nozzle_size": "0.2",
             },
         }
 
@@ -373,6 +374,7 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["quantize_colors"] == 64
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
+        assert submitted_params["nozzle_size"] == "0.2"
 
         # Verify modeling_mode is converted to core enum
         assert submitted_params["modeling_mode"] == CoreModelingMode("high-fidelity")
@@ -1374,6 +1376,7 @@ def test_convert_generate_request_accepts_native_bundle_source() -> None:
     assert request.material_type == "PLA"
     assert request.vendor == "BambuLab"
     assert request.db_names == ["RYBW_008_5L"]
+    assert request.nozzle_size == "0.4"
 
 
 def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_value() -> None:

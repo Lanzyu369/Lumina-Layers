@@ -301,6 +301,28 @@ class LUTManager:
         return f"{base_mode}"
 
     @staticmethod
+    def _canonicalize_legacy_color_mode(
+        color_mode: str | None,
+        data: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Canonicalize legacy base color modes using palette data when available.
+        当可用时，结合 palette 数据将旧版基础颜色模式规范化为 canonical 变体。
+        """
+        if not isinstance(color_mode, str):
+            return color_mode
+
+        normalized = color_mode.strip()
+        if normalized == "4-Color":
+            if isinstance(data, dict):
+                return LUTManager._detect_variant_from_palette(data, "4-Color")
+            return "4-Color (CMYW)"
+        if normalized == "6-Color":
+            if isinstance(data, dict):
+                return LUTManager._detect_variant_from_palette(data, "6-Color")
+            return "6-Color (CMYWGK 1296)"
+        return normalized
+
+    @staticmethod
     def infer_color_mode(display_name: str, file_path: str) -> str:
         """Infer color mode from LUT display name or file path.
         根据 LUT 显示名称或文件路径推断颜色模式。
@@ -363,7 +385,7 @@ class LUTManager:
             # 优先使用存储的 color_mode
             stored_mode = data.get("color_mode")
             if stored_mode and isinstance(stored_mode, str):
-                return stored_mode
+                return LUTManager._canonicalize_legacy_color_mode(stored_mode, data)
             if looks_like_reference_stage_model(data):
                 channels = data.get("parameters", {}).get("channels", [])
                 return derive_color_mode_from_palette_entries(channels, "Merged")
@@ -1039,6 +1061,7 @@ class LUTManager:
             return cls._load_keyed_json_flat_list(data, display_name, file_path)
 
         metadata = LUTMetadata.from_dict(data)
+        metadata.color_mode = cls._canonicalize_legacy_color_mode(metadata.color_mode, data)
 
         # If palette is empty, infer defaults
         if not metadata.palette:
@@ -1594,6 +1617,7 @@ class LUTManager:
             try:
                 meta_dict = json.loads(metadata_json_str)
                 metadata = LUTMetadata.from_dict(meta_dict)
+                metadata.color_mode = cls._canonicalize_legacy_color_mode(metadata.color_mode, meta_dict)
             except Exception as e:
                 print(f"[WARNING] Failed to parse metadata_json in {file_path}: {e}")
                 metadata = cls.infer_default_metadata(display_name, file_path, len(rgb))

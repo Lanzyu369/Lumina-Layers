@@ -21,6 +21,7 @@ const arbSettings = fc.record({
   lastBedLabel: fc.string({ maxLength: 50 }),
   cropEnabled: fc.boolean(),
   lastSlicerId: fc.string({ maxLength: 50 }),
+  nozzleSize: fc.constantFrom("0.2" as const, "0.4" as const),
 });
 
 // ========== Property 1: Settings persist round-trip ==========
@@ -57,7 +58,8 @@ describe("Feature: global-settings, Property 1: Settings persist round-trip", ()
           persisted.lastModelingMode === settings.lastModelingMode &&
           persisted.lastBedLabel === settings.lastBedLabel &&
           persisted.cropEnabled === settings.cropEnabled &&
-          persisted.lastSlicerId === settings.lastSlicerId
+          persisted.lastSlicerId === settings.lastSlicerId &&
+          persisted.nozzleSize === settings.nozzleSize
         );
       }),
       { numRuns: 100 }

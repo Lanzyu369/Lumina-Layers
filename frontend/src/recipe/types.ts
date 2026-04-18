@@ -118,6 +118,7 @@ export interface ConverterRecipePuzzle {
 export interface ConverterRecipeDevice {
   printer_id: string;
   slicer: string;
+  nozzle_size: string;
 }
 
 export interface ConverterRecipeFridgeMagnet {

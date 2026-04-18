@@ -69,7 +69,11 @@ class _MeshExportEntry:
     color_rgb: tuple[int, int, int]
 
 
-def load_printer_template(printer_id: str, slicer: str = "BambuStudio") -> dict:
+def load_printer_template(
+    printer_id: str,
+    slicer: str = "BambuStudio",
+    nozzle_size: Optional[str | float] = None,
+) -> dict:
     """Load printer config template JSON for the given printer ID and slicer.
     加载指定机型和切片器的配置模板 JSON。
 
@@ -80,20 +84,23 @@ def load_printer_template(printer_id: str, slicer: str = "BambuStudio") -> dict:
     Args:
         printer_id (str): Printer identifier, e.g. "bambu-h2d". (打印机标识)
         slicer (str): Slicer software identifier, e.g. "BambuStudio" or "OrcaSlicer". (切片器标识)
+        nozzle_size (Optional[str | float]): Optional nozzle size variant, e.g. 0.2.
+            Falls back to the base template when omitted or unavailable. (可选喷嘴尺寸变体)
 
     Returns:
         dict: Parsed JSON configuration template. (解析后的 JSON 配置模板)
     """
     global _PRINTER_TEMPLATE_CACHE
 
-    cache_key = f"{printer_id}:{slicer}"
+    from config import get_printer_profile, normalize_nozzle_size
+
+    normalized_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
+    cache_key = f"{printer_id}:{slicer}:{normalized_nozzle_size}"
     if cache_key in _PRINTER_TEMPLATE_CACHE:
         return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
 
-    from config import get_printer_profile
-
     profile = get_printer_profile(printer_id)
-    template_file = profile.get_template_file(slicer)
+    template_file = profile.get_template_file(slicer, nozzle_size=normalized_nozzle_size)
 
     # Resolve printer_profiles/ directory
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -107,7 +114,10 @@ def load_printer_template(printer_id: str, slicer: str = "BambuStudio") -> dict:
         with open(profile_path, "r", encoding="utf-8") as f:
             template = json.load(f)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
-        print(f"[BAMBU_3MF] Loaded printer template: {profile_path} (slicer={slicer})")
+        print(
+            f"[BAMBU_3MF] Loaded printer template: {profile_path} "
+            f"(slicer={slicer}, nozzle_size={normalized_nozzle_size})"
+        )
         return copy.deepcopy(template)
 
     # Fallback to legacy bambu_config_template.json
@@ -117,7 +127,8 @@ def load_printer_template(printer_id: str, slicer: str = "BambuStudio") -> dict:
             template = json.load(f)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
         print(
-            f"[BAMBU_3MF] Printer template not found for '{printer_id}' (slicer={slicer}), using fallback: {fallback_path}"
+            f"[BAMBU_3MF] Printer template not found for '{printer_id}' "
+            f"(slicer={slicer}, nozzle_size={normalized_nozzle_size}), using fallback: {fallback_path}"
         )
         return copy.deepcopy(template)
 
@@ -161,6 +172,7 @@ class BambuStudio3MFWriter:
         color_mode: str = "4-Color",
         printer_id: str = "bambu-h2d",
         slicer: str = "BambuStudio",
+        nozzle_size: Optional[str | float] = None,
         watermark: str = "LuminaStudio",
     ):
         """Initialize 3MF writer with printer-specific template support.
@@ -172,9 +184,11 @@ class BambuStudio3MFWriter:
             color_mode (str): Color mode ('4-Color', '6-Color', '8-Color', 'BW'). (颜色模式)
             printer_id (str): Printer identifier for template selection, default 'bambu-h2d'. (打印机标识)
             slicer (str): Slicer software identifier, default 'BambuStudio'. (切片器标识)
+            nozzle_size (Optional[str | float]): Nozzle size variant used for template selection.
+                (用于模板选择的喷嘴尺寸变体)
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
         """
-        from config import normalize_slicer_software_id
+        from config import normalize_nozzle_size, normalize_slicer_software_id
 
         self.output_path = output_path
         self.settings = {**self.DEFAULT_SETTINGS, **(settings or {})}
@@ -182,6 +196,7 @@ class BambuStudio3MFWriter:
         self.color_mode = color_mode
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
+        self.nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
         self.watermark = watermark
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
@@ -361,13 +376,28 @@ class BambuStudio3MFWriter:
             "OrcaSlicer": "BambuStudio-2.3.2-rc2",
             "AnycubicSlicerNext": "BambuStudio-1.3.9.4",
         }
+        if self.slicer == "BambuStudio":
+            return f"BambuStudio-{self._get_bambu_client_version()}"
         return _VERSION_MAP.get(self.slicer, "BambuStudio-02.02.01.04")
+
+    def _get_bambu_client_version(self) -> str:
+        """Return the BambuStudio client-version stamp for this printer/nozzle combination."""
+        if self.nozzle_size != "0.2":
+            return "02.05.00.66"
+        h2_family = {"bambu-h2c", "bambu-h2d", "bambu-h2d-pro", "bambu-h2s"}
+        if self.printer_id in h2_family:
+            return "02.05.00.66"
+        return "02.04.00.70"
 
     def _is_anycubic_slicer(self) -> bool:
         """Return whether the current export targets Anycubic Slicer Next.
         返回当前导出是否面向 Anycubic Slicer Next。
         """
         return self.slicer == "AnycubicSlicerNext"
+
+    def _should_emit_bambu_aux_parts(self) -> bool:
+        """Return whether the export should include Bambu-only aux metadata parts."""
+        return self.slicer == "BambuStudio"
 
     @staticmethod
     def _format_number(value: float) -> str:
@@ -411,7 +441,7 @@ class BambuStudio3MFWriter:
             parts.append(
                 ("Metadata/custom_gcode_per_layer.xml", "text/xml", self._build_custom_gcode_per_layer_bytes())
             )
-        else:
+        elif self._should_emit_bambu_aux_parts():
             parts.extend(
                 [
                     ("Metadata/filament_sequence.json", "application/json", self._build_filament_sequence_bytes()),
@@ -606,7 +636,14 @@ class BambuStudio3MFWriter:
             )
         else:
             ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Type", "value": "slicer"})
-            ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": "Lumina-1.6.3"})
+            if self.slicer == "BambuStudio":
+                client_version = self._get_bambu_client_version()
+                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": client_version})
+            elif self.slicer == "ElegooSlicer":
+                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": "01.03.02.09"})
+                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Name", "value": "ElegooSlicer"})
+            else:
+                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": ""})
 
         tree = ET.ElementTree(config)
         ET.indent(tree, space="  ")
@@ -683,7 +720,11 @@ class BambuStudio3MFWriter:
         Returns:
             dict: Complete configuration template. (完整配置模板)
         """
-        template = load_printer_template(self.printer_id, slicer=self.slicer)
+        template = load_printer_template(
+            self.printer_id,
+            slicer=self.slicer,
+            nozzle_size=self.nozzle_size,
+        )
         if template:
             return template
 
@@ -753,6 +794,7 @@ def export_scene_with_bambu_metadata(
     color_mode: str = "4-Color",
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
+    nozzle_size: Optional[str | float] = None,
     watermark: str = "LuminaStudio",
     project_slot_names: Optional[List[str]] = None,
 ):
@@ -768,6 +810,8 @@ def export_scene_with_bambu_metadata(
         color_mode (str): Color mode ('4-Color', '6-Color', '8-Color', 'BW'). (颜色模式)
         printer_id (str): Printer identifier for template selection, default 'bambu-h2d'. (打印机标识)
         slicer (str): Slicer software identifier, default 'BambuStudio'. (切片器标识)
+        nozzle_size (Optional[str | float]): Nozzle size variant used for template selection.
+            (用于模板选择的喷嘴尺寸变体)
         watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
         project_slot_names (Optional[List[str]]): Full selected source palette/material names to preserve
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
@@ -798,7 +842,7 @@ def export_scene_with_bambu_metadata(
 
     writer = BambuStudio3MFWriter(
         output_path, settings, actual_color_mode,
-        printer_id=printer_id, slicer=slicer, watermark=watermark,
+        printer_id=printer_id, slicer=slicer, nozzle_size=nozzle_size, watermark=watermark,
     )
     if resolved_project_slot_names:
         writer._set_project_palette(resolved_project_slot_names, preview_colors)

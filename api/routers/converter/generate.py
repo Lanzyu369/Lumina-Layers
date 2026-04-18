@@ -421,6 +421,7 @@ async def convert_generate(
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
+        "nozzle_size": request.nozzle_size,
         "material_source": session_material_source,
     }
     if session_material_source == "material_archive":
@@ -618,6 +619,7 @@ def _resolve_large_format_shared_params(
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
+        "nozzle_size": request.nozzle_size,
         "relief_global_max_height": relief_global_max_height,
     }
 

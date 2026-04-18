@@ -60,6 +60,20 @@ def _make_anycubic_writer(tmp_path) -> BambuStudio3MFWriter:
 
 
 class TestAnycubicWriterMetadata:
+    def test_writer_base_template_uses_selected_nozzle_size_variant(self) -> None:
+        writer = BambuStudio3MFWriter(
+            "selected-nozzle.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+
+        settings = writer._get_base_config_template()
+        assert settings["nozzle_diameter"] == ["0.2"]
+        assert settings["printer_settings_id"] == "Bambu Lab P1S 0.2 nozzle"
+
     def test_shared_material_palette_deduplicates_project_filaments(self) -> None:
         writer = BambuStudio3MFWriter(
             "shared-materials.3mf",
@@ -151,6 +165,7 @@ class TestAnycubicWriterMetadata:
                 color_mode: str = "4-Color",
                 printer_id: str = "bambu-h2d",
                 slicer: str = "BambuStudio",
+                nozzle_size: str | None = None,
                 watermark: str = "LuminaStudio",
             ) -> None:
                 self.output_path = output_path
@@ -204,10 +219,11 @@ class TestAnycubicWriterMetadata:
                 color_mode: str = "4-Color",
                 printer_id: str = "bambu-h2d",
                 slicer: str = "BambuStudio",
+                nozzle_size: str | None = None,
                 watermark: str = "LuminaStudio",
             ) -> None:
                 captured_color_mode["value"] = color_mode
-                super().__init__(output_path, settings, color_mode, printer_id, slicer, watermark)
+                super().__init__(output_path, settings, color_mode, printer_id, slicer, nozzle_size, watermark)
 
             def add_mesh(self, mesh, name: str, color_rgb: tuple[int, int, int]) -> None:
                 captured_colors.append((name, color_rgb))
@@ -347,3 +363,21 @@ class TestAnycubicWriterMetadata:
             header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
             assert header_items["X-ACNext-Client-Type"] == "slicer"
             assert header_items["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
+
+    def test_h2d_0_2_bambu_version_uses_h2_family_client_stamp(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "h2d-0_2.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+
+        assert writer._get_app_version_str() == "BambuStudio-02.05.00.66"
+
+        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        header = slice_info.find("./header")
+        assert header is not None
+        header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
+        assert header_items["X-BBL-Client-Version"] == "02.05.00.66"

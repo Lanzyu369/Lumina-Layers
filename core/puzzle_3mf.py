@@ -113,6 +113,7 @@ def assemble_puzzle_3mf(
     slot_names: list[str] | None,
     printer_id: str,
     slicer: str,
+    nozzle_size: str = "0.4",
     overview_png_bytes: bytes | None = None,
 ) -> str:
     """Assemble multiple puzzle piece 3MF files into one grouped 3MF.
@@ -131,6 +132,8 @@ def assemble_puzzle_3mf(
             打印机配置 ID。
         slicer: Slicer software identifier.
             切片软件 ID。
+        nozzle_size: Nozzle size variant for template selection.
+            喷嘴尺寸变体，用于模板选择。
         overview_png_bytes: Combined assembly preview PNG reused for package thumbnails.
             （组合总览 PNG，可复用于包内缩略图资源）
 
@@ -242,7 +245,18 @@ def assemble_puzzle_3mf(
     base_files[combined_object_model_path] = _to_xml_bytes(combined_object_model)
     base_files["3D/3dmodel.model"] = _to_xml_bytes(combined_root)
     base_files["3D/_rels/3dmodel.model.rels"] = _build_model_relationships_bytes([combined_object_model_path])
-    base_files["Metadata/cut_information.xml"] = _build_cut_information_bytes(len(piece_packages))
+    writer = BambuStudio3MFWriter(
+        output_path="combined-puzzle.3mf",
+        settings={},
+        color_mode="8-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+    )
+    if writer._should_emit_bambu_aux_parts():
+        base_files["Metadata/cut_information.xml"] = _build_cut_information_bytes(len(piece_packages))
+    else:
+        base_files.pop("Metadata/cut_information.xml", None)
     base_files["Metadata/model_settings.config"] = _build_combined_model_settings_bytes(
         piece_packages=piece_packages,
         root_object_ids=root_object_ids,
@@ -256,15 +270,18 @@ def assemble_puzzle_3mf(
         slot_names=slot_names,
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     base_files["Metadata/slice_info.config"] = _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     _update_combined_filament_sequence(
         base_files=base_files,
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     if overview_png_bytes is not None:
         for preview_asset_path in (
@@ -489,6 +506,7 @@ def _build_combined_project_settings_bytes(
     slot_names: list[str] | None,
     printer_id: str,
     slicer: str,
+    nozzle_size: str,
 ) -> bytes:
     """Build combined ``project_settings.config`` with a stable global palette.
 
@@ -513,6 +531,7 @@ def _build_combined_project_settings_bytes(
             color_mode="8-Color",
             printer_id=printer_id,
             slicer=slicer,
+            nozzle_size=nozzle_size,
         )
         settings = writer._get_base_config_template()
 
@@ -540,6 +559,7 @@ def _build_combined_slice_info_bytes(
     *,
     printer_id: str,
     slicer: str,
+    nozzle_size: str,
 ) -> bytes:
     """Build fresh ``slice_info.config`` bytes for the combined package.
 
@@ -552,6 +572,7 @@ def _build_combined_slice_info_bytes(
         color_mode="8-Color",
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     return writer._build_slice_info_bytes()
 
@@ -561,6 +582,7 @@ def _update_combined_filament_sequence(
     base_files: dict[str, bytes],
     printer_id: str,
     slicer: str,
+    nozzle_size: str,
 ) -> None:
     """Refresh slicer-specific filament-sequence metadata for the combined package.
 
@@ -573,8 +595,9 @@ def _update_combined_filament_sequence(
         color_mode="8-Color",
         printer_id=printer_id,
         slicer=slicer,
+        nozzle_size=nozzle_size,
     )
-    if writer._is_anycubic_slicer():
+    if not writer._should_emit_bambu_aux_parts():
         base_files.pop("Metadata/filament_sequence.json", None)
         return
     base_files["Metadata/filament_sequence.json"] = writer._build_filament_sequence_bytes()

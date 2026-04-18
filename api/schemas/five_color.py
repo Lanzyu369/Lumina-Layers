@@ -73,6 +73,7 @@ class RecipeSwatchRequest(BaseModel):
     structure_mode: str = Field("Single-sided", description="结构模式: Single-sided / Double-sided")
     printer_id: str = Field("bambu-h2d", description="打印机配置 ID")
     slicer: str = Field("BambuStudio", description="切片软件 ID")
+    nozzle_size: str = Field("0.4", description="喷嘴尺寸")
 
 
 class RecipeSwatchResponse(BaseModel):

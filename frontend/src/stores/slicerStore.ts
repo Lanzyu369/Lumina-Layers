@@ -5,7 +5,10 @@ import {
   launchSlicer as apiLaunchSlicer,
 } from "../api/slicer";
 import { useSettingsStore } from "./settingsStore";
-import { getDetectedSlicerIdForSoftware } from "../utils/settingsOptionIds";
+import {
+  getDetectedSlicerIdForSoftware,
+  getSoftwareIdForDetectedSlicerId,
+} from "../utils/settingsOptionIds";
 
 // ========== State Interface ==========
 
@@ -89,7 +92,12 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
     setSelectedSlicerId: (id: string | null) => {
       set({ selectedSlicerId: id });
       if (id) {
-        useSettingsStore.getState().setLastSlicerId(id);
+        const settingsState = useSettingsStore.getState();
+        settingsState.setLastSlicerId(id);
+        const softwareId = getSoftwareIdForDetectedSlicerId(id);
+        if (softwareId && settingsState.slicerSoftware !== softwareId) {
+          settingsState.setSlicerSoftware(softwareId);
+        }
         void useSettingsStore.getState().syncToBackend();
       }
     },

@@ -462,6 +462,7 @@ def worker_generate_large_format_svg_native(
                 color_mode=tile_processor.color_mode,
                 printer_id=params.get("printer_id", "bambu-h2d"),
                 slicer=params.get("slicer", "BambuStudio"),
+                nozzle_size=params.get("nozzle_size", "0.4"),
             )
             successful_paths.append(
                 (

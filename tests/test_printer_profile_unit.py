@@ -4,8 +4,10 @@
 Covers:
   - Task 7.1: Registry queries, default fallback, template loading
   - Task 7.2: 3MF export uses correct template (printer_model key, cache)
+  - Task 0.2 nozzle support: profile metadata and nozzle-size-aware resolution
 """
 
+from pathlib import Path
 import pytest
 
 from config import (
@@ -30,6 +32,7 @@ REQUIRED_FIELDS = (
     "bed_height",
     "nozzle_count",
     "is_dual_head",
+    "supported_nozzle_sizes",
     "template_file",
 )
 
@@ -84,6 +87,11 @@ class TestGetPrinterProfile:
         profile = get_printer_profile("bambu_h2d")
         assert profile.id == "bambu-h2d"
 
+    def test_supported_nozzle_sizes_include_0_2_for_p1s(self) -> None:
+        profile = get_printer_profile("bambu-p1s")
+        assert "0.2" in profile.supported_nozzle_sizes
+        assert "0.4" in profile.supported_nozzle_sizes
+
 
 class TestNormalizeSettingsIdentifiers:
     """Legacy settings IDs are normalized to canonical values."""
@@ -126,11 +134,28 @@ class TestLoadPrinterTemplate:
         profile = get_printer_profile("bambu-h2d")
         assert profile.get_template_file("orca_slicer") == "orca_h2d.json"
 
+    def test_nozzle_size_resolves_0_2_sibling_template(self) -> None:
+        profile = get_printer_profile("bambu-p1s")
+        assert profile.get_template_file("BambuStudio", nozzle_size=0.2) == "bambu_p1s_0_2.json"
+        assert profile.get_template_file("OrcaSlicer", nozzle_size="0.2") == "orca_p1s_0_2.json"
+
     def test_anycubic_template_uses_anycubic_slicer_mapping(self) -> None:
         template = load_printer_template("anycubic-kobra-s1", slicer="AnycubicSlicerNext")
         assert template["printer_model"] == "Anycubic Kobra S1"
         assert template["printable_area"] == ["0x0", "250x0", "250x250", "0x250"]
         assert template["printable_height"] == "250"
+
+    def test_load_printer_template_reads_0_2_variant(self) -> None:
+        template = load_printer_template("bambu-p1s", nozzle_size=0.2)
+        assert template["nozzle_diameter"] == ["0.2"]
+        assert "0.2 nozzle" in template["default_print_profile"]
+
+    def test_h2d_0_2_template_uses_official_0_2_process_preset_ids(self) -> None:
+        template = load_printer_template("bambu-h2d", nozzle_size="0.2")
+        assert template["print_settings_id"] == "0.08mm Extra Fine @BBL H2D 0.2 nozzle"
+        assert template["inherits_group"][0] == "0.08mm Extra Fine @BBL H2D 0.2 nozzle"
+        assert template["top_surface_line_width"] == "0.22"
+        assert template["support_line_width"] == "0.22"
 
 
 # ====================================================================
@@ -164,3 +189,27 @@ class TestTemplateCache:
         first = load_printer_template("bambu-h2d")
         second = load_printer_template("bambu-h2d")
         assert first == second
+
+    def test_cache_distinguishes_nozzle_size_variants(self) -> None:
+        _PRINTER_TEMPLATE_CACHE.clear()
+        load_printer_template("bambu-p1s", nozzle_size=0.2)
+        load_printer_template("bambu-p1s", nozzle_size=0.4)
+        assert len(_PRINTER_TEMPLATE_CACHE) == 2
+
+
+class TestCheckedInNozzleVariants:
+    """Repository contains generated 0.2 template siblings for every base template."""
+
+    def test_every_base_template_has_0_2_sibling(self) -> None:
+        profiles_dir = Path(__file__).resolve().parents[1] / "printer_profiles"
+        base_templates = sorted(
+            path for path in profiles_dir.glob("*.json")
+            if not path.name.endswith("_0_2.json")
+        )
+
+        missing = [
+            path.name for path in base_templates
+            if not path.with_name(f"{path.stem}_0_2.json").exists()
+        ]
+
+        assert not missing, f"Missing 0.2 template siblings: {missing}"

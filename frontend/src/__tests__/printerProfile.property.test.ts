@@ -101,9 +101,11 @@ describe("P5: Printer Model Selection Persistence Round-Trip", () => {
 
   it("default printerModel is 'bambu-h2d' (backward compatibility)", () => {
     expect(DEFAULT_SETTINGS.printerModel).toBe("bambu-h2d");
+    expect(DEFAULT_SETTINGS.nozzleSize).toBe("0.4");
 
     localStorage.clear();
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     expect(useSettingsStore.getState().printerModel).toBe("bambu-h2d");
+    expect(useSettingsStore.getState().nozzleSize).toBe("0.4");
   });
 });

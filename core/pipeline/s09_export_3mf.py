@@ -109,6 +109,7 @@ def run(ctx: dict) -> dict:
             color_mode=color_mode,
             printer_id=ctx.get("printer_id", "bambu-h2d"),
             slicer=ctx.get("slicer", "BambuStudio"),
+            nozzle_size=ctx.get("nozzle_size", "0.4"),
         )
         if _bench_enabled and _export_t0 is not None:
             _export_elapsed = time.perf_counter() - _export_t0

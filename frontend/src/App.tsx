@@ -6,6 +6,7 @@ import { useAutoPreview } from "./hooks/useAutoPreview";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
+import { getSettings } from "./api/system";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
@@ -27,6 +28,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
 import { useSingleStageStore } from "./stores/singleStageStore";
 import { useConverterStore } from "./stores/converter";
+import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 
 /* ---------- Error Boundary ---------- */
@@ -188,6 +190,9 @@ function AppContent() {
   const { t } = useI18n();
   const converterSessionId = useConverterStore((s) => s.sessionId);
   const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
+  const hydrateDeviceSettingsFromBackend = useSettingsStore(
+    (s) => s.hydrateDeviceSettingsFromBackend,
+  );
 
   useSessionLease(converterSessionId);
   useSessionLease(singleStageSessionId);
@@ -205,6 +210,24 @@ function AppContent() {
       .then((res) => setConnected(res.data.status === "ok"))
       .catch(() => setConnected(false));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getSettings()
+      .then((response) => {
+        if (!cancelled && response?.settings) {
+          hydrateDeviceSettingsFromBackend(response.settings);
+        }
+      })
+      .catch(() => {
+        /* best effort */
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateDeviceSettingsFromBackend]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">

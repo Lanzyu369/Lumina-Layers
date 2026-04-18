@@ -86,6 +86,26 @@ class TestLutInfoSuccess:
         ]
         assert "predictive_match" in data["capabilities"]
 
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(None, None, LUTMetadata()),
+    )
+    @patch("api.routers.lut.LUTManager.infer_color_mode", return_value="4-Color (RYBW)")
+    @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("4-Color", 1024))
+    @patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/path.npy")
+    def test_info_prefers_canonicalized_color_mode_for_response(
+        self,
+        mock_path,
+        mock_detect,
+        mock_infer,
+        mock_load_meta,
+    ) -> None:
+        response = client.get("/api/lut/TestLegacy/info")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["color_mode"] == "4-Color (RYBW)"
+        assert data["color_count"] == 1024
+
 
 # =========================================================================
 # 2. GET /api/lut/{name}/info — 404 scenario (Requirement 6.7)

@@ -167,6 +167,7 @@ export function exportConverterRecipe(
     device: {
       printer_id: settings.printerModel,
       slicer: settings.slicerSoftware,
+      nozzle_size: settings.nozzleSize,
     },
   };
 }

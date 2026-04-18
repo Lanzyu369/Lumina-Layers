@@ -82,7 +82,7 @@ function createPreview(): ImportPreview {
             enable_fridge_magnet: true,
             fridge_magnets: [],
           },
-          device: { printer_id: "", slicer: "" },
+          device: { printer_id: "", slicer: "", nozzle_size: "0.4" },
         },
       },
       integrity: {

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { saveSettings } from "../api/system";
+import type { UserSettings } from "../api/types";
 
 // ========== State Interface ==========
 
@@ -19,6 +20,7 @@ export interface SettingsState {
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
+  nozzleSize: "0.2" | "0.4";
 }
 
 // ========== Actions Interface ==========
@@ -38,6 +40,8 @@ export interface SettingsActions {
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
+  setNozzleSize: (size: "0.2" | "0.4") => void;
+  hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
 
@@ -58,7 +62,80 @@ export const DEFAULT_SETTINGS: SettingsState = {
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
+  nozzleSize: "0.4",
 };
+
+function clearConverterGeneratedArtifacts(): void {
+  import("./converter")
+    .then(({ useConverterStore }) => {
+      useConverterStore.setState({
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
+    })
+    .catch(() => {
+      /* best effort */
+    });
+}
+
+type PersistedSettingsSnapshot = Partial<SettingsState>;
+
+function readPersistedSettingsSnapshot(): PersistedSettingsSnapshot | null {
+  try {
+    const raw = localStorage.getItem("lumina-settings");
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as { state?: PersistedSettingsSnapshot };
+    if (!parsed || typeof parsed !== "object" || !parsed.state) {
+      return null;
+    }
+    return parsed.state;
+  } catch {
+    return null;
+  }
+}
+
+const INITIAL_PERSISTED_SETTINGS_SNAPSHOT = readPersistedSettingsSnapshot();
+
+function hasOwnSetting(
+  snapshot: PersistedSettingsSnapshot | null,
+  key: keyof SettingsState,
+): boolean {
+  return !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, key);
+}
+
+export function deriveBackendDeviceSettingsPatch(
+  settings: Partial<UserSettings>,
+  persistedSnapshot: PersistedSettingsSnapshot | null,
+): Partial<SettingsState> {
+  const patch: Partial<SettingsState> = {};
+
+  if (
+    typeof settings.printer_model === "string" &&
+    settings.printer_model.trim() &&
+    !hasOwnSetting(persistedSnapshot, "printerModel")
+  ) {
+    patch.printerModel = settings.printer_model.trim();
+  }
+
+  if (
+    typeof settings.slicer_software === "string" &&
+    settings.slicer_software.trim() &&
+    !hasOwnSetting(persistedSnapshot, "slicerSoftware")
+  ) {
+    patch.slicerSoftware = settings.slicer_software.trim();
+  }
+
+  if (
+    (settings.nozzle_size === "0.2" || settings.nozzle_size === "0.4") &&
+    !hasOwnSetting(persistedSnapshot, "nozzleSize")
+  ) {
+    patch.nozzleSize = settings.nozzle_size;
+  }
+
+  return patch;
+}
 
 // ========== Store ==========
 
@@ -93,6 +170,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setPrinterModel: (id: string) => {
         set({ printerModel: id });
+        clearConverterGeneratedArtifacts();
         
         // 延迟导入避免循环依赖
         import("./converter").then(({ useConverterStore }) => {
@@ -104,7 +182,32 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         });
       },
 
-      setSlicerSoftware: (id: string) => set({ slicerSoftware: id }),
+      setSlicerSoftware: (id: string) => {
+        set({ slicerSoftware: id });
+        clearConverterGeneratedArtifacts();
+      },
+
+      setNozzleSize: (size: "0.2" | "0.4") => {
+        set({ nozzleSize: size });
+        clearConverterGeneratedArtifacts();
+      },
+
+      hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
+        const patch = deriveBackendDeviceSettingsPatch(
+          settings,
+          INITIAL_PERSISTED_SETTINGS_SNAPSHOT,
+        );
+        const actions = get();
+        if (patch.printerModel) {
+          actions.setPrinterModel(patch.printerModel);
+        }
+        if (patch.slicerSoftware) {
+          actions.setSlicerSoftware(patch.slicerSoftware);
+        }
+        if (patch.nozzleSize) {
+          actions.setNozzleSize(patch.nozzleSize);
+        }
+      },
 
       syncToBackend: async () => {
         const state = get();
@@ -118,6 +221,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             enable_crop_modal: state.cropEnabled,
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
+            nozzle_size: state.nozzleSize,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage

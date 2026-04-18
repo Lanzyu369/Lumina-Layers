@@ -115,6 +115,9 @@ export function applyImport(restoreResult: RestoreResult): void {
     if (conv.device.slicer && conv.device.slicer !== settingsState.slicerSoftware) {
       settingsState.setSlicerSoftware(conv.device.slicer);
     }
+    if (conv.device.nozzle_size && conv.device.nozzle_size !== settingsState.nozzleSize) {
+      settingsState.setNozzleSize(conv.device.nozzle_size as "0.2" | "0.4");
+    }
   }
 
   // 3. Switch to converter tab

@@ -6,6 +6,7 @@ import {
   queryFiveColor,
   generateRecipeSwatch,
 } from "../api/fiveColor";
+import { useSettingsStore } from "./settingsStore";
 
 // ========== Collected Recipe ==========
 
@@ -260,6 +261,9 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             gap_mm: swatchGap,
             cols: swatchCols,
             structure_mode: swatchStructureMode,
+            printer_id: useSettingsStore.getState().printerModel,
+            slicer: useSettingsStore.getState().slicerSoftware,
+            nozzle_size: useSettingsStore.getState().nozzleSize,
           });
           set({
             swatchDownloadUrl: response.download_url,
