@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { saveSettings } from "../api/system";
 import type { UserSettings } from "../api/types";
+import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
 
 // ========== State Interface ==========
 
@@ -65,19 +66,6 @@ export const DEFAULT_SETTINGS: SettingsState = {
   nozzleSize: "0.4",
 };
 
-function clearConverterGeneratedArtifacts(): void {
-  import("./converter")
-    .then(({ useConverterStore }) => {
-      useConverterStore.setState({
-        threemfDiskPath: null,
-        downloadUrl: null,
-      });
-    })
-    .catch(() => {
-      /* best effort */
-    });
-}
-
 type PersistedSettingsSnapshot = Partial<SettingsState>;
 
 function readPersistedSettingsSnapshot(): PersistedSettingsSnapshot | null {
@@ -106,6 +94,7 @@ function hasOwnSetting(
 }
 
 export function deriveBackendDeviceSettingsPatch(
+  current: SettingsState,
   settings: Partial<UserSettings>,
   persistedSnapshot: PersistedSettingsSnapshot | null,
 ): Partial<SettingsState> {
@@ -114,6 +103,7 @@ export function deriveBackendDeviceSettingsPatch(
   if (
     typeof settings.printer_model === "string" &&
     settings.printer_model.trim() &&
+    current.printerModel === DEFAULT_SETTINGS.printerModel &&
     !hasOwnSetting(persistedSnapshot, "printerModel")
   ) {
     patch.printerModel = settings.printer_model.trim();
@@ -122,6 +112,7 @@ export function deriveBackendDeviceSettingsPatch(
   if (
     typeof settings.slicer_software === "string" &&
     settings.slicer_software.trim() &&
+    current.slicerSoftware === DEFAULT_SETTINGS.slicerSoftware &&
     !hasOwnSetting(persistedSnapshot, "slicerSoftware")
   ) {
     patch.slicerSoftware = settings.slicer_software.trim();
@@ -129,6 +120,7 @@ export function deriveBackendDeviceSettingsPatch(
 
   if (
     (settings.nozzle_size === "0.2" || settings.nozzle_size === "0.4") &&
+    current.nozzleSize === DEFAULT_SETTINGS.nozzleSize &&
     !hasOwnSetting(persistedSnapshot, "nozzleSize")
   ) {
     patch.nozzleSize = settings.nozzle_size;
@@ -170,7 +162,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setPrinterModel: (id: string) => {
         set({ printerModel: id });
-        clearConverterGeneratedArtifacts();
+        invalidateGeneratedArtifacts();
         
         // 延迟导入避免循环依赖
         import("./converter").then(({ useConverterStore }) => {
@@ -184,16 +176,18 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setSlicerSoftware: (id: string) => {
         set({ slicerSoftware: id });
-        clearConverterGeneratedArtifacts();
+        invalidateGeneratedArtifacts();
       },
 
       setNozzleSize: (size: "0.2" | "0.4") => {
         set({ nozzleSize: size });
-        clearConverterGeneratedArtifacts();
+        invalidateGeneratedArtifacts();
       },
 
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
+        const current = get();
         const patch = deriveBackendDeviceSettingsPatch(
+          current,
           settings,
           INITIAL_PERSISTED_SETTINGS_SNAPSHOT,
         );

@@ -62,6 +62,7 @@ import {
   resolveFridgeMagnetSpacerThick,
 } from "../../constants/fridgeMagnets";
 import { useSettingsStore } from "../settingsStore";
+import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
@@ -4462,3 +4463,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     },
   }),
 );
+
+registerGeneratedArtifactInvalidator(() => {
+  useConverterStore.setState({
+    threemfDiskPath: null,
+    downloadUrl: null,
+  });
+});

@@ -9,7 +9,7 @@ from helpers_threemf_manifest import (
     extract_manifest,
     extract_project_subset,
     list_printer_profiles,
-    load_printer_template,
+    load_expected_template_direct,
     manifest_sidecar_flags,
     supported_printer_slicer_pairs,
 )
@@ -22,7 +22,11 @@ def test_3mf_template_matrix_matches_selected_template_and_family_rules() -> Non
     for printer_id, slicer in supported_printer_slicer_pairs():
         profile = profile_map[printer_id]
         for nozzle_size in profile.supported_nozzle_sizes:
-            template = load_printer_template(printer_id, slicer=slicer, nozzle_size=nozzle_size)
+            template = load_expected_template_direct(
+                printer_id=printer_id,
+                slicer=slicer,
+                nozzle_size=nozzle_size,
+            )
             expected_subset = extract_project_subset(template)
             family = expected_family_signature(printer_id, slicer, nozzle_size)
 

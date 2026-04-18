@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { deriveBackendDeviceSettingsPatch } from "../stores/settingsStore";
+import {
+  DEFAULT_SETTINGS,
+  deriveBackendDeviceSettingsPatch,
+} from "../stores/settingsStore";
 
 describe("deriveBackendDeviceSettingsPatch", () => {
   it("backfills device settings when persisted snapshot is missing fields", () => {
     const patch = deriveBackendDeviceSettingsPatch(
+      DEFAULT_SETTINGS,
       {
         printer_model: "bambu-p1s",
         slicer_software: "BambuStudio",
@@ -22,6 +26,12 @@ describe("deriveBackendDeviceSettingsPatch", () => {
   it("preserves explicit persisted device settings over backend values", () => {
     const patch = deriveBackendDeviceSettingsPatch(
       {
+        ...DEFAULT_SETTINGS,
+        printerModel: "bambu-p1s",
+        slicerSoftware: "OrcaSlicer",
+        nozzleSize: "0.2",
+      },
+      {
         printer_model: "bambu-p1s",
         slicer_software: "BambuStudio",
         nozzle_size: "0.2",
@@ -38,6 +48,7 @@ describe("deriveBackendDeviceSettingsPatch", () => {
 
   it("backfills only newly added nozzle size when older persisted snapshot lacks it", () => {
     const patch = deriveBackendDeviceSettingsPatch(
+      DEFAULT_SETTINGS,
       {
         printer_model: "bambu-p1s",
         slicer_software: "BambuStudio",
@@ -50,6 +61,26 @@ describe("deriveBackendDeviceSettingsPatch", () => {
     );
 
     expect(patch).toEqual({
+      nozzleSize: "0.2",
+    });
+  });
+
+  it("does not overwrite an in-memory printer change made before backend hydration returns", () => {
+    const patch = deriveBackendDeviceSettingsPatch(
+      {
+        ...DEFAULT_SETTINGS,
+        printerModel: "bambu-p1s",
+      },
+      {
+        printer_model: "bambu-h2d",
+        slicer_software: "BambuStudio",
+        nozzle_size: "0.2",
+      },
+      null,
+    );
+
+    expect(patch).toEqual({
+      slicerSoftware: "BambuStudio",
       nozzleSize: "0.2",
     });
   });

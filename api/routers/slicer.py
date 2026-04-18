@@ -86,6 +86,16 @@ def launch_slicer_endpoint(
             ).model_dump(),
         )
 
+    # 2) Get fresh slicer list
+    slicers = detect_installed_slicers()
+    if not any(s.id == request.slicer_id for s in slicers):
+        return JSONResponse(
+            status_code=404,
+            content=SlicerLaunchResponse(
+                status="error",
+                message=f"未找到切片软件: {request.slicer_id}",
+            ).model_dump(),
+        )
     try:
         launch_file_path = _create_launch_copy(request.file_path, registry)
     except Exception as exc:
@@ -96,9 +106,6 @@ def launch_slicer_endpoint(
                 message=f"准备切片器打开副本失败: {exc}",
             ).model_dump(),
         )
-
-    # 2) Get fresh slicer list
-    slicers = detect_installed_slicers()
 
     # 3) Attempt launch
     try:

@@ -292,9 +292,11 @@ class TestRouterEndpoints:
         f.write_text("data")
 
         client = _make_client()
-        with (
-            patch("api.routers.slicer.detect_installed_slicers", return_value=[]),
-            patch("api.routers.slicer.launch_slicer", return_value=(False, "Slicer not found: unknown")),
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=[]), patch(
+            "api.routers.slicer._create_launch_copy",
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(False, "Slicer not found: unknown"),
         ):
             resp = client.post(
                 "/api/slicer/launch",
@@ -306,3 +308,4 @@ class TestRouterEndpoints:
 
         assert resp.status_code == 404
         assert resp.json()["status"] == "error"
+        mock_copy.assert_not_called()
