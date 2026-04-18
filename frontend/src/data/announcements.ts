@@ -22,6 +22,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           "耗材库支持自定义组合：把已校准的耗材自由拼成多色打印配色方案；档案按品牌 / 耗材两级目录整理，支持批量导入导出 ZIP",
           "3MF 底板层高修改器（Bambu）：可独立控制底板层高",
           "0.2 mm 喷嘴元数据方案：小喷嘴用户开箱即用",
+          "LUT 下拉框新增刷新按钮：切换或放入新的 LUT 后不用重启页面，点一下即可重新加载",
         ],
       },
       {
@@ -38,6 +39,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           "点“清除角点”会顺带重置预览，直接回到拾取状态",
           "RYBWGK 默认槽位名保持正确（不再误显 CMYW）",
           "小屏下按钮不再溢出",
+          "新增角点数值微调面板：四个校准角点可直接输入数值精调，不用再对着图像反复点拾",
         ],
       },
       {
@@ -46,6 +48,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           "默认材料改为下拉选择，告别输错名",
           "默认色块间距 0.82 → 0.84 mm",
           "材料求解器缓存 + 更紧凑的材料选择器",
+          "校色卡色块提取采样窗口收紧：降低相邻色块串色与边缘反锯齿污染，提取出来的参考色更干净",
         ],
       },
       {
@@ -54,6 +57,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           "滚轮缩放预览时不再连带滚动整页",
           "Slider 范围拖动会自动吸附到步进",
           "LUT 颜色网格提示文字乱码修复",
+          "2D 预览新增“按住查看原图”按钮：长按即可临时覆盖显示原始图片，便于与生成效果对比",
+          "2D 预览瘦身：移除打印床画布、网格与标尺，只保留核心画面，更清爽",
+          "右键拖动平移预览时不再被浏览器菜单打断，和 3D 视图行为一致",
+          "下拉菜单宽度跟随触发器自适应，选项不多时也不会被错误判定为“下方空间不足”而翻到上方",
         ],
       },
       {
@@ -68,6 +75,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         items: [
           "渐变色卡材料句柄超时回收，减少资源泄漏",
           "会话租约清理",
+          "Windows 11 启动器修复：系统移除 wmic 后进程清理失败的问题，现改用 Get-CimInstance 查询",
         ],
       },
     ],
