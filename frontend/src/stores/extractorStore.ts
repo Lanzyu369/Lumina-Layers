@@ -389,7 +389,25 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       set({ corner_points: [...corner_points, point] });
     },
 
-    clearCornerPoints: () => set({ corner_points: [] }),
+    clearCornerPoints: () =>
+      // Clearing corners implies the user wants to re-pick them, so we must
+      // also drop the previous extraction preview URLs. Otherwise
+      // ``ExtractorCanvas`` stays in Result mode (gated on
+      // ``warp_view_url || lut_preview_url``) and the user cannot return to
+      // the corner-picking canvas without refreshing the page.
+      // 清除角点意味着用户想重新定位，必须同时清掉上一次提取的预览 URL。
+      // 否则 ``ExtractorCanvas`` 会一直处于结果模式（由
+      // ``warp_view_url || lut_preview_url`` 决定），用户只能刷新页面才能
+      // 回到角点标定画布。
+      set({
+        corner_points: [],
+        warp_view_url: null,
+        lut_preview_url: null,
+        lut_download_url: null,
+        session_id: null,
+        error: null,
+        manualFixError: null,
+      }),
 
     setOffsetX: (value: number) =>
       set({ offset_x: clampValue(value, -30, 30) }),

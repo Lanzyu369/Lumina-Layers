@@ -350,6 +350,110 @@ describe("Feature: extractor-calibration-tab, Property 4: clearCornerPoints 重�
       { numRuns: 100 },
     );
   });
+
+  // Regression: after a successful extraction, ``ExtractorCanvas`` switches to
+  // "Result mode" whenever ``warp_view_url || lut_preview_url`` is truthy.
+  // If ``clearCornerPoints`` only empties ``corner_points`` the user stays
+  // stuck on the result view and cannot re-pick corners without refreshing
+  // the page. The action must also drop the previous preview URLs, the
+  // download URL, the session id, and any lingering errors.
+  // 回归：提取成功后，只要 ``warp_view_url || lut_preview_url`` 为真，
+  // ``ExtractorCanvas`` 就会停留在“结果模式”。如果 ``clearCornerPoints``
+  // 只清空 ``corner_points``，用户无法回到角点标定画布，只能刷新页面。
+  // 该动作必须同时丢弃上一次的预览 URL、下载 URL、session id，以及遗留的错误。
+  it("clearCornerPoints also drops extraction preview URLs so the canvas can return to corner-picking mode", () => {
+    useExtractorStore.setState({
+      corner_points: [
+        [10, 10],
+        [20, 10],
+        [20, 20],
+        [10, 20],
+      ],
+      warp_view_url: "/api/files/warp-preview",
+      lut_preview_url: "/api/files/lut-preview",
+      lut_download_url: "/api/files/lut-download",
+      session_id: "session-abc",
+      error: "stale error",
+      manualFixError: "stale manual-fix error",
+    });
+
+    useExtractorStore.getState().clearCornerPoints();
+    const state = useExtractorStore.getState();
+
+    expect(state.corner_points).toEqual([]);
+    expect(state.warp_view_url).toBeNull();
+    expect(state.lut_preview_url).toBeNull();
+    expect(state.lut_download_url).toBeNull();
+    expect(state.session_id).toBeNull();
+    expect(state.error).toBeNull();
+    expect(state.manualFixError).toBeNull();
+
+    resetExtractorStore();
+  });
+
+  // Guard: clearing corners must NOT wipe the user's uploaded image, the
+  // selected color mode/page, tuning parameters, or multi-page extraction
+  // progress. Otherwise users mid-way through a multi-page workflow (e.g.
+  // 8-Color or 5-Color Extended) would lose their earlier pages on every
+  // re-pick.
+  // 守护：清除角点不能清掉用户已上传的图片、颜色模式/页码、调参，或多页流程的
+  // 已提取页码。否则多页模式（如 8-Color / 5-Color Extended）用户每次重新点
+  // 角点都会丢掉之前完成的页面。
+  it("clearCornerPoints preserves uploaded image, color-mode settings, tuning params, and per-page extraction flags", () => {
+    const stubFile = new File(["x"], "board.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: stubFile,
+      imagePreviewUrl: "blob:mock-url",
+      imageNaturalWidth: 800,
+      imageNaturalHeight: 600,
+      color_mode: ExtractorColorMode.EIGHT_COLOR,
+      page: ExtractorPage.PAGE_2,
+      eight_color_full_export: true,
+      corner_points: [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ],
+      offset_x: 5,
+      offset_y: -3,
+      zoom: 1.1,
+      distortion: 0.05,
+      vignette_correction: true,
+      auto_wb: true,
+      page1Extracted: true,
+      page2Extracted: false,
+      extractedEightColorFullPages: [1, 2, 3],
+      page1Extracted_5c: true,
+      page2Extracted_5c: false,
+      warp_view_url: "/api/files/warp",
+      lut_preview_url: "/api/files/lut",
+    });
+
+    useExtractorStore.getState().clearCornerPoints();
+    const state = useExtractorStore.getState();
+
+    expect(state.imageFile).toBe(stubFile);
+    expect(state.imagePreviewUrl).toBe("blob:mock-url");
+    expect(state.imageNaturalWidth).toBe(800);
+    expect(state.imageNaturalHeight).toBe(600);
+    expect(state.color_mode).toBe(ExtractorColorMode.EIGHT_COLOR);
+    expect(state.page).toBe(ExtractorPage.PAGE_2);
+    expect(state.eight_color_full_export).toBe(true);
+    expect(state.offset_x).toBe(5);
+    expect(state.offset_y).toBe(-3);
+    expect(state.zoom).toBe(1.1);
+    expect(state.distortion).toBe(0.05);
+    expect(state.vignette_correction).toBe(true);
+    expect(state.auto_wb).toBe(true);
+    expect(state.page1Extracted).toBe(true);
+    expect(state.page2Extracted).toBe(false);
+    expect(state.extractedEightColorFullPages).toEqual([1, 2, 3]);
+    expect(state.page1Extracted_5c).toBe(true);
+    expect(state.page2Extracted_5c).toBe(false);
+
+    resetExtractorStore();
+  });
 });
 
 // **Feature: extractor-calibration-tab, Property 5: 参数 setter 钳制正确性**
