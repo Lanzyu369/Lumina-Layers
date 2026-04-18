@@ -251,12 +251,12 @@ class TestCalibration5ColorExtended:
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(block_size_mm=5.0, gap_mm=0.82)
+            mock_fn.assert_called_once_with(block_size_mm=5.0, gap_mm=0.84)
 
     def test_5color_extended_response_contains_download_and_preview_urls(self) -> None:
         """Response should contain download_url and preview_url."""
@@ -270,7 +270,7 @@ class TestCalibration5ColorExtended:
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
@@ -291,7 +291,7 @@ class TestCalibration5ColorExtended:
                 json={
                     "color_mode": "5-Color Extended (1444)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )

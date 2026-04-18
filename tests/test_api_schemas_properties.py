@@ -486,7 +486,7 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     (ColorMergePreviewRequest, {"session_id": "s"}, "merge_max_distance", 20),
     # CalibrationGenerateRequest
     (CalibrationGenerateRequest, {}, "block_size", 5),
-    (CalibrationGenerateRequest, {}, "gap", 0.82),
+    (CalibrationGenerateRequest, {}, "gap", 0.84),
     (CalibrationGenerateRequest, {}, "eight_color_full_export", False),
     # ExtractorExtractRequest
     (ExtractorExtractRequest, {"corner_points": [(0, 0), (100, 0), (100, 100), (0, 100)]}, "eight_color_full_export", False),

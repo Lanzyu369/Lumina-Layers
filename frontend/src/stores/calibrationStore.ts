@@ -84,7 +84,7 @@ const DEFAULT_STATE: CalibrationState = {
   lastSubmittedWorkflow: null,
   color_mode: CalibrationColorModeEnum.FOUR_COLOR_RYBW,
   block_size: 5,
-  gap: 0.82,
+  gap: 0.84,
   backing: BackingColorEnum.WHITE,
   eight_color_full_export: false,
   substrateId: "white",

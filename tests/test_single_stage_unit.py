@@ -194,7 +194,7 @@ def test_calibration_generate_registers_stateless_outputs_with_ttl(
         json={
             "color_mode": "4-Color (RYBW)",
             "block_size": 5,
-            "gap": 0.82,
+            "gap": 0.84,
             "backing": "White",
         },
     )
@@ -244,7 +244,7 @@ def test_calibration_generate_uses_unique_registry_session_ids_per_request(
     payload = {
         "color_mode": "4-Color (RYBW)",
         "block_size": 5,
-        "gap": 0.82,
+        "gap": 0.84,
         "backing": "White",
     }
     response_one = client.post("/api/calibration/generate", json=payload)
@@ -1007,7 +1007,7 @@ def test_gradient_card_stage_a_core_locks_c0_to_measured_zero_thickness_samples(
     zip_path = tmp_path / "kit_c0.zip"
     _write_gradient_card_manifest(zip_path, spec)
 
-    white_substrate = np.array([0.82, 0.85, 0.88], dtype=np.float64)
+    white_substrate = np.array([0.84, 0.85, 0.88], dtype=np.float64)
     black_substrate = np.array([0.05, 0.06, 0.07], dtype=np.float64)
     expected_e = np.array([0.30, 0.25, 0.20], dtype=np.float64)
     expected_k = np.array([1.5, 1.3, 1.1], dtype=np.float64)

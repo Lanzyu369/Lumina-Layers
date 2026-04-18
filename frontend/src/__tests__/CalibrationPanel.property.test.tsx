@@ -22,7 +22,7 @@ beforeEach(() => {
     workflow: "legacy",
     color_mode: CalibrationColorMode.FOUR_COLOR_CMYW,
     block_size: 5,
-    gap: 0.82,
+    gap: 0.84,
     backing: BackingColor.WHITE,
     eight_color_full_export: false,
     singleStageLayerHeightMm: 0.04,

@@ -41,14 +41,14 @@ class TestColorModeRouting:
                 json={
                     "color_mode": "BW (Black & White)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
-                gap_mm=0.82,
+                gap_mm=0.84,
                 backing_color="White",
             )
 
@@ -62,7 +62,7 @@ class TestColorModeRouting:
                 json={
                     "color_mode": "4-Color (RYBW)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
@@ -70,7 +70,7 @@ class TestColorModeRouting:
             mock_fn.assert_called_once_with(
                 color_mode="RYBW",
                 block_size_mm=5.0,
-                gap_mm=0.82,
+                gap_mm=0.84,
                 backing_color="White",
             )
 
@@ -84,14 +84,14 @@ class TestColorModeRouting:
                 json={
                     "color_mode": "6-Color (CMYWGK 1296)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
-                gap_mm=0.82,
+                gap_mm=0.84,
             )
 
     def test_eight_color_full_export_routes_to_generate_8color_full_batch_zip(self) -> None:
@@ -104,7 +104,7 @@ class TestColorModeRouting:
                 json={
                     "color_mode": "8-Color Max",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                     "eight_color_full_export": True,
                 },
@@ -112,7 +112,7 @@ class TestColorModeRouting:
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
-                gap_mm=0.82,
+                gap_mm=0.84,
             )
 
     def test_eight_color_mode_routes_to_generate_8color_batch_zip(self) -> None:
@@ -125,14 +125,14 @@ class TestColorModeRouting:
                 json={
                     "color_mode": "8-Color Max",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
-                gap_mm=0.82,
+                gap_mm=0.84,
             )
 
 
@@ -187,7 +187,7 @@ class TestErrorHandling:
                 json={
                     "color_mode": "4-Color (RYBW)",
                     "block_size": 5,
-                    "gap": 0.82,
+                    "gap": 0.84,
                     "backing": "White",
                 },
             )

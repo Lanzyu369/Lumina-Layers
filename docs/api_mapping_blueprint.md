@@ -207,7 +207,7 @@
 |---|---|---|---|---|---|---|---|---|
 | `gr.Radio` | `radio_cal_color_mode` | `str` | `"4-Color"` | `"BW (Black & White)"`, `"4-Color"`, `"6-Color (Smart 1296)"`, `"8-Color Max"` | `color_mode` | `Literal["BW (Black & White)","4-Color","6-Color (Smart 1296)","8-Color Max"]` | `color_mode` (路由) | 决定调用哪个生成函数 |
 | `gr.Slider` | `slider_cal_block_size` | `int` | `5` | 3–10, step=1 | `block_size` | `int` | `block_size` | 色块尺寸 (mm) |
-| `gr.Slider` | `slider_cal_gap` | `float` | `0.82` | 0.4–2.0, step=0.02 | `gap` | `float` | `gap` | 色块间距 (mm) |
+| `gr.Slider` | `slider_cal_gap` | `float` | `0.84` | 0.4–2.0, step=0.02 | `gap` | `float` | `gap` | 色块间距 (mm) |
 | `gr.Dropdown` | `dropdown_cal_backing` | `str` | `"White"` | `"White"`, `"Cyan"`, `"Magenta"`, `"Yellow"`, `"Red"`, `"Blue"` | `backing` | `Literal["White","Cyan","Magenta","Yellow","Red","Blue"]` | `backing` | 底板颜色；8-Color 模式下忽略 |
 
 ### 函数路由逻辑 / Function Routing
@@ -581,7 +581,7 @@ class CalibrationGenerateRequest(BaseModel):
     """POST /api/calibration/generate — 生成校准板"""
     color_mode: CalibrationColorMode = Field(CalibrationColorMode.FOUR_COLOR)
     block_size: int = Field(5, ge=3, le=10, description="色块尺寸 (mm)")
-    gap: float = Field(0.82, ge=0.4, le=2.0, description="色块间距 (mm)")
+    gap: float = Field(0.84, ge=0.4, le=2.0, description="色块间距 (mm)")
     backing: BackingColor = Field(BackingColor.WHITE, description="底板颜色")
 
 

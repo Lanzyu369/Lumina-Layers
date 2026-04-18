@@ -578,7 +578,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         useCalibrationStore.setState({
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
-          gap: 0.82,
+          gap: 0.84,
           backing: BackingColor.WHITE,
           eight_color_full_export: false,
           singleStageLayerHeightMm: 0.04,

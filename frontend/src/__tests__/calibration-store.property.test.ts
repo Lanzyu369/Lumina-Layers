@@ -69,7 +69,7 @@ describe("Feature: calibration-tab-integration, Property 5: Store setter 钳制�
           store.setGap(value);
           const { gap } = useCalibrationStore.getState();
           // Reset to default to avoid state leaking
-          useCalibrationStore.setState({ gap: 0.82 });
+          useCalibrationStore.setState({ gap: 0.84 });
           return gap >= 0.4 && gap <= 2.0;
         },
       ),
@@ -239,7 +239,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
           workflow: "legacy",
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
-          gap: 0.82,
+          gap: 0.84,
           backing: BackingColor.WHITE,
           eight_color_full_export: false,
           singleStageLayerHeightMm: 0.04,
@@ -327,7 +327,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       workflow: "legacy",
       color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
       block_size: 5,
-      gap: 0.82,
+      gap: 0.84,
       backing: BackingColor.WHITE,
       eight_color_full_export: false,
       substrateId: "white",

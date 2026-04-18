@@ -306,7 +306,7 @@ This launches the web interface with all three modules in tabs.
    - **6-Color** - Extended palette with 1296 colors (requires 6-filament printer)
    - **8-Color** - Professional mode with 2738 colors (two-page workflow)
    - **BW** - Grayscale mode with 32 levels
-3. Adjust block size (default: 5mm) and gap (default: 0.82mm)
+3. Adjust block size (default: 5mm) and gap (default: 0.84mm)
 4. Click **Generate** and download the `.3mf` file(s)
    - 4-Color/6-Color/BW: Single file
    - 8-Color: Two files (Page 1 and Page 2)
