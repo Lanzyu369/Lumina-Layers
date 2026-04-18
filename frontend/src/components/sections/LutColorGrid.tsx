@@ -119,7 +119,7 @@ const ColorSwatch = memo(function ColorSwatch({
           ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
           : "border-transparent hover:border-slate-300 hover:bg-slate-100/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
       }`}
-      title={`${entry.hex} 路 ${isFav ? t("lut_grid_dblclick_unfav") : t("lut_grid_dblclick_fav")}`}
+      title={`${entry.hex} · ${isFav ? t("lut_grid_dblclick_unfav") : t("lut_grid_dblclick_fav")}`}
     >
       <span
         className="block h-[clamp(1.1rem,1.7vw,1.3rem)] w-[clamp(1.1rem,1.7vw,1.3rem)] rounded-lg border border-slate-300/80 dark:border-slate-600/80"
@@ -232,7 +232,7 @@ function LutColorGridInner() {
               <button
                 key={`${c.hex}-${i}`}
                 type="button"
-                title={`${c.hex} 路 RGB(${r}, ${g}, ${b})`}
+                title={`${c.hex} · RGB(${r}, ${g}, ${b})`}
                 onClick={() => onColorClick(c.hex)}
                 className={`cursor-pointer rounded-[8px] border transition-colors ${
                   isTarget
