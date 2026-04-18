@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../i18n/context";
-import type { AnnouncementEntry } from "../../data/announcements";
+import type { AnnouncementEntry, LocalizedText } from "../../data/announcements";
 import Button from "./Button";
 
 export interface AnnouncementDialogProps {
@@ -18,7 +18,8 @@ export default function AnnouncementDialog({
   onClose,
   onDismissVersion,
 }: AnnouncementDialogProps): JSX.Element | null {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const localize = (text: LocalizedText): string => (lang === "en" ? text.en : text.zh);
 
   useEffect(() => {
     if (!open) {
@@ -85,29 +86,32 @@ export default function AnnouncementDialog({
 
         <div className="max-h-[70vh] flex-1 overflow-y-auto px-5 py-4">
           <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">
-            {entry.title}
+            {localize(entry.title)}
           </h3>
 
-          {entry.sections.map((section, index) => (
-            <section
-              key={`${section.category}-${index}`}
-              className={index === 0 ? "mt-0" : "mt-4"}
-            >
-              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                {section.category}
-              </p>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                {section.items.map((item, itemIndex) => (
-                  <li
-                    key={`${section.category}-${itemIndex}`}
-                    className="text-sm leading-6 text-slate-600 dark:text-slate-300"
-                  >
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+          {entry.sections.map((section, index) => {
+            const categoryText = localize(section.category);
+            return (
+              <section
+                key={`${categoryText}-${index}`}
+                className={index === 0 ? "mt-0" : "mt-4"}
+              >
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                  {categoryText}
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  {section.items.map((item, itemIndex) => (
+                    <li
+                      key={`${categoryText}-${itemIndex}`}
+                      className="text-sm leading-6 text-slate-600 dark:text-slate-300"
+                    >
+                      {localize(item)}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">

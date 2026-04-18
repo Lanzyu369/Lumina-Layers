@@ -8,11 +8,14 @@ import type { AnnouncementEntry } from "../data/announcements";
 function createEntry(): AnnouncementEntry {
   return {
     version: "2026-04-19",
-    title: "t1",
+    title: { zh: "t1", en: "t1-en" },
     sections: [
       {
-        category: "🆕 新",
-        items: ["a", "b"],
+        category: { zh: "新", en: "New" },
+        items: [
+          { zh: "a", en: "a-en" },
+          { zh: "b", en: "b-en" },
+        ],
       },
     ],
   };
