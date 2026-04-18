@@ -1435,8 +1435,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "2D Preview",
   },
   color_2d_hold_view_original: {
-    zh: "按住查看原图",
-    en: "Hold to view original",
+    zh: "按住按钮或按住 Shift 键查看原图",
+    en: "Hold this button or hold Shift to view the original image",
   },
   preview_debug_action_2d: {
     zh: "操作栏 2D 小预览",

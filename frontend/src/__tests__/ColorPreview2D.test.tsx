@@ -412,6 +412,113 @@ describe('ColorPreview2D hover inspector', () => {
     expect(screen.queryByTestId('main-2d-hover-inspector')).not.toBeInTheDocument();
   });
 
+  it('shows the original image while Shift is held and releases it on keyup', () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      imagePreviewUrl: '/original-upload.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const holdButton = screen.getByTestId('color-preview-2d-hold-original');
+    expect(holdButton).not.toHaveAttribute('data-active');
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Shift' });
+    });
+    expect(holdButton).toHaveAttribute('data-active', 'true');
+
+    act(() => {
+      fireEvent.keyUp(window, { key: 'Shift' });
+    });
+    expect(holdButton).not.toHaveAttribute('data-active');
+  });
+
+  it('does not trigger the Shift shortcut while typing in a text input', () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      imagePreviewUrl: '/original-upload.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+
+    const holdButton = screen.getByTestId('color-preview-2d-hold-original');
+
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Shift' });
+    });
+    expect(holdButton).not.toHaveAttribute('data-active');
+
+    input.remove();
+  });
+
+  it('releases the original view when the window loses focus mid-press', () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      imagePreviewUrl: '/original-upload.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const holdButton = screen.getByTestId('color-preview-2d-hold-original');
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Shift' });
+    });
+    expect(holdButton).toHaveAttribute('data-active', 'true');
+
+    act(() => {
+      fireEvent.blur(window);
+    });
+    expect(holdButton).not.toHaveAttribute('data-active');
+  });
+
   it('keeps regular clicks routed to the existing selection behavior', () => {
     const detectRegion = vi.fn();
 

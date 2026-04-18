@@ -103,6 +103,42 @@ export default function ColorPreview2D({
   const [showOriginal, setShowOriginal] = useState(false);
   const releaseOriginalView = useCallback(() => setShowOriginal(false), []);
 
+  // Shift keyboard shortcut: hold Shift anywhere (outside text inputs) to
+  // temporarily show the original uploaded image, releasing on keyup or
+  // window blur. Mirrors the press-and-hold button interaction.
+  // Shift 键盘快捷键：在非文本输入环境下按住 Shift 即可临时查看原图，
+  // keyup 或窗口失焦时自动恢复，与长按按钮行为一致。
+  useEffect(() => {
+    if (!originalUploadUrl) {
+      return;
+    }
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      return target.isContentEditable;
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift') return;
+      if (event.repeat) return;
+      if (isEditableTarget(event.target)) return;
+      setShowOriginal(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift') return;
+      setShowOriginal(false);
+    };
+    const handleBlur = () => setShowOriginal(false);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [originalUploadUrl]);
+
   // Preload mechanism: keep current displayUrl until new image is fully loaded,
   // preventing visible flash when stableImageUrl changes after replacement.
   const [displayUrl, setDisplayUrl] = useState<string | null>(stableImageUrl);
