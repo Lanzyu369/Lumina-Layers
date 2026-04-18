@@ -8,16 +8,22 @@ import uuid
 import zipfile
 
 import anyio
+import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
+from api.schemas.single_stage import MaterialLibraryBulkExportRequest
 from api.schemas.responses import (
+    GradientCardMaterialBulkExportResponse,
+    GradientCardMaterialBulkImportResponse,
     GradientCardMaterialDeleteResponse,
     GradientCardMaterialLibraryResponse,
     GradientCardMaterialSaveResponse,
     GradientCardStageAExtractResponse,
+    MaterialColorSuggestionItem,
+    MaterialColorSuggestionsResponse,
     MaterialSolverCacheBuildResponse,
     MaterialSolverCacheDeleteResponse,
     MaterialSolverCacheEntryResponse,
@@ -40,15 +46,22 @@ from core.material_cache import (
     save_material_solver_cache,
 )
 from core.material_color_solver import (
+    DEFAULT_SUGGEST_MAX_COMBINATIONS,
+    DEFAULT_SUGGEST_MIN_SPACING,
+    DEFAULT_SUGGEST_TOP_K,
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
     MIN_LAYER_COUNT as _SOLVER_MIN_LAYER_COUNT,  # noqa: N811
+    ColorSuggestion,
+    suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
 from core.single_stage import (
     delete_saved_stage_a_material_archive,
+    export_saved_stage_a_material_archives,
     extract_single_stage_dataset,
     extract_stage_a_material_from_gradient_cards,
     fit_stage_a_from_stage_json,
+    import_saved_stage_a_material_archives,
     list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
 )
@@ -105,6 +118,14 @@ def _normalize_manual_orientation(raw: str | None) -> str | None:
             detail=f"Invalid manual orientation label {raw!r}; expected one of: {valid}",
         )
     return cleaned
+
+
+def _rollback_imported_materials(directory_names: list[str]) -> None:
+    for directory_name in reversed(directory_names):
+        try:
+            delete_saved_stage_a_material_archive(directory_name=directory_name)
+        except (FileNotFoundError, ValueError, TypeError, OSError, RuntimeError):
+            pass
 
 
 @router.post("/extract-single-stage")
@@ -306,6 +327,7 @@ async def extractor_save_gradient_card_material(
     material_name: str = Form(...),
     target_directory_name: str | None = Form(None),
     save_mode: str = Form("merge"),
+    brand: str | None = Form(None),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialSaveResponse:
@@ -340,6 +362,7 @@ async def extractor_save_gradient_card_material(
             material_summary=material_summary,
             existing_directory_name=target_directory_name.strip() if isinstance(target_directory_name, str) and target_directory_name.strip() else None,
             save_mode=validated_save_mode,
+            brand=brand.strip() if isinstance(brand, str) and brand.strip() else None,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -371,7 +394,7 @@ async def extractor_save_gradient_card_material(
     )
 
 
-@router.delete("/gradient-card-materials/{directory_name}")
+@router.delete("/gradient-card-materials/{directory_name:path}")
 async def extractor_delete_gradient_card_material(
     directory_name: str,
 ) -> GradientCardMaterialDeleteResponse:
@@ -390,6 +413,95 @@ async def extractor_delete_gradient_card_material(
         message="Gradient card material deleted successfully",
         directory_name=result.directory_name,
         material_name=result.material_name,
+    )
+
+
+@router.post("/gradient-card-materials/export")
+async def extractor_export_gradient_card_materials(
+    payload: MaterialLibraryBulkExportRequest,
+    registry: FileRegistry = Depends(get_file_registry),
+) -> GradientCardMaterialBulkExportResponse:
+    """Export multiple saved gradient-card materials as one ZIP archive.
+    将多个已保存的梯度卡耗材导出为一个 ZIP 归档。
+    """
+    try:
+        result = export_saved_stage_a_material_archives(
+            directory_names=payload.directory_names,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
+    download_id = registry.register_path(
+        persistent_registry_session,
+        result.archive_path,
+        filename=result.download_filename,
+        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+    )
+    return GradientCardMaterialBulkExportResponse(
+        status="ok",
+        message=f"Exported {len(result.exported_directory_names)} saved materials",
+        download_url=f"/api/files/{download_id}",
+        filename=result.download_filename,
+        exported_count=len(result.exported_directory_names),
+        exported_directory_names=result.exported_directory_names,
+    )
+
+
+@router.post("/gradient-card-materials/import")
+async def extractor_import_gradient_card_materials(
+    archives: list[UploadFile] = File(...),
+) -> GradientCardMaterialBulkImportResponse:
+    """Import one or more saved-material ZIP archives into the material library.
+    导入一个或多个已保存耗材 ZIP 归档到耗材库。
+    """
+    if not archives:
+        raise HTTPException(status_code=422, detail="At least one archive must be uploaded")
+
+    uploaded_archive_paths: list[str] = []
+    imported_materials: list[dict[str, object]] = []
+    imported_directory_names: list[str] = []
+    try:
+        for archive in archives:
+            filename = archive.filename or ""
+            if not filename.lower().endswith(".zip"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Uploaded file must be a ZIP archive: {filename or '<unnamed>'}",
+                )
+            archive_path = await upload_to_tempfile(archive, suffix=".zip")
+            uploaded_archive_paths.append(archive_path)
+            result = import_saved_stage_a_material_archives(archive_path=archive_path)
+            imported_materials.extend(result.imported_materials)
+            imported_directory_names.extend(
+                str(item.get("directory_name") or "")
+                for item in result.imported_materials
+                if isinstance(item.get("directory_name"), str)
+                and str(item.get("directory_name") or "").strip()
+            )
+    except HTTPException:
+        _rollback_imported_materials(imported_directory_names)
+        raise
+    except FileNotFoundError as exc:
+        _rollback_imported_materials(imported_directory_names)
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        _rollback_imported_materials(imported_directory_names)
+        raise HTTPException(status_code=422, detail=str(exc))
+    finally:
+        for archive_path in uploaded_archive_paths:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+
+    return GradientCardMaterialBulkImportResponse(
+        status="ok",
+        message=f"Imported {len(imported_materials)} saved materials",
+        imported_count=len(imported_materials),
+        imported_materials=imported_materials,
     )
 
 
@@ -710,4 +822,173 @@ async def material_solver_cache_delete(
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Material color suggestions (picker support for material-archive mode)
+# 耗材颜色建议（材料档案模式取色器支持）
+# ---------------------------------------------------------------------------
+
+
+def _parse_target_hex(raw: str) -> tuple[str, tuple[int, int, int]]:
+    """Normalise a user-supplied hex color to ``(hex_noprefix, (r,g,b))``.
+    将用户输入的 hex 颜色规范化为 ``(去前缀 hex, (r,g,b))``。
+
+    Accepts ``#RRGGBB`` / ``RRGGBB`` (case-insensitive) and the 3-digit short
+    form ``#RGB``. Rejects malformed inputs with HTTP 422 so the frontend can
+    surface a validation error without leaking tracebacks.
+    """
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="target_hex must be a string")
+    cleaned = raw.strip().lstrip("#").lower()
+    if len(cleaned) == 3:
+        cleaned = "".join(ch * 2 for ch in cleaned)
+    if len(cleaned) != 6 or any(c not in "0123456789abcdef" for c in cleaned):
+        raise HTTPException(
+            status_code=422,
+            detail=f"target_hex must be #RRGGBB or #RGB, got {raw!r}",
+        )
+    r = int(cleaned[0:2], 16)
+    g = int(cleaned[2:4], 16)
+    b = int(cleaned[4:6], 16)
+    return cleaned, (r, g, b)
+
+
+def _validate_suggest_parameters(
+    top_k: int, min_spacing: float, max_combinations: int
+) -> None:
+    if top_k <= 0 or top_k > 100:
+        raise HTTPException(
+            status_code=422,
+            detail=f"top_k must be in [1, 100], got {top_k}",
+        )
+    if min_spacing < 0.0 or min_spacing > 50.0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"min_spacing must be in [0, 50], got {min_spacing}",
+        )
+    if max_combinations <= 0 or max_combinations > 50_000_000:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "max_combinations must be in (0, 50_000_000], "
+                f"got {max_combinations}"
+            ),
+        )
+
+
+def _suggestions_to_response_items(
+    suggestions: list[ColorSuggestion],
+) -> list[MaterialColorSuggestionItem]:
+    items: list[MaterialColorSuggestionItem] = []
+    for suggestion in suggestions:
+        rgb = [int(v) for v in suggestion.matched_rgb.tolist()]
+        recipe = [int(v) for v in suggestion.recipe.tolist()]
+        items.append(
+            MaterialColorSuggestionItem(
+                hex="#{:02X}{:02X}{:02X}".format(*rgb),
+                rgb=rgb,
+                delta_e=float(suggestion.delta_e),
+                recipe=recipe,
+                recipe_display="[" + ",".join(str(v) for v in recipe) + "]",
+            )
+        )
+    return items
+
+
+@router.post("/material-solver-cache/suggest-colors")
+async def material_solver_cache_suggest_colors(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    target_hex: str = Form(...),
+    top_k: int = Form(DEFAULT_SUGGEST_TOP_K),
+    min_spacing: float = Form(DEFAULT_SUGGEST_MIN_SPACING),
+    max_combinations: int = Form(DEFAULT_SUGGEST_MAX_COMBINATIONS),
+) -> MaterialColorSuggestionsResponse:
+    """Return up to ``top_k`` achievable colors near ``target_hex``.
+    为 ``target_hex`` 返回至多 ``top_k`` 个可达近似色建议。
+
+    Fast path: when a persisted :class:`core.material_cache.MaterialSolverCache`
+    matches the ``(palette, N, t, substrate)`` parameters the response is
+    served from the KDTree-over-Lab-buckets lookup (microseconds per query).
+    Fallback: no cache available → runs
+    :func:`core.material_color_solver.suggest_colors_for_target` in a worker
+    thread, bounded by ``max_combinations`` to keep interactive UX responsive.
+
+    The frontend reports ``source`` in the response so it can surface a
+    "build cache for instant suggestions" hint when the MITM fallback runs.
+    前端会根据 ``source`` 判断是否提示用户构建缓存以获得毫秒级响应。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_suggest_parameters(top_k, min_spacing, max_combinations)
+    target_hex_clean, target_rgb_tuple = _parse_target_hex(target_hex)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+
+    target_rgb_arr = np.asarray(target_rgb_tuple, dtype=np.uint8)
+
+    cache = load_material_solver_cache(
+        materials, layer_count, layer_height_mm, substrate
+    )
+    if cache is not None:
+        try:
+            suggestions = cache.lookup_top_k(
+                target_rgb_arr,
+                materials,
+                top_k=top_k,
+                min_spacing=min_spacing,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        source = "cache"
+        message = (
+            f"Returned {len(suggestions)} achievable colors "
+            f"(via solver cache, {cache.valid_cell_count} cells)."
+        )
+    else:
+        def _run_suggest() -> list[ColorSuggestion]:
+            return suggest_colors_for_target(
+                target_rgb_arr,
+                materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                top_k=top_k,
+                min_spacing=min_spacing,
+                max_combinations=max_combinations,
+            )
+
+        try:
+            suggestions = await anyio.to_thread.run_sync(_run_suggest)
+        except OverflowError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{exc}. Please build the material solver cache first to "
+                    "enable interactive suggestions for this palette."
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        source = "mitm"
+        message = (
+            f"Returned {len(suggestions)} achievable colors "
+            f"(via MITM fallback)."
+        )
+
+    return MaterialColorSuggestionsResponse(
+        status="ok",
+        message=message,
+        source=source,
+        palette_hash=palette_hash,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        target_hex=f"#{target_hex_clean.upper()}",
+        target_rgb=[int(v) for v in target_rgb_tuple],
+        suggestions=_suggestions_to_response_items(suggestions),
     )

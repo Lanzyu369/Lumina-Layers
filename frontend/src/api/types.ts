@@ -582,6 +582,7 @@ export interface GradientCardSampleBox {
 export interface SavedMaterialSummary {
   material_name: string;
   directory_name: string;
+  brand?: string | null;
   archive_path: string;
   stage_a_params_path: string;
   verification_count?: number;
@@ -674,6 +675,7 @@ export interface SavedMaterialVerificationHistoryItem {
 export interface SavedMaterialLibraryItem {
   material_name: string;
   directory_name: string;
+  brand?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   archive_path: string;
@@ -691,6 +693,22 @@ export interface GradientCardMaterialLibraryResponse {
   status: string;
   message: string;
   materials: SavedMaterialLibraryItem[];
+}
+
+export interface GradientCardMaterialBulkExportResponse {
+  status: string;
+  message: string;
+  download_url: string;
+  filename: string;
+  exported_count: number;
+  exported_directory_names: string[];
+}
+
+export interface GradientCardMaterialBulkImportResponse {
+  status: string;
+  message: string;
+  imported_count: number;
+  imported_materials: SavedMaterialSummary[];
 }
 
 // ========== Material solver cache (64³ Lab-grid recipe lookup) ==========
@@ -749,6 +767,30 @@ export interface MaterialSolverCacheDeleteResponse {
   layer_count: number;
   layer_height_mm: number;
   substrate: string;
+}
+
+/** One achievable-color candidate returned by the suggester endpoint. */
+export interface MaterialColorSuggestionItem {
+  hex: string;
+  rgb: [number, number, number];
+  delta_e: number;
+  recipe: number[];
+  recipe_display: string;
+}
+
+/** Response payload for ``POST /material-solver-cache/suggest-colors``. */
+export interface MaterialColorSuggestionsResponse {
+  status: string;
+  message: string;
+  /** ``"cache"`` when served from the persisted cache, ``"mitm"`` otherwise. */
+  source: "cache" | "mitm";
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  target_hex: string;
+  target_rgb: [number, number, number];
+  suggestions: MaterialColorSuggestionItem[];
 }
 
 export interface ManualFixResponse {

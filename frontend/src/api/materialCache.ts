@@ -1,5 +1,6 @@
 import apiClient from "./client";
 import type {
+  MaterialColorSuggestionsResponse,
   MaterialSolverCacheBuildResponse,
   MaterialSolverCacheDeleteResponse,
   MaterialSolverCacheListResponse,
@@ -93,12 +94,60 @@ export async function deleteMaterialSolverCache(
  * List all persisted solver caches with metadata.
  * 列出所有已持久化的求解器缓存及其元数据。
  */
-export async function listMaterialSolverCaches(): Promise<
-  MaterialSolverCacheListResponse
-> {
+export async function listMaterialSolverCaches(): Promise<MaterialSolverCacheListResponse> {
   const response = await apiClient.get<MaterialSolverCacheListResponse>(
     "/extractor/material-solver-caches",
     { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Options for :func:`fetchMaterialColorSuggestions`.
+ * :func:`fetchMaterialColorSuggestions` 的可选参数。
+ */
+export interface MaterialColorSuggestOptions {
+  /** Max number of suggestions to return. Defaults to backend's 20. (返回上限) */
+  topK?: number;
+  /** Minimum Lab ΔE between neighbours (perceptual dedup). (最小间距) */
+  minSpacing?: number;
+  /** Hard cap on ``M ** N`` for the MITM fallback. (MITM 回退上限) */
+  maxCombinations?: number;
+  /** ``AbortSignal`` to cancel the in-flight request. (用于取消请求) */
+  signal?: AbortSignal;
+  /** Request timeout. Defaults to 60 s to allow MITM fallback runs. (超时) */
+  timeoutMs?: number;
+}
+
+/**
+ * Suggest achievable colors close to ``targetHex`` for a given material palette.
+ * 为指定目标颜色返回可达近似色建议。
+ *
+ * The backend prefers the persisted solver cache when available (microsecond
+ * lookups) and transparently falls back to the MITM enumeration otherwise.
+ * The ``source`` field on the response tells the UI which path ran so it can
+ * nudge the user to build a cache for instant future queries.
+ */
+export async function fetchMaterialColorSuggestions(
+  key: MaterialSolverCacheKey,
+  targetHex: string,
+  options?: MaterialColorSuggestOptions,
+): Promise<MaterialColorSuggestionsResponse> {
+  const extra: Record<string, string> = { target_hex: targetHex };
+  if (options?.topK != null) extra.top_k = String(options.topK);
+  if (options?.minSpacing != null) {
+    extra.min_spacing = String(options.minSpacing);
+  }
+  if (options?.maxCombinations != null) {
+    extra.max_combinations = String(options.maxCombinations);
+  }
+  const response = await apiClient.post<MaterialColorSuggestionsResponse>(
+    "/extractor/material-solver-cache/suggest-colors",
+    _formData(key, extra),
+    {
+      timeout: options?.timeoutMs ?? 60_000,
+      signal: options?.signal,
+    },
   );
   return response.data;
 }

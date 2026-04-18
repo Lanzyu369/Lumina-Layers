@@ -108,6 +108,49 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it("groups materials by brand and puts unassigned entries in a trailing group", () => {
+    const materials = [
+      makeMaterial({
+        material_name: "Red PLA",
+        directory_name: "瑞贝思/red-pla",
+        brand: "瑞贝思",
+      }),
+      makeMaterial({
+        material_name: "White PLA",
+        directory_name: "瑞贝思/white-pla",
+        brand: "瑞贝思",
+      }),
+      makeMaterial({
+        material_name: "Legacy PLA",
+        directory_name: "legacy-pla",
+        brand: null,
+      }),
+    ];
+    render(
+      <MaterialPickerDialog
+        open={true}
+        materials={materials}
+        loading={false}
+        initialSelected={[]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const groups = screen.getAllByTestId("material-picker-brand-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0].getAttribute("data-brand")).toBe("瑞贝思");
+    expect(groups[1].getAttribute("data-brand")).toBe("");
+
+    // Brand header + 2 branded materials under that group
+    expect(groups[0].textContent).toContain("瑞贝思");
+    expect(groups[0].textContent).toContain("Red PLA");
+    expect(groups[0].textContent).toContain("White PLA");
+
+    // Unassigned header + legacy entry at the end
+    expect(groups[1].textContent).toContain("Legacy PLA");
+  });
+
   it("select-all toggles to clear-all once everything is selected", () => {
     const onConfirm = vi.fn();
     render(

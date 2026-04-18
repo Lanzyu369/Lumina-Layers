@@ -49,11 +49,15 @@ from scipy.spatial import cKDTree
 from config import MATERIALS_DIR
 from core.material_color_solver import (
     ALLOWED_LAYER_HEIGHTS_MM,
+    DEFAULT_SUGGEST_MIN_SPACING,
+    DEFAULT_SUGGEST_TOP_K,
     MAX_LAYER_COUNT,
     MIN_LAYER_COUNT,
+    ColorSuggestion,
     MaterialParams,
     _compute_material_affines,
     _enumerate_cumulative_affines,
+    _greedy_lab_spacing_dedup,
     linear_to_srgb_uint8,
     rgb_to_lab,
 )
@@ -303,6 +307,100 @@ class MaterialSolverCache:
         matched_lab = rgb_to_lab(matched_rgb)
         delta_e = np.linalg.norm(matched_lab - target_lab, axis=1)
         return matched_rgb, recipes_user_order, delta_e
+
+    def lookup_top_k(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+        *,
+        top_k: int = DEFAULT_SUGGEST_TOP_K,
+        min_spacing: float = DEFAULT_SUGGEST_MIN_SPACING,
+    ) -> list[ColorSuggestion]:
+        """Return the ``top_k`` cached recipes closest in Lab to one target.
+        返回 Lab 空间中最接近单一目标色的 ``top_k`` 条缓存配方。
+
+        The cache stores one recipe per reached bucket centre, so the entire
+        enumerated gamut is already deduplicated at the grid resolution. A
+        ``cKDTree`` query picks the nearest-cell neighbours, then a greedy
+        ``min_spacing`` filter enforces perceptually distinct suggestions.
+
+        Args:
+            target_srgb: (3,) uint8 target colour in sRGB. (目标 sRGB)
+            user_materials: Caller's ordered material list (for recipe
+                rebinding). (调用方耗材顺序)
+            top_k: Maximum number of suggestions to return. (返回候选数上限)
+            min_spacing: Minimum Lab ΔE between returned candidates.
+                (候选间最小 Lab ΔE)
+
+        Returns:
+            List of :class:`ColorSuggestion` ordered by ΔE ascending. Recipe
+            indices refer to ``user_materials`` (not the canonical cache order).
+            (按 ΔE 升序的候选列表；``recipe`` 使用调用方耗材索引)
+
+        Raises:
+            ValueError: ``target_srgb`` shape is wrong or ``top_k <= 0`` or
+                the caller's palette fingerprint does not match the cache.
+        """
+        target_srgb = np.asarray(target_srgb, dtype=np.uint8)
+        if target_srgb.shape != (3,):
+            raise ValueError(
+                f"target_srgb must be shaped (3,), got {target_srgb.shape}"
+            )
+        if top_k <= 0:
+            raise ValueError(f"top_k must be positive, got {top_k}")
+        if min_spacing < 0.0:
+            raise ValueError(f"min_spacing must be non-negative, got {min_spacing}")
+        user_fp = fingerprint_palette(user_materials)
+        if user_fp != self.palette_hash:
+            raise ValueError(
+                f"User palette fingerprint {user_fp} does not match cached "
+                f"palette {self.palette_hash}"
+            )
+        if self.lab_centers.shape[0] == 0:
+            return []
+
+        target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0].astype(np.float64)
+        oversample = max(1, int(top_k) * 4)
+        query_k = min(oversample, int(self.lab_centers.shape[0]))
+        tree = cKDTree(self.lab_centers.astype(np.float64))
+        # ``cKDTree.query`` returns ``distances, indices``; when ``k == 1`` the
+        # arrays are 0-D scalars so we always normalise to 1-D.
+        # k=1 时返回标量，这里统一成一维数组便于下游处理。
+        _, nearest_idx = tree.query(target_lab, k=query_k)
+        nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
+
+        nearest_lab = self.lab_centers[nearest_idx].astype(np.float64)
+        nearest_srgb = self.achieved_srgb[nearest_idx]
+        # Recompute ΔE against the achieved (not the bucket centre) for an
+        # accurate target-to-prediction error.
+        matched_lab = rgb_to_lab(nearest_srgb).astype(np.float64)
+        delta_e = np.linalg.norm(matched_lab - target_lab, axis=1)
+
+        # Sort ascending by ΔE before the greedy spacing filter.
+        sort_order = np.argsort(delta_e, kind="stable")
+        sorted_lab = matched_lab[sort_order]
+        sorted_srgb = nearest_srgb[sort_order]
+        sorted_de = delta_e[sort_order]
+        sorted_cache_rows = nearest_idx[sort_order]
+
+        kept_idx = _greedy_lab_spacing_dedup(
+            sorted_lab, min_spacing=min_spacing, limit=int(top_k)
+        )
+        if kept_idx.size == 0:
+            return []
+
+        user_order = canonical_palette_order(user_materials)
+        mapping = np.asarray(user_order, dtype=np.int32)
+        return [
+            ColorSuggestion(
+                matched_rgb=sorted_srgb[i].copy(),
+                recipe=mapping[self.recipes[sorted_cache_rows[i]]].astype(
+                    np.int32, copy=True
+                ),
+                delta_e=float(sorted_de[i]),
+            )
+            for i in kept_idx
+        ]
 
 
 # ---------------------------------------------------------------------------

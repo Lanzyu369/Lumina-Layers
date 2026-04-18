@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent } from "react";
 import { motion } from "framer-motion";
 
 import { tRuntime } from "../i18n/runtime";
-import { deleteGradientCardMaterial, listGradientCardMaterials } from "../api/extractor";
+import {
+  deleteGradientCardMaterial,
+  exportGradientCardMaterials,
+  importGradientCardMaterials,
+  listGradientCardMaterials,
+} from "../api/extractor";
 import type { SavedMaterialLibraryItem } from "../api/types";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
 import {
@@ -37,16 +44,32 @@ const formatNumericVector = (values: number[] | null | undefined, digits = 3) =>
     ? values.map((value) => formatNumericValue(value, digits)).join(", ")
     : "-";
 
+const triggerDownload = (url: string, filename?: string) => {
+  const link = document.createElement("a");
+  link.href = url;
+  if (filename) {
+    link.download = filename;
+  }
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+};
+
 export default function MaterialLibraryPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
   const setActiveTab = useWidgetStore((state) => state.setActiveTab);
   const startMaterialVerification = useSingleStageStore((state) => state.startMaterialVerification);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [materials, setMaterials] = useState<SavedMaterialLibraryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [pendingDeleteDirectoryName, setPendingDeleteDirectoryName] = useState<string | null>(null);
   const [expandedHistoryDirectoryNames, setExpandedHistoryDirectoryNames] = useState<string[]>([]);
+  const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
@@ -54,19 +77,27 @@ export default function MaterialLibraryPanel() {
     try {
       const response = await listGradientCardMaterials();
       const nextMaterials = (response.materials ?? []).map((item) => ({
-          ...item,
-          material_file_url: normalizeResourceUrl(item.material_file_url) ?? item.material_file_url,
-          stage_a_params_url: normalizeResourceUrl(item.stage_a_params_url) ?? item.stage_a_params_url,
-        }));
+        ...item,
+        material_file_url: normalizeResourceUrl(item.material_file_url) ?? item.material_file_url,
+        stage_a_params_url: normalizeResourceUrl(item.stage_a_params_url) ?? item.stage_a_params_url,
+      }));
       setMaterials(nextMaterials);
       setExpandedHistoryDirectoryNames((previous) =>
         previous.filter((directoryName) =>
           nextMaterials.some((item) => item.directory_name === directoryName),
         ),
       );
+      setSelectedDirectoryNames((previous) =>
+        previous.filter((directoryName) =>
+          nextMaterials.some((item) => item.directory_name === directoryName),
+        ),
+      );
+      return nextMaterials;
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_gradient_library_load_failed"));
       setMaterials([]);
+      setSelectedDirectoryNames([]);
+      return [];
     } finally {
       setIsLoading(false);
     }
@@ -94,6 +125,9 @@ export default function MaterialLibraryPanel() {
     }
     return dateFormatter.format(parsed);
   }, [dateFormatter]);
+
+  const selectedCount = selectedDirectoryNames.length;
+  const allSelected = materials.length > 0 && selectedCount === materials.length;
 
   const handleStartVerification = useCallback((item: SavedMaterialLibraryItem) => {
     startMaterialVerification({
@@ -123,6 +157,10 @@ export default function MaterialLibraryPanel() {
       setExpandedHistoryDirectoryNames((previous) =>
         previous.filter((directoryName) => directoryName !== item.directory_name),
       );
+      setSelectedDirectoryNames((previous) =>
+        previous.filter((directoryName) => directoryName !== item.directory_name),
+      );
+      setSuccess(t("mat_gradient_library_delete_success"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_gradient_library_load_failed"));
     } finally {
@@ -138,6 +176,72 @@ export default function MaterialLibraryPanel() {
     );
   }, []);
 
+  const toggleMaterialSelection = useCallback((directoryName: string) => {
+    setSelectedDirectoryNames((previous) =>
+      previous.includes(directoryName)
+        ? previous.filter((item) => item !== directoryName)
+        : [...previous, directoryName],
+    );
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedDirectoryNames(
+      allSelected ? [] : materials.map((item) => item.directory_name),
+    );
+  }, [allSelected, materials]);
+
+  const handleExportSelected = useCallback(async () => {
+    if (selectedDirectoryNames.length === 0) {
+      setError(t("mat_gradient_library_export_requires_selection"));
+      return;
+    }
+    setIsExporting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await exportGradientCardMaterials(selectedDirectoryNames);
+      const downloadUrl = normalizeResourceUrl(response.download_url) ?? response.download_url;
+      triggerDownload(downloadUrl, response.filename);
+      setSuccess(response.message || t("mat_gradient_library_export_success"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mat_gradient_library_export_failed"));
+    } finally {
+      setIsExporting(false);
+    }
+  }, [selectedDirectoryNames, t]);
+
+  const handleImportClick = useCallback(() => {
+    setError(null);
+    setSuccess(null);
+    importInputRef.current?.click();
+  }, []);
+
+  const handleImportArchives = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) {
+      return;
+    }
+    setIsImporting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await importGradientCardMaterials(files);
+      const refreshedMaterials = await refreshMaterials();
+      const importedDirectoryNames = (response.imported_materials ?? [])
+        .map((item) => item.directory_name)
+        .filter((directoryName) =>
+          refreshedMaterials.some((material) => material.directory_name === directoryName),
+        );
+      setSelectedDirectoryNames(importedDirectoryNames);
+      setSuccess(response.message || t("mat_gradient_library_import_success"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mat_gradient_library_import_failed"));
+    } finally {
+      setIsImporting(false);
+    }
+  }, [refreshMaterials, t]);
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
@@ -152,19 +256,72 @@ export default function MaterialLibraryPanel() {
         description={t("mat_gradient_library_desc")}
       />
 
-      <div className="flex items-center justify-end">
-        <Button
-          label={t("mat_gradient_library_refresh_btn")}
-          variant="secondary"
-          onClick={() => void refreshMaterials()}
-          disabled={isLoading}
-          loading={isLoading}
-        />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        multiple
+        className="hidden"
+        data-testid="material-library-import-input"
+        onChange={(event) => void handleImportArchives(event)}
+      />
+
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className={`${mutedSectionCardClass} flex flex-col gap-1 px-4 py-3`}>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+            {tRuntime("mat_gradient_library_selection_summary", {
+              selected: selectedCount,
+              total: materials.length,
+            })}
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {t("mat_gradient_library_import_hint")}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <Button
+            label={t(
+              allSelected
+                ? "mat_gradient_library_clear_selection_btn"
+                : "mat_gradient_library_select_all_btn",
+            )}
+            variant="secondary"
+            onClick={toggleSelectAll}
+            disabled={materials.length === 0 || isLoading || isExporting || isImporting}
+          />
+          <Button
+            label={t("mat_gradient_library_import_btn")}
+            variant="secondary"
+            onClick={handleImportClick}
+            disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
+            loading={isImporting}
+          />
+          <Button
+            label={t("mat_gradient_library_export_btn")}
+            variant="secondary"
+            onClick={() => void handleExportSelected()}
+            disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
+            loading={isExporting}
+          />
+          <Button
+            label={t("mat_gradient_library_refresh_btn")}
+            variant="secondary"
+            onClick={() => void refreshMaterials()}
+            disabled={isLoading || isImporting || isExporting}
+            loading={isLoading}
+          />
+        </div>
       </div>
 
       {error ? (
         <StatusBanner data-testid="material-library-error" tone="error">
           {error}
+        </StatusBanner>
+      ) : null}
+
+      {success ? (
+        <StatusBanner data-testid="material-library-success" tone="success">
+          {success}
         </StatusBanner>
       ) : null}
 
@@ -177,7 +334,7 @@ export default function MaterialLibraryPanel() {
           <p className="max-w-lg text-center text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_empty")}</p>
         </section>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
           {materials.map((item) => {
             const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
             const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
@@ -190,15 +347,29 @@ export default function MaterialLibraryPanel() {
                 className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
               >
                 <div className="flex items-start gap-4">
-                  <div
-                    className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
-                    style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-base font-semibold text-slate-900 dark:text-slate-50">
-                      {item.material_name}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
+                  <label className="mt-1 flex shrink-0 items-center">
+                    <input
+                      type="checkbox"
+                      data-testid={`material-library-select-${item.directory_name}`}
+                      aria-label={tRuntime("mat_gradient_library_select_item_label", {
+                        materialName: item.material_name,
+                      })}
+                      checked={selectedDirectoryNames.includes(item.directory_name)}
+                      onChange={() => toggleMaterialSelection(item.directory_name)}
+                      className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
+                    />
+                  </label>
+                  <div className="flex min-w-0 flex-1 items-start gap-4">
+                    <div
+                      className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
+                      style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-base font-semibold text-slate-900 dark:text-slate-50">
+                        {item.material_name}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
+                    </div>
                   </div>
                 </div>
 
@@ -221,9 +392,20 @@ export default function MaterialLibraryPanel() {
                   </div>
                   <div className={`${mutedSectionCardClass} px-4 py-3`}>
                     <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_gradient_library_brand_label")}
+                    </dt>
+                    <dd
+                      data-testid="material-library-item-brand"
+                      className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50"
+                    >
+                      {item.brand?.trim() || "-"}
+                    </dd>
+                  </div>
+                  <div className={`${mutedSectionCardClass} px-4 py-3`}>
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {t("mat_gradient_library_directory_label")}
                     </dt>
-                    <dd className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                    <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
                       {item.directory_name}
                     </dd>
                   </div>
@@ -253,7 +435,7 @@ export default function MaterialLibraryPanel() {
                   </div>
                 </dl>
 
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3">
                   <Button
                     label={t("mat_gradient_library_reverify_btn")}
                     variant="secondary"
@@ -424,7 +606,7 @@ export default function MaterialLibraryPanel() {
                   </section>
                 ) : null}
 
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3">
                   <a
                     href={item.material_file_url}
                     download

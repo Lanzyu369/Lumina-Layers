@@ -3006,6 +3006,64 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先选择 LUT 以加载可用颜色",
     en: "Select a LUT to load available colors",
   },
+
+  // ==================== Material Color Picker (material-archive mode) ====================
+  material_picker_title: {
+    zh: "耗材可达色",
+    en: "Achievable colors",
+  },
+  material_picker_hint: {
+    zh: "输入或选取目标颜色，系统会根据当前耗材求解出最接近的 20 个可达色。",
+    en: "Pick a target color — the solver returns the 20 closest achievable colors for the current materials.",
+  },
+  material_picker_target_label: {
+    zh: "目标颜色",
+    en: "Target color",
+  },
+  material_picker_target_placeholder: {
+    zh: "#RRGGBB",
+    en: "#RRGGBB",
+  },
+  material_picker_submit: {
+    zh: "生成建议",
+    en: "Suggest colors",
+  },
+  material_picker_loading: {
+    zh: "正在为目标色求解可达色...",
+    en: "Solving achievable colors for the target...",
+  },
+  material_picker_empty: {
+    zh: "输入目标颜色后生成可达色建议。",
+    en: "Enter a target color to get achievable suggestions.",
+  },
+  material_picker_error: {
+    zh: "求解失败：{message}",
+    en: "Failed: {message}",
+  },
+  material_picker_no_material: {
+    zh: "请先在“耗材档案”下选择至少一个耗材。",
+    en: 'Select at least one material under "Material Archive" first.',
+  },
+  material_picker_suggestion_tooltip: {
+    zh: "{hex} · ΔE={delta} · 配方 {recipe}",
+    en: "{hex} · ΔE={delta} · recipe {recipe}",
+  },
+  material_picker_source_cache: {
+    zh: "缓存命中（毫秒级返回）",
+    en: "Cache hit (millisecond response)",
+  },
+  material_picker_source_mitm: {
+    zh: "MITM 实时求解（构建持久化缓存可显著加速）",
+    en: "MITM live solve (build a persisted cache to accelerate)",
+  },
+  material_picker_result_count: {
+    zh: "共 {count} 个可达色建议",
+    en: "{count} achievable colors",
+  },
+  material_picker_delta_e_label: {
+    zh: "ΔE{value}",
+    en: "ΔE{value}",
+  },
   lut_grid_total_colors: {
     zh: "共 {total} 色，显示 {visible} 色",
     en: "{total} colors, showing {visible}",
@@ -4322,6 +4380,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "输入要保存的耗材名称",
     en: "Enter the material name to save",
   },
+  mat_gradient_brand_label: {
+    zh: "品牌（可选）",
+    en: "Brand (optional)",
+  },
+  mat_gradient_brand_placeholder: {
+    zh: "例如：瑞贝思、拓竹",
+    en: "e.g. Ribes, Bambu Lab",
+  },
+  mat_gradient_brand_hint: {
+    zh: "填写后，该耗材将保存至 materials/<品牌>/<耗材名>/",
+    en: "If set, the material is saved under materials/<brand>/<name>/",
+  },
   mat_gradient_save_material_btn: {
     zh: "保存耗材档案",
     en: "Save Material Archive",
@@ -4475,8 +4545,36 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Library",
   },
   mat_gradient_library_desc: {
-    zh: "浏览已保存的 Stage A 耗材档案，并下载 material.json 或 Stage A 参数。",
-    en: "Browse saved Stage A material archives and download material.json or Stage A parameters.",
+    zh: "浏览已保存的 Stage A 耗材档案，并支持多选导出 ZIP 或批量导入 ZIP。",
+    en: "Browse saved Stage A material archives, export selected ZIP bundles, or import ZIP bundles in bulk.",
+  },
+  mat_gradient_library_select_all_btn: {
+    zh: "全选耗材",
+    en: "Select All",
+  },
+  mat_gradient_library_clear_selection_btn: {
+    zh: "清空选择",
+    en: "Clear Selection",
+  },
+  mat_gradient_library_import_btn: {
+    zh: "导入耗材 ZIP",
+    en: "Import Material ZIP",
+  },
+  mat_gradient_library_export_btn: {
+    zh: "导出所选耗材",
+    en: "Export Selected",
+  },
+  mat_gradient_library_import_hint: {
+    zh: "可一次选择多个 ZIP；导出文件也可再次批量导入。",
+    en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
+  },
+  mat_gradient_library_selection_summary: {
+    zh: "已选择 {selected} / {total} 个耗材",
+    en: "Selected {selected} / {total} materials",
+  },
+  mat_gradient_library_select_item_label: {
+    zh: "选择耗材“{materialName}”",
+    en: 'Select material "{materialName}"',
   },
   mat_gradient_library_refresh_btn: {
     zh: "刷新耗材库",
@@ -4510,6 +4608,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "目录名",
     en: "Directory",
   },
+  mat_gradient_library_brand_label: {
+    zh: "品牌",
+    en: "Brand",
+  },
+  basic_material_picker_brand_unassigned: {
+    zh: "未分组",
+    en: "Unassigned",
+  },
   mat_gradient_library_fit_error_label: {
     zh: "拟合误差",
     en: "Fit Error",
@@ -4529,6 +4635,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_delete_confirm: {
     zh: "确认删除耗材“{materialName}”？此操作不可撤销。",
     en: 'Delete material "{materialName}"? This action cannot be undone.',
+  },
+  mat_gradient_library_delete_success: {
+    zh: "耗材已删除。",
+    en: "Material deleted.",
+  },
+  mat_gradient_library_export_requires_selection: {
+    zh: "请先至少选择一个耗材再导出。",
+    en: "Select at least one material before exporting.",
+  },
+  mat_gradient_library_export_success: {
+    zh: "已导出所选耗材。",
+    en: "Selected materials exported.",
+  },
+  mat_gradient_library_export_failed: {
+    zh: "导出耗材失败",
+    en: "Failed to export materials",
+  },
+  mat_gradient_library_import_success: {
+    zh: "耗材导入完成。",
+    en: "Materials imported.",
+  },
+  mat_gradient_library_import_failed: {
+    zh: "导入耗材失败",
+    en: "Failed to import materials",
   },
   mat_gradient_library_show_history_btn: {
     zh: "展开验证历史",

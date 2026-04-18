@@ -8,6 +8,7 @@ S03 — 颜色替换（全局替换 + 区域替换 + matched_rgb 覆盖）。
 - _apply_regions_to_raster_outputs: 按区域覆盖 raster 输出
 - _compute_connected_region_mask_4n: 4 邻接连通域掩码计算
 - matched_rgb_path 覆盖逻辑
+- _apply_material_archive_color_replacements: 材料档案模式下的全局色替换
 """
 
 import time
@@ -19,6 +20,164 @@ import numpy as np
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 
 _log = logging.getLogger(__name__)
+
+
+def _apply_material_archive_color_replacements(
+    matched_rgb: np.ndarray,
+    material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+    color_replacements: dict[str, str],
+    materials: list,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Apply ``{orig_hex: repl_hex}`` replacements using the material solver.
+    使用耗材求解器在材料档案模式下应用 ``{orig_hex: repl_hex}`` 全局替换。
+
+    For each ``(orig, repl)`` pair this locates the pixels whose current
+    ``matched_rgb`` equals ``orig``, solves a fresh ``repl`` recipe via the
+    persisted :class:`core.material_cache.MaterialSolverCache` when available
+    (falling back to :func:`core.material_color_solver.solve_image_colors_optimal`
+    otherwise), and writes the achieved sRGB plus per-layer recipe back into
+    ``matched_rgb`` and ``material_matrix``.
+
+    Unlike the LUT-backed path in :func:`run`, there is no KD-Tree over a
+    fixed palette: every replacement target is re-solved against the same
+    ``materials`` / ``layer_count`` / ``substrate`` the image was originally
+    quantised against.
+
+    Args:
+        matched_rgb: (H, W, 3) uint8 current matched sRGB image. (当前匹配 RGB)
+        material_matrix: (H, W, N) int current per-pixel layer recipe matrix.
+            Uses the pipeline ``Top2Bottom`` convention (layer 0 = viewing
+            surface). (材料矩阵，Top2Bottom)
+        mask_solid: (H, W) bool solid-pixel mask. (实体像素掩码)
+        color_replacements: ``{orig_hex: repl_hex}`` mapping in ``#rrggbb``
+            lowercase form. (颜色替换字典)
+        materials: Ordered :class:`core.material_color_solver.MaterialParams`
+            list the image was quantised against. (耗材列表)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+
+    Returns:
+        ``(new_matched_rgb, new_material_matrix, applied_count)`` where
+        ``applied_count`` is the number of replacements that actually
+        touched any pixel. Array references may alias the inputs when no
+        applicable replacement was found.
+        返回新的匹配 RGB、材料矩阵以及实际生效的替换条数。
+    """
+    if not color_replacements or not materials:
+        return matched_rgb, material_matrix, 0
+
+    # Gather the original hex → target rgb pairs that actually touch pixels.
+    # Solving is the bulk cost; skip any (orig, repl) whose orig pixels are
+    # already gone from the image (e.g. earlier override removed them).
+    # 先筛选出当前图像里确实存在的 orig → repl 对，避免无谓求解。
+    jobs: list[tuple[str, tuple[int, int, int], np.ndarray]] = []
+    repl_rgbs: list[tuple[int, int, int]] = []
+    for orig_hex, repl_hex in color_replacements.items():
+        try:
+            orig_rgb_tuple = _hex_to_rgb_tuple(orig_hex)
+            repl_rgb_tuple = _hex_to_rgb_tuple(repl_hex)
+        except ValueError as exc:
+            _log.warning("[S03-Material] Skipping invalid hex pair %s→%s: %s",
+                         orig_hex, repl_hex, exc)
+            continue
+        orig_mask = np.all(matched_rgb == np.asarray(orig_rgb_tuple, dtype=np.uint8), axis=-1)
+        orig_mask &= mask_solid
+        if not np.any(orig_mask):
+            continue
+        jobs.append((orig_hex, repl_rgb_tuple, orig_mask))
+        repl_rgbs.append(repl_rgb_tuple)
+
+    if not jobs:
+        return matched_rgb, material_matrix, 0
+
+    unique_repl_srgb = np.asarray(repl_rgbs, dtype=np.uint8)
+
+    # Prefer the persisted cache for O(log K) lookups per target; fall back
+    # to the strict MITM solver otherwise.
+    # 优先走持久化缓存；无缓存时退回严格 MITM 求解器。
+    try:
+        from core.material_cache import load_material_solver_cache
+        from core.material_lut_synthesis import solve_image_colors_optimal
+    except ImportError as exc:
+        _log.warning(
+            "[S03-Material] Solver modules unavailable (%s); replacements skipped",
+            exc,
+        )
+        return matched_rgb, material_matrix, 0
+
+    cache = load_material_solver_cache(
+        materials=materials,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+    )
+    try:
+        if cache is not None:
+            matched_rgb_unique, recipes_unique, delta_e = cache.lookup(
+                unique_repl_srgb, materials
+            )
+            solver_path = "cache"
+        else:
+            matched_rgb_unique, recipes_unique, delta_e = solve_image_colors_optimal(
+                unique_repl_srgb,
+                materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+            )
+            solver_path = "mitm"
+    except (ValueError, TypeError, RuntimeError, OSError) as exc:
+        _log.warning(
+            "[S03-Material] Solver call failed (%s); %d replacements skipped",
+            exc, len(jobs),
+        )
+        return matched_rgb, material_matrix, 0
+
+    # Solver output is Bottom2Top; the pipeline stores Top2Bottom. Mirror the
+    # same reversal used by P03 (see core/pipeline/p03_core_processing.py) so
+    # the material_matrix convention is preserved.
+    # 求解器输出 Bottom2Top，流水线统一 Top2Bottom；按 P03 的同一方式反转。
+    if recipes_unique.shape[1] > 1:
+        recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
+
+    new_matched_rgb = matched_rgb.copy()
+    new_material_matrix = material_matrix.copy()
+
+    # Upgrade material_matrix to the solver's layer count if needed so the
+    # (H, W, N) write does not broadcast-error for shorter source matrices.
+    # 若 material_matrix 的层数少于求解器层数，先在末尾补齐。
+    if new_material_matrix.shape[2] < recipes_unique.shape[1]:
+        pad_layers = recipes_unique.shape[1] - new_material_matrix.shape[2]
+        pad = np.zeros(
+            (*new_material_matrix.shape[:2], pad_layers),
+            dtype=new_material_matrix.dtype,
+        )
+        new_material_matrix = np.concatenate([new_material_matrix, pad], axis=2)
+
+    applied = 0
+    for job_idx, (orig_hex, _repl_rgb, orig_mask) in enumerate(jobs):
+        achieved_rgb = matched_rgb_unique[job_idx]
+        recipe = recipes_unique[job_idx]
+        new_matched_rgb[orig_mask] = achieved_rgb
+        new_material_matrix[orig_mask] = recipe.astype(
+            new_material_matrix.dtype, copy=False
+        )
+        applied += 1
+        _log.info(
+            "[S03-Material] %s %s → rgb(%d,%d,%d) ΔE=%.2f recipe=%s",
+            solver_path,
+            orig_hex,
+            int(achieved_rgb[0]), int(achieved_rgb[1]), int(achieved_rgb[2]),
+            float(delta_e[job_idx]),
+            recipe.tolist(),
+        )
+
+    return new_matched_rgb, new_material_matrix, applied
 
 
 def _normalize_color_replacements_input(color_replacements):
@@ -294,13 +453,38 @@ def run(ctx: dict) -> dict:
             # _apply_regions_to_raster_outputs skipping them silently
             replacement_regions = [r for r in replacement_regions if r.get("mask") is not None]
 
-    if effective_color_replacements and processor is None:
+    is_material_archive = (
+        ctx.get("material_source") == "material_archive"
+        and ctx.get("_material_params")
+    )
+    if effective_color_replacements and processor is None and not is_material_archive:
         _log.warning(
             "[S03] %d color replacements skipped (no LUT processor in material-archive mode)",
             len(effective_color_replacements),
         )
         effective_color_replacements = {}
-    if effective_color_replacements:
+    if effective_color_replacements and is_material_archive:
+        # Material-archive mode re-solves every replacement target against
+        # the saved MaterialParams palette (cache-first, MITM fallback) so
+        # both matched_rgb and material_matrix stay internally consistent.
+        # 材料档案模式：优先走持久化缓存，缓存未命中时 MITM 求解，保持 RGB
+        # 与 material_matrix 同步。
+        mats = ctx.get("_material_params") or []
+        layer_count_mat = int(ctx.get("color_layers") or material_matrix.shape[2])
+        layer_height_mat = float(ctx.get("layer_height_mm") or 0.08)
+        substrate_mat = str(ctx.get("material_substrate") or "white")
+        matched_rgb, material_matrix, applied = _apply_material_archive_color_replacements(
+            matched_rgb,
+            material_matrix,
+            mask_solid,
+            effective_color_replacements,
+            mats,
+            layer_count_mat,
+            layer_height_mat,
+            substrate_mat,
+        )
+        _log.info("[S03] Applied %d material-archive color replacements", applied)
+    elif effective_color_replacements:
         from core.color_replacement import ColorReplacementManager
 
         manager = ColorReplacementManager.from_dict(effective_color_replacements)

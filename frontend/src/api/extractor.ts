@@ -2,6 +2,8 @@ import apiClient from "./client";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
+  GradientCardMaterialBulkExportResponse,
+  GradientCardMaterialBulkImportResponse,
   GradientCardMaterialDeleteResponse,
   GradientCardMaterialLibraryResponse,
   GradientCardMaterialSaveResponse,
@@ -83,6 +85,7 @@ export async function saveGradientCardMaterial(params: {
   materialName: string;
   targetDirectoryName?: string | null;
   saveMode?: "merge" | "override";
+  brand?: string | null;
 }): Promise<GradientCardMaterialSaveResponse> {
   const fd = new FormData();
   fd.append("session_id", params.sessionId);
@@ -93,6 +96,9 @@ export async function saveGradientCardMaterial(params: {
   if (params.saveMode) {
     fd.append("save_mode", params.saveMode);
   }
+  if (params.brand && params.brand.trim()) {
+    fd.append("brand", params.brand.trim());
+  }
   const response = await apiClient.post<GradientCardMaterialSaveResponse>(
     "/extractor/save-gradient-card-material",
     fd,
@@ -101,11 +107,24 @@ export async function saveGradientCardMaterial(params: {
   return response.data;
 }
 
+/**
+ * Encode each ``/``-separated segment of a saved-material directory_name so
+ * the multi-segment path survives URL routing while still escaping spaces
+ * and non-ASCII characters.
+ * 对多段相对路径 directory_name 按 "/" 分段编码，保留分隔符。
+ */
+function encodeDirectoryNameForPath(directoryName: string): string {
+  return directoryName
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 export async function deleteGradientCardMaterial(
   directoryName: string,
 ): Promise<GradientCardMaterialDeleteResponse> {
   const response = await apiClient.delete<GradientCardMaterialDeleteResponse>(
-    `/extractor/gradient-card-materials/${encodeURIComponent(directoryName)}`,
+    `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
     { timeout: 60_000 },
   );
   return response.data;
@@ -115,6 +134,32 @@ export async function listGradientCardMaterials(): Promise<GradientCardMaterialL
   const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
     "/extractor/gradient-card-materials",
     { timeout: 60_000 },
+  );
+  return response.data;
+}
+
+export async function exportGradientCardMaterials(
+  directoryNames: string[],
+): Promise<GradientCardMaterialBulkExportResponse> {
+  const response = await apiClient.post<GradientCardMaterialBulkExportResponse>(
+    "/extractor/gradient-card-materials/export",
+    { directory_names: directoryNames },
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+export async function importGradientCardMaterials(
+  archives: File[],
+): Promise<GradientCardMaterialBulkImportResponse> {
+  const fd = new FormData();
+  archives.forEach((archive) => {
+    fd.append("archives", archive);
+  });
+  const response = await apiClient.post<GradientCardMaterialBulkImportResponse>(
+    "/extractor/gradient-card-materials/import",
+    fd,
+    { timeout: 600_000 },
   );
   return response.data;
 }

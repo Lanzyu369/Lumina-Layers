@@ -64,8 +64,60 @@ import {
 import { useSettingsStore } from "../settingsStore";
 import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
+import { fetchMaterialColorSuggestions } from "../../api/materialCache";
+import type { MaterialColorSuggestionsResponse } from "../../api/types";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
+
+// ===========================================================================
+// Material-archive achievable-color suggestion helpers (module-local state)
+// 材料档案可达色建议的模块级辅助状态（LRU + AbortController）
+// ===========================================================================
+
+/**
+ * Upper bound on the number of cached suggestion responses kept in memory.
+ * Suggestions are small (~4 KB each), and users rarely explore more than a
+ * handful of targets per session, so a modest cap avoids unbounded growth
+ * while still delivering instant re-picks when the same target is clicked.
+ * 缓存上限：每条约 4 KB，此上限既能覆盖典型交互又避免无界增长。
+ */
+const MATERIAL_SUGGEST_LRU_LIMIT = 64;
+
+/**
+ * Insertion-order :class:`Map` used as an LRU cache. Re-inserting on hit
+ * refreshes recency; eviction removes the oldest key when capacity is hit.
+ * 以插入顺序维护的 LRU：命中时重新插入以刷新，超额时淘汰最早项。
+ */
+const _materialSuggestCache = new Map<
+  string,
+  MaterialColorSuggestionsResponse
+>();
+
+/**
+ * Holds the currently in-flight suggestion request so a newer call can
+ * cancel the older one and avoid races on ``materialSuggestions`` state.
+ * 持有当前未完成请求，便于后续请求取消前者、避免状态竞态。
+ */
+let _materialSuggestAbortController: AbortController | null = null;
+
+/**
+ * Build a deterministic cache key from a suggestion request's parameters.
+ * ``directoryNames`` is joined (order-sensitive: we want the user palette
+ * ordering preserved, matching the backend recipe rebinding). Substrate is
+ * included for forward compatibility once the UI exposes black substrates.
+ * 从请求参数生成确定性缓存键；保留耗材顺序以匹配后端配方重绑定语义。
+ */
+function _materialSuggestCacheKey(params: {
+  directoryNames: string[];
+  layerCount: number;
+  layerHeightMm: number;
+  substrate: string;
+  targetHex: string;
+}): string {
+  const dirs = params.directoryNames.join(",");
+  const hex = params.targetHex.replace(/^#/, "").toLowerCase();
+  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${hex}`;
+}
 
 export const RAW_EXTENSIONS_CONVERTER = new Set([
   ".dng",
@@ -1188,6 +1240,13 @@ export interface ConverterState {
   lutColorsLoading: boolean;
   lutColorsLutName: string;
 
+  // 材料档案模式下的可达色建议（替换 lutColors 的作用）
+  // Material-archive mode's achievable-color suggestions (replaces lutColors).
+  materialSuggestions: MaterialColorSuggestionsResponse | null;
+  materialSuggestionsLoading: boolean;
+  materialSuggestionsTargetHex: string | null;
+  materialSuggestionsError: string | null;
+
   // 热床尺寸
   bed_label: string;
   bedSizes: BedSizeItem[];
@@ -1368,6 +1427,11 @@ export interface ConverterActions {
   fetchLutList: () => Promise<void>;
   fetchLutCatalog: () => Promise<void>;
   fetchLutColors: (lutName: string) => Promise<void>;
+
+  // 材料档案模式下按目标色请求建议
+  // Query achievable-color suggestions for a target hex (material-archive mode).
+  fetchMaterialSuggestions: (targetHex: string) => Promise<void>;
+  clearMaterialSuggestions: () => void;
   setSourceVersion: (version: SourceVersion) => void;
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
@@ -1652,6 +1716,10 @@ export const DEFAULT_STATE: ConverterState = {
   lutColors: [],
   lutColorsLoading: false,
   lutColorsLutName: "",
+  materialSuggestions: null,
+  materialSuggestionsLoading: false,
+  materialSuggestionsTargetHex: null,
+  materialSuggestionsError: null,
   bed_label: "256脳256 mm",
   bedSizes: [],
   bedSizesLoading: false,
@@ -3487,6 +3555,120 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           error: err instanceof Error ? err.message : "LUT 颜色加载失败",
         });
       }
+    },
+
+    fetchMaterialSuggestions: async (targetHex: string) => {
+      // Require material-archive mode with a non-empty palette.
+      // Caller (MaterialColorPicker) ensures this, but we double-check.
+      // 调用方应保证处于材料档案模式且已选耗材，这里再校验一次。
+      const state = _get();
+      if (state.source_version !== "material") {
+        set({
+          materialSuggestionsError:
+            "fetchMaterialSuggestions requires source_version='material'",
+        });
+        return;
+      }
+      const dirNames = state.selectedMaterialDirNames ?? [];
+      if (dirNames.length === 0) {
+        set({
+          materialSuggestions: null,
+          materialSuggestionsTargetHex: targetHex,
+          materialSuggestionsError:
+            "No materials selected; cannot suggest achievable colors",
+        });
+        return;
+      }
+      const cleaned = (targetHex || "").trim();
+      if (!cleaned) {
+        set({
+          materialSuggestions: null,
+          materialSuggestionsTargetHex: null,
+          materialSuggestionsError: null,
+        });
+        return;
+      }
+
+      // Abort any in-flight suggestion request before launching a new one.
+      // 发起新请求前先取消上一次未完成的请求。
+      _materialSuggestAbortController?.abort();
+      _materialSuggestAbortController = new AbortController();
+      const { signal } = _materialSuggestAbortController;
+
+      const cacheKey = _materialSuggestCacheKey({
+        directoryNames: dirNames,
+        layerCount: state.materialLayerCount,
+        layerHeightMm: state.materialLayerHeightMm,
+        substrate: "white",
+        targetHex: cleaned,
+      });
+      const cached = _materialSuggestCache.get(cacheKey);
+      if (cached) {
+        // Re-insert to refresh LRU recency.
+        _materialSuggestCache.delete(cacheKey);
+        _materialSuggestCache.set(cacheKey, cached);
+        set({
+          materialSuggestions: cached,
+          materialSuggestionsLoading: false,
+          materialSuggestionsTargetHex: cleaned,
+          materialSuggestionsError: null,
+        });
+        return;
+      }
+
+      set({
+        materialSuggestionsLoading: true,
+        materialSuggestionsTargetHex: cleaned,
+        materialSuggestionsError: null,
+      });
+      try {
+        const response = await fetchMaterialColorSuggestions(
+          {
+            materialDirectoryNames: dirNames,
+            layerCount: state.materialLayerCount,
+            layerHeightMm: state.materialLayerHeightMm,
+            substrate: "white",
+          },
+          cleaned,
+          { signal },
+        );
+        // Stash into LRU, evicting oldest when over limit.
+        // 写入 LRU，超额时淘汰最早项。
+        _materialSuggestCache.set(cacheKey, response);
+        while (_materialSuggestCache.size > MATERIAL_SUGGEST_LRU_LIMIT) {
+          const oldest = _materialSuggestCache.keys().next().value;
+          if (oldest == null) break;
+          _materialSuggestCache.delete(oldest);
+        }
+        set({
+          materialSuggestions: response,
+          materialSuggestionsLoading: false,
+          materialSuggestionsTargetHex: cleaned,
+          materialSuggestionsError: null,
+        });
+      } catch (err) {
+        if (signal.aborted) {
+          return; // Superseded by a newer request.
+        }
+        set({
+          materialSuggestionsLoading: false,
+          materialSuggestionsError:
+            err instanceof Error
+              ? err.message
+              : "Material color suggestion request failed",
+        });
+      }
+    },
+
+    clearMaterialSuggestions: () => {
+      _materialSuggestAbortController?.abort();
+      _materialSuggestAbortController = null;
+      set({
+        materialSuggestions: null,
+        materialSuggestionsLoading: false,
+        materialSuggestionsTargetHex: null,
+        materialSuggestionsError: null,
+      });
     },
 
     submitPreview: async () => {

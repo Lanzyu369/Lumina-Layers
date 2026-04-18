@@ -509,6 +509,7 @@ async def convert_preview(
     store.put(session_id, "lut_material_type", request.material_type)
     store.put(session_id, "lut_vendor", request.vendor)
     store.put(session_id, "lut_db_names", list(request.db_names))
+    store.put(session_id, "color_mode", color_mode)
     store.put(session_id, "color_layers", color_layers)
     store.put(session_id, "layer_height_mm", layer_height_mm)
     store.put(session_id, "model_enable", model_enable)
@@ -528,6 +529,12 @@ async def convert_preview(
     # Save a pristine copy of matched_rgb for reset-replacements
     if cache_data and "matched_rgb" in cache_data:
         store.put(session_id, "original_matched_rgb", cache_data["matched_rgb"].copy())
+    if cache_data and "material_matrix" in cache_data:
+        store.put(
+            session_id,
+            "original_material_matrix",
+            cache_data["material_matrix"].copy(),
+        )
     store.register_temp_file(session_id, temp_path)
     if temp_native_bundle_path is not None:
         store.register_temp_file(session_id, temp_native_bundle_path)

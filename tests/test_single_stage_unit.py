@@ -19,15 +19,19 @@ from config import PaletteEntry
 from core.single_stage import (
     GradientCardStageAResult,
     MaterialArchiveDeleteResult,
+    MaterialArchiveExportResult,
+    MaterialArchiveImportResult,
     MaterialArchiveSaveResult,
     SingleStageExtractResult,
     SingleStageKitResult,
     StageAFitResult,
     delete_saved_stage_a_material_archive,
+    export_saved_stage_a_material_archives,
     extract_single_stage_dataset,
     extract_stage_a_material_from_gradient_cards,
     fit_stage_a_from_stage_json,
     generate_single_stage_kit,
+    import_saved_stage_a_material_archives,
     list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
 )
@@ -1594,6 +1598,210 @@ def test_gradient_card_material_delete_route_removes_saved_material(
     assert body["status"] == "ok"
     assert body["directory_name"] == "pla-basic"
     assert body["material_name"] == "PLA Basic"
+
+
+def test_export_saved_stage_a_material_archives_writes_manifest_and_files(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    archive_path = material_dir / "material.json"
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    archive_path.write_text(
+        json.dumps(
+            {
+                "material_name": "PLA Basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "stage_a_params_file": "stage_A_parameters.json",
+                "verification_count": 2,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    stage_a_path.write_text(
+        json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    zip_output = tmp_path / "materials_export.zip"
+
+    result = export_saved_stage_a_material_archives(
+        directory_names=["BrandA/pla-basic"],
+        materials_dir=str(materials_root),
+        output_path=str(zip_output),
+    )
+
+    assert result.archive_path == str(zip_output)
+    assert result.exported_directory_names == ["BrandA/pla-basic"]
+    with zipfile.ZipFile(zip_output, "r") as archive:
+        members = set(archive.namelist())
+        assert "lumina_material_export.json" in members
+        assert "materials/BrandA/pla-basic/material.json" in members
+        assert "materials/BrandA/pla-basic/stage_A_parameters.json" in members
+        manifest = json.loads(
+            archive.read("lumina_material_export.json").decode("utf-8")
+        )
+    assert manifest["kind"] == "lumina_material_export"
+    assert manifest["directory_names"] == ["BrandA/pla-basic"]
+
+
+def test_import_saved_stage_a_material_archives_copies_materials_and_renames_collisions(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import.zip"
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/material.json",
+            json.dumps(
+                {
+                    "material_name": "PLA Basic Imported",
+                    "created_at": "2026-04-16T10:00:00Z",
+                    "updated_at": "2026-04-16T11:00:00Z",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                    "verification_count": 4,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        )
+
+    materials_root = tmp_path / "materials"
+    existing_dir = materials_root / "BrandA" / "pla-basic"
+    existing_dir.mkdir(parents=True)
+    (existing_dir / "material.json").write_text("{}", encoding="utf-8")
+    (existing_dir / "stage_A_parameters.json").write_text("{}", encoding="utf-8")
+
+    result = import_saved_stage_a_material_archives(
+        archive_path=str(exported_zip),
+        materials_dir=str(materials_root),
+    )
+
+    assert len(result.imported_materials) == 1
+    imported_item = result.imported_materials[0]
+    assert imported_item["material_name"] == "PLA Basic Imported"
+    assert imported_item["directory_name"].startswith("BrandA/pla-basic_")
+    imported_dir = materials_root / Path(imported_item["directory_name"])
+    assert imported_dir.exists() is True
+    assert (imported_dir / "material.json").exists() is True
+    assert (imported_dir / "stage_A_parameters.json").exists() is True
+
+
+def test_gradient_card_material_export_route_returns_download_url(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    exported_zip = tmp_path / "exported-materials.zip"
+    exported_zip.write_bytes(b"zip")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.export_saved_stage_a_material_archives",
+        lambda directory_names: MaterialArchiveExportResult(
+            archive_path=str(exported_zip),
+            download_filename="materials.zip",
+            exported_directory_names=list(directory_names),
+        ),
+    )
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/export",
+        json={"directory_names": ["pla-basic", "brand-a/pla-plus"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["filename"] == "materials.zip"
+    assert body["download_url"].startswith("/api/files/")
+    assert body["exported_directory_names"] == ["pla-basic", "brand-a/pla-plus"]
+    resolved = registry.resolve(body["download_url"].split("/")[-1])
+    assert resolved is not None
+    assert resolved[0] == str(exported_zip)
+
+
+def test_gradient_card_material_import_route_imports_multiple_archives(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    uploaded_paths = ["C:/tmp/material-a.zip", "C:/tmp/material-b.zip"]
+    upload_index = {"value": 0}
+    seen_import_paths: list[str] = []
+    removed_paths: list[str] = []
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        index = upload_index["value"]
+        upload_index["value"] += 1
+        return uploaded_paths[index]
+
+    def _fake_import_saved_stage_a_material_archives(*, archive_path: str):
+        seen_import_paths.append(archive_path)
+        suffix = "a" if archive_path.endswith("material-a.zip") else "b"
+        return MaterialArchiveImportResult(
+            imported_materials=[
+                {
+                    "material_name": f"PLA {suffix.upper()}",
+                    "directory_name": f"pla-{suffix}",
+                    "brand": None,
+                    "archive_path": f"materials/pla-{suffix}/material.json",
+                    "stage_a_params_path": f"materials/pla-{suffix}/stage_A_parameters.json",
+                    "verification_count": 1,
+                    "created_at": "2026-04-16T10:00:00Z",
+                    "updated_at": "2026-04-16T10:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile",
+        _fake_upload_to_tempfile,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.import_saved_stage_a_material_archives",
+        _fake_import_saved_stage_a_material_archives,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.os.remove",
+        lambda path: removed_paths.append(path),
+    )
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/import",
+        files=[
+            ("archives", ("materials-a.zip", b"zip-a", "application/zip")),
+            ("archives", ("materials-b.zip", b"zip-b", "application/zip")),
+        ],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["imported_count"] == 2
+    assert [item["directory_name"] for item in body["imported_materials"]] == [
+        "pla-a",
+        "pla-b",
+    ]
+    assert seen_import_paths == uploaded_paths
+    assert removed_paths == uploaded_paths
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

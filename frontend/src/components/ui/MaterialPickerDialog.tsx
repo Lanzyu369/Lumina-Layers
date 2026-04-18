@@ -64,6 +64,38 @@ export default function MaterialPickerDialog({
     () => visibleMaterials.map((m) => m.directory_name),
     [visibleMaterials],
   );
+
+  // Group visible materials by their brand (first path segment of
+  // ``directory_name`` on the backend). Materials without a brand fall into
+  // a single trailing group rendered with a localized "Unassigned" header.
+  // 按品牌分组展示，未分组项统一归入末尾的"未分组"分组。
+  const groupedVisibleMaterials = useMemo<
+    { brand: string | null; items: SavedMaterialLibraryItem[] }[]
+  >(() => {
+    const groups = new Map<string, SavedMaterialLibraryItem[]>();
+    const unassigned: SavedMaterialLibraryItem[] = [];
+    for (const mat of visibleMaterials) {
+      const brand = mat.brand?.trim();
+      if (brand) {
+        const bucket = groups.get(brand);
+        if (bucket) {
+          bucket.push(mat);
+        } else {
+          groups.set(brand, [mat]);
+        }
+      } else {
+        unassigned.push(mat);
+      }
+    }
+    const result: { brand: string | null; items: SavedMaterialLibraryItem[] }[] = [];
+    for (const [brand, items] of groups) {
+      result.push({ brand, items });
+    }
+    if (unassigned.length > 0) {
+      result.push({ brand: null, items: unassigned });
+    }
+    return result;
+  }, [visibleMaterials]);
   const allVisibleSelected =
     visibleDirNames.length > 0 &&
     visibleDirNames.every((name) => stagedSet.has(name));
@@ -180,37 +212,51 @@ export default function MaterialPickerDialog({
               {t("basic_material_picker_no_match")}
             </div>
           ) : (
-            <div className="grid gap-2">
-              {visibleMaterials.map((mat) => {
-                const rgb =
-                  Array.isArray(mat.estimated_rgb) && mat.estimated_rgb.length === 3
-                    ? (mat.estimated_rgb as [number, number, number])
-                    : null;
-                return (
-                  <Checkbox
-                    key={mat.directory_name}
-                    label={
-                      <span className="inline-flex items-center gap-1.5">
-                        {rgb && (
-                          <span
-                            className="inline-block size-3 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20"
-                            style={{ backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}
-                          />
-                        )}
-                        <span>{mat.material_name}</span>
-                        {mat.mean_delta_e != null && (
-                          <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                            {"\u0394E "}
-                            {mat.mean_delta_e.toFixed(1)}
-                          </span>
-                        )}
-                      </span>
-                    }
-                    checked={stagedSet.has(mat.directory_name)}
-                    onChange={() => toggle(mat.directory_name)}
-                  />
-                );
-              })}
+            <div className="grid gap-3">
+              {groupedVisibleMaterials.map(({ brand, items }) => (
+                <section
+                  key={brand ?? "__unassigned__"}
+                  data-testid="material-picker-brand-group"
+                  data-brand={brand ?? ""}
+                  className="flex flex-col gap-1.5"
+                >
+                  <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                    {brand ?? t("basic_material_picker_brand_unassigned")}
+                  </h3>
+                  <div className="grid gap-2">
+                    {items.map((mat) => {
+                      const rgb =
+                        Array.isArray(mat.estimated_rgb) && mat.estimated_rgb.length === 3
+                          ? (mat.estimated_rgb as [number, number, number])
+                          : null;
+                      return (
+                        <Checkbox
+                          key={mat.directory_name}
+                          label={
+                            <span className="inline-flex items-center gap-1.5">
+                              {rgb && (
+                                <span
+                                  className="inline-block size-3 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20"
+                                  style={{ backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}
+                                />
+                              )}
+                              <span>{mat.material_name}</span>
+                              {mat.mean_delta_e != null && (
+                                <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                  {"\u0394E "}
+                                  {mat.mean_delta_e.toFixed(1)}
+                                </span>
+                              )}
+                            </span>
+                          }
+                          checked={stagedSet.has(mat.directory_name)}
+                          onChange={() => toggle(mat.directory_name)}
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </div>

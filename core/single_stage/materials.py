@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 import uuid
 import zipfile
 from dataclasses import asdict, dataclass, fields
@@ -77,6 +78,34 @@ class MaterialArchiveDeleteResult:
 
 
 @dataclass(frozen=True)
+class MaterialArchiveExportResult:
+    """Persistent material archive export result.
+    持久化耗材归档导出结果。
+
+    Attributes:
+        archive_path: Generated ZIP archive path. (生成的 ZIP 归档路径)
+        download_filename: Suggested download filename. (建议下载文件名)
+        exported_directory_names: Exported saved-material directory names. (导出的耗材目录名)
+    """
+
+    archive_path: str
+    download_filename: str
+    exported_directory_names: list[str]
+
+
+@dataclass(frozen=True)
+class MaterialArchiveImportResult:
+    """Persistent material archive import result.
+    持久化耗材归档导入结果。
+
+    Attributes:
+        imported_materials: Imported material summaries for UI/API. (用于 UI/API 的导入耗材摘要)
+    """
+
+    imported_materials: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class _WarpCandidate:
     orientation_label: str
     corner_order: tuple[int, int, int, int]
@@ -87,6 +116,7 @@ class _WarpCandidate:
 
 
 _INVALID_WINDOWS_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_MATERIAL_EXPORT_MANIFEST_FILENAME = "lumina_material_export.json"
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
 _CORNER_ORIENTATION_CANDIDATES: tuple[tuple[str, tuple[int, int, int, int]], ...] = (
@@ -849,13 +879,26 @@ def _sanitize_material_dirname(material_name: str) -> str:
 
 
 
-def _unique_material_dir(base_dir: Path, material_name: str) -> Path:
+def _unique_material_dir(
+    base_dir: Path,
+    material_name: str,
+    *,
+    brand: str | None = None,
+) -> Path:
+    """Compute an unused material directory path, optionally under a brand subdir.
+    计算未被占用的耗材目录路径，可选放入品牌子目录。
+    """
     stem = _sanitize_material_dirname(material_name)
-    candidate = base_dir / stem
+    parent = base_dir
+    if brand is not None:
+        brand_stem = _sanitize_material_dirname(brand)
+        parent = base_dir / brand_stem
+    candidate = parent / stem
     if not candidate.exists():
         return candidate
     suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return base_dir / f"{stem}_{suffix}"
+    return parent / f"{stem}_{suffix}"
+
 
 
 
@@ -864,20 +907,246 @@ def _json_clone(payload: Any) -> Any:
 
 
 
-def _resolve_material_dir(base_dir: Path, directory_name: str) -> Path:
-    normalized = str(directory_name).strip()
-    requested = Path(normalized)
-    if (
-        not normalized
-        or normalized in {".", ".."}
-        or requested.name != normalized
-        or requested.anchor
-        or any(part in {".", ".."} for part in requested.parts)
-    ):
-        raise ValueError("directory_name must reference a single saved material directory")
-    candidate = base_dir / normalized
-    if not candidate.is_dir():
+def _normalize_relative_directory_name(directory_name: str) -> str:
+    """Normalize a user-provided material directory_name to a POSIX relative path.
+    将用户提供的耗材 directory_name 归一化为 POSIX 相对路径。
+
+    Accepts forward-slash or backslash separators for cross-platform tolerance,
+    rejects empty / absolute / traversal inputs, and returns the canonical
+    forward-slash form. Does not touch the filesystem.
+    """
+    raw = str(directory_name).strip().replace("\\", "/")
+    if not raw or raw in {".", ".."}:
+        raise ValueError("directory_name must reference a saved material directory")
+    if raw.startswith("/"):
+        raise ValueError("directory_name must be a relative path")
+    parts = [segment for segment in raw.split("/") if segment]
+    if not parts:
+        raise ValueError("directory_name must reference a saved material directory")
+    for segment in parts:
+        if segment in {".", ".."}:
+            raise ValueError("directory_name must not contain '.' or '..' segments")
+    requested = Path(*parts)
+    if requested.anchor:
+        raise ValueError("directory_name must be a relative path")
+    return "/".join(parts)
+
+
+
+def resolve_saved_material_dir(base_dir: Path, directory_name: str) -> Path:
+    """Safely resolve a saved-material directory under ``base_dir``.
+    在 ``base_dir`` 之下安全解析已保存的耗材目录。
+
+    Supports multi-segment relative directory names (e.g. ``"瑞贝思/瑞贝思 PLA 白"``)
+    while preventing path traversal: the resolved path must remain inside
+    ``base_dir``. Returns the existing directory as a ``Path``.
+    """
+    normalized = _normalize_relative_directory_name(directory_name)
+    candidate = (base_dir / normalized)
+    try:
+        resolved = candidate.resolve()
+        root_resolved = base_dir.resolve()
+    except OSError as exc:
+        raise FileNotFoundError(f"Saved material directory not found: {normalized}") from exc
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("directory_name escapes the materials directory") from exc
+    if not resolved.is_dir():
         raise FileNotFoundError(f"Saved material directory not found: {normalized}")
+    return resolved
+
+
+def _resolve_material_dir(base_dir: Path, directory_name: str) -> Path:
+    """Backward-compatible alias kept for internal call sites."""
+    return resolve_saved_material_dir(base_dir, directory_name)
+
+
+def _relative_directory_name(base_dir: Path, material_dir: Path) -> str:
+    """Return POSIX-style relative directory name for a saved material."""
+    try:
+        rel = material_dir.resolve().relative_to(base_dir.resolve())
+    except ValueError:
+        rel = Path(material_dir.name)
+    return rel.as_posix()
+
+
+def _prune_empty_parents(start_dir: Path, stop_dir: Path) -> None:
+    """Remove empty ancestor directories up to (but excluding) ``stop_dir``.
+    向上清理空的祖先目录，遇到 ``stop_dir`` 即停止（不含）。
+
+    Best-effort: any OSError (non-empty, permission, etc.) halts pruning.
+    """
+    try:
+        stop = stop_dir.resolve()
+        current = start_dir.resolve()
+    except OSError:
+        return
+    while current != stop and stop in current.parents:
+        try:
+            if any(current.iterdir()):
+                return
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _filter_nested_material_archive_paths(archive_paths: list[Path]) -> list[Path]:
+    material_dirs_set = {path.parent.resolve() for path in archive_paths if path.is_file()}
+    filtered_archive_paths: list[Path] = []
+    for path in archive_paths:
+        try:
+            parent = path.parent.resolve()
+        except OSError:
+            continue
+        ancestors = set(parent.parents) & material_dirs_set
+        if ancestors:
+            continue
+        filtered_archive_paths.append(path)
+    return filtered_archive_paths
+
+
+def _load_json_object(path: Path, error_message: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(error_message) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(error_message)
+    return payload
+
+
+def _resolve_stage_a_params_path(material_dir: Path, archive_payload: dict[str, Any]) -> Path:
+    raw_value = str(archive_payload.get("stage_a_params_file") or "stage_A_parameters.json")
+    normalized = raw_value.strip().replace("\\", "/")
+    if not normalized:
+        raise ValueError("stage_a_params_file must reference a file inside the material directory")
+    path_parts = [segment for segment in normalized.split("/") if segment]
+    if not path_parts or any(segment in {".", ".."} for segment in path_parts):
+        raise ValueError("stage_a_params_file must reference a file inside the material directory")
+    candidate = material_dir / Path(*path_parts)
+    try:
+        resolved = candidate.resolve()
+        material_root = material_dir.resolve()
+    except OSError as exc:
+        raise ValueError("stage_a_params_file must reference a file inside the material directory") from exc
+    try:
+        resolved.relative_to(material_root)
+    except ValueError as exc:
+        raise ValueError("stage_a_params_file must reference a file inside the material directory") from exc
+    return resolved
+
+
+def _material_summary_from_saved_archive(
+    target_root: Path,
+    material_dir: Path,
+    archive_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    archive_path = material_dir / "material.json"
+    payload = archive_payload or _load_json_object(
+        archive_path,
+        "Saved material archive is not valid UTF-8 JSON",
+    )
+    relative_directory_name = _relative_directory_name(target_root, material_dir)
+    stage_a_params_path = _resolve_stage_a_params_path(material_dir, payload)
+    if not stage_a_params_path.exists():
+        raise FileNotFoundError(
+            f"Saved Stage A parameters not found for material: {relative_directory_name}"
+        )
+    verification_runs = payload.get("verification_runs")
+    try:
+        verification_count = int(
+            payload.get("verification_count")
+            or (len(verification_runs) if isinstance(verification_runs, list) else 1)
+            or 1
+        )
+    except (TypeError, ValueError):
+        verification_count = len(verification_runs) if isinstance(verification_runs, list) and verification_runs else 1
+    brand_value: str | None = None
+    if "/" in relative_directory_name:
+        brand_value = relative_directory_name.split("/", 1)[0]
+    return {
+        "material_name": str(payload.get("material_name") or material_dir.name),
+        "directory_name": relative_directory_name,
+        "brand": brand_value,
+        "archive_path": str(archive_path),
+        "stage_a_params_path": str(stage_a_params_path),
+        "verification_count": verification_count,
+        "created_at": payload.get("created_at"),
+        "updated_at": payload.get("updated_at") or payload.get("created_at"),
+    }
+
+
+def _normalize_material_directory_names(directory_names: list[str]) -> list[str]:
+    normalized_names: list[str] = []
+    seen: set[str] = set()
+    for raw_name in directory_names:
+        if not isinstance(raw_name, str):
+            raise ValueError("directory_names must contain only strings")
+        normalized = _normalize_relative_directory_name(raw_name)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_names.append(normalized)
+    if not normalized_names:
+        raise ValueError("directory_names must contain at least one saved material directory")
+    return normalized_names
+
+
+def _safe_extract_material_zip(zip_path: str, dest_dir: Path) -> Path:
+    resolved_dest_dir = dest_dir.resolve()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            for member in archive.infolist():
+                member_name = Path(member.filename)
+                if member_name.is_absolute() or ".." in member_name.parts:
+                    raise ValueError(f"Unsafe zip entry: {member.filename}")
+                member_path = (resolved_dest_dir / member_name).resolve()
+                try:
+                    member_path.relative_to(resolved_dest_dir)
+                except ValueError as exc:
+                    raise ValueError(f"Unsafe zip entry: {member.filename}") from exc
+            archive.extractall(resolved_dest_dir)
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Malformed ZIP archive") from exc
+
+    children = [p for p in resolved_dest_dir.iterdir() if p.is_dir()]
+    if len(children) == 1 and not any(p.is_dir() for p in resolved_dest_dir.iterdir() if p != children[0]):
+        return children[0]
+    return resolved_dest_dir
+
+
+def _load_material_export_manifest(extracted_root: Path) -> dict[str, Any] | None:
+    manifest_path = extracted_root / _MATERIAL_EXPORT_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return None
+    manifest = _load_json_object(
+        manifest_path,
+        "Material export manifest is not valid UTF-8 JSON",
+    )
+    if str(manifest.get("kind") or "") != "lumina_material_export":
+        raise ValueError("Material export manifest is invalid")
+    return manifest
+
+
+def _discover_saved_material_dirs(material_root: Path) -> list[Path]:
+    archive_paths = [path for path in material_root.rglob("material.json") if path.is_file()]
+    return [path.parent for path in _filter_nested_material_archive_paths(archive_paths)]
+
+
+def _import_target_material_dir(target_root: Path, directory_name: str) -> Path:
+    normalized = _normalize_relative_directory_name(directory_name)
+    requested_path = target_root / normalized
+    if not requested_path.exists():
+        return requested_path
+    suffix = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    candidate = requested_path.parent / f"{requested_path.name}_{suffix}"
+    collision_index = 2
+    while candidate.exists():
+        candidate = requested_path.parent / f"{requested_path.name}_{suffix}_{collision_index}"
+        collision_index += 1
     return candidate
 
 
@@ -1200,6 +1469,7 @@ def save_stage_a_material_archive(
     materials_dir: str | None = None,
     existing_directory_name: str | None = None,
     save_mode: str = "merge",
+    brand: str | None = None,
 ) -> MaterialArchiveSaveResult:
     """Persist a Stage A material archive into the project materials directory.
     将 Stage A 耗材档案持久化保存到项目 materials 目录。
@@ -1215,6 +1485,10 @@ def save_stage_a_material_archive(
         save_mode: ``"merge"`` to append to existing verification runs and
             aggregate, or ``"override"`` to replace all previous runs with the
             current result only. (合并已有验证或覆盖)
+        brand: Optional brand sub-directory. When provided and creating a new
+            material, the archive is stored under
+            ``materials/<brand>/<material_name>/``. Ignored when
+            ``existing_directory_name`` is provided. (可选的品牌子目录名称)
 
     Returns:
         MaterialArchiveSaveResult: Saved archive information. (保存结果)
@@ -1241,7 +1515,12 @@ def save_stage_a_material_archive(
         if save_mode == "merge":
             verification_runs = _load_existing_verification_runs(material_dir, existing_archive_payload)
     else:
-        material_dir = _unique_material_dir(target_root, material_name)
+        sanitized_brand = None
+        if isinstance(brand, str) and brand.strip():
+            sanitized_brand = brand.strip()
+        material_dir = _unique_material_dir(
+            target_root, material_name, brand=sanitized_brand
+        )
         material_dir.mkdir(parents=True, exist_ok=True)
         archive_path = material_dir / "material.json"
         created_at = _now_iso()
@@ -1291,15 +1570,11 @@ def save_stage_a_material_archive(
         encoding="utf-8",
     )
 
-    result_summary = {
-        "material_name": final_material_name,
-        "directory_name": material_dir.name,
-        "archive_path": str(archive_path),
-        "stage_a_params_path": str(stage_a_params_path),
-        "verification_count": len(verification_runs),
-        "created_at": created_at,
-        "updated_at": updated_at,
-    }
+    result_summary = _material_summary_from_saved_archive(
+        target_root,
+        material_dir,
+        archive_payload,
+    )
     return MaterialArchiveSaveResult(
         archive_path=str(archive_path),
         stage_a_params_path=str(stage_a_params_path),
@@ -1333,13 +1608,207 @@ def delete_saved_stage_a_material_archive(
             material_name = str(archive_payload.get("material_name") or material_name)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             material_name = material_dir.name
+    relative_directory_name = _relative_directory_name(target_root, material_dir)
+    deleted_path = str(material_dir)
+    parent_dir = material_dir.parent
     shutil.rmtree(material_dir)
+    _prune_empty_parents(parent_dir, target_root)
     return MaterialArchiveDeleteResult(
-        directory_name=material_dir.name,
+        directory_name=relative_directory_name,
         material_name=material_name,
-        deleted_path=str(material_dir),
+        deleted_path=deleted_path,
     )
 
+
+def export_saved_stage_a_material_archives(
+    *,
+    directory_names: list[str],
+    materials_dir: str | None = None,
+    output_path: str | None = None,
+) -> MaterialArchiveExportResult:
+    """Export one or more saved Stage A material archives into a ZIP file.
+    导出一个或多个已保存的 Stage A 耗材档案为 ZIP 文件。
+
+    Args:
+        directory_names: Saved material directory names to export. (要导出的耗材目录名)
+        materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
+        output_path: Optional ZIP output path override. (可选的 ZIP 输出路径覆盖)
+
+    Returns:
+        MaterialArchiveExportResult: Generated ZIP archive metadata. (生成的 ZIP 归档信息)
+    """
+    normalized_names = _normalize_material_directory_names(directory_names)
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    download_filename = f"lumina_materials_{len(normalized_names)}_{timestamp}.zip"
+    zip_output_path = (
+        Path(output_path)
+        if isinstance(output_path, str) and output_path.strip()
+        else Path(TEMP_DIR) / f"lumina_material_export_{uuid.uuid4().hex}.zip"
+    )
+    zip_output_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": "1.0",
+        "kind": "lumina_material_export",
+        "exported_at": _now_iso(),
+        "directory_names": normalized_names,
+        "material_count": len(normalized_names),
+    }
+    try:
+        with zipfile.ZipFile(
+            zip_output_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            archive.writestr(
+                _MATERIAL_EXPORT_MANIFEST_FILENAME,
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+            )
+            for directory_name in normalized_names:
+                material_dir = _resolve_material_dir(target_root, directory_name)
+                material_archive_path = material_dir / "material.json"
+                if not material_archive_path.is_file():
+                    raise FileNotFoundError(
+                        f"Saved material archive not found: {directory_name}"
+                    )
+                relative_directory_name = _relative_directory_name(
+                    target_root,
+                    material_dir,
+                )
+                material_files = sorted(
+                    path for path in material_dir.rglob("*") if path.is_file()
+                )
+                for file_path in material_files:
+                    archive.write(
+                        file_path,
+                        Path("materials")
+                        .joinpath(relative_directory_name)
+                        .joinpath(file_path.relative_to(material_dir))
+                        .as_posix(),
+                    )
+    except Exception:
+        try:
+            zip_output_path.unlink()
+        except OSError:
+            pass
+        raise
+
+    return MaterialArchiveExportResult(
+        archive_path=str(zip_output_path),
+        download_filename=download_filename,
+        exported_directory_names=normalized_names,
+    )
+
+
+def import_saved_stage_a_material_archives(
+    *,
+    archive_path: str,
+    materials_dir: str | None = None,
+) -> MaterialArchiveImportResult:
+    """Import one ZIP file containing one or more saved Stage A material archives.
+    导入一个包含一个或多个已保存 Stage A 耗材档案的 ZIP 文件。
+
+    Args:
+        archive_path: ZIP archive path to import. (要导入的 ZIP 归档路径)
+        materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
+
+    Returns:
+        MaterialArchiveImportResult: Imported material summaries. (导入后的耗材摘要)
+    """
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    target_root.mkdir(parents=True, exist_ok=True)
+    extract_root = Path(
+        tempfile.mkdtemp(prefix="material_archive_import_", dir=TEMP_DIR)
+    )
+    try:
+        extracted_root = _safe_extract_material_zip(archive_path, extract_root)
+        manifest = _load_material_export_manifest(extracted_root)
+        material_root = (
+            extracted_root / "materials"
+            if (extracted_root / "materials").is_dir()
+            else extracted_root
+        )
+        if manifest is not None:
+            raw_directory_names = manifest.get("directory_names")
+            if not isinstance(raw_directory_names, list) or not raw_directory_names:
+                raise ValueError(
+                    "Material export manifest is missing directory_names"
+                )
+            normalized_directory_names = _normalize_material_directory_names(
+                raw_directory_names
+            )
+            staged_material_dirs = [
+                material_root / Path(directory_name)
+                for directory_name in normalized_directory_names
+            ]
+        else:
+            staged_material_dirs = sorted(
+                _discover_saved_material_dirs(material_root),
+                key=lambda path: path.as_posix(),
+            )
+
+        if not staged_material_dirs:
+            raise ValueError(
+                "Material archive ZIP does not contain any saved material directories"
+            )
+
+        imported_materials: list[dict[str, Any]] = []
+        created_material_dirs: list[Path] = []
+        try:
+            for staged_material_dir in staged_material_dirs:
+                relative_directory_name = _relative_directory_name(
+                    material_root,
+                    staged_material_dir,
+                )
+                material_archive_path = staged_material_dir / "material.json"
+                if not material_archive_path.is_file():
+                    raise FileNotFoundError(
+                        f"Saved material archive not found in ZIP: {relative_directory_name}"
+                    )
+                archive_payload = _load_json_object(
+                    material_archive_path,
+                    "Saved material archive is not valid UTF-8 JSON",
+                )
+                stage_a_params_path = _resolve_stage_a_params_path(
+                    staged_material_dir,
+                    archive_payload,
+                )
+                if not stage_a_params_path.is_file():
+                    raise FileNotFoundError(
+                        f"Saved Stage A parameters not found in ZIP: {relative_directory_name}"
+                    )
+                _load_json_object(
+                    stage_a_params_path,
+                    "Saved Stage A parameters are not valid UTF-8 JSON",
+                )
+                destination_dir = _import_target_material_dir(
+                    target_root,
+                    relative_directory_name,
+                )
+                try:
+                    shutil.copytree(staged_material_dir, destination_dir)
+                except Exception:
+                    if destination_dir.exists():
+                        shutil.rmtree(destination_dir, ignore_errors=True)
+                    raise
+                created_material_dirs.append(destination_dir)
+                imported_materials.append(
+                    _material_summary_from_saved_archive(
+                        target_root,
+                        destination_dir,
+                        archive_payload,
+                    )
+                )
+        except Exception:
+            for created_dir in reversed(created_material_dirs):
+                parent_dir = created_dir.parent
+                shutil.rmtree(created_dir, ignore_errors=True)
+                _prune_empty_parents(parent_dir, target_root)
+            raise
+
+        return MaterialArchiveImportResult(imported_materials=imported_materials)
+    finally:
+        shutil.rmtree(extract_root, ignore_errors=True)
 
 
 def list_saved_stage_a_material_archives(
@@ -1360,21 +1829,26 @@ def list_saved_stage_a_material_archives(
         return []
 
     items: list[dict[str, Any]] = []
-    for material_dir in sorted(
-        (path for path in target_root.iterdir() if path.is_dir()),
-        key=lambda path: path.stat().st_mtime,
+    archive_paths = [
+        path for path in target_root.rglob("material.json") if path.is_file()
+    ]
+    filtered_archive_paths = _filter_nested_material_archive_paths(archive_paths)
+
+    for archive_path in sorted(
+        filtered_archive_paths,
+        key=lambda path: path.parent.stat().st_mtime,
         reverse=True,
     ):
-        archive_path = material_dir / "material.json"
-        if not archive_path.exists():
-            continue
+        material_dir = archive_path.parent
         try:
             archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
 
-        stage_a_filename = str(archive_payload.get("stage_a_params_file") or "stage_A_parameters.json")
-        stage_a_path = material_dir / stage_a_filename
+        try:
+            stage_a_path = _resolve_stage_a_params_path(material_dir, archive_payload)
+        except ValueError:
+            stage_a_path = material_dir / "stage_A_parameters.json"
         fit_summary = archive_payload.get("fit_summary") or {}
         material_summary = archive_payload.get("material_summary") or {}
         overall_validation = fit_summary.get("overall_validation") or {}
@@ -1385,7 +1859,10 @@ def list_saved_stage_a_material_archives(
             estimated_rgb_values = [int(value) for value in estimated_rgb[:3]]
         except (TypeError, ValueError):
             estimated_rgb_values = []
-        verification_runs = _load_existing_verification_runs(material_dir, archive_payload)
+        verification_runs = _load_existing_verification_runs(
+            material_dir,
+            archive_payload,
+        )
         verification_history = _summarize_verification_runs(verification_runs)
         try:
             verification_count = int(
@@ -1396,14 +1873,24 @@ def list_saved_stage_a_material_archives(
         except (TypeError, ValueError):
             verification_count = len(verification_history) or 1
 
+        relative_directory_name = _relative_directory_name(target_root, material_dir)
+        brand_value: str | None = None
+        if "/" in relative_directory_name:
+            brand_value = relative_directory_name.split("/", 1)[0]
         items.append(
             {
-                "material_name": str(archive_payload.get("material_name") or material_dir.name),
-                "directory_name": material_dir.name,
+                "material_name": str(
+                    archive_payload.get("material_name") or material_dir.name
+                ),
+                "directory_name": relative_directory_name,
+                "brand": brand_value,
                 "created_at": archive_payload.get("created_at"),
-                "updated_at": archive_payload.get("updated_at") or archive_payload.get("created_at"),
+                "updated_at": archive_payload.get("updated_at")
+                or archive_payload.get("created_at"),
                 "archive_path": str(archive_path),
-                "stage_a_params_path": str(stage_a_path) if stage_a_path.exists() else None,
+                "stage_a_params_path": (
+                    str(stage_a_path) if stage_a_path.exists() else None
+                ),
                 "estimated_rgb": estimated_rgb_values,
                 "layer_height_mm": material_summary.get("layer_height_mm"),
                 "mean_delta_e": overall_validation.get("mean_delta_e"),

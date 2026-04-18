@@ -16,6 +16,8 @@ Public API
 - ``forward_model``    — predict linear RGB for a full N-layer recipe
 - ``solve_image_colors`` — solve optimal recipes for a batch of unique colors
 - ``map_pixels_to_materials`` — map every image pixel to its solved recipe
+- ``ColorSuggestion``  — dataclass describing one achievable-color candidate
+- ``suggest_colors_for_target`` — rank achievable colors near a target sRGB
 """
 
 from __future__ import annotations
@@ -751,3 +753,271 @@ def solve_image_colors_optimal(
 
     matched_rgb = linear_to_srgb_uint8(best_pred_linear)
     return matched_rgb, best_recipes, best_de
+
+
+# ---------------------------------------------------------------------------
+# Near-target color suggestion — MITM-based top-K achievable colors
+# 近目标色建议 —— 基于 MITM 的可达色 Top-K 搜索
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ColorSuggestion:
+    """One achievable-color candidate produced by the suggester.
+    颜色建议器产出的一个可达色候选。
+
+    Attributes:
+        matched_rgb: (3,) uint8 predicted sRGB for the candidate. (候选色 sRGB)
+        recipe: (N,) int32 per-layer material indices; column 0 is the bottom
+            layer (substrate-adjacent), column ``N-1`` is the top (viewing
+            surface). Matches the canonical solver layer order.
+            (配方：第 0 列为底层、最后一列为顶层)
+        delta_e: CIE76 ΔE between the candidate and the target color.
+            (候选色相对目标色的 CIE76 ΔE)
+    """
+
+    matched_rgb: np.ndarray
+    recipe: np.ndarray
+    delta_e: float
+
+
+# Suggester tuning knobs.
+# 建议器调参常量。
+DEFAULT_SUGGEST_TOP_K: int = 20
+"""Number of candidates returned by default. (默认返回候选数)"""
+
+DEFAULT_SUGGEST_MIN_SPACING: float = 1.5
+"""Minimum Lab ΔE between returned candidates to avoid near-duplicates.
+保证返回候选之间的最小 Lab ΔE 距离，避免视觉上的重复。"""
+
+DEFAULT_SUGGEST_MAX_COMBINATIONS: int = 2_000_000
+"""MITM fallback hard cap on ``M**N``. Above this, callers are expected to
+build the persisted :class:`core.material_cache.MaterialSolverCache` first.
+MITM 回退路径对 ``M**N`` 的硬性上限；超过需先构建持久化缓存。"""
+
+_SUGGEST_OVERSAMPLE_FACTOR: int = 8
+"""Heap size = ``top_k * oversample``; keeps a generous buffer for the
+post-pass greedy-spacing dedup. (过采样倍数，便于去重后仍有足够候选)"""
+
+
+def _greedy_lab_spacing_dedup(
+    sorted_labs: np.ndarray,
+    min_spacing: float,
+    limit: int,
+) -> np.ndarray:
+    """Keep entries whose Lab is ``>= min_spacing`` away from every earlier kept.
+    贪心保留与之前保留项 Lab 距离 ``>= min_spacing`` 的条目。
+
+    Assumes ``sorted_labs`` is already ordered by desirability (best first).
+    Returns the kept row indices (into ``sorted_labs``) in input order. The
+    result length is ``<= limit``; callers pass ``limit=top_k`` to bound it.
+    前提 ``sorted_labs`` 已按优先级排序；返回保留行的索引数组，长度 ``<= limit``。
+    """
+    if sorted_labs.shape[0] == 0 or limit <= 0:
+        return np.zeros(0, dtype=np.int64)
+    spacing_sq = float(min_spacing) ** 2
+    kept_idx: list[int] = [0]
+    kept_labs = [sorted_labs[0]]
+    for i in range(1, sorted_labs.shape[0]):
+        if len(kept_idx) >= limit:
+            break
+        candidate = sorted_labs[i]
+        diffs = np.asarray(kept_labs, dtype=np.float64) - candidate
+        if np.all(np.sum(diffs * diffs, axis=1) >= spacing_sq):
+            kept_idx.append(i)
+            kept_labs.append(candidate)
+    return np.asarray(kept_idx, dtype=np.int64)
+
+
+# Shared MITM chunk-memory budget. Keeping it modest (32 MiB) bounds peak RSS
+# on machines running the backend alongside the heavy pipeline stages.
+# 32 MiB 的 MITM 分块内存预算，在后端并跑其他重流程时不会抬高 RSS。
+_CHUNK_TARGET_BYTES: int = 32 * 1024 * 1024
+
+
+def _mitm_chunk_size_for(k_bot: int, chunk_budget_bytes: int | None = None) -> int:
+    """Pick a top-chunk size that keeps ``chunk * K_bot * 24B`` under budget.
+    选择 top 分块大小，使 ``chunk * K_bot * 24 字节`` 不超过内存预算。
+
+    The 24 bytes/row figure reflects the three float64 linear-RGB channels we
+    instantiate per (top, bottom) pair during MITM evaluation. Callers pass an
+    explicit budget only in tests.
+    """
+    budget = int(chunk_budget_bytes or _CHUNK_TARGET_BYTES)
+    per_row_bytes = max(1, int(k_bot) * 24)
+    return max(1, budget // per_row_bytes)
+
+
+def suggest_colors_for_target(
+    target_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
+    substrate: str = "white",
+    *,
+    top_k: int = DEFAULT_SUGGEST_TOP_K,
+    min_spacing: float = DEFAULT_SUGGEST_MIN_SPACING,
+    max_combinations: int = DEFAULT_SUGGEST_MAX_COMBINATIONS,
+) -> list[ColorSuggestion]:
+    """Suggest up to ``top_k`` achievable colors near ``target_srgb``.
+    为 ``target_srgb`` 返回至多 ``top_k`` 个可达的近似色建议。
+
+    Uses the same MITM enumeration as :func:`solve_image_colors_optimal` but
+    scores every final color against a single target, keeps a heap of the
+    best ``top_k * oversample`` candidates across chunks, and finally applies
+    a greedy Lab-ΔE spacing filter so returned suggestions are perceptually
+    distinct.
+
+    Args:
+        target_srgb: (3,) uint8 target color in sRGB. (目标 sRGB 颜色)
+        materials: Selected material palette. (已选耗材列表)
+        layer_count: Layers per pixel (5-10). (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底类型)
+        top_k: Maximum number of candidates to return. (返回候选数上限)
+        min_spacing: Minimum Lab ΔE between candidates. (候选间最小 Lab ΔE)
+        max_combinations: Hard cap on ``M**N`` before falling back to an error.
+            Callers are expected to build a persisted solver cache for larger
+            palettes. (``M**N`` 硬上限；超过需先构建持久化缓存)
+
+    Returns:
+        List of up to ``top_k`` :class:`ColorSuggestion` ordered by ΔE
+        ascending. Empty list only when the palette produces zero enumerated
+        rows (should not happen for ``layer_count >= 1``).
+        (按 ΔE 升序的 :class:`ColorSuggestion` 列表，最多 ``top_k`` 项)
+
+    Raises:
+        ValueError: ``layer_count``, ``layer_height_mm``, ``substrate`` or
+            ``target_srgb`` out of range; or empty ``materials``.
+        OverflowError: ``M ** layer_count`` exceeds ``max_combinations``;
+            caller should build a persisted solver cache instead.
+    """
+    target_srgb = np.asarray(target_srgb, dtype=np.uint8)
+    if target_srgb.shape != (3,):
+        raise ValueError(f"target_srgb must be shaped (3,), got {target_srgb.shape}")
+    if layer_count < MIN_LAYER_COUNT or layer_count > MAX_LAYER_COUNT:
+        raise ValueError(
+            f"layer_count must be {MIN_LAYER_COUNT}-{MAX_LAYER_COUNT}, got {layer_count}"
+        )
+    if not materials:
+        raise ValueError("At least one material must be provided (materials is empty)")
+    if layer_height_mm not in ALLOWED_LAYER_HEIGHTS_MM:
+        raise ValueError(
+            f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, got {layer_height_mm}"
+        )
+    if substrate not in ("white", "black"):
+        raise ValueError(f"substrate must be 'white' or 'black', got {substrate!r}")
+    if top_k <= 0:
+        raise ValueError(f"top_k must be positive, got {top_k}")
+    if min_spacing < 0.0:
+        raise ValueError(f"min_spacing must be non-negative, got {min_spacing}")
+
+    total_combinations = len(materials) ** int(layer_count)
+    if total_combinations > int(max_combinations):
+        raise OverflowError(
+            f"Total combinations {total_combinations} exceeds cap "
+            f"{max_combinations}; build a persisted material-solver cache first"
+        )
+
+    substrate_linear = (
+        np.zeros(3, dtype=np.float64)
+        if substrate == "black"
+        else np.ones(3, dtype=np.float64)
+    )
+    target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0]
+
+    affines = _compute_material_affines(materials, layer_height_mm)
+    bottom_depth, top_depth = _pick_mitm_split(layer_count, len(materials))
+    bot_alpha, bot_beta, bot_recipes = _enumerate_cumulative_affines(
+        affines, bottom_depth
+    )
+    top_alpha, top_beta, top_recipes = _enumerate_cumulative_affines(
+        affines, top_depth
+    )
+    bot_colors = bot_alpha * substrate_linear + bot_beta  # (K_bot, 3)
+    k_bot = bot_colors.shape[0]
+    k_top = top_alpha.shape[0]
+    heap_size = max(int(top_k), int(top_k) * _SUGGEST_OVERSAMPLE_FACTOR)
+    chunk_size = _mitm_chunk_size_for(k_bot)
+
+    best_de = np.full(heap_size, np.inf, dtype=np.float64)
+    best_lab = np.zeros((heap_size, 3), dtype=np.float64)
+    best_srgb = np.zeros((heap_size, 3), dtype=np.uint8)
+    best_recipes = np.zeros((heap_size, layer_count), dtype=np.int32)
+    # ``heap_size`` is treated as an unordered priority queue keyed on ΔE; the
+    # worst (largest) element's slot is tracked so we can replace it directly
+    # without re-sorting every chunk.
+    # heap_size 被当作无序优先队列，跟踪当前最差元素位置方便替换。
+    worst_heap_idx = int(np.argmax(best_de))
+
+    for chunk_start in range(0, k_top, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, k_top)
+        sub = chunk_end - chunk_start
+        chunk_alpha = top_alpha[chunk_start:chunk_end]  # (sub, 3)
+        chunk_beta = top_beta[chunk_start:chunk_end]    # (sub, 3)
+        chunk_top_recipes = top_recipes[chunk_start:chunk_end]  # (sub, top_depth)
+
+        # final_linear: (sub, K_bot, 3) = α_top * bot_color + β_top.
+        final_linear = (
+            chunk_alpha[:, None, :] * bot_colors[None, :, :]
+            + chunk_beta[:, None, :]
+        )
+        flat_linear = final_linear.reshape(-1, 3)               # (sub*K_bot, 3)
+        flat_srgb = linear_to_srgb_uint8(flat_linear)
+        flat_lab = rgb_to_lab(flat_srgb)                        # (sub*K_bot, 3)
+        flat_de = np.linalg.norm(flat_lab - target_lab.reshape(1, 3), axis=1)
+
+        # Fast pre-filter: only rows that beat the current worst heap entry.
+        threshold = float(best_de[worst_heap_idx])
+        if not np.isfinite(threshold):
+            promote_mask = np.ones_like(flat_de, dtype=bool)
+        else:
+            promote_mask = flat_de < threshold
+        promote_idx = np.where(promote_mask)[0]
+        if promote_idx.size == 0:
+            continue
+
+        # Promote candidates one by one; each insertion updates the worst slot.
+        promote_idx_sorted = promote_idx[np.argsort(flat_de[promote_idx])]
+        for flat_idx in promote_idx_sorted:
+            candidate_de = float(flat_de[flat_idx])
+            if candidate_de >= best_de[worst_heap_idx]:
+                break
+            top_i = int(flat_idx // k_bot)
+            bot_i = int(flat_idx % k_bot)
+            best_de[worst_heap_idx] = candidate_de
+            best_lab[worst_heap_idx] = flat_lab[flat_idx]
+            best_srgb[worst_heap_idx] = flat_srgb[flat_idx]
+            recipe_slot = best_recipes[worst_heap_idx]
+            if bottom_depth > 0:
+                recipe_slot[:bottom_depth] = bot_recipes[bot_i]
+            recipe_slot[bottom_depth:] = chunk_top_recipes[top_i]
+            worst_heap_idx = int(np.argmax(best_de))
+
+    # Sort the heap by ΔE ascending (infinity entries sink to the tail).
+    order = np.argsort(best_de, kind="stable")
+    ordered_de = best_de[order]
+    ordered_lab = best_lab[order]
+    ordered_srgb = best_srgb[order]
+    ordered_recipes = best_recipes[order]
+
+    finite_mask = np.isfinite(ordered_de)
+    ordered_de = ordered_de[finite_mask]
+    ordered_lab = ordered_lab[finite_mask]
+    ordered_srgb = ordered_srgb[finite_mask]
+    ordered_recipes = ordered_recipes[finite_mask]
+
+    if ordered_de.size == 0:
+        return []
+
+    kept_idx = _greedy_lab_spacing_dedup(
+        ordered_lab, min_spacing=min_spacing, limit=int(top_k)
+    )
+    return [
+        ColorSuggestion(
+            matched_rgb=ordered_srgb[i].copy(),
+            recipe=ordered_recipes[i].astype(np.int32, copy=True),
+            delta_e=float(ordered_de[i]),
+        )
+        for i in kept_idx
+    ]

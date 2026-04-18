@@ -163,6 +163,37 @@ def test_ttl_entry_expires_and_resolve_invalidates_file_id(sid: str, filename: s
     assert not os.path.exists(path)
 
 
+def test_ttl_entry_under_materials_dir_expires_without_deleting_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """TTL expiry should invalidate persistent material links without deleting material files."""
+    materials_root = tmp_path / "materials"
+    material_path = materials_root / "PLA Basic" / "material.json"
+    material_path.parent.mkdir(parents=True)
+    material_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("api.file_registry.MATERIALS_DIR", str(materials_root))
+    registry = FileRegistry()
+
+    with patch("api.file_registry.time.time", return_value=100.0):
+        file_id = registry.register_path(
+            "material:test",
+            str(material_path),
+            "material.json",
+            ttl_seconds=1,
+        )
+
+    entry = registry.get_entry(file_id)
+    assert entry is not None
+    assert entry["delete_on_cleanup"] is False
+
+    with patch("api.file_registry.time.time", return_value=102.0):
+        assert registry.resolve(file_id) is None
+
+    assert material_path.exists() is True
+
+
 # **Validates: Requirements 1.2**
 @given(sid=session_ids, filename=filenames)
 @settings(max_examples=50)

@@ -170,6 +170,7 @@ export default function GradientCardExtractPanel() {
     manualWhiteOrientation,
     manualBlackOrientation,
     materialName,
+    materialBrand,
     verificationTargetDirectoryName,
     verificationTargetCount,
     isSaving,
@@ -190,6 +191,7 @@ export default function GradientCardExtractPanel() {
     clearWhiteCornerPoints,
     clearBlackCornerPoints,
     setMaterialName,
+    setMaterialBrand,
     setManualWhiteOrientation,
     setManualBlackOrientation,
     clearMaterialVerification,
@@ -794,6 +796,29 @@ export default function GradientCardExtractPanel() {
               className={textInputClass}
               disabled={isVerificationMode}
             />
+            {!isVerificationMode && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <label
+                    htmlFor="gradient-card-material-brand"
+                    className="text-sm font-semibold text-slate-900 dark:text-slate-50"
+                  >
+                    {t("mat_gradient_brand_label")}
+                  </label>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {t("mat_gradient_brand_hint")}
+                  </span>
+                </div>
+                <input
+                  id="gradient-card-material-brand"
+                  value={materialBrand}
+                  onChange={(event) => setMaterialBrand(event.target.value)}
+                  placeholder={t("mat_gradient_brand_placeholder")}
+                  className={textInputClass}
+                  data-testid="gradient-card-material-brand-input"
+                />
+              </div>
+            )}
             {isVerificationMode ? (
               <div className="grid gap-3 sm:grid-cols-3">
                 <Button

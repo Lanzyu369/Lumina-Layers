@@ -63,9 +63,12 @@ def load_material_params(
     Returns:
         MaterialParams with E, k, C0_white vectors loaded.
     """
+    from core.single_stage import resolve_saved_material_dir
+
     root = Path(materials_dir or MATERIALS_DIR)
-    material_dir = root / directory_name
-    if not material_dir.is_dir():
+    try:
+        material_dir = resolve_saved_material_dir(root, directory_name)
+    except FileNotFoundError:
         raise FileNotFoundError(f"Material directory not found: {directory_name}")
 
     archive_path = material_dir / "material.json"

@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 from typing import Optional, Tuple
-
+from config import MATERIALS_DIR, TEMP_DIR
 
 class FileRegistry:
     """文件注册表，管理生成文件的 UUID 映射。
@@ -31,6 +31,7 @@ class FileRegistry:
             filename = os.path.basename(path)
         now = time.time()
         expires_at = (now + ttl_seconds) if ttl_seconds is not None else None
+        delete_on_cleanup = self._should_delete_path(path)
         with self._lock:
             self._registry[file_id] = {
                 "path": path,
@@ -40,6 +41,7 @@ class FileRegistry:
                 "expires_at": expires_at,
                 "ttl_seconds": ttl_seconds,
                 "lifecycle": "ephemeral" if ttl_seconds is not None else "session_bound",
+                "delete_on_cleanup": delete_on_cleanup,
             }
         return file_id
 
@@ -52,7 +54,6 @@ class FileRegistry:
     ) -> str:
         """注册字节流（写入临时文件），返回 file_id。"""
         import tempfile
-        from config import TEMP_DIR
 
         suffix = os.path.splitext(filename)[1] or ".bin"
         fd, path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
@@ -78,9 +79,10 @@ class FileRegistry:
             filename = entry["filename"]
             expires_at = entry.get("expires_at")
             ttl_seconds = entry.get("ttl_seconds")
+            delete_on_cleanup = bool(entry.get("delete_on_cleanup", True))
 
         if expires_at is not None and now >= expires_at:
-            cleaned = self._delete_path(path)
+            cleaned = True if not delete_on_cleanup else self._delete_path(path)
             with self._lock:
                 current = self._registry.get(file_id)
                 if current is not None and current.get("path") == path and cleaned:
@@ -173,7 +175,7 @@ class FileRegistry:
         """Delete registry entries in two phases so filesystem I/O stays outside the lock.
         两阶段删除 registry 条目，将文件系统 I/O 移到锁外。
         """
-        snapshots: list[tuple[str, str]] = []
+        snapshots: list[tuple[str, str, bool]] = []
         with self._lock:
             for file_id in file_ids:
                 entry = self._registry.get(file_id)
@@ -183,11 +185,12 @@ class FileRegistry:
                 if not path:
                     self._registry.pop(file_id, None)
                     continue
-                snapshots.append((file_id, path))
+                delete_on_cleanup = bool(entry.get("delete_on_cleanup", True))
+                snapshots.append((file_id, path, delete_on_cleanup))
 
         outcomes = [
-            (file_id, path, self._delete_path(path))
-            for file_id, path in snapshots
+            (file_id, path, True if not delete_on_cleanup else self._delete_path(path))
+            for file_id, path, delete_on_cleanup in snapshots
         ]
 
         removed = 0
@@ -203,6 +206,14 @@ class FileRegistry:
                 if expire_failed_session_bound and current.get("lifecycle") == "session_bound":
                     current["expires_at"] = time.time()
         return removed
+
+    def _should_delete_path(self, path: str) -> bool:
+        try:
+            resolved_path = os.path.realpath(path)
+            materials_root = os.path.realpath(MATERIALS_DIR)
+            return os.path.commonpath([resolved_path, materials_root]) != materials_root
+        except (ValueError, OSError):
+            return True
 
     def _delete_path(self, path: str) -> bool:
         """Delete one path outside the registry lock.

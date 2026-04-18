@@ -6,6 +6,7 @@ import { isCardModeAvailable } from "../../utils/cardUtils";
 import type { LutColorEntry } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
+import MaterialColorPicker from "./MaterialColorPicker";
 
 export type HueCategory =
   | "all"
@@ -136,7 +137,22 @@ const ColorSwatch = memo(function ColorSwatch({
 
 // Card mode helpers have been moved inside the main component to access state variables.
 
+/**
+ * Dispatcher: renders :class:`MaterialColorPicker` in material-archive mode
+ * and :class:`LutColorGridInner` otherwise. Keeping this split avoids calling
+ * :func:`useState`/:func:`useMemo` conditionally in the LUT implementation.
+ * 调度组件：材料档案模式转到 MaterialColorPicker，否则渲染 LUT 内部实现。
+ * 拆分用以避免在条件分支前后调用 hook。
+ */
 export default function LutColorGrid() {
+  const sourceVersion = useConverterStore((s) => s.source_version);
+  if (sourceVersion === "material") {
+    return <MaterialColorPicker />;
+  }
+  return <LutColorGridInner />;
+}
+
+function LutColorGridInner() {
   const { t } = useI18n();
   const paletteMode = useSettingsStore((s) => s.paletteMode);
   const setPaletteMode = useSettingsStore((s) => s.setPaletteMode);

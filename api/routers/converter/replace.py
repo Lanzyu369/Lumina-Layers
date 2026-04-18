@@ -39,6 +39,9 @@ from core.converter import (
     generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
+from core.material_cache import load_material_solver_cache
+from core.material_lut_synthesis import load_multiple_materials, solve_image_colors_optimal
+from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import pad_recipe_to_layer_count
 from utils.lut_manager import LUTManager
@@ -115,6 +118,219 @@ def _get_region_mask_items_for_ids(
             masks.append((fallback_id, fallback_mask))
     return masks
 
+
+def _upgrade_material_matrix_layers(
+    material_matrix: np.ndarray,
+    target_layers: int,
+) -> np.ndarray:
+    if material_matrix.shape[2] >= target_layers:
+        return material_matrix.copy()
+    pad = np.zeros(
+        (*material_matrix.shape[:2], target_layers - material_matrix.shape[2]),
+        dtype=material_matrix.dtype,
+    )
+    return np.concatenate([material_matrix.copy(), pad], axis=2)
+
+
+def _sync_lut_material_matrix_for_diff(
+    session_data: dict,
+    cache: dict,
+    diff_mask: np.ndarray,
+    updated_rgb: np.ndarray,
+) -> None:
+    material_matrix = cache.get("material_matrix")
+    if material_matrix is None:
+        return
+    lut_path = session_data.get("lut_path")
+    color_mode = session_data.get("color_mode")
+    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+        return
+    if not isinstance(color_mode, str) or not color_mode:
+        return
+    target_layers = int(
+        cache.get("color_layers")
+        or session_data.get("color_layers")
+        or material_matrix.shape[2]
+    )
+    layer_height_mm = float(
+        cache.get("layer_height_mm")
+        or session_data.get("layer_height_mm")
+        or 0.08
+    )
+    try:
+        lut_data = load_lut(
+            lut_path,
+            color_mode,
+            color_layers=target_layers,
+            layer_height_mm=layer_height_mm,
+            model_enable=bool(session_data.get("model_enable", False)),
+            model_only=bool(session_data.get("model_only", False)),
+            model_threshold=(
+                float(session_data["model_threshold"])
+                if session_data.get("model_threshold") is not None
+                else None
+            ),
+            model_margin=(
+                float(session_data["model_margin"])
+                if session_data.get("model_margin") is not None
+                else None
+            ),
+        )
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        log.warning(
+            "LUT replacement stack sync failed",
+            extra={
+                "event": "converter_replace_lut_stack_sync_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return
+
+    ref_stacks = np.asarray(lut_data.get("ref_stacks"))
+    kdtree = lut_data.get("kdtree")
+    if ref_stacks.ndim != 2 or ref_stacks.shape[0] == 0 or kdtree is None:
+        return
+
+    new_material_matrix = _upgrade_material_matrix_layers(
+        np.asarray(material_matrix),
+        int(ref_stacks.shape[1]),
+    )
+    unique_colors = np.unique(updated_rgb[diff_mask], axis=0)
+    for color in unique_colors:
+        color_mask = np.all(updated_rgb == color, axis=-1) & diff_mask
+        _, lut_idx = kdtree.query(
+            _rgb_to_lab(np.asarray(color, dtype=np.uint8).reshape(1, 3))
+        )
+        stack = ref_stacks[int(np.asarray(lut_idx).reshape(-1)[0])]
+        new_material_matrix[color_mask] = np.asarray(
+            stack,
+            dtype=new_material_matrix.dtype,
+        )
+    cache["material_matrix"] = new_material_matrix
+    cache["color_layers"] = int(new_material_matrix.shape[2])
+
+
+def _sync_material_archive_matrix_for_diff(
+    session_data: dict,
+    cache: dict,
+    diff_mask: np.ndarray,
+    updated_rgb: np.ndarray,
+) -> None:
+    material_matrix = cache.get("material_matrix")
+    if material_matrix is None:
+        return
+    selected_materials = session_data.get("selected_materials") or []
+    if not isinstance(selected_materials, list) or len(selected_materials) == 0:
+        return
+
+    try:
+        materials = load_multiple_materials(selected_materials)
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        log.warning(
+            "Material-archive replacement stack sync failed during material load",
+            extra={
+                "event": "converter_replace_material_stack_load_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return
+
+    layer_count = int(
+        session_data.get("material_layer_count")
+        or cache.get("color_layers")
+        or material_matrix.shape[2]
+    )
+    layer_height_mm = float(
+        session_data.get("material_layer_height_mm")
+        or cache.get("layer_height_mm")
+        or session_data.get("layer_height_mm")
+        or 0.08
+    )
+    substrate = str(
+        cache.get("material_substrate")
+        or session_data.get("material_substrate")
+        or "white"
+    )
+    target_rgbs = np.unique(updated_rgb[diff_mask], axis=0).astype(np.uint8, copy=False)
+
+    try:
+        solver_cache = load_material_solver_cache(
+            materials=materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+        )
+        if solver_cache is not None:
+            resolved_rgb, recipes, _delta_e = solver_cache.lookup(target_rgbs, materials)
+        else:
+            resolved_rgb, recipes, _delta_e = solve_image_colors_optimal(
+                target_rgbs,
+                materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+            )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        log.warning(
+            "Material-archive replacement stack sync solve failed",
+            extra={
+                "event": "converter_replace_material_stack_solve_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return
+
+    if recipes.shape[1] > 1:
+        recipes = np.ascontiguousarray(recipes[:, ::-1])
+
+    new_material_matrix = _upgrade_material_matrix_layers(
+        np.asarray(material_matrix),
+        int(recipes.shape[1]),
+    )
+    color_masks = [
+        np.all(updated_rgb == color, axis=-1) & diff_mask for color in target_rgbs
+    ]
+    for idx, color_mask in enumerate(color_masks):
+        if not np.any(color_mask):
+            continue
+        updated_rgb[color_mask] = resolved_rgb[idx].astype(np.uint8, copy=False)
+        new_material_matrix[color_mask] = recipes[idx].astype(
+            new_material_matrix.dtype,
+            copy=False,
+        )
+    cache["material_matrix"] = new_material_matrix
+    cache["color_layers"] = int(new_material_matrix.shape[2])
+    cache["layer_height_mm"] = float(layer_height_mm)
+
+
+def _sync_material_matrix_after_rgb_change(
+    session_data: dict,
+    cache: dict,
+    previous_rgb: np.ndarray,
+    updated_rgb: np.ndarray,
+) -> None:
+    material_matrix = cache.get("material_matrix")
+    mask_solid = cache.get("mask_solid")
+    if material_matrix is None or mask_solid is None:
+        return
+
+    diff_mask = np.any(previous_rgb != updated_rgb, axis=-1) & np.asarray(
+        mask_solid,
+        dtype=bool,
+    )
+    if not np.any(diff_mask):
+        return
+
+    if str(session_data.get("material_source") or "lut") == "material_archive":
+        _sync_material_archive_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
+    else:
+        _sync_lut_material_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
+
+    cache["color_palette"] = extract_color_palette(cache)
+
 # Extend base tuple with IndexError for array-index operations
 # in region-detect / region-replace endpoints.
 REPLACE_HANDLED_ERRORS = ROUTER_HANDLED_ERRORS + (IndexError,)
@@ -172,10 +388,17 @@ def replace_color(
 
         # Apply all replacements to the original matched_rgb
         matched_rgb: np.ndarray = cache["matched_rgb"]
+        previous_rgb = matched_rgb.copy()
         replaced_rgb = manager.apply_to_image(matched_rgb)
 
         # Update cache so 3D preview reflects replacements
         cache["matched_rgb"] = replaced_rgb
+        _sync_material_matrix_after_rgb_change(
+            session_data,
+            cache,
+            previous_rgb,
+            replaced_rgb,
+        )
         store.put(request.session_id, "preview_cache", cache)
 
         # Generate styled preview PNG (with bed grid and transparency)
@@ -263,6 +486,7 @@ def reset_replacements(
         # Clear replacement state
         store.put(request.session_id, "replacement_regions", [])
         store.put(request.session_id, "replacement_history", [])
+        previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
         # Restore matched_rgb from the pristine original saved at preview time.
         # region-replace mutates cache["matched_rgb"] in-place, so we must
@@ -271,11 +495,25 @@ def reset_replacements(
         if original_rgb is not None:
             # Restore cache to original state
             cache["matched_rgb"] = original_rgb.copy()
-            store.put(request.session_id, "preview_cache", cache)
             source_rgb = original_rgb
         else:
             # Fallback: no original saved (legacy session), use current cache
             source_rgb = cache["matched_rgb"]
+
+        original_material_matrix: np.ndarray | None = session_data.get(
+            "original_material_matrix"
+        )
+        if original_material_matrix is not None:
+            cache["material_matrix"] = original_material_matrix.copy()
+        elif original_rgb is not None:
+            _sync_material_matrix_after_rgb_change(
+                session_data,
+                cache,
+                previous_rgb,
+                cache["matched_rgb"],
+            )
+        cache["color_palette"] = extract_color_palette(cache)
+        store.put(request.session_id, "preview_cache", cache)
 
         # Regenerate preview from original matched_rgb (no replacements applied)
         preview_bytes = _image_to_png_bytes(source_rgb)
@@ -576,6 +814,12 @@ def region_replace(
 
         # Update matched_rgb in session cache
         cache["matched_rgb"] = replaced_rgb
+        _sync_material_matrix_after_rgb_change(
+            session_data,
+            cache,
+            matched_rgb,
+            replaced_rgb,
+        )
         store.put(request.session_id, "preview_cache", cache)
 
         # Generate styled preview PNG (with bed grid and transparency)

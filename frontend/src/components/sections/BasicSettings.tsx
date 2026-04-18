@@ -8,6 +8,7 @@ import {
 } from "../../api/types";
 import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
+import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
@@ -292,7 +293,22 @@ export default function BasicSettings() {
     setMaterialLibraryLoading(true);
     listGradientCardMaterials()
       .then((res) => {
-        if (!cancelled) setMaterialLibrary(res.materials ?? []);
+        if (cancelled) return;
+        const materials = res.materials ?? [];
+        setMaterialLibrary(materials);
+        // One-shot migration: legacy selections (flat directory_names stored
+        // in localStorage before the brand-subdirectory feature) are remapped
+        // to the current nested directory_name so cache/status/build calls
+        // don't 404. Unresolvable entries are dropped.
+        // 一次性迁移：把 localStorage 里的旧扁平 directory_name 映射到新的
+        // 嵌套名，避免求解器缓存接口 404。
+        const { names: reconciled, changed } = reconcileDirectoryNames(
+          selectedMaterialDirNames,
+          materials,
+        );
+        if (changed) {
+          setSelectedMaterialDirNames(reconciled);
+        }
       })
       .catch(() => {
         if (!cancelled) setMaterialLibrary([]);
@@ -301,6 +317,9 @@ export default function BasicSettings() {
         if (!cancelled) setMaterialLibraryLoading(false);
       });
     return () => { cancelled = true; };
+    // selectedMaterialDirNames intentionally omitted: the migration must run
+    // after the fresh library arrives, not on every selection change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source_version]);
 
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);

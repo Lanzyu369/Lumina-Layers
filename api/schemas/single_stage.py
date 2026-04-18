@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.lut import PaletteEntrySchema
 
@@ -45,3 +45,21 @@ class StageAFitRequest(BaseModel):
         if self.session_id is not None and not str(self.session_id).strip():
             raise ValueError("session_id cannot be blank")
         return self
+
+
+class MaterialLibraryBulkExportRequest(BaseModel):
+    """Request model for exporting multiple saved material archives."""
+
+    directory_names: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Saved material directory names to export as one ZIP archive.",
+    )
+
+    @field_validator("directory_names")
+    @classmethod
+    def validate_directory_names(cls, value: list[str]) -> list[str]:
+        cleaned = [name.strip() for name in value if isinstance(name, str) and name.strip()]
+        if len(cleaned) != len(value) or not cleaned:
+            raise ValueError("directory_names must contain non-empty strings")
+        return cleaned

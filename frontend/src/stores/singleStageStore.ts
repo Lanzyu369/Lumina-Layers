@@ -46,6 +46,7 @@ interface SingleStageState {
   manualWhiteOrientation: ManualOrientationLabel | null;
   manualBlackOrientation: ManualOrientationLabel | null;
   materialName: string;
+  materialBrand: string;
   verificationTargetDirectoryName: string | null;
   verificationTargetCount: number;
   isSaving: boolean;
@@ -70,6 +71,7 @@ interface SingleStageActions {
   clearWhiteCornerPoints: () => void;
   clearBlackCornerPoints: () => void;
   setMaterialName: (value: string) => void;
+  setMaterialBrand: (value: string) => void;
   setManualWhiteOrientation: (value: ManualOrientationLabel | null) => void;
   setManualBlackOrientation: (value: ManualOrientationLabel | null) => void;
   startMaterialVerification: (target: {
@@ -150,6 +152,7 @@ const DEFAULT_STATE: SingleStageState = {
   manualWhiteOrientation: null,
   manualBlackOrientation: null,
   materialName: "",
+  materialBrand: "",
   verificationTargetDirectoryName: null,
   verificationTargetCount: 0,
   isSaving: false,
@@ -340,6 +343,9 @@ export const useSingleStageStore = create<
   setMaterialName: (value: string) =>
     set({ materialName: value, saveError: null, saveSuccess: null }),
 
+  setMaterialBrand: (value: string) =>
+    set({ materialBrand: value, saveError: null, saveSuccess: null }),
+
   setManualWhiteOrientation: (value: ManualOrientationLabel | null) =>
     set({ manualWhiteOrientation: value, extractError: null }),
 
@@ -367,6 +373,9 @@ export const useSingleStageStore = create<
       blackImageNaturalHeight: null,
       blackCornerPoints: [],
       materialName,
+      // Re-verification keeps using the existing archive directory, so the
+      // brand value cannot be changed at this stage; clear the staged input.
+      materialBrand: "",
       verificationTargetDirectoryName: directoryName,
       verificationTargetCount: Math.max(1, verificationCount ?? 1),
       ...RESULT_RESET_STATE,
@@ -463,6 +472,11 @@ export const useSingleStageStore = create<
         materialName: state.materialName.trim(),
         targetDirectoryName: state.verificationTargetDirectoryName,
         saveMode,
+        // Brand is only honored when creating a new archive; the backend
+        // ignores it when targetDirectoryName is provided.
+        brand: state.verificationTargetDirectoryName
+          ? null
+          : state.materialBrand.trim() || null,
       });
       set({
         materialFileUrl: normalizeResourceUrl(response.material_file_url),

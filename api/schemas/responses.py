@@ -140,6 +140,7 @@ class SavedMaterialSummaryResponse(BaseModel):
 
     material_name: str
     directory_name: str
+    brand: str | None = None
     archive_path: str
     stage_a_params_path: str
     verification_count: int = 1
@@ -241,6 +242,7 @@ class SavedMaterialLibraryItemResponse(BaseModel):
 
     material_name: str
     directory_name: str
+    brand: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     archive_path: str
@@ -260,6 +262,26 @@ class GradientCardMaterialLibraryResponse(BaseModel):
     status: str
     message: str
     materials: list[SavedMaterialLibraryItemResponse] = Field(default_factory=list)
+
+
+class GradientCardMaterialBulkExportResponse(BaseModel):
+    """Saved gradient-card material archive bulk export response."""
+
+    status: str
+    message: str
+    download_url: str
+    filename: str
+    exported_count: int
+    exported_directory_names: list[str] = Field(default_factory=list)
+
+
+class GradientCardMaterialBulkImportResponse(BaseModel):
+    """Saved gradient-card material archive bulk import response."""
+
+    status: str
+    message: str
+    imported_count: int
+    imported_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
 
 
 class MaterialSolverCacheEntryResponse(BaseModel):
@@ -325,6 +347,45 @@ class MaterialSolverCacheListResponse(BaseModel):
     status: str
     message: str
     entries: list[MaterialSolverCacheEntryResponse] = Field(default_factory=list)
+
+
+class MaterialColorSuggestionItem(BaseModel):
+    """One achievable-color candidate returned by the suggester.
+    颜色建议器返回的一个可达色候选。
+
+    ``hex`` / ``rgb`` describe the predicted sRGB of the candidate; ``recipe``
+    is the per-layer material index array (bottom-to-top), using the same
+    ``material_directory_names`` order the caller submitted. ``recipe_display``
+    is a short human-readable representation (e.g. ``"[0,2,1,2,0]"``) suitable
+    for tooltips.
+    """
+
+    hex: str
+    rgb: list[int]
+    delta_e: float
+    recipe: list[int]
+    recipe_display: str
+
+
+class MaterialColorSuggestionsResponse(BaseModel):
+    """Response for the "suggest achievable colors near target" endpoint.
+    "为目标色推荐可达近似色" 接口的响应。
+
+    ``source`` is ``"cache"`` when a persisted ``MaterialSolverCache`` served
+    the query, ``"mitm"`` when the MITM fallback ran in-process. The frontend
+    uses this to decide whether to nudge the user to build a cache.
+    """
+
+    status: str
+    message: str
+    source: str
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    target_hex: str
+    target_rgb: list[int]
+    suggestions: list[MaterialColorSuggestionItem] = Field(default_factory=list)
 
 
 class MaterialSolverCacheDeleteResponse(BaseModel):
