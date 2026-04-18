@@ -226,7 +226,7 @@ export default function ExtractorPanel() {
           </div>
         </section>
 
-        <section className={`${sectionCardClass} flex flex-col gap-3 lg:flex-row`}>
+        <section className={`${sectionCardClass} grid gap-3 sm:grid-cols-2`}>
           <div data-testid="extract-button">
             <Button
               label={t("ext_extract_btn_label")}
@@ -234,7 +234,7 @@ export default function ExtractorPanel() {
               onClick={() => void submitExtract()}
               disabled={extractDisabled}
               loading={isLoading}
-              className="w-full lg:min-w-[12rem]"
+              className="w-full"
             />
           </div>
           <div data-testid="clear-corners-button">
@@ -242,7 +242,7 @@ export default function ExtractorPanel() {
               label={t("ext_clear_corners")}
               variant="secondary"
               onClick={clearCornerPoints}
-              className="w-full lg:min-w-[12rem]"
+              className="w-full"
             />
           </div>
         </section>
