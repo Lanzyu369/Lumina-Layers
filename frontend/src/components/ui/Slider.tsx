@@ -39,6 +39,24 @@ export default function Slider({
     }
   }, [value, step, displayDecimals, isFocused]);
 
+  const snapToGrid = useCallback(
+    (num: number) => {
+      // Align to the step grid anchored at 0 (so values are always true
+      // multiples of `step`), then clamp into [min, max]. The 1e-9 bias
+      // counters IEEE-754 float noise (e.g. 1.16/0.08 === 14.499999999999998)
+      // so half-step values consistently round toward the nearest larger
+      // multiple instead of getting pulled down by trailing epsilons.
+      // 将值对齐到以 0 为锚点的 step 网格（保证始终是 step 的整数倍），再 clamp 到 [min, max]。
+      // 加 1e-9 偏置抵消浮点噪声（如 1.16/0.08 在 IEEE-754 下等于 14.499999999999998），
+      // 避免半格值被多余的尾数向下拉。
+      const aligned = Math.round(num / step + 1e-9) * step;
+      const clamped = Math.min(max, Math.max(min, aligned));
+      const decimals = getStepDecimals(step);
+      return parseFloat(clamped.toFixed(decimals));
+    },
+    [min, max, step],
+  );
+
   const commitValue = useCallback(
     (text: string) => {
       const num = parseFloat(text);
@@ -47,16 +65,11 @@ export default function Slider({
         setInputText(formatValue(value, step, displayDecimals));
         return;
       }
-      // clamp 到 min/max 范围，并对齐 step
-      const clamped = Math.min(max, Math.max(min, num));
-      const aligned = Math.round(clamped / step) * step;
-      // 修正浮点精度
-      const decimals = getStepDecimals(step);
-      const final = parseFloat(aligned.toFixed(decimals));
+      const final = snapToGrid(num);
       onChange(final);
       setInputText(formatValue(final, step, displayDecimals));
     },
-    [value, min, max, step, onChange, displayDecimals],
+    [value, step, onChange, displayDecimals, snapToGrid],
   );
 
   const handleBlur = () => {
@@ -105,7 +118,7 @@ export default function Slider({
           value={value}
           disabled={disabled}
           aria-label={label}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onChange={(e) => onChange(snapToGrid(Number(e.target.value)))}
           className={cx(
             "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
             "h-1.5 bg-slate-200 dark:bg-slate-700",
