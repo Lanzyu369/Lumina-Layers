@@ -46,6 +46,7 @@ def _get_n3mf():
 
 _CONFIG_TEMPLATE_CACHE = None
 _PRINTER_TEMPLATE_CACHE: dict[str, dict] = {}
+_VALID_LAYER_CONFIG_FACES = frozenset({"up", "down", "double"})
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,77 @@ class _MeshExportEntry:
     object_name: str
     material_name: str
     color_rgb: tuple[int, int, int]
+
+
+def build_layer_config_ranges_xml(
+    *,
+    base_height_mm: float,
+    color_height_mm: float,
+    nozzle_mm: float,
+    face: str,
+    fine_layer_height_mm: float = 0.08,
+    object_id: int = 1,
+) -> bytes | None:
+    """Build Metadata/layer_config_ranges.xml for base-plate coarse layer height.
+    为底板粗层高生成 Metadata/layer_config_ranges.xml。
+
+    Args:
+        base_height_mm (float): Backing/base thickness in millimetres.
+            （底板厚度，单位为毫米）
+        color_height_mm (float): Colored-region thickness in millimetres.
+            （彩色区域厚度，单位为毫米）
+        nozzle_mm (float): Nozzle diameter in millimetres.
+            （喷嘴直径，单位为毫米）
+        face (str): Face orientation selector: "up", "down", or "double".
+            （朝向选择器："up"、"down" 或 "double"）
+        fine_layer_height_mm (float): Fine printing layer height in millimetres.
+            （细层高打印层高，单位为毫米）
+        object_id (int): 3MF object identifier written into the XML payload.
+            （写入 XML 载荷的 3MF 对象 ID）
+
+    Returns:
+        bytes | None: UTF-8 XML bytes when a coarse-layer override is required, otherwise `None`.
+            （当需要粗层高覆盖时返回 UTF-8 XML 字节，否则返回 `None`）
+
+    Raises:
+        ValueError: If numeric inputs cannot be converted to floats.
+            （当数值输入无法转换为浮点数时抛出）
+    """
+    base_height = float(base_height_mm)
+    color_height = float(color_height_mm)
+    nozzle = float(nozzle_mm)
+    fine_layer_height = float(fine_layer_height_mm)
+    normalized_face = str(face).strip().lower()
+
+    coarse_lh = nozzle * 0.5
+    if base_height <= 0:
+        return None
+    if coarse_lh <= fine_layer_height:
+        return None
+    if color_height < 0 or nozzle <= 0:
+        return None
+    if normalized_face not in _VALID_LAYER_CONFIG_FACES:
+        return None
+
+    if normalized_face == "up":
+        min_z = 0.0
+        max_z = base_height
+    else:
+        min_z = color_height
+        max_z = color_height + base_height
+
+    xml_text = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<objects>\n"
+        f' <object id="{object_id}">\n'
+        f'  <range min_z="{min_z:.17g}" max_z="{max_z:.17g}">\n'
+        '   <option opt_key="extruder">0</option>\n'
+        f'   <option opt_key="layer_height">{coarse_lh:.17g}</option>\n'
+        "  </range>\n"
+        " </object>\n"
+        "</objects>\n"
+    )
+    return xml_text.encode("utf-8")
 
 
 def load_printer_template(
@@ -174,6 +246,11 @@ class BambuStudio3MFWriter:
         slicer: str = "BambuStudio",
         nozzle_size: Optional[str | float] = None,
         watermark: str = "LuminaStudio",
+        *,
+        enable_base_layer_height_modifier: bool = True,
+        base_height_mm: float = 0.0,
+        color_height_mm: float = 0.0,
+        face_orientation: str = "down",
     ):
         """Initialize 3MF writer with printer-specific template support.
         初始化 3MF 写入器，支持机型和切片器专属配置模板。
@@ -187,6 +264,14 @@ class BambuStudio3MFWriter:
             nozzle_size (Optional[str | float]): Nozzle size variant used for template selection.
                 (用于模板选择的喷嘴尺寸变体)
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
+            enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
+                （是否输出 layer_config_ranges.xml）
+            base_height_mm (float): Backing/base thickness used for coarse layer-height override.
+                （用于粗层高覆盖的底板厚度）
+            color_height_mm (float): Colored-region thickness used to place the override range.
+                （用于定位覆盖区间的彩色区域厚度）
+            face_orientation (str): Base orientation selector; invalid values fall back to "down".
+                （底板朝向；非法值静默回退到 "down"）
         """
         from config import normalize_nozzle_size, normalize_slicer_software_id
 
@@ -198,6 +283,13 @@ class BambuStudio3MFWriter:
         self.slicer = normalize_slicer_software_id(slicer)
         self.nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
         self.watermark = watermark
+        self.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+        self.base_height_mm = float(base_height_mm)
+        self.color_height_mm = float(color_height_mm)
+        normalized_face_orientation = str(face_orientation).strip().lower()
+        if normalized_face_orientation not in _VALID_LAYER_CONFIG_FACES:
+            normalized_face_orientation = "down"
+        self.face_orientation = normalized_face_orientation
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
 
@@ -448,6 +540,15 @@ class BambuStudio3MFWriter:
                     ("Metadata/cut_information.xml", "text/xml", self._build_cut_information_bytes()),
                 ]
             )
+        if self.enable_base_layer_height_modifier:
+            lcr_bytes = build_layer_config_ranges_xml(
+                base_height_mm=self.base_height_mm,
+                color_height_mm=self.color_height_mm,
+                nozzle_mm=float(self.nozzle_size),
+                face=self.face_orientation,
+            )
+            if lcr_bytes is not None:
+                parts.append(("Metadata/layer_config_ranges.xml", "text/xml", lcr_bytes))
         preview_png = self._build_preview_placeholder_png_bytes()
         parts.extend(
             [
@@ -797,6 +898,11 @@ def export_scene_with_bambu_metadata(
     nozzle_size: Optional[str | float] = None,
     watermark: str = "LuminaStudio",
     project_slot_names: Optional[List[str]] = None,
+    *,
+    enable_base_layer_height_modifier: bool = True,
+    base_height_mm: float = 0.0,
+    color_height_mm: float = 0.0,
+    face_orientation: str = "down",
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
@@ -815,6 +921,14 @@ def export_scene_with_bambu_metadata(
         watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
         project_slot_names (Optional[List[str]]): Full selected source palette/material names to preserve
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
+        enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
+            （是否输出 layer_config_ranges.xml）
+        base_height_mm (float): Backing/base thickness used for coarse layer-height override.
+            （用于粗层高覆盖的底板厚度）
+        color_height_mm (float): Colored-region thickness used to place the override range.
+            （用于定位覆盖区间的彩色区域厚度）
+        face_orientation (str): Base orientation selector passed to the writer.
+            （透传给写入器的底板朝向）
 
     Returns:
         str: Path to the exported 3MF file. (导出的 3MF 文件路径)
@@ -840,10 +954,23 @@ def export_scene_with_bambu_metadata(
         f"[BAMBU_3MF] LUT color_mode: {color_mode}, Palette colors: {palette_color_count} → 3MF mode: {actual_color_mode}"
     )
 
-    writer = BambuStudio3MFWriter(
-        output_path, settings, actual_color_mode,
-        printer_id=printer_id, slicer=slicer, nozzle_size=nozzle_size, watermark=watermark,
-    )
+    writer_kwargs = {
+        "output_path": output_path,
+        "settings": settings,
+        "color_mode": actual_color_mode,
+        "printer_id": printer_id,
+        "slicer": slicer,
+        "nozzle_size": nozzle_size,
+        "watermark": watermark,
+    }
+    writer = BambuStudio3MFWriter(**writer_kwargs)
+    writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+    writer.base_height_mm = float(base_height_mm)
+    writer.color_height_mm = float(color_height_mm)
+    normalized_face_orientation = str(face_orientation).strip().lower()
+    if normalized_face_orientation not in _VALID_LAYER_CONFIG_FACES:
+        normalized_face_orientation = "down"
+    writer.face_orientation = normalized_face_orientation
     if resolved_project_slot_names:
         writer._set_project_palette(resolved_project_slot_names, preview_colors)
 

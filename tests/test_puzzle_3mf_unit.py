@@ -9,7 +9,10 @@ import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 
+import trimesh
+
 from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
+from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 _CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 _PROD_NS = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
@@ -197,6 +200,50 @@ def test_assemble_puzzle_3mf_refreshes_metadata_files_and_preview_assets() -> No
                 "Metadata/pick_1.png",
             ):
                 assert archive.read(preview_asset_path) == overview_png
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+
+def test_assemble_puzzle_3mf_excludes_layer_config_ranges_xml() -> None:
+    """Combined puzzle package should not carry the single-piece layer-config modifier file."""
+
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        writer = BambuStudio3MFWriter(
+            output_path=str(piece_path),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            base_height_mm=0.8,
+            color_height_mm=2.4,
+            face_orientation="down",
+        )
+        writer.add_mesh(
+            trimesh.creation.box(extents=(10.0, 10.0, 1.0)),
+            "Slot 1 (White)",
+            (255, 255, 255),
+        )
+        writer.export()
+
+        with zipfile.ZipFile(piece_path, "r") as piece_archive:
+            assert "Metadata/layer_config_ranges.xml" in piece_archive.namelist()
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(label="A1", threemf_path=str(piece_path), offset_x_mm=0.0, offset_y_mm=0.0),
+            ],
+            output_path=str(output_path),
+            preview_colors={0: [255, 255, 255, 255]},
+            slot_names=["Slot 1 (White)"],
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            assert "Metadata/layer_config_ranges.xml" not in archive.namelist()
     finally:
         _cleanup_temp_paths(piece_path, output_path)
 

@@ -1653,6 +1653,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "喷嘴尺寸",
     en: "Nozzle Size",
   },
+  "settings.base_layer_height_modifier": {
+    zh: "底板层高修改器",
+    en: "Base-plate layer-height modifier",
+  },
+  "settings.base_layer_height_modifier_desc": {
+    zh: "在 3MF 里写入 layer_config_ranges，让底板用喷嘴直径一半的粗层高打印（0.4 → 0.2 mm，0.2 → 0.1 mm），显著缩短底板耗时。仅对 Bambu 系切片器生效；双面模型会自动跳过。",
+    en: "Writes layer_config_ranges so the base plate prints at half the nozzle diameter (0.4 → 0.2 mm, 0.2 → 0.1 mm), noticeably reducing base-plate time. Bambu-family slicers only; skipped for double-sided prints.",
+  },
   "settings.nozzle_count": {
     zh: "喷头数量",
     en: "Nozzle Count",

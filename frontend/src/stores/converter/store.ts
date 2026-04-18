@@ -3959,6 +3959,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           printer_id: useSettingsStore.getState().printerModel,
           slicer: useSettingsStore.getState().slicerSoftware,
           nozzle_size: useSettingsStore.getState().nozzleSize,
+          enable_base_layer_height_modifier:
+            useSettingsStore.getState().enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
         } as const;
 

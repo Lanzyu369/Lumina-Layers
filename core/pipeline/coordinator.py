@@ -53,6 +53,54 @@ COORDINATOR_HANDLED_ERRORS = (
     cv2.error,
 )
 
+
+def _update_bambu_base_layer_ctx_for_vector(
+    ctx: dict,
+    *,
+    color_mode: str,
+    structure_mode: str,
+    num_layers: int,
+    thickness_mm: float,
+) -> None:
+    """Populate Bambu base-layer modifier values for the vector export branch.
+    为矢量导出分支填充 Bambu 底板粗层高相关上下文值。
+
+    Args:
+        ctx (dict): Pipeline context updated in place.
+            （就地更新的流水线上下文字典）
+        color_mode (str): Effective color mode resolved by the vector branch.
+            （矢量分支解析后的颜色模式）
+        structure_mode (str): Effective structure mode used for mesh extrusion.
+            （用于网格拉伸的实际结构模式）
+        num_layers (int): Optical color-layer count reported by vector analysis.
+            （矢量分析得到的彩色光学层层数）
+        thickness_mm (float): Requested backing thickness in millimetres.
+            （请求的底板厚度，单位毫米）
+    """
+    from config import PrinterConfig
+
+    layer_h = PrinterConfig.LAYER_HEIGHT
+    backing_layer_count = max(1, int(round(float(thickness_mm) / layer_h)))
+    base_height_mm = backing_layer_count * layer_h
+    color_height_mm = max(0, int(num_layers)) * layer_h
+
+    structure_mode_text = str(structure_mode or "")
+    color_mode_text = str(color_mode or "")
+    is_double = "双面" in structure_mode_text or "Double" in structure_mode_text
+    is_5color = "5-Color Extended" in color_mode_text
+
+    if is_double:
+        face_orientation = "double"
+    elif is_5color:
+        face_orientation = "up"
+    else:
+        face_orientation = "down"
+
+    ctx["bambu_base_height_mm"] = float(base_height_mm)
+    ctx["bambu_color_height_mm"] = float(color_height_mm)
+    ctx["bambu_face_orientation"] = face_orientation
+    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+
 # ---------------------------------------------------------------------------
 # Raster pipeline step definitions
 # ---------------------------------------------------------------------------
@@ -416,6 +464,14 @@ def _run_vector_branch(ctx: dict) -> dict:
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
 
+        _update_bambu_base_layer_ctx_for_vector(
+            ctx,
+            color_mode=vec_processor.color_mode,
+            structure_mode=structure_mode,
+            num_layers=analysis.num_layers,
+            thickness_mm=spacer_thick,
+        )
+
         if len(scene.geometry) == 0:
             ctx["error"] = "[ERROR] Vector mesh generation failed: no valid geometry generated"
             return ctx
@@ -499,6 +555,10 @@ def _run_vector_branch(ctx: dict) -> dict:
             printer_id=ctx.get("printer_id", "bambu-h2d"),
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
+            enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
+            base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
+            color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
+            face_orientation=str(ctx.get("bambu_face_orientation", "down")),
         )
         log.info(f"[COORDINATOR] Vector 3MF exported with Bambu metadata: {out_path}")
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0

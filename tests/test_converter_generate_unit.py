@@ -14,6 +14,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import pickle
 import tempfile
@@ -33,6 +34,7 @@ from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
 from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
+from api.schemas.system import UserSettings
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
@@ -409,6 +411,7 @@ class TestGenerateParameterCompleteness:
         # Verify session-derived parameters (empty → None)
         assert submitted_params["replacement_regions"] is None
         assert submitted_params["free_color_set"] is None
+        assert submitted_params["enable_base_layer_height_modifier"] is True
 
     def test_generate_passes_replacement_regions_from_request(self) -> None:
         """Verify replacement_regions from request body override session data."""
@@ -445,6 +448,55 @@ class TestGenerateParameterCompleteness:
         assert regions[0]["quantized_hex"] == "#ff0000"
         assert regions[0]["matched_hex"] == "#ee0000"
         assert regions[0]["replacement_hex"] == "#00ff00"
+
+    def test_generate_passes_enable_base_layer_modifier_false(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "enable_base_layer_height_modifier": False,
+            },
+        }
+
+        worker_result = {
+            "threemf_path": "/tmp/out.3mf",
+            "glb_path": "/tmp/out.glb",
+            "status_msg": "OK",
+        }
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 200
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["enable_base_layer_height_modifier"] is False
+
+    def test_generate_defaults_enable_base_layer_modifier_true_when_field_missing(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+            },
+        }
+
+        worker_result = {
+            "threemf_path": "/tmp/out.3mf",
+            "glb_path": "/tmp/out.glb",
+            "status_msg": "OK",
+        }
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 200
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["enable_base_layer_height_modifier"] is True
 
 
 # =========================================================================
@@ -1391,3 +1443,79 @@ def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_va
     )
 
     assert resolved is None
+
+
+class TestUserSettingsBaseLayerModifierCompatibility:
+    """Verify persisted user settings keep the new base-layer flag compatible."""
+
+    def test_user_settings_default_enables_base_layer_modifier(self) -> None:
+        settings = UserSettings()
+
+        assert settings.enable_base_layer_height_modifier is True
+
+    def test_user_settings_accepts_missing_base_layer_modifier_key(self) -> None:
+        settings = UserSettings(
+            **{
+                "printer_model": "bambu-h2d",
+                "slicer_software": "BambuStudio",
+                "nozzle_size": "0.4",
+            }
+        )
+
+        assert settings.enable_base_layer_height_modifier is True
+
+    def test_user_settings_roundtrip_preserves_base_layer_modifier_false(self) -> None:
+        payload = {
+            "last_lut": "",
+            "last_modeling_mode": "high-fidelity",
+            "last_color_mode": "4-Color (RYBW)",
+            "last_slicer": "",
+            "palette_mode": "swatch",
+            "enable_crop_modal": True,
+            "printer_model": "bambu-h2d",
+            "slicer_software": "BambuStudio",
+            "nozzle_size": "0.4",
+            "enable_base_layer_height_modifier": False,
+        }
+        mock_file = MagicMock()
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = json.dumps(payload)
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            post_response = client.post("/api/system/settings", json=payload)
+            get_response = client.get("/api/system/settings")
+
+        assert post_response.status_code == 200
+        written_payload = json.loads(mock_file.write_text.call_args.args[0])
+        assert written_payload["enable_base_layer_height_modifier"] is False
+        assert get_response.status_code == 200
+        assert get_response.json()["settings"]["enable_base_layer_height_modifier"] is False
+
+
+class TestConverterEntryAcceptsBaseLayerModifierKwarg:
+    """Contract tests: the ctx key plumbed by the /api/convert/generate router
+    must be accepted by every downstream entry point that is called via
+    ``**kwargs`` with the router ``params`` dict, otherwise the worker process
+    raises ``TypeError`` and the API returns a generic 500.
+
+    契约测试：/api/convert/generate 路由组装的 ctx 键必须被每一个通过 ``**kwargs``
+    消费 params 字典的下游入口接受，否则 worker 进程抛 ``TypeError``，API 返回 500。
+    """
+
+    def test_generate_final_model_signature_accepts_enable_base_layer_modifier(self) -> None:
+        import inspect
+
+        from core.converter import generate_final_model
+
+        params = inspect.signature(generate_final_model).parameters
+        assert "enable_base_layer_height_modifier" in params
+        assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_convert_image_to_3d_signature_accepts_enable_base_layer_modifier(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d
+
+        params = inspect.signature(convert_image_to_3d).parameters
+        assert "enable_base_layer_height_modifier" in params
+        assert params["enable_base_layer_height_modifier"].default is True

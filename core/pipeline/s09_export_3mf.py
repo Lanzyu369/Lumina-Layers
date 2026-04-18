@@ -35,6 +35,10 @@ def run(ctx: dict) -> dict:
         - pixel_scale (float): mm/px 缩放因子
         - structure_mode (str): 结构模式（双面/单面）
         - total_layers (int): 总层数
+        - bambu_base_height_mm (float): Bambu 底板高度，缺省为 0.0
+        - bambu_color_height_mm (float): Bambu 彩色层高度，缺省为 0.0
+        - bambu_face_orientation (str): Bambu 朝向，缺省为 "down"
+        - enable_base_layer_height_modifier (bool): 是否启用底板粗层高覆盖，缺省为 True
 
     PipelineContext 输出键 / Output keys:
         - out_path (str): 导出的 3MF 文件路径
@@ -55,7 +59,8 @@ def run(ctx: dict) -> dict:
 
     is_single_sided = "单面" in structure_mode or "Single" in structure_mode
 
-    # Single-sided: X mirror correction (needed by BambuStudio writer)
+    # Single-sided: X mirror correction only. The transform does not change Z,
+    # so Bambu layer_config_ranges Z intervals remain valid without adjustment.
     if is_single_sided:
         model_width_mm = target_w * pixel_scale
         mirror_transform = np.array([[-1, 0, 0, model_width_mm], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
@@ -99,6 +104,13 @@ def run(ctx: dict) -> dict:
 
     try:
         _log.info(f"[S09] Exporting with BambuStudio metadata...")
+        _log.debug(
+            "[S09] Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
+            bool(ctx.get("enable_base_layer_height_modifier", True)),
+            float(ctx.get("bambu_base_height_mm", 0.0)),
+            float(ctx.get("bambu_color_height_mm", 0.0)),
+            str(ctx.get("bambu_face_orientation", "down")),
+        )
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,
@@ -110,6 +122,10 @@ def run(ctx: dict) -> dict:
             printer_id=ctx.get("printer_id", "bambu-h2d"),
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
+            enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
+            base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
+            color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
+            face_orientation=str(ctx.get("bambu_face_orientation", "down")),
         )
         if _bench_enabled and _export_t0 is not None:
             _export_elapsed = time.perf_counter() - _export_t0

@@ -65,6 +65,7 @@ class UserSettings(BaseModel):
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
     nozzle_size: str = "0.4"
+    enable_base_layer_height_modifier: StrictBool = True
 
 
 class UserSettingsResponse(BaseModel):

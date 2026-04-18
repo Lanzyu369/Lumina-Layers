@@ -4,6 +4,7 @@ import {
   filterCompatiblePrinters,
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
+  isBambuFamilySlicer,
   normalizePrinterOptionId,
   normalizeSlicerOptionId,
   resolveNozzleSizeOption,
@@ -98,5 +99,26 @@ describe("settingsOptionIds", () => {
     expect(resolveNozzleSizeOption("0.2", PRINTERS[1])).toBe("0.4");
     expect(resolveNozzleSizeOption("0.2", PRINTERS[0])).toBe("0.2");
     expect(resolveNozzleSizeOption("", undefined)).toBe("0.4");
+  });
+
+  describe("isBambuFamilySlicer", () => {
+    it("returns true for canonical Bambu-family slicers", () => {
+      expect(isBambuFamilySlicer("BambuStudio")).toBe(true);
+      expect(isBambuFamilySlicer("OrcaSlicer")).toBe(true);
+      expect(isBambuFamilySlicer("AnycubicSlicerNext")).toBe(true);
+    });
+
+    it("returns true for legacy aliases", () => {
+      expect(isBambuFamilySlicer("bambu")).toBe(true);
+      expect(isBambuFamilySlicer("orca_slicer")).toBe(true);
+      expect(isBambuFamilySlicer("snapmaker orca")).toBe(true);
+    });
+
+    it("returns false for non-Bambu-family and empty values", () => {
+      expect(isBambuFamilySlicer("PrusaSlicer")).toBe(false);
+      expect(isBambuFamilySlicer("Cura")).toBe(false);
+      expect(isBambuFamilySlicer("")).toBe(false);
+      expect(isBambuFamilySlicer("UnknownSlicer")).toBe(false);
+    });
   });
 });

@@ -245,6 +245,7 @@ def assemble_puzzle_3mf(
     base_files[combined_object_model_path] = _to_xml_bytes(combined_object_model)
     base_files["3D/3dmodel.model"] = _to_xml_bytes(combined_root)
     base_files["3D/_rels/3dmodel.model.rels"] = _build_model_relationships_bytes([combined_object_model_path])
+    log.info("[PUZZLE_3MF] base-layer-height modifier disabled for combined puzzle package")
     writer = BambuStudio3MFWriter(
         output_path="combined-puzzle.3mf",
         settings={},
@@ -252,7 +253,9 @@ def assemble_puzzle_3mf(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        enable_base_layer_height_modifier=False,
     )
+    base_files.pop("Metadata/layer_config_ranges.xml", None)
     if writer._should_emit_bambu_aux_parts():
         base_files["Metadata/cut_information.xml"] = _build_cut_information_bytes(len(piece_packages))
     else:
@@ -532,6 +535,7 @@ def _build_combined_project_settings_bytes(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            enable_base_layer_height_modifier=False,
         )
         settings = writer._get_base_config_template()
 
@@ -573,6 +577,7 @@ def _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        enable_base_layer_height_modifier=False,
     )
     return writer._build_slice_info_bytes()
 
@@ -596,6 +601,7 @@ def _update_combined_filament_sequence(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        enable_base_layer_height_modifier=False,
     )
     if not writer._should_emit_bambu_aux_parts():
         base_files.pop("Metadata/filament_sequence.json", None)

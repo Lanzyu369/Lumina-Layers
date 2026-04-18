@@ -297,3 +297,114 @@ print("Application:", app)
   - writer family stamps
   - launch behavior
   - frontend request propagation
+
+## Base-plate Layer-Height Modifier / 底板层高修改器
+
+### Motivation / 动机
+
+For multi-color FDM prints, the solid-color base plate often dominates print
+time while contributing nothing to color fidelity. Bambu-family slicers accept
+a per-Z-range `layer_height` override via `Metadata/layer_config_ranges.xml`.
+Lumina Studio embeds this override so the base plate prints at half the nozzle
+diameter while colored layers keep the configured fine layer height; measured
+base-plate time savings are 40–60% depending on geometry.
+
+对于多色 FDM 打印，纯色底板往往占据最大打印耗时，却对最终色彩效果
+没有贡献。Bambu 系切片器支持通过 `Metadata/layer_config_ranges.xml`
+按 Z 区间覆盖 `layer_height`。Lumina Studio 默认把底板层高写成喷嘴直径的
+一半，彩色层仍保持原层高，底板耗时通常可节省 40–60%。
+
+### Formula / 计算规则
+
+| Input / 输入 | Value / 值 |
+|---|---|
+| `coarse_layer_height` | `nozzle_diameter × 0.5` |
+| `0.4` nozzle | `0.2 mm` |
+| `0.2` nozzle | `0.1 mm` |
+| `base_height_mm` | `backing_layer_count × PrinterConfig.LAYER_HEIGHT` |
+| `color_height_mm` | `num_color_layers × PrinterConfig.LAYER_HEIGHT` |
+
+Z ranges emitted per `face_orientation`:
+
+| Orientation / 朝向 | Condition / 判定 | Z range |
+|---|---|---|
+| `down` | Single-sided, non-5-Color-Extended / 单面且非 5-Color Extended | `[color_height_mm, color_height_mm + base_height_mm]` |
+| `up` | 5-Color Extended (base on top) / 5-Color Extended（底板在顶部） | `[0, base_height_mm]` |
+| `double` | Double-sided / 双面 | Skipped — colored layers exist on both sides / 跳过，正反两面都是彩色层 |
+
+### Skip Conditions / 跳过条件
+
+The writer skips emitting `layer_config_ranges.xml` when any of:
+
+- toggle is off (`enable_base_layer_height_modifier=False`)
+- `base_height_mm ≤ 0` (no backing)
+- `coarse_layer_height ≤ fine_layer_height` (no benefit)
+- `face_orientation == "double"`
+- puzzle combine path (`core/puzzle_3mf.py` forces it off because object ids
+  and Z coordinates differ from single-piece exports)
+
+### Example XML / 样例 XML
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<objects>
+ <object id="1">
+  <range min_z="2.4" max_z="3.2">
+   <option opt_key="extruder">0</option>
+   <option opt_key="layer_height">0.2</option>
+  </range>
+ </object>
+</objects>
+```
+
+### End-to-end Wiring / 全链路
+
+```
+SettingsPanel (WikiTooltip + Switch)
+  └─► settingsStore.enableBaseLayerHeightModifier
+        └─► POST /api/system/settings  → user_settings.json
+        └─► ConvertGenerateRequest.enable_base_layer_height_modifier
+              └─► worker params dict
+                    └─► core.converter.generate_final_model(...)
+                          └─► pipeline ctx["enable_base_layer_height_modifier"]
+                                └─► core/pipeline/s09_export_3mf.py
+                                      └─► utils/bambu_3mf_writer.export_scene_with_bambu_metadata
+                                            └─► build_layer_config_ranges_xml
+```
+
+Bambu geometry keys (`bambu_base_height_mm`, `bambu_color_height_mm`,
+`bambu_face_orientation`) are populated by `core/pipeline/s06_voxel_building.py`
+(raster) and `core/pipeline/coordinator.py::_update_bambu_base_layer_ctx_for_vector`
+(vector), so downstream stages never recompute them.
+
+几何相关的 Bambu 上下文键由 `s06`（光栅）和 `coordinator` 的
+`_update_bambu_base_layer_ctx_for_vector`（矢量）统一写入，下游阶段不重复计算。
+
+### Turning it Off / 关闭方式
+
+- UI: **Settings → Slicer Settings → Base-plate layer-height modifier**（仅当
+  所选切片器属于 Bambu 家族时可见）
+- Programmatic: send `enable_base_layer_height_modifier=false` in
+  `POST /api/convert/generate`
+- Config: set `"enable_base_layer_height_modifier": false` in `user_settings.json`
+
+Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
+`BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`, `AnycubicSlicerNext`.
+
+### Regression Tests / 回归测试入口
+
+- `tests/test_bambu_layer_config_ranges_unit.py` — formula + XML shape +
+  end-to-end writer produces valid XML
+- `tests/test_pipeline_bambu_base_layer_ctx_unit.py` — raster/vector ctx
+  derivation
+- `tests/test_s09_export_3mf_unit.py` — s09 forwards ctx to writer and
+  falls back to safe defaults
+- `tests/test_puzzle_3mf_unit.py` — combined puzzle explicitly excludes
+  `Metadata/layer_config_ranges.xml`
+- `tests/test_converter_generate_unit.py::TestConverterEntryAcceptsBaseLayerModifierKwarg`
+  — signature contract (prevents API↔worker kwargs drift)
+- `tests/test_bambu_3mf_writer_unit.py` — writer-level kwargs plumbing
+- `frontend/src/components/__tests__/SettingsPanel.baseLayerHeightModifier.test.tsx`
+  — UI gating by slicer family + translation assertions
+- `frontend/src/__tests__/settingsOptionIds.test.ts` — `isBambuFamilySlicer`
+  canonicalization

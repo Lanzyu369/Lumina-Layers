@@ -58,6 +58,14 @@ const SLICER_SOFTWARE_DISPLAY_NAME_MAP: Record<string, string> = {
   Cura: "Ultimaker Cura",
 };
 
+const BAMBU_FAMILY_SLICER_IDS: ReadonlySet<string> = new Set([
+  "BambuStudio",
+  "OrcaSlicer",
+  "SnapmakerOrca",
+  "ElegooSlicer",
+  "AnycubicSlicerNext",
+]);
+
 export function normalizeSlicerOptionId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -80,6 +88,11 @@ export function getSoftwareIdForDetectedSlicerId(value: string): string | null {
 export function getSlicerSoftwareDisplayName(value: string): string {
   const canonicalId = normalizeSlicerOptionId(value);
   return SLICER_SOFTWARE_DISPLAY_NAME_MAP[canonicalId] ?? canonicalId;
+}
+
+export function isBambuFamilySlicer(value: string): boolean {
+  const canonicalId = normalizeSlicerOptionId(value);
+  return BAMBU_FAMILY_SLICER_IDS.has(canonicalId);
 }
 
 export function normalizePrinterOptionId(value: string): string {

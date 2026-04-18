@@ -1,0 +1,6 @@
+# Keep repository text normalized to LF across platforms.
+* text=auto eol=lf
+
+# Windows batch files should keep CRLF for native execution and editing.
+*.bat text eol=crlf
+*.cmd text eol=crlf

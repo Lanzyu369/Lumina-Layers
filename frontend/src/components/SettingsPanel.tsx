@@ -12,6 +12,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  isBambuFamilySlicer,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
@@ -20,6 +21,7 @@ import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
 import Switch from "./ui/Switch";
+import WikiTooltip from "./ui/WikiTooltip";
 import { PanelIntro, StatusBanner, resolvePanelSurfaceClass, resolveSectionCardClass } from "./ui/panelPrimitives";
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
@@ -47,6 +49,12 @@ export default function SettingsPanel() {
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
   const nozzleSize = useSettingsStore((s) => s.nozzleSize);
   const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
+  const enableBaseLayerHeightModifier = useSettingsStore(
+    (s) => s.enableBaseLayerHeightModifier,
+  );
+  const setEnableBaseLayerHeightModifier = useSettingsStore(
+    (s) => s.setEnableBaseLayerHeightModifier,
+  );
   const setLastBedLabel = useSettingsStore((s) => s.setLastBedLabel);
   const syncToBackend = useSettingsStore((s) => s.syncToBackend);
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
@@ -279,6 +287,30 @@ export default function SettingsPanel() {
             <span>
               {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter)} {t("common_unit_mm")}
             </span>
+          </div>
+        )}
+        {isBambuFamilySlicer(resolvedSlicerSoftware) && (
+          <div
+            data-testid="base-layer-height-modifier-row"
+            className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
+          >
+            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+              {t("settings.base_layer_height_modifier")}
+            </span>
+            <WikiTooltip
+              title={t("settings.base_layer_height_modifier")}
+              description={t("settings.base_layer_height_modifier_desc")}
+              placement="left"
+            >
+              <Switch
+                checked={enableBaseLayerHeightModifier}
+                onChange={(enabled) => {
+                  setEnableBaseLayerHeightModifier(enabled);
+                  void syncToBackend();
+                }}
+                ariaLabel={t("settings.base_layer_height_modifier")}
+              />
+            </WikiTooltip>
           </div>
         )}
       </section>

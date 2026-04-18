@@ -422,6 +422,7 @@ async def convert_generate(
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
     }
     if session_material_source == "material_archive":
@@ -620,6 +621,7 @@ def _resolve_large_format_shared_params(
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
     }
 

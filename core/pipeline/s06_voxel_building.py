@@ -20,6 +20,52 @@ from config import PrinterConfig, get_source_kind
 _log = logging.getLogger(__name__)
 
 
+def _update_bambu_base_layer_ctx_from_voxels(
+    ctx: dict,
+    *,
+    color_mode: str,
+    structure_mode: str,
+    num_layers: int,
+    thickness_mm: float,
+) -> None:
+    """Populate Bambu base-layer modifier values from voxel-stage inputs.
+    根据体素阶段输入填充 Bambu 底板粗层高相关上下文值。
+
+    Args:
+        ctx (dict): Pipeline context updated in place.
+            （就地更新的流水线上下文字典）
+        color_mode (str): Effective color mode for the current build.
+            （当前构建使用的颜色模式）
+        structure_mode (str): Effective structure mode after stage-level normalization.
+            （阶段归一化后的结构模式）
+        num_layers (int): Optical color-layer count before backing is added.
+            （添加底板前的彩色光学层层数）
+        thickness_mm (float): Requested or quantized backing thickness in millimetres.
+            （请求值或量化后的底板厚度，单位毫米）
+    """
+    layer_h = PrinterConfig.LAYER_HEIGHT
+    backing_layer_count = max(1, int(round(float(thickness_mm) / layer_h)))
+    base_height_mm = backing_layer_count * layer_h
+    color_height_mm = max(0, int(num_layers)) * layer_h
+
+    structure_mode_text = str(structure_mode or "")
+    color_mode_text = str(color_mode or "")
+    is_double = "双面" in structure_mode_text or "Double" in structure_mode_text
+    is_5color = "5-Color Extended" in color_mode_text
+
+    if is_double:
+        face_orientation = "double"
+    elif is_5color:
+        face_orientation = "up"
+    else:
+        face_orientation = "down"
+
+    ctx["bambu_base_height_mm"] = float(base_height_mm)
+    ctx["bambu_color_height_mm"] = float(color_height_mm)
+    ctx["bambu_face_orientation"] = face_orientation
+    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+
+
 def _normalize_color_height_map(color_height_map: dict[str, float]) -> dict[str, float]:
     """Normalize hex keys to '#rrggbb' format.
     将 hex 键归一化为 '#rrggbb' 格式。
@@ -832,6 +878,13 @@ def run(ctx: dict) -> dict:
     # Update structure_mode in case it was forced
     ctx["structure_mode"] = structure_mode
     ctx["spacer_thick"] = spacer_thick
+    _update_bambu_base_layer_ctx_from_voxels(
+        ctx,
+        color_mode=color_mode,
+        structure_mode=structure_mode,
+        num_layers=material_matrix.shape[2],
+        thickness_mm=spacer_thick,
+    )
 
     _elapsed = time.perf_counter() - _t0
     _log.info(f"[S06] voxel_build done: {_elapsed:.3f}s")

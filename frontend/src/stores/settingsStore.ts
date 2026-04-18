@@ -22,6 +22,7 @@ export interface SettingsState {
   printerModel: string;
   slicerSoftware: string;
   nozzleSize: "0.2" | "0.4";
+  enableBaseLayerHeightModifier: boolean;
 }
 
 // ========== Actions Interface ==========
@@ -42,6 +43,7 @@ export interface SettingsActions {
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
   setNozzleSize: (size: "0.2" | "0.4") => void;
+  setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
   nozzleSize: "0.4",
+  enableBaseLayerHeightModifier: true,
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
@@ -126,6 +129,16 @@ export function deriveBackendDeviceSettingsPatch(
     patch.nozzleSize = settings.nozzle_size;
   }
 
+  if (
+    typeof settings.enable_base_layer_height_modifier === "boolean" &&
+    current.enableBaseLayerHeightModifier ===
+      DEFAULT_SETTINGS.enableBaseLayerHeightModifier &&
+    !hasOwnSetting(persistedSnapshot, "enableBaseLayerHeightModifier")
+  ) {
+    patch.enableBaseLayerHeightModifier =
+      settings.enable_base_layer_height_modifier;
+  }
+
   return patch;
 }
 
@@ -184,6 +197,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
+      setEnableBaseLayerHeightModifier: (enabled: boolean) => {
+        set({ enableBaseLayerHeightModifier: enabled });
+        invalidateGeneratedArtifacts();
+      },
+
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();
         const patch = deriveBackendDeviceSettingsPatch(
@@ -201,6 +219,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         if (patch.nozzleSize) {
           actions.setNozzleSize(patch.nozzleSize);
         }
+        if (typeof patch.enableBaseLayerHeightModifier === "boolean") {
+          actions.setEnableBaseLayerHeightModifier(
+            patch.enableBaseLayerHeightModifier,
+          );
+        }
       },
 
       syncToBackend: async () => {
@@ -216,6 +239,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
             nozzle_size: state.nozzleSize,
+            enable_base_layer_height_modifier:
+              state.enableBaseLayerHeightModifier,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage
