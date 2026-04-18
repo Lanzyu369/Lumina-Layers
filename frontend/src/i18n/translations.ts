@@ -3923,6 +3923,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "取消",
     en: "Cancel",
   },
+  announcement_title: {
+    zh: "版本更新",
+    en: "What's New",
+  },
+  announcement_close: {
+    zh: "关闭",
+    en: "Close",
+  },
+  announcement_close_label: {
+    zh: "稍后再看",
+    en: "Later",
+  },
+  announcement_mark_read: {
+    zh: "知道了",
+    en: "Got it",
+  },
+  announcement_version_label: {
+    zh: "发布日期",
+    en: "Released",
+  },
   recipe_import_success: {
     zh: "配方已恢复",
     en: "Recipe restored",

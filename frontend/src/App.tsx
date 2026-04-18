@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
 import { useAutoPreview } from "./hooks/useAutoPreview";
+import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
@@ -10,6 +11,7 @@ import { getSettings } from "./api/system";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
+import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -188,6 +190,7 @@ function WidgetToggles() {
 
 function AppContent() {
   const { t } = useI18n();
+  const announcement = useAnnouncement();
   const converterSessionId = useConverterStore((s) => s.sessionId);
   const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
   const hydrateDeviceSettingsFromBackend = useSettingsStore(
@@ -201,6 +204,7 @@ function AppContent() {
   const workspace = useWorkspaceMode();
 
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [announcementReady, setAnnouncementReady] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
 
@@ -228,6 +232,11 @@ function AppContent() {
       cancelled = true;
     };
   }, [hydrateDeviceSettingsFromBackend]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAnnouncementReady(true), 600);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
@@ -325,6 +334,12 @@ function AppContent() {
         {activeTab === 'vectorizer' && <VectorizerPanel />}
         {activeTab === 'settings' && <SettingsPanel />}
       </main>
+      <AnnouncementDialog
+        open={announcementReady && announcement.visible}
+        entry={announcement.entry}
+        onClose={announcement.close}
+        onDismissVersion={announcement.dismissThisVersion}
+      />
     </div>
   );
 }

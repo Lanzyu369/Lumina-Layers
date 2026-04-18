@@ -84,3 +84,14 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Use Conventional Commits: `<type>(<scope>): <subject>`
 - When commit bodies or PR descriptions are needed, write English first and Chinese second
 - Summaries should explain why, not just touched files
+
+## In-App Announcement Maintenance
+- Source of truth: `frontend/src/data/announcements.ts`; rendered by `AnnouncementDialog` via `useAnnouncement` on first launch
+- Any PR merged to the default branch that introduces a user-visible change (new feature, behavior change, UX fix, notable stability fix) must be reflected in the announcement file in a follow-up commit or PR
+- Versioning is by **publish date in Beijing time (UTC+8)**, formatted `YYYY-MM-DD`; never use semver here, never backdate, never use a future date
+- If the latest entry's `version` equals today's Beijing date, append new `items` to the appropriate existing `sections[].category`; otherwise prepend a new `AnnouncementEntry` whose `version` is today's Beijing date
+- Use the canonical category vocabulary in order: `新功能`, `颜色工作站`, `提取器（校色卡）`, `校准 & 材料`, `预览 & 交互`, `矢量化`, `稳定性`; add a new category only when no existing one fits
+- Writing style: Chinese plain-language, one sentence per item, explain the user-visible outcome rather than the code path; no emoji, no PR/issue numbers, no internal module names
+- Keep `title` stable within a release cycle; only bump it when the marketing framing actually changes
+- After editing, run `cd frontend && npx tsc --noEmit` plus `npx vitest run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
+- Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) distill each into one plain-language bullet under the right category, (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
