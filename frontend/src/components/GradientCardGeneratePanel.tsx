@@ -4,6 +4,7 @@ import { useI18n } from "../i18n/context";
 import Dropdown from "./ui/Dropdown";
 import Button from "./ui/Button";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
+import { MATERIAL_PRESET_OPTIONS } from "../constants/materialPresets";
 import {
   PanelIntro,
   StatusBanner,
@@ -102,16 +103,13 @@ export default function GradientCardGeneratePanel() {
               />
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                {t("cal_material_default_label")}
-              </span>
-              <input
-                className={textInputClass}
-                value={materialDefault}
-                onChange={(event) => setMaterialDefault(event.target.value)}
-              />
-            </label>
+            <Dropdown
+              label={t("cal_material_default_label")}
+              value={materialDefault}
+              options={[...MATERIAL_PRESET_OPTIONS]}
+              onChange={(value) => setMaterialDefault(value)}
+            />
+
 
             <Button
               label={t("cal_generate_single_stage_btn")}
