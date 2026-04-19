@@ -72,6 +72,29 @@ export default function GradientCardGeneratePanel() {
               </p>
             </div>
 
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/90 p-4 text-sm leading-6 text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300">
+              <p>{t("mat_gradient_generate_notice_dual_print")}</p>
+              <p className="mt-2">{t("mat_gradient_generate_notice_online_model")}</p>
+              <div className="mt-3 flex flex-col gap-2">
+                <a
+                  href="https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                >
+                  {t("mat_gradient_generate_online_model_link")}
+                </a>
+                <a
+                  href="https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                >
+                  {t("mat_gradient_generate_parametric_box_link")}
+                </a>
+              </div>
+            </div>
+
             <Dropdown
               label={t("cal_single_stage_layer_height_label")}
               value={singleStageLayerHeightMm.toString()}
@@ -81,35 +104,40 @@ export default function GradientCardGeneratePanel() {
               }
             />
 
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                {t("cal_substrate_id_label")}
-              </span>
-              <input
-                className={textInputClass}
-                value={substrateId}
-                onChange={(event) => setSubstrateId(event.target.value)}
+            <div style={{ display: "none" }}>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {t("cal_substrate_id_label")}
+                </span>
+                <input
+                  className={textInputClass}
+                  value={substrateId}
+                  onChange={(event) => setSubstrateId(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: "none" }}>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {t("cal_substrate_name_label")}
+                </span>
+                <input
+                  className={textInputClass}
+                  value={substrateDisplayName}
+                  onChange={(event) => setSubstrateDisplayName(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: "none" }}>
+              <Dropdown
+                label={t("cal_material_default_label")}
+                value={materialDefault}
+                options={[...MATERIAL_PRESET_OPTIONS]}
+                onChange={(value) => setMaterialDefault(value)}
               />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                {t("cal_substrate_name_label")}
-              </span>
-              <input
-                className={textInputClass}
-                value={substrateDisplayName}
-                onChange={(event) => setSubstrateDisplayName(event.target.value)}
-              />
-            </label>
-
-            <Dropdown
-              label={t("cal_material_default_label")}
-              value={materialDefault}
-              options={[...MATERIAL_PRESET_OPTIONS]}
-              onChange={(value) => setMaterialDefault(value)}
-            />
-
+            </div>
 
             <Button
               label={t("cal_generate_single_stage_btn")}

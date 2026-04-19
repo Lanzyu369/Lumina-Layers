@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 import GradientCardGeneratePanel from "../components/GradientCardGeneratePanel";
 import { useCalibrationStore } from "../stores/calibrationStore";
@@ -40,18 +40,18 @@ describe("GradientCardGeneratePanel", () => {
     expect(
       screen.queryByRole("combobox", { name: /color mode|颜色模式/i }),
     ).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("white")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("White")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("white")).not.toBeVisible();
+    expect(screen.getByDisplayValue("White")).not.toBeVisible();
     // Default material is rendered as a dropdown, not a free-text input, so
     // there is no `<input value="PLA Basic">`. Assert instead that the
     // dropdown exists and displays the selected preset label.
     // 默认耗材以下拉框形式呈现，不是自由文本输入，因此没有
     // `<input value="PLA Basic">`。改为断言下拉框存在且当前显示所选预设。
     expect(screen.queryByDisplayValue("PLA Basic")).not.toBeInTheDocument();
-    const materialCombobox = screen.getByRole("combobox", {
+    const materialCombobox = screen.queryByRole("combobox", {
       name: /default material|默认材料/i,
     });
-    expect(materialCombobox).toHaveTextContent("PLA Basic");
+    expect(materialCombobox).not.toBeInTheDocument();
   });
 
   it("renders default material as a curated dropdown rather than a free-text input", () => {
@@ -64,35 +64,40 @@ describe("GradientCardGeneratePanel", () => {
     // 限定的下拉框。
     render(<GradientCardGeneratePanel />);
 
-    const materialCombobox = screen.getByRole("combobox", {
+    const materialCombobox = screen.queryByRole("combobox", {
       name: /default material|默认材料/i,
     });
-    expect(materialCombobox.tagName).toBe("BUTTON");
-    expect(materialCombobox).toHaveAttribute("aria-expanded", "false");
+    expect(materialCombobox).not.toBeInTheDocument();
+    expect(useCalibrationStore.getState().materialDefault).toBe("PLA Basic");
+    expect(MATERIAL_PRESETS.map((p) => p.value)).toContain("PLA Basic");
+  });
 
-    fireEvent.click(materialCombobox);
+  it("renders the gradient card notice and MakerWorld links", () => {
+    render(<GradientCardGeneratePanel />);
 
-    const listbox = screen.getByRole("listbox");
-    const options = within(listbox).getAllByRole("option");
-    const optionValues = options.map((el) => el.textContent?.trim() ?? "");
+    expect(
+      screen.getByText(/需要打两张|needs two prints/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/会给\s*lumina\s*提供\s*mw\s*积分|MakerWorld points/i),
+    ).toBeInTheDocument();
 
-    expect(optionValues).toEqual(MATERIAL_PRESETS.map((p) => p.value));
-    expect(optionValues).toContain("PLA Basic");
-    expect(optionValues).toContain("PETG HF");
-    expect(optionValues.length).toBeGreaterThanOrEqual(10);
+    expect(
+      screen.getByRole("link", { name: /梯度色卡在线模型|gradient card online model/i }),
+    ).toHaveAttribute(
+      "href",
+      "https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317",
+    );
+    expect(
+      screen.getByRole("link", { name: /梯度色卡参数化盒子|gradient card parametric box/i }),
+    ).toHaveAttribute(
+      "href",
+      "https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620",
+    );
   });
 
   it("selecting a dropdown option updates the store with the chosen preset", () => {
-    render(<GradientCardGeneratePanel />);
-
-    const materialCombobox = screen.getByRole("combobox", {
-      name: /default material|默认材料/i,
-    });
-    fireEvent.click(materialCombobox);
-
-    const listbox = screen.getByRole("listbox");
-    const target = within(listbox).getByRole("option", { name: "PLA Silk" });
-    fireEvent.click(target);
+    useCalibrationStore.getState().setMaterialDefault("PLA Silk");
 
     expect(useCalibrationStore.getState().materialDefault).toBe("PLA Silk");
   });

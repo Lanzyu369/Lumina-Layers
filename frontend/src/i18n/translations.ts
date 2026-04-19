@@ -4387,6 +4387,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成用于耗材表征的共享梯度卡套件，并保留 manifest、层高等元数据。",
     en: "Generate a shared gradient card kit for material characterization while preserving manifest metadata such as layer height.",
   },
+  mat_gradient_generate_notice_dual_print: {
+    zh: "色卡一个颜色，需要打两张，一张白色底，一张黑色底。不管你使用生成还是在线模型，你都需要下载 Kit zip 包。因为提取的时候会用到。",
+    en: "Each color in the card needs two prints: one on a white base and one on a black base. Whether you use the generated model or the online model, you still need to download the Kit ZIP package because it is required during extraction.",
+  },
+  mat_gradient_generate_notice_online_model: {
+    zh: "线上模型和你生成的模型是一样的，如果你愿意使用在线模型生成，会给 Lumina 提供 MW 积分，积分将用于抽奖。",
+    en: "The online models are the same as the ones generated here. If you choose to use the online versions, Lumina will receive MakerWorld points that will be used for giveaways.",
+  },
+  mat_gradient_generate_online_model_link: {
+    zh: "梯度色卡在线模型",
+    en: "Gradient card online model",
+  },
+  mat_gradient_generate_parametric_box_link: {
+    zh: "梯度色卡参数化盒子",
+    en: "Gradient card parametric box",
+  },
   mat_gradient_extract_title: {
     zh: "提取梯度卡数据",
     en: "Extract Gradient Card Data",
