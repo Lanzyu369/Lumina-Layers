@@ -78,7 +78,7 @@ def build_box_body(
     wall=2.0,
     floor=1.5,
     groove_t=1.0,
-    groove_h=3.0,
+    groove_h=10.0,
     expose=12.0,
     step_inset=1.2,
     step_depth=8.0,
@@ -140,7 +140,7 @@ def build_box_body(
     info = dict(
         ox=ox, oy=oy, oz=oz, step_z=step_z,
         wall=wall, thin=thin, floor=floor,
-        expose=expose, wall_h=wall_h,
+        card_h=card_h, expose=expose, wall_h=wall_h,
         step_inset=step_inset, step_depth=step_depth,
         lid_clearance=lid_clearance,
         groove_t=groove_t, groove_h=groove_h,
@@ -155,35 +155,48 @@ def build_box_body(
 # Snap-on lid  (prints upside-down, plate on bed)
 # ---------------------------------------------------------------------------
 #
-#  Cross-section (Y-Z):
+#  Assembled cross-section (Y-Z):
 #
-#   ┌───────────────────────────────────────┐  ← plate (top when placed)
+#   ┌───────────────────────────────────────┐  ← plate (top)
 #   │  ┌─outer─┐                ┌─outer─┐  │
 #   │  │       │  ┌─inner lip─┐ │       │  │
+#   │  │       │  │  (cards)  │ │       │  │  ← card tops
 #   │  │       │  │           │ │       │  │
-#   │  │       │  └───────────┘ │       │  │
-#   │  └───────┘                └───────┘  │
+#   │  │  box  │  └───────────┘ │  rim  │  │  ← box rim / step_z
+#   │  │  wall │                │  wall │  │
+#   │  │       │                │       │  │
+#   │  └───────┘                └───────┘  │  ← near box base
 #   └───────────────────────────────────────┘
 #
-#   outer walls wrap outside the box; inner lip sits on the step ledge.
+#   Deep-cap lid: outer walls extend from plate down to near box base.
+#   Inner lip reaches the step ledge inside the box.
 #   Printed plate-down — no overhangs.
 #
 
-def build_lid(info, plate=1.5, lid_wall=1.5):
+def build_lid(info, plate=1.5, lid_wall=1.5, top_clearance=2.0):
     ox = info["ox"]
     oy = info["oy"]
-    sd = info["step_depth"]
+    fl = info["floor"]
     si = info["step_inset"]
     thin = info["thin"]
     gap = info["lid_clearance"]
-    expose = info["expose"]
+    step_z = info["step_z"]
+    card_h = info["card_h"]
+
+    # In assembled position (box coords):
+    #   card tops = floor + card_h
+    #   plate inner face must clear card tops
+    card_top_z = fl + card_h
+    plate_inner_z = card_top_z + top_clearance
 
     # Outer footprint
     lx = ox + 2 * gap + 2 * lid_wall
     ly = oy + 2 * gap + 2 * lid_wall
-    # Outer walls: cover exposed cards + overlap with step zone
-    outer_h = expose + sd
-    lip_h = sd - 1.0    # inner lip height (shorter to clear step)
+
+    # Outer walls: from plate down to near box base (leave 1 mm gap)
+    outer_h = plate_inner_z - 1.0
+    # Inner lip: from plate down to step ledge (minus 1 mm clearance)
+    lip_h = plate_inner_z - step_z - 1.0
     lip_t = si - gap     # lip thickness fits between step inset and thin wall
 
     parts = []
