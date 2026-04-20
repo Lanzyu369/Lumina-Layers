@@ -17,7 +17,7 @@ beforeEach(() => {
     substrateId: "white",
     substrateDisplayName: "White",
     materialDefault: "PLA Basic",
-    singleStageLayerHeightMm: 0.04,
+    singleStageLayerHeightMm: 0.08,
     isLoading: false,
     error: null,
     downloadUrl: null,
@@ -102,11 +102,12 @@ describe("GradientCardGeneratePanel", () => {
     expect(useCalibrationStore.getState().materialDefault).toBe("PLA Silk");
   });
 
-  it("renders kit and manifest links when generation output exists", () => {
+  it("renders only the kit download while hiding manifest and preview output", () => {
     useCalibrationStore.setState({
       lastSubmittedWorkflow: "single-stage",
       downloadUrl: "/api/files/kit.zip",
       manifestUrl: "/api/files/manifest.json",
+      previewImageUrl: "/api/files/preview.png",
       singleStageJobs: [],
     });
 
@@ -116,9 +117,7 @@ describe("GradientCardGeneratePanel", () => {
       "href",
       "/api/files/kit.zip",
     );
-    expect(screen.getByTestId("manifest-link")).toHaveAttribute(
-      "href",
-      "/api/files/manifest.json",
-    );
+    expect(screen.queryByTestId("manifest-link")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("preview-image")).not.toBeInTheDocument();
   });
 });

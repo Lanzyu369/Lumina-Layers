@@ -16,6 +16,7 @@ from .materials import (
     MaterialArchiveExportResult,
     MaterialArchiveImportResult,
     MaterialArchiveSaveResult,
+    MaterialArchiveUpdateResult,
     delete_saved_stage_a_material_archive,
     export_saved_stage_a_material_archives,
     extract_stage_a_material_from_gradient_cards,
@@ -23,6 +24,7 @@ from .materials import (
     list_saved_stage_a_material_archives,
     resolve_saved_material_dir,
     save_stage_a_material_archive,
+    update_saved_stage_a_material_archive_metadata,
 )
 from .processing import (
     StageAFitResult,
@@ -41,6 +43,7 @@ __all__ = [
     "MaterialArchiveExportResult",
     "MaterialArchiveImportResult",
     "MaterialArchiveSaveResult",
+    "MaterialArchiveUpdateResult",
     "SingleStageExtractResult",
     "StageAFitResult",
     "delete_saved_stage_a_material_archive",
@@ -53,5 +56,6 @@ __all__ = [
     "list_saved_stage_a_material_archives",
     "resolve_saved_material_dir",
     "save_stage_a_material_archive",
+    "update_saved_stage_a_material_archive_metadata",
     "resolve_single_stage_colorchecker_assets",
 ]

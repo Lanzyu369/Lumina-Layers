@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
@@ -212,6 +213,17 @@ def create_app() -> FastAPI:
 
         记录 FastAPI 422 验证错误详情，方便定位前端载荷不匹配的 bug。
         """
+        # Pydantic v2 stores the originating exception in ``ctx.error`` which is
+        # not JSON-serialisable by the default encoder, so both the structured
+        # log payload and the response body must go through ``jsonable_encoder``
+        # to coerce those values to strings. Without this the handler itself
+        # raises ``TypeError`` and the client sees a 500 instead of the real
+        # 422, which in turn breaks frontend error-detail mapping (e.g. the
+        # gradient-card store's ``detail === "material_name is required"``
+        # path). (Pydantic v2 将原始异常放在 ctx.error 中，必须通过
+        # jsonable_encoder 统一序列化，否则 handler 本身会抛 TypeError
+        # 导致前端拿不到 422，错误文案映射随之失效。)
+        encoded_errors = jsonable_encoder(exc.errors())
         log.warning(
             "Request validation failed",
             extra={
@@ -220,12 +232,12 @@ def create_app() -> FastAPI:
                 "method": request.method,
                 "status_code": 422,
                 "error_type": "RequestValidationError",
-                "error_message": str(exc.errors()),
+                "error_message": str(encoded_errors),
             },
         )
         return JSONResponse(
             status_code=422,
-            content={"detail": exc.errors()},
+            content={"detail": encoded_errors},
         )
 
     app.include_router(converter_router)

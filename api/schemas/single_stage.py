@@ -47,6 +47,35 @@ class StageAFitRequest(BaseModel):
         return self
 
 
+class GradientCardMaterialUpdateRequest(BaseModel):
+    """Request model for updating saved material metadata."""
+
+    material_name: str = Field(
+        ...,
+        description="Updated user-facing material name.",
+    )
+    brand: str | None = Field(
+        None,
+        description="Updated optional brand label.",
+    )
+
+    @field_validator("material_name")
+    @classmethod
+    def validate_material_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("material_name is required")
+        return cleaned
+
+    @field_validator("brand")
+    @classmethod
+    def normalize_brand(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class MaterialLibraryBulkExportRequest(BaseModel):
     """Request model for exporting multiple saved material archives."""
 

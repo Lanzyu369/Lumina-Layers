@@ -220,6 +220,14 @@ class GradientCardMaterialDeleteResponse(BaseModel):
     material_name: str
 
 
+class GradientCardMaterialUpdateResponse(BaseModel):
+    """Gradient-card material archive metadata update response."""
+
+    status: str
+    message: str
+    material: "SavedMaterialLibraryItemResponse"
+
+
 class SavedMaterialVerificationHistoryItemResponse(BaseModel):
     """Summary row for a single saved material verification run."""
 

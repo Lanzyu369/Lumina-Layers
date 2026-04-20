@@ -53,11 +53,51 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         ],
       },
       {
+        category: {
+          zh: "提取器（校色卡）",
+          en: "Extractor (Calibration Card)",
+        },
+        items: [
+          {
+            zh: "梯度卡耗材库支持直接编辑：双击条目即可修改耗材名和品牌，material.json 和 stage_A_parameters.json 会同步改名，不用再重新提取",
+            en: "The gradient-card material library now lets you rename a saved entry and change its brand in place; both material.json and stage_A_parameters.json are updated together, so there is no need to re-extract just to fix a label",
+          },
+          {
+            zh: "品牌选择改成可创建下拉：从已保存的耗材里自动汇总品牌选项，也能现场输入新品牌，不再需要手动拼写已经存在的品牌名",
+            en: "Brand input is now a creatable dropdown: it auto-aggregates brands from your saved materials, while still letting you type in a new brand on the spot — no more manually re-typing brand names you already use",
+          },
+          {
+            zh: "提取结果的 JSON 详情、拟合摘要、Stage A 下载链接统一收进新的\"详情\"弹窗，主面板保持干净，出参数/下载一步到位",
+            en: "Stage A download link, material summary and fit summary are now grouped into a \"Details\" dialog, keeping the main panel tidy while still one click away from the raw JSON and parameter files",
+          },
+          {
+            zh: "成功/失败提示改成右上角轻量浮层：4 秒后自动消失，也可以点 × 关闭，不再挤占面板正文",
+            en: "Success and error feedback moves to a lightweight top-right toast: it auto-dismisses after 4 seconds (or on clicking ×), so the main panel no longer gets pushed around by transient messages",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "校准 & 材料",
+          en: "Calibration & Materials",
+        },
+        items: [
+          {
+            zh: "梯度卡校准的默认层高从 0.04 mm 调整为 0.08 mm，更贴近常见 FDM 打印习惯；已有的档案不受影响，仍然按原始层高解析",
+            en: "Default gradient-card calibration layer height is now 0.08 mm (was 0.04 mm) to line up with the most common FDM print setting; existing archives keep their original layer height and are unaffected",
+          },
+        ],
+      },
+      {
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
             zh: "后端 422 验证错误现在会写入结构化日志并回传具体字段信息，对话框能直接告诉你哪个字段不对，而不是笼统的 \"请求失败 status 422\"",
             en: "Backend 422 validation errors are now written to structured logs and surfaced with concrete field details, so the dialog tells you exactly which field is wrong instead of a generic \"request failed with status 422\"",
+          },
+          {
+            zh: "字段级校验错误不再被错误处理器本身卡成 500：之前 Pydantic 的验证异常对象带了非 JSON 可序列化的内部引用，会把真正的 422 盖成 500，现在已统一走编码器回传",
+            en: "Field-level validation errors no longer turn themselves into 500s: the handler used to crash trying to serialise Pydantic's internal exception objects, hiding the real 422; responses now go through a proper encoder and carry the actual field errors",
           },
           {
             zh: "耗材档案模式下的自定义配方预测与应用不再报 \"LUT/source file missing\" 409，整套流程走通",
@@ -66,6 +106,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "扩展配方层数时的填充修正：模型外的透明背景保持透明，不再被一圈白色 mesh 包裹；模型内未改动的像素则延用背板材料，不会出现额外层塌成空层的情况",
             en: "Layer-count extension padding fixed: transparent background outside the model stays transparent (no more white ring mesh around the silhouette), while untouched interior pixels keep the backing material (no more collapsed extra layers inside the model)",
+          },
+          {
+            zh: "梯度卡提取与保存出错时会翻译成具体提示（ZIP 结构、HEIC 未装依赖、无法解码图像、四角选点个数、基底方向无法判断、会话过期、目标档案缺失等），不再直接透出英文技术细节",
+            en: "Gradient-card extract/save failures are now translated into concrete hints (malformed ZIP, missing HEIC decoder, undecodable image, wrong corner-point count, undeterminable substrate orientation, expired session, missing target archive, …) instead of leaking raw English backend strings",
           },
         ],
       },

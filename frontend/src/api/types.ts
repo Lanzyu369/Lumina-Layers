@@ -698,6 +698,12 @@ export interface GradientCardMaterialDeleteResponse {
   material_name: string;
 }
 
+export interface GradientCardMaterialUpdateResponse {
+  status: string;
+  message: string;
+  material: SavedMaterialLibraryItem;
+}
+
 export interface SavedMaterialVerificationHistoryItem {
   verification_index: number;
   captured_at?: string | null;

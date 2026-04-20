@@ -12,6 +12,7 @@ import type {
   SavedMaterialSummary,
   StageAFitSummary,
 } from "../api/types";
+import { tRuntime } from "../i18n/runtime";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 
 export type ExtractorWorkflow = "legacy" | "single-stage";
@@ -105,6 +106,136 @@ const revokePreviewUrl = (url: string | null) => {
     URL.revokeObjectURL(url);
   }
 };
+
+type ErrorWithResponseDetail = Error & {
+  response?: {
+    status?: number;
+    data?: {
+      detail?: unknown;
+    };
+  };
+};
+
+const INVALID_GRADIENT_CARD_ZIP_DETAILS = [
+  "Gradient card kit must be uploaded as a ZIP file",
+  "Gradient card kit zip must contain manifest.json",
+  "Malformed ZIP archive",
+  "manifest.json is not valid UTF-8 JSON",
+];
+
+const GRADIENT_CARD_CORNER_DETAIL_PATTERNS = [
+  /^Invalid (white|black)_corner_points JSON:/,
+  /^(white|black)_corner_points must contain exactly 4 points$/,
+  /^corner points must contain exactly 4 \[x, y\] pairs$/,
+];
+
+const GRADIENT_CARD_ORIENTATION_DETAIL_PATTERNS = [
+  /^Unable to determine gradient card orientation$/,
+  /^Invalid manual orientation label /,
+];
+
+const GRADIENT_CARD_SAVE_SESSION_DETAIL_PATTERNS = [
+  /^Session .+ not found$/,
+  /^Session does not contain a computed gradient-card Stage A result$/,
+];
+
+const GRADIENT_CARD_SAVE_TARGET_MISSING_DETAIL_PATTERNS = [
+  /^Saved material directory not found:/,
+  /^Saved material archive not found:/,
+];
+
+const GRADIENT_CARD_SAVE_TARGET_INVALID_DETAILS = [
+  "Existing material archive is not valid UTF-8 JSON",
+];
+
+const GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX = "无法解码图像文件:";
+const GRADIENT_CARD_HEIC_DETAIL_FRAGMENT = "HEIC/HEIF";
+
+function extractErrorDetail(err: unknown): string | null {
+  const detail = (err as ErrorWithResponseDetail | null)?.response?.data
+    ?.detail;
+  return typeof detail === "string" && detail.trim().length > 0
+    ? detail.trim()
+    : null;
+}
+
+function matchesAnyPattern(value: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+function isInvalidGradientCardZipDetail(detail: string): boolean {
+  return INVALID_GRADIENT_CARD_ZIP_DETAILS.includes(detail);
+}
+
+function resolveKnownGradientCardDetail(detail: string): string | null {
+  if (isInvalidGradientCardZipDetail(detail)) {
+    return tRuntime("mat_gradient_invalid_zip_error");
+  }
+  if (
+    detail.includes(GRADIENT_CARD_HEIC_DETAIL_FRAGMENT) &&
+    detail.includes("pillow-heif")
+  ) {
+    return tRuntime("mat_gradient_heic_unsupported_error");
+  }
+  if (detail.startsWith(GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX)) {
+    return tRuntime("mat_gradient_invalid_image_error");
+  }
+  if (matchesAnyPattern(detail, GRADIENT_CARD_CORNER_DETAIL_PATTERNS)) {
+    return tRuntime("mat_gradient_invalid_corner_error");
+  }
+  if (matchesAnyPattern(detail, GRADIENT_CARD_ORIENTATION_DETAIL_PATTERNS)) {
+    return tRuntime("mat_gradient_invalid_orientation_error");
+  }
+  return null;
+}
+
+function resolveGradientCardExtractError(err: unknown): string {
+  const detail = extractErrorDetail(err);
+  if (detail) {
+    return resolveKnownGradientCardDetail(detail) ?? detail;
+  }
+  return tRuntime("mat_gradient_extract_failed_error");
+}
+
+function resolveGradientCardRotationError(
+  err: unknown,
+  substrate: "white" | "black",
+): string {
+  const detail = extractErrorDetail(err);
+  if (detail) {
+    return resolveKnownGradientCardDetail(detail) ?? detail;
+  }
+  return tRuntime(
+    substrate === "white"
+      ? "mat_gradient_rotate_white_failed"
+      : "mat_gradient_rotate_black_failed",
+  );
+}
+
+function resolveGradientCardSaveError(err: unknown): string {
+  const detail = extractErrorDetail(err);
+  if (detail) {
+    if (matchesAnyPattern(detail, GRADIENT_CARD_SAVE_SESSION_DETAIL_PATTERNS)) {
+      return tRuntime("mat_gradient_save_session_expired_error");
+    }
+    if (detail === "material_name is required") {
+      return tRuntime("mat_gradient_save_name_required_error");
+    }
+    if (
+      matchesAnyPattern(
+        detail,
+        GRADIENT_CARD_SAVE_TARGET_MISSING_DETAIL_PATTERNS,
+      )
+    ) {
+      return tRuntime("mat_gradient_save_target_missing_error");
+    }
+    if (GRADIENT_CARD_SAVE_TARGET_INVALID_DETAILS.includes(detail)) {
+      return tRuntime("mat_gradient_save_target_invalid_error");
+    }
+    return detail;
+  }
+  return tRuntime("mat_gradient_save_failed_error");
+}
 
 const RESULT_RESET_STATE = {
   extractError: null,
@@ -254,10 +385,7 @@ export const useSingleStageStore = create<
       });
     } catch (err) {
       set({
-        extractError:
-          err instanceof Error
-            ? err.message
-            : "White gradient card rotation failed",
+        extractError: resolveGradientCardRotationError(err, "white"),
         isRotatingWhite: false,
       });
     }
@@ -303,10 +431,7 @@ export const useSingleStageStore = create<
       });
     } catch (err) {
       set({
-        extractError:
-          err instanceof Error
-            ? err.message
-            : "Black gradient card rotation failed",
+        extractError: resolveGradientCardRotationError(err, "black"),
         isRotatingBlack: false,
       });
     }
@@ -394,7 +519,7 @@ export const useSingleStageStore = create<
     const state = get();
     if (!state.datasetFile || !state.whiteImageFile || !state.blackImageFile) {
       set({
-        extractError: "Select the kit ZIP and both gradient card images first.",
+        extractError: tRuntime("mat_gradient_extract_inputs_required_error"),
       });
       return;
     }
@@ -403,8 +528,7 @@ export const useSingleStageStore = create<
       state.blackCornerPoints.length !== 4
     ) {
       set({
-        extractError:
-          "Mark 4 corners on both the white and black gradient cards.",
+        extractError: tRuntime("mat_gradient_extract_corners_required_error"),
       });
       return;
     }
@@ -445,10 +569,7 @@ export const useSingleStageStore = create<
       });
     } catch (err) {
       set({
-        extractError:
-          err instanceof Error
-            ? err.message
-            : "Gradient card extraction failed",
+        extractError: resolveGradientCardExtractError(err),
         isExtracting: false,
       });
     }
@@ -457,11 +578,11 @@ export const useSingleStageStore = create<
   submitSave: async (saveMode?: "merge" | "override") => {
     const state = get();
     if (!state.sessionId) {
-      set({ saveError: "Compute Stage A material data before saving." });
+      set({ saveError: tRuntime("mat_gradient_save_requires_extract_error") });
       return;
     }
     if (!state.materialName.trim()) {
-      set({ saveError: "Enter a material name before saving." });
+      set({ saveError: tRuntime("mat_gradient_save_name_required_error") });
       return;
     }
 
@@ -491,10 +612,7 @@ export const useSingleStageStore = create<
       });
     } catch (err) {
       set({
-        saveError:
-          err instanceof Error
-            ? err.message
-            : "Saving gradient card material failed",
+        saveError: resolveGradientCardSaveError(err),
         isSaving: false,
       });
     }
