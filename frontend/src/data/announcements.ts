@@ -18,16 +18,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
     version: "2026-04-20",
     title: {
-      zh: "Lumina Layers — 自定义配方更稳了",
-      en: "Lumina Layers — Custom recipe, stabilised",
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
     },
     sections: [
       {
         category: { zh: "新功能", en: "New" },
         items: [
           {
-            zh: "自定义配方编辑器支持虚拟耗材：LUT 里没有的原色（比如 CMYW LUT 想要黑）可以直接在下拉里选，3MF 导出时会作为独立对象自动带上，不再需要手工编辑切片",
-            en: "Custom recipe editor now supports virtual materials: primaries the LUT lacks (e.g. Black on a CMYW LUT) can be picked straight from the dropdown and are exported as separate 3MF objects, so no manual slicing tweaks are needed",
+            zh: "自定义配方可以加 LUT 里没有的颜色了：下拉直接选，导出的 3MF 会自动多一个对象带上这种颜色，切片那边不用自己改",
+            en: "You can now add colours that aren't in the LUT to a custom recipe: pick them from the dropdown and the exported 3MF carries them as extra objects, so the slicer just works",
           },
         ],
       },
@@ -35,20 +35,20 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         category: { zh: "颜色工作站", en: "Color Workstation" },
         items: [
           {
-            zh: "自定义配方对话框聚焦到最核心的动作：每层直接从 LUT 调色板里选材料，下拉菜单不再是空的，色块会显示该材料的真实颜色而不是灰色",
-            en: "The custom recipe dialog focuses on the core action: pick a material per layer from the LUT palette, the dropdown is no longer empty, and each swatch shows that material's real colour instead of a grey placeholder",
+            zh: "打开自定义配方，下拉里能看到每种材料的真实颜色，不再是一堆灰方块",
+            en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
           },
           {
-            zh: "没有前向模型的 LUT（例如材料档案 / 原生包）也能应用自定义配方了：后端会用最顶层通道的纯色堆叠作为兜底预览色，手动选材料的编辑不会再被 \"No predictive runtime\" 挡住",
-            en: "Custom recipes now apply even on LUTs without a forward model (e.g. material archives / native bundles): the backend falls back to the top layer's pure-stack colour so manual edits are no longer blocked by \"No predictive runtime\"",
+            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
+            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
           },
           {
-            zh: "打开自定义配方时，每层会自动预设为该色块已经匹配好的配方，而不是默认全白；只改一两层时其它层不会被覆盖",
-            en: "Opening the custom recipe dialog now pre-populates every layer with the swatch's real matched recipe instead of the all-White default, so tweaking one or two layers no longer wipes the rest of the stack",
+            zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
+            en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
           },
           {
-            zh: "应用自定义配方后，分层预览会重新拉取每一层，不再出现 \"只有被改过的层有颜色、其它层灰掉\" 的情况",
-            en: "After applying a custom recipe, the per-layer preview re-fetches every layer so the old \"only overridden layers are coloured, the rest stay grey\" artefact is gone",
+            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
           },
         ],
       },
@@ -59,20 +59,20 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         },
         items: [
           {
-            zh: "梯度卡耗材库支持直接编辑：双击条目即可修改耗材名和品牌，material.json 和 stage_A_parameters.json 会同步改名，不用再重新提取",
-            en: "The gradient-card material library now lets you rename a saved entry and change its brand in place; both material.json and stage_A_parameters.json are updated together, so there is no need to re-extract just to fix a label",
+            zh: "耗材库里已经存好的条目，现在可以直接改名字和品牌，不用重新扫卡",
+            en: "Already-saved entries in the material library can now be renamed (and have their brand changed) in place — no need to re-scan the card",
           },
           {
-            zh: "品牌选择改成可创建下拉：从已保存的耗材里自动汇总品牌选项，也能现场输入新品牌，不再需要手动拼写已经存在的品牌名",
-            en: "Brand input is now a creatable dropdown: it auto-aggregates brands from your saved materials, while still letting you type in a new brand on the spot — no more manually re-typing brand names you already use",
+            zh: "品牌输入改成下拉：之前用过的品牌会自动列出来，想加新品牌也能直接打字",
+            en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
           },
           {
-            zh: "提取结果的 JSON 详情、拟合摘要、Stage A 下载链接统一收进新的\"详情\"弹窗，主面板保持干净，出参数/下载一步到位",
-            en: "Stage A download link, material summary and fit summary are now grouped into a \"Details\" dialog, keeping the main panel tidy while still one click away from the raw JSON and parameter files",
+            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
+            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
           },
           {
-            zh: "成功/失败提示改成右上角轻量浮层：4 秒后自动消失，也可以点 × 关闭，不再挤占面板正文",
-            en: "Success and error feedback moves to a lightweight top-right toast: it auto-dismisses after 4 seconds (or on clicking ×), so the main panel no longer gets pushed around by transient messages",
+            zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
+            en: "Save success / failure messages moved to a small top-right toast that fades on its own, so they no longer push the rest of the panel around",
           },
         ],
       },
@@ -83,8 +83,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         },
         items: [
           {
-            zh: "梯度卡校准的默认层高从 0.04 mm 调整为 0.08 mm，更贴近常见 FDM 打印习惯；已有的档案不受影响，仍然按原始层高解析",
-            en: "Default gradient-card calibration layer height is now 0.08 mm (was 0.04 mm) to line up with the most common FDM print setting; existing archives keep their original layer height and are unaffected",
+            zh: "梯度卡校准的默认层高从 0.04 mm 改成 0.08 mm，跟大家平时打印的层高更接近；以前存好的档案保持原样，不会被动",
+            en: "Default gradient-card layer height is now 0.08 mm (was 0.04 mm) to match the layer height most people actually print at; archives you saved earlier keep their original layer height",
           },
         ],
       },
@@ -92,24 +92,24 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
-            zh: "后端 422 验证错误现在会写入结构化日志并回传具体字段信息，对话框能直接告诉你哪个字段不对，而不是笼统的 \"请求失败 status 422\"",
-            en: "Backend 422 validation errors are now written to structured logs and surfaced with concrete field details, so the dialog tells you exactly which field is wrong instead of a generic \"request failed with status 422\"",
+            zh: "梯度卡提取或保存失败时，会告诉你具体是哪一步出问题（ZIP 格式不对、图片解码不出来、角点选少了、基底方向认不出来、会话过期、找不到目标档案等），不再甩一串英文报错",
+            en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
           },
           {
-            zh: "字段级校验错误不再被错误处理器本身卡成 500：之前 Pydantic 的验证异常对象带了非 JSON 可序列化的内部引用，会把真正的 422 盖成 500，现在已统一走编码器回传",
-            en: "Field-level validation errors no longer turn themselves into 500s: the handler used to crash trying to serialise Pydantic's internal exception objects, hiding the real 422; responses now go through a proper encoder and carry the actual field errors",
+            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
+            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
           },
           {
-            zh: "耗材档案模式下的自定义配方预测与应用不再报 \"LUT/source file missing\" 409，整套流程走通",
-            en: "Custom recipe prediction and apply no longer surface a \"LUT/source file missing\" 409 in Material Archive mode; the full flow works end to end",
+            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
           },
           {
-            zh: "扩展配方层数时的填充修正：模型外的透明背景保持透明，不再被一圈白色 mesh 包裹；模型内未改动的像素则延用背板材料，不会出现额外层塌成空层的情况",
-            en: "Layer-count extension padding fixed: transparent background outside the model stays transparent (no more white ring mesh around the silhouette), while untouched interior pixels keep the backing material (no more collapsed extra layers inside the model)",
+            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
+            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
           },
           {
-            zh: "梯度卡提取与保存出错时会翻译成具体提示（ZIP 结构、HEIC 未装依赖、无法解码图像、四角选点个数、基底方向无法判断、会话过期、目标档案缺失等），不再直接透出英文技术细节",
-            en: "Gradient-card extract/save failures are now translated into concrete hints (malformed ZIP, missing HEIC decoder, undecodable image, wrong corner-point count, undeterminable substrate orientation, expired session, missing target archive, …) instead of leaking raw English backend strings",
+            zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
+            en: "When the layer count is extended: transparent background outside the model stays transparent (no more white ring), and untouched pixels inside the model keep their backing material (no more collapsed empty layers)",
           },
         ],
       },
