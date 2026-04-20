@@ -14,6 +14,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from api.app import app
+from api.dependencies import get_session_store
+from api.session_store import SessionStore
 from config import LUTMetadata, PaletteEntry
 from core.native_reference import (
     NativeReferenceContext,
@@ -120,6 +122,123 @@ class TestLutInfoNotFound:
         response = client.get("/api/lut/NonExistent/info")
         assert response.status_code == 404
         assert "LUT not found" in response.json()["detail"]
+
+
+# =========================================================================
+# 3. GET /api/lut/session/{session_id}/info — works for sessions without
+#    a globally-known LUT name (material archive / native bundle).
+# =========================================================================
+
+
+class TestSessionLutInfo:
+    """Verify the session-scoped LUT info endpoint."""
+
+    def _override_store(self, store: SessionStore) -> None:
+        app.dependency_overrides[get_session_store] = lambda: store
+
+    def _clear_override(self) -> None:
+        app.dependency_overrides.pop(get_session_store, None)
+
+    def test_returns_404_when_session_missing(self) -> None:
+        store = SessionStore(ttl=60)
+        self._override_store(store)
+        try:
+            response = client.get("/api/lut/session/does-not-exist/info")
+            assert response.status_code == 404
+            assert "Session not found" in response.json()["detail"]
+        finally:
+            self._clear_override()
+
+    def test_returns_409_when_session_has_no_lut(self) -> None:
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 409
+            assert "LUT" in response.json()["detail"]
+        finally:
+            self._clear_override()
+
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(
+            None,
+            None,
+            LUTMetadata(
+                palette=[
+                    PaletteEntry(
+                        color="White",
+                        material="PLA Basic",
+                        hex_color="#FFFFFF",
+                        color_name="Jade White",
+                    ),
+                    PaletteEntry(
+                        color="Red",
+                        material="PLA Basic",
+                        hex_color="#FF0000",
+                        color_name="Ruby",
+                    ),
+                ],
+            ),
+        ),
+    )
+    @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("8-Color", 2))
+    def test_returns_channel_palette_for_session_lut(
+        self,
+        mock_detect,
+        mock_load_meta,
+        tmp_path: Path,
+    ) -> None:
+        # Need a real file path for os.path.exists guard in the endpoint.
+        lut_file = tmp_path / "session_lut.json"
+        lut_file.write_text("{}", encoding="utf-8")
+
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", str(lut_file))
+        store.put(session_id, "lut_name", "Material Archive Session")
+
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["name"] == "Material Archive Session"
+            assert data["color_mode"] == "8-Color"
+            # Channel palette should be returned in LUT order, not quantized order.
+            assert [entry["color"] for entry in data["palette"]] == ["White", "Red"]
+            assert data["palette"][0]["hex_color"] == "#FFFFFF"
+            assert data["palette"][1]["hex_color"] == "#FF0000"
+        finally:
+            self._clear_override()
+
+    @patch(
+        "api.routers.lut.LUTManager.load_lut_with_metadata",
+        return_value=(None, None, LUTMetadata()),
+    )
+    @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("BW", 2))
+    def test_falls_back_to_file_stem_when_lut_name_missing(
+        self,
+        mock_detect,
+        mock_load_meta,
+        tmp_path: Path,
+    ) -> None:
+        lut_file = tmp_path / "fallback_name.json"
+        lut_file.write_text("{}", encoding="utf-8")
+
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", str(lut_file))
+        # Intentionally no "lut_name" stored.
+
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 200
+            assert response.json()["name"] == "fallback_name"
+        finally:
+            self._clear_override()
 
 
 class TestPredictRecipeColor:

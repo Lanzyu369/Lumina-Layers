@@ -175,16 +175,36 @@ export interface PuzzleGenerateResponse {
   warnings: string[];
 }
 
+/**
+ * 用户声明的虚拟耗材：LUT 原生没有的原色由前端作为虚拟耗材附加。
+ * 配方里 `>= lut_palette.length` 的索引指向 virtual_materials 列表的位置。
+ *
+ * User-declared extra material carried alongside a recipe override. Recipe
+ * values at or beyond the LUT palette length index into `virtual_materials`,
+ * so the pipeline can extend the working palette with the user's intended
+ * colours for both the 2D preview and the 3MF output.
+ */
+export interface VirtualMaterial {
+  /** 耗材显示名，例如 "Black"。Friendly name shown in preview / history. */
+  name: string;
+  /** 耗材 hex（#RRGGBB）。Canonical hex carried through to slicer filament colour. */
+  hex: string;
+}
+
 export interface RecipeOverrideItem {
   region_id: string;
   recipe: number[];
   layer_order: string;
+  /** 可选虚拟耗材列表；recipe 中 >= LUT.N 的索引指向它。 */
+  virtual_materials?: VirtualMaterial[];
 }
 
 export interface RecipePredictRequest {
   session_id: string;
   recipe: number[];
   layer_order: string;
+  /** 可选虚拟耗材列表；与后端 RecipePredictRequest.virtual_materials 对齐。 */
+  virtual_materials?: VirtualMaterial[];
   color_layers: number;
   layer_height_mm: number;
 }
@@ -206,6 +226,26 @@ export interface RecipeOverrideApplyResponse extends RecipePredictResponse {
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
+}
+
+export interface RegionRecipeRequest {
+  session_id: string;
+  region_ids: string[];
+  layer_order?: string;
+}
+
+export interface RegionRecipeEntry {
+  region_id: string;
+  recipe: number[];
+  color_layers: number;
+  layer_height_mm: number;
+  layer_order: string;
+}
+
+export interface RegionRecipeResponse {
+  status: string;
+  message: string;
+  recipes: RegionRecipeEntry[];
 }
 
 export interface ColorReplacementItem {
@@ -1211,4 +1251,64 @@ export interface VectorizeResponse {
 
 export interface VectorizeDefaultsResponse {
   defaults: VectorizeParams;
+}
+
+/** Lab 色三元组，保持和后端 RecipePredictResponse.lab 对齐。 */
+export type LabColor = [number, number, number];
+
+/** 失败来源分类：warning 级不吓人，error 级要醒目。 */
+export type PredictFailureKind = "no_forward_model" | "unknown";
+
+/** 用户在自定义配方对话框里手动或模型填入的目标色。 */
+export interface TargetColor {
+  /** 受控的 hex，带 "#" 前缀，上游/展示均统一带井号。 */
+  hex: string;
+  /** 对应 LAB 值（仅供 UI，不回传后端）。 */
+  lab: LabColor;
+  /** "model" 表示是点 Predict 由后端填的；"user" 表示用户手动调过。 */
+  source: "user" | "model";
+}
+
+/** 自定义配方历史条目（会话内内存，不落 localStorage）。 */
+export interface RecipeHistoryItem {
+  /** 稳定 ID：`${recipe.join("-")}@${layerOrder}`，便于去重 + React key。 */
+  id: string;
+  recipe: number[];
+  layerOrder: string;
+  /** 用户 apply 或 predict 时拿到的 RGB（uint8），显示色块用。 */
+  predictedRgb: [number, number, number];
+  /** 对应的 LAB。 */
+  predictedLab: LabColor;
+  /** 井号前缀的 hex，展示用。 */
+  hex: string;
+  /** 这条配方的颜色是否来自模型 predict；用户手调目标色后为 false。 */
+  fromModel: boolean;
+  /** 写入时间戳，UI 排序 / 调试用。 */
+  createdAtMs: number;
+  /**
+   * 每层用户实际点击的原色 hex（#RRGGBB，大写）。
+   * `recipe` 是翻译到 LUT 通道后的索引，可能因稀疏 LUT 代用丢失原意；
+   * 侧栏历史层条按此数组渲染，保证用户点"黑"历史就显示"黑"。
+   *
+   * Per-layer canonical hex the user actually picked. `recipe` holds the
+   * translated LUT channel indices (which may be substituted on sparse
+   * LUTs), so we persist the visual intent separately and drive the side
+   * panel's LayerBar off of it. Optional for backward compatibility with
+   * older session histories.
+   */
+  displayHexes?: string[];
+  /** 对应每层的原色名（与 ``displayHexes`` 对齐），用作 tooltip。Primary name per layer. */
+  displayLabels?: string[];
+  /**
+   * 应用本配方时声明的虚拟耗材列表（LUT 原生没有、recipe 里以
+   * ``palette.length + k`` 引用的原色）。历史重放时必须随 recipe 一起回传
+   * 后端，否则 validator 会以 "recipe[i] out of range" 拒绝请求，worker 也
+   * 无法把虚拟索引扩展到 ctx["slot_names"]（表现为 3MF 缺对象 / 透明失效）。
+   *
+   * Virtual materials declared when this recipe was applied. Replay paths
+   * MUST forward this alongside ``recipe`` so backend validation accepts
+   * indices ``>= LUT.N`` and the worker can extend ``ctx["slot_names"]``;
+   * dropping it collapses virtual-index pixels back onto native channels.
+   */
+  virtualMaterials?: VirtualMaterial[];
 }

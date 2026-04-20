@@ -3439,6 +3439,66 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "撤销",
     en: "Undo",
   },
+  five_color_add_to_list: {
+    zh: "加入配方收藏",
+    en: "Add to collection",
+  },
+  five_color_already_in_list: {
+    zh: "已在收藏",
+    en: "Already in collection",
+  },
+  five_color_collection_title: {
+    zh: "配方收藏",
+    en: "Recipe collection",
+  },
+  five_color_collection_count: {
+    zh: "共 {count} 条",
+    en: "{count} item(s)",
+  },
+  five_color_collection_empty: {
+    zh: "尚未收藏任何配方",
+    en: "No recipes collected yet",
+  },
+  five_color_collection_clear: {
+    zh: "清空收藏",
+    en: "Clear collection",
+  },
+  five_color_remove_recipe: {
+    zh: "移除此配方",
+    en: "Remove this recipe",
+  },
+  five_color_swatch_block_size: {
+    zh: "色块尺寸 (mm)",
+    en: "Block size (mm)",
+  },
+  five_color_swatch_gap: {
+    zh: "色块间距 (mm)",
+    en: "Gap (mm)",
+  },
+  five_color_swatch_cols: {
+    zh: "每行列数",
+    en: "Columns per row",
+  },
+  five_color_swatch_structure: {
+    zh: "色卡结构",
+    en: "Swatch structure",
+  },
+  five_color_swatch_legend_alt: {
+    zh: "色卡预览图",
+    en: "Swatch preview",
+  },
+  five_color_generate_swatch: {
+    zh: "生成色卡",
+    en: "Generate swatch",
+  },
+  five_color_generating_swatch: {
+    zh: "生成中...",
+    en: "Generating...",
+  },
+  five_color_download_swatch: {
+    zh: "下载色卡",
+    en: "Download swatch",
+  },
   five_color_reverse: {
     zh: "反序",
     en: "Reverse",
@@ -4022,6 +4082,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自定义配方",
     en: "Custom Recipe",
   },
+  recipe_custom_disabled_region: {
+    zh: "请先在预览图上点选一个颜色区域，再打开自定义配方",
+    en: "Click a color region in the preview first, then open Custom Recipe",
+  },
+  recipe_custom_undo: {
+    zh: "撤销编辑",
+    en: "Undo edit",
+  },
+  recipe_custom_applied_toast: {
+    zh: "已应用到当前区域。可以继续调整，或换一个区域再打开。",
+    en: "Applied to this region. Keep tweaking, or pick another region and reopen.",
+  },
+  recipe_custom_current_region: {
+    zh: "当前区域",
+    en: "Current region",
+  },
+  recipe_custom_region_multiple: {
+    zh: "已选 {count} 个区域",
+    en: "{count} regions selected",
+  },
   recipe_custom_title: {
     zh: "自定义配方编辑器",
     en: "Custom Recipe Editor",
@@ -4117,6 +4197,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_custom_apply_failed: {
     zh: "应用自定义配方失败",
     en: "Failed to apply custom recipe",
+  },
+  recipe_custom_layer_upgrade_warning: {
+    zh: "新配方 {new} 层比当前预览的 {old} 层多，应用后整张图都会按新层数重新出图。再点一次确认。",
+    en: "The new recipe has {new} layers, more than the current {old}-layer preview. Applying will re-render the whole image at the new layer count. Click again to confirm.",
+  },
+  recipe_custom_layer_upgrade_confirm: {
+    zh: "确认升级层数并应用",
+    en: "Confirm layer upgrade",
+  },
+  recipe_custom_predict_no_forward_model: {
+    zh: "当前 LUT 没带预测模型，无法算出这张配方的颜色。换一张带模型的 LUT，或者直接应用试试。",
+    en: "This LUT has no forward model, so the recipe colour can't be predicted. Switch to a LUT with a model, or apply directly to try it out.",
+  },
+  recipe_custom_target_from_model: {
+    zh: "来自模型",
+    en: "From Model",
+  },
+  recipe_custom_history_title: {
+    zh: "历史配方",
+    en: "Recipe History",
+  },
+  recipe_custom_history_empty: {
+    zh: "还没有自定义配方记录。应用一次后，这里会留下可一键复用的快照。",
+    en: "No custom recipes yet. After you apply one, a reusable snapshot will appear here.",
+  },
+  recipe_custom_history_layers: {
+    zh: "{count} 层",
+    en: "{count} layers",
   },
   recipe_import_lut_missing: {
     zh: "LUT 未找到，请手动选择兼容的 LUT",

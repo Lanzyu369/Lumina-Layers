@@ -16,6 +16,62 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-20",
+    title: {
+      zh: "Lumina Layers — 自定义配方更稳了",
+      en: "Lumina Layers — Custom recipe, stabilised",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "自定义配方编辑器支持虚拟耗材：LUT 里没有的原色（比如 CMYW LUT 想要黑）可以直接在下拉里选，3MF 导出时会作为独立对象自动带上，不再需要手工编辑切片",
+            en: "Custom recipe editor now supports virtual materials: primaries the LUT lacks (e.g. Black on a CMYW LUT) can be picked straight from the dropdown and are exported as separate 3MF objects, so no manual slicing tweaks are needed",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "自定义配方对话框聚焦到最核心的动作：每层直接从 LUT 调色板里选材料，下拉菜单不再是空的，色块会显示该材料的真实颜色而不是灰色",
+            en: "The custom recipe dialog focuses on the core action: pick a material per layer from the LUT palette, the dropdown is no longer empty, and each swatch shows that material's real colour instead of a grey placeholder",
+          },
+          {
+            zh: "没有前向模型的 LUT（例如材料档案 / 原生包）也能应用自定义配方了：后端会用最顶层通道的纯色堆叠作为兜底预览色，手动选材料的编辑不会再被 \"No predictive runtime\" 挡住",
+            en: "Custom recipes now apply even on LUTs without a forward model (e.g. material archives / native bundles): the backend falls back to the top layer's pure-stack colour so manual edits are no longer blocked by \"No predictive runtime\"",
+          },
+          {
+            zh: "打开自定义配方时，每层会自动预设为该色块已经匹配好的配方，而不是默认全白；只改一两层时其它层不会被覆盖",
+            en: "Opening the custom recipe dialog now pre-populates every layer with the swatch's real matched recipe instead of the all-White default, so tweaking one or two layers no longer wipes the rest of the stack",
+          },
+          {
+            zh: "应用自定义配方后，分层预览会重新拉取每一层，不再出现 \"只有被改过的层有颜色、其它层灰掉\" 的情况",
+            en: "After applying a custom recipe, the per-layer preview re-fetches every layer so the old \"only overridden layers are coloured, the rest stay grey\" artefact is gone",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "后端 422 验证错误现在会写入结构化日志并回传具体字段信息，对话框能直接告诉你哪个字段不对，而不是笼统的 \"请求失败 status 422\"",
+            en: "Backend 422 validation errors are now written to structured logs and surfaced with concrete field details, so the dialog tells you exactly which field is wrong instead of a generic \"request failed with status 422\"",
+          },
+          {
+            zh: "耗材档案模式下的自定义配方预测与应用不再报 \"LUT/source file missing\" 409，整套流程走通",
+            en: "Custom recipe prediction and apply no longer surface a \"LUT/source file missing\" 409 in Material Archive mode; the full flow works end to end",
+          },
+          {
+            zh: "扩展配方层数时的填充修正：模型外的透明背景保持透明，不再被一圈白色 mesh 包裹；模型内未改动的像素则延用背板材料，不会出现额外层塌成空层的情况",
+            en: "Layer-count extension padding fixed: transparent background outside the model stays transparent (no more white ring mesh around the silhouette), while untouched interior pixels keep the backing material (no more collapsed extra layers inside the model)",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-19",
     title: {
       zh: "Lumina Layers v2.0.0 — 近三天的大更新",
@@ -61,6 +117,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "调色板顶部工具栏重新分组：历史 / 选择模式 / 自由色 / 配方 / 悬停显示 各自独立卡片，一眼分清",
             en: "Palette toolbar is regrouped into tinted cards — history, selection mode, free colour, recipe, and hover display — so each group is easier to spot",
+          },
+          {
+            zh: "自定义配方编辑器升级：每层带颜色色块，目标色支持直接改 hex / Lab 双向联动；应用过的配方进历史，再点一下就能复用；材料档案模式下还会按目标色推荐相近配方。",
+            en: "Custom recipe editor upgrade: each layer now shows a colour swatch, the target colour can be edited via hex or Lab with two-way sync, applied recipes are saved as reusable history snapshots, and Material Archive mode suggests recipes that match the target colour.",
           },
         ],
       },

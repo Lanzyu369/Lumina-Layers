@@ -136,6 +136,27 @@ export function exportConverterRecipe(
     color_ops: {
       replacement_regions: normalizedReplacements,
       free_color_set: normalizedFreeColors,
+      recipe_overrides: state.recipe_overrides.map((item) => ({
+        region_id: item.region_id,
+        recipe: [...item.recipe],
+        layer_order: item.layer_order,
+      })),
+      custom_recipe_history: state.customRecipeHistory.map((item) => ({
+        id: item.id,
+        recipe: [...item.recipe],
+        layer_order: item.layerOrder,
+        predicted_rgb: [...item.predictedRgb],
+        predicted_lab: [...item.predictedLab],
+        hex: item.hex,
+        from_model: item.fromModel,
+        created_at_ms: item.createdAtMs,
+        ...(item.displayHexes
+          ? { display_hexes: [...item.displayHexes] }
+          : {}),
+        ...(item.displayLabels
+          ? { display_labels: [...item.displayLabels] }
+          : {}),
+      })),
     },
     large_format: {
       large_format_enabled: state.largeFormatEnabled,

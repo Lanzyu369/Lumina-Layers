@@ -5,6 +5,8 @@ import type {
   StructureMode,
   ColorReplacementItem,
   RecipeOverrideItem,
+  RecipeHistoryItem,
+  VirtualMaterial,
   BedSizeItem,
   PaletteEntry,
   AutoHeightMode,
@@ -49,6 +51,7 @@ import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
   fetchLutCatalog as apiFetchLutCatalog,
+  fetchSessionLutInfo as apiFetchSessionLutInfo,
 } from "../../api/lut";
 import {
   computeAutoHeightMap,
@@ -1175,6 +1178,7 @@ export interface ConverterState {
   // 颜色替换
   replacement_regions: ColorReplacementItem[];
   recipe_overrides: RecipeOverrideItem[];
+  customRecipeHistory: RecipeHistoryItem[];
   free_color_set: Set<string>;
 
   // 调色板与选择
@@ -1390,13 +1394,26 @@ export interface ConverterActions {
     regionIds: string[],
     recipe: number[],
     layerOrder?: string,
+    /** Virtual materials declared at apply time; required when ``recipe`` carries indices ``>= LUT.N``. */
+    virtualMaterials?: VirtualMaterial[],
   ) => Promise<void>;
   upsertRecipeOverrides: (
     regionIds: string[],
     recipe: number[],
     layerOrder: string,
+    /** Optional virtuals to persist alongside the override so ``/generate`` can extend the palette. */
+    virtualMaterials?: VirtualMaterial[],
   ) => void;
   clearRecipeOverrides: (regionIds?: string[]) => void;
+  /** 追加一条历史；按 id LRU 置顶，容量 10。 */
+  pushCustomRecipeHistory: (item: RecipeHistoryItem) => void;
+  /** 清空历史（一般在 submitPreview 之外很少主动调）。 */
+  clearCustomRecipeHistory: () => void;
+  /** 应用一条历史到当前选区；内部复用 applyCustomRecipeOverride。 */
+  applyCustomRecipeFromHistory: (
+    historyId: string,
+    regionIds: string[],
+  ) => Promise<void>;
 
   // 待确认颜色替换
   setPendingReplacement: (pending: PendingReplacement | null) => void;
@@ -1552,6 +1569,7 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     remapHistory: [],
     replacement_regions: [],
     recipe_overrides: [],
+    customRecipeHistory: [],
     free_color_set: new Set<string>(),
     regionReplacementCount: 0,
     selectedColor: null,
@@ -1695,6 +1713,7 @@ export const DEFAULT_STATE: ConverterState = {
   ...DEFAULT_PUZZLE_PREVIEW_STATE,
   replacement_regions: [],
   recipe_overrides: [],
+  customRecipeHistory: [],
   free_color_set: new Set(),
   selectedColor: null,
   palette: [],
@@ -2967,6 +2986,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       regionIds: string[],
       recipe: number[],
       layerOrder: string,
+      virtualMaterials?: VirtualMaterial[],
     ) => {
       const validRegionIds = regionIds.filter((value) => !!value);
       if (validRegionIds.length === 0) {
@@ -2975,6 +2995,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       const normalizedRecipe = recipe.map((value) =>
         Math.max(0, Math.round(value)),
       );
+      // Deep-copy the virtuals so later mutations on either the caller's
+      // list or the stored items don't bleed across overrides. Virtuals are
+      // the part of the override payload that ``/generate`` relies on to
+      // extend the worker palette; losing them collapses virtual-index
+      // pixels back onto the LUT's native channels.
+      // 对 virtuals 做深拷贝，避免外部改动污染 store。generate 端依赖它扩
+      // 展 worker 调色板，丢了会让虚拟索引像素坍缩回 LUT 原生通道。
+      const clonedVirtuals = (virtualMaterials ?? []).map((material) => ({
+        name: material.name,
+        hex: material.hex,
+      }));
       set((state) => {
         const existing = state.recipe_overrides.filter(
           (item) => !validRegionIds.includes(item.region_id),
@@ -2985,6 +3016,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             region_id: regionId,
             recipe: normalizedRecipe,
             layer_order: layerOrder,
+            ...(clonedVirtuals.length > 0
+              ? {
+                  virtual_materials: clonedVirtuals.map((material) => ({
+                    ...material,
+                  })),
+                }
+              : {}),
           })),
         ];
         return {
@@ -3007,6 +3045,45 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           (item) => !regionIds.includes(item.region_id),
         ),
       }));
+    },
+
+    pushCustomRecipeHistory: (item: RecipeHistoryItem) => {
+      set((state) => {
+        const filtered = state.customRecipeHistory.filter(
+          (history) => history.id !== item.id,
+        );
+        const next = [item, ...filtered].slice(0, 10);
+        return { customRecipeHistory: next };
+      });
+    },
+
+    clearCustomRecipeHistory: () => {
+      set({ customRecipeHistory: [] });
+    },
+
+    applyCustomRecipeFromHistory: async (
+      historyId: string,
+      regionIds: string[],
+    ) => {
+      const state = _get();
+      const entry = state.customRecipeHistory.find(
+        (history) => history.id === historyId,
+      );
+      if (!entry) {
+        set({ error: "Custom recipe history entry not found" });
+        return;
+      }
+      // Forward the virtuals captured at the original apply so the replay
+      // round-trips ``recipe[i] >= LUT.N`` through backend validation and
+      // reaches the worker with an intact virtual-material registry.
+      // 带上首次 apply 时记下的虚拟耗材，保证重放时 ``recipe[i] >= LUT.N``
+      // 通过后端校验、worker 也能重建虚拟材料注册表。
+      await _get().applyCustomRecipeOverride(
+        regionIds,
+        entry.recipe,
+        entry.layerOrder,
+        entry.virtualMaterials,
+      );
     },
 
     // --- 连通区域替换 ---
@@ -3074,6 +3151,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       regionIds: string[],
       recipe: number[],
       layerOrder: string = "Top2Bottom",
+      virtualMaterials?: VirtualMaterial[],
     ) => {
       const state = _get();
       if (!state.sessionId) {
@@ -3091,6 +3169,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       );
       const resolvedHeight =
         state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
+      // Deep-copy virtuals to isolate the payload / state from later
+      // caller-side mutations; 422 on ``recipe[i] >= LUT.N`` requires this
+      // list to be present, so forward it when non-empty.
+      // 深拷贝 virtuals 避免调用方随后改动影响 store / 请求体；recipe 里有
+      // 虚拟索引时后端 422 校验需要它，故非空时必须透传。
+      const clonedVirtuals = (virtualMaterials ?? []).map((material) => ({
+        name: material.name,
+        hex: material.hex,
+      }));
 
       set({ replacePreviewLoading: true, error: null });
       try {
@@ -3101,6 +3188,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           layer_order: layerOrder,
           color_layers: resolvedLayers,
           layer_height_mm: resolvedHeight,
+          ...(clonedVirtuals.length > 0
+            ? { virtual_materials: clonedVirtuals }
+            : {}),
         });
         set((current) => ({
           replacePreviewLoading: false,
@@ -3122,6 +3212,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               region_id: regionId,
               recipe: [...recipe],
               layer_order: layerOrder,
+              ...(clonedVirtuals.length > 0
+                ? {
+                    virtual_materials: clonedVirtuals.map((material) => ({
+                      ...material,
+                    })),
+                  }
+                : {}),
             })),
           ],
           lutMatchMode: "predictive",
@@ -3810,6 +3907,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           remapHistory: [],
           replacement_regions: [],
           recipe_overrides: [],
+          customRecipeHistory: [],
           free_color_set: new Set<string>(),
           regionReplacementCount: 0,
           selectedColor: null,
@@ -3833,6 +3931,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         console.log(
           "[DEBUG] submitPreview success: cleared layerImages for new sessionId",
         );
+        // 预览绑定会话后，拉取会话所绑定 LUT 的通道调色板，便于自定义配方编辑器
+        // 在材料档案 / 原生打包流程里也能显示按通道顺序的耗材列表。
+        // After the preview binds a session, refresh the channel palette for
+        // the custom recipe editor so material-archive / native-bundle flows
+        // also see the per-channel material list, not just legacy named LUTs.
+        const previewSessionId = response.session_id;
+        void apiFetchSessionLutInfo(previewSessionId)
+          .then((info) => {
+            // Only apply if the user hasn't moved on to another session.
+            if (_get().sessionId === previewSessionId) {
+              set({ selectedLutInfo: info });
+            }
+          })
+          .catch(() => {
+            // Best-effort: if the session hasn't been bound yet or the
+            // endpoint errors, leave selectedLutInfo untouched.
+          });
       } catch (err) {
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {

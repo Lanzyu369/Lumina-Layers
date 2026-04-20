@@ -145,7 +145,7 @@ export default function Dropdown({
       {open && menuPos && createPortal(
         <div
           ref={menuRef}
-          className="z-[1200] overflow-hidden rounded-[24px] border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96"
+          className="z-[10010] overflow-hidden rounded-[24px] border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96"
           style={{
             position: "fixed",
             top: `${menuPos.top}px`,

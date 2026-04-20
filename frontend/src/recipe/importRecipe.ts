@@ -5,7 +5,12 @@
 
 import type { LuminaRecipe } from "./types";
 import type { ConverterState } from "../stores/converter/store";
-import type { ColorReplacementItem, FridgeMagnetItem, LutInfo } from "../api/types";
+import type {
+  ColorReplacementItem,
+  FridgeMagnetItem,
+  LutInfo,
+  RecipeHistoryItem,
+} from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
 import { base64ToFile } from "./utils";
@@ -209,6 +214,45 @@ export function restoreConverterRecipe(
     conv.color_ops.free_color_set.map(stripHash),
   );
 
+  // V2+ optional: recipe_overrides (back-compat: missing → empty array)
+  const recipeOverrides = (conv.color_ops.recipe_overrides ?? []).map(
+    (item) => ({
+      region_id: item.region_id,
+      recipe: [...item.recipe],
+      layer_order: item.layer_order,
+    }),
+  );
+
+  // V2+ optional: custom_recipe_history — fromModel is forced to false on import
+  // because we left the original session's forward-model context.
+  // 历史条目导入后 fromModel 强制为 false：离开原会话模型上下文后不再保留"来自模型"标记。
+  const customRecipeHistory: RecipeHistoryItem[] = (
+    conv.color_ops.custom_recipe_history ?? []
+  ).map((item) => ({
+    id: item.id,
+    recipe: [...item.recipe],
+    layerOrder: item.layer_order,
+    predictedRgb: [
+      item.predicted_rgb[0],
+      item.predicted_rgb[1],
+      item.predicted_rgb[2],
+    ],
+    predictedLab: [
+      item.predicted_lab[0],
+      item.predicted_lab[1],
+      item.predicted_lab[2],
+    ],
+    hex: item.hex,
+    fromModel: false,
+    createdAtMs: item.created_at_ms,
+    ...(item.display_hexes
+      ? { displayHexes: [...item.display_hexes] }
+      : {}),
+    ...(item.display_labels
+      ? { displayLabels: [...item.display_labels] }
+      : {}),
+  }));
+
   const colorHeightMap: Record<string, number> = {};
   for (const [hex, height] of Object.entries(conv.relief.color_height_map)) {
     colorHeightMap[stripHash(hex)] = height;
@@ -339,6 +383,8 @@ export function restoreConverterRecipe(
     // Color ops
     replacement_regions: replacementRegions,
     free_color_set: freeColorSet,
+    recipe_overrides: recipeOverrides,
+    customRecipeHistory: customRecipeHistory,
     // Clear remap state — replacement_regions already contains merged data
     colorRemapMap: {},
     remapHistory: [],

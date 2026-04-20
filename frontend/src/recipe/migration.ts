@@ -22,29 +22,20 @@ export function migrateRecipe(raw: unknown): LuminaRecipe {
   if (!raw || typeof raw !== "object") {
     throw new Error("Invalid recipe: not an object");
   }
-
   const obj = raw as Record<string, unknown>;
-
-  // Validate format field
   if (obj.format !== RECIPE_FORMAT) {
     throw new Error(
       `Invalid recipe format: expected "${RECIPE_FORMAT}", got "${String(obj.format)}"`,
     );
   }
-
   const version = typeof obj.schema_version === "number" ? obj.schema_version : 0;
-
   if (version < 1) {
     throw new Error(`Unsupported recipe schema version: ${version}`);
   }
-
   if (version > RECIPE_SCHEMA_VERSION) {
-    // Future version — attempt best-effort pass-through with warning
-    // The recipe structure should be forward-compatible for optional new fields
+    // Future version — forward-compat pass-through with warning.
     const recipe = obj as unknown as LuminaRecipe;
-    if (!recipe.warnings) {
-      recipe.warnings = [];
-    }
+    if (!recipe.warnings) recipe.warnings = [];
     recipe.warnings.push(
       `Recipe was created with schema version ${version}, ` +
         `but this app only supports up to version ${RECIPE_SCHEMA_VERSION}. ` +
@@ -52,7 +43,8 @@ export function migrateRecipe(raw: unknown): LuminaRecipe {
     );
     return recipe;
   }
-
-  // V1: direct pass-through (current version)
+  // v1 → v2: optional fields (recipe_overrides, custom_recipe_history)
+  // default to undefined which importRecipe reads as empty arrays.
+  // 旧 v1 文件缺少可选字段时，importRecipe 会按空数组处理。
   return obj as unknown as LuminaRecipe;
 }

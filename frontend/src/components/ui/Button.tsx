@@ -9,6 +9,7 @@ interface ButtonProps {
   variant?: "primary" | "secondary";
   size?: "sm" | "md";
   className?: string;
+  title?: string;
 }
 
 export default function Button({
@@ -19,6 +20,7 @@ export default function Button({
   variant = "primary",
   size = "md",
   className,
+  title,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
 
@@ -40,6 +42,7 @@ export default function Button({
       type="button"
       onClick={onClick}
       disabled={isDisabled}
+      title={title}
       className={cx(
         "relative inline-flex flex-shrink-0 items-center justify-center gap-2 font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
         sizeClasses,

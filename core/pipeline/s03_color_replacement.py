@@ -22,6 +22,93 @@ from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 _log = logging.getLogger(__name__)
 
 
+def _extend_ctx_palette_with_virtuals(
+    ctx: dict,
+    lut_palette_length: int,
+    virtual_registry: list[dict[str, str]],
+) -> None:
+    """Append user-declared virtual materials to the pipeline palette.
+
+    把用户声明的虚拟耗材追加进 pipeline 的 ``slot_names`` /
+    ``preview_colors`` / ``color_conf``，让下游 s07 / s08 / s09 按新索引渲染。
+
+    The registry is a list of ``{"name", "hex"}`` dicts; the ``k``-th entry
+    lands at channel index ``lut_palette_length + k`` so the material_matrix
+    writes in s03 stay consistent with the palette the meshers read later.
+
+    Args:
+        ctx: Pipeline context; mutated in place.
+        lut_palette_length: Native LUT palette length; virtuals start after.
+        virtual_registry: Deduped ordered list of virtual materials.
+    """
+    if not virtual_registry:
+        return
+    # CRITICAL: in the raster pipeline ``ctx["color_conf"]`` /
+    # ``ctx["preview_colors"]`` / ``ctx["slot_names"]`` may be direct
+    # references into ``ColorSystem.get(color_mode)`` (see
+    # ``p01_preview_validation`` and ``s01_input_validation``). Appending in
+    # place would permanently pollute the process-wide ColorSystem dict for
+    # every subsequent request handled by this worker — manifesting as
+    # transparent channels collapsing into opaque blocks, s07 over-counting
+    # materials, and non-override regions losing their recipes. Copy-on-write
+    # the containers before we extend them.
+    # 栅格管线里这三个 ctx 键常常直接指向进程级共享的 ColorSystem dict，
+    # 就地 ``append`` 会永久污染后续请求（表现为透明失效、模型变方块、
+    # 非 override 区域丢配方）。先 copy-on-write 再追加。
+    slot_names_src = ctx.get("slot_names")
+    slot_names = (
+        list(slot_names_src)
+        if isinstance(slot_names_src, (list, tuple))
+        else []
+    )
+    ctx["slot_names"] = slot_names
+    preview_colors_src = ctx.get("preview_colors")
+    preview_colors = (
+        dict(preview_colors_src) if isinstance(preview_colors_src, dict) else {}
+    )
+    ctx["preview_colors"] = preview_colors
+    color_conf_src = ctx.get("color_conf")
+    color_conf = (
+        dict(color_conf_src) if isinstance(color_conf_src, dict) else {}
+    )
+    ctx["color_conf"] = color_conf
+    conf_preview_src = color_conf.get("preview")
+    conf_preview = (
+        dict(conf_preview_src) if isinstance(conf_preview_src, dict) else {}
+    )
+    color_conf["preview"] = conf_preview
+    conf_slots_src = color_conf.get("slots")
+    conf_slots = (
+        list(conf_slots_src)
+        if isinstance(conf_slots_src, (list, tuple))
+        else []
+    )
+    color_conf["slots"] = conf_slots
+
+    for offset, material in enumerate(virtual_registry):
+        cache_index = lut_palette_length + offset
+        try:
+            r, g, b = _hex_to_rgb_tuple(material["hex"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        rgba = [int(r), int(g), int(b), 255]
+        preview_colors[cache_index] = rgba
+        conf_preview[cache_index] = rgba
+        name = str(material.get("name") or f"Virtual_{offset}")
+        while len(slot_names) < cache_index:
+            slot_names.append(f"Slot_{len(slot_names)}")
+        if len(slot_names) == cache_index:
+            slot_names.append(name)
+        else:
+            slot_names[cache_index] = name
+        while len(conf_slots) < cache_index:
+            conf_slots.append(f"Slot_{len(conf_slots)}")
+        if len(conf_slots) == cache_index:
+            conf_slots.append(name)
+        else:
+            conf_slots[cache_index] = name
+
+
 def _apply_material_archive_color_replacements(
     matched_rgb: np.ndarray,
     material_matrix: np.ndarray,
@@ -342,12 +429,62 @@ def _upgrade_material_matrix_layers(
     target_layers: int,
     base_channel_idx: int,
     layer_order: str,
+    mask_solid: np.ndarray | None = None,
 ) -> np.ndarray:
+    """Grow ``material_matrix`` to ``target_layers`` using ``mask_solid`` aware pads.
+
+    The new layers must satisfy two contradictory constraints:
+
+    - ``~mask_solid`` (transparent background already marked ``-1`` by
+      ``p03_core_processing``) must stay ``-1`` so ``s06_voxel_building`` /
+      ``s07_mesh_generation`` do not emit a ring-shaped mesh around the
+      silhouette at the extended Z ("整块白矩形包裹 / 透明通道失效"
+      regression).
+    - ``mask_solid`` non-override pixels must keep a real material so the
+      extended columns stay continuous with the backing slab. Padding them
+      with ``-1`` leaves the user's grown layers visually empty outside the
+      override ("第 6 层空层" regression).
+
+    The pad slab starts at ``-1`` everywhere and ``mask_solid`` interior
+    cells are written to ``base_channel_idx`` (the LUT's base material,
+    normally White on CMYW). ``mask_solid=None`` means "caller didn't provide
+    solidity info" (rare; legacy callers) — fall back to the old all-base
+    behaviour but still honour the dtype promotion so ``-1`` cells written
+    by earlier stages survive.
+
+    扩展层必须同时满足两件事：(a) ~mask_solid (p03 标成 -1 的透明背景)
+    保持 -1 空气，否则 S07 会围着模型生成白色 mesh；(b) mask_solid 内
+    非 override 像素保留 base channel，避免第 6 层塌成空层。pad slab
+    整体置 -1，只在 mask_solid 位置写 base_channel_idx。mask_solid
+    缺省时兼容老调用方：全部填 base_channel_idx。
+    """
+
     current_layers = int(material_matrix.shape[2])
     if current_layers >= target_layers:
         return material_matrix
+    # uint dtypes would wrap ``-1`` into ``255`` and reintroduce the exact
+    # mesh-explosion bug under a different channel id, so promote to a
+    # signed dtype before padding.
+    # uint 类型会把 ``-1`` 绕回 255 把同一个 bug 换个编号重来，所以先升
+    # 到 signed 类型再 pad。
+    if np.issubdtype(material_matrix.dtype, np.unsignedinteger):
+        material_matrix = material_matrix.astype(np.int32)
     pad_shape = (*material_matrix.shape[:2], target_layers - current_layers)
-    pad = np.full(pad_shape, int(base_channel_idx), dtype=material_matrix.dtype)
+    if mask_solid is None:
+        pad = np.full(pad_shape, int(base_channel_idx), dtype=material_matrix.dtype)
+    else:
+        mask_solid_arr = np.asarray(mask_solid, dtype=bool)
+        if mask_solid_arr.shape != material_matrix.shape[:2]:
+            # Shape mismatch would silently paint the whole slab with base;
+            # callers always pass a matching mask, so treat this as a
+            # programming error rather than silently degrading.
+            # 形状不匹配说明调用方传错了，直接报错避免静默污染扩展层。
+            raise ValueError(
+                f"mask_solid shape {mask_solid_arr.shape} does not match "
+                f"material_matrix spatial shape {material_matrix.shape[:2]}"
+            )
+        pad = np.full(pad_shape, -1, dtype=material_matrix.dtype)
+        pad[mask_solid_arr] = int(base_channel_idx)
     if layer_order == "Bottom2Top":
         return np.concatenate([pad, material_matrix], axis=2)
     return np.concatenate([material_matrix, pad], axis=2)
@@ -533,6 +670,7 @@ def run(ctx: dict) -> dict:
                 int(target_layers),
                 base_channel_idx,
                 target_order,
+                mask_solid=mask_solid,
             )
             try:
                 from core.predictive_lut import predict_recipe_color
@@ -540,6 +678,53 @@ def run(ctx: dict) -> dict:
             except (ImportError, ModuleNotFoundError):
                 predict_recipe_color = None
                 convert_recipe_between_orders = None
+
+            # Build a global virtual-material registry by deduping every
+            # per-region virtual_materials list across all overrides; assign
+            # each unique (name, hex) a stable global channel index starting
+            # at ``lut_palette_length``. Each region's local virtual indices
+            # are then remapped through this registry so the material_matrix
+            # writes consistent channel ids no matter which region a given
+            # virtual appeared in first.
+            # 跨所有覆盖条目聚合 virtual_materials 并按 (name, hex) 去重，从
+            # ``lut_palette_length`` 开始给每条虚拟耗材分配稳定的全局通道索引；
+            # 各 region 的本地虚拟索引再统一重映射到该全局表，保证
+            # material_matrix 里的通道 id 跨 region 一致。
+            lut_palette_length = len(getattr(lut_metadata, "palette", []) or [])
+            virtual_registry: list[dict[str, str]] = []
+            virtual_lookup: dict[tuple[str, str], int] = {}
+            per_region_virtual_maps: dict[str, dict[int, int]] = {}
+            for item in recipe_overrides:
+                if not isinstance(item, dict):
+                    continue
+                region_id_raw = str(item.get("region_id", "")).strip()
+                region_virtuals = item.get("virtual_materials") or []
+                local_to_global: dict[int, int] = {}
+                for local_idx, vm in enumerate(region_virtuals):
+                    if not isinstance(vm, dict):
+                        continue
+                    name = str(vm.get("name") or "").strip()
+                    hex_value = str(vm.get("hex") or "").strip()
+                    if not name or not hex_value:
+                        continue
+                    key = (name.lower(), hex_value.lower())
+                    global_idx = virtual_lookup.get(key)
+                    if global_idx is None:
+                        global_idx = lut_palette_length + len(virtual_registry)
+                        virtual_registry.append(
+                            {"name": name, "hex": hex_value}
+                        )
+                        virtual_lookup[key] = global_idx
+                    local_to_global[lut_palette_length + local_idx] = global_idx
+                if region_id_raw:
+                    per_region_virtual_maps[region_id_raw] = local_to_global
+
+            if virtual_registry:
+                _extend_ctx_palette_with_virtuals(
+                    ctx,
+                    lut_palette_length,
+                    virtual_registry,
+                )
 
             for item in recipe_overrides:
                 if not isinstance(item, dict):
@@ -553,6 +738,14 @@ def run(ctx: dict) -> dict:
                     continue
 
                 recipe_raw = [int(v) for v in item.get("recipe", [])]
+                # Rewrite any local virtual indices into the deduped global
+                # registry so every region speaks the same channel vocabulary.
+                # 把本 region 的本地虚拟索引改写为全局虚拟索引。
+                local_map = per_region_virtual_maps.get(region_id) or {}
+                if local_map:
+                    recipe_raw = [
+                        int(local_map.get(int(v), int(v))) for v in recipe_raw
+                    ]
                 recipe_order = str(item.get("layer_order", target_order))
                 normalized_recipe = recipe_raw
                 if convert_recipe_between_orders is not None:
@@ -563,9 +756,30 @@ def run(ctx: dict) -> dict:
                     base_channel_idx,
                     target_order,
                 )
+                # material_matrix dtype may be uint8 (capacity 256) which is
+                # plenty for LUT.N + a handful of virtuals; upgrade on demand
+                # if a virtual index would overflow.
+                # material_matrix 通常是 uint8，虚拟耗材加起来远小于 256；
+                # 真遇到越界再升 dtype。
+                max_index = max(normalized_recipe) if normalized_recipe else 0
+                if (
+                    max_index > np.iinfo(material_matrix.dtype).max
+                    if np.issubdtype(material_matrix.dtype, np.integer)
+                    else False
+                ):
+                    material_matrix = material_matrix.astype(np.int32)
                 material_matrix[effective_mask] = np.asarray(normalized_recipe, dtype=material_matrix.dtype)
 
-                if predict_recipe_color is not None:
+                # The forward model only understands real LUT channels. Skip
+                # prediction when the recipe carries virtual indices and let
+                # the apply endpoint's preview colour (already baked into
+                # ``matched_rgb`` via the cached preview) stand.
+                # 前向模型只认真实 LUT 通道；recipe 里带虚拟索引时跳过预测，
+                # 保留 apply 端点兜底得到的预览色。
+                recipe_has_virtual = any(
+                    ch >= lut_palette_length for ch in recipe_raw
+                )
+                if predict_recipe_color is not None and not recipe_has_virtual:
                     try:
                         predicted = predict_recipe_color(
                             lut_metadata,
@@ -579,6 +793,30 @@ def run(ctx: dict) -> dict:
                             matched_rgb[effective_mask] = rgb
                     except (AttributeError, ImportError, ModuleNotFoundError, TypeError, ValueError) as exc:
                         _log.warning("[S03] Recipe color prediction failed for %s: %s", region_id, exc)
+                elif recipe_has_virtual:
+                    # Paint the region with the topmost virtual material hex so
+                    # the 2D preview and downstream stages see the user's
+                    # intent even without a forward model call.
+                    # 顶层若是虚拟耗材，直接按其 hex 给 region 上色，保证 2D
+                    # 预览与后续阶段都看到用户意图色。
+                    top_channel = (
+                        recipe_raw[0] if target_order == "Top2Bottom" else recipe_raw[-1]
+                    )
+                    if top_channel >= lut_palette_length and virtual_registry:
+                        offset = top_channel - lut_palette_length
+                        if 0 <= offset < len(virtual_registry):
+                            intent_hex = virtual_registry[offset]["hex"]
+                            try:
+                                matched_rgb[effective_mask] = np.asarray(
+                                    _hex_to_rgb_tuple(intent_hex), dtype=np.uint8
+                                )
+                            except (ValueError, TypeError) as exc:
+                                _log.warning(
+                                    "[S03] Virtual material hex %s unreadable for %s: %s",
+                                    intent_hex,
+                                    region_id,
+                                    exc,
+                                )
 
     # ---- Apply region replacements in-order ----
     if replacement_regions and processor is None:

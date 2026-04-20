@@ -129,3 +129,100 @@ export function sortByColorDistance(
     )
     .slice(0, topK);
 }
+
+// ==================== sRGB ↔ CIE Lab (D65) ====================
+// 采用 D65 白点与标准 sRGB 伽马，参考 https://www.easyrgb.com/en/math.php。
+// sRGB ↔ CIE Lab (D65) conversions following EasyRGB's reference formulas.
+
+const D65_REF_WHITE: readonly [number, number, number] = [
+  95.047,
+  100.0,
+  108.883,
+];
+
+function pivotEncode(t: number): number {
+  return t > 0.008856 ? Math.cbrt(t) : (7.787 * t) + 16 / 116;
+}
+
+function pivotDecode(t: number): number {
+  const t3 = t * t * t;
+  return t3 > 0.008856 ? t3 : (t - 16 / 116) / 7.787;
+}
+
+function srgbToLinear(channel: number): number {
+  const c = channel / 255;
+  return c > 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
+}
+
+function linearToSrgb(channel: number): number {
+  const c =
+    channel > 0.0031308
+      ? 1.055 * Math.pow(channel, 1 / 2.4) - 0.055
+      : 12.92 * channel;
+  return Math.max(0, Math.min(255, Math.round(c * 255)));
+}
+
+/**
+ * Convert an sRGB triple (0-255) to CIE Lab under D65.
+ * sRGB (0-255) 转 CIE Lab (D65)。
+ */
+export function rgbToLab(
+  rgb: readonly [number, number, number],
+): [number, number, number] {
+  const [r, g, b] = rgb.map(srgbToLinear) as [number, number, number];
+  // sRGB → XYZ (D65)
+  const x = (r * 0.4124564 + g * 0.3575761 + b * 0.1804375) * 100;
+  const y = (r * 0.2126729 + g * 0.7151522 + b * 0.072175) * 100;
+  const z = (r * 0.0193339 + g * 0.119192 + b * 0.9503041) * 100;
+  const [xr, yr, zr] = [
+    x / D65_REF_WHITE[0],
+    y / D65_REF_WHITE[1],
+    z / D65_REF_WHITE[2],
+  ];
+  const fx = pivotEncode(xr);
+  const fy = pivotEncode(yr);
+  const fz = pivotEncode(zr);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+/**
+ * Convert CIE Lab (D65) back to an sRGB triple (0-255).
+ * CIE Lab (D65) 转 sRGB (0-255)，结果已 clamp 到 [0,255] 并取整。
+ */
+export function labToRgb(
+  lab: readonly [number, number, number],
+): [number, number, number] {
+  const [l, a, b] = lab;
+  const fy = (l + 16) / 116;
+  const fx = a / 500 + fy;
+  const fz = fy - b / 200;
+  const xr = pivotDecode(fx);
+  const yr = pivotDecode(fy);
+  const zr = pivotDecode(fz);
+  const x = (xr * D65_REF_WHITE[0]) / 100;
+  const y = (yr * D65_REF_WHITE[1]) / 100;
+  const z = (zr * D65_REF_WHITE[2]) / 100;
+  // XYZ → linear sRGB
+  const r = x * 3.2404542 + y * -1.5371385 + z * -0.4985314;
+  const g = x * -0.969266 + y * 1.8760108 + z * 0.041556;
+  const bl = x * 0.0556434 + y * -0.2040259 + z * 1.0572252;
+  return [linearToSrgb(r), linearToSrgb(g), linearToSrgb(bl)];
+}
+
+/**
+ * Convert a hex string (with or without '#') to CIE Lab (D65).
+ * hex 字符串转 CIE Lab (D65)。
+ */
+export function hexToLab(hex: string): [number, number, number] {
+  return rgbToLab(hexToRgb(hex));
+}
+
+/**
+ * Convert CIE Lab (D65) back to a hex string with leading '#'.
+ * CIE Lab 转带 "#" 前缀的 hex 字符串。
+ */
+export function labToHex(lab: readonly [number, number, number]): string {
+  const [r, g, b] = labToRgb(lab);
+  const toHex = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}

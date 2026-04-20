@@ -1445,6 +1445,142 @@ def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_va
     assert resolved is None
 
 
+def test_resolve_recipe_overrides_backfills_session_virtual_materials_when_request_omits_them() -> None:
+    """Backend safety: session-persisted virtual_materials must survive when the
+    request body's recipe_overrides (same region_id) forgets to send them.
+
+    apply 端点会把用户声明的 virtual_materials 随 recipe_overrides 一起持久化
+    到 session。前端旧版本 / 第三方调用方可能在 /generate 时只回传
+    ``{region_id, recipe, layer_order}``——若 backend 简单用 request 覆盖 session，
+    virtual_materials 就整条丢失，worker 无法扩展 ctx["slot_names"]，
+    S07 只会给 LUT 原生通道生成 mesh，表现为 3MF 缺少自定义颜色对象、
+    该通道像素无网格（看起来像"方块 / 透明失效"）。
+
+    回归保证：当 request 的某个 region_id 没带 virtual_materials、session
+    同一 region_id 有持久化的 virtuals 时，resolver 必须把它们合并回来。
+    """
+    session_data = {
+        "recipe_overrides": [
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Black", "hex": "#111111"}],
+            }
+        ]
+    }
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                # Intentionally no ``virtual_materials`` — old-client scenario.
+            }
+        ],
+    )
+
+    resolved = _resolve_recipe_overrides(session_data, request)
+
+    assert resolved is not None
+    assert len(resolved) == 1
+    assert resolved[0]["region_id"] == "region-1"
+    assert resolved[0]["recipe"] == [4, 0, 0, 0, 0, 4]
+    assert resolved[0]["virtual_materials"] == [
+        {"name": "Black", "hex": "#111111"}
+    ]
+
+
+def test_resolve_recipe_overrides_prefers_request_virtual_materials_when_provided() -> None:
+    """When both request and session carry virtuals for the same region, request wins.
+
+    新前端会在 apply 后把 virtual_materials 一起存进 store，generate 时随
+    recipe_overrides 再发一遍。此时请求体是事实来源，resolver 不得用 session
+    的版本覆盖掉用户最新的虚拟耗材声明。
+    """
+    session_data = {
+        "recipe_overrides": [
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Black", "hex": "#000000"}],
+            }
+        ]
+    }
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Crimson", "hex": "#DC143C"}],
+            }
+        ],
+    )
+
+    resolved = _resolve_recipe_overrides(session_data, request)
+
+    assert resolved is not None
+    assert resolved[0]["virtual_materials"] == [
+        {"name": "Crimson", "hex": "#DC143C"}
+    ]
+
+
+def test_resolve_recipe_overrides_keeps_other_region_virtuals_untouched() -> None:
+    """Backfill must be scoped by region_id, not applied globally.
+
+    region-1 带了 virtuals、region-2 没带时，resolver 只应为 region-2 从 session
+    回补对应的 virtuals；不应把 region-1 的 virtuals 覆盖或跨 region 乱涂。
+    """
+    session_data = {
+        "recipe_overrides": [
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Black", "hex": "#000000"}],
+            },
+            {
+                "region_id": "region-2",
+                "recipe": [5, 0, 0, 0, 0, 5],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Red", "hex": "#FF0000"}],
+            },
+        ]
+    }
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [4, 0, 0, 0, 0, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Black", "hex": "#111111"}],
+            },
+            {
+                "region_id": "region-2",
+                "recipe": [5, 0, 0, 0, 0, 5],
+                "layer_order": "Top2Bottom",
+                # Missing virtuals — must be backfilled from session["region-2"].
+            },
+        ],
+    )
+
+    resolved = _resolve_recipe_overrides(session_data, request)
+
+    assert resolved is not None
+    by_region = {item["region_id"]: item for item in resolved}
+    assert by_region["region-1"]["virtual_materials"] == [
+        {"name": "Black", "hex": "#111111"}
+    ]
+    assert by_region["region-2"]["virtual_materials"] == [
+        {"name": "Red", "hex": "#FF0000"}
+    ]
+
+
 class TestUserSettingsBaseLayerModifierCompatibility:
     """Verify persisted user settings keep the new base-layer flag compatible."""
 

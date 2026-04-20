@@ -22,6 +22,21 @@ export async function fetchLutInfo(
   return response.data;
 }
 
+/**
+ * 获取当前会话所绑定 LUT 的通道调色板与能力信息。
+ * Fetches the channel palette bound to a converter session, which works for
+ * material-archive / native-bundle sessions that have no globally-known LUT
+ * name. Used by the custom recipe editor to show channel-ordered materials.
+ */
+export async function fetchSessionLutInfo(
+  sessionId: string,
+): Promise<LutInfoResponse> {
+  const response = await apiClient.get<LutInfoResponse>(
+    `/lut/session/${encodeURIComponent(sessionId)}/info`,
+  );
+  return response.data;
+}
+
 /** 执行 LUT 合并操作 */
 export async function mergeLuts(
   request: MergeRequest

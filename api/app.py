@@ -18,8 +18,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from api.logger import setup_file_logging
 from api.structured_logging import (
@@ -202,6 +203,30 @@ def create_app() -> FastAPI:
         reset_request_id(request_token)
         reset_session_id(session_token)
         return response
+
+    @app.exception_handler(RequestValidationError)
+    async def _log_request_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Log FastAPI 422 validation details so frontend bugs are diagnosable.
+
+        记录 FastAPI 422 验证错误详情，方便定位前端载荷不匹配的 bug。
+        """
+        log.warning(
+            "Request validation failed",
+            extra={
+                "event": "request_validation_failed",
+                "path": request.url.path,
+                "method": request.method,
+                "status_code": 422,
+                "error_type": "RequestValidationError",
+                "error_message": str(exc.errors()),
+            },
+        )
+        return JSONResponse(
+            status_code=422,
+            content={"detail": exc.errors()},
+        )
 
     app.include_router(converter_router)
     app.include_router(extractor_router)
