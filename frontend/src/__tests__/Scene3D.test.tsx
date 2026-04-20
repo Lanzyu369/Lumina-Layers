@@ -73,23 +73,44 @@ function createMockGl() {
   };
 }
 
-vi.mock("@react-three/fiber", () => ({
-  Canvas: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
-    capturedCanvasProps = props;
-    return <div data-testid="mock-canvas">{props.children}</div>;
-  },
-  useThree: (selector?: (state: {
-    gl: ReturnType<typeof createMockGl>;
-    scene: { children: THREE.Object3D[] };
-    camera: { position: { x: number; y: number; z: number } };
-    controls: null;
-  }) => unknown) => {
-    const state = {
+// Shared mock state so every ``useThree`` call inside a single test returns
+// the SAME references. Helpers like ``ScreenshotHelper`` and ``ThemeUpdater``
+// depend on ``gl`` in their effect-deps; if the mock returned a fresh object
+// per call, those effects would re-fire on every render, trigger
+// ``setDiagnostics`` from ``handleGlReady``, and spin into an infinite loop
+// that exhausts the Node heap (the symptom before this fix was a 60s OOM).
+// ``beforeEach`` resets this so each test sees a fresh renderer-info + DOM
+// canvas, matching the previous "new gl per test" intent.
+// 共享 mock state：保证同一测试内每次 useThree 返回的 gl / scene / camera
+// 引用一致，避免 ScreenshotHelper 等组件的 effect 每次 render 都重跑而
+// 通过 handleGlReady 的 setDiagnostics 引发无限 re-render（原本表现为
+// Scene3D.test.tsx 60s OOM 无一测试跑通）。
+type MockThreeState = {
+  gl: ReturnType<typeof createMockGl>;
+  scene: { children: THREE.Object3D[] };
+  camera: { position: { x: number; y: number; z: number } };
+  controls: null;
+};
+let mockThreeState: MockThreeState | null = null;
+function getMockThreeState(): MockThreeState {
+  if (!mockThreeState) {
+    mockThreeState = {
       gl: createMockGl(),
       scene: { children: [] as THREE.Object3D[] },
       camera: { position: { x: 0, y: 0, z: 0 } },
       controls: null,
     };
+  }
+  return mockThreeState;
+}
+
+vi.mock("@react-three/fiber", () => ({
+  Canvas: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
+    capturedCanvasProps = props;
+    return <div data-testid="mock-canvas">{props.children}</div>;
+  },
+  useThree: (selector?: (state: MockThreeState) => unknown) => {
+    const state = getMockThreeState();
     return selector ? selector(state) : state;
   },
   useFrame: vi.fn(),
@@ -103,6 +124,12 @@ beforeEach(() => {
     capturedCanvasProps = {};
     capturedInteractiveViewerProps = null;
     capturedFridgeMagnet3DProps = null;
+    // Reset the shared useThree state so each test gets a fresh renderer /
+    // scene snapshot while every hook call within that test still sees
+    // stable references.
+    // 清空 useThree 的共享 state，保证每个 test 拿到新的 renderer/scene，
+    // 同时保持同一 test 内引用稳定。
+    mockThreeState = null;
     (window as Window & { __luminaThreePerfDebug?: boolean }).__luminaThreePerfDebug = false;
     // Reset store to defaults
       useConverterStore.setState({
@@ -367,12 +394,15 @@ beforeEach(() => {
     it("Canvas clearColor uses theme config value", () => {
       render(<Scene3D />);
       expect(capturedCanvasProps.onCreated).toBeTypeOf("function");
-      const mockGl = {
-        setClearColor: vi.fn(),
-        domElement: {
-          addEventListener: vi.fn(),
-        },
-      };
+      // Use the shared ``createMockGl`` helper so onCreated's downstream
+      // ``getRendererInfoSnapshot(gl)`` / diagnostic logging see the same
+      // renderer-info shape the mock already provides; the previous inline
+      // stub only had ``setClearColor`` + ``domElement.addEventListener``,
+      // which crashed the new PR #68 postClientLog path with
+      // "Cannot read properties of undefined (reading 'programs')".
+      // 复用 createMockGl：否则 onCreated 里走到 getRendererInfoSnapshot 会
+      // 因为 gl.info/gl.getPixelRatio 缺失崩溃。
+      const mockGl = createMockGl();
       (capturedCanvasProps.onCreated as (state: { gl: typeof mockGl }) => void)({
         gl: mockGl,
       });
