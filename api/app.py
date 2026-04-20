@@ -268,11 +268,17 @@ def create_app() -> FastAPI:
         """Receive frontend timing events and write to server log."""
         label = payload.get("label", "?")
         elapsed = payload.get("elapsed_ms", None)
+        scope = payload.get("scope", None)
+        phase = payload.get("phase", None)
+        details = payload.get("details", None)
         log.info(
             "Client log received",
             extra={
                 "event": "client_log",
                 "client_label": label,
+                "client_scope": scope,
+                "client_phase": phase,
+                "client_details": details,
                 "duration_ms": elapsed,
             },
         )

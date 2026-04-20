@@ -650,6 +650,66 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "截图",
     en: "Screenshot",
   },
+  viewer_diagnostics_toggle: {
+    zh: "性能",
+    en: "Diagnostics",
+  },
+  viewer_diagnostics_title: {
+    zh: "3D 诊断",
+    en: "3D Diagnostics",
+  },
+  viewer_diagnostics_source: {
+    zh: "来源",
+    en: "Source",
+  },
+  viewer_diagnostics_source_generate: {
+    zh: "生成 GLB",
+    en: "Generated GLB",
+  },
+  viewer_diagnostics_source_preview: {
+    zh: "预览 GLB",
+    en: "Preview GLB",
+  },
+  viewer_diagnostics_source_idle: {
+    zh: "空闲画布",
+    en: "Idle Canvas",
+  },
+  viewer_diagnostics_fps: {
+    zh: "FPS",
+    en: "FPS",
+  },
+  viewer_diagnostics_js_heap: {
+    zh: "JS 堆",
+    en: "JS Heap",
+  },
+  viewer_diagnostics_js_heap_unavailable: {
+    zh: "不可用",
+    en: "Unavailable",
+  },
+  viewer_diagnostics_geometries: {
+    zh: "几何体",
+    en: "Geometries",
+  },
+  viewer_diagnostics_textures: {
+    zh: "纹理",
+    en: "Textures",
+  },
+  viewer_diagnostics_programs: {
+    zh: "Programs",
+    en: "Programs",
+  },
+  viewer_diagnostics_draw_calls: {
+    zh: "调用数",
+    en: "Draw Calls",
+  },
+  viewer_diagnostics_triangles: {
+    zh: "三角面",
+    en: "Triangles",
+  },
+  viewer_diagnostics_canvas: {
+    zh: "画布",
+    en: "Canvas",
+  },
   viewer_hover_magnifier: {
     zh: "放大镜",
     en: "Magnifier",

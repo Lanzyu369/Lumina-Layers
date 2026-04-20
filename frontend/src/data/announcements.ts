@@ -122,6 +122,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "自定义配方编辑器升级：每层带颜色色块，目标色支持直接改 hex / Lab 双向联动；应用过的配方进历史，再点一下就能复用；材料档案模式下还会按目标色推荐相近配方。",
             en: "Custom recipe editor upgrade: each layer now shows a colour swatch, the target colour can be edited via hex or Lab with two-way sync, applied recipes are saved as reusable history snapshots, and Material Archive mode suggests recipes that match the target colour.",
           },
+          {
+            zh: "耗材档案颜色匹配更稳：增加耗材时，原本匹配良好的参考色不容易再被带偏",
+            en: "Material-archive colour matching is steadier: adding new filaments is less likely to throw off reference colours that were already matching well",
+          },
         ],
       },
       {
@@ -201,6 +205,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "下拉菜单宽度跟随触发器自适应，选项不多时也不会被错误判定为“下方空间不足”而翻到上方",
             en: "Dropdown menu width now follows its trigger, and short menus no longer flip upward when there is actually enough room below",
           },
+          {
+            zh: "3D 视图新增“性能”按钮：实时查看 FPS、显存占用、几何体 / 纹理数量和画布尺寸",
+            en: "3D viewer gains a Diagnostics button: inspect live FPS, heap usage, geometry / texture counts, and canvas size",
+          },
         ],
       },
       {
@@ -230,6 +238,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "Windows 11 启动器修复：系统移除 wmic 后进程清理失败的问题，现改用 Get-CimInstance 查询",
             en: "Windows 11 launcher fix: process cleanup now uses Get-CimInstance because wmic was removed from the OS",
+          },
+          {
+            zh: "修复生成穷举缓存后点预览偶发 500：worker 读取预览尺寸的方式已修正",
+            en: "Fixed an occasional 500 when previewing after generating the exhaustive cache: the worker's preview-size logging is now correct",
           },
         ],
       },

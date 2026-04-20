@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import type * as THREE from "three";
 import { useConverterStore } from "../stores/converter";
 
@@ -103,6 +103,7 @@ beforeEach(() => {
     capturedCanvasProps = {};
     capturedInteractiveViewerProps = null;
     capturedFridgeMagnet3DProps = null;
+    (window as Window & { __luminaThreePerfDebug?: boolean }).__luminaThreePerfDebug = false;
     // Reset store to defaults
       useConverterStore.setState({
         isLoading: false,
@@ -162,6 +163,18 @@ beforeEach(() => {
       expect(
         screen.queryByTestId("fullscreen-thumbnail"),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("diagnostics overlay", () => {
+    it("opens the diagnostics panel when the diagnostics button is clicked", () => {
+      render(<Scene3D />);
+
+      expect(screen.queryByTestId("scene3d-diagnostics-panel")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("scene3d-diagnostics-toggle"));
+
+      expect(screen.getByTestId("scene3d-diagnostics-panel")).toBeInTheDocument();
     });
   });
 

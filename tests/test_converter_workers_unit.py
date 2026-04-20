@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import get_args, get_origin
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from api.workers.converter_workers import (
@@ -149,9 +150,9 @@ class TestParameterAnnotations:
             )
 
     def test_preview_has_expected_param_count(self) -> None:
-        """worker_generate_preview should have 18 parameters."""
+        """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 18
+        assert len(sig.parameters) == 22
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -172,6 +173,8 @@ class TestParameterAnnotations:
             "color_layers", "layer_height_mm", "enable_cleanup", "is_dark",
             "model_enable", "model_only", "model_threshold", "model_margin",
             "hue_weight", "chroma_gate",
+            "material_source", "selected_materials",
+            "material_layer_count", "material_layer_height_mm",
         }
         assert set(sig.parameters.keys()) == expected
 
@@ -309,6 +312,47 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         lut_path="lut.npy",
         **params,
     )
+
+
+def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
+    preview_img = np.zeros((4, 6, 4), dtype=np.uint8)
+    preview_img[..., 0] = 255
+    cache_payload = {"preview_rgba": preview_img.copy(), "color_conf": {}}
+
+    with (
+        patch(
+            "core.converter.generate_preview_cached",
+            return_value=(preview_img, cache_payload, "OK"),
+        ),
+        patch("config.TEMP_DIR", str(tmp_path)),
+    ):
+        result = worker_generate_preview(
+            image_path="image.png",
+            lut_path="lut.npy",
+            target_width_mm=60.0,
+            auto_bg=False,
+            bg_tol=40,
+            color_mode="4-Color (RYBW)",
+            modeling_mode="high-fidelity",
+            color_layers=10,
+            layer_height_mm=0.08,
+            quantize_colors=16,
+            enable_cleanup=True,
+        )
+
+    assert result["status_msg"] == "OK"
+    assert result["preview_png_path"] is not None
+    assert result["cache_data_path"] is not None
+    assert os.path.exists(result["preview_png_path"])
+    assert os.path.exists(result["cache_data_path"])
+
+    try:
+        with open(result["cache_data_path"], "rb") as handle:
+            restored_cache = pickle.load(handle)
+        assert restored_cache["preview_rgba"].shape == (4, 6, 4)
+    finally:
+        os.unlink(result["preview_png_path"])
+        os.unlink(result["cache_data_path"])
 
 
 def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_zip_entries(tmp_path) -> None:

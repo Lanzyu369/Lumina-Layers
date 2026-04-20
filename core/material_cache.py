@@ -265,17 +265,46 @@ class MaterialSolverCache:
         """Find the best stored recipe for each target color.
         为每个目标颜色查找最优存档配方。
 
+        The cache quantizes the exhaustive solver output onto a fixed Lab grid
+        and keeps one representative recipe per occupied bucket. A naive
+        nearest-bucket-center lookup can be suboptimal because a bucket's
+        representative may not be the closest achievable colour to a specific
+        target inside that bucket. To mitigate this, the lookup queries up to
+        ``min(64, grid_resolution, valid_cell_count)`` nearest buckets per
+        target, rehydrates their stored ``achieved_srgb``, converts those back
+        to Lab, and selects the candidate with the smallest actual CIE76 ΔE to
+        the target. This keeps the O(1)-style query cost while greatly reducing
+        bucket-collision error when many recipes land in the same cell.
+
+        缓存在构建时将穷举求解结果压缩到固定 Lab 网格，每个被占用的分桶只保留
+        一条代表配方。直接取最近桶中心可能并不最优，因为该桶的代表色与桶内某
+        个目标色之间仍可能有较大偏差。为缓解这种近似误差，本方法一次性查询
+        ``min(64, grid_resolution, valid_cell_count)`` 个最近分桶，对各自存档
+        的 ``achieved_srgb`` 重新计算相对目标色的 CIE76 ΔE，并选择 ΔE 最小的
+        候选，在保持近常数级查询成本的同时明显降低桶内碰撞误差。
+
         Args:
-            target_srgb: (C, 3) uint8 unique target colors in sRGB.
-                (目标 sRGB 唯一色)
-            user_materials: The caller's ordered material list. Used to
-                re-bind recipe indices from canonical to caller order.
-                (调用方耗材顺序)
+            target_srgb (np.ndarray): ``(C, 3)`` uint8 unique target colours in
+                sRGB. (目标 sRGB 唯一色)
+            user_materials (list[MaterialParams]): The caller's ordered material
+                list. Used to re-bind recipe indices from canonical storage
+                order to the caller's order. (调用方耗材顺序)
 
         Returns:
-            matched_rgb: (C, 3) uint8 predicted sRGB for each target.
-            recipes_user_order: (C, N) int32 recipes in caller's material order.
-            delta_e: (C,) float64 CIE76 ΔE between target and achieved.
+            tuple[np.ndarray, np.ndarray, np.ndarray]: A triple of
+                ``(matched_rgb, recipes_user_order, delta_e)``.
+
+                - ``matched_rgb`` (``(C, 3)`` uint8): predicted sRGB for each
+                  target, taken from the re-ranked best candidate bucket.
+                - ``recipes_user_order`` (``(C, N)`` int32): recipes rewritten
+                  in the caller's material order.
+                - ``delta_e`` (``(C,)`` float64): CIE76 ΔE between target and
+                  the selected achieved colour (not the bucket centre).
+
+        Raises:
+            ValueError: If ``target_srgb`` is not shaped ``(C, 3)``, the
+                caller's palette fingerprint does not match the cache, or the
+                cache contains no populated cells.
         """
         if target_srgb.ndim != 2 or target_srgb.shape[1] != 3:
             raise ValueError("target_srgb must be shaped (C, 3)")
@@ -285,6 +314,11 @@ class MaterialSolverCache:
                 np.zeros((0, 3), dtype=np.uint8),
                 np.zeros((0, N), dtype=np.int32),
                 np.zeros((0,), dtype=np.float64),
+            )
+        if int(self.valid_cell_count) == 0:
+            raise ValueError(
+                "MaterialSolverCache has no populated cells; rebuild the cache "
+                "before lookup. (缓存不含任何有效分桶，请先重建缓存)"
             )
         # Validate user palette fingerprint matches the cache.
         user_fp = fingerprint_palette(user_materials)
@@ -296,16 +330,29 @@ class MaterialSolverCache:
         # Build KDTree over bucket centers (lazily; expected small cost).
         tree = cKDTree(self.lab_centers.astype(np.float64))
         target_lab = rgb_to_lab(target_srgb).astype(np.float64)
-        _, nearest_idx = tree.query(target_lab, k=1)
-        matched_rgb = self.achieved_srgb[nearest_idx]
+        query_k = min(64, int(self.grid_resolution), int(self.valid_cell_count))
+        _, nearest_idx = tree.query(target_lab, k=query_k)
+        nearest_idx = np.asarray(nearest_idx)
+        if nearest_idx.ndim == 1:
+            # cKDTree squeezes the last dim when k == 1.
+            nearest_idx = nearest_idx.reshape(-1, 1)
+        candidate_rgb = self.achieved_srgb[nearest_idx]
+        candidate_lab = rgb_to_lab(candidate_rgb.reshape(-1, 3)).astype(np.float64)
+        candidate_lab = candidate_lab.reshape(target_lab.shape[0], nearest_idx.shape[1], 3)
+        candidate_delta_e = np.linalg.norm(
+            candidate_lab - target_lab[:, None, :], axis=2
+        )
+        best_pos = np.argmin(candidate_delta_e, axis=1)
+        row_index = np.arange(target_lab.shape[0], dtype=np.int64)
+        best_rows = nearest_idx[row_index, best_pos]
+        matched_rgb = self.achieved_srgb[best_rows]
         # Re-bind recipe material indices from canonical to caller order.
         user_order = canonical_palette_order(user_materials)
-        canonical_recipes = self.recipes[nearest_idx]
+        canonical_recipes = self.recipes[best_rows]
         mapping = np.asarray(user_order, dtype=np.int32)
         recipes_user_order = mapping[canonical_recipes].astype(np.int32)
-        # Compute actual ΔE target → achieved.
-        matched_lab = rgb_to_lab(matched_rgb)
-        delta_e = np.linalg.norm(matched_lab - target_lab, axis=1)
+        # ΔE already measured against the actual achieved colour (not the bucket centre).
+        delta_e = candidate_delta_e[row_index, best_pos]
         return matched_rgb, recipes_user_order, delta_e
 
     def lookup_top_k(

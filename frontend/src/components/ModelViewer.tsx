@@ -12,18 +12,13 @@ import {
   getLatestResourceTiming,
   summarizeObjectTree,
 } from "../utils/threeDebug";
+import { postClientLog } from "../utils/clientLog";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
 
-function _clog(label: string) {
-  const start = (window as LuminaWindow).__luminaGenerateStart;
-  const elapsed_ms = start != null ? performance.now() - start : null;
-  fetch('/api/client-log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, elapsed_ms }),
-  }).catch(() => {});
+function _getGenerateStartTime(): number | null {
+  return (window as LuminaWindow).__luminaGenerateStart ?? null;
 }
 
 /**
@@ -78,15 +73,27 @@ function ModelViewer({ url }: ModelViewerProps) {
 
   useEffect(() => {
     console.timeLog('[LUMINA] generate', 'GLB loaded (useGLTF resolved)');
-    _clog('generate: GLB loaded (useGLTF resolved)');
+    const resourceTiming = getLatestResourceTiming(url);
+    const sourceScene = summarizeObjectTree(scene);
+    postClientLog('generate: GLB loaded (useGLTF resolved)', {
+      startTime: _getGenerateStartTime(),
+      scope: 'generate-viewer',
+      phase: 'gltf-loaded',
+      dedupeMs: 250,
+      details: {
+        url,
+        resource_timing: resourceTiming,
+        source_scene: sourceScene,
+      },
+    });
     debugThreeLog("ModelViewer.gltf", {
       url,
-      resource_timing: getLatestResourceTiming(url),
-      source_scene: summarizeObjectTree(scene),
+      resource_timing: resourceTiming,
+      source_scene: sourceScene,
     });
   }, [scene, url]);
 
-  const preparedScene = useMemo(() => {
+  const { preparedScene, buildSummary } = useMemo(() => {
     const buildStart = performance.now();
     const clone = cloneObjectTreeWithOwnedResources(scene);
 
@@ -139,7 +146,7 @@ function ModelViewer({ url }: ModelViewerProps) {
     box.getCenter(center);
     clone.position.set(-center.x, -center.y, -box.min.z);
 
-    debugThreeLog("ModelViewer.build", {
+    const summary = {
       url,
       build_ms: +(performance.now() - buildStart).toFixed(2),
       source_scene: summarizeObjectTree(scene),
@@ -150,15 +157,26 @@ function ModelViewer({ url }: ModelViewerProps) {
         z: +center.z.toFixed(3),
       },
       min_z: +box.min.z.toFixed(3),
-    });
+    };
 
-    return clone;
+    debugThreeLog("ModelViewer.build", summary);
+
+    return {
+      preparedScene: clone,
+      buildSummary: summary,
+    };
   }, [scene, url]);
 
   useEffect(() => {
     console.timeLog('[LUMINA] generate', 'GLB scene processed (useMemo done)');
-    _clog('generate: GLB scene processed (useMemo done)');
-  }, [preparedScene]);
+    postClientLog('generate: GLB scene processed (useMemo done)', {
+      startTime: _getGenerateStartTime(),
+      scope: 'generate-viewer',
+      phase: 'scene-processed',
+      dedupeMs: 250,
+      details: buildSummary,
+    });
+  }, [buildSummary]);
 
   useEffect(() => {
     return () => {
@@ -200,8 +218,18 @@ function ModelViewer({ url }: ModelViewerProps) {
 
     console.timeLog('[LUMINA] generate', 'camera fitted (model fully visible)');
     console.timeEnd('[LUMINA] generate');
-    _clog('generate: camera fitted (model fully visible)');
-  }, [preparedScene, camera, controls]);
+    postClientLog('generate: camera fitted (model fully visible)', {
+      startTime: _getGenerateStartTime(),
+      scope: 'generate-viewer',
+      phase: 'camera-fitted',
+      dedupeMs: 250,
+      details: {
+        url,
+        camera_distance: +dist.toFixed(3),
+        bounding_sphere_radius: +sphere.radius.toFixed(3),
+      },
+    });
+  }, [preparedScene, camera, controls, url]);
 
   return <primitive object={preparedScene} />;
 }

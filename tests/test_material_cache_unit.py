@@ -30,6 +30,7 @@ from core.material_cache import (
 )
 from core.material_color_solver import (
     MaterialParams,
+    rgb_to_lab,
     solve_image_colors_optimal,
 )
 
@@ -304,6 +305,25 @@ class TestLookup:
         with pytest.raises(ValueError, match="palette"):
             built_cache.lookup(targets, MEDIUM_PALETTE)
 
+    def test_lookup_on_empty_cache_raises(self):
+        """A cache with zero populated cells must refuse lookup explicitly."""
+        empty_cache = MaterialSolverCache(
+            lab_centers=np.zeros((0, 3), dtype=np.float32),
+            recipes=np.zeros((0, 5), dtype=np.uint8),
+            achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
+            center_delta_e=np.zeros((0,), dtype=np.float32),
+            metadata={
+                "palette_hash": fingerprint_palette(SMALL_PALETTE),
+                "layer_count": 5,
+                "layer_height_mm": 0.08,
+                "substrate": "white",
+                "grid_resolution": 32,
+            },
+        )
+        targets = np.asarray([[100, 100, 100]], dtype=np.uint8)
+        with pytest.raises(ValueError, match="no populated cells"):
+            empty_cache.lookup(targets, SMALL_PALETTE)
+
     def test_lookup_within_cell_half_diagonal_of_optimal(
         self, built_cache: MaterialSolverCache
     ):
@@ -344,6 +364,54 @@ class TestLookup:
         # Actual material per layer must match (same recipe, just different
         # integer encoding).
         assert [m.name for m in original_mats] == [m.name for m in shuffled_mats]
+
+    def test_lookup_prefers_best_actual_color_across_nearby_cells(self):
+        target = np.asarray([[168, 168, 168]], dtype=np.uint8)
+        target_lab = rgb_to_lab(target).astype(np.float32)[0]
+        cache = MaterialSolverCache(
+            lab_centers=np.asarray(
+                [
+                    target_lab + np.asarray([0.1, 0.0, 0.0], dtype=np.float32),
+                    target_lab + np.asarray([0.9, 0.0, 0.0], dtype=np.float32),
+                ],
+                dtype=np.float32,
+            ),
+            recipes=np.asarray(
+                [
+                    [0, 0, 0, 0, 0],
+                    [2, 2, 2, 2, 2],
+                ],
+                dtype=np.uint8,
+            ),
+            achieved_srgb=np.asarray(
+                [
+                    [172, 169, 174],
+                    [168, 168, 168],
+                ],
+                dtype=np.uint8,
+            ),
+            center_delta_e=np.asarray([0.1, 0.9], dtype=np.float32),
+            metadata={
+                "palette_hash": fingerprint_palette(SMALL_PALETTE),
+                "layer_count": 5,
+                "layer_height_mm": 0.08,
+                "substrate": "white",
+                "grid_resolution": 32,
+            },
+        )
+
+        matched, recipes, delta_e = cache.lookup(target, SMALL_PALETTE)
+
+        np.testing.assert_array_equal(
+            matched,
+            np.asarray([[168, 168, 168]], dtype=np.uint8),
+        )
+        expected_user_idx = canonical_palette_order(SMALL_PALETTE)[2]
+        np.testing.assert_array_equal(
+            recipes,
+            np.full((1, 5), expected_user_idx, dtype=np.int32),
+        )
+        assert float(delta_e[0]) == pytest.approx(0.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
