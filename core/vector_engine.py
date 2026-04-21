@@ -985,30 +985,37 @@ class VectorProcessor:
         num_channels = len(slot_names)
         num_layers = color_conf.get("layer_count", PrinterConfig.COLOR_LAYERS)
 
-        # For Merged JSON LUTs, override slot_names and preview_colors from
-        # the LUT palette so that material IDs match the actual palette order
-        # (mirrors the raster pipeline logic in S01).
+        # For any LUT that carries explicit palette metadata (Merged JSON,
+        # reverse-inferred native_bundle .json / .msgpack, etc.), override
+        # slot_names and preview_colors from the LUT palette so the vector
+        # engine uses the LUT's own color system instead of the stale UI
+        # ``color_mode`` preset. Mirrors the raster pipeline logic in S01.
+        #
+        # 当 LUT 自带调色板元数据（Merged JSON、反推 LUT 的 .json/.msgpack 等）
+        # 时，用调色板真实条目覆盖 slot_names / preview_colors，避免继承上一次
+        # UI 颜色模式（例如 4-Color CMYW）的预设槽位导致串色；同时沿用
+        # ``build_palette_preview_colors`` 的规范颜色名兜底，保证 hex_color 缺省
+        # 的 ColorDB 条目也能拿到正确 RGBA。
         lut_path = self.img_processor.lut_path
-        if self.color_mode == "Merged" and lut_path.endswith(".json"):
+        if lut_path.endswith((".json", ".msgpack")):
             try:
                 from utils.lut_manager import LUTManager
+                from core.pipeline.preview_color_utils import build_palette_preview_colors
+
                 _, _, lut_meta = LUTManager.load_lut_with_metadata(lut_path)
                 if lut_meta.palette:
-                    slot_names = [e.color for e in lut_meta.palette]
-                    preview_colors = {}
-                    for idx, entry in enumerate(lut_meta.palette):
-                        hex_color = entry.hex_color or "#FFFFFF"
-                        r = int(hex_color[1:3], 16)
-                        g = int(hex_color[3:5], 16)
-                        b = int(hex_color[5:7], 16)
-                        preview_colors[idx] = [r, g, b, 255]
+                    palette_slot_names, palette_preview_colors = build_palette_preview_colors(
+                        lut_meta.palette, color_conf
+                    )
+                    slot_names = palette_slot_names
+                    preview_colors = dict(palette_preview_colors)
                     num_channels = len(slot_names)
                     color_conf = dict(color_conf)
                     color_conf["slots"] = slot_names
                     color_conf["preview"] = preview_colors
-                    _log.info("[VECTOR] Merged LUT palette override: %s", slot_names)
+                    _log.info("[VECTOR] LUT palette override: %s", slot_names)
             except Exception as e:
-                _log.warning("[VECTOR] Failed to extract Merged LUT palette: %s", e)
+                _log.warning("[VECTOR] Failed to extract LUT palette: %s", e)
 
         # === Stage 4: Match fill colors to LUT recipes ===
         replacement_manager = None
