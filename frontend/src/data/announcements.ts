@@ -127,6 +127,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
             en: "When the layer count is extended: transparent background outside the model stays transparent (no more white ring), and untouched pixels inside the model keep their backing material (no more collapsed empty layers)",
           },
+          {
+            zh: "导出的 3MF 现在能在 Anycubic 切片软件（纵维立方 Anycubic Slicer Next）里正常打开——之前一拖进去就闪退，原因是自动生成的预览缩略图本身就是损坏的；别的切片软件一直没受影响，是因为它们遇到坏缩略图会静默跳过",
+            en: "Exported 3MF files now open normally in Anycubic Slicer Next — they used to crash the moment you dropped one in, because the auto-generated preview thumbnails were themselves corrupt; other slicers were unaffected because they silently skip over broken thumbnails",
+          },
         ],
       },
     ],
