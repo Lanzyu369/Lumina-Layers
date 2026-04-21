@@ -89,6 +89,18 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         ],
       },
       {
+        category: {
+          zh: "预览 & 交互",
+          en: "Preview & Interaction",
+        },
+        items: [
+          {
+            zh: "3D 预览加载大幅提速：以前上百 MB 的预览模型在远程使用时要等很久才出现，现在真实多色图通常只有几 MB，一打开画面就能看到 3D 模型；实际导出的 3MF 和打印精度完全不受影响",
+            en: "The 3D preview loads dramatically faster: what used to be a 100+ MB model that kept remote users waiting is now typically just a few MB on real multi-colour images, so the 3D scene appears almost immediately; the actual exported 3MF and its print precision are completely unchanged",
+          },
+        ],
+      },
+      {
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {

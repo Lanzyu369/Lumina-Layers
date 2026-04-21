@@ -15,7 +15,12 @@ import trimesh
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from config import PrinterConfig
 from core.converter import generate_segmented_glb
+
+# Total Z layers hard-coded inside generate_segmented_glb().
+# generate_segmented_glb 内部硬编码的总层数。
+_TOTAL_LAYERS_IN_GLB = 25
 
 COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})$")
 
@@ -198,3 +203,148 @@ class TestExactly64Colors:
             assert np.isclose(min_z, 0.0, atol=1e-6), (
                 f"Mesh {name} min_z={min_z}, expected 0.0"
             )
+
+
+# ============================================================================
+# Test 4: Contour-extrusion size + coverage regression
+# Guards the S11 refactor that replaced per-pixel voxel boxes with
+# contour-extruded prisms. On a 256x256 / 6-colour representative image the
+# pre-refactor baseline is ~15 MB / ~480k vertices; the new path targets
+# single-digit MB and sub-100k vertices without any loss of XY footprint or
+# Z volume coverage.
+# 第 4 组：轮廓挤出的体积大小与覆盖率回归。针对把 S11 逐像素体素盒改成
+# 轮廓挤出的重构，在 256x256 / 6 色代表性图像上，重构前基线约 15 MB /
+# ~48 万顶点；新路径目标是个位数 MB 与 10 万顶点以下，同时在 XY 平面
+# 与 Z 体积覆盖上完全保留原有精度。
+# ============================================================================
+
+class TestContourExtrusionSizeRegression:
+    """Lock in the dramatic size / vertex reduction from contour extrusion."""
+
+    @staticmethod
+    def _representative_image(
+        h: int = 256,
+        w: int = 256,
+        seed: int = 42,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Synthesize a 6-colour layered-print-style image deterministically.
+
+        Light-grey background plus 5 Gaussian blobs of distinct hues, with a
+        small transparent border — representative of typical user workloads.
+        """
+        rng = np.random.RandomState(seed)
+        matched_rgb = np.full((h, w, 3), (245, 245, 245), dtype=np.uint8)
+        mask_solid = np.ones((h, w), dtype=bool)
+
+        yy, xx = np.mgrid[:h, :w]
+        palette = [
+            (0x0A, 0x29, 0x89),
+            (0xC1, 0x2E, 0x1F),
+            (0x00, 0xAE, 0x42),
+            (0xF4, 0xEE, 0x2A),
+            (0x00, 0x00, 0x00),
+        ]
+        for color in palette:
+            cy = rng.randint(40, h - 40)
+            cx = rng.randint(40, w - 40)
+            sigma = rng.randint(30, 70)
+            blob = (xx - cx) ** 2 + (yy - cy) ** 2 < sigma**2
+            matched_rgb[blob] = color
+
+        border = 6
+        mask_solid[:border, :] = False
+        mask_solid[-border:, :] = False
+        mask_solid[:, :border] = False
+        mask_solid[:, -border:] = False
+        return matched_rgb, mask_solid
+
+    def test_glb_size_under_2mb(self) -> None:
+        """Representative 256x256 / 6-colour image must produce a GLB < 2 MB.
+
+        Pre-refactor voxel baseline for this exact image is ~15 MB; the
+        contour-extrusion path empirically lands around 0.1 MB, so 2 MB
+        gives ample margin for future mesh-format changes while still
+        flagging any accidental regression back to voxel-like sizes.
+        """
+        matched_rgb, mask_solid = self._representative_image()
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
+
+        glb_path = generate_segmented_glb(cache)
+
+        assert glb_path is not None, "generate_segmented_glb returned None"
+        assert os.path.isfile(glb_path), f"GLB file not found: {glb_path}"
+
+        size_bytes = os.path.getsize(glb_path)
+        size_mb = size_bytes / (1024 * 1024)
+        assert size_mb < 2.0, (
+            f"GLB size {size_mb:.3f} MB exceeds 2 MB threshold for the "
+            f"representative 256x256 6-colour image (pre-refactor voxel "
+            f"baseline was ~15 MB)."
+        )
+
+    def test_vertex_count_far_below_voxel_baseline(self) -> None:
+        """Total vertex count must be well under the voxel-box equivalent.
+
+        Voxel baseline = solid_pixel_count * 8 (each pixel = 8 vertices).
+        Contour extrusion should use at most 5% of that, i.e. >= 20x
+        fewer vertices on typical layered-print imagery.
+        """
+        matched_rgb, mask_solid = self._representative_image()
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
+
+        glb_path = generate_segmented_glb(cache)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+
+        total_verts = sum(g.vertices.shape[0] for g in scene.geometry.values())
+        solid_pixel_count = int(np.count_nonzero(mask_solid))
+        voxel_baseline = solid_pixel_count * 8
+
+        ratio = total_verts / max(voxel_baseline, 1)
+        assert ratio < 0.05, (
+            f"Vertex count {total_verts:,} is {ratio:.2%} of the voxel "
+            f"baseline ({voxel_baseline:,}); expected < 5% (i.e. at least "
+            f"20x reduction) from the contour-extrusion refactor."
+        )
+
+    def test_volume_coverage_preserved(self) -> None:
+        """Sum of per-colour mesh volume equals the expected pixel volume.
+
+        Representation-agnostic invariant proving the refactor did not lose
+        any solid pixel: every solid pixel contributes 1x1xtotal_layers
+        voxel units of volume (mapped to mm via pixel_scale^2 * LAYER_HEIGHT).
+        """
+        matched_rgb, mask_solid = self._representative_image()
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
+
+        glb_path = generate_segmented_glb(cache)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_nodes = _get_color_nodes(scene)
+
+        solid_pixel_count = int(np.count_nonzero(mask_solid))
+        pixel_scale = float(cache["target_width_mm"]) / matched_rgb.shape[1]
+        expected_volume = (
+            solid_pixel_count
+            * (pixel_scale ** 2)
+            * float(_TOTAL_LAYERS_IN_GLB)
+            * float(PrinterConfig.LAYER_HEIGHT)
+        )
+
+        actual_volume = 0.0
+        for mesh in color_nodes.values():
+            try:
+                v = float(mesh.volume)
+            except (ValueError, TypeError, RuntimeError, AttributeError):
+                v = 0.0
+            if np.isfinite(v):
+                actual_volume += abs(v)
+
+        tolerance = max(1e-6, 1e-3 * expected_volume)
+        assert abs(actual_volume - expected_volume) <= tolerance, (
+            f"Volume coverage mismatch: expected {expected_volume:.6f} mm^3 "
+            f"(pixels={solid_pixel_count}, pixel_scale={pixel_scale:.6f} mm), "
+            f"got {actual_volume:.6f} mm^3"
+        )

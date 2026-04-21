@@ -18,7 +18,12 @@ from hypothesis import strategies as st
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from config import PrinterConfig
 from core.converter import generate_segmented_glb
+
+# Total Z layers hard-coded inside generate_segmented_glb().
+# generate_segmented_glb 内部硬编码的总层数。
+_TOTAL_LAYERS_IN_GLB = 25
 
 # Regex for valid color_<hex> node names
 COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})$")
@@ -290,18 +295,43 @@ def test_glb_mesh_count_limit(data):
     )
 
     # (b) All original solid pixels are covered by some Mesh (no pixel loss).
-    # Each solid pixel becomes exactly one voxel box (8 vertices, 12 faces).
-    # Total voxels across all meshes must equal total solid pixels.
+    # We check the representation-agnostic invariant:
+    #     sum(mesh.volume) == solid_pixel_count × pixel_scale² × total_layers × LAYER_HEIGHT
+    # Each solid pixel owns a 1×1 footprint in pixel space (before the
+    # per-scene ``scale_transform`` maps pixel→mm) and a full-stack height
+    # of ``_TOTAL_LAYERS_IN_GLB`` voxel units, so the expected total volume
+    # equals pixel_count × per-pixel-volume regardless of whether the mesh
+    # is encoded as per-pixel voxel boxes or as a single contour-extruded
+    # prism per colour.
+    # 用和实现无关的体积守恒代替原先"每像素 8 顶点"的体素假设：
+    # 每个实体像素在像素坐标下占 1×1 面积，高度为 ``_TOTAL_LAYERS_IN_GLB``
+    # 层，因此总体积等于像素数 × 单像素体积，体素盒和轮廓挤出两种表示都
+    # 应当满足。
     total_solid_pixels = int(np.count_nonzero(mask_solid))
-    total_voxels_in_glb = 0
+    pixel_scale = float(cache["target_width_mm"]) / matched_rgb.shape[1]
+    per_pixel_volume = (
+        (pixel_scale ** 2)
+        * float(_TOTAL_LAYERS_IN_GLB)
+        * float(PrinterConfig.LAYER_HEIGHT)
+    )
+    expected_total_volume = total_solid_pixels * per_pixel_volume
+
+    actual_total_volume = 0.0
     for node_name in color_nodes:
         transform, geom_name = scene.graph[node_name]
         geom = scene.geometry[geom_name]
-        # Each voxel box has 8 vertices
-        n_verts = len(geom.vertices)
-        total_voxels_in_glb += n_verts // 8
+        try:
+            volume = float(geom.volume)
+        except (ValueError, TypeError, RuntimeError, AttributeError):
+            volume = 0.0
+        if np.isfinite(volume):
+            actual_total_volume += abs(volume)
 
-    assert total_voxels_in_glb == total_solid_pixels, (
-        f"Pixel coverage mismatch: {total_solid_pixels} solid pixels but "
-        f"{total_voxels_in_glb} voxels in GLB (no pixel should be lost)"
+    tolerance = max(1e-6, 1e-3 * expected_total_volume)
+    assert abs(actual_total_volume - expected_total_volume) <= tolerance, (
+        f"Volume coverage mismatch: expected {expected_total_volume:.6f} "
+        f"(pixels={total_solid_pixels}, pixel_scale={pixel_scale:.6f} mm, "
+        f"total_layers={_TOTAL_LAYERS_IN_GLB}, "
+        f"LAYER_HEIGHT={PrinterConfig.LAYER_HEIGHT}), "
+        f"got {actual_total_volume:.6f}"
     )
