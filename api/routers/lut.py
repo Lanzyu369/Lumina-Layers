@@ -11,8 +11,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+import numpy as np
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from api.dependencies import get_session_store
+from api.session_store import SessionStore
 from api.schemas.lut import (
     CompareDiffItem,
     CompareRequest,
@@ -450,21 +453,111 @@ def get_lut_colors(lut_name: str) -> LutColorsResponse:
     return LutColorsResponse(lut_name=lut_name, total=len(entries), colors=entries)
 
 
-@router.get("/{lut_name}/info")
-def get_lut_info(lut_name: str) -> LutInfoResponseV2:
-    """Return color mode and color count for a specific LUT.
-    返回指定 LUT 的颜色模式和颜色数量。
-    """
-    path: str | None = LUTManager.get_lut_path(lut_name)
-    if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+# Canonical hex for the well-known primary / secondary channel names used by
+# ChromaPrint-style palettes. Applied as a last-resort fallback when neither
+# ``palette[c].hex_color`` nor the LUT's pure-stack recipe yields a colour,
+# so the custom recipe dialog's swatches never degrade to a neutral grey for
+# standard primaries like Cyan / Magenta / Yellow / Black / White / RGB.
+# 用于 ChromaPrint 风格调色板的通道规范色：当 palette 元数据没有 hex_color、
+# 且 LUT 没有纯通道堆叠配方可供反查时作为兜底，保证对话框色块对常见原色
+# （Cyan / Magenta / Yellow / Black / White / RGB）永远不是灰色。
+_CANONICAL_PRIMARY_HEX: dict[str, str] = {
+    "cyan": "#00B7EB",
+    "magenta": "#E6007E",
+    "yellow": "#FFD400",
+    "black": "#111111",
+    "white": "#F5F5F5",
+    "red": "#E53935",
+    "green": "#43A047",
+    "blue": "#1E88E5",
+    "orange": "#FB8C00",
+    "purple": "#8E24AA",
+    "pink": "#EC407A",
+    "gray": "#9E9E9E",
+    "grey": "#9E9E9E",
+    "brown": "#795548",
+}
 
+
+def _canonical_primary_hex(color_name: str | None) -> str | None:
+    """Return the canonical ``#RRGGBB`` for well-known primary channel names.
+
+    返回常见原色通道名对应的规范 ``#RRGGBB``（大小写不敏感，找不到返回 ``None``）。
+    """
+    if not color_name:
+        return None
+    return _CANONICAL_PRIMARY_HEX.get(color_name.strip().lower())
+
+
+def _pure_channel_hex(
+    rgb: np.ndarray | None,
+    stacks: np.ndarray | None,
+    channel_idx: int,
+) -> str | None:
+    """Derive ``#RRGGBB`` for a palette channel from its pure-stack recipe.
+
+    从"纯通道"配方（每一层都是同一通道）反查 LUT 得到该通道的代表色 hex。
+
+    Many LUT bundles ship without explicit ``hex_color`` in their palette
+    metadata (notably material archives and native bundles). The LUT itself
+    still carries an authoritative RGB for the pure stack ``[c, c, ..., c]``,
+    which is the natural visual representative of channel ``c``. This helper
+    looks that up so the frontend does not have to fall back to a neutral gray
+    swatch.
+
+    Args:
+        rgb: ``(N, 3)`` uint8 array of per-recipe RGB values, or ``None``.
+        stacks: ``(N, layers)`` int array of per-recipe channel indices, or ``None``.
+        channel_idx: Palette channel index to resolve. 调色板通道索引。
+
+    Returns:
+        ``"#RRGGBB"`` when a pure-stack recipe exists, otherwise ``None``.
+    """
+    if rgb is None or stacks is None:
+        return None
+    rgb_arr = np.asarray(rgb)
+    stacks_arr = np.asarray(stacks)
+    if rgb_arr.ndim != 2 or stacks_arr.ndim != 2:
+        return None
+    if stacks_arr.shape[0] != rgb_arr.shape[0] or stacks_arr.shape[1] == 0:
+        return None
+    target = np.full(stacks_arr.shape[1], channel_idx, dtype=stacks_arr.dtype)
+    matches = np.where(np.all(stacks_arr == target, axis=1))[0]
+    if matches.size == 0:
+        return None
+    row = rgb_arr[int(matches[0])]
+    if row.shape[-1] < 3:
+        return None
+    r, g, b = (int(row[0]), int(row[1]), int(row[2]))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _build_lut_info_from_path(path: str, display_name: str) -> LutInfoResponseV2:
+    """Assemble :class:`LutInfoResponseV2` from a LUT file on disk.
+
+    从磁盘上的 LUT 文件组装 ``LutInfoResponseV2``。
+
+    Shared by the named-LUT endpoint and the session-scoped endpoint so that
+    material-archive / native bundle sessions expose the same channel palette
+    shape as legacy LUTs.
+
+    Args:
+        path: Absolute path of a LUT file. LUT 文件绝对路径。
+        display_name: Name returned in the response ``name`` field.
+            响应 ``name`` 字段中的显示名称。
+
+    Returns:
+        LutInfoResponseV2: Channel palette + capability flags for the LUT.
+            LUT 的通道调色板与能力标志。
+    """
     detected_mode, color_count = LUTMerger.detect_color_mode(path)
     inferred_mode = LUTManager.infer_color_mode(Path(path).name, path)
     color_mode = inferred_mode if detected_mode in {"4-Color", "6-Color"} else detected_mode
 
     # 加载元数据（如果 load_lut_with_metadata 可用）
     metadata = LUTMetadata()
+    _rgb: np.ndarray | None = None
+    _stacks: np.ndarray | None = None
     try:
         _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
     except (AttributeError, NotImplementedError, Exception):
@@ -475,14 +568,19 @@ def get_lut_info(lut_name: str) -> LutInfoResponseV2:
         PaletteEntrySchema(
             color=e.color,
             material=e.material,
-            hex_color=e.hex_color,
+            hex_color=(
+                e.hex_color
+                or _pure_channel_hex(_rgb, _stacks, channel_idx)
+                or _canonical_primary_hex(e.color_name)
+                or _canonical_primary_hex(e.color)
+            ),
             color_name=e.color_name,
         )
-        for e in metadata.palette
+        for channel_idx, e in enumerate(metadata.palette)
     ]
 
     return LutInfoResponseV2(
-        name=lut_name,
+        name=display_name,
         color_mode=color_mode,
         color_count=color_count,
         palette=palette_schema,
@@ -501,6 +599,56 @@ def get_lut_info(lut_name: str) -> LutInfoResponseV2:
         source_kind=metadata.get_source_kind(),
         supported_modes=metadata.get_supported_modes(),
     )
+
+
+@router.get("/{lut_name}/info")
+def get_lut_info(lut_name: str) -> LutInfoResponseV2:
+    """Return color mode and color count for a specific LUT.
+    返回指定 LUT 的颜色模式和颜色数量。
+    """
+    path: str | None = LUTManager.get_lut_path(lut_name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+    return _build_lut_info_from_path(path, lut_name)
+
+
+@router.get("/session/{session_id}/info")
+def get_session_lut_info(
+    session_id: str,
+    store: SessionStore = Depends(get_session_store),
+) -> LutInfoResponseV2:
+    """Return channel palette and capabilities for the LUT bound to a session.
+
+    返回当前会话所绑定 LUT 的通道调色板与能力标志。
+
+    Unlike :func:`get_lut_info`, this endpoint works for material-archive and
+    native-bundle sessions that don't have a globally-known LUT name, letting
+    the UI surface channel-ordered materials for custom recipe editing.
+
+    Args:
+        session_id: Active converter session id. 当前转换会话 id。
+        store: Injected :class:`SessionStore`. 会话存储依赖。
+
+    Returns:
+        LutInfoResponseV2: Same shape as :func:`get_lut_info`.
+            与 ``get_lut_info`` 相同的响应结构。
+
+    Raises:
+        HTTPException(404): Session not found. 会话不存在。
+        HTTPException(409): Session has no LUT bound yet or the file is
+            missing. 会话未绑定 LUT 或文件缺失。
+    """
+    session_data = store.get(session_id)
+    if session_data is None:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    lut_path = session_data.get("lut_path")
+    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(
+            status_code=409,
+            detail="Session has no LUT bound yet. Run preview/generate first.",
+        )
+    display_name = session_data.get("lut_name") or Path(lut_path).stem
+    return _build_lut_info_from_path(lut_path, str(display_name))
 
 
 @router.post("/{lut_name}/predict-recipe-color")

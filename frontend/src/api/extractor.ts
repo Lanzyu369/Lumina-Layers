@@ -7,6 +7,7 @@ import type {
   GradientCardMaterialDeleteResponse,
   GradientCardMaterialLibraryResponse,
   GradientCardMaterialSaveResponse,
+  GradientCardMaterialUpdateResponse,
   GradientCardStageAExtractResponse,
   ManualFixResponse,
   ManualOrientationLabel,
@@ -125,6 +126,24 @@ export async function deleteGradientCardMaterial(
 ): Promise<GradientCardMaterialDeleteResponse> {
   const response = await apiClient.delete<GradientCardMaterialDeleteResponse>(
     `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
+    { timeout: 60_000 },
+  );
+  return response.data;
+}
+
+export async function updateGradientCardMaterial(
+  directoryName: string,
+  payload: {
+    materialName: string;
+    brand?: string | null;
+  },
+): Promise<GradientCardMaterialUpdateResponse> {
+  const response = await apiClient.patch<GradientCardMaterialUpdateResponse>(
+    `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
+    {
+      material_name: payload.materialName.trim(),
+      brand: payload.brand?.trim() || null,
+    },
     { timeout: 60_000 },
   );
   return response.data;

@@ -1,5 +1,5 @@
 import { Suspense, useRef, useState, useEffect, useCallback } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
@@ -14,6 +14,13 @@ import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
+import {
+  debugThreeLog,
+  getHeapMemorySnapshot,
+  getRendererInfoSnapshot,
+  getThreePerfDebugConfig,
+} from "../utils/threeDebug";
+import { postClientLog } from "../utils/clientLog";
 
 declare global {
   interface Window {
@@ -27,6 +34,85 @@ declare global {
 
 interface Scene3DProps {
   modelUrl?: string;
+}
+
+interface SceneDiagnosticsSnapshot {
+  renderer: ReturnType<typeof getRendererInfoSnapshot>;
+  heap: ReturnType<typeof getHeapMemorySnapshot>;
+  fps: number | null;
+}
+
+function FrameSampler({
+  onFps,
+  onPublish,
+}: {
+  onFps: (fps: number) => void;
+  onPublish: () => void;
+}) {
+  const frameCountRef = useRef(0);
+  const lastFpsAtRef = useRef(performance.now());
+
+  useFrame(() => {
+    frameCountRef.current += 1;
+    const now = performance.now();
+    const elapsed = now - lastFpsAtRef.current;
+    if (elapsed < 1000) {
+      return;
+    }
+    const fps = Math.round((frameCountRef.current * 10000) / elapsed) / 10;
+    frameCountRef.current = 0;
+    lastFpsAtRef.current = now;
+    onFps(fps);
+    onPublish();
+  });
+
+  return null;
+}
+
+function RendererDiagnosticsBridge({
+  enabled,
+  onSample,
+}: {
+  enabled: boolean;
+  onSample: (snapshot: SceneDiagnosticsSnapshot) => void;
+}) {
+  const { gl } = useThree();
+  const latestFpsRef = useRef<number | null>(null);
+
+  const publishSnapshot = useCallback(() => {
+    onSample({
+      renderer: getRendererInfoSnapshot(gl),
+      heap: getHeapMemorySnapshot(),
+      fps: latestFpsRef.current,
+    });
+  }, [gl, onSample]);
+
+  useEffect(() => {
+    publishSnapshot();
+  }, [publishSnapshot]);
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    const { intervalMs } = getThreePerfDebugConfig();
+    const timerId = window.setInterval(() => {
+      publishSnapshot();
+    }, intervalMs);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [enabled, publishSnapshot]);
+
+  const handleFps = useCallback((fps: number) => {
+    latestFpsRef.current = fps;
+  }, []);
+
+  if (!enabled) {
+    return null;
+  }
+
+  return <FrameSampler onFps={handleFps} onPublish={publishSnapshot} />;
 }
 
 /**
@@ -94,6 +180,10 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(
+    getThreePerfDebugConfig().enabled,
+  );
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -140,6 +230,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const modelBounds = useConverterStore((s) => s.modelBounds);
+  const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
+
+  const diagnosticsSourceLabel = modelUrl
+    ? t("viewer_diagnostics_source_generate")
+    : previewGlbUrl
+      ? t("viewer_diagnostics_source_preview")
+      : t("viewer_diagnostics_source_idle");
 
   // Listen to fullscreenchange event
   useEffect(() => {
@@ -150,7 +247,47 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
   const handleGlReady = useCallback((gl: THREE.WebGLRenderer) => {
     glRef.current = gl;
+    const snapshot = {
+      renderer: getRendererInfoSnapshot(gl),
+      heap: getHeapMemorySnapshot(),
+      fps: null,
+    };
+    setDiagnostics((current) => ({
+      ...snapshot,
+      fps: current?.fps ?? snapshot.fps,
+    }));
+    debugThreeLog("Scene3D.gl", {
+      event: "ready",
+      renderer: snapshot.renderer,
+      heap: snapshot.heap,
+    });
+    postClientLog("viewer: gl ready", {
+      scope: "viewer",
+      phase: "gl-ready",
+      dedupeMs: 250,
+      details: {
+        renderer: snapshot.renderer,
+        heap: snapshot.heap,
+      },
+    });
   }, []);
+
+  const handleDiagnosticsSample = useCallback((snapshot: SceneDiagnosticsSnapshot) => {
+    setDiagnostics(snapshot);
+  }, []);
+
+  const toggleDiagnostics = useCallback(() => {
+    const next = !diagnosticsVisible;
+    setDiagnosticsVisible(next);
+    postClientLog("viewer: diagnostics toggled", {
+      scope: "viewer",
+      phase: "diagnostics-toggle",
+      details: {
+        open: next,
+        source: modelUrl ? "generate" : previewGlbUrl ? "preview" : "idle",
+      },
+    });
+  }, [diagnosticsVisible, modelUrl, previewGlbUrl]);
 
   const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
@@ -178,6 +315,18 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     }
   }, []);
 
+  useEffect(() => {
+    postClientLog("viewer: source updated", {
+      scope: "viewer",
+      phase: "source-updated",
+      dedupeMs: 250,
+      details: {
+        model_url: modelUrl ?? null,
+        preview_glb_url: previewGlbUrl ?? null,
+      },
+    });
+  }, [modelUrl, previewGlbUrl]);
+
   // Check if Fullscreen API is available
   const fullscreenSupported = typeof document.fullscreenElement !== "undefined";
 
@@ -189,6 +338,15 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     >
       {/* Toolbar buttons */}
       <div className="absolute top-2 right-2 z-10 flex gap-1">
+        <button
+          onClick={toggleDiagnostics}
+          className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
+          aria-label={t("viewer_diagnostics_toggle")}
+          title={t("viewer_diagnostics_toggle")}
+          data-testid="scene3d-diagnostics-toggle"
+        >
+          {t("viewer_diagnostics_toggle")}
+        </button>
         {fullscreenSupported && (
           <button
             onClick={toggleFullscreen}
@@ -209,6 +367,55 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         </button>
       </div>
 
+      {diagnosticsVisible && (
+        <div
+          className="absolute left-2 top-2 z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
+          style={{
+            borderColor: "var(--surface-outline)",
+            background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
+            color: "var(--surface-text-muted)",
+          }}
+          data-testid="scene3d-diagnostics-panel"
+        >
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-900 dark:text-slate-50">
+              {t("viewer_diagnostics_title")}
+            </span>
+            <span>{diagnostics?.renderer.frame ?? "—"}</span>
+          </div>
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <span>{t("viewer_diagnostics_source")}</span>
+            <span className="truncate text-right">{diagnosticsSourceLabel}</span>
+            <span>{t("viewer_diagnostics_fps")}</span>
+            <span className="text-right">
+              {diagnostics?.fps != null ? diagnostics.fps.toFixed(1) : "—"}
+            </span>
+            <span>{t("viewer_diagnostics_js_heap")}</span>
+            <span className="text-right">
+              {diagnostics?.heap
+                ? `${diagnostics.heap.used_js_heap_mb} / ${diagnostics.heap.total_js_heap_mb} MB`
+                : t("viewer_diagnostics_js_heap_unavailable")}
+            </span>
+            <span>{t("viewer_diagnostics_geometries")}</span>
+            <span className="text-right">{diagnostics?.renderer.geometries ?? "—"}</span>
+            <span>{t("viewer_diagnostics_textures")}</span>
+            <span className="text-right">{diagnostics?.renderer.textures ?? "—"}</span>
+            <span>{t("viewer_diagnostics_programs")}</span>
+            <span className="text-right">{diagnostics?.renderer.programs ?? "—"}</span>
+            <span>{t("viewer_diagnostics_draw_calls")}</span>
+            <span className="text-right">{diagnostics?.renderer.calls ?? "—"}</span>
+            <span>{t("viewer_diagnostics_triangles")}</span>
+            <span className="text-right">{diagnostics?.renderer.triangles ?? "—"}</span>
+            <span>{t("viewer_diagnostics_canvas")}</span>
+            <span className="text-right">
+              {diagnostics?.renderer
+                ? `${diagnostics.renderer.canvas_width}×${diagnostics.renderer.canvas_height} @${diagnostics.renderer.pixel_ratio}x`
+                : "—"}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Loading indicator is now 3D-anchored inside Canvas */}
 
       <Canvas
@@ -222,15 +429,45 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         onCreated={({ gl }) => {
           gl.setClearColor(themeColors.canvasClearColor);
           const canvas = gl.domElement;
+          postClientLog("viewer: canvas created", {
+            scope: "viewer",
+            phase: "canvas-created",
+            dedupeMs: 250,
+            details: {
+              renderer: getRendererInfoSnapshot(gl),
+              heap: getHeapMemorySnapshot(),
+            },
+          });
           canvas.addEventListener("webglcontextlost", (e) => {
             e.preventDefault();
+            postClientLog("viewer: webgl context lost", {
+              scope: "viewer",
+              phase: "context-lost",
+              method: "warn",
+              details: {
+                canvas_width: canvas.width,
+                canvas_height: canvas.height,
+              },
+            });
           });
           canvas.addEventListener("webglcontextrestored", () => {
             gl.setSize(canvas.clientWidth, canvas.clientHeight);
+            postClientLog("viewer: webgl context restored", {
+              scope: "viewer",
+              phase: "context-restored",
+              details: {
+                renderer: getRendererInfoSnapshot(gl),
+                heap: getHeapMemorySnapshot(),
+              },
+            });
           });
         }}
       >
         <ScreenshotHelper onGlReady={handleGlReady} />
+        <RendererDiagnosticsBridge
+          enabled={diagnosticsSamplingEnabled}
+          onSample={handleDiagnosticsSample}
+        />
         <CameraDebugHelper />
         <ThemeUpdater />
         <Suspense fallback={null}>

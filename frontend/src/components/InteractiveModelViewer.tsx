@@ -17,8 +17,15 @@ import {
   summarizeMeshList,
   summarizeObjectTree,
 } from "../utils/threeDebug";
+import { postClientLog } from "../utils/clientLog";
 import PuzzleOverlay3D from "./PuzzleOverlay3D";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
+
+type LuminaWindow = Window & { __luminaPreviewStart?: number };
+
+function _getPreviewStartTime(): number | null {
+  return (window as LuminaWindow).__luminaPreviewStart ?? null;
+}
 
 // ========== Exported pure utility functions (testable without Three.js) ==========
 
@@ -94,17 +101,30 @@ function InteractiveModelViewer({
   }, [url]);
 
   useEffect(() => {
+    const resourceTiming = getLatestResourceTiming(url);
+    const sourceScene = summarizeObjectTree(scene);
+    postClientLog("preview: GLB loaded (useGLTF resolved)", {
+      startTime: _getPreviewStartTime(),
+      scope: "preview-viewer",
+      phase: "gltf-loaded",
+      dedupeMs: 250,
+      details: {
+        url,
+        resource_timing: resourceTiming,
+        source_scene: sourceScene,
+      },
+    });
     debugThreeLog("InteractiveModelViewer.gltf", {
       url,
-      resource_timing: getLatestResourceTiming(url),
-      source_scene: summarizeObjectTree(scene),
+      resource_timing: resourceTiming,
+      source_scene: sourceScene,
     });
   }, [scene, url]);
 
   // Clone scene once per URL load, apply rotation/centering,
   // and clone each color mesh's material to avoid shared-material mutations.
   // Also separate color_ meshes from non-color children for individual JSX rendering.
-  const { nonColorObject, colorMeshes, modelBounds, sceneCenter, backingPlateMesh } = useMemo(() => {
+  const { nonColorObject, colorMeshes, modelBounds, sceneCenter, backingPlateMesh, buildSummary } = useMemo(() => {
     const buildStart = performance.now();
     const clone = cloneObjectTreeWithOwnedResources(scene);
 
@@ -273,8 +293,19 @@ function InteractiveModelViewer({
       modelBounds: bounds,
       sceneCenter: center,
       backingPlateMesh: extractedBackingPlate as THREE.Mesh | null,
+      buildSummary,
     };
   }, [scene, url]);
+
+  useEffect(() => {
+    postClientLog("preview: GLB scene processed (useMemo done)", {
+      startTime: _getPreviewStartTime(),
+      scope: "preview-viewer",
+      phase: "scene-processed",
+      dedupeMs: 250,
+      details: buildSummary,
+    });
+  }, [buildSummary]);
 
   // Expose model bounds to store for KeychainRing3D positioning
   useEffect(() => {

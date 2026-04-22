@@ -2,11 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import GradientCardExtractPanel from "../components/GradientCardExtractPanel";
-import { extractGradientCardStageA } from "../api/extractor";
+import {
+  extractGradientCardStageA,
+  listGradientCardMaterials,
+  saveGradientCardMaterial,
+} from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
   extractGradientCardStageA: vi.fn(),
+  listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),
   saveGradientCardMaterial: vi.fn(),
 }));
@@ -27,6 +32,9 @@ vi.mock("../components/GradientCardCanvasPreview", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(listGradientCardMaterials).mockImplementation(
+    () => new Promise(() => {}),
+  );
   useSingleStageStore.setState({
     workflow: "single-stage",
     datasetFile: null,
@@ -52,6 +60,7 @@ beforeEach(() => {
     fitSummary: null,
     materialSummary: null,
     materialName: "",
+    materialBrand: "",
     verificationTargetDirectoryName: null,
     verificationTargetCount: 0,
     isSaving: false,
@@ -74,9 +83,14 @@ describe("GradientCardExtractPanel", () => {
     expect(
       screen.getByRole("button", { name: /选择数据集 zip|choose dataset zip/i }),
     ).toBeInTheDocument();
+    const extractButton = screen.getByRole("button", {
+      name: /提取耗材|extract material/i,
+    });
+    expect(extractButton).toBeDisabled();
+    const blackCornerSelector = screen.getByTestId("black-corner-selector-preview");
     expect(
-      screen.getByRole("button", { name: /提取 stage a 耗材参数|extract stage a material parameters/i }),
-    ).toBeDisabled();
+      blackCornerSelector.compareDocumentPosition(extractButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /保存耗材档案|save material archive/i }),
     ).toBeDisabled();
@@ -161,10 +175,6 @@ describe("GradientCardExtractPanel", () => {
 
     render(<GradientCardExtractPanel />);
 
-    expect(screen.getByTestId("stage-a-link")).toHaveAttribute(
-      "href",
-      "/api/files/stage-a.json",
-    );
     expect(screen.getByTestId("material-link")).toHaveAttribute(
       "href",
       "/api/files/material.json",
@@ -209,6 +219,21 @@ describe("GradientCardExtractPanel", () => {
     expect(screen.getByTestId("orientation-black")).toHaveTextContent("identity");
     expect(screen.getByTestId("orientation-delta-e-gap")).toHaveTextContent("2.3456");
     expect(screen.getByTestId("orientation-reliability-badge")).toHaveTextContent(/可靠|reliable/i);
+    expect(screen.queryByTestId("stage-a-link")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-summary-json")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fit-summary-json")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("saved-material-summary-json")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /查看详细信息|view details/i }));
+
+    expect(screen.getByTestId("gradient-card-details-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-a-link")).toHaveAttribute(
+      "href",
+      "/api/files/stage-a.json",
+    );
+    expect(screen.getByTestId("material-summary-json")).toHaveTextContent("estimated_rgb");
+    expect(screen.getByTestId("fit-summary-json")).toHaveTextContent("overall_validation");
+    expect(screen.getByTestId("saved-material-summary-json")).toHaveTextContent("Test Material");
   });
 
   it("shows unreliable orientation badge when delta_e_gap is below threshold", () => {
@@ -288,6 +313,212 @@ describe("GradientCardExtractPanel", () => {
     // "no manual override" — selecting it means the store holds null.
     expect(whiteSelect.value).toBe("__auto__");
     expect(blackSelect.value).toBe("__auto__");
+  });
+
+  it("lets you pick an existing saved brand from the brand selector", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 2 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "bambu-lab/pla-basic",
+          brand: "Bambu Lab",
+          archive_path: "materials/bambu-lab/pla-basic/material.json",
+          stage_a_params_path: "materials/bambu-lab/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-1.json",
+          stage_a_params_url: "/api/files/stage-a-1.json",
+          estimated_rgb: [100, 120, 140],
+        },
+        {
+          material_name: "PLA Matte",
+          directory_name: "polymaker/pla-matte",
+          brand: "Polymaker",
+          archive_path: "materials/polymaker/pla-matte/material.json",
+          stage_a_params_path: "materials/polymaker/pla-matte/stage_A_parameters.json",
+          material_file_url: "/api/files/material-2.json",
+          stage_a_params_url: "/api/files/stage-a-2.json",
+          estimated_rgb: [120, 120, 120],
+        },
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    fireEvent.click(screen.getByTestId("gradient-card-material-brand-toggle"));
+
+    const option = await screen.findByRole("option", { name: "Bambu Lab" });
+    fireEvent.click(option);
+
+    const input = screen.getByTestId("gradient-card-material-brand-input") as HTMLInputElement;
+    expect(input.value).toBe("Bambu Lab");
+    expect(useSingleStageStore.getState().materialBrand).toBe("Bambu Lab");
+  });
+
+  it("lets you create a new brand from typed input when it does not already exist", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "bambu-lab/pla-basic",
+          brand: "Bambu Lab",
+          archive_path: "materials/bambu-lab/pla-basic/material.json",
+          stage_a_params_path: "materials/bambu-lab/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-1.json",
+          stage_a_params_url: "/api/files/stage-a-1.json",
+          estimated_rgb: [100, 120, 140],
+        },
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    const input = screen.getByTestId("gradient-card-material-brand-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "My New Brand" } });
+
+    const createOption = await screen.findByTestId("gradient-card-material-brand-create-option");
+    fireEvent.click(createOption);
+
+    expect(input.value).toBe("My New Brand");
+    expect(useSingleStageStore.getState().materialBrand).toBe("My New Brand");
+  });
+
+  it("shows a friendly error when the uploaded gradient card ZIP is invalid", async () => {
+    const extractMock = vi.mocked(extractGradientCardStageA);
+    const axiosLikeError = new Error("Request failed with status code 422") as Error & {
+      response?: {
+        status: number;
+        data: {
+          detail: string;
+        };
+      };
+    };
+    axiosLikeError.response = {
+      status: 422,
+      data: {
+        detail: "Gradient card kit zip must contain manifest.json",
+      },
+    };
+    extractMock.mockRejectedValueOnce(axiosLikeError);
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "wrong.zip", { type: "application/zip" }),
+      whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+      blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitExtract();
+    });
+
+    expect(screen.getByTestId("extract-error")).toHaveTextContent(
+      /ZIP 不是正确的梯度卡 Kit ZIP|uploaded ZIP is not a valid gradient card kit/i,
+    );
+    expect(screen.getByTestId("gradient-card-floating-message")).toHaveTextContent(
+      /ZIP 不是正确的梯度卡 Kit ZIP|uploaded ZIP is not a valid gradient card kit/i,
+    );
+    fireEvent.click(screen.getByTestId("gradient-card-floating-message-close"));
+    expect(screen.queryByTestId("gradient-card-floating-message")).not.toBeInTheDocument();
+  });
+
+  it("shows a friendly error when an uploaded gradient card image cannot be decoded", async () => {
+    const extractMock = vi.mocked(extractGradientCardStageA);
+    const axiosLikeError = new Error("Request failed with status code 422") as Error & {
+      response?: {
+        status: number;
+        data: {
+          detail: string;
+        };
+      };
+    };
+    axiosLikeError.response = {
+      status: 422,
+      data: {
+        detail: "无法解码图像文件: cannot identify image file",
+      },
+    };
+    extractMock.mockRejectedValueOnce(axiosLikeError);
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "dataset.zip", { type: "application/zip" }),
+      whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+      blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitExtract();
+    });
+
+    expect(screen.getByTestId("extract-error")).toHaveTextContent(
+      /上传的图片无法识别|uploaded image could not be read/i,
+    );
+  });
+
+  it("shows a friendly save error when the extraction session has expired", async () => {
+    const saveMock = vi.mocked(saveGradientCardMaterial);
+    const axiosLikeError = new Error("Request failed with status code 404") as Error & {
+      response?: {
+        status: number;
+        data: {
+          detail: string;
+        };
+      };
+    };
+    axiosLikeError.response = {
+      status: 404,
+      data: {
+        detail: "Session sess-expired not found",
+      },
+    };
+    saveMock.mockRejectedValueOnce(axiosLikeError);
+
+    useSingleStageStore.setState({
+      sessionId: "sess-expired",
+      materialName: "PLA Basic",
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitSave();
+    });
+
+    expect(screen.getByTestId("save-error")).toHaveTextContent(
+      /提取结果已失效|extraction result has expired/i,
+    );
+    expect(screen.getByTestId("gradient-card-floating-message")).toHaveTextContent(
+      /提取结果已失效|extraction result has expired/i,
+    );
   });
 
   it("propagates the manual white orientation selection to the extractor API call", async () => {

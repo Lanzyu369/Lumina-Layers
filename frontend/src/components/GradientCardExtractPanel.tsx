@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
+import { listGradientCardMaterials } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import Button from "./ui/Button";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
@@ -55,6 +56,12 @@ const badgeToneManual = `${badgeClass} bg-blue-100 text-blue-700 dark:bg-blue-90
 const orientationOptionKey = (label: ManualOrientationLabel) =>
   `mat_gradient_orientation_option_${label}` as const;
 
+const brandMenuClass =
+  "absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96";
+
+const brandMenuOptionClass =
+  "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 text-slate-700 transition-colors duration-150 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900";
+
 const OrientationSelect = ({
   label,
   value,
@@ -99,6 +106,161 @@ const OrientationSelect = ({
   );
 };
 
+const BrandSelect = ({
+  value,
+  onChange,
+  options,
+  isLoading,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  isLoading: boolean;
+}) => {
+  const { t } = useI18n();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  const normalizedValue = value.trim().toLocaleLowerCase();
+  const filteredOptions = useMemo(() => {
+    if (!normalizedValue) {
+      return options;
+    }
+    return options.filter((option) => option.toLocaleLowerCase().includes(normalizedValue));
+  }, [normalizedValue, options]);
+
+  const hasExactMatch = useMemo(
+    () => options.some((option) => option.toLocaleLowerCase() === normalizedValue),
+    [normalizedValue, options],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [open]);
+
+  const showCreateOption = value.trim().length > 0 && !hasExactMatch;
+
+  return (
+    <div ref={rootRef} className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <label
+          htmlFor="gradient-card-material-brand"
+          className="text-sm font-semibold text-slate-900 dark:text-slate-50"
+        >
+          {t("mat_gradient_brand_label")}
+        </label>
+        <span className="text-xs text-slate-400 dark:text-slate-500">
+          {t("mat_gradient_brand_hint")}
+        </span>
+      </div>
+      <div className="relative">
+        <input
+          id="gradient-card-material-brand"
+          value={value}
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpen(false);
+            }
+            if (event.key === "Enter" && value.trim()) {
+              setOpen(false);
+            }
+          }}
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-label={t("mat_gradient_brand_label")}
+          placeholder={t("mat_gradient_brand_placeholder")}
+          className={`${textInputClass} pr-10`}
+          data-testid="gradient-card-material-brand-input"
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((previous) => !previous)}
+          className="absolute inset-y-0 right-2 inline-flex items-center justify-center rounded-lg px-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+          aria-label={t("mat_gradient_brand_label")}
+          data-testid="gradient-card-material-brand-toggle"
+        >
+          <svg className={`h-4 w-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.1 1.02l-4.25 4.52a.75.75 0 01-1.1 0L5.21 8.25a.75.75 0 01.02-1.04z" />
+          </svg>
+        </button>
+
+        {open ? (
+          <div className={brandMenuClass}>
+            <div role="listbox" className="max-h-64 overflow-y-auto p-2">
+              {isLoading ? (
+                <div
+                  className="px-3 py-2 text-sm text-slate-500 dark:text-slate-400"
+                  data-testid="gradient-card-material-brand-loading"
+                >
+                  {t("mat_gradient_brand_loading")}
+                </div>
+              ) : (
+                <>
+                  {showCreateOption ? (
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => {
+                        onChange(value.trim());
+                        setOpen(false);
+                      }}
+                      className={brandMenuOptionClass}
+                      data-testid="gradient-card-material-brand-create-option"
+                    >
+                      {tRuntime("mat_gradient_brand_create_option", { brand: value.trim() })}
+                    </button>
+                  ) : null}
+                  {filteredOptions.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      role="option"
+                      aria-selected={option.toLocaleLowerCase() === normalizedValue}
+                      onClick={() => {
+                        onChange(option);
+                        setOpen(false);
+                      }}
+                      className={brandMenuOptionClass}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                  {!showCreateOption && filteredOptions.length === 0 ? (
+                    <div
+                      className="px-3 py-2 text-sm text-slate-500 dark:text-slate-400"
+                      data-testid="gradient-card-material-brand-empty"
+                    >
+                      {t("mat_gradient_brand_empty")}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
 const SubstrateSignalCard = ({
   label,
   info,
@@ -137,12 +299,67 @@ const SubstrateSignalCard = ({
   );
 };
 
+type FloatingMessage = {
+  id: number;
+  tone: "error" | "success";
+  message: string;
+};
+
+const FloatingStatusMessage = ({
+  tone,
+  message,
+  closeLabel,
+  onDismiss,
+}: {
+  tone: "error" | "success";
+  message: string;
+  closeLabel: string;
+  onDismiss: () => void;
+}) => (
+  <motion.div
+    key={`${tone}:${message}`}
+    initial={{ opacity: 0, y: -12, scale: 0.98 }}
+    animate={{ opacity: 1, y: 0, scale: 1 }}
+    transition={{ duration: 0.18, ease: "easeOut" }}
+    data-testid="gradient-card-floating-message"
+    role={tone === "error" ? "alert" : "status"}
+    aria-live={tone === "error" ? "assertive" : "polite"}
+    className="pointer-events-none fixed inset-x-4 top-4 z-50 flex justify-end sm:inset-x-auto sm:right-4"
+  >
+    <StatusBanner
+      tone={tone}
+      className="pointer-events-auto w-full max-w-md rounded-[22px] shadow-[var(--shadow-control)]"
+      action={(
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={closeLabel}
+          data-testid="gradient-card-floating-message-close"
+          className="rounded-lg px-2 py-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+        >
+          ×
+        </button>
+      )}
+    >
+      {message}
+    </StatusBanner>
+  </motion.div>
+);
+
 export default function GradientCardExtractPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
   const datasetInputRef = useRef<HTMLInputElement>(null);
   const whiteImageInputRef = useRef<HTMLInputElement>(null);
   const blackImageInputRef = useRef<HTMLInputElement>(null);
+  const floatingMessageIdRef = useRef(0);
+  const previousExtractErrorRef = useRef<string | null>(null);
+  const previousSaveErrorRef = useRef<string | null>(null);
+  const previousSaveSuccessRef = useRef<string | null>(null);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [brandOptions, setBrandOptions] = useState<string[]>([]);
+  const [brandOptionsLoading, setBrandOptionsLoading] = useState(false);
+  const [floatingMessage, setFloatingMessage] = useState<FloatingMessage | null>(null);
   const {
     datasetFile,
     whiteImageFile,
@@ -246,6 +463,89 @@ export default function GradientCardExtractPanel() {
   const saveButtonLabel = isVerificationMode
     ? t("mat_gradient_save_verification_btn")
     : t("mat_gradient_save_material_btn");
+  const hasDetailInfo = !!stageAParamsUrl || !!materialSummary || !!fitSummary || !!savedMaterialSummary;
+
+  const showFloatingMessage = (tone: FloatingMessage["tone"], message: string) => {
+    floatingMessageIdRef.current += 1;
+    setFloatingMessage({
+      id: floatingMessageIdRef.current,
+      tone,
+      message,
+    });
+  };
+
+  useEffect(() => {
+    if (isVerificationMode) {
+      setBrandOptions([]);
+      setBrandOptionsLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setBrandOptionsLoading(true);
+
+    void listGradientCardMaterials()
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        const nextOptions = Array.from(new Set(
+          (response.materials ?? [])
+            .map((item) => (typeof item.brand === "string" ? item.brand.trim() : ""))
+            .filter((brand) => brand.length > 0),
+        )).sort((left, right) => left.localeCompare(right));
+        setBrandOptions(nextOptions);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBrandOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBrandOptionsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isVerificationMode]);
+
+  useEffect(() => {
+    if (extractError && extractError !== previousExtractErrorRef.current) {
+      showFloatingMessage("error", extractError);
+    }
+    previousExtractErrorRef.current = extractError;
+  }, [extractError]);
+
+  useEffect(() => {
+    if (saveError && saveError !== previousSaveErrorRef.current) {
+      showFloatingMessage("error", saveError);
+    }
+    previousSaveErrorRef.current = saveError;
+  }, [saveError]);
+
+  useEffect(() => {
+    if (saveSuccess && saveSuccess !== previousSaveSuccessRef.current) {
+      showFloatingMessage("success", saveSuccess);
+    }
+    previousSaveSuccessRef.current = saveSuccess;
+  }, [saveSuccess]);
+
+  useEffect(() => {
+    if (!floatingMessage) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setFloatingMessage((current) =>
+        current?.id === floatingMessage.id ? null : current,
+      );
+    }, 4000);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [floatingMessage]);
 
   return (
     <motion.aside
@@ -260,6 +560,15 @@ export default function GradientCardExtractPanel() {
         title={t("mat_gradient_extract_title")}
         description={t("mat_gradient_extract_desc")}
       />
+
+      {floatingMessage ? (
+        <FloatingStatusMessage
+          tone={floatingMessage.tone}
+          message={floatingMessage.message}
+          closeLabel={t("mat_gradient_details_close_btn")}
+          onDismiss={() => setFloatingMessage(null)}
+        />
+      ) : null}
 
       {isVerificationMode ? (
         <StatusBanner
@@ -432,15 +741,6 @@ export default function GradientCardExtractPanel() {
                 />
               </div>
             </div>
-
-            <Button
-              label={t("mat_gradient_compute_btn")}
-              variant="primary"
-              onClick={() => void submitExtract()}
-              disabled={!canExtract || isExtracting}
-              loading={isExtracting}
-              className="w-full"
-            />
           </section>
         </div>
 
@@ -498,6 +798,17 @@ export default function GradientCardExtractPanel() {
             />
           </div>
 
+          <div data-testid="extract-action-container" className="mt-4">
+            <Button
+              label={t("mat_gradient_compute_btn")}
+              variant="primary"
+              onClick={() => void submitExtract()}
+              disabled={!canExtract || isExtracting}
+              loading={isExtracting}
+              className="w-full"
+            />
+          </div>
+
           {(whiteWarpPreviewUrl || blackWarpPreviewUrl) && (
             <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
               <div>
@@ -532,24 +843,6 @@ export default function GradientCardExtractPanel() {
                   />
                 )}
               </div>
-            </section>
-          )}
-
-          {stageAParamsUrl && (
-            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                  {t("mat_gradient_fit_output_title")}
-                </h3>
-              </div>
-              <a
-                data-testid="stage-a-link"
-                href={stageAParamsUrl}
-                download
-                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/80 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 dark:border-slate-600/80 dark:text-slate-200"
-              >
-                {t("ext_single_stage_download_stage_a")}
-              </a>
             </section>
           )}
 
@@ -725,35 +1018,16 @@ export default function GradientCardExtractPanel() {
                   )}
                 </div>
               </div>
-              <pre className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}>
-                {JSON.stringify(materialSummary, null, 2)}
-              </pre>
-            </section>
-          )}
-
-          {fitSummary && (
-            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                  {t("ext_single_stage_fit_summary_title")}
-                </h3>
-              </div>
-              <pre className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}>
-                {JSON.stringify(fitSummary, null, 2)}
-              </pre>
-            </section>
-          )}
-
-          {savedMaterialSummary && (
-            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                  {t("mat_gradient_saved_material_title")}
-                </h3>
-              </div>
-              <pre className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}>
-                {JSON.stringify(savedMaterialSummary, null, 2)}
-              </pre>
+              {hasDetailInfo ? (
+                <div className="flex justify-end">
+                  <Button
+                    label={t("mat_gradient_view_details_btn")}
+                    variant="secondary"
+                    onClick={() => setDetailsDialogOpen(true)}
+                    className="w-full sm:w-auto"
+                  />
+                </div>
+              ) : null}
             </section>
           )}
 
@@ -797,27 +1071,12 @@ export default function GradientCardExtractPanel() {
               disabled={isVerificationMode}
             />
             {!isVerificationMode && (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-3">
-                  <label
-                    htmlFor="gradient-card-material-brand"
-                    className="text-sm font-semibold text-slate-900 dark:text-slate-50"
-                  >
-                    {t("mat_gradient_brand_label")}
-                  </label>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">
-                    {t("mat_gradient_brand_hint")}
-                  </span>
-                </div>
-                <input
-                  id="gradient-card-material-brand"
-                  value={materialBrand}
-                  onChange={(event) => setMaterialBrand(event.target.value)}
-                  placeholder={t("mat_gradient_brand_placeholder")}
-                  className={textInputClass}
-                  data-testid="gradient-card-material-brand-input"
-                />
-              </div>
+              <BrandSelect
+                value={materialBrand}
+                onChange={setMaterialBrand}
+                options={brandOptions}
+                isLoading={brandOptionsLoading}
+              />
             )}
             {isVerificationMode ? (
               <div className="grid gap-3 sm:grid-cols-3">
@@ -856,6 +1115,131 @@ export default function GradientCardExtractPanel() {
               />
             )}
           </section>
+
+          {detailsDialogOpen && hasDetailInfo ? (
+            <div
+              className="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm"
+              style={{ background: "var(--surface-scrim)" }}
+              onClick={() => setDetailsDialogOpen(false)}
+              data-testid="gradient-card-details-dialog-overlay"
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="gradient-card-details-dialog-title"
+                className="relative mx-4 flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border shadow-2xl"
+                style={{
+                  borderColor: "var(--surface-outline)",
+                  background: "var(--surface-panel-strong)",
+                }}
+                onClick={(event) => event.stopPropagation()}
+                data-testid="gradient-card-details-dialog"
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                  <div className="flex flex-col gap-1">
+                    <h3
+                      id="gradient-card-details-dialog-title"
+                      className="text-base font-semibold text-slate-900 dark:text-slate-50"
+                    >
+                      {t("mat_gradient_details_dialog_title")}
+                    </h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      {t("mat_gradient_details_dialog_desc")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDetailsDialogOpen(false)}
+                    className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                    aria-label={t("mat_gradient_details_close_btn")}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-4">
+                  <div className="flex flex-col gap-4">
+                    {stageAParamsUrl ? (
+                      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+                        <div>
+                          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                            {t("mat_gradient_fit_output_title")}
+                          </h4>
+                        </div>
+                        <a
+                          data-testid="stage-a-link"
+                          href={stageAParamsUrl}
+                          download
+                          className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/80 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 dark:border-slate-600/80 dark:text-slate-200"
+                        >
+                          {t("ext_single_stage_download_stage_a")}
+                        </a>
+                      </section>
+                    ) : null}
+
+                    {materialSummary ? (
+                      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+                        <div>
+                          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                            {t("mat_gradient_extract_output_title")}
+                          </h4>
+                        </div>
+                        <pre
+                          data-testid="material-summary-json"
+                          className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}
+                        >
+                          {JSON.stringify(materialSummary, null, 2)}
+                        </pre>
+                      </section>
+                    ) : null}
+
+                    {fitSummary ? (
+                      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+                        <div>
+                          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                            {t("ext_single_stage_fit_summary_title")}
+                          </h4>
+                        </div>
+                        <pre
+                          data-testid="fit-summary-json"
+                          className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}
+                        >
+                          {JSON.stringify(fitSummary, null, 2)}
+                        </pre>
+                      </section>
+                    ) : null}
+
+                    {savedMaterialSummary ? (
+                      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+                        <div>
+                          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                            {t("mat_gradient_saved_material_title")}
+                          </h4>
+                        </div>
+                        <pre
+                          data-testid="saved-material-summary-json"
+                          className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}
+                        >
+                          {JSON.stringify(savedMaterialSummary, null, 2)}
+                        </pre>
+                      </section>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+                  <div className="flex justify-end">
+                    <Button
+                      label={t("mat_gradient_details_close_btn")}
+                      variant="secondary"
+                      onClick={() => setDetailsDialogOpen(false)}
+                      className="w-full sm:w-auto"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </motion.aside>

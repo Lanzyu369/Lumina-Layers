@@ -78,6 +78,22 @@ class MaterialArchiveDeleteResult:
 
 
 @dataclass(frozen=True)
+class MaterialArchiveUpdateResult:
+    """Persistent material archive metadata update result.
+    持久化耗材归档元数据更新结果。
+
+    Attributes:
+        archive_path: Updated material archive JSON path. (更新后的耗材归档 JSON 路径)
+        stage_a_params_path: Updated Stage A parameter JSON path. (更新后的 Stage A 参数 JSON 路径)
+        material_summary: Archive summary for UI/API. (用于 UI/API 的归档摘要)
+    """
+
+    archive_path: str
+    stage_a_params_path: str
+    material_summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class MaterialArchiveExportResult:
     """Persistent material archive export result.
     持久化耗材归档导出结果。
@@ -1038,6 +1054,21 @@ def _resolve_stage_a_params_path(material_dir: Path, archive_payload: dict[str, 
     return resolved
 
 
+def _saved_material_brand_from_archive_payload(
+    archive_payload: dict[str, Any],
+    relative_directory_name: str,
+) -> str | None:
+    if "brand" in archive_payload:
+        raw_brand = archive_payload.get("brand")
+        if isinstance(raw_brand, str):
+            cleaned_brand = raw_brand.strip()
+            return cleaned_brand or None
+        return None
+    if "/" in relative_directory_name:
+        return relative_directory_name.split("/", 1)[0]
+    return None
+
+
 def _material_summary_from_saved_archive(
     target_root: Path,
     material_dir: Path,
@@ -1063,9 +1094,10 @@ def _material_summary_from_saved_archive(
         )
     except (TypeError, ValueError):
         verification_count = len(verification_runs) if isinstance(verification_runs, list) and verification_runs else 1
-    brand_value: str | None = None
-    if "/" in relative_directory_name:
-        brand_value = relative_directory_name.split("/", 1)[0]
+    brand_value = _saved_material_brand_from_archive_payload(
+        payload,
+        relative_directory_name,
+    )
     return {
         "material_name": str(payload.get("material_name") or material_dir.name),
         "directory_name": relative_directory_name,
@@ -1075,6 +1107,66 @@ def _material_summary_from_saved_archive(
         "verification_count": verification_count,
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at") or payload.get("created_at"),
+    }
+
+
+def _saved_material_library_item_from_archive(
+    target_root: Path,
+    material_dir: Path,
+    archive_payload: dict[str, Any],
+) -> dict[str, Any]:
+    archive_path = material_dir / "material.json"
+    try:
+        stage_a_path = _resolve_stage_a_params_path(material_dir, archive_payload)
+    except ValueError:
+        stage_a_path = material_dir / "stage_A_parameters.json"
+    fit_summary = archive_payload.get("fit_summary") or {}
+    material_summary = archive_payload.get("material_summary") or {}
+    overall_validation = fit_summary.get("overall_validation") or {}
+    estimated_rgb = material_summary.get("estimated_rgb")
+    if not isinstance(estimated_rgb, list):
+        estimated_rgb = []
+    try:
+        estimated_rgb_values = [int(value) for value in estimated_rgb[:3]]
+    except (TypeError, ValueError):
+        estimated_rgb_values = []
+    verification_runs = _load_existing_verification_runs(
+        material_dir,
+        archive_payload,
+    )
+    verification_history = _summarize_verification_runs(verification_runs)
+    try:
+        verification_count = int(
+            archive_payload.get("verification_count")
+            or len(verification_history)
+            or 1
+        )
+    except (TypeError, ValueError):
+        verification_count = len(verification_history) or 1
+
+    relative_directory_name = _relative_directory_name(target_root, material_dir)
+    brand_value = _saved_material_brand_from_archive_payload(
+        archive_payload,
+        relative_directory_name,
+    )
+    return {
+        "material_name": str(
+            archive_payload.get("material_name") or material_dir.name
+        ),
+        "directory_name": relative_directory_name,
+        "brand": brand_value,
+        "created_at": archive_payload.get("created_at"),
+        "updated_at": archive_payload.get("updated_at")
+        or archive_payload.get("created_at"),
+        "archive_path": str(archive_path),
+        "stage_a_params_path": (
+            str(stage_a_path) if stage_a_path.exists() else None
+        ),
+        "estimated_rgb": estimated_rgb_values,
+        "layer_height_mm": material_summary.get("layer_height_mm"),
+        "mean_delta_e": overall_validation.get("mean_delta_e"),
+        "verification_count": verification_count,
+        "verification_history": verification_history,
     }
 
 
@@ -1192,6 +1284,21 @@ def _extract_stage_a_vectors(
         raise ValueError("Stage A parameter payload must contain 3-channel E/k/C0 vectors")
     return e_values, k_values, white_c0_values, black_c0_values
 
+
+def _update_stage_a_payload_material_name(
+    stage_a_payload: dict[str, Any],
+    material_name: str,
+) -> dict[str, Any]:
+    updated_payload = _json_clone(stage_a_payload)
+    parameters = updated_payload.get("parameters")
+    if isinstance(parameters, dict):
+        channels = parameters.get("channels")
+        if isinstance(channels, list) and channels and isinstance(channels[0], dict):
+            channels[0]["color_name"] = material_name
+    meta = updated_payload.get("meta")
+    if isinstance(meta, dict) and "material_name" in meta:
+        meta["material_name"] = material_name
+    return updated_payload
 
 
 def _build_verification_run(
@@ -1500,6 +1607,7 @@ def save_stage_a_material_archive(
     archive_path: Path
     created_at: str
     final_material_name = material_name
+    final_brand: str | None = None
     verification_runs: list[dict[str, Any]] = []
     if existing_directory_name:
         material_dir = _resolve_material_dir(target_root, existing_directory_name)
@@ -1512,12 +1620,17 @@ def save_stage_a_material_archive(
             raise ValueError("Existing material archive is not valid UTF-8 JSON") from exc
         created_at = str(existing_archive_payload.get("created_at") or _now_iso())
         final_material_name = str(existing_archive_payload.get("material_name") or material_name)
+        final_brand = _saved_material_brand_from_archive_payload(
+            existing_archive_payload,
+            _relative_directory_name(target_root, material_dir),
+        )
         if save_mode == "merge":
             verification_runs = _load_existing_verification_runs(material_dir, existing_archive_payload)
     else:
         sanitized_brand = None
         if isinstance(brand, str) and brand.strip():
             sanitized_brand = brand.strip()
+        final_brand = sanitized_brand
         material_dir = _unique_material_dir(
             target_root, material_name, brand=sanitized_brand
         )
@@ -1552,6 +1665,7 @@ def save_stage_a_material_archive(
         "schema_version": "1.1",
         "kind": "lumina_stage_a_material",
         "material_name": final_material_name,
+        "brand": final_brand,
         "created_at": created_at,
         "updated_at": updated_at,
         "stage_a_params_file": stage_a_params_path.name,
@@ -1581,6 +1695,83 @@ def save_stage_a_material_archive(
         material_summary=result_summary,
     )
 
+
+def update_saved_stage_a_material_archive_metadata(
+    *,
+    directory_name: str,
+    material_name: str,
+    brand: str | None = None,
+    materials_dir: str | None = None,
+) -> MaterialArchiveUpdateResult:
+    """Update editable metadata on a saved Stage A material archive.
+    更新已保存 Stage A 耗材档案的可编辑元数据。
+
+    Args:
+        directory_name: Saved material directory name. (已保存的耗材目录名)
+        material_name: Updated user-facing material name. (更新后的耗材名称)
+        brand: Updated optional brand label. (更新后的可选品牌标签)
+        materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
+
+    Returns:
+        MaterialArchiveUpdateResult: Updated archive information. (更新结果)
+    """
+    cleaned_material_name = str(material_name).strip()
+    if not cleaned_material_name:
+        raise ValueError("material_name is required")
+    cleaned_brand = None
+    if isinstance(brand, str):
+        stripped_brand = brand.strip()
+        cleaned_brand = stripped_brand or None
+
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    material_dir = _resolve_material_dir(target_root, directory_name)
+    archive_path = material_dir / "material.json"
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Saved material archive not found: {directory_name}")
+    archive_payload = _load_json_object(
+        archive_path,
+        "Existing material archive is not valid UTF-8 JSON",
+    )
+    stage_a_params_path = _resolve_stage_a_params_path(material_dir, archive_payload)
+    if not stage_a_params_path.exists():
+        raise FileNotFoundError(
+            f"Saved Stage A parameters not found for material: {directory_name}"
+        )
+    stage_a_payload = _load_json_object(
+        stage_a_params_path,
+        "Saved Stage A parameters are not valid UTF-8 JSON",
+    )
+
+    updated_at = _now_iso()
+    archive_payload["material_name"] = cleaned_material_name
+    archive_payload["brand"] = cleaned_brand
+    archive_payload["updated_at"] = updated_at
+    fit_summary = archive_payload.get("fit_summary")
+    if isinstance(fit_summary, dict):
+        fit_summary["colors"] = [cleaned_material_name]
+    archive_path.write_text(
+        json.dumps(archive_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    updated_stage_a_payload = _update_stage_a_payload_material_name(
+        stage_a_payload,
+        cleaned_material_name,
+    )
+    stage_a_params_path.write_text(
+        json.dumps(updated_stage_a_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return MaterialArchiveUpdateResult(
+        archive_path=str(archive_path),
+        stage_a_params_path=str(stage_a_params_path),
+        material_summary=_saved_material_library_item_from_archive(
+            target_root,
+            material_dir,
+            archive_payload,
+        ),
+    )
 
 
 def delete_saved_stage_a_material_archive(
@@ -1844,58 +2035,11 @@ def list_saved_stage_a_material_archives(
             archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
-
-        try:
-            stage_a_path = _resolve_stage_a_params_path(material_dir, archive_payload)
-        except ValueError:
-            stage_a_path = material_dir / "stage_A_parameters.json"
-        fit_summary = archive_payload.get("fit_summary") or {}
-        material_summary = archive_payload.get("material_summary") or {}
-        overall_validation = fit_summary.get("overall_validation") or {}
-        estimated_rgb = material_summary.get("estimated_rgb")
-        if not isinstance(estimated_rgb, list):
-            estimated_rgb = []
-        try:
-            estimated_rgb_values = [int(value) for value in estimated_rgb[:3]]
-        except (TypeError, ValueError):
-            estimated_rgb_values = []
-        verification_runs = _load_existing_verification_runs(
-            material_dir,
-            archive_payload,
-        )
-        verification_history = _summarize_verification_runs(verification_runs)
-        try:
-            verification_count = int(
-                archive_payload.get("verification_count")
-                or len(verification_history)
-                or 1
-            )
-        except (TypeError, ValueError):
-            verification_count = len(verification_history) or 1
-
-        relative_directory_name = _relative_directory_name(target_root, material_dir)
-        brand_value: str | None = None
-        if "/" in relative_directory_name:
-            brand_value = relative_directory_name.split("/", 1)[0]
         items.append(
-            {
-                "material_name": str(
-                    archive_payload.get("material_name") or material_dir.name
-                ),
-                "directory_name": relative_directory_name,
-                "brand": brand_value,
-                "created_at": archive_payload.get("created_at"),
-                "updated_at": archive_payload.get("updated_at")
-                or archive_payload.get("created_at"),
-                "archive_path": str(archive_path),
-                "stage_a_params_path": (
-                    str(stage_a_path) if stage_a_path.exists() else None
-                ),
-                "estimated_rgb": estimated_rgb_values,
-                "layer_height_mm": material_summary.get("layer_height_mm"),
-                "mean_delta_e": overall_validation.get("mean_delta_e"),
-                "verification_count": verification_count,
-                "verification_history": verification_history,
-            }
+            _saved_material_library_item_from_archive(
+                target_root,
+                material_dir,
+                archive_payload,
+            )
         )
     return items

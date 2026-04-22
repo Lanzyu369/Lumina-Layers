@@ -723,7 +723,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           gap: 0.84,
           backing: BackingColor.WHITE,
           eight_color_full_export: false,
-          singleStageLayerHeightMm: 0.04,
+          singleStageLayerHeightMm: 0.08,
         });
 
         return JSON.stringify(before) === JSON.stringify(after);
@@ -812,9 +812,7 @@ describe("Extractor corner nudge tool", () => {
           const { nudge_step } = useExtractorStore.getState();
           resetExtractorStore();
           return (
-            Number.isInteger(nudge_step) &&
-            nudge_step >= 1 &&
-            nudge_step <= 10
+            Number.isInteger(nudge_step) && nudge_step >= 1 && nudge_step <= 10
           );
         },
       ),

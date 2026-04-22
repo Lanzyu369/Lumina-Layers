@@ -22,7 +22,7 @@ beforeEach(() => {
     substrateId: "white",
     substrateDisplayName: "White",
     materialDefault: "PLA Basic",
-    singleStageLayerHeightMm: 0.04,
+    singleStageLayerHeightMm: 0.08,
     isLoading: false,
     error: null,
     downloadUrl: null,

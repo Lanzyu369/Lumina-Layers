@@ -650,6 +650,66 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "截图",
     en: "Screenshot",
   },
+  viewer_diagnostics_toggle: {
+    zh: "性能",
+    en: "Diagnostics",
+  },
+  viewer_diagnostics_title: {
+    zh: "3D 诊断",
+    en: "3D Diagnostics",
+  },
+  viewer_diagnostics_source: {
+    zh: "来源",
+    en: "Source",
+  },
+  viewer_diagnostics_source_generate: {
+    zh: "生成 GLB",
+    en: "Generated GLB",
+  },
+  viewer_diagnostics_source_preview: {
+    zh: "预览 GLB",
+    en: "Preview GLB",
+  },
+  viewer_diagnostics_source_idle: {
+    zh: "空闲画布",
+    en: "Idle Canvas",
+  },
+  viewer_diagnostics_fps: {
+    zh: "FPS",
+    en: "FPS",
+  },
+  viewer_diagnostics_js_heap: {
+    zh: "JS 堆",
+    en: "JS Heap",
+  },
+  viewer_diagnostics_js_heap_unavailable: {
+    zh: "不可用",
+    en: "Unavailable",
+  },
+  viewer_diagnostics_geometries: {
+    zh: "几何体",
+    en: "Geometries",
+  },
+  viewer_diagnostics_textures: {
+    zh: "纹理",
+    en: "Textures",
+  },
+  viewer_diagnostics_programs: {
+    zh: "Programs",
+    en: "Programs",
+  },
+  viewer_diagnostics_draw_calls: {
+    zh: "调用数",
+    en: "Draw Calls",
+  },
+  viewer_diagnostics_triangles: {
+    zh: "三角面",
+    en: "Triangles",
+  },
+  viewer_diagnostics_canvas: {
+    zh: "画布",
+    en: "Canvas",
+  },
   viewer_hover_magnifier: {
     zh: "放大镜",
     en: "Magnifier",
@@ -3439,6 +3499,66 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "撤销",
     en: "Undo",
   },
+  five_color_add_to_list: {
+    zh: "加入配方收藏",
+    en: "Add to collection",
+  },
+  five_color_already_in_list: {
+    zh: "已在收藏",
+    en: "Already in collection",
+  },
+  five_color_collection_title: {
+    zh: "配方收藏",
+    en: "Recipe collection",
+  },
+  five_color_collection_count: {
+    zh: "共 {count} 条",
+    en: "{count} item(s)",
+  },
+  five_color_collection_empty: {
+    zh: "尚未收藏任何配方",
+    en: "No recipes collected yet",
+  },
+  five_color_collection_clear: {
+    zh: "清空收藏",
+    en: "Clear collection",
+  },
+  five_color_remove_recipe: {
+    zh: "移除此配方",
+    en: "Remove this recipe",
+  },
+  five_color_swatch_block_size: {
+    zh: "色块尺寸 (mm)",
+    en: "Block size (mm)",
+  },
+  five_color_swatch_gap: {
+    zh: "色块间距 (mm)",
+    en: "Gap (mm)",
+  },
+  five_color_swatch_cols: {
+    zh: "每行列数",
+    en: "Columns per row",
+  },
+  five_color_swatch_structure: {
+    zh: "色卡结构",
+    en: "Swatch structure",
+  },
+  five_color_swatch_legend_alt: {
+    zh: "色卡预览图",
+    en: "Swatch preview",
+  },
+  five_color_generate_swatch: {
+    zh: "生成色卡",
+    en: "Generate swatch",
+  },
+  five_color_generating_swatch: {
+    zh: "生成中...",
+    en: "Generating...",
+  },
+  five_color_download_swatch: {
+    zh: "下载色卡",
+    en: "Download swatch",
+  },
   five_color_reverse: {
     zh: "反序",
     en: "Reverse",
@@ -4022,6 +4142,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自定义配方",
     en: "Custom Recipe",
   },
+  recipe_custom_disabled_region: {
+    zh: "请先在预览图上点选一个颜色区域，再打开自定义配方",
+    en: "Click a color region in the preview first, then open Custom Recipe",
+  },
+  recipe_custom_undo: {
+    zh: "撤销编辑",
+    en: "Undo edit",
+  },
+  recipe_custom_applied_toast: {
+    zh: "已应用到当前区域。可以继续调整，或换一个区域再打开。",
+    en: "Applied to this region. Keep tweaking, or pick another region and reopen.",
+  },
+  recipe_custom_current_region: {
+    zh: "当前区域",
+    en: "Current region",
+  },
+  recipe_custom_region_multiple: {
+    zh: "已选 {count} 个区域",
+    en: "{count} regions selected",
+  },
   recipe_custom_title: {
     zh: "自定义配方编辑器",
     en: "Custom Recipe Editor",
@@ -4117,6 +4257,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_custom_apply_failed: {
     zh: "应用自定义配方失败",
     en: "Failed to apply custom recipe",
+  },
+  recipe_custom_layer_upgrade_warning: {
+    zh: "新配方 {new} 层比当前预览的 {old} 层多，应用后整张图都会按新层数重新出图。再点一次确认。",
+    en: "The new recipe has {new} layers, more than the current {old}-layer preview. Applying will re-render the whole image at the new layer count. Click again to confirm.",
+  },
+  recipe_custom_layer_upgrade_confirm: {
+    zh: "确认升级层数并应用",
+    en: "Confirm layer upgrade",
+  },
+  recipe_custom_predict_no_forward_model: {
+    zh: "当前 LUT 没带预测模型，无法算出这张配方的颜色。换一张带模型的 LUT，或者直接应用试试。",
+    en: "This LUT has no forward model, so the recipe colour can't be predicted. Switch to a LUT with a model, or apply directly to try it out.",
+  },
+  recipe_custom_target_from_model: {
+    zh: "来自模型",
+    en: "From Model",
+  },
+  recipe_custom_history_title: {
+    zh: "历史配方",
+    en: "Recipe History",
+  },
+  recipe_custom_history_empty: {
+    zh: "还没有自定义配方记录。应用一次后，这里会留下可一键复用的快照。",
+    en: "No custom recipes yet. After you apply one, a reusable snapshot will appear here.",
+  },
+  recipe_custom_history_layers: {
+    zh: "{count} 层",
+    en: "{count} layers",
   },
   recipe_import_lut_missing: {
     zh: "LUT 未找到，请手动选择兼容的 LUT",
@@ -4411,6 +4579,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "上传梯度卡套件 ZIP、白底图和黑底图，分别点选四角并提取 Stage A 耗材参数。",
     en: "Upload the gradient card kit ZIP plus white/black substrate images, mark four corners on each, and extract Stage A material parameters.",
   },
+  mat_gradient_view_details_btn: {
+    zh: "查看详细信息",
+    en: "View Details",
+  },
+  mat_gradient_details_dialog_title: {
+    zh: "提取详细信息",
+    en: "Extraction Details",
+  },
+  mat_gradient_details_dialog_desc: {
+    zh: "在这里查看拟合输出和完整 JSON 详情。",
+    en: "Review the fit output and full JSON details here.",
+  },
+  mat_gradient_details_close_btn: {
+    zh: "关闭",
+    en: "Close",
+  },
   mat_gradient_dataset_selected: {
     zh: "已选数据集",
     en: "Selected Dataset",
@@ -4422,6 +4606,70 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_no_dataset_selected: {
     zh: "尚未选择数据集 ZIP",
     en: "No dataset ZIP selected",
+  },
+  mat_gradient_invalid_zip_error: {
+    zh: "你上传的 ZIP 不是正确的梯度卡 Kit ZIP，请重新选择生成时下载的 Kit ZIP。",
+    en: "The uploaded ZIP is not a valid gradient card kit. Please reselect the Kit ZIP downloaded during generation.",
+  },
+  mat_gradient_extract_inputs_required_error: {
+    zh: "请先选择 Kit ZIP，并上传白底图和黑底图。",
+    en: "Please choose the Kit ZIP and upload both the white and black images first.",
+  },
+  mat_gradient_extract_corners_required_error: {
+    zh: "请先在白底图和黑底图上各点选四个角。",
+    en: "Please mark four corners on both the white and black images first.",
+  },
+  mat_gradient_invalid_image_error: {
+    zh: "上传的图片无法识别，请重新选择清晰且完整的梯度卡照片。",
+    en: "The uploaded image could not be read. Please reselect a clear and complete gradient card photo.",
+  },
+  mat_gradient_heic_unsupported_error: {
+    zh: "当前环境暂不支持 HEIC/HEIF 图片，请先转换为 PNG 或 JPG 后再上传。",
+    en: "HEIC/HEIF images are not supported in the current environment. Please convert them to PNG or JPG before uploading.",
+  },
+  mat_gradient_invalid_corner_error: {
+    zh: "四角数据无效，请重新点选四个角后再试。",
+    en: "The corner selection is invalid. Please re-mark the four corners and try again.",
+  },
+  mat_gradient_invalid_orientation_error: {
+    zh: "无法可靠判断梯度卡方向，请检查图片方向和四角位置后重试。",
+    en: "The gradient card orientation could not be determined reliably. Please check the image orientation and corner positions, then try again.",
+  },
+  mat_gradient_extract_failed_error: {
+    zh: "梯度卡提取失败，请重试。",
+    en: "Gradient card extraction failed. Please try again.",
+  },
+  mat_gradient_rotate_white_failed: {
+    zh: "白底梯度卡图片旋转失败，请重试。",
+    en: "Failed to rotate the white gradient card image. Please try again.",
+  },
+  mat_gradient_rotate_black_failed: {
+    zh: "黑底梯度卡图片旋转失败，请重试。",
+    en: "Failed to rotate the black gradient card image. Please try again.",
+  },
+  mat_gradient_save_requires_extract_error: {
+    zh: "请先完成提取，再保存耗材档案。",
+    en: "Please complete extraction before saving the material archive.",
+  },
+  mat_gradient_save_name_required_error: {
+    zh: "请输入耗材名称后再保存。",
+    en: "Please enter a material name before saving.",
+  },
+  mat_gradient_save_session_expired_error: {
+    zh: "当前提取结果已失效，请重新提取后再保存。",
+    en: "The current extraction result has expired. Please run extraction again before saving.",
+  },
+  mat_gradient_save_target_missing_error: {
+    zh: "目标耗材档案不存在，可能已被删除，请刷新后重试。",
+    en: "The target material archive no longer exists. It may have been deleted. Please refresh and try again.",
+  },
+  mat_gradient_save_target_invalid_error: {
+    zh: "目标耗材档案已损坏，无法继续保存，请检查后重试。",
+    en: "The target material archive is invalid, so saving cannot continue. Please check it and try again.",
+  },
+  mat_gradient_save_failed_error: {
+    zh: "保存耗材档案失败，请重试。",
+    en: "Saving the material archive failed. Please try again.",
   },
   mat_gradient_extract_output_title: {
     zh: "提取输出",
@@ -4488,8 +4736,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Upload the black gradient card image to mark its four corners here.",
   },
   mat_gradient_compute_btn: {
-    zh: "提取 Stage A 耗材参数",
-    en: "Extract Stage A Material Parameters",
+    zh: "提取耗材",
+    en: "Extract Material",
   },
   mat_gradient_material_name_label: {
     zh: "耗材名称",
@@ -4510,6 +4758,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_brand_hint: {
     zh: "填写后，该耗材将保存至 materials/<品牌>/<耗材名>/",
     en: "If set, the material is saved under materials/<brand>/<name>/",
+  },
+  mat_gradient_brand_loading: {
+    zh: "正在加载已有品牌...",
+    en: "Loading saved brands...",
+  },
+  mat_gradient_brand_empty: {
+    zh: "暂无已有品牌，可直接输入新品牌",
+    en: "No saved brands yet. You can type a new brand directly.",
+  },
+  mat_gradient_brand_create_option: {
+    zh: "新增品牌：{brand}",
+    en: "Create brand: {brand}",
   },
   mat_gradient_save_material_btn: {
     zh: "保存耗材档案",
@@ -4743,6 +5003,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "层高",
     en: "Layer Height",
   },
+  mat_gradient_library_edit_btn: {
+    zh: "编辑信息",
+    en: "Edit Details",
+  },
+  mat_gradient_library_edit_title: {
+    zh: "编辑耗材信息",
+    en: "Edit Material Details",
+  },
+  mat_gradient_library_edit_desc: {
+    zh: "你正在编辑目录 {directoryName} 的显示名称与品牌。",
+    en: "You are editing the display name and brand for directory {directoryName}.",
+  },
+  mat_gradient_library_edit_cancel_btn: {
+    zh: "取消",
+    en: "Cancel",
+  },
+  mat_gradient_library_edit_save_btn: {
+    zh: "保存修改",
+    en: "Save Changes",
+  },
+  mat_gradient_library_edit_success: {
+    zh: "耗材信息已更新。",
+    en: "Material details updated.",
+  },
+  mat_gradient_library_edit_failed: {
+    zh: "更新耗材信息失败",
+    en: "Failed to update material details",
+  },
   mat_gradient_library_reverify_btn: {
     zh: "再次验证",
     en: "Re-Verify",
@@ -4790,6 +5078,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_history_title: {
     zh: "验证历史",
     en: "Verification History",
+  },
+  mat_gradient_library_history_close_btn: {
+    zh: "关闭",
+    en: "Close",
   },
   mat_gradient_library_history_empty: {
     zh: "当前还没有可展示的验证历史摘要。",

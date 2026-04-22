@@ -7,6 +7,7 @@ import {
   exportGradientCardMaterials,
   importGradientCardMaterials,
   listGradientCardMaterials,
+  updateGradientCardMaterial,
 } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
@@ -16,6 +17,7 @@ vi.mock("../api/extractor", () => ({
   exportGradientCardMaterials: vi.fn(),
   importGradientCardMaterials: vi.fn(),
   listGradientCardMaterials: vi.fn(),
+  updateGradientCardMaterial: vi.fn(),
 }));
 
 describe("MaterialLibraryPanel", () => {
@@ -74,17 +76,85 @@ describe("MaterialLibraryPanel", () => {
     });
 
     expect(screen.getByText("PLA Basic")).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ href: expect.stringContaining("/api/files/material-json") }),
-        expect.objectContaining({ href: expect.stringContaining("/api/files/stage-a-json") }),
-      ]),
-    );
+    expect(screen.queryByText(/下载 material\.json|download material\.json/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
-  it("expands saved material verification history details", async () => {
+  it("edits a saved material name and brand from the library", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "pla-basic",
+          brand: null,
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/pla-basic/material.json",
+          stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json",
+          stage_a_params_url: "/api/files/stage-a-json",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+    vi.mocked(updateGradientCardMaterial).mockResolvedValue({
+      status: "ok",
+      message: "updated",
+      material: {
+        material_name: "PLA Matte",
+        directory_name: "pla-basic",
+        brand: "Bambu Lab",
+        created_at: "2026-04-16T10:00:00Z",
+        updated_at: "2026-04-17T11:00:00Z",
+        archive_path: "materials/pla-basic/material.json",
+        stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+        material_file_url: "/api/files/material-json-updated",
+        stage_a_params_url: "/api/files/stage-a-json-updated",
+        estimated_rgb: [100, 120, 140],
+        layer_height_mm: 0.04,
+        mean_delta_e: 1.23,
+        verification_count: 3,
+        verification_history: [],
+      },
+    });
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
+
+    expect(screen.getByTestId("material-library-edit-dialog")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("material-library-edit-name-input"), {
+      target: { value: "PLA Matte" },
+    });
+    fireEvent.change(screen.getByTestId("material-library-edit-brand-input"), {
+      target: { value: "Bambu Lab" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /保存修改|save changes/i }));
+
+    await waitFor(() => {
+      expect(updateGradientCardMaterial).toHaveBeenCalledWith("pla-basic", {
+        materialName: "PLA Matte",
+        brand: "Bambu Lab",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("PLA Matte")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("material-library-item-brand")).toHaveTextContent("Bambu Lab");
+  });
+
+  it("opens saved material verification history in a dialog", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
       message: "Loaded 1 saved materials",
@@ -130,11 +200,17 @@ describe("MaterialLibraryPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /展开验证历史|show verification history/i }));
 
-    expect(screen.getByTestId("material-library-history-pla-basic")).toBeInTheDocument();
+    expect(screen.getByTestId("material-library-history-dialog")).toBeInTheDocument();
     expect(screen.getByText(/第 1 次验证|Run 1/i)).toBeInTheDocument();
     expect(screen.getByText("0.0150")).toBeInTheDocument();
     expect(screen.getByText(/0.210, 0.310, 0.410/)).toBeInTheDocument();
     expect(screen.getByText(/White identity \/ Black rotate_90_cw|白底 identity \/ 黑底 rotate_90_cw/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /关闭|close/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("material-library-history-dialog")).not.toBeInTheDocument();
+    });
   });
 
   it("starts material re-verification and routes back to the extract tab", async () => {

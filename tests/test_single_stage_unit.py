@@ -22,6 +22,7 @@ from core.single_stage import (
     MaterialArchiveExportResult,
     MaterialArchiveImportResult,
     MaterialArchiveSaveResult,
+    MaterialArchiveUpdateResult,
     SingleStageExtractResult,
     SingleStageKitResult,
     StageAFitResult,
@@ -34,6 +35,7 @@ from core.single_stage import (
     import_saved_stage_a_material_archives,
     list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
+    update_saved_stage_a_material_archive_metadata,
 )
 from core.single_stage.kit import SingleStageSpec, _build_stage_matrix, _build_stage_scene
 from core.single_stage.processing import _safe_extract_zip
@@ -812,6 +814,226 @@ def test_save_stage_a_material_archive_aggregates_reverification_runs(tmp_path: 
         np.asarray(saved_payload["parameters"]["channels"][0]["k"], dtype=np.float64),
         np.asarray([1.2, 1.3, 1.4], dtype=np.float64),
     )
+
+
+def _write_updatable_material_archive(
+    materials_root: Path,
+    directory_name: str,
+    *,
+    material_name: str = "PLA Basic",
+    brand: str | None = None,
+) -> tuple[Path, Path]:
+    """Fixture helper: write a minimal ``material.json`` + ``stage_A_parameters.json``
+    pair so update/delete flows have something to act on.
+    写入最小的 ``material.json`` + ``stage_A_parameters.json`` 供更新/删除流程测试使用。
+    """
+    material_dir = materials_root / directory_name
+    material_dir.mkdir(parents=True, exist_ok=True)
+    archive_payload: dict[str, object] = {
+        "material_name": material_name,
+        "brand": brand,
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "updated_at": "2025-01-01T00:00:00+00:00",
+        "stage_a_params_file": "stage_A_parameters.json",
+        "fit_summary": {
+            "colors": [material_name],
+            "overall_validation": {"mean_delta_e": 0.5},
+        },
+        "material_summary": {"estimated_rgb": [120, 130, 140]},
+    }
+    (material_dir / "material.json").write_text(
+        json.dumps(archive_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    stage_a_payload = {
+        "meta": {"material_name": material_name, "warnings": []},
+        "parameters": {
+            "channels": [
+                {"color_name": material_name, "E": [0.1, 0.2, 0.3], "k": [1.0, 1.1, 1.2]}
+            ],
+        },
+    }
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    stage_a_path.write_text(
+        json.dumps(stage_a_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return material_dir / "material.json", stage_a_path
+
+
+def test_update_saved_stage_a_material_archive_metadata_updates_both_files(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+
+    result = update_saved_stage_a_material_archive_metadata(
+        directory_name="pla-basic",
+        material_name="  PLA Matte  ",
+        brand="  Bambu Lab  ",
+        materials_dir=str(materials_root),
+    )
+
+    assert isinstance(result, MaterialArchiveUpdateResult)
+    assert result.archive_path == str(archive_path)
+    assert result.stage_a_params_path == str(stage_a_path)
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Matte"
+    assert archive_payload["brand"] == "Bambu Lab"
+    assert archive_payload["updated_at"] != archive_payload["created_at"]
+    assert archive_payload["fit_summary"]["colors"] == ["PLA Matte"]
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Matte"
+    assert stage_a_payload["meta"]["material_name"] == "PLA Matte"
+    assert result.material_summary["material_name"] == "PLA Matte"
+    assert result.material_summary["brand"] == "Bambu Lab"
+    assert result.material_summary["directory_name"] == "pla-basic"
+
+
+def test_update_saved_stage_a_material_archive_metadata_clears_brand_on_blank(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    archive_path, _ = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        brand="Generic",
+    )
+
+    update_saved_stage_a_material_archive_metadata(
+        directory_name="pla-basic",
+        material_name="PLA Basic",
+        brand="   ",
+        materials_dir=str(materials_root),
+    )
+
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["brand"] is None
+
+
+def test_update_saved_stage_a_material_archive_metadata_rejects_blank_name(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+
+    with pytest.raises(ValueError, match="material_name is required"):
+        update_saved_stage_a_material_archive_metadata(
+            directory_name="pla-basic",
+            material_name="   ",
+            materials_dir=str(materials_root),
+        )
+
+
+def test_update_saved_stage_a_material_archive_metadata_missing_archive(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    materials_root.mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        update_saved_stage_a_material_archive_metadata(
+            directory_name="does-not-exist",
+            material_name="Ghost",
+            materials_dir=str(materials_root),
+        )
+
+
+def test_update_saved_stage_a_material_archive_metadata_missing_stage_a_file(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    _, stage_a_path = _write_updatable_material_archive(materials_root, "pla-basic")
+    stage_a_path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="Saved Stage A parameters"):
+        update_saved_stage_a_material_archive_metadata(
+            directory_name="pla-basic",
+            material_name="PLA Basic",
+            materials_dir=str(materials_root),
+        )
+
+
+def test_extractor_update_gradient_card_material_route_persists_edits(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "PLA Matte", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["material"]["material_name"] == "PLA Matte"
+    assert body["material"]["brand"] == "Bambu Lab"
+    assert body["material"]["directory_name"] == "pla-basic"
+    assert body["material"]["material_file_url"].startswith("/api/files/")
+    assert body["material"]["stage_a_params_url"].startswith("/api/files/")
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Matte"
+    assert archive_payload["brand"] == "Bambu Lab"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Matte"
+
+
+def test_extractor_update_gradient_card_material_route_rejects_blank_name(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "   ", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_extractor_update_gradient_card_material_route_missing_archive(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    materials_root.mkdir()
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/does-not-exist",
+        json={"material_name": "Ghost"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_delete_saved_stage_a_material_archive_removes_directory(tmp_path: Path) -> None:

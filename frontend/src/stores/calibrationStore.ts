@@ -18,7 +18,7 @@ function normalizeSingleStageLayerHeight(value: number): number {
     value as (typeof SINGLE_STAGE_LAYER_HEIGHT_OPTIONS)[number],
   )
     ? value
-    : 0.04;
+    : 0.08;
 }
 
 function buildSingleStagePalette(materialDefault: string) {
@@ -90,7 +90,7 @@ const DEFAULT_STATE: CalibrationState = {
   substrateId: "white",
   substrateDisplayName: "White",
   materialDefault: "PLA Basic",
-  singleStageLayerHeightMm: 0.04,
+  singleStageLayerHeightMm: 0.08,
   isLoading: false,
   error: null,
   downloadUrl: null,

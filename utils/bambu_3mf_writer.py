@@ -19,11 +19,13 @@ import copy
 import re
 from typing import List, Dict, Optional
 import numpy as np
+from PIL import Image
 
 # Lazy imports: avoid >60s startup cost when imported via API.
 # Only loaded when export functions are actually called.
 _trimesh = None
 _n3mf = None
+_PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 
 
 def _get_trimesh():
@@ -799,13 +801,40 @@ class BambuStudio3MFWriter:
 
     @staticmethod
     def _build_preview_placeholder_png_bytes() -> bytes:
-        """Build a tiny valid PNG payload for referenced plate preview assets."""
-        # 1x1 transparent PNG
-        return (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc`\x00\x01"
-            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
+        """Build a tiny valid PNG payload for referenced plate preview assets.
+
+        构建一个微型合法 PNG，用于未渲染时占位 ``Metadata/plate_*.png`` /
+        ``top_*.png`` / ``pick_*.png`` 等预览资源。
+
+        Returns:
+            bytes: A Pillow-generated 2x2 opaque grey PNG, guaranteed to pass
+                ``PIL.Image.verify()`` and any downstream PNG decoder. The
+                result is cached at module level so repeated calls during a
+                single export are free.
+                （由 Pillow 生成的 2x2 不透明灰色 PNG，保证能通过
+                ``PIL.Image.verify()`` 以及下游任意 PNG 解码器；模块级缓存，
+                同一次导出多次调用零额外开销）
+
+        Notes:
+            The previous implementation was a hardcoded 68-byte payload whose
+            ``IDAT`` chunk CRC was incorrect. Bambu Studio and Orca-family
+            slicers silently ignore malformed thumbnails and render a blank
+            tile, but Anycubic Slicer Next decodes every referenced
+            ``Metadata/*.png`` eagerly on import and crashes on the bad CRC,
+            producing a Windows ``Application Hang`` event.
+            （此前硬编码的 68 字节占位 PNG 的 ``IDAT`` chunk CRC 错误；
+            Bambu Studio 与 Orca 家族切片器对坏缩略图静默降级，
+            但纵维立方切片软件 Anycubic Slicer Next 在导入时会预渲染每一张
+            ``Metadata/*.png``，遇到坏 CRC 直接崩溃，在 Windows 事件日志中
+            表现为 ``Application Hang``。）
+        """
+        global _PREVIEW_PLACEHOLDER_PNG_BYTES
+        if _PREVIEW_PLACEHOLDER_PNG_BYTES is None:
+            image = Image.new("RGBA", (2, 2), (128, 128, 128, 255))
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG", optimize=True)
+            _PREVIEW_PLACEHOLDER_PNG_BYTES = buffer.getvalue()
+        return _PREVIEW_PLACEHOLDER_PNG_BYTES
 
     # ------------------------------------------------------------------
     # Config template & filament arrays (unchanged logic)

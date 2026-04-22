@@ -87,12 +87,12 @@ describe('Palette-LUT Merge Unit Tests', () => {
 
   // ===== Persist version 验证 =====
   describe('Persist version', () => {
-    it('persist version is 4', () => {
+    it('persist version is 6', () => {
       // Requirements 5.3
       const options = (
         useWidgetStore.persist as unknown as { getOptions: () => { version: number } }
       ).getOptions();
-      expect(options.version).toBe(4);
+      expect(options.version).toBe(6);
     });
   });
 

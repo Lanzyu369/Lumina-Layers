@@ -20,18 +20,23 @@ from api.schemas.converter import (
     RecipePredictRequest,
     RegionDetectRequest,
     RegionDetectResponse,
+    RegionRecipeRequest,
     RegionReplaceRequest,
     RegionReplaceResponse,
     ResetReplacementsRequest,
+    VirtualMaterial,
 )
 from api.schemas.responses import (
     ColorReplaceResponse,
     MergePreviewResponse,
     RecipeOverrideApplyResponse,
     RecipePredictResponse,
+    RegionRecipeEntry,
+    RegionRecipeResponse,
     ResetReplacementsResponse,
 )
 from api.session_store import SessionStore
+from config import LUTMetadata, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
 from core.converter import (
@@ -43,7 +48,11 @@ from core.material_cache import load_material_solver_cache
 from core.material_lut_synthesis import load_multiple_materials, solve_image_colors_optimal
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
-from core.recipe_order import pad_recipe_to_layer_count
+from core.recipe_order import (
+    convert_recipe_between_orders,
+    normalize_layer_order,
+    pad_recipe_to_layer_count,
+)
 from utils.lut_manager import LUTManager
 from api.structured_logging import get_logger
 
@@ -863,6 +872,136 @@ def region_replace(
     )
 
 
+def _resolve_recipe_source_metadata(
+    session_data: dict,
+    cache: dict,
+) -> tuple[LUTMetadata, np.ndarray | None, np.ndarray | None]:
+    """Return ``(metadata, lut_rgb, lut_stacks)`` for a recipe endpoint.
+
+    Bridges ``/predict-recipe`` and ``/apply-recipe-override`` over two source
+    kinds:
+
+    - **LUT-backed sessions** — ``session_data["lut_path"]`` points to a real
+      calibration file. We resolve it via
+      :meth:`LUTManager.load_lut_with_metadata` and return the real
+      palette + pure-stack arrays so downstream forward-model prediction and
+      pure-stack fallbacks work as they always have.
+    - **Material-archive sessions** — ``session_data["material_source"] ==
+      "material_archive"`` and ``lut_path`` is the sentinel literal
+      ``"__material_archive__"`` (no file on disk). We synthesise a stub
+      :class:`LUTMetadata` from ``selected_materials`` /
+      ``material_layer_count`` / ``material_layer_height_mm`` so the
+      apply / predict endpoints still get a palette length, layer order, and
+      ``base_channel_idx`` to drive virtual-material validation, top-layer
+      selection, and pad-slab growth. ``lut_rgb`` / ``lut_stacks`` are
+      returned as ``None`` — callers must derive display RGB from
+      ``cache["preview_colors"]`` (see :func:`_cache_preview_rgb`) because
+      material archives have no LUT pure-stack mapping.
+
+    耗材档案模式下 ``session_data["lut_path"]`` 是
+    ``"__material_archive__"`` 这种 sentinel 字符串，没法 open，所以两种
+    来源统一到这里：LUT 会话照旧走 ``LUTManager.load_lut_with_metadata``；
+    耗材档案会话按 ``selected_materials`` / ``material_layer_count`` 拼出
+    stub :class:`LUTMetadata`，``lut_rgb`` / ``lut_stacks`` 返回 ``None``，
+    让上游自然退化到 cache preview colors 兜底。
+
+    Raises:
+        HTTPException(409): LUT session has no LUT file, or material-archive
+            session is missing ``selected_materials``. Surfaces the same
+            "Preview again first." hint the legacy code used.
+    """
+    material_source = str(session_data.get("material_source") or "lut")
+
+    if material_source == "material_archive":
+        selected_materials = session_data.get("selected_materials") or []
+        if not isinstance(selected_materials, list) or not selected_materials:
+            raise HTTPException(
+                status_code=409,
+                detail="Material-archive session missing selected_materials. Preview again first.",
+            )
+        # Stub palette: one ``PaletteEntry`` per selected material. The
+        # ``color`` attribute is only consumed by
+        # ``_canonical_apply_rgb(palette[idx].color)`` in the existing apply
+        # fallback chain and by palette-length checks; use the slot name when
+        # cache already has one (keeps downstream logs readable), otherwise
+        # fall back to the material directory name.
+        # stub 调色板：每个选中的耗材给一个 PaletteEntry。color 字段仅用于
+        # ``_canonical_apply_rgb`` 的通道名兜底和长度校验；尽量用 cache 里
+        # 已有的 slot_name，退而用目录名，保持日志/错误信息可读。
+        slot_names_raw = cache.get("slot_names")
+        slot_names = list(slot_names_raw) if isinstance(slot_names_raw, (list, tuple)) else []
+        palette_entries: list[PaletteEntry] = []
+        for idx, dir_name in enumerate(selected_materials):
+            raw_slot = slot_names[idx] if idx < len(slot_names) else None
+            label = str(raw_slot) if raw_slot else str(dir_name)
+            palette_entries.append(
+                PaletteEntry(color=label, material=str(dir_name))
+            )
+        try:
+            layer_count = int(
+                session_data.get("material_layer_count") or len(palette_entries) or 1
+            )
+            layer_height_mm = float(
+                session_data.get("material_layer_height_mm") or 0.08
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Material-archive layer metadata invalid: {exc}",
+            ) from exc
+        metadata = LUTMetadata(
+            palette=palette_entries,
+            max_color_layers=layer_count,
+            layer_height_mm=layer_height_mm,
+            base_channel_idx=0,
+            layer_order="Top2Bottom",
+        )
+        return metadata, None, None
+
+    # LUT-backed session: the path must be a real file on disk.
+    # LUT 会话：lut_path 必须是真实存在的文件。
+    lut_path = session_data.get("lut_path")
+    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+        raise HTTPException(
+            status_code=409,
+            detail="LUT/source file missing. Preview again first.",
+        )
+    lut_rgb, lut_stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
+    return metadata, lut_rgb, lut_stacks
+
+
+def _cache_preview_rgb(cache: dict, channel_idx: int) -> np.ndarray | None:
+    """Return the cached preview RGB for ``channel_idx`` or ``None``.
+
+    Reads ``cache["preview_colors"]`` first (populated for merged LUTs and
+    after ``_extend_cache_palette_with_virtuals``), then falls back to
+    ``cache["color_conf"]["preview"]`` (the standard-color-mode canonical
+    source). Used by the recipe endpoints as the material-archive fallback
+    when ``_pure_stack_rgb`` cannot resolve a colour — material archives
+    have no LUT pure-stack table but always publish a ``preview_colors``
+    entry per selected material in ``p04_cache_building`` / P01.
+
+    从 cache 读通道预览色，优先 ``preview_colors``，再回退
+    ``color_conf.preview``。耗材档案模式没有 LUT 纯堆叠表，但 cache 里每
+    个选中耗材一定有 ``preview_colors`` 条目，所以这是它的兜底色源。
+    """
+    if channel_idx < 0:
+        return None
+    for source in (
+        cache.get("preview_colors"),
+        (cache.get("color_conf") or {}).get("preview"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        rgba = source.get(channel_idx)
+        if rgba is None:
+            continue
+        arr = np.asarray(rgba, dtype=np.uint8)
+        if arr.ndim == 1 and arr.shape[0] >= 3:
+            return arr[:3].copy()
+    return None
+
+
 @router.post("/predict-recipe", response_model=RecipePredictResponse)
 def predict_recipe(
     request: RecipePredictRequest,
@@ -870,19 +1009,53 @@ def predict_recipe(
 ) -> RecipePredictResponse:
     """Predict the display color of a custom recipe for the active source."""
     session_data = _require_session(store, request.session_id)
-    lut_path: str | None = session_data.get("lut_path")
-    if not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT/source file missing. Preview again first.")
+    cache = session_data.get("preview_cache") or {}
+    is_material_archive = (
+        str(session_data.get("material_source") or "lut") == "material_archive"
+    )
+    metadata, _lut_rgb, _lut_stacks = _resolve_recipe_source_metadata(
+        session_data, cache
+    )
 
     try:
-        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
-        prediction = predict_recipe_color(
-            metadata,
-            recipe=request.recipe,
-            layer_height_mm=request.layer_height_mm,
-            color_layers=request.color_layers,
-            layer_order=request.layer_order,
-        )
+        if not is_material_archive:
+            # LUT-backed session: keep the predictive forward model path.
+            # LUT 会话：走前向模型预测。
+            prediction = predict_recipe_color(
+                metadata,
+                recipe=request.recipe,
+                layer_height_mm=request.layer_height_mm,
+                color_layers=request.color_layers,
+                layer_order=request.layer_order,
+            )
+        else:
+            # Material-archive session: no forward model exists, so derive
+            # the display colour from the topmost layer's preview RGB in the
+            # shared cache (populated by P01 from the material archive). If
+            # that misses (e.g. malformed cache), degrade to neutral grey
+            # rather than hard-failing — the dialog's "predict" button is a
+            # preview, not a gate.
+            # 耗材档案没有前向模型，直接用最顶层通道的 preview 色做预测。
+            # 兜底是中性灰，避免因 cache 异常让 predict 按钮直接报错。
+            top_channel = _top_layer_channel(list(request.recipe), request.layer_order)
+            preview_rgb = (
+                _cache_preview_rgb(cache, top_channel)
+                if top_channel is not None
+                else None
+            )
+            if preview_rgb is None:
+                preview_rgb = np.asarray((128, 128, 128), dtype=np.uint8)
+            prediction = {
+                "rgb": [int(v) for v in preview_rgb.tolist()],
+                "lab": [
+                    float(v)
+                    for v in _rgb_to_lab(preview_rgb.reshape(1, 1, 3))
+                    .reshape(3)
+                    .tolist()
+                ],
+                "source": "material_archive_preview",
+                "runtime_mode_key": None,
+            }
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -900,6 +1073,208 @@ def predict_recipe(
     )
 
 
+# Canonical primary-name -> RGB fallback for apply's preview colour when the
+# LUT has neither a forward model nor a pure-channel stack to sample. Keeping
+# the dict in sync with the one in ``api/routers/lut.py`` is deliberate: both
+# locations need the same visual shorthand so users never see "apply failed"
+# just because a particular bundle happens to be sparse.
+# 当 LUT 既没前向模型也没纯通道堆叠时，应用自定义配方的预览色走此兜底：
+# 按通道名映射到 CMYK / RGB 经典原色，和 ``api/routers/lut.py`` 保持同步，
+# 避免"某个 bundle 太稀疏"就让应用失败。
+_APPLY_CANONICAL_RGB: dict[str, tuple[int, int, int]] = {
+    "cyan": (0, 183, 235),
+    "magenta": (230, 0, 126),
+    "yellow": (255, 212, 0),
+    "black": (17, 17, 17),
+    "white": (245, 245, 245),
+    "red": (229, 57, 53),
+    "green": (67, 160, 71),
+    "blue": (30, 136, 229),
+    "orange": (251, 140, 0),
+    "purple": (142, 36, 170),
+    "pink": (236, 64, 122),
+    "gray": (158, 158, 158),
+    "grey": (158, 158, 158),
+    "brown": (121, 85, 72),
+}
+
+
+def _canonical_apply_rgb(color_name: str | None) -> np.ndarray | None:
+    """Map a channel name to a canonical primary RGB triplet.
+
+    按通道名返回经典原色 RGB 三元组；找不到返回 ``None``。
+    """
+    if not color_name:
+        return None
+    hit = _APPLY_CANONICAL_RGB.get(color_name.strip().lower())
+    if hit is None:
+        return None
+    return np.asarray(hit, dtype=np.uint8)
+
+
+def _hex_to_rgb_triple(hex_value: str) -> tuple[int, int, int]:
+    """Parse ``#RRGGBB`` into an ``(r, g, b)`` uint8 triple.
+
+    将 ``#RRGGBB`` 解析为 ``(r, g, b)`` uint8 三元组；非法输入抛 ``ValueError``。
+    """
+    raw = hex_value.strip().lstrip("#")
+    if len(raw) != 6:
+        raise ValueError(f"Invalid virtual material hex: {hex_value!r}")
+    value = int(raw, 16)
+    return (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF
+
+
+def _extend_cache_palette_with_virtuals(
+    cache: dict,
+    lut_palette_length: int,
+    virtual_materials: list[VirtualMaterial] | None,
+) -> list[tuple[int, tuple[int, int, int], str]]:
+    """Append user-declared virtual materials into the preview cache palette.
+
+    把用户声明的虚拟耗材追加到预览缓存的调色板，保证 material_matrix 里
+    ``>= LUT.N`` 的索引能被 preview/3MF 正确解析。Returns the list of
+    ``(cache_index, rgb, name)`` triples that were written so callers can
+    honour the user's per-layer intent when computing the overall preview
+    colour.
+
+    Virtual materials are indexed strictly above the LUT palette so LUT-native
+    channels stay at their canonical positions; the ``cache_index`` returned
+    is ``lut_palette_length + virtual_position``.
+    """
+    if not virtual_materials:
+        return []
+    # CRITICAL: ``cache["color_conf"]`` / ``cache["preview_colors"]`` /
+    # ``cache["slot_names"]`` may be direct references into the process-wide
+    # ``ColorSystem.get(color_mode)`` dict (populated by ``p01`` +
+    # ``p04_cache_building``). Appending to them in place permanently pollutes
+    # every subsequent request handled by this worker: 透明通道被额外槽位顶掉、
+    # s07 按错误的 ``num_materials`` 生成方块、非 override 区域丢配方。
+    # 所以必须先做 copy-on-write，把 cache 里的引用换成独立副本，再追加。
+    color_conf_src = cache.get("color_conf")
+    color_conf = (
+        dict(color_conf_src) if isinstance(color_conf_src, dict) else {}
+    )
+    cache["color_conf"] = color_conf
+    conf_preview_src = color_conf.get("preview")
+    conf_preview = (
+        dict(conf_preview_src) if isinstance(conf_preview_src, dict) else {}
+    )
+    color_conf["preview"] = conf_preview
+    conf_slots_src = color_conf.get("slots")
+    conf_slots = (
+        list(conf_slots_src)
+        if isinstance(conf_slots_src, (list, tuple))
+        else []
+    )
+    color_conf["slots"] = conf_slots
+
+    # Standard color modes (CMYW / RYBW / BW) don't pre-populate
+    # ``cache["preview_colors"]`` or ``cache["slot_names"]`` — those keys are
+    # only populated for Merged LUTs. The ``/layer-images`` endpoint reads
+    # ``preview_colors`` with priority and only falls back to
+    # ``color_conf.preview`` when it's missing. If we seeded ``preview_colors``
+    # with a fresh empty dict here and only wrote virtuals into it, the
+    # endpoint would switch from the complete ``color_conf`` fallback to an
+    # incomplete virtuals-only ``preview_colors`` mid-session, and every
+    # native layer would render as background grey — exactly the "分层预览
+    # 只显示改过配方的那几层，原预览变灰" regression. Seed both keys from the
+    # already-copied ``conf_preview`` / ``conf_slots`` so the cache always
+    # reflects the FULL palette (natives + upcoming virtuals) after apply.
+    # 标准色模式（CMYW / RYBW / BW）下 cache 没有 preview_colors / slot_names，
+    # 只有 Merged LUT 才会预置这两个键。/layer-images 端点优先读 preview_colors，
+    # 缺失时才回退到 color_conf.preview。如果这里新建空字典只塞虚拟耗材，
+    # 端点就会从完整的 color_conf 兜底切换到只有虚拟耗材的残缺字典，native
+    # 层全部变灰（就是分层预览只剩配方层的现象）。用已复制的 conf_preview /
+    # conf_slots 做种子，保证 apply 后 cache 里的调色板始终是 native + 虚拟
+    # 的完整集合。
+    preview_colors_src = cache.get("preview_colors")
+    if isinstance(preview_colors_src, dict):
+        preview_colors = dict(preview_colors_src)
+    else:
+        preview_colors = dict(conf_preview)
+    cache["preview_colors"] = preview_colors
+    slot_names_src = cache.get("slot_names")
+    if isinstance(slot_names_src, (list, tuple)):
+        slot_names = list(slot_names_src)
+    else:
+        slot_names = list(conf_slots)
+    cache["slot_names"] = slot_names
+
+    written: list[tuple[int, tuple[int, int, int], str]] = []
+    for offset, material in enumerate(virtual_materials):
+        cache_index = lut_palette_length + offset
+        r, g, b = _hex_to_rgb_triple(material.hex)
+        rgba = [int(r), int(g), int(b), 255]
+        preview_colors[cache_index] = rgba
+        # slot_names is addressed by int index; pad with None placeholders if
+        # the current list is shorter (shouldn't happen in practice but keeps
+        # behaviour deterministic for sparse caches).
+        while len(slot_names) < cache_index:
+            slot_names.append(f"Slot_{len(slot_names)}")
+        if len(slot_names) == cache_index:
+            slot_names.append(material.name)
+        else:
+            slot_names[cache_index] = material.name
+        # color_conf mirrors preview_colors/slot_names for downstream helpers
+        # (e.g. pipeline color configuration). Keep them in lockstep so any
+        # path that reads color_conf[*] sees the virtual entry.
+        conf_preview[cache_index] = rgba
+        while len(conf_slots) < cache_index:
+            conf_slots.append(f"Slot_{len(conf_slots)}")
+        if len(conf_slots) == cache_index:
+            conf_slots.append(material.name)
+        else:
+            conf_slots[cache_index] = material.name
+        written.append((cache_index, (int(r), int(g), int(b)), material.name))
+    return written
+
+
+def _top_layer_channel(recipe: list[int], layer_order: str) -> int | None:
+    """Return the channel index of the visually topmost layer in ``recipe``.
+
+    返回 ``recipe`` 中视觉上最顶层那一层的通道索引；空配方返回 ``None``。
+    """
+    if not recipe:
+        return None
+    return int(recipe[0] if layer_order == "Top2Bottom" else recipe[-1])
+
+
+def _pure_stack_rgb(
+    rgb: np.ndarray | None,
+    stacks: np.ndarray | None,
+    channel_idx: int,
+) -> np.ndarray | None:
+    """Return the LUT's RGB for the pure-channel stack ``[c, c, ..., c]``.
+
+    查找 LUT 中纯通道堆叠配方（每层都是同一通道）对应的 RGB，
+    用作缺少前向模型时自定义配方应用的兜底颜色。
+
+    Args:
+        rgb: ``(N, 3)`` uint8 array of per-recipe RGB, or ``None``.
+        stacks: ``(N, layers)`` int array of per-recipe channel indices, or ``None``.
+        channel_idx: Palette channel index to resolve. 调色板通道索引。
+
+    Returns:
+        ``(3,)`` uint8 array when a matching pure stack exists, else ``None``.
+    """
+    if rgb is None or stacks is None:
+        return None
+    rgb_arr = np.asarray(rgb)
+    stacks_arr = np.asarray(stacks)
+    if rgb_arr.ndim != 2 or stacks_arr.ndim != 2:
+        return None
+    if stacks_arr.shape[0] != rgb_arr.shape[0] or stacks_arr.shape[1] == 0:
+        return None
+    target = np.full(stacks_arr.shape[1], channel_idx, dtype=stacks_arr.dtype)
+    matches = np.where(np.all(stacks_arr == target, axis=1))[0]
+    if matches.size == 0:
+        return None
+    row = rgb_arr[int(matches[0])]
+    if row.shape[-1] < 3:
+        return None
+    return np.asarray(row[:3], dtype=np.uint8)
+
+
 @router.post("/apply-recipe-override", response_model=RecipeOverrideApplyResponse)
 def apply_recipe_override(
     request: RecipeOverrideApplyRequest,
@@ -909,9 +1284,6 @@ def apply_recipe_override(
     """Apply a custom recipe override to the selected regions and update preview cache."""
     session_data = _require_session(store, request.session_id)
     cache = _require_preview_cache(session_data)
-    lut_path: str | None = session_data.get("lut_path")
-    if not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT/source file missing. Preview again first.")
 
     matched_rgb: np.ndarray | None = cache.get("matched_rgb")
     material_matrix: np.ndarray | None = cache.get("material_matrix")
@@ -922,34 +1294,268 @@ def apply_recipe_override(
     if not region_mask_items:
         raise HTTPException(status_code=409, detail="No selected regions available for recipe override.")
 
+    # Resolve source metadata: real LUT for LUT-backed sessions, stub
+    # metadata + ``(None, None)`` arrays for material-archive sessions
+    # (whose ``lut_path`` is the ``"__material_archive__"`` sentinel and
+    # cannot be opened). The fallback chain below reads
+    # ``cache["preview_colors"]`` via :func:`_cache_preview_rgb` when the
+    # LUT pure-stack arrays are unavailable.
+    # 解析来源元数据：LUT 会话走真实 LUT；耗材档案会话返回 stub metadata
+    # 和 (None, None) 数组，下面的兜底链用 cache preview_colors 取色。
+    is_material_archive = (
+        str(session_data.get("material_source") or "lut") == "material_archive"
+    )
+    metadata, _rgb, _stacks = _resolve_recipe_source_metadata(session_data, cache)
+
     try:
-        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(lut_path)
-        prediction = predict_recipe_color(
-            metadata,
-            recipe=request.recipe,
-            layer_height_mm=request.layer_height_mm,
-            color_layers=request.color_layers,
-            layer_order=request.layer_order,
+        lut_palette_length = len(metadata.palette)
+        virtual_materials = list(request.virtual_materials or [])
+        allowed_upper = lut_palette_length + len(virtual_materials)
+
+        # Validate recipe indices only when the caller opts into the new
+        # virtual-material path: legacy callers (tests, older clients) may
+        # pass ``metadata.palette`` == empty + raw LUT channel indices that
+        # downstream code still resolves correctly, so we leave their contract
+        # untouched. When ``virtual_materials`` is supplied we do enforce that
+        # the provided virtual-tail count is sufficient so the user's intent
+        # round-trips cleanly into the cache's extended palette.
+        # 仅在调用方使用新的虚拟耗材功能时校验 recipe 索引：旧调用方
+        # （测试 / 老前端）传空 palette + 原始 LUT 通道索引的路径依然走老逻辑，
+        # 保持契约不变；一旦带上 virtual_materials，就严格保证索引落在
+        # LUT.N + 虚拟耗材数 的范围内。
+        if virtual_materials:
+            for idx, channel in enumerate(request.recipe):
+                if channel < 0 or channel >= allowed_upper:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"recipe[{idx}]={channel} out of range; LUT has "
+                            f"{lut_palette_length} channel(s) and "
+                            f"{len(virtual_materials)} virtual material(s) "
+                            f"were supplied."
+                        ),
+                    )
+
+        top_channel_idx = _top_layer_channel(
+            list(request.recipe), request.layer_order
         )
-        predicted_rgb = np.asarray(prediction.get("rgb", []), dtype=np.uint8)
-        if predicted_rgb.shape != (3,):
-            raise ValueError("Predicted RGB payload is invalid")
+
+        # Custom recipes must still apply when the bundle has no forward model
+        # (e.g. material archives / native LUTs). In that case we synthesise a
+        # deterministic preview color from the LUT's pure-stack recipe of the
+        # topmost visible layer so the material_matrix update still produces
+        # visible feedback instead of hard-failing the whole request.
+        # 自定义配方在缺少前向模型（例如材料包 / 原生 LUT）时也必须能应用。
+        # 此时用 LUT 里"最顶层通道"对应的纯堆叠配方颜色作为兜底预测色，
+        # 保证 material_matrix 更新依旧能给用户可见的反馈，而不是整单报错。
+        used_virtual_preview = False
+        # When the topmost layer is a user-declared virtual material, trust the
+        # user's intent colour directly — this is the whole point of the
+        # virtual-material feature and keeps the 2D preview honest instead of
+        # rendering the LUT substitute channel.
+        # 顶层若是用户声明的虚拟耗材，直接用该耗材的 hex 作为 2D 预览色，
+        # 保证所见即所得，而不是 LUT 里代用通道的色。
+        if (
+            top_channel_idx is not None
+            and top_channel_idx >= lut_palette_length
+            and virtual_materials
+        ):
+            offset = top_channel_idx - lut_palette_length
+            if 0 <= offset < len(virtual_materials):
+                material = virtual_materials[offset]
+                predicted_rgb = np.asarray(
+                    _hex_to_rgb_triple(material.hex), dtype=np.uint8
+                )
+                predicted_lab = [
+                    float(v)
+                    for v in _rgb_to_lab(
+                        predicted_rgb.reshape(1, 1, 3)
+                    ).reshape(3).tolist()
+                ]
+                prediction_source = "virtual_material"
+                runtime_mode_key = None
+                match_mode = "virtual_material"
+                used_virtual_preview = True
+
+        if not used_virtual_preview:
+            # For predictive runtimes we can only call in when every recipe
+            # index actually lives in the LUT's palette; virtual indices have
+            # no forward-model representation yet, so we fall through to the
+            # user-intent / pure-stack fallback instead of erroring out.
+            # 前向模型只认识真实 LUT 通道；recipe 含虚拟索引时直接走兜底。
+            # Only treat an index as "virtual" when the caller explicitly
+            # supplied a virtual materials list; otherwise legacy callers with
+            # empty ``metadata.palette`` but valid channel indices keep their
+            # old predictive path (empty palette makes ``>= lut_palette_length``
+            # match every index, which would wrongly bypass the forward model).
+            # 仅当调用方显式提供 virtual_materials 时才把索引当作"虚拟"；
+            # 否则保持老调用方的兼容性（空 palette 下每个索引都会大于等于 0，
+            # 若不加这层判断会错把所有普通请求甩到兜底路径）。
+            recipe_has_virtual = bool(virtual_materials) and any(
+                ch >= lut_palette_length for ch in request.recipe
+            )
+            # Material-archive sessions have no LUT file and therefore no
+            # forward-model runtime. Skipping ``predict_recipe_color`` for
+            # these sessions avoids a stub-metadata round-trip that would
+            # ValueError inside the predictive runtime loader and lets the
+            # fallback chain pick a deterministic preview colour from
+            # ``preview_colors``. ``is_material_archive`` is the source-of-
+            # truth here (driven by ``session_data["material_source"]``);
+            # we cannot infer the source from ``_rgb`` / ``_stacks`` being
+            # ``None`` because legacy tests legitimately monkeypatch the
+            # LUT loader to return ``stacks=None`` while still wiring the
+            # predictive path.
+            # 耗材档案会话没有 LUT 文件也没有前向模型 runtime，此处跳过
+            # ``predict_recipe_color``，避免对 stub metadata 做无意义尝试，
+            # 直接走兜底链用 preview_colors 取色。用 session 的
+            # material_source 作为唯一信号——不能靠 _rgb/_stacks 是否为
+            # None 来推断，老 LUT 测试会合法地 mock stacks=None 但仍然
+            # 走预测路径。
+            try:
+                if recipe_has_virtual or is_material_archive:
+                    raise ValueError(
+                        "No predictive runtime is available for virtual materials"
+                    )
+                prediction = predict_recipe_color(
+                    metadata,
+                    recipe=request.recipe,
+                    layer_height_mm=request.layer_height_mm,
+                    color_layers=request.color_layers,
+                    layer_order=request.layer_order,
+                )
+                predicted_rgb = np.asarray(prediction.get("rgb", []), dtype=np.uint8)
+                if predicted_rgb.shape != (3,):
+                    raise ValueError("Predicted RGB payload is invalid")
+                predicted_lab = [float(v) for v in prediction.get("lab", [])]
+                prediction_source = prediction.get("source")
+                runtime_mode_key = prediction.get("runtime_mode_key")
+                match_mode = "predictive"
+            except ValueError as predict_exc:
+                if "No predictive runtime" not in str(predict_exc):
+                    raise
+                top_channel = top_channel_idx if top_channel_idx is not None else 0
+                # Multi-tier fallback so apply never 422s for lack of colour data:
+                # (1) LUT pure-stack, (2) cached preview_colors entry for the
+                # top channel (covers material-archive sessions whose selected
+                # materials publish preview RGB into the cache during preview),
+                # (3) canonical primary by channel name (LUT-side sparse
+                # palettes like BW without explicit RGB), (4) neutral grey.
+                # The material_matrix update is the real work here; the
+                # preview colour is only for painting the cached region.
+                # 多级兜底：LUT 纯堆叠 → cache preview_colors 的通道预览色
+                # （覆盖耗材档案模式）→ 通道名对应的原色 → 中性灰。真正的
+                # 工作是 material_matrix 更新，预览色只是给缓存区域着色。
+                fallback_rgb = _pure_stack_rgb(_rgb, _stacks, top_channel)
+                if fallback_rgb is None:
+                    fallback_rgb = _cache_preview_rgb(cache, top_channel)
+                if (
+                    fallback_rgb is None
+                    and 0 <= top_channel < lut_palette_length
+                ):
+                    fallback_rgb = _canonical_apply_rgb(
+                        metadata.palette[top_channel].color
+                    )
+                if fallback_rgb is None:
+                    fallback_rgb = np.asarray((128, 128, 128), dtype=np.uint8)
+                predicted_rgb = fallback_rgb
+                predicted_lab = [
+                    float(v)
+                    for v in _rgb_to_lab(
+                        predicted_rgb.reshape(1, 1, 3)
+                    ).reshape(3).tolist()
+                ]
+                # Distinguish the material-archive cache-backed fallback from
+                # the LUT pure-stack fallback so downstream logs and the UI
+                # can differentiate "no forward model, used archive preview"
+                # from "LUT exists but the recipe was outside the predictive
+                # grid". 区分耗材档案兜底与 LUT 纯堆叠兜底，方便日志/前端
+                # 分辨"没前向模型走档案"和"LUT 不在预测格"两种来源。
+                prediction_source = (
+                    "material_archive_preview"
+                    if is_material_archive
+                    else "pure_stack_fallback"
+                )
+                runtime_mode_key = None
+                match_mode = prediction_source
+
+        # Extend the preview cache with any user-declared virtual materials so
+        # downstream GLB rendering / 3MF export (which index preview_colors and
+        # slot_names by material id) can resolve indices beyond LUT.N.
+        # 扩展预览缓存里的 preview_colors / slot_names / color_conf，让下游
+        # GLB 渲染和 3MF 导出按索引读 preview_colors 时能解析到虚拟耗材。
+        _extend_cache_palette_with_virtuals(
+            cache,
+            lut_palette_length,
+            virtual_materials or None,
+        )
 
         current_layers = int(material_matrix.shape[2])
         target_layers = int(request.color_layers)
         if target_layers > current_layers:
             pad_count = target_layers - current_layers
-            base_fill = int(metadata.base_channel_idx)
-            if metadata.layer_order == "Bottom2Top":
-                pad_shape = ((0, 0), (0, 0), (pad_count, 0))
-            else:
-                pad_shape = ((0, 0), (0, 0), (0, pad_count))
-            material_matrix = np.pad(
-                material_matrix,
-                pad_shape,
-                mode="constant",
-                constant_values=base_fill,
+            # Growing ``material_matrix`` beyond its current depth has two
+            # conflicting constraints that must be satisfied at the same time:
+            #
+            #   (a) Pixels OUTSIDE the object silhouette (``~mask_solid``,
+            #       i.e., the transparent background p03 has already marked
+            #       with ``-1``) must NOT gain any material at the new
+            #       layers. Otherwise S06 copies them into ``full_matrix``
+            #       and S07 emits a White mesh ringing the model at the
+            #       extended Z — the "整块白矩形包裹 / 透明通道失效" bug.
+            #
+            #   (b) Pixels INSIDE the object silhouette (``mask_solid``) that
+            #       the user did not override must keep a real material at
+            #       the new layers so the extended region stays continuous
+            #       with the backing slab. If we pad them with ``-1`` too
+            #       they become "air" and the user sees their 6th layer
+            #       collapse into an empty silhouette outside the override
+            #       — the "第 6 层空层" bug.
+            #
+            # Both constraints collapse into a single rule: the pad slab is
+            # ``-1`` everywhere except the ``mask_solid`` interior, which
+            # gets the LUT's base channel (normally White on CMYW). The
+            # override region is then overwritten by the user's recipe a
+            # few lines down, so this pad only affects non-override pixels.
+            # 扩展 material_matrix 必须同时满足两条约束：(a) 物体轮廓外
+            # (~mask_solid，p03 已经标记为 -1 的透明背景) 新增的层上绝不能
+            # 产生材料，否则 S07 会围着模型生成一圈白色 mesh（"整块白矩形
+            # / 透明通道失效"）；(b) 物体轮廓内但未被 override 的像素在新
+            # 增层上要保留实体材料，跟下方背板连续，否则用户的第 6 层会
+            # 塌成空层（"第 6 层空层"）。所以 pad slab 整体置 -1，再只在
+            # mask_solid 位置写 LUT base channel（CMYW 下就是白色）；接下
+            # 来几行再把 override 区域覆盖成用户配方。
+            mask_solid: np.ndarray | None = cache.get("mask_solid")
+            if mask_solid is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Preview cache missing mask_solid; re-run preview before applying recipe override.",
+                )
+            mask_solid_arr = np.asarray(mask_solid, dtype=bool)
+            if mask_solid_arr.shape != material_matrix.shape[:2]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "mask_solid shape does not match material_matrix; "
+                        "re-run preview before applying recipe override."
+                    ),
+                )
+            # uint dtypes would wrap ``-1`` into ``255`` and resurrect the
+            # exact same mesh-explosion bug, so promote to a signed dtype
+            # before padding.
+            # uint 类型会把 ``-1`` 绕回 255，把同一个 bug 换个编号再来一遍，
+            # 所以先升到 signed 类型再 pad。
+            if np.issubdtype(material_matrix.dtype, np.unsignedinteger):
+                material_matrix = material_matrix.astype(np.int32)
+            pad_slab = np.full(
+                (material_matrix.shape[0], material_matrix.shape[1], pad_count),
+                -1,
+                dtype=material_matrix.dtype,
             )
+            pad_slab[mask_solid_arr] = int(metadata.base_channel_idx)
+            if metadata.layer_order == "Bottom2Top":
+                material_matrix = np.concatenate([pad_slab, material_matrix], axis=2)
+            else:
+                material_matrix = np.concatenate([material_matrix, pad_slab], axis=2)
 
         recipe_full = np.asarray(
             pad_recipe_to_layer_count(
@@ -972,14 +1578,28 @@ def apply_recipe_override(
         cache["color_layers"] = int(material_matrix.shape[2])
         cache["layer_height_mm"] = float(request.layer_height_mm)
         cache["lut_match_info"] = {
-            "match_mode": "predictive",
-            "runtime_mode_key": prediction.get("runtime_mode_key"),
+            "match_mode": match_mode,
+            "runtime_mode_key": runtime_mode_key,
             "override": True,
-            "source": prediction.get("source"),
+            "source": prediction_source,
         }
         store.put(request.session_id, "preview_cache", cache)
 
         existing_overrides = list(session_data.get("recipe_overrides") or [])
+        # Persist the per-region virtual materials alongside the recipe so the
+        # generate endpoint can rebuild the extended palette for the 3MF
+        # pipeline even in a fresh worker process. Use plain dicts (not
+        # pydantic models) so the session store stays JSON-serialisable.
+        # 把 per-region 的虚拟耗材和 recipe 一并持久化到会话里，让 generate
+        # 端点在新 worker 进程里也能重建扩展调色板；存 dict 保证 JSON 可序列化。
+        virtual_materials_payload = (
+            [
+                {"name": material.name, "hex": material.hex}
+                for material in virtual_materials
+            ]
+            if virtual_materials
+            else None
+        )
         existing_overrides.extend(
             {
                 "region_id": region_id,
@@ -987,6 +1607,11 @@ def apply_recipe_override(
                 "layer_order": request.layer_order,
                 "color_layers": int(material_matrix.shape[2]),
                 "layer_height_mm": float(request.layer_height_mm),
+                **(
+                    {"virtual_materials": virtual_materials_payload}
+                    if virtual_materials_payload
+                    else {}
+                ),
             }
             for region_id, _region_mask in region_mask_items
         )
@@ -1026,14 +1651,142 @@ def apply_recipe_override(
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
         rgb=[int(v) for v in predicted_rgb.tolist()],
-        lab=[float(v) for v in prediction.get("lab", [])],
-        source=str(prediction.get("source", "unknown")),
+        lab=predicted_lab,
+        source=str(prediction_source or "unknown"),
         runtime_mode_key=(
-            str(prediction["runtime_mode_key"])
-            if prediction.get("runtime_mode_key") is not None
-            else None
+            str(runtime_mode_key) if runtime_mode_key is not None else None
         ),
         override_count=len(existing_overrides),
+    )
+
+
+def _sample_region_recipe_top2bottom(
+    material_matrix: np.ndarray,
+    region_mask: np.ndarray,
+) -> list[int] | None:
+    """Sample the current per-layer material stack for a region mask.
+
+    Reads the first solid pixel inside ``region_mask`` and returns its
+    ``material_matrix`` stack in the pipeline's native ``Top2Bottom``
+    convention (index 0 = viewing surface). Regions are connected components
+    of a single ``matched_hex`` so every pixel in the mask shares the same
+    stack; picking any one pixel is therefore correct and O(H·W) cheap.
+    ``-1`` air sentinels (present in layers grown past the original depth
+    outside ``mask_solid``) are stripped so the returned recipe contains
+    only valid material indices — callers can use its length as the "real"
+    solid-layer count.
+
+    从区域掩码里采样一个实体像素，返回该像素在 ``material_matrix`` 中的
+    堆叠（Top2Bottom，索引 0 = 观察面）。区域内每个像素共享同一个 matched_hex
+    → 同一个堆叠，所以取任意一个即可。过滤 -1（空气哨兵，发生在 grown
+    后不在 mask_solid 内的层），返回的 recipe 里只含合法材料索引，其长度
+    就是该区域的真实实体层数。
+
+    Returns:
+        Recipe list or ``None`` when the mask is empty / shape mismatched /
+        stack contains no solid layers.
+    """
+    if material_matrix.ndim != 3:
+        return None
+    mask_arr = np.asarray(region_mask, dtype=bool)
+    if mask_arr.shape != material_matrix.shape[:2]:
+        return None
+    ys, xs = np.where(mask_arr)
+    if ys.size == 0:
+        return None
+    stack = material_matrix[int(ys[0]), int(xs[0]), :]
+    recipe = [int(v) for v in stack.tolist() if int(v) >= 0]
+    if not recipe:
+        return None
+    return recipe
+
+
+@router.post("/region-recipe", response_model=RegionRecipeResponse)
+def region_recipe(
+    request: RegionRecipeRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> RegionRecipeResponse:
+    """Return each requested region's current per-layer material stack.
+
+    The Custom Recipe dialog calls this on open so the per-layer dropdowns
+    pre-populate with the region's *actual* matched recipe instead of the
+    all-White default. Without this the dialog silently overwrites the
+    user's current stack on "Apply" if they only wanted to tweak a single
+    layer — the user-reported "永远默认全白" bug.
+
+    自定义配方对话框打开时调用，让逐层下拉预设为该区域的真实配方，而不
+    是默认的全白。否则用户只想改一层也会把整个配方覆盖成白色，正是用户
+    报告的 "永远默认全白" bug。
+
+    ``material_matrix`` is stored in ``Top2Bottom`` convention (layer 0 =
+    viewing surface) everywhere in the pipeline; we sample directly and
+    reorder only when the caller asks for ``Bottom2Top``.
+
+    Raises:
+        HTTPException(404): Session not found.
+        HTTPException(409): Missing preview cache, missing material_matrix,
+            or no regions to sample.
+    """
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+
+    material_matrix: np.ndarray | None = cache.get("material_matrix")
+    if material_matrix is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Preview cache missing material_matrix. Preview again first.",
+        )
+
+    region_mask_items = _get_region_mask_items_for_ids(
+        session_data, list(request.region_ids)
+    )
+    if not region_mask_items:
+        raise HTTPException(
+            status_code=409,
+            detail="No selected regions available for recipe sampling.",
+        )
+
+    target_order = normalize_layer_order(request.layer_order)
+    layer_height_mm = float(
+        cache.get("layer_height_mm") or session_data.get("material_layer_height_mm") or 0.08
+    )
+
+    entries: list[RegionRecipeEntry] = []
+    for region_id, region_mask in region_mask_items:
+        # ``material_matrix`` storage is always Top2Bottom (s03 docstring is
+        # the canonical reference). Convert only when the caller asks for
+        # the reversed view; empty samples degrade to an empty recipe so
+        # the frontend can still fall back to its built-in default without
+        # crashing on ``recipe[0]``.
+        # material_matrix 恒为 Top2Bottom 存储，调用方要 Bottom2Top 时才反
+        # 序；空样本退化为空 recipe，让前端能安全回退到默认配方。
+        recipe_t2b = _sample_region_recipe_top2bottom(material_matrix, region_mask)
+        if recipe_t2b is None:
+            entries.append(
+                RegionRecipeEntry(
+                    region_id=region_id,
+                    recipe=[],
+                    color_layers=int(material_matrix.shape[2]),
+                    layer_height_mm=layer_height_mm,
+                    layer_order=target_order,
+                )
+            )
+            continue
+        recipe_out = convert_recipe_between_orders(recipe_t2b, "Top2Bottom", target_order)
+        entries.append(
+            RegionRecipeEntry(
+                region_id=region_id,
+                recipe=recipe_out,
+                color_layers=len(recipe_out),
+                layer_height_mm=layer_height_mm,
+                layer_order=target_order,
+            )
+        )
+
+    return RegionRecipeResponse(
+        status="ok",
+        message="Region recipes resolved",
+        recipes=entries,
     )
 
 

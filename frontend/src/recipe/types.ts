@@ -90,6 +90,27 @@ export interface ConverterRecipeColorOps {
     replacement_hex: string;
   }>;
   free_color_set: string[];
+  /** V2+: per-region custom recipe overrides (region_id, recipe, layer_order). */
+  recipe_overrides?: Array<{
+    region_id: string;
+    recipe: number[];
+    layer_order: string;
+  }>;
+  /** V2+: session-scoped custom recipe history; imported with fromModel forced to false. */
+  custom_recipe_history?: Array<{
+    id: string;
+    recipe: number[];
+    layer_order: string;
+    predicted_rgb: [number, number, number];
+    predicted_lab: [number, number, number];
+    hex: string;
+    from_model: boolean;
+    /** 每层用户意图原色 hex（可选，v2 之后新增）。 */
+    display_hexes?: string[];
+    /** 每层用户意图原色名（可选，v2 之后新增）。 */
+    display_labels?: string[];
+    created_at_ms: number;
+  }>;
 }
 
 export interface ConverterRecipeLargeFormat {
@@ -190,4 +211,4 @@ export interface LuminaRecipe {
 // ========== Constants ==========
 
 export const RECIPE_FORMAT = "lumina-recipe" as const;
-export const RECIPE_SCHEMA_VERSION = 1;
+export const RECIPE_SCHEMA_VERSION = 2;

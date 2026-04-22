@@ -10,6 +10,87 @@ _CAMEL_CASE_RE = re.compile(r"([a-z])([A-Z])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _PREFIX_RE = re.compile(r"^(?:slot|channel|material)\s*\d+\s*[:\-]?\s*", re.IGNORECASE)
 
+# Lazy canonical name→rgba registry, built once from standard ColorSystem presets
+# so a native ColorDB palette (whose entries typically carry no ``hex_color``)
+# still resolves to stable colors even when the caller passes a stale
+# ``color_conf`` belonging to a different, smaller color mode.
+# 基于标准 ColorSystem 预设一次性构建的 "颜色名 → RGBA" 规范表，
+# 用于在 native ColorDB 调色板 hex_color 缺省、且外部传入 color_conf
+# 过旧（例如用户从传统 CMYW LUT 切换到反推 LUT 时 color_mode 未同步）
+# 的情况下，保证每个常见颜色名都能解析到稳定且互不冲突的颜色。
+_CANONICAL_COLOR_LOOKUP: dict[str, list[int]] | None = None
+
+
+def _get_canonical_color_lookup() -> dict[str, list[int]]:
+    """Return the cached canonical name→rgba lookup, building it on first use.
+
+    Uses ``ColorSystem.EIGHT_COLOR`` as the primary source (widest palette),
+    aliases bare "Blue" to "Deep Blue" to match the physical filament convention
+    used by native ColorDB bundles, and falls back to legacy presets for any
+    extra aliases. The lookup is keyed by normalized labels so it matches
+    arbitrary capitalization / decoration.
+    """
+    global _CANONICAL_COLOR_LOOKUP
+    if _CANONICAL_COLOR_LOOKUP is not None:
+        return _CANONICAL_COLOR_LOOKUP
+
+    from config import ColorSystem
+
+    lookup: dict[str, list[int]] = {}
+
+    def _absorb(conf: dict[str, Any]) -> None:
+        preview = conf.get("preview") or {}
+        slot_map = conf.get("map") or {}
+        for name, slot_idx in slot_map.items():
+            rgba = preview.get(slot_idx)
+            if not rgba:
+                continue
+            normalized = _normalize_color_label(name)
+            if normalized and normalized not in lookup:
+                lookup[normalized] = list(rgba)
+
+    # EIGHT_COLOR is the primary: it covers W / C / M / Y / K / Red / Deep Blue
+    # / Green with the hex values native bundles actually print with.
+    _absorb(ColorSystem.EIGHT_COLOR)
+
+    # Alias bare "Blue" → Deep Blue BEFORE the legacy presets get a chance to
+    # bind their own vivid-blue hex, so a native bundle palette that uses the
+    # short "Blue" form keeps mapping to the 8-Color Deep Blue filament —
+    # matching the previously-correct behaviour under ``color_mode='8-Color Max'``.
+    # 将裸 "Blue" 别名为 Deep Blue，以匹配反推 LUT 调色板实际使用的深蓝耗材；
+    # 必须放在吸收 SIX_COLOR_RYBW 之前，否则 RYBW 的鲜蓝 (#0064F0) 会抢先占位。
+    deep_blue = lookup.get("deep blue")
+    if deep_blue is not None:
+        lookup.setdefault("blue", list(deep_blue))
+
+    # Fill in remaining aliases from legacy presets (White/Cyan/etc. are shared
+    # so these calls are mostly no-ops for standard names but keep exotic aliases
+    # like BW's "Black" available on the off-chance EIGHT_COLOR skips them).
+    _absorb(ColorSystem.SIX_COLOR_RYBW)
+    _absorb(ColorSystem.SIX_COLOR)
+    _absorb(ColorSystem.CMYW)
+    _absorb(ColorSystem.RYBW)
+    _absorb(ColorSystem.BW)
+
+    _CANONICAL_COLOR_LOOKUP = lookup
+    return lookup
+
+
+def _lookup_canonical_rgba(entry: Any) -> list[int] | None:
+    """Return the canonical RGBA for an entry's name, or None if unknown.
+
+    根据调色板条目的 color / color_name / material 字段在规范表中查找 RGBA。
+    """
+    lookup = _get_canonical_color_lookup()
+    for attr in ("color", "color_name", "material"):
+        value = getattr(entry, attr, None)
+        if not isinstance(value, str):
+            continue
+        normalized = _normalize_color_label(value)
+        if normalized and normalized in lookup:
+            return list(lookup[normalized])
+    return None
+
 
 def _normalize_color_label(value: Any) -> str:
     """Normalize a color label for fuzzy matching."""
@@ -120,15 +201,31 @@ def _resolve_color_conf_preview(entry: Any, idx: int, color_conf: dict[str, Any]
     return list(fallback_preview)
 
 
+def _resolve_entry_rgba(entry: Any, idx: int, color_conf: dict[str, Any]) -> list[int]:
+    """Resolve an entry to RGBA with a deterministic priority order.
+
+    按以下优先级解析调色板条目的 RGBA：
+    1. ``entry.hex_color`` 有效时直接使用（调色板自带最权威）。
+    2. ``entry.color`` 命中规范颜色名表时返回规范 RGBA（规避传入的
+       ``color_conf`` 与调色板不匹配时的串色问题）。
+    3. 否则回落到原有的 ``color_conf`` 模糊匹配逻辑（保留旧版兼容）。
+    """
+    hex_color = getattr(entry, "hex_color", None)
+    if isinstance(hex_color, str) and _HEX_COLOR_RE.match(hex_color.strip()):
+        return _hex_to_rgba(hex_color)
+
+    canonical = _lookup_canonical_rgba(entry)
+    if canonical is not None:
+        return canonical
+
+    return _resolve_color_conf_preview(entry, idx, color_conf)
+
+
 def build_palette_preview_colors(palette: list[Any], color_conf: dict[str, Any]) -> tuple[list[str], dict[int, list[int]]]:
     """Build slot names and preview RGBA values from LUT metadata."""
     slot_names = [getattr(entry, "color", "") for entry in palette]
     preview_colors = {
-        idx: (
-            _hex_to_rgba(entry.hex_color)
-            if isinstance(getattr(entry, "hex_color", None), str) and _HEX_COLOR_RE.match(entry.hex_color.strip())
-            else _resolve_color_conf_preview(entry, idx, color_conf)
-        )
+        idx: _resolve_entry_rgba(entry, idx, color_conf)
         for idx, entry in enumerate(palette)
     }
     return slot_names, preview_colors

@@ -5,6 +5,8 @@ import type {
   StructureMode,
   ColorReplacementItem,
   RecipeOverrideItem,
+  RecipeHistoryItem,
+  VirtualMaterial,
   BedSizeItem,
   PaletteEntry,
   AutoHeightMode,
@@ -49,6 +51,7 @@ import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
   fetchLutCatalog as apiFetchLutCatalog,
+  fetchSessionLutInfo as apiFetchSessionLutInfo,
 } from "../../api/lut";
 import {
   computeAutoHeightMap,
@@ -62,12 +65,20 @@ import {
   resolveFridgeMagnetSpacerThick,
 } from "../../constants/fridgeMagnets";
 import { useSettingsStore } from "../settingsStore";
+import {
+  postClientLog,
+  summarizeErrorForLog,
+  summarizeFileForLog,
+} from "../../utils/clientLog";
 import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import type { MaterialColorSuggestionsResponse } from "../../api/types";
 
-type LuminaWindow = Window & { __luminaGenerateStart?: number };
+type LuminaWindow = Window & {
+  __luminaGenerateStart?: number;
+  __luminaPreviewStart?: number;
+};
 
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
@@ -1175,6 +1186,7 @@ export interface ConverterState {
   // 颜色替换
   replacement_regions: ColorReplacementItem[];
   recipe_overrides: RecipeOverrideItem[];
+  customRecipeHistory: RecipeHistoryItem[];
   free_color_set: Set<string>;
 
   // 调色板与选择
@@ -1390,13 +1402,26 @@ export interface ConverterActions {
     regionIds: string[],
     recipe: number[],
     layerOrder?: string,
+    /** Virtual materials declared at apply time; required when ``recipe`` carries indices ``>= LUT.N``. */
+    virtualMaterials?: VirtualMaterial[],
   ) => Promise<void>;
   upsertRecipeOverrides: (
     regionIds: string[],
     recipe: number[],
     layerOrder: string,
+    /** Optional virtuals to persist alongside the override so ``/generate`` can extend the palette. */
+    virtualMaterials?: VirtualMaterial[],
   ) => void;
   clearRecipeOverrides: (regionIds?: string[]) => void;
+  /** 追加一条历史；按 id LRU 置顶，容量 10。 */
+  pushCustomRecipeHistory: (item: RecipeHistoryItem) => void;
+  /** 清空历史（一般在 submitPreview 之外很少主动调）。 */
+  clearCustomRecipeHistory: () => void;
+  /** 应用一条历史到当前选区；内部复用 applyCustomRecipeOverride。 */
+  applyCustomRecipeFromHistory: (
+    historyId: string,
+    regionIds: string[],
+  ) => Promise<void>;
 
   // 待确认颜色替换
   setPendingReplacement: (pending: PendingReplacement | null) => void;
@@ -1552,6 +1577,7 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     remapHistory: [],
     replacement_regions: [],
     recipe_overrides: [],
+    customRecipeHistory: [],
     free_color_set: new Set<string>(),
     regionReplacementCount: 0,
     selectedColor: null,
@@ -1695,6 +1721,7 @@ export const DEFAULT_STATE: ConverterState = {
   ...DEFAULT_PUZZLE_PREVIEW_STATE,
   replacement_regions: [],
   recipe_overrides: [],
+  customRecipeHistory: [],
   free_color_set: new Set(),
   selectedColor: null,
   palette: [],
@@ -1761,9 +1788,43 @@ export const DEFAULT_STATE: ConverterState = {
 let _previewAbortController: AbortController | null = null;
 
 // ========== Client-side timing log (writes to server log) ==========
+let _previewStartTime: number | null = null;
+const _PREVIEW_TIMER_LABEL = "[LUMINA] preview";
+let _previewTimerActive = false;
 let _generateStartTime: number | null = null;
 const _GENERATE_TIMER_LABEL = "[LUMINA] generate";
 let _generateTimerActive = false;
+
+function _startPreviewTimer(): void {
+  if (_previewTimerActive) {
+    try {
+      console.timeEnd(_PREVIEW_TIMER_LABEL);
+    } catch {
+      void 0;
+    }
+  }
+  console.time(_PREVIEW_TIMER_LABEL);
+  _previewTimerActive = true;
+}
+
+function _logPreviewTimer(message: string): void {
+  if (!_previewTimerActive) return;
+  try {
+    console.timeLog(_PREVIEW_TIMER_LABEL, message);
+  } catch {
+    void 0;
+  }
+}
+
+function _endPreviewTimer(): void {
+  if (!_previewTimerActive) return;
+  try {
+    console.timeEnd(_PREVIEW_TIMER_LABEL);
+  } catch {
+    void 0;
+  }
+  _previewTimerActive = false;
+}
 
 function _startGenerateTimer(): void {
   if (_generateTimerActive) {
@@ -1796,16 +1857,32 @@ function _endGenerateTimer(): void {
   _generateTimerActive = false;
 }
 
-function _clientLog(label: string) {
-  const elapsed =
-    _generateStartTime != null ? performance.now() - _generateStartTime : null;
-  const msg = elapsed != null ? `${label} (+${elapsed.toFixed(0)}ms)` : label;
-  console.log(`[LUMINA] ${msg}`);
-  fetch("/api/client-log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, elapsed_ms: elapsed }),
-  }).catch(() => {});
+function _previewClientLog(
+  label: string,
+  details?: Record<string, unknown>,
+  method: "log" | "warn" | "error" = "log",
+) {
+  postClientLog(label, {
+    startTime: _previewStartTime,
+    details,
+    scope: "preview",
+    phase: label,
+    method,
+  });
+}
+
+function _clientLog(
+  label: string,
+  details?: Record<string, unknown>,
+  method: "log" | "warn" | "error" = "log",
+) {
+  postClientLog(label, {
+    startTime: _generateStartTime,
+    details,
+    scope: "generate",
+    phase: label,
+    method,
+  });
 }
 
 function buildPuzzlePreviewParams(
@@ -2967,6 +3044,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       regionIds: string[],
       recipe: number[],
       layerOrder: string,
+      virtualMaterials?: VirtualMaterial[],
     ) => {
       const validRegionIds = regionIds.filter((value) => !!value);
       if (validRegionIds.length === 0) {
@@ -2975,6 +3053,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       const normalizedRecipe = recipe.map((value) =>
         Math.max(0, Math.round(value)),
       );
+      // Deep-copy the virtuals so later mutations on either the caller's
+      // list or the stored items don't bleed across overrides. Virtuals are
+      // the part of the override payload that ``/generate`` relies on to
+      // extend the worker palette; losing them collapses virtual-index
+      // pixels back onto the LUT's native channels.
+      // 对 virtuals 做深拷贝，避免外部改动污染 store。generate 端依赖它扩
+      // 展 worker 调色板，丢了会让虚拟索引像素坍缩回 LUT 原生通道。
+      const clonedVirtuals = (virtualMaterials ?? []).map((material) => ({
+        name: material.name,
+        hex: material.hex,
+      }));
       set((state) => {
         const existing = state.recipe_overrides.filter(
           (item) => !validRegionIds.includes(item.region_id),
@@ -2985,6 +3074,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             region_id: regionId,
             recipe: normalizedRecipe,
             layer_order: layerOrder,
+            ...(clonedVirtuals.length > 0
+              ? {
+                  virtual_materials: clonedVirtuals.map((material) => ({
+                    ...material,
+                  })),
+                }
+              : {}),
           })),
         ];
         return {
@@ -3007,6 +3103,45 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           (item) => !regionIds.includes(item.region_id),
         ),
       }));
+    },
+
+    pushCustomRecipeHistory: (item: RecipeHistoryItem) => {
+      set((state) => {
+        const filtered = state.customRecipeHistory.filter(
+          (history) => history.id !== item.id,
+        );
+        const next = [item, ...filtered].slice(0, 10);
+        return { customRecipeHistory: next };
+      });
+    },
+
+    clearCustomRecipeHistory: () => {
+      set({ customRecipeHistory: [] });
+    },
+
+    applyCustomRecipeFromHistory: async (
+      historyId: string,
+      regionIds: string[],
+    ) => {
+      const state = _get();
+      const entry = state.customRecipeHistory.find(
+        (history) => history.id === historyId,
+      );
+      if (!entry) {
+        set({ error: "Custom recipe history entry not found" });
+        return;
+      }
+      // Forward the virtuals captured at the original apply so the replay
+      // round-trips ``recipe[i] >= LUT.N`` through backend validation and
+      // reaches the worker with an intact virtual-material registry.
+      // 带上首次 apply 时记下的虚拟耗材，保证重放时 ``recipe[i] >= LUT.N``
+      // 通过后端校验、worker 也能重建虚拟材料注册表。
+      await _get().applyCustomRecipeOverride(
+        regionIds,
+        entry.recipe,
+        entry.layerOrder,
+        entry.virtualMaterials,
+      );
     },
 
     // --- 连通区域替换 ---
@@ -3074,6 +3209,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       regionIds: string[],
       recipe: number[],
       layerOrder: string = "Top2Bottom",
+      virtualMaterials?: VirtualMaterial[],
     ) => {
       const state = _get();
       if (!state.sessionId) {
@@ -3091,6 +3227,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       );
       const resolvedHeight =
         state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
+      // Deep-copy virtuals to isolate the payload / state from later
+      // caller-side mutations; 422 on ``recipe[i] >= LUT.N`` requires this
+      // list to be present, so forward it when non-empty.
+      // 深拷贝 virtuals 避免调用方随后改动影响 store / 请求体；recipe 里有
+      // 虚拟索引时后端 422 校验需要它，故非空时必须透传。
+      const clonedVirtuals = (virtualMaterials ?? []).map((material) => ({
+        name: material.name,
+        hex: material.hex,
+      }));
 
       set({ replacePreviewLoading: true, error: null });
       try {
@@ -3101,6 +3246,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           layer_order: layerOrder,
           color_layers: resolvedLayers,
           layer_height_mm: resolvedHeight,
+          ...(clonedVirtuals.length > 0
+            ? { virtual_materials: clonedVirtuals }
+            : {}),
         });
         set((current) => ({
           replacePreviewLoading: false,
@@ -3122,6 +3270,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               region_id: regionId,
               recipe: [...recipe],
               layer_order: layerOrder,
+              ...(clonedVirtuals.length > 0
+                ? {
+                    virtual_materials: clonedVirtuals.map((material) => ({
+                      ...material,
+                    })),
+                  }
+                : {}),
             })),
           ],
           lutMatchMode: "predictive",
@@ -3714,6 +3869,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       _previewAbortController = new AbortController();
       const { signal } = _previewAbortController;
 
+      _previewStartTime = performance.now();
+      (window as LuminaWindow).__luminaPreviewStart = _previewStartTime;
+      _startPreviewTimer();
+      _previewClientLog("preview: click", {
+        image: summarizeFileForLog(state.imageFile),
+        source_version: state.source_version,
+        target_width_mm: state.target_width_mm,
+        color_mode: state.color_mode,
+        modeling_mode: state.modeling_mode,
+        quantize_colors: state.quantize_colors,
+        enable_cleanup: state.enable_cleanup,
+        hue_enable: state.hue_enable,
+      });
+
       set({
         isLoading: true,
         error: null,
@@ -3733,41 +3902,58 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               ? buildNativeSourceParams(resolvedSourceSelection, state)
               : buildLegacySourceParams(state.lut_name);
         if (!sourceParams) {
+          _previewClientLog("preview: invalid source", {
+            source_version: state.source_version,
+          }, "warn");
           set({
             isLoading: false,
             error: "请先选择品牌和数据库",
           });
           return;
         }
+        const previewParams = {
+          ...sourceParams,
+          color_layers:
+            state.source_version === "material"
+              ? state.materialLayerCount
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.color_layers ?? undefined)
+                : (state.color_layers ?? undefined),
+          layer_height_mm:
+            state.source_version === "material"
+              ? state.materialLayerHeightMm
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.layer_height_mm ?? undefined)
+                : (state.layer_height_mm ?? undefined),
+          target_width_mm: state.target_width_mm,
+          auto_bg: state.auto_bg,
+          bg_tol: state.bg_tol,
+          color_mode: state.color_mode,
+          modeling_mode: state.modeling_mode,
+          quantize_colors: state.quantize_colors,
+          enable_cleanup: state.enable_cleanup,
+          hue_weight: state.hue_enable ? 0.5 : 0.0,
+          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          is_dark: useSettingsStore.getState().theme === "dark",
+        };
+        _logPreviewTimer("request sent");
+        _previewClientLog("preview: request sent", {
+          source_kind: sourceParams.source_kind,
+          color_layers: previewParams.color_layers ?? null,
+          layer_height_mm: previewParams.layer_height_mm ?? null,
+          target_width_mm: previewParams.target_width_mm,
+          color_mode: previewParams.color_mode,
+          modeling_mode: previewParams.modeling_mode,
+          quantize_colors: previewParams.quantize_colors,
+          auto_bg: previewParams.auto_bg,
+          bg_tol: previewParams.bg_tol,
+        });
         const response = await apiConvertPreview(
           state.imageFile,
-          {
-            ...sourceParams,
-            color_layers:
-              state.source_version === "material"
-                ? state.materialLayerCount
-                : sourceParams.source_kind === "native_bundle"
-                  ? (sourceParams.color_layers ?? undefined)
-                  : (state.color_layers ?? undefined),
-            layer_height_mm:
-              state.source_version === "material"
-                ? state.materialLayerHeightMm
-                : sourceParams.source_kind === "native_bundle"
-                  ? (sourceParams.layer_height_mm ?? undefined)
-                  : (state.layer_height_mm ?? undefined),
-            target_width_mm: state.target_width_mm,
-            auto_bg: state.auto_bg,
-            bg_tol: state.bg_tol,
-            color_mode: state.color_mode,
-            modeling_mode: state.modeling_mode,
-            quantize_colors: state.quantize_colors,
-            enable_cleanup: state.enable_cleanup,
-            hue_weight: state.hue_enable ? 0.5 : 0.0,
-            chroma_gate: state.hue_enable ? state.chroma_gate : 0,
-            is_dark: useSettingsStore.getState().theme === "dark",
-          },
+          previewParams,
           signal,
         );
+        _logPreviewTimer("response received");
         // 后端返回 JSON，preview_url 是相对路径如 /api/files/xxx
         const previewUrl =
           normalizeResourceUrl(response.preview_url) ?? response.preview_url;
@@ -3791,6 +3977,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             ? (sourceSelection.layer_height_mm ?? null)
             : state.layer_height_mm;
 
+        _previewClientLog("preview: response received", {
+          session_id: response.session_id,
+          preview_url: previewUrl,
+          preview_glb_url: glbUrl,
+          palette_count: normalizedPalette.length,
+          warning_count: (response.warnings ?? []).length,
+          dimensions: response.dimensions ?? null,
+          source_kind: sourceParams.source_kind,
+        });
+
         set({
           isLoading: false,
           sessionId: response.session_id,
@@ -3810,6 +4006,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           remapHistory: [],
           replacement_regions: [],
           recipe_overrides: [],
+          customRecipeHistory: [],
           free_color_set: new Set<string>(),
           regionReplacementCount: 0,
           selectedColor: null,
@@ -3833,15 +4030,45 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         console.log(
           "[DEBUG] submitPreview success: cleared layerImages for new sessionId",
         );
+        _logPreviewTimer("UI unlocked (isLoading=false, preview state set)");
+        _previewClientLog("preview: UI unlocked", {
+          session_id: response.session_id,
+          preview_url: previewUrl,
+          preview_glb_url: glbUrl,
+          preview_pixel_width: response.dimensions?.width ?? null,
+          preview_pixel_height: response.dimensions?.height ?? null,
+          warning_count: (response.warnings ?? []).length,
+        });
+        // 预览绑定会话后，拉取会话所绑定 LUT 的通道调色板，便于自定义配方编辑器
+        // 在材料档案 / 原生打包流程里也能显示按通道顺序的耗材列表。
+        // After the preview binds a session, refresh the channel palette for
+        // the custom recipe editor so material-archive / native-bundle flows
+        // also see the per-channel material list, not just legacy named LUTs.
+        const previewSessionId = response.session_id;
+        void apiFetchSessionLutInfo(previewSessionId)
+          .then((info) => {
+            // Only apply if the user hasn't moved on to another session.
+            if (_get().sessionId === previewSessionId) {
+              set({ selectedLutInfo: info });
+            }
+          })
+          .catch(() => {
+            // Best-effort: if the session hasn't been bound yet or the
+            // endpoint errors, leave selectedLutInfo untouched.
+          });
       } catch (err) {
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {
+          _previewClientLog("preview: canceled", summarizeErrorForLog(err), "warn");
           return;
         }
         set({
           isLoading: false,
           error: err instanceof Error ? err.message : "预览失败",
         });
+        _previewClientLog("preview: failed", summarizeErrorForLog(err), "error");
+      } finally {
+        _endPreviewTimer();
       }
     },
 
@@ -3880,7 +4107,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ isGenerating: true, error: null });
       _generateStartTime = performance.now();
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
-      _clientLog("generate: click");
+      _clientLog("generate: click", {
+        image: summarizeFileForLog(state.imageFile),
+        session_id: state.sessionId,
+        source_version: state.source_version,
+        target_width_mm: state.target_width_mm,
+        color_mode: state.color_mode,
+        modeling_mode: state.modeling_mode,
+        quantize_colors: state.quantize_colors,
+        enable_cleanup: state.enable_cleanup,
+        enable_relief: state.enable_relief,
+        enable_outline: state.enable_outline,
+        enable_cloisonne: state.enable_cloisonne,
+        puzzle_enabled: state.puzzleEnabled,
+        large_format_enabled: state.largeFormatEnabled,
+      });
       _startGenerateTimer();
       try {
         // 合并 colorRemapMap 转换的 replacement_regions 与已有的 replacement_regions
@@ -3981,6 +4222,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           use_cached_matched_rgb: state.regionReplacementCount > 0,
         } as const;
 
+        _clientLog("generate: request prepared", {
+          source_kind: sourceParams.source_kind,
+          replacement_count: mergedReplacements?.length ?? 0,
+          recipe_override_count: state.recipe_overrides.length,
+          free_color_count: state.free_color_set.size,
+          fridge_magnet_count: state.fridge_magnets.length,
+          color_layers: baseParams.color_layers ?? null,
+          layer_height_mm: baseParams.layer_height_mm ?? null,
+          structure_mode: baseParams.structure_mode,
+          separate_backing: baseParams.separate_backing,
+          enable_relief: baseParams.enable_relief,
+          enable_outline: baseParams.enable_outline,
+          enable_cloisonne: baseParams.enable_cloisonne,
+        });
+
         if (state.puzzleEnabled) {
           const puzzleResponse = await apiConvertGeneratePuzzle(
             state.sessionId,
@@ -4002,7 +4258,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             puzzleResolvedPieceCount: puzzleResponse.piece_count ?? null,
           });
           _logGenerateTimer("puzzle 3mf received");
-          _clientLog("generate: puzzle 3mf received");
+          _clientLog("generate: puzzle 3mf received", {
+            download_url: puzzleResponse.download_url ?? null,
+            threemf_disk_path: puzzleResponse.threemf_disk_path ?? null,
+            warning_count: (puzzleResponse.warnings ?? []).length,
+            grid_rows: puzzleResponse.grid_rows ?? null,
+            grid_cols: puzzleResponse.grid_cols ?? null,
+            piece_count: puzzleResponse.piece_count ?? null,
+          });
           return null;
         }
 
@@ -4025,14 +4288,31 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               : null,
             largeFormatWarnings: lfResponse.warnings ?? [],
           });
+          _clientLog("generate: large-format zip received", {
+            download_url: lfResponse.download_url ?? null,
+            warning_count: (lfResponse.warnings ?? []).length,
+            target_height_mm: state.target_height_mm,
+            tile_width_mm: state.tileWidthMm,
+            tile_height_mm: state.tileHeightMm,
+          });
           return null;
         }
 
         _logGenerateTimer("request sent");
-        _clientLog("generate: request sent");
+        _clientLog("generate: request sent", {
+          session_id: state.sessionId,
+          source_kind: sourceParams.source_kind,
+          replacement_count: mergedReplacements?.length ?? 0,
+          recipe_override_count: state.recipe_overrides.length,
+          free_color_count: state.free_color_set.size,
+        });
         const response = await apiConvertGenerate(state.sessionId, baseParams);
         _logGenerateTimer("response received");
-        _clientLog("generate: response received");
+        _clientLog("generate: response received", {
+          preview_3d_url: response.preview_3d_url ?? null,
+          download_url: response.download_url ?? null,
+          threemf_disk_path: response.threemf_disk_path ?? null,
+        });
         const modelUrl = response.preview_3d_url
           ? `${response.preview_3d_url}`
           : null;
@@ -4046,13 +4326,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
-        _clientLog("generate: UI unlocked");
+        _clientLog("generate: UI unlocked", {
+          model_url: modelUrl,
+          download_url: response.download_url ?? null,
+          threemf_disk_path: response.threemf_disk_path ?? null,
+        });
         return modelUrl;
       } catch (err) {
         set({
           isGenerating: false,
           error: err instanceof Error ? err.message : "生成失败",
         });
+        _clientLog("generate: failed", summarizeErrorForLog(err), "error");
         return null;
       } finally {
         _endGenerateTimer();

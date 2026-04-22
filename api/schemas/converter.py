@@ -137,6 +137,35 @@ class ColorReplacementItem(BaseModel):
     replacement_hex: str = Field(..., description="替换目标色 (#rrggbb)")
 
 
+class VirtualMaterial(BaseModel):
+    """User-declared extra material attached to a recipe override.
+
+    recipe override 附带的用户声明虚拟耗材（LUT 原生没有时使用）。
+
+    Indices in a recipe that are ``>= len(lut_palette)`` refer to positions in
+    the ``virtual_materials`` list: entry ``k`` corresponds to recipe value
+    ``len(lut_palette) + k``. The downstream pipeline extends the working
+    palette with these entries so preview and 3MF output honour the colour
+    the user actually picked even when the bundle has no matching channel.
+
+    配方里 ``>= len(lut_palette)`` 的索引指向 ``virtual_materials`` 列表的位置：
+    第 ``k`` 条对应索引值 ``len(lut_palette) + k``。下游管线把这些条目追加到
+    工作调色板，保证即使 LUT 没有对应通道，预览和 3MF 也按用户选择的原色输出。
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="耗材显示名，例如 'Black' 或 'User-Red'。",
+    )
+    hex: str = Field(
+        ...,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="耗材外观 hex (#RRGGBB)。",
+    )
+
+
 class RecipeOverrideItem(BaseModel):
     """Region-scoped recipe override.
     区域级配方覆盖项。
@@ -145,6 +174,13 @@ class RecipeOverrideItem(BaseModel):
     region_id: str = Field(..., description="区域 ID")
     recipe: List[int] = Field(..., min_length=1, description="覆盖配方（通道索引序列）")
     layer_order: str = Field("Top2Bottom", description="配方层序")
+    virtual_materials: list[VirtualMaterial] | None = Field(
+        default=None,
+        description=(
+            "可选：配方里 >= LUT.N 的索引对应的虚拟耗材。Optional extra materials "
+            "referenced by recipe indices that sit beyond the LUT palette length."
+        ),
+    )
 
 
 class FridgeMagnetItem(BaseModel):
@@ -256,6 +292,14 @@ class RecipeOverrideItem(BaseModel):
     region_id: str = Field(..., description="区域 ID")
     recipe: list[int] = Field(..., min_length=1, max_length=20, description="配方层序列")
     layer_order: str = Field("Top2Bottom", description="配方层顺序")
+    virtual_materials: list[VirtualMaterial] | None = Field(
+        default=None,
+        description=(
+            "可选：配方里 >= LUT.N 的索引对应的虚拟耗材。See ``VirtualMaterial``. "
+            "Mirrors the converter-side override item so the generate pipeline "
+            "can reconstruct the extended palette."
+        ),
+    )
 
 
 class ConvertGenerateRequest(LutSourceSelection):
@@ -610,6 +654,14 @@ class RecipePredictRequest(BaseModel):
     layer_order: str = Field("Top2Bottom", description="配方层序")
     color_layers: int = Field(..., ge=1, le=20, description="叠色层数")
     layer_height_mm: float = Field(..., gt=0.0, le=1.0, description="叠色层高 (mm)")
+    virtual_materials: list[VirtualMaterial] | None = Field(
+        default=None,
+        description=(
+            "可选：配方里 >= LUT.N 的索引对应的虚拟耗材列表。Optional list of "
+            "user-declared extra materials. Recipe values at or beyond the LUT "
+            "palette length index into this list."
+        ),
+    )
 
 
 class RecipeOverrideApplyRequest(RecipePredictRequest):
@@ -618,6 +670,37 @@ class RecipeOverrideApplyRequest(RecipePredictRequest):
     """
 
     region_ids: List[str] = Field(default_factory=list, description="要应用的区域 ID 列表")
+
+
+class RegionRecipeRequest(BaseModel):
+    """Request model for reading the current per-layer recipe of selected regions.
+    读取选中区域当前每层堆叠配方的请求模型。
+
+    Used by the Custom Recipe dialog to pre-populate the per-layer dropdowns
+    with the region's *actual* matched recipe instead of the all-White
+    default. Without this the dialog silently overwrites the user's current
+    recipe on "Apply" if they just wanted to tweak one or two layers —
+    exactly the "全白默认" bug the user reported.
+
+    Attributes:
+        session_id: Active session identifier. (Session ID)
+        region_ids: Regions to sample. Must be non-empty; mirrors the apply
+            endpoint's region contract so both dialogs share the same session
+            keys (``selected_region_masks`` + fallback single-region).
+            区域 ID 列表，至少一个；与 apply 端点共用 session 里的区域键。
+        layer_order: Output layer order ("Top2Bottom" / "Bottom2Top").
+            Defaults to ``Top2Bottom`` since the pipeline stores
+            ``material_matrix`` with layer 0 = viewing surface.
+            输出层序，默认 Top2Bottom（material_matrix 的存储约定）。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    region_ids: List[str] = Field(
+        default_factory=list, description="要读取 recipe 的区域 ID 列表"
+    )
+    layer_order: str = Field(
+        "Top2Bottom", description="返回 recipe 的层序，默认 Top2Bottom"
+    )
 
 
 class ColorMergePreviewRequest(BaseModel):

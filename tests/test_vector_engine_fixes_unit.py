@@ -967,3 +967,137 @@ class TestMergedLutPaletteOverride:
         assert analysis.preview_colors[2][:3] == [0, 0, 0]
         # Red (#dc143c)
         assert analysis.preview_colors[3][:3] == [220, 20, 60]
+
+
+# ---------------------------------------------------------------------------
+# Fix 10: Native bundle palette override in vector pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestNativeBundlePaletteOverride:
+    """Verify that ``analyze_svg`` honors a native ColorDB palette even when
+    the incoming ``color_mode`` is stale (e.g. user switched from a legacy
+    CMYW LUT to the reverse-inferred native bundle without re-selecting a
+    color mode).
+
+    Regression test: without this fix, the 3MF emitted for a native_bundle
+    source picked up the stale UI ``color_mode`` preset (``SIX_COLOR`` or
+    ``CMYW``) as slot_names / preview_colors, so the bundle's real palette
+    (e.g. RYBWGK — White/Blue/Red/Green/Yellow/Black) never reached the 3MF
+    and the filament_colour array came out as CMY-flavored garbage.
+
+    回归测试：若未修复此问题，当用户从传统 CMYW LUT 切到反推 LUT 而未
+    手动调整 ``color_mode`` 时，3MF 会继承过时的 UI 颜色模式预设 (SIX_COLOR
+    / CMYW) 作为槽位名称和预览颜色，bundle 自带的调色板 (RYBWGK) 无法
+    进入 3MF，``filament_colour`` 便退化为 CMY 配色。
+    """
+
+    @pytest.fixture()
+    def native_bundle_json(self, tmp_path):
+        """Create a minimal native-bundle-style JSON LUT whose palette entries
+        mimic a real ColorDB (canonical color names, ``hex_color=None``)."""
+        import json
+        lut = {
+            # Native ColorDB palettes store entries WITHOUT hex_color; the
+            # canonical color name (White / Blue / Red / Green / Yellow /
+            # Black) is the only identity hint we get.
+            "palette": {
+                "White": {"material": "PLA"},
+                "Blue": {"material": "PLA"},
+                "Red": {"material": "PLA"},
+                "Green": {"material": "PLA"},
+                "Yellow": {"material": "PLA"},
+                "Black": {"material": "PLA"},
+            },
+            "max_color_layers": 5,
+            "layer_height_mm": 0.08,
+            "line_width_mm": 0.42,
+            "base_layers": 10,
+            "base_channel_idx": 0,
+            "layer_order": "Top2Bottom",
+            "name": "test_native_bundle_6color",
+            "entries": [],
+        }
+        # Build a 6^5 = 7776-entry LUT so `is_six_color` auto-detection
+        # doesn't fire (it gates on 1296 = 6^4) and the native palette
+        # override is the only thing driving slot_names.
+        palette_rgb = [
+            (255, 255, 255),  # White
+            (10, 41, 137),    # Blue / Deep Blue
+            (193, 46, 31),    # Red
+            (0, 174, 66),     # Green
+            (244, 238, 42),   # Yellow
+            (0, 0, 0),        # Black
+        ]
+        n_channels = len(palette_rgb)
+        layers = 5
+        entries = []
+        for i in range(n_channels ** layers):
+            recipe = []
+            val = i
+            for _ in range(layers):
+                recipe.append(val % n_channels)
+                val //= n_channels
+            r = palette_rgb[recipe[-1]]
+            entries.append({
+                "rgb": list(r),
+                "hex": f"#{r[0]:02X}{r[1]:02X}{r[2]:02X}",
+                "recipe": {
+                    "canonical_stack_ids": recipe,
+                },
+            })
+        lut["entries"] = entries
+        path = tmp_path / "test_native_bundle.json"
+        path.write_text(json.dumps(lut), encoding="utf-8")
+        return str(path)
+
+    @pytest.fixture()
+    def simple_svg(self, tmp_path):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '  <rect x="10" y="10" width="80" height="80" fill="#c12e1f"/>'
+            "</svg>"
+        )
+        path = tmp_path / "test.svg"
+        path.write_text(svg, encoding="utf-8")
+        return str(path)
+
+    def test_slot_names_override_stale_cmyw_color_mode(self, native_bundle_json, simple_svg):
+        """Stale ``color_mode='4-Color (CMYW)'`` must NOT leak into slot_names.
+        传入的陈旧 ``color_mode='4-Color (CMYW)'`` 不得污染 slot_names。"""
+        vp = VectorProcessor(native_bundle_json, "4-Color (CMYW)")
+        analysis = vp.analyze_svg(simple_svg, target_width_mm=50.0)
+
+        assert analysis.slot_names == ["White", "Blue", "Red", "Green", "Yellow", "Black"]
+        assert analysis.num_channels == 6
+        # CMYW-leak sentinels: these names would appear if the stale color_conf
+        # were still in control of slot_names.
+        assert "Cyan" not in analysis.slot_names
+        assert "Magenta" not in analysis.slot_names
+
+    def test_preview_colors_resolve_canonical_rgba_when_hex_missing(
+        self, native_bundle_json, simple_svg
+    ):
+        """With ``hex_color=None`` on every palette entry, preview_colors must
+        fall back to the canonical name→RGBA registry (not to a CMYW preview
+        dict keyed by the stale color_mode, and not to white placeholders).
+        """
+        vp = VectorProcessor(native_bundle_json, "4-Color (CMYW)")
+        analysis = vp.analyze_svg(simple_svg, target_width_mm=50.0)
+
+        # All six slots must resolve to DISTINCT, canonical RGBA triples.
+        hexes = [
+            "#{:02X}{:02X}{:02X}".format(*analysis.preview_colors[i][:3])
+            for i in range(analysis.num_channels)
+        ]
+        assert len(set(hexes)) == 6, f"Expected 6 distinct colors, got {hexes}"
+
+        # Spot-check the canonical values driven by the EIGHT_COLOR-first
+        # lookup in ``preview_color_utils._get_canonical_color_lookup``.
+        assert analysis.preview_colors[0][:3] == [255, 255, 255]  # White
+        assert analysis.preview_colors[1][:3] == [10, 41, 137]   # Blue → Deep Blue
+        assert analysis.preview_colors[2][:3] == [193, 46, 31]    # Red
+        assert analysis.preview_colors[3][:3] == [0, 174, 66]     # Green
+        assert analysis.preview_colors[4][:3] == [244, 238, 42]   # Yellow
+        assert analysis.preview_colors[5][:3] == [0, 0, 0]        # Black

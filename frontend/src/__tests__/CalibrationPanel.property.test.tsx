@@ -25,7 +25,7 @@ beforeEach(() => {
     gap: 0.84,
     backing: BackingColor.WHITE,
     eight_color_full_export: false,
-    singleStageLayerHeightMm: 0.04,
+    singleStageLayerHeightMm: 0.08,
     isLoading: false,
     error: null,
     downloadUrl: null,

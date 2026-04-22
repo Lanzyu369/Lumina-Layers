@@ -102,12 +102,33 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
                 "region_ids": getattr(item, "region_ids", None),
                 "recipe": getattr(item, "recipe", None),
                 "layer_order": getattr(item, "layer_order", None),
+                "virtual_materials": getattr(item, "virtual_materials", None),
             }
 
         region_id = item_data.get("region_id")
         region_ids = item_data.get("region_ids")
         recipe = item_data.get("recipe")
         layer_order = item_data.get("layer_order")
+        # Preserve virtual_materials through normalization so the worker can
+        # extend the pipeline palette with the user's declared extra colours.
+        # 透传 virtual_materials，让 worker 能把用户声明的额外颜色合并进管线
+        # 调色板里（preview_colors / slot_names）。
+        raw_virtuals = item_data.get("virtual_materials")
+        virtuals_payload: list[dict[str, str]] | None = None
+        if raw_virtuals:
+            accumulated: list[dict[str, str]] = []
+            for vm in raw_virtuals:
+                if isinstance(vm, dict):
+                    name = vm.get("name")
+                    hex_value = vm.get("hex")
+                else:
+                    name = getattr(vm, "name", None)
+                    hex_value = getattr(vm, "hex", None)
+                if name and hex_value:
+                    accumulated.append(
+                        {"name": str(name), "hex": str(hex_value)}
+                    )
+            virtuals_payload = accumulated or None
 
         expanded_region_ids: list[str] = []
         if isinstance(region_id, str) and region_id:
@@ -123,24 +144,75 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
             continue
 
         for expanded_region_id in expanded_region_ids:
-            normalized.append(
-                {
-                    "region_id": expanded_region_id,
-                    "recipe": list(recipe_values),
-                    "layer_order": str(layer_order or "Top2Bottom"),
-                }
-            )
+            payload: dict[str, object] = {
+                "region_id": expanded_region_id,
+                "recipe": list(recipe_values),
+                "layer_order": str(layer_order or "Top2Bottom"),
+            }
+            if virtuals_payload:
+                payload["virtual_materials"] = [
+                    dict(entry) for entry in virtuals_payload
+                ]
+            normalized.append(payload)
 
     return normalized or None
 
 
 def _resolve_recipe_overrides(session_data: dict, request: ConvertGenerateRequest) -> list[dict[str, object]] | None:
-    """Resolve effective recipe overrides from session state and request body."""
+    """Resolve effective recipe overrides from session state and request body.
 
-    recipe_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
-    if request.recipe_overrides is not None:
-        recipe_overrides = _normalize_recipe_overrides(request.recipe_overrides)
-    return recipe_overrides
+    When the request body provides ``recipe_overrides``, it is the source of
+    truth for recipes / layer_order. However, older clients (and any caller
+    that merely round-trips ``{region_id, recipe, layer_order}`` without
+    carrying the virtual-material tail) may drop the ``virtual_materials``
+    declared at apply time. The apply endpoint persists per-region
+    ``virtual_materials`` into ``session_data["recipe_overrides"]`` so the
+    generate pipeline can rebuild the extended palette in a fresh worker
+    process. To keep the virtual palette extension alive across a stale
+    client, this resolver backfills ``virtual_materials`` from the session
+    by ``region_id`` whenever the request body leaves them unset for that
+    region — without ever overriding ``virtual_materials`` the request
+    explicitly provides.
+
+    当请求体带了 ``recipe_overrides`` 时它是 recipe / layer_order 的事实来源；
+    但旧前端 / 第三方调用方可能只回传 ``{region_id, recipe, layer_order}``，
+    把 apply 时声明的 ``virtual_materials`` 丢掉。apply 端点把每个 region 的
+    ``virtual_materials`` 一并持久化进 session，保证 worker 进程可以重建扩展
+    调色板；这里按 ``region_id`` 从 session 回补缺失的 ``virtual_materials``，
+    同时绝不覆盖请求体显式给出的 virtuals。
+    """
+
+    session_overrides = _normalize_recipe_overrides(session_data.get("recipe_overrides") or None)
+    if request.recipe_overrides is None:
+        return session_overrides
+
+    request_overrides = _normalize_recipe_overrides(request.recipe_overrides)
+    if not request_overrides:
+        return request_overrides
+
+    if not session_overrides:
+        return request_overrides
+
+    session_virtuals_by_region: dict[str, list[dict[str, str]]] = {}
+    for session_item in session_overrides:
+        region_id = session_item.get("region_id")
+        virtuals = session_item.get("virtual_materials")
+        if isinstance(region_id, str) and region_id and virtuals:
+            session_virtuals_by_region[region_id] = [
+                dict(entry) for entry in virtuals  # type: ignore[arg-type]
+            ]
+
+    for item in request_overrides:
+        if item.get("virtual_materials"):
+            continue
+        region_id = item.get("region_id")
+        if not isinstance(region_id, str):
+            continue
+        backfill = session_virtuals_by_region.get(region_id)
+        if backfill:
+            item["virtual_materials"] = [dict(entry) for entry in backfill]
+
+    return request_overrides
 
 
 def _prepare_recipe_override_worker_inputs(
@@ -172,16 +244,53 @@ def _prepare_recipe_override_worker_inputs(
     base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
 
     if target_layers > current_layers and material_matrix_override.ndim == 3:
-        pad_shape = (
-            material_matrix_override.shape[0],
-            material_matrix_override.shape[1],
-            target_layers - current_layers,
+        # Pad the grown layers so that:
+        #   (a) ``~mask_solid`` (transparent background — p03 has already
+        #       marked it as ``-1``) stays as ``-1`` air, otherwise S07
+        #       emits a ring-shaped White mesh around the model ("透明通道
+        #       失效 / 整块白矩形包裹" regression).
+        #   (b) ``mask_solid`` non-override pixels keep the LUT base channel
+        #       so the extended column stays continuous with the backing
+        #       slab; padding them with ``-1`` leaves the user's 6th layer
+        #       visually empty ("第 6 层空层" regression).
+        # The override region is overwritten below with ``recipe_full``.
+        # 扩展层要同时兼顾两件事：(a) mask_solid 外的透明背景保持 -1 空气，
+        # 避免 S07 围着模型生成一圈白色 mesh；(b) mask_solid 内非 override
+        # 像素保留 base channel，避免第 6 层塌成空层。
+        cached_mask_solid = cache.get("mask_solid")
+        if cached_mask_solid is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview cache missing mask_solid; re-run preview before generating with recipe overrides.",
+            )
+        mask_solid_arr = np.asarray(cached_mask_solid, dtype=bool)
+        if mask_solid_arr.shape != material_matrix_override.shape[:2]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "mask_solid shape does not match material_matrix; "
+                    "re-run preview before generating with recipe overrides."
+                ),
+            )
+        # uint dtypes would wrap ``-1`` into ``255`` and reintroduce the bug
+        # under a different channel id; promote to signed first.
+        # uint 类型会把 -1 绕回 255 把同一个 bug 换个编号复现，先升到 signed。
+        if np.issubdtype(material_matrix_override.dtype, np.unsignedinteger):
+            material_matrix_override = material_matrix_override.astype(np.int32)
+        pad_slab = np.full(
+            (
+                material_matrix_override.shape[0],
+                material_matrix_override.shape[1],
+                target_layers - current_layers,
+            ),
+            -1,
+            dtype=material_matrix_override.dtype,
         )
-        pad = np.full(pad_shape, base_channel_idx, dtype=material_matrix_override.dtype)
+        pad_slab[mask_solid_arr] = base_channel_idx
         if metadata_order == "Top2Bottom":
-            material_matrix_override = np.concatenate([material_matrix_override, pad], axis=2)
+            material_matrix_override = np.concatenate([material_matrix_override, pad_slab], axis=2)
         else:
-            material_matrix_override = np.concatenate([pad, material_matrix_override], axis=2)
+            material_matrix_override = np.concatenate([pad_slab, material_matrix_override], axis=2)
     elif target_layers < current_layers:
         raise HTTPException(
             status_code=422,
@@ -393,6 +502,20 @@ async def convert_generate(
                     "region_id": item["region_id"],
                     "recipe": list(item["recipe"]),
                     "layer_order": item["layer_order"],
+                    # Forward the per-region virtual materials to the worker
+                    # so the pipeline can rebuild the extended palette inside
+                    # the CPU-offloaded process.
+                    # 把 per-region 的虚拟耗材一起传给 worker，方便在 CPU 进程
+                    # 里重建扩展调色板。
+                    **(
+                        {
+                            "virtual_materials": [
+                                dict(vm) for vm in item["virtual_materials"]
+                            ]
+                        }
+                        if item.get("virtual_materials")
+                        else {}
+                    ),
                 }
                 for item in recipe_overrides
             ]
@@ -594,6 +717,20 @@ def _resolve_large_format_shared_params(
                     "region_id": item["region_id"],
                     "recipe": list(item["recipe"]),
                     "layer_order": item["layer_order"],
+                    # Forward the per-region virtual materials to the worker
+                    # so the pipeline can rebuild the extended palette inside
+                    # the CPU-offloaded process.
+                    # 把 per-region 的虚拟耗材一起传给 worker，方便在 CPU 进程
+                    # 里重建扩展调色板。
+                    **(
+                        {
+                            "virtual_materials": [
+                                dict(vm) for vm in item["virtual_materials"]
+                            ]
+                        }
+                        if item.get("virtual_materials")
+                        else {}
+                    ),
                 }
                 for item in recipe_overrides
             ]

@@ -8,7 +8,12 @@
 
 import { describe, it, expect } from "vitest";
 import { exportConverterRecipe, buildFullRecipe, buildRecipeAssets } from "../recipe/exportRecipe";
-import { parseRecipeFile, restoreConverterRecipe } from "../recipe/importRecipe";
+import {
+  parseRecipeFile,
+  RECIPE_IMPORT_WARNING_LUT_DEGRADED,
+  RECIPE_IMPORT_WARNING_LUT_MISSING,
+  restoreConverterRecipe,
+} from "../recipe/importRecipe";
 import { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe } from "../recipe/pngMetadata";
 import { migrateRecipe } from "../recipe/migration";
 import { DEFAULT_STATE } from "../stores/converter";
@@ -156,6 +161,77 @@ describe("recipe integration", () => {
       expect(restored.free_color_set).toEqual(new Set(["ff0000", "00ff00", "0000ff"]));
     });
 
+    it("recipe_overrides and customRecipeHistory round-trip correctly", async () => {
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        recipe_overrides: [
+          { region_id: "r1", recipe: [0, 1, 2], layer_order: "Top2Bottom" },
+          { region_id: "r2", recipe: [1, 1, 0, 2], layer_order: "Top2Bottom" },
+        ],
+        customRecipeHistory: [
+          {
+            id: "0-1-2@Top2Bottom",
+            recipe: [0, 1, 2],
+            layerOrder: "Top2Bottom",
+            predictedRgb: [10, 20, 30],
+            predictedLab: [40, 5, -3],
+            hex: "#0A141E",
+            fromModel: true,
+            createdAtMs: 1_700_000_000_000,
+          },
+        ],
+      });
+
+      const { state: restored, warnings } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+
+      expect(restored.recipe_overrides).toHaveLength(2);
+      expect(restored.recipe_overrides![0]).toEqual({
+        region_id: "r1",
+        recipe: [0, 1, 2],
+        layer_order: "Top2Bottom",
+      });
+      expect(restored.recipe_overrides![1].recipe).toEqual([1, 1, 0, 2]);
+
+      expect(restored.customRecipeHistory).toHaveLength(1);
+      const history = restored.customRecipeHistory![0];
+      expect(history.id).toBe("0-1-2@Top2Bottom");
+      expect(history.recipe).toEqual([0, 1, 2]);
+      expect(history.layerOrder).toBe("Top2Bottom");
+      expect(history.predictedRgb).toEqual([10, 20, 30]);
+      expect(history.predictedLab).toEqual([40, 5, -3]);
+      expect(history.hex).toBe("#0A141E");
+      expect(history.fromModel).toBe(false);
+      expect(history.createdAtMs).toBe(1_700_000_000_000);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it("exports schema_version 2 and imports legacy v1 without warnings", async () => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+      expect(recipe.schema_version).toBe(2);
+
+      const legacy = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
+      legacy.schema_version = 1;
+      delete legacy.recipe.converter?.color_ops.recipe_overrides;
+      delete legacy.recipe.converter?.color_ops.custom_recipe_history;
+
+      const migrated = migrateRecipe(legacy);
+      expect(
+        migrated.warnings.filter((warning) => warning.includes("schema version")),
+      ).toHaveLength(0);
+
+      const { state: restored } = restoreConverterRecipe(
+        migrated,
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+      expect(restored.recipe_overrides).toEqual([]);
+      expect(restored.customRecipeHistory).toEqual([]);
+    });
+
     it("large format parameters round-trip", async () => {
       const { recipe } = await buildTestRecipe({
         lut_name: "TestLUT",
@@ -253,7 +329,7 @@ describe("recipe integration", () => {
       const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
 
       expect(restored.lut_name).toBe(""); // Cannot match
-      expect(warnings.some((w) => w.includes("not found"))).toBe(true);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
     });
 
     it("LUT fingerprint mismatch triggers name fallback with warning", async () => {
@@ -278,7 +354,7 @@ describe("recipe integration", () => {
       const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
 
       expect(restored.lut_name).toBe("TestLUT"); // Name fallback still works
-      expect(warnings.some((w) => w.includes("fingerprint differs"))).toBe(true);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
     });
   });
 

@@ -8,7 +8,6 @@ import { MATERIAL_PRESET_OPTIONS } from "../constants/materialPresets";
 import {
   PanelIntro,
   StatusBanner,
-  mutedSectionCardClass,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
   resolveDesktopSplitLayoutClass,
@@ -36,9 +35,7 @@ export default function GradientCardGeneratePanel() {
     isLoading,
     error,
     downloadUrl,
-    previewImageUrl,
     statusMessage,
-    manifestUrl,
     setSubstrateId,
     setSubstrateDisplayName,
     setMaterialDefault,
@@ -182,47 +179,9 @@ export default function GradientCardGeneratePanel() {
                 >
                   {t("cal_download_kit")}
                 </a>
-                {manifestUrl && (
-                  <a
-                    data-testid="manifest-link"
-                    href={manifestUrl}
-                    download
-                    className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/80 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 dark:border-slate-600/80 dark:text-slate-200"
-                  >
-                    {t("cal_download_manifest")}
-                  </a>
-                )}
               </div>
             </section>
           )}
-
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {t("cal_preview")}
-              </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t("cal_preview_alt")}
-              </p>
-            </div>
-            {lastSubmittedWorkflow === "single-stage" && previewImageUrl ? (
-              <img
-                data-testid="preview-image"
-                src={previewImageUrl}
-                alt={t("cal_preview_alt")}
-                className="w-full rounded-[24px] border border-slate-200/80 object-cover shadow-[var(--shadow-control)] dark:border-slate-700/80"
-              />
-            ) : (
-              <div className={`${mutedSectionCardClass} flex min-h-[280px] flex-col justify-center gap-3`}>
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t("cal_status")}
-                </p>
-                <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  {t("mat_gradient_generate_desc")}
-                </p>
-              </div>
-            )}
-          </section>
         </div>
       </div>
     </motion.aside>

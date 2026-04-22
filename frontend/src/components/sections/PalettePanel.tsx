@@ -250,9 +250,17 @@ export default function PalettePanel({
   const toggleFreeColor = useConverterStore((s) => s.toggleFreeColor);
   const clearFreeColors = useConverterStore((s) => s.clearFreeColors);
   const regionReplacementCount = useConverterStore((s) => s.regionReplacementCount);
-  const canUseCustomRecipe =
-    !!selectedLutInfo?.supports_custom_recipe &&
-    (selectedRegions.length > 0 || !!regionData?.regionId);
+  // Custom recipe lets users manually compose the layer stack for a region;
+  // it is LUT-agnostic. Forward-model prediction is an optional add-on that
+  // degrades gracefully inside the dialog when the LUT has no predictor.
+  // 自定义配方是手动指定区域的叠层耗材，与 LUT 预测能力无关；预测按钮
+  // 在无预测模型的 LUT 下会在对话框内优雅降级提示。
+  const hasRegionTarget =
+    selectedRegions.length > 0 || !!regionData?.regionId;
+  const canUseCustomRecipe = hasRegionTarget;
+  const customRecipeDisabledHint = !hasRegionTarget
+    ? t("recipe_custom_disabled_region")
+    : undefined;
 
   const hasRemaps = Object.keys(colorRemapMap).length > 0 || regionReplacementCount > 0;
   const hasHistory = remapHistory.length > 0;
@@ -409,6 +417,7 @@ export default function PalettePanel({
                   size="sm"
                   onClick={() => setRecipeDialogOpen(true)}
                   disabled={!canUseCustomRecipe}
+                  title={customRecipeDisabledHint}
                 />
               </ToolbarGroup>
 
@@ -516,22 +525,46 @@ export default function PalettePanel({
         palette={(selectedLutInfo?.palette ?? []).map((entry) => ({
           color: entry.color_name ?? entry.color,
           material: entry.material,
+          hex: entry.hex_color ?? null,
         }))}
         regionIds={
           selectedRegions.length > 0
             ? selectedRegions.map((region) => region.regionId)
             : (regionData?.regionId ? [regionData.regionId] : [])
         }
+        currentRegionColorHex={
+          selectedRegions.length > 0
+            ? selectedRegions[selectedRegions.length - 1]?.colorHex ?? null
+            : regionData?.colorHex ?? null
+        }
         colorLayers={color_layers ?? selectedLutInfo?.max_color_layers ?? 5}
         layerHeightMm={layer_height_mm ?? selectedLutInfo?.layer_height_mm ?? 0.08}
         layerOrder={selectedLutInfo?.layer_order ?? "Top2Bottom"}
         baseChannelIdx={selectedLutInfo?.base_channel_idx ?? 0}
         onClose={() => setRecipeDialogOpen(false)}
-        onApplied={(response, recipe, nextLayers, nextLayerHeightMm) => {
+        onApplied={(response, recipe, nextLayers, nextLayerHeightMm, virtualMaterials) => {
           const activeRegionIds =
             selectedRegions.length > 0
               ? selectedRegions.map((region) => region.regionId)
               : (regionData?.regionId ? [regionData.regionId] : []);
+          // Persist the virtual_materials declared at apply time alongside
+          // the recipe. ``submitGenerate`` later forwards
+          // ``state.recipe_overrides`` verbatim to ``/generate``; dropping
+          // virtuals here makes the worker pipeline unable to extend the
+          // palette, so S07 emits no mesh for the virtual-index pixels and
+          // the 3MF loses that filament / object (表现为透明失效 / 方块 /
+          // 3MF 缺对象). Only attach the key when the list is non-empty so
+          // legacy non-virtual overrides keep their existing serialized
+          // shape for recipe bundle round-trips.
+          // 把 apply 时声明的虚拟耗材和 recipe 一起存进 store，后续
+          // ``submitGenerate`` 会原样转发给 ``/generate``；丢掉 virtuals
+          // 会让 worker 无法扩展调色板，S07 为虚拟索引像素生成不出 mesh，
+          // 3MF 里也缺少对应的耗材 / 对象。只在非空时带 key，以免污染旧
+          // recipe bundle 的序列化格式。
+          const clonedVirtuals = virtualMaterials.map((material) => ({
+            name: material.name,
+            hex: material.hex,
+          }));
           useConverterStore.setState((state) => ({
             previewImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
             previewBaseImageUrl: normalizeResourceUrl(response.preview_url) ?? response.preview_url,
@@ -548,6 +581,13 @@ export default function PalettePanel({
                 region_id: regionId,
                 recipe: [...recipe],
                 layer_order: selectedLutInfo?.layer_order ?? "Top2Bottom",
+                ...(clonedVirtuals.length > 0
+                  ? {
+                      virtual_materials: clonedVirtuals.map((material) => ({
+                        ...material,
+                      })),
+                    }
+                  : {}),
               })),
             ],
             lutMatchMode: "predictive",
@@ -558,6 +598,22 @@ export default function PalettePanel({
               source: response.source,
               override: true,
             },
+            // Invalidate the cached per-layer preview images so the next
+            // hover / ActionBar render re-fetches against the post-apply
+            // ``material_matrix``. Without this the stale pre-apply
+            // layer list survives (it was sized to the original
+            // ``color_layers``) and only the layers the override touched
+            // look fresh — users see it as "分层预览只显示更改配方的那几
+            // 层". Store-level ``applyCustomRecipeOverride`` already does
+            // this via ``INVALIDATE_LAYER_IMAGES_AFTER_REPLACE``; the
+            // dialog-driven path must stay consistent.
+            // 刷新分层预览缓存：apply 后 material_matrix 的层数和内容都会
+            // 变，继续沿用旧的 layerImages 会出现 "只显示更改配方的层，
+            // 其它灰"。store 的 applyCustomRecipeOverride 本来就会通过
+            // INVALIDATE_LAYER_IMAGES_AFTER_REPLACE 做同样的事，dialog
+            // 路径也必须保持一致。
+            layerImages: [] as typeof state.layerImages,
+            layerImagesSourceKey: null,
           }));
         }}
       />

@@ -14,13 +14,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
-from api.schemas.single_stage import MaterialLibraryBulkExportRequest
+from api.schemas.single_stage import (
+    GradientCardMaterialUpdateRequest,
+    MaterialLibraryBulkExportRequest,
+)
 from api.schemas.responses import (
     GradientCardMaterialBulkExportResponse,
     GradientCardMaterialBulkImportResponse,
     GradientCardMaterialDeleteResponse,
     GradientCardMaterialLibraryResponse,
     GradientCardMaterialSaveResponse,
+    GradientCardMaterialUpdateResponse,
     GradientCardStageAExtractResponse,
     MaterialColorSuggestionItem,
     MaterialColorSuggestionsResponse,
@@ -64,6 +68,7 @@ from core.single_stage import (
     import_saved_stage_a_material_archives,
     list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
+    update_saved_stage_a_material_archive_metadata,
 )
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
@@ -413,6 +418,48 @@ async def extractor_delete_gradient_card_material(
         message="Gradient card material deleted successfully",
         directory_name=result.directory_name,
         material_name=result.material_name,
+    )
+
+
+@router.patch("/gradient-card-materials/{directory_name:path}")
+async def extractor_update_gradient_card_material(
+    directory_name: str,
+    payload: GradientCardMaterialUpdateRequest,
+    registry: FileRegistry = Depends(get_file_registry),
+) -> GradientCardMaterialUpdateResponse:
+    """Update saved gradient-card material metadata.
+    更新已保存的梯度卡耗材元数据。
+    """
+    try:
+        result = update_saved_stage_a_material_archive_metadata(
+            directory_name=directory_name,
+            material_name=payload.material_name,
+            brand=payload.brand,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
+    material_file_url = f"/api/files/{registry.register_path(
+        persistent_registry_session,
+        result.archive_path,
+        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+    )}"
+    stage_a_params_url = f"/api/files/{registry.register_path(
+        persistent_registry_session,
+        result.stage_a_params_path,
+        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+    )}"
+    return GradientCardMaterialUpdateResponse(
+        status="ok",
+        message="Gradient card material updated successfully",
+        material={
+            **result.material_summary,
+            "material_file_url": material_file_url,
+            "stage_a_params_url": stage_a_params_url,
+        },
     )
 
 

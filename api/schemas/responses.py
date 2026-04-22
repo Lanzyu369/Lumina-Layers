@@ -220,6 +220,14 @@ class GradientCardMaterialDeleteResponse(BaseModel):
     material_name: str
 
 
+class GradientCardMaterialUpdateResponse(BaseModel):
+    """Gradient-card material archive metadata update response."""
+
+    status: str
+    message: str
+    material: "SavedMaterialLibraryItemResponse"
+
+
 class SavedMaterialVerificationHistoryItemResponse(BaseModel):
     """Summary row for a single saved material verification run."""
 
@@ -425,6 +433,34 @@ class RecipeOverrideApplyResponse(BaseModel):
     source: str
     runtime_mode_key: str | None = None
     override_count: int = 0
+
+
+class RegionRecipeEntry(BaseModel):
+    """Per-region current recipe payload.
+    单个区域的当前 recipe 返回体。
+    """
+
+    region_id: str
+    recipe: list[int] = Field(default_factory=list)
+    color_layers: int = 0
+    layer_height_mm: float = 0.08
+    layer_order: str = "Top2Bottom"
+
+
+class RegionRecipeResponse(BaseModel):
+    """Response for ``POST /api/convert/region-recipe``.
+
+    Carries the current per-layer material indices that the pipeline has
+    already matched for each requested region, so the Custom Recipe dialog
+    can pre-populate its per-layer dropdowns instead of defaulting to White.
+
+    每个请求区域当前已匹配到的逐层材料索引，供自定义配方对话框把下拉框
+    预设成该区域的真实配方，而不是默认的全白。
+    """
+
+    status: str
+    message: str
+    recipes: list[RegionRecipeEntry] = Field(default_factory=list)
 
 
 class PreviewResponse(BaseModel):

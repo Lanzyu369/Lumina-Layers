@@ -29,6 +29,7 @@ from api.schemas.converter import (
     ModelingMode,
     RecipeOverrideItem,
     StructureMode,
+    VirtualMaterial,
 )
 from api.schemas.extractor import (
     CalibrationColorMode,
@@ -93,6 +94,7 @@ __all__ = [
     "ColorMergePreviewRequest",
     "FridgeMagnetItem",
     "RecipeOverrideItem",
+    "VirtualMaterial",
     # --- Extractor enums ---
     "CalibrationColorMode",
     "ExtractorPage",

@@ -24,6 +24,8 @@ import type {
   RecipePredictResponse,
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
+  RegionRecipeRequest,
+  RegionRecipeResponse,
   AutoDetectColorsResponse,
 } from "./types";
 
@@ -335,6 +337,30 @@ export async function applyRecipeOverride(
     "/convert/apply-recipe-override",
     request,
     { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Read the current per-layer material stack for one or more selected regions.
+ * 读取选中区域当前每层的堆叠材料，用于自定义配方对话框预设下拉。
+ *
+ * The Custom Recipe dialog calls this on open so the per-layer dropdowns
+ * pre-populate with each region's real matched recipe instead of the
+ * all-White default. Short timeout (15s) because the backend path is a
+ * cheap ``material_matrix[mask]`` sample — not a full solve.
+ *
+ * 自定义配方对话框打开时调用，让每层下拉预设为该区域真实匹配的配方而
+ * 非全白默认。超时取短值（15s），后端只是 ``material_matrix[mask]`` 的
+ * 轻量采样，不是完整求解。
+ */
+export async function fetchRegionRecipe(
+  request: RegionRecipeRequest,
+): Promise<RegionRecipeResponse> {
+  const response = await apiClient.post<RegionRecipeResponse>(
+    "/convert/region-recipe",
+    request,
+    { timeout: 15_000 },
   );
   return response.data;
 }

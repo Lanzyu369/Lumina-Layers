@@ -8,6 +8,7 @@ import {
   exportGradientCardMaterials,
   importGradientCardMaterials,
   listGradientCardMaterials,
+  updateGradientCardMaterial,
 } from "../api/extractor";
 import type { SavedMaterialLibraryItem } from "../api/types";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
@@ -55,6 +56,15 @@ const triggerDownload = (url: string, filename?: string) => {
   link.remove();
 };
 
+const textInputClass =
+  "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
+
+const normalizeLibraryItem = (item: SavedMaterialLibraryItem): SavedMaterialLibraryItem => ({
+  ...item,
+  material_file_url: normalizeResourceUrl(item.material_file_url) ?? item.material_file_url,
+  stage_a_params_url: normalizeResourceUrl(item.stage_a_params_url) ?? item.stage_a_params_url,
+});
+
 export default function MaterialLibraryPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
@@ -68,24 +78,24 @@ export default function MaterialLibraryPanel() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pendingDeleteDirectoryName, setPendingDeleteDirectoryName] = useState<string | null>(null);
-  const [expandedHistoryDirectoryNames, setExpandedHistoryDirectoryNames] = useState<string[]>([]);
+  const [pendingUpdateDirectoryName, setPendingUpdateDirectoryName] = useState<string | null>(null);
+  const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
+  const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
+  const [editingMaterialName, setEditingMaterialName] = useState("");
+  const [editingMaterialBrand, setEditingMaterialBrand] = useState("");
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const response = await listGradientCardMaterials();
-      const nextMaterials = (response.materials ?? []).map((item) => ({
-        ...item,
-        material_file_url: normalizeResourceUrl(item.material_file_url) ?? item.material_file_url,
-        stage_a_params_url: normalizeResourceUrl(item.stage_a_params_url) ?? item.stage_a_params_url,
-      }));
+      const nextMaterials = (response.materials ?? []).map(normalizeLibraryItem);
       setMaterials(nextMaterials);
-      setExpandedHistoryDirectoryNames((previous) =>
-        previous.filter((directoryName) =>
-          nextMaterials.some((item) => item.directory_name === directoryName),
-        ),
+      setHistoryMaterial((previous) =>
+        previous
+          ? nextMaterials.find((item) => item.directory_name === previous.directory_name) ?? null
+          : null,
       );
       setSelectedDirectoryNames((previous) =>
         previous.filter((directoryName) =>
@@ -138,6 +148,60 @@ export default function MaterialLibraryPanel() {
     setActiveTab("gradient-card-extract");
   }, [setActiveTab, startMaterialVerification]);
 
+  const handleOpenEditDialog = useCallback((item: SavedMaterialLibraryItem) => {
+    setEditingMaterial(item);
+    setEditingMaterialName(item.material_name);
+    setEditingMaterialBrand(item.brand?.trim() || "");
+    setError(null);
+    setSuccess(null);
+  }, []);
+
+  const handleCloseEditDialog = useCallback(() => {
+    setEditingMaterial(null);
+    setEditingMaterialName("");
+    setEditingMaterialBrand("");
+  }, []);
+
+  const handleOpenHistoryDialog = useCallback((item: SavedMaterialLibraryItem) => {
+    setHistoryMaterial(item);
+  }, []);
+
+  const handleCloseHistoryDialog = useCallback(() => {
+    setHistoryMaterial(null);
+  }, []);
+
+  const handleUpdateMaterial = useCallback(async () => {
+    if (!editingMaterial) {
+      return;
+    }
+    const nextMaterialName = editingMaterialName.trim();
+    if (!nextMaterialName) {
+      setError(t("mat_gradient_save_name_required_error"));
+      return;
+    }
+    setPendingUpdateDirectoryName(editingMaterial.directory_name);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await updateGradientCardMaterial(editingMaterial.directory_name, {
+        materialName: nextMaterialName,
+        brand: editingMaterialBrand.trim() || null,
+      });
+      const nextItem = normalizeLibraryItem(response.material);
+      setMaterials((previous) =>
+        previous.map((item) =>
+          item.directory_name === editingMaterial.directory_name ? nextItem : item,
+        ),
+      );
+      setSuccess(response.message || t("mat_gradient_library_edit_success"));
+      handleCloseEditDialog();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mat_gradient_library_edit_failed"));
+    } finally {
+      setPendingUpdateDirectoryName(null);
+    }
+  }, [editingMaterial, editingMaterialBrand, editingMaterialName, handleCloseEditDialog, t]);
+
   const handleDeleteMaterial = useCallback(async (item: SavedMaterialLibraryItem) => {
     const confirmed = window.confirm(
       tRuntime("mat_gradient_library_delete_confirm", {
@@ -154,8 +218,8 @@ export default function MaterialLibraryPanel() {
       setMaterials((previous) =>
         previous.filter((entry) => entry.directory_name !== item.directory_name),
       );
-      setExpandedHistoryDirectoryNames((previous) =>
-        previous.filter((directoryName) => directoryName !== item.directory_name),
+      setHistoryMaterial((previous) =>
+        previous?.directory_name === item.directory_name ? null : previous,
       );
       setSelectedDirectoryNames((previous) =>
         previous.filter((directoryName) => directoryName !== item.directory_name),
@@ -167,14 +231,6 @@ export default function MaterialLibraryPanel() {
       setPendingDeleteDirectoryName(null);
     }
   }, [t]);
-
-  const toggleHistoryExpanded = useCallback((directoryName: string) => {
-    setExpandedHistoryDirectoryNames((previous) =>
-      previous.includes(directoryName)
-        ? previous.filter((item) => item !== directoryName)
-        : [...previous, directoryName],
-    );
-  }, []);
 
   const toggleMaterialSelection = useCallback((directoryName: string) => {
     setSelectedDirectoryNames((previous) =>
@@ -325,6 +381,275 @@ export default function MaterialLibraryPanel() {
         </StatusBanner>
       ) : null}
 
+      {editingMaterial ? (
+        <div
+          data-testid="material-library-edit-dialog"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "var(--surface-scrim)" }}
+        >
+          <section
+            className="relative flex w-full max-w-lg flex-col gap-4 overflow-hidden rounded-[28px] border p-4 shadow-2xl sm:p-5"
+            style={{
+              borderColor: "var(--surface-outline)",
+              background: "var(--surface-panel-strong)",
+            }}
+          >
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                {t("mat_gradient_library_edit_title")}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {tRuntime("mat_gradient_library_edit_desc", {
+                  directoryName: editingMaterial.directory_name,
+                })}
+              </p>
+            </div>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {t("mat_gradient_material_name_label")}
+              </span>
+              <input
+                data-testid="material-library-edit-name-input"
+                value={editingMaterialName}
+                onChange={(event) => setEditingMaterialName(event.target.value)}
+                placeholder={t("mat_gradient_material_name_placeholder")}
+                className={textInputClass}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {t("mat_gradient_brand_label")}
+              </span>
+              <input
+                data-testid="material-library-edit-brand-input"
+                value={editingMaterialBrand}
+                onChange={(event) => setEditingMaterialBrand(event.target.value)}
+                placeholder={t("mat_gradient_brand_placeholder")}
+                className={textInputClass}
+              />
+            </label>
+
+            <div className={`${mutedSectionCardClass} px-4 py-3`}>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                {t("mat_gradient_library_directory_label")}
+              </p>
+              <p className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {editingMaterial.directory_name}
+              </p>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button
+                label={t("mat_gradient_library_edit_cancel_btn")}
+                variant="secondary"
+                onClick={handleCloseEditDialog}
+                disabled={pendingUpdateDirectoryName === editingMaterial.directory_name}
+                className="w-full sm:w-auto"
+              />
+              <Button
+                label={t("mat_gradient_library_edit_save_btn")}
+                onClick={() => void handleUpdateMaterial()}
+                disabled={!editingMaterialName.trim()}
+                loading={pendingUpdateDirectoryName === editingMaterial.directory_name}
+                className="w-full sm:w-auto"
+              />
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {historyMaterial ? (
+        <div
+          data-testid="material-library-history-dialog-overlay"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "var(--surface-scrim)" }}
+          onClick={handleCloseHistoryDialog}
+        >
+          <section
+            data-testid="material-library-history-dialog"
+            className="relative flex max-h-[85vh] w-full max-w-5xl flex-col gap-4 overflow-hidden rounded-[28px] border p-4 shadow-2xl sm:p-5"
+            style={{
+              borderColor: "var(--surface-outline)",
+              background: "var(--surface-panel-strong)",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                  {t("mat_gradient_library_history_title")}
+                </h3>
+                <p className="mt-1 truncate text-sm text-slate-500 dark:text-slate-400">
+                  {historyMaterial.material_name}
+                </p>
+              </div>
+              <Button
+                label={t("mat_gradient_library_history_close_btn")}
+                variant="secondary"
+                onClick={handleCloseHistoryDialog}
+                className="w-full sm:w-auto"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className={`${mutedSectionCardClass} px-4 py-3`}>
+                <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  {t("mat_gradient_library_directory_label")}
+                </dt>
+                <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  {historyMaterial.directory_name}
+                </dd>
+              </div>
+              <div className={`${mutedSectionCardClass} px-4 py-3`}>
+                <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  {t("mat_gradient_library_verification_count_label")}
+                </dt>
+                <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  {Math.max(
+                    historyMaterial.verification_history?.length ?? 0,
+                    Number(historyMaterial.verification_count ?? 0),
+                    0,
+                  )}
+                </dd>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto pr-1">
+              {(historyMaterial.verification_history?.length ?? 0) === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {t("mat_gradient_library_history_empty")}
+                </p>
+              ) : (
+                <div className="grid gap-3">
+                  {[...(historyMaterial.verification_history ?? [])]
+                    .sort((left, right) => right.verification_index - left.verification_index)
+                    .map((historyItem) => {
+                      const historyRgb = isRgbTriplet(historyItem.estimated_rgb)
+                        ? historyItem.estimated_rgb
+                        : null;
+                      const historyHex = historyRgb ? toHex(historyRgb) : "-";
+                      return (
+                        <article
+                          key={`${historyMaterial.directory_name}-history-${historyItem.verification_index}`}
+                          data-testid="material-library-history-item"
+                          className={`${mutedSectionCardClass} p-4`}
+                        >
+                          <div className="flex items-start gap-4">
+                            <div
+                              className="h-12 w-12 shrink-0 rounded-2xl border border-slate-200/80 dark:border-slate-700/80"
+                              style={historyRgb ? { backgroundColor: toRgbCss(historyRgb) } : undefined}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                  {tRuntime("mat_gradient_library_history_run_label", {
+                                    index: historyItem.verification_index,
+                                  })}
+                                </h5>
+                                <span className="text-xs text-slate-500 dark:text-slate-400">
+                                  {formatCreatedAt(historyItem.captured_at)}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                                {historyHex}
+                              </p>
+                            </div>
+                          </div>
+
+                          <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_time_label")}
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {formatCreatedAt(historyItem.captured_at)}
+                              </dd>
+                            </div>
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_fit_error_label")}
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {formatNumericValue(historyItem.mean_delta_e, 2)}
+                              </dd>
+                            </div>
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_rmse_label")}
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {formatNumericValue(historyItem.rmse_linear, 4)}
+                              </dd>
+                            </div>
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_color_label")}
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {historyRgb ? historyRgb.join(", ") : "-"}
+                              </dd>
+                            </div>
+                            <div className={`${mutedSectionCardClass} px-3 py-3 sm:col-span-2 xl:col-span-2`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_orientation_label")}
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {tRuntime("mat_gradient_library_history_orientation_value", {
+                                  white: historyItem.white_detected_orientation || "-",
+                                  black: historyItem.black_detected_orientation || "-",
+                                })}
+                              </dd>
+                            </div>
+                          </dl>
+
+                          <dl className="mt-3 grid gap-3">
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_e_label")}
+                              </dt>
+                              <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {formatNumericVector(historyItem.e_values)}
+                              </dd>
+                            </div>
+                            <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                {t("mat_gradient_library_history_k_label")}
+                              </dt>
+                              <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                {formatNumericVector(historyItem.k_values)}
+                              </dd>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                                <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                  {t("mat_gradient_library_history_white_c0_label")}
+                                </dt>
+                                <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                  {formatNumericVector(historyItem.white_c0_values)}
+                                </dd>
+                              </div>
+                              <div className={`${mutedSectionCardClass} px-3 py-3`}>
+                                <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                  {t("mat_gradient_library_history_black_c0_label")}
+                                </dt>
+                                <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                                  {formatNumericVector(historyItem.black_c0_values)}
+                                </dd>
+                              </div>
+                            </div>
+                          </dl>
+                        </article>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {isLoading ? (
         <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-48 items-center justify-center`}>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_loading")}</p>
@@ -338,8 +663,6 @@ export default function MaterialLibraryPanel() {
           {materials.map((item) => {
             const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
             const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
-            const verificationHistory = item.verification_history ?? [];
-            const isHistoryExpanded = expandedHistoryDirectoryNames.includes(item.directory_name);
             return (
               <section
                 key={`${item.directory_name}-${item.material_name}`}
@@ -437,19 +760,24 @@ export default function MaterialLibraryPanel() {
 
                 <div className="grid gap-3">
                   <Button
-                    label={t("mat_gradient_library_reverify_btn")}
+                    label={t("mat_gradient_library_edit_btn")}
                     variant="secondary"
-                    onClick={() => handleStartVerification(item)}
+                    onClick={() => handleOpenEditDialog(item)}
+                    disabled={pendingDeleteDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button
-                    label={t(
-                      isHistoryExpanded
-                        ? "mat_gradient_library_hide_history_btn"
-                        : "mat_gradient_library_show_history_btn",
-                    )}
+                    label={t("mat_gradient_library_reverify_btn")}
                     variant="secondary"
-                    onClick={() => toggleHistoryExpanded(item.directory_name)}
+                    onClick={() => handleStartVerification(item)}
+                    disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
+                    className="w-full"
+                  />
+                  <Button
+                    label={t("mat_gradient_library_show_history_btn")}
+                    variant="secondary"
+                    onClick={() => handleOpenHistoryDialog(item)}
+                    disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button
@@ -460,169 +788,6 @@ export default function MaterialLibraryPanel() {
                     loading={pendingDeleteDirectoryName === item.directory_name}
                     className="w-full"
                   />
-                </div>
-
-                {isHistoryExpanded ? (
-                  <section
-                    data-testid={`material-library-history-${item.directory_name}`}
-                    className={`${mutedSectionCardClass} flex flex-col gap-3 px-4 py-4`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                        {t("mat_gradient_library_history_title")}
-                      </h4>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {Math.max(verificationHistory.length, Number(item.verification_count ?? 0), 0)}
-                      </span>
-                    </div>
-                    {verificationHistory.length === 0 ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        {t("mat_gradient_library_history_empty")}
-                      </p>
-                    ) : (
-                      <div className="grid gap-3">
-                        {[...verificationHistory]
-                          .sort((left, right) => right.verification_index - left.verification_index)
-                          .map((historyItem) => {
-                            const historyRgb = isRgbTriplet(historyItem.estimated_rgb)
-                              ? historyItem.estimated_rgb
-                              : null;
-                            const historyHex = historyRgb ? toHex(historyRgb) : "-";
-                            return (
-                              <article
-                                key={`${item.directory_name}-history-${historyItem.verification_index}`}
-                                data-testid="material-library-history-item"
-                                className={`${mutedSectionCardClass} p-4`}
-                              >
-                                <div className="flex items-start gap-4">
-                                  <div
-                                    className="h-12 w-12 shrink-0 rounded-2xl border border-slate-200/80 dark:border-slate-700/80"
-                                    style={historyRgb ? { backgroundColor: toRgbCss(historyRgb) } : undefined}
-                                  />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                        {tRuntime("mat_gradient_library_history_run_label", {
-                                          index: historyItem.verification_index,
-                                        })}
-                                      </h5>
-                                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                                        {formatCreatedAt(historyItem.captured_at)}
-                                      </span>
-                                    </div>
-                                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                                      {historyHex}
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_time_label")}
-                                    </dt>
-                                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {formatCreatedAt(historyItem.captured_at)}
-                                    </dd>
-                                  </div>
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_fit_error_label")}
-                                    </dt>
-                                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {formatNumericValue(historyItem.mean_delta_e, 2)}
-                                    </dd>
-                                  </div>
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_rmse_label")}
-                                    </dt>
-                                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {formatNumericValue(historyItem.rmse_linear, 4)}
-                                    </dd>
-                                  </div>
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_color_label")}
-                                    </dt>
-                                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {historyRgb ? historyRgb.join(", ") : "-"}
-                                    </dd>
-                                  </div>
-                                  <div className={`${mutedSectionCardClass} px-3 py-3 sm:col-span-2 xl:col-span-2`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_orientation_label")}
-                                    </dt>
-                                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {tRuntime("mat_gradient_library_history_orientation_value", {
-                                        white: historyItem.white_detected_orientation || "-",
-                                        black: historyItem.black_detected_orientation || "-",
-                                      })}
-                                    </dd>
-                                  </div>
-                                </dl>
-
-                                <dl className="mt-3 grid gap-3">
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_e_label")}
-                                    </dt>
-                                    <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {formatNumericVector(historyItem.e_values)}
-                                    </dd>
-                                  </div>
-                                  <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                      {t("mat_gradient_library_history_k_label")}
-                                    </dt>
-                                    <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                      {formatNumericVector(historyItem.k_values)}
-                                    </dd>
-                                  </div>
-                                  <div className="grid gap-3 sm:grid-cols-2">
-                                    <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                        {t("mat_gradient_library_history_white_c0_label")}
-                                      </dt>
-                                      <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                        {formatNumericVector(historyItem.white_c0_values)}
-                                      </dd>
-                                    </div>
-                                    <div className={`${mutedSectionCardClass} px-3 py-3`}>
-                                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                                        {t("mat_gradient_library_history_black_c0_label")}
-                                      </dt>
-                                      <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                                        {formatNumericVector(historyItem.black_c0_values)}
-                                      </dd>
-                                    </div>
-                                  </div>
-                                </dl>
-                              </article>
-                            );
-                          })}
-                      </div>
-                    )}
-                  </section>
-                ) : null}
-
-                <div className="grid gap-3">
-                  <a
-                    href={item.material_file_url}
-                    download
-                    className="inline-flex min-h-11 items-center justify-center rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-[var(--shadow-control-hover)] transition-colors hover:bg-blue-700"
-                  >
-                    {t("mat_gradient_download_material_btn")}
-                  </a>
-                  {item.stage_a_params_url ? (
-                    <a
-                      href={item.stage_a_params_url}
-                      download
-                      className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/80 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 dark:border-slate-600/80 dark:text-slate-200"
-                    >
-                      {t("ext_single_stage_download_stage_a")}
-                    </a>
-                  ) : null}
                 </div>
               </section>
             );

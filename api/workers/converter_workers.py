@@ -106,6 +106,7 @@ def worker_generate_preview(
     import os
     import pickle
     import tempfile
+    import time as _time
 
     import numpy as np
     from PIL import Image
@@ -118,6 +119,7 @@ def worker_generate_preview(
 
     # Convert string modeling_mode to enum
     mode_enum = ModelingMode(modeling_mode)
+    _t_worker_start = _time.perf_counter()
 
     log.info(
         "Worker preview started",
@@ -126,6 +128,18 @@ def worker_generate_preview(
             "hue_weight": hue_weight,
             "chroma_gate": chroma_gate,
             "lut_path": lut_path,
+            "image_name": os.path.basename(image_path),
+            "target_width_mm": target_width_mm,
+            "color_mode": color_mode,
+            "modeling_mode": modeling_mode,
+            "color_layers": color_layers,
+            "layer_height_mm": layer_height_mm,
+            "quantize_colors": quantize_colors,
+            "enable_cleanup": enable_cleanup,
+            "material_source": material_source,
+            "selected_material_count": len(selected_materials or []),
+            "model_enable": model_enable,
+            "model_only": model_only,
         },
     )
     try:
@@ -164,6 +178,27 @@ def worker_generate_preview(
         )
         raise
 
+    preview_array_shape = list(preview_img.shape) if isinstance(preview_img, np.ndarray) else None
+    if isinstance(preview_img, np.ndarray):
+        if preview_img.ndim >= 2:
+            preview_image_size = [int(preview_img.shape[1]), int(preview_img.shape[0])]
+        else:
+            preview_image_size = [int(preview_img.shape[0])]
+    else:
+        preview_image_size = list(preview_img.size) if hasattr(preview_img, "size") else None
+
+    log.info(
+        "Worker preview core conversion complete",
+        extra={
+            "event": "worker_preview_core_done",
+            "duration_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
+            "status_msg": status_msg,
+            "cache_data_ready": cache_data is not None,
+            "preview_array_shape": preview_array_shape,
+            "preview_image_size": preview_image_size,
+        },
+    )
+
     result: dict = {
         "status_msg": status_msg,
         "preview_png_path": None,
@@ -181,8 +216,6 @@ def worker_generate_preview(
         # Surface the domain error to the API layer so the 500 response
         # includes the actual pipeline error instead of an opaque fallback.
         raise RuntimeError(status_msg or "Preview generation failed")
-
-    import time as _time
 
     _t_serial_start = _time.perf_counter()
 
@@ -217,6 +250,9 @@ def worker_generate_preview(
             "png_save_ms": round(_t_png * 1000, 3),
             "pickle_dump_ms": round(_t_pkl * 1000, 3),
             "duration_ms": round((_time.perf_counter() - _t_serial_start) * 1000, 3),
+            "worker_total_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
+            "preview_png_bytes": os.path.getsize(result["preview_png_path"]) if result["preview_png_path"] else None,
+            "cache_data_bytes": os.path.getsize(result["cache_data_path"]) if result["cache_data_path"] else None,
         },
     )
 
@@ -328,18 +364,68 @@ def worker_generate_model(
             - status_msg (str): Status message from the converter.
     """
     # Lazy imports — executed inside the worker process
+    import os
+    import time as _time
+
+    from api.structured_logging import get_logger
     from core.converter import generate_final_model
 
+    log = get_logger(__name__)
     normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
-    result_tuple = generate_final_model(
-        image_path=image_path,
-        lut_path=lut_path,
-        **normalized_params,
+    _t_worker_start = _time.perf_counter()
+    log.info(
+        "Worker model generation started",
+        extra={
+            "event": "worker_model_started",
+            "image_name": os.path.basename(image_path),
+            "lut_path": lut_path,
+            "target_width_mm": normalized_params.get("target_width_mm"),
+            "color_mode": normalized_params.get("color_mode"),
+            "modeling_mode": normalized_params.get("modeling_mode"),
+            "quantize_colors": normalized_params.get("quantize_colors"),
+            "enable_cleanup": normalized_params.get("enable_cleanup"),
+            "replacement_count": len(normalized_params.get("replacement_regions") or []),
+            "recipe_override_count": len(normalized_params.get("recipe_overrides") or []),
+            "free_color_count": len(normalized_params.get("free_color_set") or []),
+            "fridge_magnet_count": len(normalized_params.get("fridge_magnets") or []),
+            "enable_relief": normalized_params.get("enable_relief"),
+            "enable_outline": normalized_params.get("enable_outline"),
+            "enable_cloisonne": normalized_params.get("enable_cloisonne"),
+        },
     )
+    try:
+        result_tuple = generate_final_model(
+            image_path=image_path,
+            lut_path=lut_path,
+            **normalized_params,
+        )
+    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
+        log.exception(
+            "Worker model generation failed",
+            extra={
+                "event": "worker_model_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+        )
+        raise
 
     # generate_final_model returns:
     # (3mf_path, glb_path, preview_image, status_message, recipe)
     threemf_path, glb_path, _preview, status_msg, _recipe = result_tuple
+
+    log.info(
+        "Worker model generation complete",
+        extra={
+            "event": "worker_model_done",
+            "duration_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
+            "status_msg": status_msg,
+            "threemf_path": threemf_path,
+            "threemf_bytes": os.path.getsize(threemf_path) if threemf_path and os.path.exists(threemf_path) else None,
+            "glb_path": glb_path,
+            "glb_bytes": os.path.getsize(glb_path) if glb_path and os.path.exists(glb_path) else None,
+        },
+    )
 
     return {
         "threemf_path": threemf_path,

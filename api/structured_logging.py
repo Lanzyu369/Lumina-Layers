@@ -11,6 +11,8 @@ from typing import Any
 
 _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
 _session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("session_id", default=None)
+_standard_record = logging.makeLogRecord({})
+_STANDARD_LOG_RECORD_KEYS = frozenset(_standard_record.__dict__.keys())
 
 _configured = False
 
@@ -43,6 +45,16 @@ def bind_session_id(session_id: str | None) -> None:
     _session_id_var.set(session_id)
 
 
+def _coerce_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _coerce_jsonable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_coerce_jsonable(item) for item in value]
+    return str(value)
+
+
 class _JsonFormatter(logging.Formatter):
     """Render log records as one-line JSON."""
 
@@ -62,6 +74,10 @@ class _JsonFormatter(logging.Formatter):
             "error_message": getattr(record, "error_message", None),
             "message": record.getMessage(),
         }
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_KEYS or key in payload or key.startswith("_"):
+                continue
+            payload[key] = _coerce_jsonable(value)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
