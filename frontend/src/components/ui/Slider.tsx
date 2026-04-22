@@ -39,18 +39,21 @@ export default function Slider({
     }
   }, [value, step, displayDecimals, isFocused]);
 
-  const snapToGrid = useCallback(
+  const clampAndRound = useCallback(
     (num: number) => {
-      // Align to the step grid anchored at 0 (so values are always true
-      // multiples of `step`), then clamp into [min, max]. The 1e-9 bias
-      // counters IEEE-754 float noise (e.g. 1.16/0.08 === 14.499999999999998)
-      // so half-step values consistently round toward the nearest larger
-      // multiple instead of getting pulled down by trailing epsilons.
-      // 将值对齐到以 0 为锚点的 step 网格（保证始终是 step 的整数倍），再 clamp 到 [min, max]。
-      // 加 1e-9 偏置抵消浮点噪声（如 1.16/0.08 在 IEEE-754 下等于 14.499999999999998），
-      // 避免半格值被多余的尾数向下拉。
-      const aligned = Math.round(num / step + 1e-9) * step;
-      const clamped = Math.min(max, Math.max(min, aligned));
+      // Clamp into [min, max] and round to the display precision. We do NOT
+      // re-anchor the value to a step grid based at 0: the native
+      // `<input type="range">` already anchors its step grid at `min`, which
+      // yields values like 0.2, 0.28, 0.36... for min=0.2/step=0.08. Forcing
+      // these onto a 0-anchored grid would bump every drag emission up by
+      // half a step (e.g. 1.16 → 1.20, 1.24 → 1.28), making users feel the
+      // slider "auto-adds 0.08" every time they release it.
+      // 只做 [min, max] 夹紧并按显示精度取整。不再把值重新对齐到以 0 为锚点
+      // 的 step 网格：原生 `<input type="range">` 自身以 `min` 为锚点（例如
+      // min=0.2/step=0.08 会发出 0.2、0.28、0.36…）。若强制对齐到 0 锚点，
+      // 每次拖动释放都会把值向上平移半格（1.16→1.20、1.24→1.28），用户会
+      // 感觉"一放手就自动加 0.08"。
+      const clamped = Math.min(max, Math.max(min, num));
       const decimals = getStepDecimals(step);
       return parseFloat(clamped.toFixed(decimals));
     },
@@ -65,11 +68,17 @@ export default function Slider({
         setInputText(formatValue(value, step, displayDecimals));
         return;
       }
-      const final = snapToGrid(num);
+      // Text input is the precise-entry path: clamp to [min, max] and round
+      // to the display precision. Same treatment as range drag — see
+      // `clampAndRound` above.
+      // 文本框同样只做 [min, max] 夹紧与显示精度圆整，路径与滑条拖动一致。
+      const clamped = Math.min(max, Math.max(min, num));
+      const decimals = getDisplayDecimals(step, displayDecimals);
+      const final = parseFloat(clamped.toFixed(decimals));
       onChange(final);
       setInputText(formatValue(final, step, displayDecimals));
     },
-    [value, step, onChange, displayDecimals, snapToGrid],
+    [value, step, min, max, onChange, displayDecimals],
   );
 
   const handleBlur = () => {
@@ -118,7 +127,7 @@ export default function Slider({
           value={value}
           disabled={disabled}
           aria-label={label}
-          onChange={(e) => onChange(snapToGrid(Number(e.target.value)))}
+          onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
           className={cx(
             "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",
             "h-1.5 bg-slate-200 dark:bg-slate-700",
