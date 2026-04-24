@@ -289,6 +289,310 @@ class VectorAnalysis:
     stage_timings: dict = field(default_factory=dict)
 
 
+def apply_recipe_overrides_to_analysis(
+    analysis: "VectorAnalysis",
+    *,
+    recipe_overrides,
+    region_masks,
+    target_layers=None,
+    base_channel_idx: int = 0,
+    pixels_per_mm: float = 10.0,
+    max_width_px: int = 1600,
+    min_overlap_ratio: float = 0.5,
+) -> None:
+    """Apply user-declared per-region recipe overrides to a ``VectorAnalysis``.
+    将用户通过自定义配方对话框声明的 per-region 覆盖回写到 ``VectorAnalysis``。
+
+    The raster pipeline mutates ``preview_cache["material_matrix"]`` inside
+    ``/convert/apply-recipe-override`` so the 2D preview + segmented GLB echo
+    the user's picks and any extra layers they appended. The SVG-native
+    branch used to skip this entirely — it re-ran ``analyze_svg`` and built
+    the 3MF from the LUT's default match, so "custom recipe + added layers"
+    applied on a vector input never made it into the generated 3MF even
+    though the preview showed them. This helper mirrors
+    ``s03_color_replacement`` for the vector branch:
+
+    - Rasterises each ``analysis.matched_shapes`` entry onto the same grid
+      used by :meth:`VectorProcessor.build_preview_cache` so the preview-time
+      region masks line up pixel-for-pixel.
+    - Picks the dominant region (by mask overlap) for each shape; shapes
+      whose footprint sits mostly inside a region mask inherit that
+      region's recipe.
+    - Translates each override recipe into the vector internal order
+      (``Top2Bottom`` — recipe[0] is the visible face at z=0) and pads it
+      up to the effective layer count with the base backing channel.
+    - Non-overridden shapes keep their LUT recipe but are also padded so
+      the extended layers stay continuous with the backing slab.
+    - Virtual (non-native) materials declared per-region are deduped into a
+      global registry and appended to ``slot_names`` / ``preview_colors``
+      so ``build_mesh`` can emit one geometry per extra material.
+
+    Args:
+        analysis: Analysis result from ``analyze_svg``. Mutated in place.
+        recipe_overrides: Sequence of ``{"region_id", "recipe", "layer_order",
+            "virtual_materials"?}`` dicts coming from the generate request.
+        region_masks: Mapping of ``region_id`` to a boolean mask that was
+            computed at preview time and lives on the preview grid.
+        target_layers: Requested ``color_layers`` from the generate request;
+            used to extend ``analysis.num_layers`` when the user appended
+            layers. ``None`` falls back to the max length found in
+            ``recipe_overrides``.
+        base_channel_idx: LUT base channel id used when padding non-override
+            recipes; typically 0 (white / backing).
+        pixels_per_mm: Preview-grid rasterisation density. Must match the
+            value passed to :meth:`VectorProcessor.build_preview_cache`.
+        max_width_px: Preview-grid width cap. Must match
+            :meth:`VectorProcessor.build_preview_cache`.
+        min_overlap_ratio: Minimum ratio of a shape's pixels that must fall
+            inside a region mask before that region "claims" the shape.
+            0.5 matches the "majority wins" rule used by the raster path.
+    """
+    from core.recipe_order import convert_recipe_between_orders, pad_recipe_to_layer_count
+    from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
+
+    if not recipe_overrides or not region_masks:
+        return
+
+    # --- Reproduce build_preview_cache grid so region masks line up exactly ---
+    real_w = float(analysis.bbox[2])
+    real_h = float(analysis.bbox[3])
+    sf = float(analysis.scale_factor)
+    w_mm = real_w * sf
+    h_mm = real_h * sf
+    if w_mm <= 0 or h_mm <= 0:
+        return
+    ppm = float(pixels_per_mm)
+    w_px = max(1, int(round(w_mm * ppm)))
+    h_px = max(1, int(round(h_mm * ppm)))
+    if w_px > max_width_px:
+        ratio = max_width_px / w_px
+        w_px = max_width_px
+        h_px = max(1, int(round(h_px * ratio)))
+        ppm = w_px / w_mm
+    coord_scale = sf * ppm
+
+    # --- Normalise region masks to the preview grid ---
+    normalised_masks: dict[str, np.ndarray] = {}
+    for rid, mask in (region_masks or {}).items():
+        arr = np.asarray(mask, dtype=bool)
+        if arr.ndim != 2 or arr.shape != (h_px, w_px):
+            _log.warning(
+                "[VECTOR] Region mask %s shape %s does not match preview grid %s; skipped",
+                rid,
+                arr.shape,
+                (h_px, w_px),
+            )
+            continue
+        normalised_masks[str(rid)] = arr
+
+    if not normalised_masks:
+        _log.warning("[VECTOR] No region masks matched preview grid; recipe overrides ignored")
+        return
+
+    # --- Build a global virtual-material registry (dedupe by name+hex) ---
+    lut_palette_length = int(analysis.num_channels)
+    virtual_registry: list[dict] = []
+    virtual_lookup: dict[tuple, int] = {}
+    per_region_virtual_maps: dict[str, dict[int, int]] = {}
+    for item in recipe_overrides:
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("region_id", "")).strip()
+        local_map: dict[int, int] = {}
+        for local_idx, vm in enumerate(item.get("virtual_materials") or []):
+            if not isinstance(vm, dict):
+                continue
+            name = str(vm.get("name") or "").strip()
+            hex_value = str(vm.get("hex") or "").strip()
+            if not name or not hex_value:
+                continue
+            key = (name.lower(), hex_value.lower())
+            gidx = virtual_lookup.get(key)
+            if gidx is None:
+                gidx = lut_palette_length + len(virtual_registry)
+                virtual_registry.append({"name": name, "hex": hex_value})
+                virtual_lookup[key] = gidx
+            local_map[lut_palette_length + local_idx] = gidx
+        if rid:
+            per_region_virtual_maps[rid] = local_map
+
+    # --- Compute effective target layer count ---
+    recipe_max_len = max(
+        (len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)),
+        default=0,
+    )
+    effective_target = max(int(analysis.num_layers), recipe_max_len)
+    if target_layers is not None:
+        try:
+            effective_target = max(effective_target, int(target_layers))
+        except (TypeError, ValueError):
+            pass
+    effective_target = max(1, effective_target)
+
+    # --- Extend slot_names / preview_colors / color_conf with virtuals ---
+    if virtual_registry:
+        new_slot_names = list(analysis.slot_names)
+        new_preview_colors = dict(analysis.preview_colors)
+        new_color_conf = dict(analysis.color_conf)
+        conf_preview = dict(new_color_conf.get("preview") or {})
+        conf_slots = list(new_color_conf.get("slots") or [])
+        new_color_conf["preview"] = conf_preview
+        new_color_conf["slots"] = conf_slots
+        for offset, material in enumerate(virtual_registry):
+            cache_index = lut_palette_length + offset
+            try:
+                r, g, b = _hex_to_rgb_tuple(material["hex"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            rgba = [int(r), int(g), int(b), 255]
+            name = str(material.get("name") or f"Virtual_{offset}")
+            while len(new_slot_names) < cache_index:
+                new_slot_names.append(f"Slot_{len(new_slot_names)}")
+            if len(new_slot_names) == cache_index:
+                new_slot_names.append(name)
+            else:
+                new_slot_names[cache_index] = name
+            while len(conf_slots) < cache_index:
+                conf_slots.append(f"Slot_{len(conf_slots)}")
+            if len(conf_slots) == cache_index:
+                conf_slots.append(name)
+            else:
+                conf_slots[cache_index] = name
+            new_preview_colors[cache_index] = rgba
+            conf_preview[cache_index] = rgba
+        analysis.slot_names = new_slot_names
+        analysis.preview_colors = new_preview_colors
+        analysis.color_conf = new_color_conf
+        analysis.num_channels = max(
+            int(analysis.num_channels),
+            lut_palette_length + len(virtual_registry),
+        )
+
+    # --- Rasterise every shape onto the preview grid ---
+    def _iter_polygons(geom):
+        if geom is None or geom.is_empty:
+            return []
+        if geom.geom_type == "Polygon":
+            return [geom]
+        if geom.geom_type == "MultiPolygon":
+            return list(geom.geoms)
+        return []
+
+    def _coords_to_pts(coords):
+        pts = np.column_stack(
+            [
+                coords[:, 0] * coord_scale,
+                coords[:, 1] * coord_scale,
+            ]
+        ).astype(np.int32)
+        if len(pts) < 3:
+            return None
+        return pts
+
+    def _shape_mask(geom):
+        region = np.zeros((h_px, w_px), dtype=np.uint8)
+        painted = False
+        for poly in _iter_polygons(geom):
+            if poly.is_empty:
+                continue
+            ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
+            if ext_pts is None:
+                continue
+            cv2.fillPoly(region, [ext_pts], 255)
+            painted = True
+            for interior in poly.interiors:
+                hole_pts = _coords_to_pts(np.array(interior.coords))
+                if hole_pts is not None:
+                    cv2.fillPoly(region, [hole_pts], 0)
+        if not painted:
+            return None
+        return region.astype(bool)
+
+    shape_masks: list = []
+    for shape in analysis.matched_shapes:
+        shape_masks.append(_shape_mask(shape.get("geometry")))
+
+    # --- Pick the dominant region for every shape (majority wins) ---
+    override_by_region: dict[str, dict] = {}
+    for item in recipe_overrides:
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("region_id", "")).strip()
+        if rid:
+            override_by_region[rid] = item
+
+    shape_overrides: dict[int, dict] = {}
+    for shape_idx, mask in enumerate(shape_masks):
+        if mask is None:
+            continue
+        shape_px = int(mask.sum())
+        if shape_px == 0:
+            continue
+        best_rid: str | None = None
+        best_overlap = 0
+        for rid, rmask in normalised_masks.items():
+            overlap = int(np.logical_and(mask, rmask).sum())
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_rid = rid
+        if best_rid is None:
+            continue
+        if best_overlap / shape_px < min_overlap_ratio:
+            continue
+        item = override_by_region.get(best_rid)
+        if item is not None:
+            shape_overrides[shape_idx] = item
+
+    # --- Apply recipes: overridden shapes use user recipe, others get padded ---
+    overridden_count = 0
+    for shape_idx, shape in enumerate(analysis.matched_shapes):
+        override = shape_overrides.get(shape_idx)
+        if override is not None:
+            raw_recipe = [int(v) for v in override.get("recipe", [])]
+            rid = str(override.get("region_id", "")).strip()
+            local_map = per_region_virtual_maps.get(rid) or {}
+            if local_map:
+                raw_recipe = [int(local_map.get(int(v), int(v))) for v in raw_recipe]
+            source_order = str(override.get("layer_order") or "Top2Bottom")
+            # Vector runs recipe[0] at z=0 (the visible face for face-down
+            # prints), i.e. Top2Bottom by convention. Normalise user recipes
+            # into that order before padding.
+            # 矢量管道约定 recipe[0] 在 z=0（面朝下打印时的可视面），即
+            # Top2Bottom；用户 recipe 先归一到该序再补齐。
+            normalised = convert_recipe_between_orders(raw_recipe, source_order, "Top2Bottom")
+            padded = pad_recipe_to_layer_count(
+                normalised,
+                effective_target,
+                int(base_channel_idx),
+                "Top2Bottom",
+            )
+            shape["recipe"] = padded
+            overridden_count += 1
+        else:
+            existing = [int(v) for v in shape.get("recipe") or []]
+            if len(existing) < effective_target:
+                shape["recipe"] = pad_recipe_to_layer_count(
+                    existing,
+                    effective_target,
+                    int(base_channel_idx),
+                    "Top2Bottom",
+                )
+            elif len(existing) > effective_target:
+                shape["recipe"] = existing[:effective_target]
+
+    analysis.num_layers = int(effective_target)
+
+    _log.info(
+        "[VECTOR] Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
+        "virtuals=%s, target_layers=%s",
+        len(analysis.matched_shapes),
+        overridden_count,
+        len(normalised_masks),
+        len(virtual_registry),
+        effective_target,
+    )
+
+
 class VectorProcessor:
     """
     Native vector processing engine for SVG files.

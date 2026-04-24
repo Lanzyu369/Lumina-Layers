@@ -16,6 +16,134 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-23",
+    title: {
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "自定义配方可以加 LUT 里没有的颜色了：下拉直接选，导出的 3MF 会自动多一个对象带上这种颜色，切片那边不用自己改",
+            en: "You can now add colours that aren't in the LUT to a custom recipe: pick them from the dropdown and the exported 3MF carries them as extra objects, so the slicer just works",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "打开自定义配方，下拉里能看到每种材料的真实颜色，不再是一堆灰方块",
+            en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
+          },
+          {
+            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
+            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
+          },
+          {
+            zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
+            en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
+          },
+          {
+            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "提取器（校色卡）",
+          en: "Extractor (Calibration Card)",
+        },
+        items: [
+          {
+            zh: "耗材库里已经存好的条目，现在可以直接改名字和品牌，不用重新扫卡",
+            en: "Already-saved entries in the material library can now be renamed (and have their brand changed) in place — no need to re-scan the card",
+          },
+          {
+            zh: "品牌输入改成下拉：之前用过的品牌会自动列出来，想加新品牌也能直接打字",
+            en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
+          },
+          {
+            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
+            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
+          },
+          {
+            zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
+            en: "Save success / failure messages moved to a small top-right toast that fades on its own, so they no longer push the rest of the panel around",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "校准 & 材料",
+          en: "Calibration & Materials",
+        },
+        items: [
+          {
+            zh: "梯度卡校准的默认层高从 0.04 mm 改成 0.08 mm，跟大家平时打印的层高更接近；以前存好的档案保持原样，不会被动",
+            en: "Default gradient-card layer height is now 0.08 mm (was 0.04 mm) to match the layer height most people actually print at; archives you saved earlier keep their original layer height",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "预览 & 交互",
+          en: "Preview & Interaction",
+        },
+        items: [
+          {
+            zh: "3D 预览加载大幅提速：以前上百 MB 的预览模型在远程使用时要等很久才出现，现在真实多色图通常只有几 MB，一打开画面就能看到 3D 模型；实际导出的 3MF 和打印精度完全不受影响",
+            en: "The 3D preview loads dramatically faster: what used to be a 100+ MB model that kept remote users waiting is now typically just a few MB on real multi-colour images, so the 3D scene appears almost immediately; the actual exported 3MF and its print precision are completely unchanged",
+          },
+          {
+            zh: "厚度等滑条修掉了\"一松手就自动加 0.08\"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）",
+            en: "Sliders like Thickness no longer add an extra 0.08 every time you let go: previously each drag release was silently bumped up by half a step, and typing precise values like 1.5 or 3.5 into the number box on the right got rewritten to the nearest step multiple (such as 1.52)",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "SVG 矢量图 + 传统 LUT 模式下，自定义配方里改过的颜色和加过的层，现在会真实写进导出的 3MF；之前只能在 2D 预览里看到效果，实际 3MF 会悄悄退回 LUT 默认配色，加的层也像没加过一样",
+            en: "For SVG vector inputs with a traditional LUT, recipe edits and extra layers made in the custom recipe dialog now actually land in the exported 3MF; previously the 2D preview reflected them but the 3MF silently fell back to the LUT's default match, as if the custom recipe and added layers had never been applied",
+          },
+          {
+            zh: "反推 LUT 导出的 3MF 不再跟上一次选过的传统 LUT 串色：之前如果上次选的是 CMYW，反推 LUT 的蓝 / 红 / 绿 / 黑会被错刷成青 / 品红 / 黄，黑甚至变成白；栅格（高保真）和 SVG 矢量建模两种路径现在都直接用反推 LUT 自己的调色板，耗材槽名和颜色不再因为上次的颜色模式而翻车",
+            en: "3MF files exported from the Inferred LUT no longer pick up colours from the previously-selected legacy LUT: blue / red / green / black slots used to be silently recoloured as cyan / magenta / yellow (and black could come out white) when CMYW was picked last — both the raster (high-fidelity) and SVG vector modelling paths now honour the Inferred LUT's own palette, so filament slot names and colours are correct regardless of what colour mode was used before",
+          },
+          {
+            zh: "梯度卡提取或保存失败时，会告诉你具体是哪一步出问题（ZIP 格式不对、图片解码不出来、角点选少了、基底方向认不出来、会话过期、找不到目标档案等），不再甩一串英文报错",
+            en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
+          },
+          {
+            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
+            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
+          },
+          {
+            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
+          },
+          {
+            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
+            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
+          },
+          {
+            zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
+            en: "When the layer count is extended: transparent background outside the model stays transparent (no more white ring), and untouched pixels inside the model keep their backing material (no more collapsed empty layers)",
+          },
+          {
+            zh: "导出的 3MF 现在能在 Anycubic 切片软件（纵维立方 Anycubic Slicer Next）里正常打开——之前一拖进去就闪退，原因是自动生成的预览缩略图本身就是损坏的；别的切片软件一直没受影响，是因为它们遇到坏缩略图会静默跳过",
+            en: "Exported 3MF files now open normally in Anycubic Slicer Next — they used to crash the moment you dropped one in, because the auto-generated preview thumbnails were themselves corrupt; other slicers were unaffected because they silently skip over broken thumbnails",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-22",
     title: {
       zh: "Lumina Layers — 近三天更新速览",

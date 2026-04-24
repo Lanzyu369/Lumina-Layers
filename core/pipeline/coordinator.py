@@ -415,6 +415,10 @@ def _run_vector_branch(ctx: dict) -> dict:
     replacement_regions = ctx.get("replacement_regions")
     enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
     fridge_magnets = ctx.get("fridge_magnets") or []
+    recipe_overrides = ctx.get("recipe_overrides") or []
+    recipe_override_masks_path = ctx.get("recipe_override_masks_path")
+    requested_color_layers = ctx.get("color_layers")
+    lut_metadata = ctx.get("lut_metadata")
 
     log.info("[COORDINATOR] Using Native Vector Engine (Shapely/Clipper)...")
     vector_timing = {}
@@ -426,7 +430,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         vector_replacements = _normalize_color_replacements_input(color_replacements)
 
     try:
-        from core.vector_engine import VectorProcessor
+        from core.vector_engine import VectorProcessor, apply_recipe_overrides_to_analysis
 
         vec_processor = VectorProcessor(actual_lut_path, color_mode)
         vec_processor.enable_fridge_magnet = bool(enable_fridge_magnet)
@@ -440,6 +444,46 @@ def _run_vector_branch(ctx: dict) -> dict:
             target_width_mm=target_width_mm,
             color_replacements=vector_replacements,
         )
+
+        # 1a. Apply per-region recipe overrides (custom recipe dialog +
+        # appended layers) before meshing. Without this the 3MF is built
+        # from the LUT's default match and silently ignores every edit
+        # the user made in the "自定义配方" dialog — the 2D preview +
+        # segmented GLB would reflect the override (they read the
+        # material_matrix updated by ``/convert/apply-recipe-override``)
+        # but the vector 3MF would not.
+        # 生成网格前先把自定义配方对话框里的 per-region 配方 / 追加的层
+        # 回写到 ``matched_shapes``；否则 3MF 仅基于 LUT 默认匹配，用户
+        # 在 "自定义配方" 里做的编辑（包括加层）会被悄悄丢弃，只有 2D
+        # 预览和分段 GLB 能看到。
+        if recipe_overrides and recipe_override_masks_path:
+            import pickle as _pickle
+
+            try:
+                with open(recipe_override_masks_path, "rb") as f:
+                    vector_region_masks = _pickle.load(f)
+            except (OSError, EOFError, ValueError, TypeError, _pickle.PickleError) as exc:
+                log.warning(
+                    "[COORDINATOR] Failed to load recipe override masks for vector: %s",
+                    exc,
+                )
+                vector_region_masks = None
+
+            if isinstance(vector_region_masks, dict) and vector_region_masks:
+                base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
+                try:
+                    apply_recipe_overrides_to_analysis(
+                        analysis,
+                        recipe_overrides=recipe_overrides,
+                        region_masks=vector_region_masks,
+                        target_layers=requested_color_layers,
+                        base_channel_idx=base_channel_idx,
+                    )
+                except COORDINATOR_HANDLED_ERRORS as exc:
+                    log.warning(
+                        "[COORDINATOR] Vector recipe override application failed: %s",
+                        exc,
+                    )
 
         # 1b. Build 3D mesh from analysis
         build_mesh_kwargs = {
