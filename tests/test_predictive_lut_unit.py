@@ -10,6 +10,7 @@ from unittest.mock import patch
 import msgpack
 import numpy as np
 import cv2
+import pytest
 from scipy.spatial import KDTree
 
 from config import LUTMetadata, PaletteEntry
@@ -438,6 +439,84 @@ def test_load_lut_with_metadata_supports_native_model_package() -> None:
         assert metadata.base_channel_idx == 0
         assert rgb.shape == (0, 3)
         assert stacks is None
+
+
+def test_load_lut_with_metadata_filters_model_package_metadata_to_usable_runtime_modes() -> None:
+    """Metadata should only expose model-package modes that survive runtime payload parsing."""
+    payload = {
+        "schema_version": 2,
+        "name": "TestPackage",
+        "scope": {"vendor": "BambuLab", "material_type": "PLA"},
+        "channel_keys": ["White|PLA Basic"],
+        "defaults": {"threshold": 5.0, "margin": 0.7},
+        "modes": [
+            {
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+                "num_candidates": "oops",
+                "candidate_recipes": b"",
+                "pred_lab": b"",
+            },
+            {
+                "color_layers": 8,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+                "num_candidates": 1,
+                "candidate_recipes": np.asarray([[0, 0, 0, 0, 0, 0, 0, 0]], dtype=np.uint8).tobytes(),
+                "pred_lab": np.asarray([[50.0, 0.0, 0.0]], dtype="<f4").tobytes(),
+            },
+        ],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "native.msgpack")
+        with open(path, "wb") as fh:
+            fh.write(msgpack.packb(payload, use_bin_type=True))
+
+        rgb, stacks, metadata = LUTManager.load_lut_with_metadata(path)
+
+        assert rgb.shape == (0, 3)
+        assert stacks is None
+        assert metadata.max_color_layers == 8
+        assert metadata.layer_height_mm == pytest.approx(0.08)
+        assert metadata.get_supported_modes() == [
+            {
+                "mode_key": "0.08x8",
+                "color_layers": 8,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+            }
+        ]
+
+
+def test_load_lut_rejects_unavailable_dynamic_mode_for_direct_model_package() -> None:
+    """Direct model-package loads should fail early when the requested layer mode is unavailable."""
+    payload = {
+        "schema_version": 2,
+        "name": "TestPackage",
+        "scope": {"vendor": "UnknownVendor", "material_type": "UnknownMaterial"},
+        "channel_keys": ["White|PLA Basic", "Black|PLA Basic"],
+        "defaults": {"threshold": 5.0, "margin": 0.7},
+        "modes": [
+            {
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+                "num_candidates": 2,
+                "candidate_recipes": np.asarray([[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]], dtype=np.uint8).tobytes(),
+                "pred_lab": np.asarray([[255, 128, 128], [0, 128, 128]], dtype="<f4").tobytes(),
+            }
+        ],
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "native.msgpack")
+        with open(path, "wb") as fh:
+            fh.write(msgpack.packb(payload, use_bin_type=True))
+
+        with pytest.raises(ValueError, match="empty or corrupted"):
+            load_lut(path, "8-Color Max", color_layers=10, layer_height_mm=0.08, model_enable=True)
 
 
 def test_native_model_package_discovers_compatible_vendor_bundle_db_paths() -> None:

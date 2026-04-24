@@ -12,6 +12,7 @@ export type TabId =
   | "gradient-card-extract"
   | "material-library"
   | "lut-manager"
+  | "lut-details"
   | "lut-compare"
   | "five-color"
   | "vectorizer"

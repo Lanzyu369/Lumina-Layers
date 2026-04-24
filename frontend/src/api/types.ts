@@ -391,6 +391,28 @@ export interface LutCatalogResponse {
   native_brand_groups: NativeBrandGroup[];
 }
 
+export interface LutDetailsCatalogItem {
+  name: string;
+  path: string;
+  fingerprint: string;
+  color_mode: string;
+  source_kind: string;
+  manufacturer: string;
+  material_type: string;
+  manufacturer_source: string;
+  material_source: string;
+  search_tokens: string[];
+}
+
+export interface LutDetailsCatalogGroup {
+  manufacturer: string;
+  items: LutDetailsCatalogItem[];
+}
+
+export interface LutDetailsCatalogResponse {
+  groups: LutDetailsCatalogGroup[];
+}
+
 export interface BedSizeItem {
   label: string;
   width_mm: number;
@@ -872,6 +894,73 @@ export interface LutInfoResponse {
   supports_custom_recipe?: boolean;
   source_kind?: string;
   supported_modes?: LutSupportedMode[];
+}
+
+export interface LutDetailsCoverageRange {
+  min: number;
+  max: number;
+}
+
+export interface LutDetailsCoverageStats {
+  entry_count: number;
+  plotted_point_count: number;
+  l_range: LutDetailsCoverageRange;
+  a_range: LutDetailsCoverageRange;
+  b_range: LutDetailsCoverageRange;
+  r_range: LutDetailsCoverageRange;
+  g_range: LutDetailsCoverageRange;
+  b_rgb_range: LutDetailsCoverageRange;
+}
+
+export interface LutDetailsPoint {
+  x: number;
+  y: number;
+  hex_color: string | null;
+  rgb: [number, number, number];
+  label?: string | null;
+}
+
+export interface LutDetailsPoint3D {
+  l: number;
+  a: number;
+  b: number;
+  hex_color: string | null;
+  rgb: [number, number, number];
+  label?: string | null;
+}
+
+export interface LutDetailsResponse {
+  name: string;
+  path: string;
+  fingerprint: string;
+  manufacturer: string;
+  manufacturer_source: string;
+  material_type: string;
+  material_source: string;
+  color_mode: string;
+  color_count: number;
+  source_kind: string;
+  schema_version: string;
+  capabilities: string[];
+  supported_modes: LutSupportedMode[];
+  raw_metadata: Record<string, unknown>;
+  palette: Array<{
+    color: string;
+    material: string;
+    hex_color: string | null;
+    color_name?: string | null;
+  }>;
+  coverage_stats: LutDetailsCoverageStats;
+  lab_points: LutDetailsPoint[];
+  lab_points_3d: LutDetailsPoint3D[];
+  lab_hull: Array<{ x: number; y: number }>;
+  rgb_points: LutDetailsPoint[];
+  max_color_layers: number;
+  layer_height_mm: number;
+  line_width_mm: number;
+  base_layers: number;
+  base_channel_idx: number;
+  layer_order: string;
 }
 
 export interface RecipeColorPredictRequest {

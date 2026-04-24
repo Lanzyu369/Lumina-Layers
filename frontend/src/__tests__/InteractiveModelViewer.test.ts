@@ -21,4 +21,3 @@ describe("extractHexFromMeshName", () => {
     expect(extractHexFromMeshName("color_ffffff")).toBe("ffffff");
   });
 });
-

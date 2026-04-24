@@ -26,6 +26,7 @@ from core.native_reference import (
     SOURCE_KIND_COLORD_DB,
     SOURCE_KIND_PACKAGE,
     SOURCE_KIND_STAGE_MODEL,
+    _parse_model_package_payload,
     build_channel_key,
     build_model_package_runtime_payload,
     build_recipe_runtime_payload,
@@ -78,19 +79,63 @@ def _resolve_model_package_base_channel_idx(
             for item in modes_raw:
                 if not isinstance(item, dict):
                     continue
-                if (
-                    int(item.get("color_layers", 0)) == int(default_mode.get("color_layers", 0))
-                    and abs(float(item.get("layer_height_mm", 0.0)) - float(default_mode.get("layer_height_mm", 0.0))) <= 1e-3
-                    and str(item.get("layer_order", "Top2Bottom")) == str(default_mode.get("layer_order", "Top2Bottom"))
-                ):
-                    preferred_key = item.get("base_channel_key")
-                    break
+                try:
+                    if (
+                        int(item.get("color_layers", 0)) == int(default_mode.get("color_layers", 0))
+                        and abs(float(item.get("layer_height_mm", 0.0)) - float(default_mode.get("layer_height_mm", 0.0))) <= 1e-3
+                        and str(item.get("layer_order", "Top2Bottom")) == str(default_mode.get("layer_order", "Top2Bottom"))
+                    ):
+                        preferred_key = item.get("base_channel_key")
+                        break
+                except (TypeError, ValueError):
+                    continue
         if preferred_key is None:
             for item in modes_raw:
                 if isinstance(item, dict) and item.get("base_channel_key"):
                     preferred_key = str(item.get("base_channel_key"))
                     break
     return _resolve_native_base_channel_idx(channel_keys, preferred_key)
+
+
+def _supported_modes_from_runtime_package(runtime_package: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build normalized supported-mode metadata from a validated runtime package.
+    从已验证的 runtime package 构建规范化的 supported_modes 元数据。
+    """
+    modes_raw = runtime_package.get("modes", {})
+    if not isinstance(modes_raw, dict):
+        return []
+
+    supported_modes: list[dict[str, Any]] = []
+    for mode_key, item in modes_raw.items():
+        if not isinstance(item, dict):
+            continue
+        try:
+            supported_modes.append(
+                {
+                    "mode_key": str(
+                        mode_key
+                        or f"{float(item.get('layer_height_mm', 0.08)):.2f}x{int(item.get('color_layers', 0))}"
+                    ),
+                    "color_layers": int(item.get("color_layers", 0)),
+                    "layer_height_mm": float(item.get("layer_height_mm", 0.08)),
+                    "layer_order": str(item.get("layer_order", "Top2Bottom")),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return supported_modes
+
+
+def _select_preferred_supported_mode(supported_modes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Prefer the canonical 5-layer mode, otherwise fall back to the first usable mode.
+    优先选择标准 5 层模式，否则回退到第一个可用模式。
+    """
+    if not supported_modes:
+        return None
+    return next(
+        (mode for mode in supported_modes if int(mode.get("color_layers", 0)) == 5),
+        supported_modes[0],
+    )
 
 
 @dataclass(frozen=True)
@@ -1022,7 +1067,16 @@ class LUTManager:
 
         # ---- native model package (.msgpack) ----
         if ext == ".msgpack":
-            return cls._load_model_package(file_path, display_name)
+            try:
+                payload = msgpack.unpackb(Path(file_path).read_bytes(), raw=False)
+            except Exception as e:
+                print(f"[WARNING] Failed to parse msgpack file {file_path}: {e}")
+                rgb = np.zeros((0, 3), dtype=np.uint8)
+                metadata = cls.infer_default_metadata(display_name, file_path, 0)
+                return rgb, None, metadata
+            if cls._is_model_package_payload(payload):
+                return cls._load_model_package(file_path, display_name)
+            return cls._load_keyed_payload(payload, display_name, file_path)
 
         # Unsupported format – return empty defaults
         print(f"[WARNING] Unsupported LUT format: {ext}")
@@ -1045,6 +1099,18 @@ class LUTManager:
             rgb = np.zeros((0, 3), dtype=np.uint8)
             metadata = cls.infer_default_metadata(display_name, file_path, 0)
             return rgb, None, metadata
+        return cls._load_keyed_payload(data, display_name, file_path)
+
+    @classmethod
+    def _load_keyed_payload(
+        cls,
+        data: Any,
+        display_name: str,
+        file_path: str,
+    ) -> tuple[np.ndarray, np.ndarray | None, 'LUTMetadata']:
+        """Load a keyed LUT payload from JSON or msgpack content.
+        从 JSON 或 msgpack 内容加载 keyed LUT 载荷。
+        """
 
         native_ctx = discover_native_reference_context(file_path, data)
         if native_ctx is not None:
@@ -1086,12 +1152,16 @@ class LUTManager:
             rgb_val = entry.get("rgb")
             hex_val = entry.get("hex")
             lab = entry.get("lab")
-            
+            row_rgb: list[int] | None = None
             if rgb_val and len(rgb_val) == 3:
-                r = max(0, min(255, int(rgb_val[0])))
-                g = max(0, min(255, int(rgb_val[1])))
-                b = max(0, min(255, int(rgb_val[2])))
-                rgb_list.append([r, g, b])
+                try:
+                    r = max(0, min(255, int(rgb_val[0])))
+                    g = max(0, min(255, int(rgb_val[1])))
+                    b = max(0, min(255, int(rgb_val[2])))
+                except (TypeError, ValueError) as e:
+                    print(f"[WARNING] RGB row conversion failed for {rgb_val}: {e}")
+                    continue
+                row_rgb = [r, g, b]
                 
                 # Optional: Validate hex consistency with RGB
                 if hex_val:
@@ -1103,20 +1173,26 @@ class LUTManager:
                 try:
                     from colormath.color_objects import LabColor, sRGBColor
                     from colormath.color_conversions import convert_color
-                    lab_color = LabColor(float(lab[0]), float(lab[1]), float(lab[2]))
+                    lab_values = np.asarray([float(lab[0]), float(lab[1]), float(lab[2])], dtype=np.float32)
+                    if not np.isfinite(lab_values).all():
+                        raise ValueError("non-finite lab")
+                    lab_color = LabColor(float(lab_values[0]), float(lab_values[1]), float(lab_values[2]))
                     srgb = convert_color(lab_color, sRGBColor)
                     r = max(0, min(255, int(round(srgb.clamped_rgb_r * 255))))
                     g = max(0, min(255, int(round(srgb.clamped_rgb_g * 255))))
                     b = max(0, min(255, int(round(srgb.clamped_rgb_b * 255))))
-                    rgb_list.append([r, g, b])
+                    row_rgb = [r, g, b]
                 except Exception as e:
                     print(f"[WARNING] Lab→RGB conversion failed for {lab}: {e}")
-                    rgb_list.append([0, 0, 0])
+                    continue
             else:
-                rgb_list.append([0, 0, 0])
+                continue
 
             # Recipe: resolve color names to indices, support both formats
             recipe_raw = entry.get("recipe", [])
+            if not isinstance(recipe_raw, (list, tuple)):
+                print(f"[WARNING] Invalid recipe payload skipped for entry: {recipe_raw}")
+                continue
             recipe_indices: list[int] = []
             for v in recipe_raw:
                 if isinstance(v, str):
@@ -1130,7 +1206,15 @@ class LUTManager:
                         recipe_indices.append(0)
                 else:
                     # 旧格式兼容: 直接是数字索引
-                    recipe_indices.append(int(v))
+                    try:
+                        recipe_indices.append(int(v))
+                    except (TypeError, ValueError) as e:
+                        print(f"[WARNING] Invalid recipe member skipped for entry: {v} ({e})")
+                        recipe_indices = []
+                        break
+            if len(recipe_indices) != len(recipe_raw):
+                continue
+            rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
 
         if rgb_list:
@@ -1139,7 +1223,12 @@ class LUTManager:
             rgb = np.zeros((0, 3), dtype=np.uint8)
 
         if stacks_list:
-            stacks = np.array(stacks_list, dtype=np.int32)
+            max_len = max((len(row) for row in stacks_list), default=0)
+            normalized_stacks = [
+                row + ([-1] * (max_len - len(row)))
+                for row in stacks_list
+            ]
+            stacks = np.array(normalized_stacks, dtype=np.int32)
         else:
             stacks = None
 
@@ -1479,43 +1568,65 @@ class LUTManager:
         return rgb, stacks, metadata
 
     @classmethod
-    def _load_model_package(cls, file_path: str, display_name: str) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
-        native_ctx = parse_model_package_file(file_path)
-        payload = msgpack.unpackb(Path(file_path).read_bytes(), raw=False)
-        rgb = np.zeros((0, 3), dtype=np.uint8)
-        stacks = None
+    def _load_model_package_from_payload(
+        cls,
+        file_path: str,
+        display_name: str,
+        payload: Any,
+    ) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        native_ctx = _parse_model_package_payload(payload, file_path)
+        runtime_package = build_model_package_runtime_payload(file_path, payload=payload)
+        runtime_supported_modes = _supported_modes_from_runtime_package(runtime_package)
+        effective_mode = _select_preferred_supported_mode(runtime_supported_modes)
         palette = [
             PaletteEntry(color=split_channel_key(key)[0], material=split_channel_key(key)[1])
             for key in native_ctx.channel_keys
         ]
-        default_mode = None
-        if native_ctx.supported_modes:
-            default_mode = next(
-                (mode for mode in native_ctx.supported_modes if int(mode.get("color_layers", 0)) == 5),
-                native_ctx.supported_modes[0],
-            )
+        rgb = np.zeros((0, 3), dtype=np.uint8)
+        stacks = None
         metadata = LUTMetadata(
             palette=palette,
             color_mode=derive_color_mode_from_palette_entries(palette, display_name),
             max_color_layers=(
-                int(default_mode["color_layers"])
-                if default_mode is not None
+                int(effective_mode["color_layers"])
+                if effective_mode is not None
                 else 5
             ),
-            layer_height_mm=(float(default_mode["layer_height_mm"]) if default_mode is not None else 0.08),
+            layer_height_mm=(float(effective_mode["layer_height_mm"]) if effective_mode is not None else 0.08),
             line_width_mm=0.42,
             base_layers=0,
-            base_channel_idx=_resolve_model_package_base_channel_idx(payload, list(native_ctx.channel_keys), default_mode),
-            layer_order=(str(default_mode.get("layer_order", "Top2Bottom")) if default_mode is not None else "Top2Bottom"),
+            base_channel_idx=_resolve_model_package_base_channel_idx(payload, list(native_ctx.channel_keys), effective_mode),
+            layer_order=(str(effective_mode.get("layer_order", "Top2Bottom")) if effective_mode is not None else "Top2Bottom"),
             schema_version="2.0",
             capabilities=["predictive_match", "dynamic_layer_count", "custom_recipe"],
         )
-        metadata.extensions["runtime_package"] = build_model_package_runtime_payload(file_path)
+        metadata.extensions["runtime_package"] = runtime_package
         metadata.extensions["native_db_subset_explicit"] = bool(
             isinstance(payload, dict) and payload.get("selected_db_paths")
         )
         metadata = cls._apply_native_context_to_metadata(metadata, native_ctx, custom_recipe_supported=True)
+        if runtime_supported_modes:
+            metadata.extensions["supported_modes"] = runtime_supported_modes
         return rgb, stacks, metadata
+
+    @classmethod
+    def _load_model_package(cls, file_path: str, display_name: str) -> tuple[np.ndarray, np.ndarray | None, LUTMetadata]:
+        payload = msgpack.unpackb(Path(file_path).read_bytes(), raw=False)
+        return cls._load_model_package_from_payload(file_path, display_name, payload)
+
+    @classmethod
+    def _is_model_package_payload(cls, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        modes = payload.get("modes")
+        if not isinstance(modes, list) or not modes:
+            return False
+        return any(
+            isinstance(mode, dict)
+            and mode.get("num_candidates")
+            and ("candidate_recipes" in mode or "pred_lab" in mode)
+            for mode in modes
+        )
 
     @classmethod
     def _load_keyed_json_flat_list(

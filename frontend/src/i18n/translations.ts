@@ -1668,6 +1668,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 合并",
     en: "LUT Merge",
   },
+  "tab.lutDetails": {
+    zh: "LUT 详情",
+    en: "LUT Details",
+  },
   "tab.lutCompare": {
     zh: "LUT 对比",
     en: "LUT Compare",
@@ -1907,6 +1911,380 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lut_manager_selected_count: {
     zh: "已选择 {count} 个副 LUT",
     en: "{count} secondary LUTs selected",
+  },
+
+  // ==================== LUT Details Panel ====================
+  lut_details_title: {
+    zh: "LUT 详情浏览",
+    en: "LUT Details Browser",
+  },
+  lut_details_desc: {
+    zh: "查找 LUT，并查看其颜色、材料和分布图。",
+    en: "Find LUTs and inspect their colors, materials, and distribution charts.",
+  },
+  lut_details_query_label: {
+    zh: "筛选 LUT",
+    en: "Filter LUTs",
+  },
+  lut_details_query_placeholder: {
+    zh: "输入名称、材料或别名",
+    en: "Search by name, material, or alias",
+  },
+  lut_details_manufacturer_label: {
+    zh: "制造商",
+    en: "Manufacturer",
+  },
+  lut_details_manufacturer_placeholder: {
+    zh: "选择制造商...",
+    en: "Select manufacturer...",
+  },
+  lut_details_lut_label: {
+    zh: "LUT 方案",
+    en: "LUT",
+  },
+  lut_details_lut_placeholder: {
+    zh: "选择 LUT...",
+    en: "Select LUT...",
+  },
+  lut_details_load_action: {
+    zh: "加载 LUT",
+    en: "Load LUT",
+  },
+  lut_details_load_hint: {
+    zh: "选择 LUT 后点击加载。",
+    en: "Select a LUT, then click load.",
+  },
+  lut_details_pending_loaded_notice: {
+    zh: "当前显示的是已加载 LUT，点击加载后更新。",
+    en: "You are viewing the loaded LUT. Click load to update it.",
+  },
+  lut_details_loading_selected: {
+    zh: "正在加载所选 LUT...",
+    en: "Loading selected LUT...",
+  },
+  lut_details_catalog_loading: {
+    zh: "正在加载 LUT 目录...",
+    en: "Loading LUT catalog...",
+  },
+  lut_details_close_error: {
+    zh: "关闭错误",
+    en: "Dismiss error",
+  },
+  lut_details_no_matches: {
+    zh: "没有匹配的 LUT，请调整筛选条件。",
+    en: "No LUTs match the current filters.",
+  },
+  lut_details_summary_title: {
+    zh: "摘要",
+    en: "Summary",
+  },
+  lut_details_summary_desc: {
+    zh: "当前 LUT 的基本信息。",
+    en: "Core information for the current LUT.",
+  },
+  lut_details_no_detail: {
+    zh: "请选择一个 LUT。",
+    en: "Select a LUT.",
+  },
+  lut_details_loading: {
+    zh: "加载详情中...",
+    en: "Loading details...",
+  },
+  lut_details_error_load_catalog: {
+    zh: "LUT 详情目录加载失败",
+    en: "Failed to load LUT details catalog",
+  },
+  lut_details_error_load_detail: {
+    zh: "LUT 详情加载失败",
+    en: "Failed to load LUT details",
+  },
+  lut_details_summary_name: {
+    zh: "名称",
+    en: "Name",
+  },
+  lut_details_summary_manufacturer: {
+    zh: "制造商",
+    en: "Manufacturer",
+  },
+  lut_details_summary_material: {
+    zh: "材料",
+    en: "Material",
+  },
+  lut_details_summary_color_mode: {
+    zh: "色彩模式",
+    en: "Color Mode",
+  },
+  lut_details_summary_color_count: {
+    zh: "颜色数",
+    en: "Color Count",
+  },
+  lut_details_summary_source_kind: {
+    zh: "来源类型",
+    en: "Source Kind",
+  },
+  lut_details_summary_fingerprint: {
+    zh: "指纹",
+    en: "Fingerprint",
+  },
+  lut_details_summary_path: {
+    zh: "路径",
+    en: "Path",
+  },
+  lut_details_metadata_title: {
+    zh: "类型化元数据",
+    en: "Typed Metadata",
+  },
+  lut_details_metadata_desc: {
+    zh: "结构化参数与打印设置。",
+    en: "Structured parameters and print settings.",
+  },
+  lut_details_metadata_schema: {
+    zh: "Schema",
+    en: "Schema",
+  },
+  lut_details_metadata_manufacturer_source: {
+    zh: "制造商来源",
+    en: "Manufacturer Source",
+  },
+  lut_details_metadata_material_source: {
+    zh: "材料来源",
+    en: "Material Source",
+  },
+  lut_details_metadata_max_color_layers: {
+    zh: "最大颜色层数",
+    en: "Max Color Layers",
+  },
+  lut_details_metadata_layer_height: {
+    zh: "层高",
+    en: "Layer Height",
+  },
+  lut_details_metadata_line_width: {
+    zh: "线宽",
+    en: "Line Width",
+  },
+  lut_details_metadata_base_layers: {
+    zh: "底层数",
+    en: "Base Layers",
+  },
+  lut_details_metadata_base_channel: {
+    zh: "基础通道",
+    en: "Base Channel",
+  },
+  lut_details_metadata_layer_order: {
+    zh: "层顺序",
+    en: "Layer Order",
+  },
+  lut_details_metadata_coverage: {
+    zh: "覆盖统计",
+    en: "Coverage",
+  },
+  lut_details_coverage_summary: {
+    zh: "{entries} 条记录 / {points} 个点",
+    en: "{entries} entries / {points} plotted points",
+  },
+  lut_details_capabilities_title: {
+    zh: "能力",
+    en: "Capabilities",
+  },
+  lut_details_capabilities_desc: {
+    zh: "该 LUT 声明的能力。",
+    en: "Capabilities declared by this LUT.",
+  },
+  lut_details_capabilities_empty: {
+    zh: "无能力信息",
+    en: "No capabilities",
+  },
+  lut_details_supported_modes_title: {
+    zh: "支持模式",
+    en: "Supported Modes",
+  },
+  lut_details_supported_modes_desc: {
+    zh: "可用的层数与层高组合。",
+    en: "Available layer-count and layer-height combinations.",
+  },
+  lut_details_supported_modes_empty: {
+    zh: "无支持模式",
+    en: "No supported modes",
+  },
+  lut_details_supported_mode_item: {
+    zh: "{layers} 层 · {height} mm",
+    en: "{layers} layers · {height} mm",
+  },
+  lut_details_raw_metadata_title: {
+    zh: "LUT 原始元数据",
+    en: "Raw LUT Metadata",
+  },
+  lut_details_raw_metadata_desc: {
+    zh: "",
+    en: "",
+  },
+  lut_details_no_raw_metadata: {
+    zh: "{}",
+    en: "{}",
+  },
+  lut_details_palette_title: {
+    zh: "调色板",
+    en: "Palette",
+  },
+  lut_details_palette_desc: {
+    zh: "颜色、材料与色值对应关系。",
+    en: "Color, material, and color-value mappings.",
+  },
+  lut_details_palette_count: {
+    zh: "{count} 项",
+    en: "{count} entries",
+  },
+  lut_details_palette_color: {
+    zh: "颜色",
+    en: "Color",
+  },
+  lut_details_palette_material: {
+    zh: "材料",
+    en: "Material",
+  },
+  lut_details_palette_hex: {
+    zh: "HEX",
+    en: "Hex",
+  },
+  lut_details_palette_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  lut_details_no_palette: {
+    zh: "没有调色板数据。",
+    en: "No palette data.",
+  },
+  lut_details_lab_chart_title: {
+    zh: "Lab 图",
+    en: "Lab Chart",
+  },
+  lut_details_lab_chart_desc: {
+    zh: "显示颜色在 Lab a*/b* 平面上的分布。X 轴为 a*，负方向偏绿、正方向偏红；Y 轴为 b*，负方向偏蓝、正方向偏黄。亮度维度 L* 在该图中不显示。",
+    en: "Shows the color distribution on the Lab a*/b* plane. The X axis is a*, with negative values toward green and positive values toward red; the Y axis is b*, with negative values toward blue and positive values toward yellow. The L* lightness dimension is not shown in this chart.",
+  },
+  lut_details_lab_chart_3d_desc: {
+    zh: "显示颜色在 Lab 三维空间中的分布。X 轴为 a*，负方向偏绿、正方向偏红；Y 轴为 L*，负方向更暗、正方向更亮；Z 轴为 b*，负方向偏蓝、正方向偏黄。",
+    en: "Shows the color distribution in the Lab 3D space. The X axis is a*, with negative values toward green and positive values toward red; the Y axis is L*, with negative values darker and positive values lighter; the Z axis is b*, with negative values toward blue and positive values toward yellow.",
+  },
+  lut_details_lab_view_2d: {
+    zh: "2D",
+    en: "2D",
+  },
+  lut_details_lab_view_3d: {
+    zh: "3D",
+    en: "3D",
+  },
+  lut_details_lab_chart_x: {
+    zh: "a* 轴",
+    en: "a* axis",
+  },
+  lut_details_lab_chart_y: {
+    zh: "b* 轴",
+    en: "b* axis",
+  },
+  lut_details_lab_chart_footer: {
+    zh: "L 范围: {lRange} | a 范围: {aRange} | b 范围: {bRange}",
+    en: "L range: {lRange} | a range: {aRange} | b range: {bRange}",
+  },
+  lut_details_lab_3d_axis_x: {
+    zh: "X = a*（-绿 / +红）",
+    en: "X = a* (-green / +red)",
+  },
+  lut_details_lab_3d_axis_y: {
+    zh: "Y = L*（暗 → 亮）",
+    en: "Y = L* (dark -> light)",
+  },
+  lut_details_lab_3d_axis_z: {
+    zh: "Z = b*（-蓝 / +黄）",
+    en: "Z = b* (-blue / +yellow)",
+  },
+  lut_details_lab_3d_loading_hull: {
+    zh: "正在生成 3D 外壳...",
+    en: "Generating the 3D hull...",
+  },
+  lut_details_lab_3d_error_hull: {
+    zh: "3D 外壳生成失败，已仅显示点云。",
+    en: "The 3D hull failed to generate. Only the point cloud is shown.",
+  },
+  lut_details_lab_3d_reference_toggle: {
+    zh: "参考切片",
+    en: "Reference Slice",
+  },
+  lut_details_lab_3d_reference_status: {
+    zh: "参考切片 · L* {lightness}",
+    en: "Reference Slice · L* {lightness}",
+  },
+  lut_details_lab_3d_reference_slider: {
+    zh: "参考切片 L*",
+    en: "Reference Slice L*",
+  },
+  lut_details_rgb_chart_title: {
+    zh: "RGB 投影视图",
+    en: "RGB Projection Chart",
+  },
+  lut_details_rgb_chart_desc: {
+    zh: "显示颜色在 RGB 空间中的整体分布趋势。由于采用二维等距投影表示，沿 R=G=B 的中性轴，也就是黑到白的第三维度，在该图中不直接显示，因此不适合用于精确读取单独通道值。",
+    en: "Shows the overall distribution trend in RGB space. Because this chart uses a 2D isometric projection, the third dimension along the neutral R=G=B axis, from black to white, is not shown directly, so the chart is not suitable for precise single-channel readings.",
+  },
+  lut_details_rgb_chart_x: {
+    zh: "投影 X",
+    en: "Projection X",
+  },
+  lut_details_rgb_chart_y: {
+    zh: "投影 Y",
+    en: "Projection Y",
+  },
+  lut_details_rgb_chart_footer: {
+    zh: "原始通道范围 R: {rRange} | G: {gRange} | B: {bRange}",
+    en: "Raw channel ranges R: {rRange} | G: {gRange} | B: {bRange}",
+  },
+  lut_details_hue_lightness_chart_title: {
+    zh: "色相 × 相对亮度",
+    en: "Hue × Relative Lightness",
+  },
+  lut_details_hue_lightness_chart_desc: {
+    zh: "显示各色相上的相对亮度分布，用于观察不同色相对应的亮度覆盖情况。饱和度维度在该图中不显示。",
+    en: "Shows the relative lightness distribution across hues, so you can inspect the lightness coverage for each hue. The saturation dimension is not shown in this chart.",
+  },
+  lut_details_hue_lightness_chart_x: {
+    zh: "色相 (°)",
+    en: "Hue (°)",
+  },
+  lut_details_hue_lightness_chart_y: {
+    zh: "相对亮度 (%)",
+    en: "Relative Lightness (%)",
+  },
+  lut_details_hue_lightness_chart_footer: {
+    zh: "相对亮度范围: {lRange} | 色相范围: {hRange}",
+    en: "Relative lightness range: {lRange} | Hue range: {hRange}",
+  },
+  lut_details_hue_chroma_chart_title: {
+    zh: "色相 × 饱和度",
+    en: "Hue × Saturation",
+  },
+  lut_details_hue_chroma_chart_desc: {
+    zh: "显示各色相上的相对饱和度分布，用于观察不同色相对应的饱和度覆盖情况。亮度维度在该图中不显示。",
+    en: "Shows the relative saturation distribution across hues, so you can inspect the saturation coverage for each hue. The lightness dimension is not shown in this chart.",
+  },
+  lut_details_hue_chroma_chart_x: {
+    zh: "色相 (°)",
+    en: "Hue (°)",
+  },
+  lut_details_hue_chroma_chart_y: {
+    zh: "相对饱和度 (%)",
+    en: "Relative Saturation (%)",
+  },
+  lut_details_hue_chroma_chart_footer: {
+    zh: "相对饱和度范围: {cRange} | 色相范围: {hRange}",
+    en: "Relative saturation range: {cRange} | Hue range: {hRange}",
+  },
+  lut_details_hue_chart_omitted_neutral: {
+    zh: "低饱和、色相未定义的点未显示：{count}",
+    en: "Low-saturation points with undefined hue are not shown: {count}",
+  },
+  lut_details_no_chart_points: {
+    zh: "暂无点位数据",
+    en: "No point data available",
   },
 
   lut_compare_title: {
@@ -3963,6 +4341,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   common_unit_mm: {
     zh: "毫米",
     en: "mm",
+  },
+  common_not_available: {
+    zh: "不可用",
+    en: "N/A",
   },
   common_unit_px: {
     zh: "像素",

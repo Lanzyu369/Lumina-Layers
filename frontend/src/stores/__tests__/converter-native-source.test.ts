@@ -163,7 +163,7 @@ describe("native bundle converter flow", () => {
 
     const selection = resolveConverterSourceSelection(useConverterStore.getState());
 
-    expect(selection.db_names).toEqual(["A2"]);
+    expect(selection.native.db_names).toEqual(["A2"]);
     expect(selection.isReady).toBe(true);
   });
 
@@ -178,7 +178,7 @@ describe("native bundle converter flow", () => {
 
     const selection = resolveConverterSourceSelection(useConverterStore.getState());
 
-    expect(selection.db_names).toEqual([]);
+    expect(selection.native.db_names).toEqual([]);
     expect(selection.isReady).toBe(false);
   });
 

@@ -3,6 +3,8 @@ import type {
   CompareRequest,
   CompareResponse,
   LutCatalogResponse,
+  LutDetailsCatalogResponse,
+  LutDetailsResponse,
   LutInfoResponse,
   MergeRequest,
   MergeResponse,
@@ -64,6 +66,20 @@ export async function compareLuts(
 /** 获取旧版 LUT 与新版品牌包目录 */
 export async function fetchLutCatalog(): Promise<LutCatalogResponse> {
   const response = await apiClient.get<LutCatalogResponse>("/lut/catalog");
+  return response.data;
+}
+
+/** 获取 LUT 详情目录，包含 manufacturer 分组与可搜索 tokens。 */
+export async function fetchLutDetailsCatalog(): Promise<LutDetailsCatalogResponse> {
+  const response = await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog");
+  return response.data;
+}
+
+/** 获取单个 LUT 的完整详情。 */
+export async function fetchLutDetails(lutName: string): Promise<LutDetailsResponse> {
+  const response = await apiClient.get<LutDetailsResponse>(
+    `/lut/${encodeURIComponent(lutName)}/details`
+  );
   return response.data;
 }
 

@@ -40,6 +40,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   "gradient-card-extract": [],
   "material-library": [],
   "lut-manager": ["lut-manager"],
+  "lut-details": [],
   "lut-compare": [],
   "five-color": ["five-color"],
   vectorizer: [],

@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense, Component } from "react";
+import { useState, useEffect, Suspense, Component, lazy } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
@@ -32,6 +32,8 @@ import { useSingleStageStore } from "./stores/singleStageStore";
 import { useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
+
+const LutDetailsPanel = lazy(() => import("./components/LutDetailsPanel"));
 
 /* ---------- Error Boundary ---------- */
 
@@ -325,6 +327,11 @@ function AppContent() {
         )}
 
         {activeTab === 'lut-manager' && <LutManagerPanel />}
+        {activeTab === 'lut-details' && (
+          <Suspense fallback={<LoadingSpinner />}>
+            <LutDetailsPanel />
+          </Suspense>
+        )}
         {activeTab === 'lut-compare' && <LutComparePanel />}
         {activeTab === 'five-color' && (
           <div className="flex h-full min-h-0">

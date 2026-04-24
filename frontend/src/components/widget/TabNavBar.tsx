@@ -13,10 +13,10 @@ interface TabNavBarProps {
 }
 
 type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'settings';
-type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-compare' | 'five-color';
+type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-details' | 'lut-compare' | 'five-color';
 type MaterialSubTabId = 'gradient-card-generate' | 'gradient-card-extract' | 'material-library';
 
-const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-compare', 'five-color'];
+const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-details', 'lut-compare', 'five-color'];
 const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'gradient-card-generate', 'gradient-card-extract'];
 
 const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
@@ -67,6 +67,11 @@ const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNod
       <path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
     </svg>
   ),
+  'lut-details': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10 6h8m-8 6h8m-8 6h8M6 6h.01M6 12h.01M6 18h.01" />
+    </svg>
+  ),
   'lut-compare': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8M8 17h8M5 7l-2 2m0 0l2 2m-2-2h10M19 17l2-2m0 0l-2-2m2 2H11" />
@@ -106,6 +111,7 @@ const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
   { id: 'calibration', titleKey: 'tab.calibration' },
   { id: 'extractor', titleKey: 'tab.extractor' },
   { id: 'lut-manager', titleKey: 'tab.lutManager' },
+  { id: 'lut-details', titleKey: 'tab.lutDetails' },
   { id: 'lut-compare', titleKey: 'tab.lutCompare' },
   { id: 'five-color', titleKey: 'tab.fiveColor' },
 ];

@@ -69,6 +69,7 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("subtab-calibration")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-extractor")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-manager")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-lut-details")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-compare")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-five-color")).toBeInTheDocument();
 
@@ -77,6 +78,9 @@ describe("Widget Workspace Layout", () => {
 
     fireEvent.click(screen.getByTestId("subtab-lut-manager"));
     expect(useWidgetStore.getState().activeTab).toBe("lut-manager");
+
+    fireEvent.click(screen.getByTestId("subtab-lut-details"));
+    expect(useWidgetStore.getState().activeTab).toBe("lut-details");
 
     fireEvent.click(screen.getByTestId("subtab-lut-compare"));
     expect(useWidgetStore.getState().activeTab).toBe("lut-compare");

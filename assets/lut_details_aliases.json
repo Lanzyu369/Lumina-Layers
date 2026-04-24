@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "manufacturers": {
+    "Bambu Lab": [
+      "bambulab",
+      "bambu",
+      "bam",
+      "ba",
+      "拓竹",
+      "拓"
+    ],
+    "Aliz": [
+      "aliz"
+    ],
+    "Jayo": [
+      "jayo"
+    ]
+  },
+  "materials": {
+    "PLA": [
+      "pla",
+      "pla basic",
+      "plabasic",
+      "pla+"
+    ],
+    "PETG": [
+      "petg"
+    ]
+  }
+}

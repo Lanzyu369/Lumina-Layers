@@ -21,7 +21,16 @@ from api.schemas.lut import (
     CompareRequest,
     CompareResponse,
     CompareStats,
+    LutAxisRange,
+    LutCoverageStatsResponse,
+    LutDetailsCatalogGroup,
+    LutDetailsCatalogItem,
+    LutDetailsCatalogResponse,
+    LutDetailsResponse,
+    LutHullPoint,
     LutInfoResponseV2,
+    LutPlotPoint,
+    LutPlotPoint3D,
     LutSourceCatalogResponse,
     MergeRequest,
     MergeResponse,
@@ -35,6 +44,7 @@ from api.schemas.lut import (
 )
 from api.schemas.responses import LUTListResponse, LutInfo, LutColorsResponse, LutColorEntry
 from config import LUTMetadata, get_capabilities, get_schema_version, get_source_kind, get_supported_modes
+from core.lut_details.service import get_lut_details_service
 from core.lut_merger import LUTMerger
 from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, resolve_predictive_runtime
 from utils.lut_manager import LUTManager
@@ -42,6 +52,28 @@ from utils.lut_manager import LUTManager
 router = APIRouter(prefix="/api/lut", tags=["LUT"])
 
 _VALID_PRIMARY_MODES = {"6-Color", "8-Color", "8-Color Max"}
+_lut_details_service = None
+
+
+def _resolve_lut_details_service():
+    """Lazily initialize the LUT details service.
+    延迟初始化 LUT 详情服务。
+    """
+
+    global _lut_details_service
+    if _lut_details_service is None:
+        _lut_details_service = get_lut_details_service()
+    return _lut_details_service
+
+
+def _invalidate_lut_details_service_cache() -> None:
+    """Drop cached LUT details service state after LUT files change.
+    在 LUT 文件变更后丢弃缓存的 LUT 详情服务状态。
+    """
+
+    global _lut_details_service
+    _lut_details_service = None
+    get_lut_details_service.cache_clear()
 
 
 def _dedupe_warnings(warnings: list[str]) -> list[str]:
@@ -115,6 +147,41 @@ def get_source_catalog() -> LutSourceCatalogResponse:
     return LutSourceCatalogResponse.model_validate(LUTManager.get_source_catalog())
 
 
+@router.get("/details/catalog", response_model=LutDetailsCatalogResponse)
+def get_lut_details_catalog() -> LutDetailsCatalogResponse:
+    """Return the LUT details catalog grouped by manufacturer.
+    返回按厂商分组的 LUT 详情目录。
+    """
+
+    try:
+        catalog = _resolve_lut_details_service().get_catalog()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LUT details catalog unavailable: {exc}") from exc
+    return LutDetailsCatalogResponse(
+        groups=[
+            LutDetailsCatalogGroup(
+                manufacturer=group.manufacturer,
+                items=[
+                    LutDetailsCatalogItem(
+                        name=item.name,
+                        path=item.path,
+                        fingerprint=item.fingerprint,
+                        color_mode=item.color_mode,
+                        source_kind=item.source_kind,
+                        manufacturer=item.manufacturer,
+                        material_type=item.material_type,
+                        manufacturer_source=item.manufacturer_source,
+                        material_source=item.material_source,
+                        search_tokens=list(item.search_tokens),
+                    )
+                    for item in group.items
+                ],
+            )
+            for group in catalog.groups
+        ]
+    )
+
+
 _ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 
 
@@ -183,6 +250,7 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
                 counter += 1
             shutil.copy2(tmp_path, dest_path)
 
+        _invalidate_lut_details_service_cache()
         display_name = f"Custom - {Path(dest_path).stem}"
         return {"status": "ok", "message": f"LUT 已保存: {display_name}", "name": display_name}
     except Exception as exc:
@@ -308,6 +376,7 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
         else:
             LUTMerger.save_merged_lut(merged_rgb, merged_stacks, output_path)
 
+        _invalidate_lut_details_service_cache()
         # 10. Return response / 返回响应
         # 注意：validate_print_params() 和 merge_palettes() 尚未实现（任务 6），暂时使用空列表
         return MergeResponse(
@@ -649,6 +718,94 @@ def get_session_lut_info(
         )
     display_name = session_data.get("lut_name") or Path(lut_path).stem
     return _build_lut_info_from_path(lut_path, str(display_name))
+
+
+@router.get("/{lut_name}/details", response_model=LutDetailsResponse)
+def get_lut_details(lut_name: str) -> LutDetailsResponse:
+    """Return the detailed LUT metadata and visualization payload.
+    返回 LUT 的详细元数据和可视化载荷。
+    """
+
+    try:
+        detail = _resolve_lut_details_service().get_lut_details(lut_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LUT details unavailable: {exc}") from exc
+
+    return LutDetailsResponse(
+        name=detail.name,
+        path=detail.path,
+        fingerprint=detail.fingerprint,
+        manufacturer=detail.manufacturer,
+        manufacturer_source=detail.manufacturer_source,
+        material_type=detail.material_type,
+        material_source=detail.material_source,
+        color_mode=detail.color_mode,
+        color_count=detail.color_count,
+        source_kind=detail.source_kind,
+        schema_version=detail.schema_version,
+        capabilities=list(detail.capabilities),
+        supported_modes=list(detail.supported_modes),
+        raw_metadata=detail.raw_metadata,
+        palette=[
+            PaletteEntrySchema(
+                color=str(entry["color"]),
+                material=str(entry["material"]),
+                hex_color=entry.get("hex_color"),
+                color_name=entry.get("color_name"),
+            )
+            for entry in detail.palette
+        ],
+        coverage_stats=LutCoverageStatsResponse(
+            entry_count=detail.coverage_stats.entry_count,
+            plotted_point_count=detail.coverage_stats.plotted_point_count,
+            l_range=LutAxisRange(min=detail.coverage_stats.l_range.min, max=detail.coverage_stats.l_range.max),
+            a_range=LutAxisRange(min=detail.coverage_stats.a_range.min, max=detail.coverage_stats.a_range.max),
+            b_range=LutAxisRange(min=detail.coverage_stats.b_range.min, max=detail.coverage_stats.b_range.max),
+            r_range=LutAxisRange(min=detail.coverage_stats.r_range.min, max=detail.coverage_stats.r_range.max),
+            g_range=LutAxisRange(min=detail.coverage_stats.g_range.min, max=detail.coverage_stats.g_range.max),
+            b_rgb_range=LutAxisRange(min=detail.coverage_stats.b_rgb_range.min, max=detail.coverage_stats.b_rgb_range.max),
+        ),
+        lab_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in detail.lab_points
+        ],
+        lab_points_3d=[
+            LutPlotPoint3D(
+                l=point.l,
+                a=point.a,
+                b=point.b,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in detail.lab_points_3d
+        ],
+        lab_hull=[LutHullPoint(x=point[0], y=point[1]) for point in detail.lab_hull],
+        rgb_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in detail.rgb_points
+        ],
+        max_color_layers=detail.max_color_layers,
+        layer_height_mm=detail.layer_height_mm,
+        line_width_mm=detail.line_width_mm,
+        base_layers=detail.base_layers,
+        base_channel_idx=detail.base_channel_idx,
+        layer_order=detail.layer_order,
+    )
 
 
 @router.post("/{lut_name}/predict-recipe-color")

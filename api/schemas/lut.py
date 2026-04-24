@@ -90,6 +90,131 @@ class LutSourceCatalogResponse(BaseModel):
     native_brand_groups: list[NativeBrandCatalogGroup] = Field(default_factory=list, description="原生品牌分组")
 
 
+class LutDetailsCatalogItem(BaseModel):
+    """Indexed item for the LUT details catalog.
+    LUT 详情目录中的索引条目。
+    """
+
+    name: str = Field(..., description="LUT 详情显示名称")
+    path: str = Field(..., description="文件路径")
+    fingerprint: str = Field("", description="文件指纹")
+    color_mode: str = Field(..., description="颜色模式")
+    source_kind: str = Field("legacy_lookup", description="来源类型")
+    manufacturer: str = Field(..., description="解析后的厂商")
+    material_type: str = Field("", description="解析后的材质")
+    manufacturer_source: str = Field(..., description="厂商解析来源")
+    material_source: str = Field(..., description="材质解析来源")
+    search_tokens: list[str] = Field(default_factory=list, description="预计算搜索 token")
+
+
+class LutDetailsCatalogGroup(BaseModel):
+    """Manufacturer-grouped LUT details catalog bucket.
+    按厂商分组的 LUT 详情目录桶。
+    """
+
+    manufacturer: str = Field(..., description="标准化后的厂商名")
+    items: list[LutDetailsCatalogItem] = Field(default_factory=list, description="该厂商下的 LUT 条目")
+
+
+class LutDetailsCatalogResponse(BaseModel):
+    """Grouped LUT details catalog response.
+    分组后的 LUT 详情目录响应。
+    """
+
+    groups: list[LutDetailsCatalogGroup] = Field(default_factory=list, description="按厂商分组后的目录")
+
+
+class LutAxisRange(BaseModel):
+    """Axis min/max pair for coverage stats.
+    覆盖统计的坐标轴范围。
+    """
+
+    min: float = Field(..., description="最小值")
+    max: float = Field(..., description="最大值")
+
+
+class LutCoverageStatsResponse(BaseModel):
+    """Coverage statistics for LUT detail visualizations.
+    LUT 详情可视化的覆盖统计。
+    """
+
+    entry_count: int = Field(..., ge=0, description="LUT 条目数量")
+    plotted_point_count: int = Field(..., ge=0, description="绘制点数量")
+    l_range: LutAxisRange = Field(..., description="Lab L 范围")
+    a_range: LutAxisRange = Field(..., description="Lab a 范围")
+    b_range: LutAxisRange = Field(..., description="Lab b 范围")
+    r_range: LutAxisRange = Field(..., description="RGB R 范围")
+    g_range: LutAxisRange = Field(..., description="RGB G 范围")
+    b_rgb_range: LutAxisRange = Field(..., description="RGB B 范围")
+
+
+class LutPlotPoint(BaseModel):
+    """Plot point for LUT details charts.
+    LUT 详情图表中的散点。
+    """
+
+    x: float = Field(..., description="X 坐标")
+    y: float = Field(..., description="Y 坐标")
+    hex_color: str = Field(..., description="点的十六进制颜色")
+    rgb: list[int] = Field(..., min_length=3, max_length=3, description="点的 RGB 值")
+    label: str = Field(..., description="点标签")
+
+
+class LutPlotPoint3D(BaseModel):
+    """3D plot point for LUT details charts.
+    LUT 详情 3D 图表中的散点。
+    """
+
+    l: float = Field(..., description="L* 坐标")
+    a: float = Field(..., description="a* 坐标")
+    b: float = Field(..., description="b* 坐标")
+    hex_color: str = Field(..., description="点的十六进制颜色")
+    rgb: list[int] = Field(..., min_length=3, max_length=3, description="点的 RGB 值")
+    label: str = Field(..., description="点标签")
+
+
+class LutHullPoint(BaseModel):
+    """Hull polygon point for Lab coverage region.
+    Lab 覆盖区域凸包点。
+    """
+
+    x: float = Field(..., description="X 坐标")
+    y: float = Field(..., description="Y 坐标")
+
+
+class LutDetailsResponse(BaseModel):
+    """Detailed LUT metadata and visualization payload.
+    LUT 详细元数据与可视化载荷。
+    """
+
+    name: str = Field(..., description="LUT 名称")
+    path: str = Field(..., description="文件路径")
+    fingerprint: str = Field("", description="文件指纹")
+    manufacturer: str = Field(..., description="解析后的厂商")
+    manufacturer_source: str = Field(..., description="厂商解析来源")
+    material_type: str = Field("", description="解析后的材质")
+    material_source: str = Field(..., description="材质解析来源")
+    color_mode: str = Field(..., description="颜色模式")
+    color_count: int = Field(..., ge=0, description="颜色数量")
+    source_kind: str = Field("legacy_lookup", description="来源类型")
+    schema_version: str = Field("1.0", description="Schema 版本")
+    capabilities: list[str] = Field(default_factory=list, description="能力列表")
+    supported_modes: list[dict[str, Any]] = Field(default_factory=list, description="支持的模式列表")
+    raw_metadata: dict[str, Any] = Field(default_factory=dict, description="安全裁剪后的原始元数据")
+    palette: list[PaletteEntrySchema] = Field(default_factory=list, description="调色板")
+    coverage_stats: LutCoverageStatsResponse = Field(..., description="覆盖统计")
+    lab_points: list[LutPlotPoint] = Field(default_factory=list, description="Lab 散点图点集")
+    lab_points_3d: list[LutPlotPoint3D] = Field(default_factory=list, description="Lab 3D 散点图点集")
+    lab_hull: list[LutHullPoint] = Field(default_factory=list, description="Lab 凸包点集")
+    rgb_points: list[LutPlotPoint] = Field(default_factory=list, description="RGB 投影视图点集")
+    max_color_layers: int = Field(5, description="最大颜色层数")
+    layer_height_mm: float = Field(0.08, description="层高 (mm)")
+    line_width_mm: float = Field(0.42, description="线宽 (mm)")
+    base_layers: int = Field(10, description="底板层数")
+    base_channel_idx: int = Field(0, description="底板通道索引")
+    layer_order: str = Field("Top2Bottom", description="打印顺序")
+
+
 class LutSourceSelection(BaseModel):
     """Shared LUT source selection contract.
     LUT 源选择共享契约。

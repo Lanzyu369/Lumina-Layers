@@ -323,8 +323,7 @@ def looks_like_model_package(path: str) -> bool:
     return Path(path).suffix.lower() == ".msgpack"
 
 
-def parse_model_package_file(path: str) -> NativeReferenceContext:
-    payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
+def _parse_model_package_payload(payload: Any, path: str) -> NativeReferenceContext:
     if not isinstance(payload, dict):
         raise ValueError("Invalid model package payload")
     modes_raw = payload.get("modes", [])
@@ -333,13 +332,16 @@ def parse_model_package_file(path: str) -> NativeReferenceContext:
         for item in modes_raw:
             if not isinstance(item, dict):
                 continue
-            supported_modes.append(
-                supported_mode_dict(
-                    int(item.get("color_layers", 0)),
-                    float(item.get("layer_height_mm", 0.0)),
-                    layer_order=str(item.get("layer_order", "Top2Bottom")),
+            try:
+                supported_modes.append(
+                    supported_mode_dict(
+                        int(item.get("color_layers", 0)),
+                        float(item.get("layer_height_mm", 0.0)),
+                        layer_order=str(item.get("layer_order", "Top2Bottom")),
+                    )
                 )
-            )
+            except (TypeError, ValueError):
+                continue
     scope = payload.get("scope", {}) if isinstance(payload.get("scope"), dict) else {}
     channel_keys = tuple(str(item) for item in payload.get("channel_keys", []) if str(item))
     vendor = (str(scope.get("vendor")) if scope.get("vendor") is not None else None)
@@ -373,6 +375,11 @@ def parse_model_package_file(path: str) -> NativeReferenceContext:
         vendor=vendor,
         material_type=material_type,
     )
+
+
+def parse_model_package_file(path: str) -> NativeReferenceContext:
+    payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
+    return _parse_model_package_payload(payload, path)
 
 
 def _find_nearby_json(path: str, predicate) -> list[str]:
@@ -740,9 +747,10 @@ def build_recipe_runtime_payload(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_model_package_runtime_payload(path: str) -> dict[str, Any]:
+def build_model_package_runtime_payload(path: str, payload: Any | None = None) -> dict[str, Any]:
     """Convert a native reference ModelPackage v2 msgpack into Lumina runtime_package shape."""
-    payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
+    if payload is None:
+        payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
     if not isinstance(payload, dict):
         raise ValueError("Invalid model package payload")
     modes_raw = payload.get("modes", [])
@@ -754,15 +762,21 @@ def build_model_package_runtime_payload(path: str) -> dict[str, Any]:
     for item in modes_raw:
         if not isinstance(item, dict):
             continue
-        color_layers = int(item.get("color_layers", 0))
-        layer_height_mm = float(item.get("layer_height_mm", 0.0))
-        layer_order = str(item.get("layer_order", "Top2Bottom"))
-        num_candidates = int(item.get("num_candidates", 0))
+        try:
+            color_layers = int(item.get("color_layers", 0))
+            layer_height_mm = float(item.get("layer_height_mm", 0.0))
+            layer_order = str(item.get("layer_order", "Top2Bottom"))
+            num_candidates = int(item.get("num_candidates", 0))
+        except (TypeError, ValueError):
+            continue
         if color_layers <= 0 or layer_height_mm <= 0 or num_candidates <= 0:
             continue
 
-        candidate_recipes = np.frombuffer(item.get("candidate_recipes", b""), dtype=np.uint8)
-        pred_lab = np.frombuffer(item.get("pred_lab", b""), dtype="<f4")
+        try:
+            candidate_recipes = np.frombuffer(item.get("candidate_recipes", b""), dtype=np.uint8)
+            pred_lab = np.frombuffer(item.get("pred_lab", b""), dtype="<f4")
+        except (TypeError, ValueError):
+            continue
         if candidate_recipes.size != num_candidates * color_layers:
             continue
         if pred_lab.size != num_candidates * 3:
@@ -771,14 +785,22 @@ def build_model_package_runtime_payload(path: str) -> dict[str, Any]:
         candidate_recipes = candidate_recipes.reshape(num_candidates, color_layers).astype(np.int32)
         pred_lab = pred_lab.reshape(num_candidates, 3).astype(np.float32)
         mode = supported_mode_dict(color_layers, layer_height_mm, layer_order=layer_order)
+        try:
+            threshold = float(item.get("threshold", defaults.get("threshold", 5.0)))
+        except (TypeError, ValueError):
+            threshold = float(defaults.get("threshold", 5.0))
+        try:
+            margin = float(item.get("margin", defaults.get("margin", 0.7)))
+        except (TypeError, ValueError):
+            margin = float(defaults.get("margin", 0.7))
         runtime_modes[mode["mode_key"]] = {
             "layer_height_mm": mode["layer_height_mm"],
             "color_layers": mode["color_layers"],
             "layer_order": mode.get("layer_order", "Top2Bottom"),
             "candidate_recipes": candidate_recipes.tolist(),
             "pred_lab": pred_lab.tolist(),
-            "threshold": float(item.get("threshold", defaults.get("threshold", 5.0))),
-            "margin": float(item.get("margin", defaults.get("margin", 0.7))),
+            "threshold": threshold,
+            "margin": margin,
         }
 
     if not runtime_modes:
@@ -794,19 +816,52 @@ def build_model_package_runtime_payload(path: str) -> dict[str, Any]:
 
 
 def synthesize_rgb_and_stacks_from_model_package(path: str) -> tuple[np.ndarray, np.ndarray]:
-    ctx = parse_model_package_file(path)
     payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
+    rgb, stacks, _mode = synthesize_rgb_and_stacks_from_model_package_payload(path, payload)
+    return rgb, stacks
+
+
+def synthesize_rgb_and_stacks_from_model_package_payload(
+    path: str,
+    payload: Any,
+    preferred_mode: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any] | None]:
+    _parse_model_package_payload(payload, path)
     modes = payload.get("modes", [])
     if not isinstance(modes, list) or not modes:
-        return np.zeros((0, 3), dtype=np.uint8), np.zeros((0, 0), dtype=np.int32)
-    first_mode = next((m for m in modes if isinstance(m, dict) and m.get("num_candidates")), modes[0])
-    recipes = np.frombuffer(first_mode.get("candidate_recipes", b""), dtype=np.uint8)
-    color_layers = int(first_mode.get("color_layers", 0))
-    num_candidates = int(first_mode.get("num_candidates", 0))
-    pred_lab = np.frombuffer(first_mode.get("pred_lab", b""), dtype="<f4")
-    if num_candidates <= 0 or color_layers <= 0:
-        return np.zeros((0, 3), dtype=np.uint8), np.zeros((0, 0), dtype=np.int32)
-    recipes = recipes.reshape(num_candidates, color_layers).astype(np.int32)
-    pred_lab = pred_lab.reshape(num_candidates, 3)
-    rgb = opencv_lab_to_rgb_uint8(pred_lab)
-    return rgb, recipes
+        return np.zeros((0, 3), dtype=np.uint8), np.zeros((0, 0), dtype=np.int32), None
+    ordered_modes = [mode for mode in modes if isinstance(mode, dict)]
+    if preferred_mode is not None:
+        def _matches_preferred(mode: dict[str, Any]) -> bool:
+            try:
+                return (
+                    int(mode.get("color_layers", 0)) == int(preferred_mode.get("color_layers", 0))
+                    and float(mode.get("layer_height_mm", 0.0)) == float(preferred_mode.get("layer_height_mm", 0.0))
+                    and str(mode.get("layer_order", "Top2Bottom")) == str(preferred_mode.get("layer_order", "Top2Bottom"))
+                )
+            except (TypeError, ValueError):
+                return False
+
+        ordered_modes = [
+            *(mode for mode in ordered_modes if _matches_preferred(mode)),
+            *(mode for mode in ordered_modes if not _matches_preferred(mode)),
+        ]
+    for mode in ordered_modes:
+        try:
+            recipes = np.frombuffer(mode.get("candidate_recipes", b""), dtype=np.uint8)
+            color_layers = int(mode.get("color_layers", 0))
+            num_candidates = int(mode.get("num_candidates", 0))
+            pred_lab = np.frombuffer(mode.get("pred_lab", b""), dtype="<f4")
+        except (TypeError, ValueError):
+            continue
+        if num_candidates <= 0 or color_layers <= 0:
+            continue
+        if recipes.size != num_candidates * color_layers:
+            continue
+        if pred_lab.size != num_candidates * 3:
+            continue
+        recipes = recipes.reshape(num_candidates, color_layers).astype(np.int32)
+        pred_lab = pred_lab.reshape(num_candidates, 3)
+        rgb = opencv_lab_to_rgb_uint8(pred_lab)
+        return rgb, recipes, mode
+    return np.zeros((0, 3), dtype=np.uint8), np.zeros((0, 0), dtype=np.int32), None
