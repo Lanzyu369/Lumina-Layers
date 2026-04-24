@@ -959,6 +959,74 @@ def test_update_saved_stage_a_material_archive_metadata_missing_stage_a_file(
         )
 
 
+def test_update_saved_stage_a_material_archive_metadata_overrides_estimated_rgb(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    archive_path, _ = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+    )
+
+    result = update_saved_stage_a_material_archive_metadata(
+        directory_name="pla-basic",
+        material_name="PLA Basic",
+        estimated_rgb=[255, 128, 0],
+        materials_dir=str(materials_root),
+    )
+
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_summary"]["estimated_rgb"] == [255, 128, 0]
+    assert result.material_summary["estimated_rgb"] == [255, 128, 0]
+
+
+def test_update_saved_stage_a_material_archive_metadata_preserves_estimated_rgb_when_unset(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    archive_path, _ = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+    )
+
+    update_saved_stage_a_material_archive_metadata(
+        directory_name="pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+        materials_dir=str(materials_root),
+    )
+
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_summary"]["estimated_rgb"] == [120, 130, 140]
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    [
+        [255, 128],
+        [255, 128, 0, 10],
+        [256, 0, 0],
+        [-1, 0, 0],
+        ["ff", "80", "00"],
+        "not-a-list",
+    ],
+)
+def test_update_saved_stage_a_material_archive_metadata_rejects_invalid_estimated_rgb(
+    tmp_path: Path,
+    invalid_value,
+) -> None:
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+
+    with pytest.raises(ValueError):
+        update_saved_stage_a_material_archive_metadata(
+            directory_name="pla-basic",
+            material_name="PLA Basic",
+            estimated_rgb=invalid_value,
+            materials_dir=str(materials_root),
+        )
+
+
 def test_extractor_update_gradient_card_material_route_persists_edits(
     monkeypatch,
     tmp_path: Path,
@@ -1011,6 +1079,61 @@ def test_extractor_update_gradient_card_material_route_rejects_blank_name(
     response = client.patch(
         "/api/extractor/gradient-card-materials/pla-basic",
         json={"material_name": "   ", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_extractor_update_gradient_card_material_route_overrides_estimated_rgb(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    archive_path, _ = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={
+            "material_name": "PLA Basic",
+            "brand": None,
+            "estimated_rgb": [255, 128, 0],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["material"]["estimated_rgb"] == [255, 128, 0]
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_summary"]["estimated_rgb"] == [255, 128, 0]
+
+
+def test_extractor_update_gradient_card_material_route_rejects_invalid_estimated_rgb(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={
+            "material_name": "PLA Basic",
+            "estimated_rgb": [300, 0, 0],
+        },
     )
 
     assert response.status_code == 422

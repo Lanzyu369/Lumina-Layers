@@ -31,11 +31,33 @@ const isRgbTriplet = (value: number[] | null | undefined): value is [number, num
 
 const toRgbCss = (rgb: [number, number, number]) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
+const clampChannel = (channel: number): number =>
+  Math.max(0, Math.min(255, Math.round(Number.isFinite(channel) ? channel : 0)));
+
 const toHex = (rgb: [number, number, number]) =>
   `#${rgb
-    .map((channel) => Math.max(0, Math.min(255, channel)).toString(16).padStart(2, "0"))
+    .map((channel) => clampChannel(channel).toString(16).padStart(2, "0"))
     .join("")
     .toUpperCase()}`;
+
+const HEX_COLOR_PATTERN = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+const parseHexColor = (hex: string): [number, number, number] | null => {
+  const match = HEX_COLOR_PATTERN.exec(hex.trim());
+  if (!match) {
+    return null;
+  }
+  const digits = match[1];
+  const expanded = digits.length === 3
+    ? digits.split("").map((char) => char + char).join("")
+    : digits;
+  const r = Number.parseInt(expanded.slice(0, 2), 16);
+  const g = Number.parseInt(expanded.slice(2, 4), 16);
+  const b = Number.parseInt(expanded.slice(4, 6), 16);
+  return [r, g, b];
+};
+
+const DEFAULT_EDIT_COLOR: [number, number, number] = [128, 128, 128];
 
 const formatNumericValue = (value: number | null | undefined, digits = 3) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
@@ -58,6 +80,9 @@ const triggerDownload = (url: string, filename?: string) => {
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
+
+const colorPickerInputClass =
+  "h-10 w-14 shrink-0 cursor-pointer rounded-2xl border border-slate-200/80 bg-white/90 p-1 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900";
 
 const normalizeLibraryItem = (item: SavedMaterialLibraryItem): SavedMaterialLibraryItem => ({
   ...item,
@@ -82,8 +107,6 @@ export default function MaterialLibraryPanel() {
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
-  const [editingMaterialName, setEditingMaterialName] = useState("");
-  const [editingMaterialBrand, setEditingMaterialBrand] = useState("");
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
@@ -150,16 +173,12 @@ export default function MaterialLibraryPanel() {
 
   const handleOpenEditDialog = useCallback((item: SavedMaterialLibraryItem) => {
     setEditingMaterial(item);
-    setEditingMaterialName(item.material_name);
-    setEditingMaterialBrand(item.brand?.trim() || "");
     setError(null);
     setSuccess(null);
   }, []);
 
   const handleCloseEditDialog = useCallback(() => {
     setEditingMaterial(null);
-    setEditingMaterialName("");
-    setEditingMaterialBrand("");
   }, []);
 
   const handleOpenHistoryDialog = useCallback((item: SavedMaterialLibraryItem) => {
@@ -170,37 +189,41 @@ export default function MaterialLibraryPanel() {
     setHistoryMaterial(null);
   }, []);
 
-  const handleUpdateMaterial = useCallback(async () => {
-    if (!editingMaterial) {
-      return;
-    }
-    const nextMaterialName = editingMaterialName.trim();
-    if (!nextMaterialName) {
-      setError(t("mat_gradient_save_name_required_error"));
-      return;
-    }
-    setPendingUpdateDirectoryName(editingMaterial.directory_name);
-    setError(null);
-    setSuccess(null);
-    try {
-      const response = await updateGradientCardMaterial(editingMaterial.directory_name, {
-        materialName: nextMaterialName,
-        brand: editingMaterialBrand.trim() || null,
-      });
-      const nextItem = normalizeLibraryItem(response.material);
-      setMaterials((previous) =>
-        previous.map((item) =>
-          item.directory_name === editingMaterial.directory_name ? nextItem : item,
-        ),
-      );
-      setSuccess(response.message || t("mat_gradient_library_edit_success"));
-      handleCloseEditDialog();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_edit_failed"));
-    } finally {
-      setPendingUpdateDirectoryName(null);
-    }
-  }, [editingMaterial, editingMaterialBrand, editingMaterialName, handleCloseEditDialog, t]);
+  const handleSaveEditDialog = useCallback(
+    async (values: {
+      materialName: string;
+      brand: string | null;
+      estimatedRgb: [number, number, number];
+    }) => {
+      if (!editingMaterial) {
+        return;
+      }
+      const directoryName = editingMaterial.directory_name;
+      setPendingUpdateDirectoryName(directoryName);
+      setError(null);
+      setSuccess(null);
+      try {
+        const response = await updateGradientCardMaterial(directoryName, {
+          materialName: values.materialName,
+          brand: values.brand,
+          estimatedRgb: values.estimatedRgb,
+        });
+        const nextItem = normalizeLibraryItem(response.material);
+        setMaterials((previous) =>
+          previous.map((item) =>
+            item.directory_name === directoryName ? nextItem : item,
+          ),
+        );
+        setSuccess(response.message || t("mat_gradient_library_edit_success"));
+        setEditingMaterial(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t("mat_gradient_library_edit_failed"));
+      } finally {
+        setPendingUpdateDirectoryName(null);
+      }
+    },
+    [editingMaterial, t],
+  );
 
   const handleDeleteMaterial = useCallback(async (item: SavedMaterialLibraryItem) => {
     const confirmed = window.confirm(
@@ -382,82 +405,12 @@ export default function MaterialLibraryPanel() {
       ) : null}
 
       {editingMaterial ? (
-        <div
-          data-testid="material-library-edit-dialog"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: "var(--surface-scrim)" }}
-        >
-          <section
-            className="relative flex w-full max-w-lg flex-col gap-4 overflow-hidden rounded-[28px] border p-4 shadow-2xl sm:p-5"
-            style={{
-              borderColor: "var(--surface-outline)",
-              background: "var(--surface-panel-strong)",
-            }}
-          >
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_library_edit_title")}
-              </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {tRuntime("mat_gradient_library_edit_desc", {
-                  directoryName: editingMaterial.directory_name,
-                })}
-              </p>
-            </div>
-
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_material_name_label")}
-              </span>
-              <input
-                data-testid="material-library-edit-name-input"
-                value={editingMaterialName}
-                onChange={(event) => setEditingMaterialName(event.target.value)}
-                placeholder={t("mat_gradient_material_name_placeholder")}
-                className={textInputClass}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_brand_label")}
-              </span>
-              <input
-                data-testid="material-library-edit-brand-input"
-                value={editingMaterialBrand}
-                onChange={(event) => setEditingMaterialBrand(event.target.value)}
-                placeholder={t("mat_gradient_brand_placeholder")}
-                className={textInputClass}
-              />
-            </label>
-
-            <div className={`${mutedSectionCardClass} px-4 py-3`}>
-              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_gradient_library_directory_label")}
-              </p>
-              <p className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {editingMaterial.directory_name}
-              </p>
-            </div>
-
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <Button
-                label={t("mat_gradient_library_edit_cancel_btn")}
-                variant="secondary"
-                onClick={handleCloseEditDialog}
-                disabled={pendingUpdateDirectoryName === editingMaterial.directory_name}
-                className="w-full sm:w-auto"
-              />
-              <Button
-                label={t("mat_gradient_library_edit_save_btn")}
-                onClick={() => void handleUpdateMaterial()}
-                disabled={!editingMaterialName.trim()}
-                loading={pendingUpdateDirectoryName === editingMaterial.directory_name}
-                className="w-full sm:w-auto"
-              />
-            </div>
-          </section>
-        </div>
+        <MaterialLibraryEditDialog
+          item={editingMaterial}
+          pending={pendingUpdateDirectoryName === editingMaterial.directory_name}
+          onCancel={handleCloseEditDialog}
+          onSave={handleSaveEditDialog}
+        />
       ) : null}
 
       {historyMaterial ? (
@@ -795,5 +748,205 @@ export default function MaterialLibraryPanel() {
         </div>
       )}
     </motion.aside>
+  );
+}
+
+interface MaterialLibraryEditDialogProps {
+  item: SavedMaterialLibraryItem;
+  pending: boolean;
+  onCancel: () => void;
+  onSave: (values: {
+    materialName: string;
+    brand: string | null;
+    estimatedRgb: [number, number, number];
+  }) => void;
+}
+
+function MaterialLibraryEditDialog({
+  item,
+  pending,
+  onCancel,
+  onSave,
+}: MaterialLibraryEditDialogProps) {
+  const { t } = useI18n();
+
+  const initialColor = useMemo<[number, number, number]>(() => {
+    if (!isRgbTriplet(item.estimated_rgb)) {
+      return DEFAULT_EDIT_COLOR;
+    }
+    return [
+      clampChannel(item.estimated_rgb[0]),
+      clampChannel(item.estimated_rgb[1]),
+      clampChannel(item.estimated_rgb[2]),
+    ];
+  }, [item.estimated_rgb]);
+
+  const [materialName, setMaterialName] = useState(item.material_name);
+  const [brand, setBrand] = useState(item.brand?.trim() || "");
+  const [color, setColor] = useState<[number, number, number]>(initialColor);
+  const [colorHex, setColorHex] = useState<string>(toHex(initialColor));
+  const [colorHexError, setColorHexError] = useState<string | null>(null);
+
+  const handleColorPickerChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const parsed = parseHexColor(event.target.value);
+    if (!parsed) {
+      return;
+    }
+    setColor(parsed);
+    setColorHex(toHex(parsed));
+    setColorHexError(null);
+  }, []);
+
+  const handleColorHexChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const raw = event.target.value;
+      setColorHex(raw);
+      const parsed = parseHexColor(raw);
+      if (parsed) {
+        setColor(parsed);
+        setColorHexError(null);
+      } else if (raw.trim() === "") {
+        setColorHexError(null);
+      } else {
+        setColorHexError(t("mat_gradient_library_edit_color_invalid_hex"));
+      }
+    },
+    [t],
+  );
+
+  const handleSave = useCallback(() => {
+    const trimmedName = materialName.trim();
+    if (!trimmedName || colorHexError) {
+      return;
+    }
+    onSave({
+      materialName: trimmedName,
+      brand: brand.trim() || null,
+      estimatedRgb: [clampChannel(color[0]), clampChannel(color[1]), clampChannel(color[2])],
+    });
+  }, [brand, color, colorHexError, materialName, onSave]);
+
+  return (
+    <div
+      data-testid="material-library-edit-dialog"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "var(--surface-scrim)" }}
+    >
+      <section
+        className="relative flex w-full max-w-lg flex-col gap-4 overflow-hidden rounded-[28px] border p-4 shadow-2xl sm:p-5"
+        style={{
+          borderColor: "var(--surface-outline)",
+          background: "var(--surface-panel-strong)",
+        }}
+      >
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+            {t("mat_gradient_library_edit_title")}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {tRuntime("mat_gradient_library_edit_desc", {
+              directoryName: item.directory_name,
+            })}
+          </p>
+        </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+            {t("mat_gradient_material_name_label")}
+          </span>
+          <input
+            data-testid="material-library-edit-name-input"
+            value={materialName}
+            onChange={(event) => setMaterialName(event.target.value)}
+            placeholder={t("mat_gradient_material_name_placeholder")}
+            className={textInputClass}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+            {t("mat_gradient_brand_label")}
+          </span>
+          <input
+            data-testid="material-library-edit-brand-input"
+            value={brand}
+            onChange={(event) => setBrand(event.target.value)}
+            placeholder={t("mat_gradient_brand_placeholder")}
+            className={textInputClass}
+          />
+        </label>
+
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+            {t("mat_gradient_library_edit_color_label")}
+          </span>
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              data-testid="material-library-edit-color-picker"
+              value={toHex(color)}
+              onChange={handleColorPickerChange}
+              aria-label={t("mat_gradient_library_edit_color_label")}
+              className={colorPickerInputClass}
+            />
+            <input
+              type="text"
+              data-testid="material-library-edit-color-hex-input"
+              value={colorHex}
+              onChange={handleColorHexChange}
+              placeholder={t("mat_gradient_library_edit_color_hex_placeholder")}
+              className={textInputClass}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+            <div
+              data-testid="material-library-edit-color-swatch"
+              aria-hidden="true"
+              className="h-10 w-10 shrink-0 rounded-2xl border border-slate-200/80 dark:border-slate-700/80"
+              style={{ backgroundColor: toRgbCss(color) }}
+            />
+          </div>
+          {colorHexError ? (
+            <p
+              data-testid="material-library-edit-color-hex-error"
+              className="text-xs font-medium text-rose-600 dark:text-rose-400"
+            >
+              {colorHexError}
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t("mat_gradient_library_edit_color_hint")}
+            </p>
+          )}
+        </div>
+
+        <div className={`${mutedSectionCardClass} px-4 py-3`}>
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            {t("mat_gradient_library_directory_label")}
+          </p>
+          <p className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+            {item.directory_name}
+          </p>
+        </div>
+
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button
+            label={t("mat_gradient_library_edit_cancel_btn")}
+            variant="secondary"
+            onClick={onCancel}
+            disabled={pending}
+            className="w-full sm:w-auto"
+          />
+          <Button
+            label={t("mat_gradient_library_edit_save_btn")}
+            onClick={handleSave}
+            disabled={!materialName.trim() || Boolean(colorHexError)}
+            loading={pending}
+            className="w-full sm:w-auto"
+          />
+        </div>
+      </section>
+    </div>
   );
 }

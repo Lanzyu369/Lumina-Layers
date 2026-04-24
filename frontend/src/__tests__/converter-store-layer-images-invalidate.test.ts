@@ -16,12 +16,18 @@ vi.mock("../api/converter", () => ({
   cropImage: vi.fn(),
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
+  replaceColorsBatch: vi.fn(),
   applyRecipeOverride: vi.fn(),
 }));
 
-import { replaceColor, applyRecipeOverride } from "../api/converter";
+import {
+  replaceColor,
+  replaceColorsBatch,
+  applyRecipeOverride,
+} from "../api/converter";
 
 const mockReplaceColor = vi.mocked(replaceColor);
+const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 const mockApplyRecipeOverride = vi.mocked(applyRecipeOverride);
 
 function seedStore(overrides: Partial<ConverterState> = {}) {
@@ -42,7 +48,8 @@ function seedStore(overrides: Partial<ConverterState> = {}) {
     ],
     layerImagesLoading: false,
     layerImagesOpen: true,
-    layerImagesSourceKey: "sess-abc|null|/api/files/preview-old|/api/files/preview-old",
+    layerImagesSourceKey:
+      "sess-abc|null|/api/files/preview-old|/api/files/preview-old",
     ...overrides,
   } as Partial<ConverterState>);
 }
@@ -86,7 +93,7 @@ describe("layer image cache invalidation after color replacement", () => {
         },
       ],
     });
-    mockReplaceColor.mockResolvedValue({
+    mockReplaceColorsBatch.mockResolvedValue({
       status: "ok",
       message: "ok",
       preview_url: "/api/files/preview-batch-new",
@@ -145,7 +152,11 @@ describe("layer image cache invalidation after custom recipe apply", () => {
 
     await useConverterStore
       .getState()
-      .applyCustomRecipeOverride(["region-1"], [1, 1, 1, 1, 1, 1], "Top2Bottom");
+      .applyCustomRecipeOverride(
+        ["region-1"],
+        [1, 1, 1, 1, 1, 1],
+        "Top2Bottom",
+      );
 
     const state = useConverterStore.getState();
     expect(state.previewBaseImageUrl).toBe("/api/files/preview-apply");

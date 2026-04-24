@@ -1237,6 +1237,15 @@ export interface RegionReplaceResponse {
   preview_glb_url?: string | null;
   color_contours?: Record<string, number[][][]> | null;
   message: string;
+  /**
+   * Refreshed gradient-banding groups when the endpoint re-ran the
+   * gradient-group analyser (e.g. ``/region-requantize``). Endpoints that
+   * do not mutate ``matched_rgb`` enough to shift the segmentation leave
+   * this absent, and the frontend should keep the cached groups.
+   * 端点重新分析了渐变分组时返回；普通 hex 替换不会填充此字段，前端应
+   * 保留已缓存的分组。
+   */
+  gradient_groups?: GradientGroupItem[] | null;
 }
 
 // ========== Printer Models ==========
@@ -1461,7 +1470,21 @@ export interface GradientGroupItem {
  */
 export type GradientSelectionSource =
   | { kind: "group"; groupIndex: number }
-  | { kind: "region"; groupIndex: number; regionIndex: number };
+  | { kind: "region"; groupIndex: number; regionIndex: number }
+  /**
+   * Multi-region selection inside a single gradient group: the user ticked
+   * ≥2 sub-region checkboxes in the Gradient Groups panel to merge them
+   * for flatten/recolor. All ``regionIndices`` belong to ``groupIndex``
+   * (the panel enforces same-group when toggling); ordering matches the
+   * order the user checked them so UI can show a stable summary.
+   * 用户在面板上跨 region 勾选合并处理时的来源；所有 regionIndex 必属于同
+   * 一个 groupIndex（勾跨 group 的 region 会清空旧选择）。
+   */
+  | {
+      kind: "multi-region";
+      groupIndex: number;
+      regionIndices: number[];
+    };
 
 /** Response payload for ``GET /convert/gradient-groups/{session_id}``. */
 export interface GradientGroupsResponse {

@@ -249,6 +249,42 @@ export async function replaceColor(
   return response.data;
 }
 
+/** 一次颜色替换对：{ 原色, 目标色 } */
+export interface ColorReplacePair {
+  selectedColor: string;
+  replacementColor: string;
+}
+
+/**
+ * Batch-replace multiple colours in one backend round-trip.
+ *
+ * Semantically equivalent to calling :func:`replaceColor` for each pair in
+ * order, but the server runs the styled PNG render and the segmented GLB
+ * rebuild exactly once at the end, making batch swaps O(N) cheaper on
+ * those dominant cost centres. Use whenever the caller already knows the
+ * full list of colour swaps up front (multi-select replace, colour-remap
+ * undo replay, gradient whole-group flatten, etc.).
+ * 一次请求里批量替换多个颜色。语义等价于循环调用 replaceColor，但 PNG
+ * 渲染和 GLB 重建只做 1 次，批量颜色替换 N× 提速。
+ */
+export async function replaceColorsBatch(
+  sessionId: string,
+  pairs: ColorReplacePair[],
+): Promise<ColorReplaceResponse> {
+  const response = await apiClient.post<ColorReplaceResponse>(
+    "/convert/replace-colors-batch",
+    {
+      session_id: sessionId,
+      replacements: pairs.map((p) => ({
+        selected_color: p.selectedColor,
+        replacement_color: p.replacementColor,
+      })),
+    },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
 /** 分层图片响应 */
 export interface LayerImageInfo {
   layer_index: number;
@@ -377,6 +413,141 @@ export async function regionReplace(
     "/convert/region-replace",
     body,
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * One entry in a region-replace batch request. Either the click
+ * coordinate pair (``clickX`` + ``clickY``) or the gradient indices
+ * (``gradientGroupIndex``, optionally with ``gradientRegionIndex``) must
+ * be supplied — exactly the same source modes as the non-batch
+ * :func:`regionReplace`.
+ * 批量区域替换的单条 item：click 坐标或 gradient 索引二选一，与非批量
+ * :func:`regionReplace` 的 mask 来源语义一致。
+ */
+export interface RegionReplaceBatchItemPayload {
+  replacementColor: string;
+  clickX?: number;
+  clickY?: number;
+  gradientGroupIndex?: number;
+  gradientRegionIndex?: number;
+}
+
+/**
+ * Batch region-replace: multiple masks + target colours in one round-trip.
+ *
+ * Server applies each item's mask cumulatively to the cached matched_rgb
+ * then renders the styled PNG and rebuilds the segmented GLB exactly
+ * once for the whole batch. Use this for multi-region click replace and
+ * for any flow that edits several gradient regions in a row — the
+ * per-call GLB rebuild was the dominant latency before.
+ * 一次请求批量处理多个区域替换。服务端累积 mask 后统一渲染 PNG 和 GLB，
+ * 解决"N 区域 → N 次 GLB 重建"的瓶颈。
+ */
+export async function regionReplaceBatch(
+  sessionId: string,
+  items: RegionReplaceBatchItemPayload[],
+): Promise<RegionReplaceResponse> {
+  const response = await apiClient.post<RegionReplaceResponse>(
+    "/convert/region-replace-batch",
+    {
+      session_id: sessionId,
+      items: items.map((it) => {
+        const body: Record<string, unknown> = {
+          replacement_color: it.replacementColor,
+        };
+        if (it.clickX !== undefined) body.click_x = it.clickX;
+        if (it.clickY !== undefined) body.click_y = it.clickY;
+        if (it.gradientGroupIndex !== undefined) {
+          body.gradient_group_index = it.gradientGroupIndex;
+        }
+        if (it.gradientRegionIndex !== undefined) {
+          body.gradient_region_index = it.gradientRegionIndex;
+        }
+        return body;
+      }),
+    },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * One gradient-region target inside a re-quantisation request.
+ * 二次量化请求中的单个渐变 region 目标（group + region 索引均 1-based）。
+ */
+export interface RegionRequantizeTargetPayload {
+  gradientGroupIndex: number;
+  gradientRegionIndex: number;
+}
+
+/**
+ * Per-region secondary re-quantisation — takes the original source pixels
+ * under each selected region's mask, runs a dedicated K-Means with
+ * ``localQuantizeColors`` clusters, re-matches through the same material
+ * solver the preview uses, and splices the result back into
+ * ``matched_rgb``. Material-archive mode only.
+ *
+ * 渐变面板的区域级二次量化：对每个选中 region 独立跑一次 K-Means
+ * 量化（局部调色板预算），再用管线同款材料求解器重匹配，只写回这些
+ * region 的像素。仅在耗材档案模式下可用。
+ */
+export async function regionRequantize(
+  sessionId: string,
+  targets: RegionRequantizeTargetPayload[],
+  localQuantizeColors: number,
+): Promise<RegionReplaceResponse> {
+  const response = await apiClient.post<RegionReplaceResponse>(
+    "/convert/region-requantize",
+    {
+      session_id: sessionId,
+      targets: targets.map((t) => ({
+        gradient_group_index: t.gradientGroupIndex,
+        gradient_region_index: t.gradientRegionIndex,
+      })),
+      local_quantize_colors: localQuantizeColors,
+    },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Snapshot of the backend's async segmented-GLB build state.
+ *
+ * Emitted by ``GET /api/convert/glb-status/{session_id}`` so the frontend
+ * can keep polling after a replace endpoint returned ``preview_glb_url:
+ * null`` (the server now runs ``generate_segmented_glb`` off the request
+ * thread to cut perceived replace latency by ~75%). When ``status`` goes
+ * to ``"ready"`` the caller should drop the ``glb_url`` into
+ * ``previewGlbUrl`` and stop polling.
+ * 后端异步 GLB 构建状态快照：因为 replace 端点不再同步等 GLB，前端通过
+ * 这个端点轮询拿 ``glb_url``，``status`` 切到 ready 后更新 previewGlbUrl。
+ */
+export interface GlbStatusResponse {
+  session_id: string;
+  status: "idle" | "pending" | "ready" | "error";
+  glb_url: string | null;
+  job_token: string | null;
+  error: string | null;
+}
+
+/**
+ * Fetch the async segmented-GLB build status for a session.
+ *
+ * Safe to call repeatedly (read-only, no side effects); the backend's
+ * status endpoint returns ``idle`` for sessions that have never scheduled
+ * a build yet, so callers can start polling speculatively without a 404.
+ * 查询 session 的异步 GLB 构建状态，可重复调用；从未调度过的 session
+ * 返回 ``idle``，前端可放心先起轮询。
+ */
+export async function getGlbStatus(
+  sessionId: string,
+): Promise<GlbStatusResponse> {
+  const response = await apiClient.get<GlbStatusResponse>(
+    `/convert/glb-status/${encodeURIComponent(sessionId)}`,
+    { timeout: 30_000 },
   );
   return response.data;
 }

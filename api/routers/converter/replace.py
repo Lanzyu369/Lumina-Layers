@@ -15,14 +15,18 @@ from api.schemas.converter import (
     ColorHighlightRequest,
     ColorHighlightResponse,
     ColorMergePreviewRequest,
+    ColorReplaceBatchRequest,
     ColorReplaceRequest,
     RecipeOverrideApplyRequest,
     RecipePredictRequest,
     RegionDetectRequest,
     RegionDetectResponse,
     RegionRecipeRequest,
+    RegionReplaceBatchItem,
+    RegionReplaceBatchRequest,
     RegionReplaceRequest,
     RegionReplaceResponse,
+    RegionRequantizeRequest,
     ResetReplacementsRequest,
     VirtualMaterial,
 )
@@ -40,9 +44,9 @@ from config import LUTMetadata, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
+from core.gradient_region_requantize import requantize_gradient_regions
 from core.converter import (
     extract_color_palette,
-    generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
@@ -58,13 +62,14 @@ from utils.lut_manager import LUTManager
 from api.structured_logging import get_logger
 
 from .common import (
-    NON_FATAL_GLB_ERRORS,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
     _require_preview_cache,
     _require_session,
+    recompute_gradient_groups_into_session,
 )
+from .async_glb import schedule_glb_build
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -462,22 +467,12 @@ def replace_color(
         preview_bytes = _render_styled_preview_bytes(replaced_rgb, cache)
         preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_replaced.png")
 
-        # Regenerate segmented GLB from updated matched_rgb
+        # Schedule async segmented-GLB rebuild so this response returns
+        # immediately after the PNG is ready. Frontend polls
+        # /api/convert/glb-status/{session_id} to pick up the new GLB URL.
+        # 异步重建分段 GLB：响应在 PNG 就绪后立即返回，前端轮询 glb-status。
+        schedule_glb_build(request.session_id, store, registry, cache)
         glb_url: str | None = None
-        try:
-            glb_path = generate_segmented_glb(cache)
-            if glb_path and os.path.exists(glb_path):
-                glb_id = registry.register_path(request.session_id, glb_path)
-                glb_url = f"/api/files/{glb_id}"
-        except NON_FATAL_GLB_ERRORS as glb_err:
-            log.warning(
-                "Color-replace GLB regeneration failed",
-                extra={
-                    "event": "converter_color_replace_glb_failed",
-                    "error_type": type(glb_err).__name__,
-                    "error_message": str(glb_err),
-                },
-            )
 
         # Save history snapshot (deep copy of regions before this change) for undo
         current_regions = session_data.get("replacement_regions", [])
@@ -576,22 +571,11 @@ def reset_replacements(
         preview_bytes = _image_to_png_bytes(source_rgb)
         preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_reset.png")
 
-        # Regenerate segmented GLB from restored matched_rgb
+        # Async GLB rebuild from restored matched_rgb. Same rationale as
+        # /replace-color: keep HTTP response snappy, let the frontend poll.
+        # 异步 GLB 重建，理由同 /replace-color。
+        schedule_glb_build(request.session_id, store, registry, cache)
         glb_url: str | None = None
-        try:
-            glb_path = generate_segmented_glb(cache)
-            if glb_path and os.path.exists(glb_path):
-                glb_id = registry.register_path(request.session_id, glb_path)
-                glb_url = f"/api/files/{glb_id}"
-        except NON_FATAL_GLB_ERRORS as glb_err:
-            log.warning(
-                "Reset-replacements GLB regeneration failed",
-                extra={
-                    "event": "converter_reset_glb_failed",
-                    "error_type": type(glb_err).__name__,
-                    "error_message": str(glb_err),
-                },
-            )
     except HTTPException:
         raise
     except REPLACE_HANDLED_ERRORS as e:
@@ -1098,25 +1082,35 @@ def region_replace(
         store.put(request.session_id, "preview_cache", cache)
 
         # Generate styled preview PNG (with bed grid and transparency)
+        _t_png = _time.perf_counter()
         preview_bytes: bytes = _render_styled_preview_bytes(replaced_rgb, cache)
         preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "preview_region_replaced.png")
+        _png_ms = (_time.perf_counter() - _t_png) * 1000
 
-        # Regenerate segmented GLB from updated matched_rgb
+        # Async GLB rebuild: /region-replace previously spent ~77% of its
+        # wall time here; now the HTTP response returns in ~10s (sync +
+        # PNG) and the GLB arrives via /glb-status polling afterwards.
+        # 异步 GLB 重建：以往 /region-replace 77% 的耗时在这里；现在只
+        # 等 sync + PNG 即可响应，GLB 通过 glb-status 轮询取回。
+        schedule_glb_build(request.session_id, store, registry, cache)
         glb_url: str | None = None
-        try:
-            glb_path = generate_segmented_glb(cache)
-            if glb_path and os.path.exists(glb_path):
-                glb_id = registry.register_path(request.session_id, glb_path)
-                glb_url = f"/api/files/{glb_id}"
-        except NON_FATAL_GLB_ERRORS as glb_err:
-            log.warning(
-                "Region-replace GLB regeneration failed",
-                extra={
-                    "event": "converter_region_replace_glb_failed",
-                    "error_type": type(glb_err).__name__,
-                    "error_message": str(glb_err),
-                },
-            )
+
+        # Per-step timing so the frontend-perceived latency can be attributed
+        # to mask building / material sync / PNG render. The heavy GLB step
+        # no longer blocks this response — see converter_glb_completed in
+        # async_glb.py for its separate timing log.
+        # 每步耗时日志；GLB 现已脱离本响应，改为 async_glb 中单独打点。
+        log.info(
+            "region-replace timing",
+            extra={
+                "event": "converter_region_replace_timing",
+                "sync_ms": round(_sync_ms, 1),
+                "png_ms": round(_png_ms, 1),
+                "mask_source": mask_source,
+                "region_mask_pixels": _region_pixels,
+                "matched_rgb_shape": list(matched_rgb.shape),
+            },
+        )
 
         # Extract updated color_contours from cache
         contours_data: dict | None = cache.get("color_contours")
@@ -1142,6 +1136,644 @@ def region_replace(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message="Region color replaced successfully",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-region secondary re-quantisation (material-archive mode only)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/region-requantize", response_model=RegionReplaceResponse)
+def region_requantize(
+    request: RegionRequantizeRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> RegionReplaceResponse:
+    """Per-region secondary re-quantisation for the gradient-groups panel.
+    渐变分组面板的区域级二次量化接口。
+
+    For every ``(gradient_group_index, gradient_region_index)`` in
+    ``request.targets``, the endpoint extracts the ORIGINAL source pixels
+    inside the region's mask, runs a local K-Means with the user-chosen
+    ``local_quantize_colors`` budget, and re-matches those locally
+    quantised colours through the same :class:`MaterialSolverCache` the
+    preview pipeline used. The resulting per-pixel material colours
+    overwrite those regions in ``matched_rgb`` while leaving the rest of
+    the canvas untouched.
+
+    对每个选中的渐变 region，取原图像素独立做一次 K-Means 量化，再经
+    管线同款材料求解器重匹配，只写回这些区域的 ``matched_rgb``。其它
+    像素保持不变。
+
+    Material-archive mode only — LUT mode has a completely different
+    matching path that does not use :class:`MaterialSolverCache`. Callers
+    get HTTP 409 if they attempt this on an LUT session.
+    仅支持耗材档案模式；LUT 模式走另一套匹配逻辑，此端点不适用。
+
+    Raises:
+        HTTPException(404): Session not found.
+        HTTPException(409): Preview cache missing, ``material_source`` is
+            not ``"material_archive"``, ``gradient_region_id_map`` is
+            absent/stale, or the material solver cache cannot be loaded.
+        HTTPException(422): Validation failure on ``local_quantize_colors``
+            or ``targets`` (handled by Pydantic before reaching here).
+        HTTPException(500): Unexpected processing error.
+    """
+    import time as _time
+    from PIL import Image
+
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+
+    try:
+        matched_rgb: np.ndarray | None = cache.get("matched_rgb")
+        if matched_rgb is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview cache missing matched_rgb; re-run /preview first.",
+            )
+
+        material_source = str(session_data.get("material_source") or "lut")
+        if material_source != "material_archive":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Region re-quantisation is only available in material-archive "
+                    "mode; current material_source is "
+                    f"'{material_source}'."
+                ),
+            )
+
+        region_id_map = session_data.get("gradient_region_id_map")
+        if region_id_map is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Preview cache has no gradient_region_id_map; "
+                    "re-run /preview to refresh gradient-region metadata."
+                ),
+            )
+        region_id_arr = np.asarray(region_id_map)
+        img_h, img_w = matched_rgb.shape[:2]
+        if region_id_arr.shape != (img_h, img_w):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cached gradient_region_id_map shape "
+                    f"{region_id_arr.shape} does not match preview "
+                    f"{img_h}x{img_w}; re-run /preview."
+                ),
+            )
+
+        # Materials list → MaterialParams → solver cache.
+        selected_materials = session_data.get("selected_materials") or []
+        if not isinstance(selected_materials, list) or not selected_materials:
+            raise HTTPException(
+                status_code=409,
+                detail="Session has no selected materials for material-archive mode.",
+            )
+        try:
+            materials = load_multiple_materials(list(selected_materials))
+        except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Failed to load materials: {exc}",
+            ) from exc
+
+        layer_count = int(
+            session_data.get("material_layer_count")
+            or cache.get("color_layers")
+            or 10
+        )
+        layer_height_mm = float(
+            session_data.get("material_layer_height_mm")
+            or cache.get("layer_height_mm")
+            or session_data.get("layer_height_mm")
+            or 0.08
+        )
+        substrate = str(
+            cache.get("material_substrate")
+            or session_data.get("material_substrate")
+            or "white"
+        )
+        grid_resolution = int(
+            session_data.get("material_grid_resolution")
+            or DEFAULT_GRID_RESOLUTION
+        )
+        solver_cache, _grid = load_material_solver_cache_with_fallback(
+            materials=materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            grid_resolution=grid_resolution,
+        )
+        if solver_cache is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "No material solver cache on disk for the current palette; "
+                    "run a normal /preview first so the cache is built."
+                ),
+            )
+
+        # Load the ORIGINAL source image and resize to preview resolution so
+        # the region_mask indexes the right pixels. The preview pipeline
+        # performs the same resize; resampling with LANCZOS is acceptable
+        # here because k-means is robust to sub-pixel smoothing.
+        # 原图加载并缩放至预览分辨率，mask 索引才能对齐。
+        image_path = session_data.get("image_path")
+        if not image_path or not os.path.exists(image_path):
+            raise HTTPException(
+                status_code=409,
+                detail="Session has no original image_path on disk; re-upload.",
+            )
+        try:
+            original_pil = Image.open(image_path).convert("RGB")
+            if original_pil.size != (img_w, img_h):
+                original_pil = original_pil.resize(
+                    (img_w, img_h), Image.LANCZOS
+                )
+            original_source_rgb = np.asarray(original_pil, dtype=np.uint8)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load / resize source image: {exc}",
+            ) from exc
+
+        # Convert Pydantic targets to plain tuples for the core function.
+        target_pairs = [
+            (t.gradient_group_index, t.gradient_region_index)
+            for t in request.targets
+        ]
+
+        _t_core = _time.perf_counter()
+        try:
+            new_matched_rgb, rewritten_px = requantize_gradient_regions(
+                matched_rgb=np.asarray(matched_rgb, dtype=np.uint8),
+                original_source_rgb=original_source_rgb,
+                region_id_map=region_id_arr.astype(np.uint32, copy=False),
+                targets=target_pairs,
+                materials=materials,
+                material_solver_cache=solver_cache,
+                local_quantize_colors=request.local_quantize_colors,
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invalid re-quantisation request: {exc}",
+            ) from exc
+        _core_ms = (_time.perf_counter() - _t_core) * 1000
+
+        # Sync material matrix for the changed pixels, then commit to cache.
+        cache["matched_rgb"] = new_matched_rgb
+        _t_sync = _time.perf_counter()
+        _sync_material_matrix_after_rgb_change(
+            session_data,
+            cache,
+            np.asarray(matched_rgb),
+            new_matched_rgb,
+        )
+        _sync_ms = (_time.perf_counter() - _t_sync) * 1000
+
+        # Refresh the palette derived from matched_rgb so downstream
+        # consumers (``/layer-images`` iterates over it; Palette Panel
+        # surfaces it in the UI) see every new material colour the local
+        # k-means produced. Without this the palette still reflects the
+        # pre-quantise colours and ``/layer-images`` would only generate
+        # slices for the old set.
+        # 重算从 matched_rgb 派生的调色板，保证 /layer-images 与面板
+        # 能看到二次量化新增的材料色；不补会导致分层图缺色。
+        _t_palette = _time.perf_counter()
+        cache["color_palette"] = extract_color_palette(cache)
+        _palette_ms = (_time.perf_counter() - _t_palette) * 1000
+
+        # The default segmented-GLB merge cap is 64 unique colours. Local
+        # re-quantisation deliberately introduces low-frequency colours
+        # inside small regions; if those exceed the cap they get merged
+        # into the dominant palette, which makes the 3D preview look
+        # identical to the pre-quantise state even though the 2D PNG
+        # already shows the new colours. Track the actual unique-colour
+        # count in the (post-sync) matched_rgb solid mask and bump the
+        # GLB cap so every new colour survives into the segmented mesh.
+        # 默认 GLB 合并上限 64 会把二次量化引入的低频新色合并掉，导致 3D
+        # 看起来没变化。这里按 sync 之后真实的唯一色数把上限抬高，确保
+        # 二次量化后 3D 预览能显现 2D 同步可见的新色。
+        mask_solid_arr = cache.get("mask_solid")
+        if mask_solid_arr is not None:
+            mask_bool = np.asarray(mask_solid_arr, dtype=bool)
+            solid_pixels = new_matched_rgb[mask_bool] if mask_bool.shape == new_matched_rgb.shape[:2] else new_matched_rgb.reshape(-1, 3)
+        else:
+            solid_pixels = new_matched_rgb.reshape(-1, 3)
+        unique_color_count = int(np.unique(solid_pixels.reshape(-1, 3), axis=0).shape[0])
+        previous_cap = int(cache.get("glb_max_meshes") or 0)
+        new_cap = max(previous_cap, unique_color_count)
+        if new_cap > previous_cap:
+            cache["glb_max_meshes"] = new_cap
+
+        store.put(request.session_id, "preview_cache", cache)
+
+        # Re-run gradient-group analysis so the Gradient Groups panel and
+        # the cached ``gradient_region_id_map`` both reflect the new
+        # ``matched_rgb``. Without this the panel still shows the pre-
+        # quantize groups and subsequent /region-requantize or /region-
+        # replace calls would address stale region ids. Best-effort: a
+        # failure here is logged inside the helper and we ship an empty
+        # ``gradient_groups`` so the client can keep going.
+        # 二次量化后 matched_rgb 分布变了，必须重跑 gradient-group 分析
+        # 让面板与 region_id_map 同步刷新，否则面板显示旧分组，后续再量化
+        # 会按旧 region 定位，造成点不中的错觉。
+        _t_groups = _time.perf_counter()
+        refreshed_groups = recompute_gradient_groups_into_session(
+            cache, request.session_id, store
+        )
+        _groups_ms = (_time.perf_counter() - _t_groups) * 1000
+
+        # Re-render styled preview PNG and schedule GLB rebuild.
+        _t_png = _time.perf_counter()
+        preview_bytes: bytes = _render_styled_preview_bytes(new_matched_rgb, cache)
+        preview_id: str = registry.register_bytes(
+            request.session_id,
+            preview_bytes,
+            "preview_region_requantized.png",
+        )
+        _png_ms = (_time.perf_counter() - _t_png) * 1000
+        schedule_glb_build(request.session_id, store, registry, cache)
+
+        log.info(
+            "region-requantize done",
+            extra={
+                "event": "converter_region_requantize_done",
+                "target_count": len(target_pairs),
+                "local_quantize_colors": int(request.local_quantize_colors),
+                "rewritten_pixels": int(rewritten_px),
+                "unique_color_count_after": unique_color_count,
+                "glb_max_meshes_previous": previous_cap,
+                "glb_max_meshes_new": new_cap,
+                "core_ms": round(_core_ms, 1),
+                "sync_ms": round(_sync_ms, 1),
+                "palette_ms": round(_palette_ms, 1),
+                "palette_entry_count": len(cache.get("color_palette") or []),
+                "groups_ms": round(_groups_ms, 1),
+                "png_ms": round(_png_ms, 1),
+                "refreshed_group_count": (
+                    len(refreshed_groups) if refreshed_groups is not None else None
+                ),
+                "matched_rgb_shape": list(matched_rgb.shape),
+            },
+        )
+
+        contours_data: dict | None = cache.get("color_contours")
+    except HTTPException:
+        raise
+    except REPLACE_HANDLED_ERRORS as exc:
+        _handle_core_error(exc, "Region re-quantisation")
+
+    return RegionReplaceResponse(
+        preview_url=f"/api/files/{preview_id}",
+        preview_glb_url=None,
+        color_contours=contours_data,
+        message=(
+            f"Re-quantised {len(request.targets)} region(s) with "
+            f"{request.local_quantize_colors} colours; rewrote {rewritten_px} pixels."
+        ),
+        gradient_groups=refreshed_groups,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch endpoints
+# ---------------------------------------------------------------------------
+#
+# Why these exist: the legacy per-colour / per-region endpoints regenerate
+# the styled preview PNG, the segmented GLB, and run the material-matrix
+# sync on *every* request. When the frontend loops over N replacements
+# (multi-colour swap, colour-remap preview rebuild, multi-region click,
+# whole-group gradient flatten) that's N * (GLB + PNG + sync) — and GLB
+# is expensive. These batch endpoints apply all N changes cumulatively to
+# the cached ``matched_rgb``, then do PNG + GLB + sync exactly once at
+# the end. Semantically equivalent to the loop, but O(N) faster on the
+# heavy steps.
+# 批量端点存在的原因：老的单色/单区域端点每次都会重渲染 PNG、重建 GLB、
+# 做一次物料矩阵 sync。前端循环 N 次就等于 N × (GLB + PNG + sync)，GLB
+# 又最贵。这里把 N 次改动累积到 matched_rgb，最后统一做一次 PNG+GLB+sync。
+# 语义上等价于循环，重活只做一次。
+
+
+def _build_mask_for_region_batch_item(
+    session_data: dict,
+    item: RegionReplaceBatchItem,
+    img_h: int,
+    img_w: int,
+    cache: dict,
+) -> tuple[np.ndarray, str]:
+    """Build a boolean mask for one batch region-replace item.
+    为单条批量 region-replace 条目构建 mask。
+
+    Mirrors :func:`region_replace` mask-selection logic: gradient group/region
+    indices take precedence (re-derived from the cached region_id_map); else
+    ``click_x`` / ``click_y`` trigger a fresh flood-fill on the quantised
+    preview.
+    与 :func:`region_replace` 的 mask 选择逻辑一致：优先渐变索引（现场从
+    缓存的 region_id_map 重建），否则使用 click_x/click_y 做泛洪填充。
+
+    Raises:
+        HTTPException(400/404/409): Same error codes and messages as the
+            single-item /region-replace endpoint.
+    """
+    gradient_group_idx = item.gradient_group_index
+    gradient_region_idx = item.gradient_region_index
+
+    if gradient_group_idx is not None:
+        region_id_map = session_data.get("gradient_region_id_map")
+        if region_id_map is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Preview cache has no gradient_region_id_map; "
+                    "re-run /preview to refresh gradient-region metadata."
+                ),
+            )
+        region_id_arr = np.asarray(region_id_map)
+        if region_id_arr.shape != (img_h, img_w):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cached gradient_region_id_map shape "
+                    f"{region_id_arr.shape} does not match preview "
+                    f"{img_h}x{img_w}; re-run /preview."
+                ),
+            )
+        if gradient_region_idx is not None:
+            encoded_id = (
+                int(gradient_group_idx) * REGION_ID_ENCODING_MULTIPLIER
+                + int(gradient_region_idx)
+            )
+            mask = region_id_arr == np.uint32(encoded_id)
+            if not np.any(mask):
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No pixels found for gradient group "
+                        f"{gradient_group_idx}, region "
+                        f"{gradient_region_idx}."
+                    ),
+                )
+            return mask, "gradient_region"
+        group_of_pixel = region_id_arr // np.uint32(REGION_ID_ENCODING_MULTIPLIER)
+        mask = group_of_pixel == np.uint32(int(gradient_group_idx))
+        if not np.any(mask):
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No pixels found for gradient group {gradient_group_idx}."
+                ),
+            )
+        return mask, "gradient_group"
+
+    # Click-detected path: flood-fill from (click_x, click_y) on the
+    # quantised preview, same kernel as /region-detect.
+    if item.click_x is None or item.click_y is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Each batch item must supply either gradient_group_index "
+                "(+ optional gradient_region_index) or click_x + click_y."
+            ),
+        )
+
+    quantized_image = cache.get("quantized_image")
+    mask_solid = cache.get("mask_solid")
+    if quantized_image is None or mask_solid is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Preview cache missing quantized_image or mask_solid.",
+        )
+
+    x, y = int(item.click_x), int(item.click_y)
+    if not (0 <= x < img_w and 0 <= y < img_h):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Coordinates ({x}, {y}) out of bounds for image {img_w}x{img_h}.",
+        )
+    if not mask_solid[y, x]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Click ({x}, {y}) fell on background.",
+        )
+    mask = _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y)
+    if not np.any(mask):
+        raise HTTPException(
+            status_code=400,
+            detail=f"No connected region at ({x}, {y}).",
+        )
+    return mask, "click"
+
+
+@router.post("/replace-colors-batch", response_model=ColorReplaceResponse)
+def replace_colors_batch(
+    request: ColorReplaceBatchRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> ColorReplaceResponse:
+    """Batch-replace multiple colours in one round-trip.
+    一次调用批量替换多个颜色。
+
+    Semantically equivalent to calling /replace-color for each pair in
+    ``request.replacements`` in order, but the heavy per-call work (styled
+    PNG render, segmented GLB rebuild, material-matrix sync) runs exactly
+    once at the end, making batch colour swaps O(N) cheaper on those
+    dominant cost centres.
+    语义等价于顺序调用 N 次 /replace-color，但重活（PNG 渲染、GLB 重建、
+    物料矩阵 sync）只跑 1 次，批量颜色替换 N× 提速。
+
+    Raises:
+        HTTPException(404): Session not found. (会话不存在)
+        HTTPException(409): No preview cache. (无预览缓存)
+    """
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+
+    try:
+        matched_rgb: np.ndarray = cache["matched_rgb"]
+        previous_rgb = matched_rgb.copy()
+
+        # Build manager from existing replacement_regions + every new pair.
+        # 把历史 replacement_regions 和本次新 pair 一起塞进 manager，
+        # 一次性 apply 到 matched_rgb。
+        manager = ColorReplacementManager()
+        for record in session_data.get("replacement_regions", []):
+            orig = ColorReplacementManager._hex_to_color(record["selected_color"])
+            repl = ColorReplacementManager._hex_to_color(record["replacement_color"])
+            manager.add_replacement(orig, repl)
+        for pair in request.replacements:
+            manager.add_replacement(
+                ColorReplacementManager._hex_to_color(pair.selected_color),
+                ColorReplacementManager._hex_to_color(pair.replacement_color),
+            )
+
+        replaced_rgb = manager.apply_to_image(matched_rgb)
+
+        log.info(
+            "replace-colors-batch diag",
+            extra={
+                "event": "converter_replace_colors_batch_diag",
+                "pair_count": len(request.replacements),
+                "diff_pixel_count": int(
+                    np.any(previous_rgb != replaced_rgb, axis=-1).sum()
+                ),
+                "material_source": session_data.get("material_source"),
+            },
+        )
+
+        cache["matched_rgb"] = replaced_rgb
+        _sync_material_matrix_after_rgb_change(
+            session_data, cache, previous_rgb, replaced_rgb
+        )
+        store.put(request.session_id, "preview_cache", cache)
+
+        # One PNG render + one GLB rebuild for the whole batch.
+        # 整个批次只渲染一次 PNG、重建一次 GLB。
+        preview_bytes = _render_styled_preview_bytes(replaced_rgb, cache)
+        preview_id = registry.register_bytes(
+            request.session_id, preview_bytes, "preview_batch_replaced.png"
+        )
+
+        # Async GLB rebuild for the entire batch. Matches the single-pair
+        # behaviour and keeps batch-swap responses as snappy as PNG render.
+        # 批量颜色替换的 GLB 重建也改为异步，响应只等 PNG。
+        schedule_glb_build(request.session_id, store, registry, cache)
+        glb_url: str | None = None
+
+        # One snapshot to history, append all new pairs to replacement_regions.
+        # 批次开始前快照入 history 一次，末尾一次性 append 所有新 pair。
+        current_regions = list(session_data.get("replacement_regions", []))
+        snapshot = [dict(r) for r in current_regions]
+        history = list(session_data.get("replacement_history", []))
+        history.append(snapshot)
+        store.put(request.session_id, "replacement_history", history)
+
+        for pair in request.replacements:
+            current_regions.append(
+                {
+                    "selected_color": pair.selected_color,
+                    "replacement_color": pair.replacement_color,
+                }
+            )
+        store.put(request.session_id, "replacement_regions", current_regions)
+
+    except HTTPException:
+        raise
+    except REPLACE_HANDLED_ERRORS as e:
+        _handle_core_error(e, "Batch color replacement")
+
+    return ColorReplaceResponse(
+        status="ok",
+        message=f"Replaced {len(request.replacements)} colors in batch",
+        preview_url=f"/api/files/{preview_id}",
+        preview_3d_url=glb_url,
+        replacement_count=len(request.replacements),
+    )
+
+
+@router.post("/region-replace-batch", response_model=RegionReplaceResponse)
+def region_replace_batch(
+    request: RegionReplaceBatchRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> RegionReplaceResponse:
+    """Batch region-replacement: multiple masks + target colours in one call.
+    批量区域替换：一次调用里处理多个区域（混合 click 和 gradient 来源）。
+
+    Each item independently resolves its mask (gradient indices or click
+    coordinates), then the target colour is applied on top of the running
+    ``matched_rgb``. Material-matrix sync, styled PNG render and segmented
+    GLB rebuild all run exactly once at the end — the expensive steps are
+    amortised across the whole batch.
+    每条 item 独立解析 mask（渐变索引或点击坐标），目标色逐条累加应用到
+    ``matched_rgb``。物料矩阵 sync、PNG、GLB 各只跑 1 次，重活在整个批次
+    内摊薄。
+    """
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+
+    try:
+        matched_rgb: np.ndarray | None = cache.get("matched_rgb")
+        if matched_rgb is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview cache missing matched_rgb.",
+            )
+
+        img_h, img_w = matched_rgb.shape[:2]
+        previous_rgb = matched_rgb.copy()
+        working_rgb = matched_rgb.copy()
+
+        any_click_mask_used = False
+        for item in request.items:
+            mask, mask_source = _build_mask_for_region_batch_item(
+                session_data, item, img_h, img_w, cache
+            )
+            replacement_rgb = np.array(
+                ColorReplacementManager._hex_to_color(item.replacement_color),
+                dtype=np.uint8,
+            )
+            working_rgb[mask] = replacement_rgb
+            if mask_source == "click":
+                any_click_mask_used = True
+
+        # Commit + single sync + single PNG + single GLB.
+        # 一次性提交到 cache，sync/PNG/GLB 各跑一次。
+        cache["matched_rgb"] = working_rgb
+        _sync_material_matrix_after_rgb_change(
+            session_data, cache, previous_rgb, working_rgb
+        )
+        store.put(request.session_id, "preview_cache", cache)
+
+        preview_bytes = _render_styled_preview_bytes(working_rgb, cache)
+        preview_id = registry.register_bytes(
+            request.session_id, preview_bytes, "preview_region_batch_replaced.png"
+        )
+
+        # Async GLB rebuild for the whole batch of region edits. See
+        # schedule_glb_build for job-token semantics when a newer replace
+        # arrives before the background thread finishes.
+        # 批量区域替换的 GLB 重建改为异步；重入竞争由 job_token 守护。
+        schedule_glb_build(request.session_id, store, registry, cache)
+        glb_url: str | None = None
+
+        contours_data: dict | None = cache.get("color_contours")
+
+        # Legacy one-shot click mask gets cleared just like the per-item
+        # endpoint does, but only if at least one click-sourced item was
+        # consumed. Gradient masks are reusable metadata and survive.
+        # 批次里消费过 click mask 的话清理一次性 mask；gradient 元数据保留。
+        if any_click_mask_used:
+            store.put(request.session_id, "selected_region_mask", None)
+            store.put(request.session_id, "selected_region_id", None)
+
+        log.info(
+            "region-replace-batch diag",
+            extra={
+                "event": "converter_region_replace_batch_diag",
+                "item_count": len(request.items),
+                "diff_pixel_count": int(
+                    np.any(previous_rgb != working_rgb, axis=-1).sum()
+                ),
+                "material_source": session_data.get("material_source"),
+            },
+        )
+
+    except HTTPException:
+        raise
+    except REPLACE_HANDLED_ERRORS as e:
+        _handle_core_error(e, "Batch region replacement")
+
+    return RegionReplaceResponse(
+        preview_url=f"/api/files/{preview_id}",
+        preview_glb_url=glb_url,
+        color_contours=contours_data,
+        message=f"Batch replaced {len(request.items)} regions successfully",
     )
 
 
@@ -1898,21 +2530,11 @@ def apply_recipe_override(
             "preview_recipe_override.png",
         )
 
+        # Async GLB rebuild for the newly applied recipe override. Keeps
+        # the override response fast; GLB arrives via /glb-status polling.
+        # 配方覆盖也走异步 GLB 重建，保持响应延迟与其他 replace 端点一致。
+        schedule_glb_build(request.session_id, store, registry, cache)
         glb_url: str | None = None
-        try:
-            glb_path = generate_segmented_glb(cache)
-            if glb_path and os.path.exists(glb_path):
-                glb_id = registry.register_path(request.session_id, glb_path)
-                glb_url = f"/api/files/{glb_id}"
-        except NON_FATAL_GLB_ERRORS as glb_err:
-            log.warning(
-                "Recipe-override GLB regeneration failed",
-                extra={
-                    "event": "converter_recipe_override_glb_failed",
-                    "error_type": type(glb_err).__name__,
-                    "error_message": str(glb_err),
-                },
-            )
     except HTTPException:
         raise
     except (ValueError, TypeError, OSError, RuntimeError) as exc:

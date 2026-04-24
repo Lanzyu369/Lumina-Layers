@@ -225,8 +225,15 @@ export default function ExtractorCanvas() {
   const rotateImage = useExtractorStore((s) => s.rotateImage);
 
   // ---------- Manual fix state: selected cell + color picker ----------
+  // ``initialFixColor`` is only used as the seed for ``ManualFixPopover``'s
+  // internal state, so dragging the color picker only re-renders the popover
+  // instead of the entire canvas + LUT preview tree.
+  // ``initialFixColor`` 仅作为 ManualFixPopover 内部状态的初值，避免拖动
+  // 取色器时连带整张画布 + LUT 预览一起重绘。
   const [selectedCell, setSelectedCell] = useState<[number, number] | null>(null);
-  const [fixColor, setFixColor] = useState<string>(UI_COLOR_TOKENS.extractorFixColorDefault);
+  const [initialFixColor, setInitialFixColor] = useState<string>(
+    UI_COLOR_TOKENS.extractorFixColorDefault,
+  );
   const [renderedRect, setRenderedRect] = useState<RenderedImageRect | null>(null);
   const lutPreviewRef = useRef<HTMLImageElement>(null);
 
@@ -307,20 +314,25 @@ export default function ExtractorCanvas() {
         setRenderedRect(rendered);
         // 采样该色块当前颜色作为取色器初始值，便于用户基于真实颜色微调。
         const sampled = sampleCellHexColor(img, cell[0], cell[1], gridSize);
-        if (sampled) {
-          setFixColor(sampled);
-        }
+        setInitialFixColor(sampled || UI_COLOR_TOKENS.extractorFixColorDefault);
       }
       // 留白区域点击被忽略
     },
     [color_mode]
   );
 
-  const handleFixSubmit = useCallback(() => {
-    if (!selectedCell) return;
-    void submitManualFix(selectedCell[0], selectedCell[1], fixColor);
+  const handleFixSubmit = useCallback(
+    (hex: string) => {
+      if (!selectedCell) return;
+      void submitManualFix(selectedCell[0], selectedCell[1], hex);
+      setSelectedCell(null);
+    },
+    [selectedCell, submitManualFix],
+  );
+
+  const handleFixCancel = useCallback(() => {
     setSelectedCell(null);
-  }, [selectedCell, fixColor, submitManualFix]);
+  }, []);
 
   // ===== Result mode =====
   if (warp_view_url || lut_preview_url) {
@@ -386,39 +398,14 @@ export default function ExtractorCanvas() {
         </div>
         {/* 手动修正浮层：选中色块后悬浮显示 */}
         {selectedCell && (
-          <div
-            data-testid="manual-fix-popup"
-            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/96 px-4 py-3 shadow-lg dark:border-slate-700/80 dark:bg-slate-900/96"
-          >
-            <span className="text-sm text-slate-700 dark:text-slate-300">
-              {t("ext_canvas_row")} {selectedCell[0] + 1} / {t("ext_canvas_col")} {selectedCell[1] + 1}
-            </span>
-            <input
-              data-testid="fix-color-picker"
-              type="color"
-              value={fixColor}
-              onChange={(e) => setFixColor(e.target.value)}
-              className="h-8 w-10 cursor-pointer rounded-xl border border-slate-300 bg-transparent dark:border-slate-500"
-            />
-            <span className="font-mono text-xs text-slate-500 dark:text-slate-400">{(() => {
-              const [r, g, b] = hexToRgb(fixColor);
-              return `RGB(${r}, ${g}, ${b})`;
-            })()}</span>
-            <button
-              data-testid="fix-submit-button"
-              onClick={handleFixSubmit}
-              disabled={manualFixLoading}
-              className="rounded-full bg-blue-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {manualFixLoading ? t("ext_canvas_fixing") : t("ext_canvas_confirm_fix")}
-            </button>
-            <button
-              onClick={() => setSelectedCell(null)}
-              className="rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              {t("ext_canvas_cancel")}
-            </button>
-          </div>
+          <ManualFixPopover
+            key={`${selectedCell[0]},${selectedCell[1]}`}
+            cell={selectedCell}
+            initialColor={initialFixColor}
+            loading={manualFixLoading}
+            onSubmit={handleFixSubmit}
+            onCancel={handleFixCancel}
+          />
         )}
       </div>
     );
@@ -485,6 +472,83 @@ export default function ExtractorCanvas() {
         className="max-w-full cursor-crosshair object-contain"
         style={{ objectFit: "contain", maxHeight: EXTRACTOR_CANVAS_MAX_HEIGHT }}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manual fix popover
+// ---------------------------------------------------------------------------
+
+interface ManualFixPopoverProps {
+  cell: [number, number];
+  initialColor: string;
+  loading: boolean;
+  onSubmit: (hex: string) => void;
+  onCancel: () => void;
+}
+
+/**
+ * Floating popover over the LUT preview for tweaking one LUT cell's color.
+ * 悬浮在 LUT 预览上的单元手动修正弹层。
+ *
+ * Owns its own ``fixColor`` state so that continuous ``<input type="color">``
+ * drag events only re-render this small popover and not the full extractor
+ * canvas / LUT preview tree. The parent passes ``initialColor`` as the seed
+ * and re-mounts the component via a ``key`` tied to ``cell`` whenever the
+ * user picks a different cell.
+ * 组件内部自持 fixColor 状态，避免拖动取色器时连带整张提取器画布和 LUT
+ * 预览一起重绘。父组件通过 key 绑定 cell 触发子组件重建，从而用新的
+ * initialColor 重新播种。
+ */
+function ManualFixPopover({
+  cell,
+  initialColor,
+  loading,
+  onSubmit,
+  onCancel,
+}: ManualFixPopoverProps) {
+  const { t } = useI18n();
+  const [fixColor, setFixColor] = useState<string>(initialColor);
+
+  const handleSubmit = useCallback(() => {
+    onSubmit(fixColor);
+  }, [fixColor, onSubmit]);
+
+  const [r, g, b] = hexToRgb(fixColor);
+
+  return (
+    <div
+      data-testid="manual-fix-popup"
+      className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/96 px-4 py-3 shadow-lg dark:border-slate-700/80 dark:bg-slate-900/96"
+    >
+      <span className="text-sm text-slate-700 dark:text-slate-300">
+        {t("ext_canvas_row")} {cell[0] + 1} / {t("ext_canvas_col")} {cell[1] + 1}
+      </span>
+      <input
+        data-testid="fix-color-picker"
+        type="color"
+        value={fixColor}
+        onChange={(e) => setFixColor(e.target.value)}
+        className="h-8 w-10 cursor-pointer rounded-xl border border-slate-300 bg-transparent dark:border-slate-500"
+      />
+      <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+        {`RGB(${r}, ${g}, ${b})`}
+      </span>
+      <button
+        data-testid="fix-submit-button"
+        onClick={handleSubmit}
+        disabled={loading}
+        className="rounded-full bg-blue-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? t("ext_canvas_fixing") : t("ext_canvas_confirm_fix")}
+      </button>
+      <button
+        onClick={onCancel}
+        className="rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+      >
+        {t("ext_canvas_cancel")}
+      </button>
     </div>
   );
 }

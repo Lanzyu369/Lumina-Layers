@@ -253,3 +253,78 @@ class TestMaterialArchiveReplaceLayerSync:
             updated_cache["material_matrix"][0, 0],
             np.asarray([4, 3, 2, 1, 0], dtype=np.int16),
         )
+
+
+class TestLayerImagesCache:
+    """Regression tests for the session-level /layer-images cache.
+
+    The cache keys off ``material_matrix`` bytes + the palette so that when
+    the user doesn't touch the replacement state, a second request bypasses
+    the ~6s full PNG rebuild. Any structural change to the matrix has to
+    invalidate the cache so stale layer images never leak.
+    /layer-images 的 session 级缓存回归：matrix 不变时 PNG 字节必须完全
+    相同（命中）；matrix 改动必须使缓存失效并重新编码（miss）。
+    """
+
+    def test_second_call_returns_identical_png_bytes(self, tmp_path: Path) -> None:
+        sid = _create_lut_session(tmp_path)
+
+        first = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        first_bytes = [
+            _read_bytes(entry["url"]) for entry in first["layers"]
+        ]
+
+        second = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        second_bytes = [
+            _read_bytes(entry["url"]) for entry in second["layers"]
+        ]
+
+        assert [e["name"] for e in first["layers"]] == [
+            e["name"] for e in second["layers"]
+        ]
+        assert first_bytes == second_bytes, (
+            "cache hit must reuse encoded PNG bytes byte-for-byte"
+        )
+
+    def test_matrix_change_invalidates_cache(self, tmp_path: Path) -> None:
+        sid = _create_lut_session(tmp_path)
+
+        first = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        first_bytes = [
+            _read_bytes(entry["url"]) for entry in first["layers"]
+        ]
+
+        # Mutate material_matrix in place so the next call triggers a miss.
+        # 直接改 material_matrix，下一次请求应重新编码。
+        cache = _test_store.get(sid)["preview_cache"]
+        cache["material_matrix"][0, 0, 0] = 1
+        _test_store.put(sid, "preview_cache", cache)
+
+        second = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        second_bytes = [
+            _read_bytes(entry["url"]) for entry in second["layers"]
+        ]
+
+        assert first_bytes != second_bytes, (
+            "matrix mutation must invalidate the cache and re-encode layers"
+        )
+
+
+def _read_bytes(url: str) -> bytes:
+    """Read the PNG bytes served by a ``/api/files/<id>`` URL via the
+    test FileRegistry, ignoring the HTTP layer.
+    通过测试 FileRegistry 直接读取 /api/files/<id> 对应的 PNG 字节。
+    """
+    file_id = url.rsplit("/", 1)[-1]
+    resolved = _test_registry.resolve(file_id)
+    assert resolved is not None
+    path, _filename = resolved
+    return Path(path).read_bytes()

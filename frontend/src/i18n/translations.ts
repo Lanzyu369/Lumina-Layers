@@ -3741,6 +3741,72 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "去海带纹",
     en: "Flatten",
   },
+  gradient_groups_merge_flatten: {
+    zh: "合并去海带纹 ({count})",
+    en: "Merge flatten ({count})",
+  },
+  gradient_groups_merge_checkbox_label: {
+    zh: "勾选区域 {index} 加入合并",
+    en: "Select region {index} for merge",
+  },
+  gradient_groups_requantize: {
+    zh: "二次量化 ({count})",
+    en: "Re-quantize ({count})",
+  },
+  // Short label for the per-region requantize button that lives on every
+  // region row. Keeps the chip narrow so it does not crowd the existing
+  // "Select / Flatten / Highlight" trio.
+  // 单 region 行上的"二次量化"按钮文案；尽量短以免挤占同行其它按钮。
+  gradient_groups_requantize_region: {
+    zh: "二次量化",
+    en: "Re-quantize",
+  },
+  // External batch button shown at the panel header so the user never has
+  // to scroll back to find the group their selection belongs to.
+  // 外置批量按钮文案（面板顶部）；避免用户为了找到所在分组而滚动列表。
+  gradient_groups_batch_requantize: {
+    zh: "批量二次量化 ({count})",
+    en: "Batch re-quantize ({count})",
+  },
+  gradient_groups_batch_requantize_empty: {
+    zh: "请先勾选至少一个区域",
+    en: "Select at least one region first",
+  },
+  // Shown in the dialog description when the explicit target list spans
+  // multiple gradient groups (the batch button can do this).
+  // 批量调用跨多 group 时，dialog 描述里用这个字符串替换 {group}。
+  gradient_groups_requantize_dialog_multi_group: {
+    zh: "多组",
+    en: "multiple",
+  },
+  gradient_groups_requantize_dialog_title: {
+    zh: "区域二次量化",
+    en: "Region re-quantization",
+  },
+  gradient_groups_requantize_dialog_description: {
+    zh: "为分组 {group} 中勾选的 {count} 个区域分别重新量化，随后用材料求解器重新匹配。保留低频渐变，消除条纹。",
+    en: "Re-quantize {count} selected region(s) in group {group} with a dedicated palette each, then re-match via the material solver. Keeps low-frequency gradients while collapsing kelp banding.",
+  },
+  gradient_groups_requantize_dialog_slider_label: {
+    zh: "每个区域的量化色数",
+    en: "Per-region quantize colour count",
+  },
+  gradient_groups_requantize_dialog_hint: {
+    zh: "范围 {min}-{max}；值越大保留的色阶越多，越小越接近直接平坦化。",
+    en: "Range {min}-{max}; larger keeps more gradient detail, smaller approximates flatten.",
+  },
+  gradient_groups_requantize_dialog_cancel: {
+    zh: "取消",
+    en: "Cancel",
+  },
+  gradient_groups_requantize_dialog_submit: {
+    zh: "开始量化",
+    en: "Re-quantize",
+  },
+  gradient_groups_requantize_dialog_submitting: {
+    zh: "处理中...",
+    en: "Working...",
+  },
   lut_grid_total_colors: {
     zh: "共 {total} 色，显示 {visible} 色",
     en: "{total} colors, showing {visible}",
@@ -5550,8 +5616,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Edit Material Details",
   },
   mat_gradient_library_edit_desc: {
-    zh: "你正在编辑目录 {directoryName} 的显示名称与品牌。",
-    en: "You are editing the display name and brand for directory {directoryName}.",
+    zh: "你正在编辑目录 {directoryName} 的显示名称、品牌与颜色。",
+    en: "You are editing the display name, brand and color for directory {directoryName}.",
+  },
+  mat_gradient_library_edit_color_label: {
+    zh: "显示颜色",
+    en: "Display Color",
+  },
+  mat_gradient_library_edit_color_hex_placeholder: {
+    zh: "#RRGGBB 色号",
+    en: "#RRGGBB hex",
+  },
+  mat_gradient_library_edit_color_invalid_hex: {
+    zh: "色号必须是 #RGB 或 #RRGGBB 格式",
+    en: "Color must be #RGB or #RRGGBB format",
+  },
+  mat_gradient_library_edit_color_hint: {
+    zh: "可使用颜色选择器或直接输入色号；修改后会替换测量得到的显示颜色。",
+    en: "Use the picker or enter a hex code; this overrides the measured display color.",
   },
   mat_gradient_library_edit_cancel_btn: {
     zh: "取消",

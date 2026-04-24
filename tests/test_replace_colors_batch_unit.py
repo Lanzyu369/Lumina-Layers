@@ -1,0 +1,429 @@
+"""Regression tests for the batch replace endpoints.
+
+Covers ``POST /api/convert/replace-colors-batch`` and
+``POST /api/convert/region-replace-batch`` — the two endpoints added to
+eliminate the "multi-colour / multi-region replace feels slow" regression.
+The legacy per-colour / per-region endpoints regenerate the segmented GLB
+on every call; batch endpoints must produce the same pixel-level state as
+the loop but report a single replacement in the response (one PNG+GLB
+render for the whole batch).
+
+批量替换端点的回归测试：验证批量端点的像素效果与循环调用等价，但语义上
+只做一次 PNG/GLB 渲染。测试也固定错误路径（404/409/400）。
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from api.app import create_app
+from api.dependencies import get_file_registry, get_session_store
+from api.file_registry import FileRegistry
+from api.session_store import SessionStore
+from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_client(
+    matched_rgb: np.ndarray,
+    *,
+    mask_solid: np.ndarray | None = None,
+    quantized_image: np.ndarray | None = None,
+    region_id_map: np.ndarray | None = None,
+) -> tuple[TestClient, str, SessionStore]:
+    """Build a TestClient + session seeded with just enough cache to drive
+    the batch replace endpoints.
+    构造 TestClient + 预置 session，覆盖 batch 端点需要的 cache 字段。
+    """
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+
+    sid = store.create()
+    cache: dict = {"matched_rgb": matched_rgb.copy()}
+    if mask_solid is not None:
+        cache["mask_solid"] = mask_solid.copy()
+    if quantized_image is not None:
+        cache["quantized_image"] = quantized_image.copy()
+    store.put(sid, "preview_cache", cache)
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "replacement_history", [])
+    if region_id_map is not None:
+        store.put(sid, "gradient_region_id_map", region_id_map.copy())
+    return TestClient(app), sid, store
+
+
+@pytest.fixture()
+def red_green_canvas() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """4x4 canvas: top 2 rows red, bottom 2 rows green.
+    Plus a solid mask and a quantised preview (identical to matched_rgb
+    since there's no dithering).
+    4x4 画布：上半红、下半绿；mask 全 1；quantized 等于 matched。
+    """
+    matched = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched[:2, :] = (255, 0, 0)
+    matched[2:, :] = (0, 255, 0)
+    mask_solid = np.ones((4, 4), dtype=bool)
+    quantized = matched.copy()
+    return matched, mask_solid, quantized
+
+
+# ---------------------------------------------------------------------------
+# /replace-colors-batch
+# ---------------------------------------------------------------------------
+
+
+class TestReplaceColorsBatch:
+    def test_batch_applies_all_pairs_in_one_call(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """All pairs mutate matched_rgb in a single request.
+        一次请求里所有 pair 都应用到 matched_rgb。
+        """
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+
+        response = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                    {"selected_color": "#00ff00", "replacement_color": "#ffff00"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["replacement_count"] == 2
+        assert body["preview_url"].startswith("/api/files/")
+
+        updated = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated[:2, :] == (0, 0, 255)), "red → blue"
+        assert np.all(updated[2:, :] == (255, 255, 0)), "green → yellow"
+
+    def test_batch_appends_all_regions_and_single_history_snapshot(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """replacement_regions grows by N; replacement_history grows by 1.
+        replacement_regions 增加 N 条，replacement_history 只增加 1 条快照。
+        """
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+
+        client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                    {"selected_color": "#00ff00", "replacement_color": "#ffff00"},
+                ],
+            },
+        )
+        data = store.get(sid)
+        assert len(data["replacement_regions"]) == 2
+        assert data["replacement_regions"][0]["selected_color"] == "#ff0000"
+        assert data["replacement_regions"][1]["selected_color"] == "#00ff00"
+        # Single batch → single pre-change snapshot (not N).
+        # 整批只有 1 个 snapshot，不是 N 个。
+        assert len(data["replacement_history"]) == 1
+        assert data["replacement_history"][0] == []
+
+    def test_batch_unknown_session_returns_404(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        matched, *_ = red_green_canvas
+        client, _, _ = _make_client(matched)
+        response = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": "bogus",
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"}
+                ],
+            },
+        )
+        assert response.status_code == 404
+
+    def test_batch_no_preview_cache_returns_409(self) -> None:
+        app = create_app()
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        app.dependency_overrides[get_session_store] = lambda: store
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        client = TestClient(app)
+        sid = store.create()  # no preview_cache
+
+        response = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"}
+                ],
+            },
+        )
+        assert response.status_code == 409
+
+    def test_batch_empty_replacements_rejected_by_schema(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """Empty list is a schema error (422), not a silent no-op.
+        空列表由 pydantic 校验返回 422，不静默。
+        """
+        matched, *_ = red_green_canvas
+        client, sid, _ = _make_client(matched)
+        response = client.post(
+            "/api/convert/replace-colors-batch",
+            json={"session_id": sid, "replacements": []},
+        )
+        assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# /region-replace-batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def two_red_stripes() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """100x100 all-red canvas; two gradient regions tagged inside.
+    region 1 covers x∈[10,40); region 2 covers x∈[60,90).
+    Quantised preview + mask_solid also supplied so click items work.
+    """
+    matched = np.full((100, 100, 3), (255, 0, 0), dtype=np.uint8)
+    mask_solid = np.ones((100, 100), dtype=bool)
+    quantized = matched.copy()
+    region_id_map = np.zeros((100, 100), dtype=np.uint32)
+    region_id_map[:, 10:40] = 1 * REGION_ID_ENCODING_MULTIPLIER + 1
+    region_id_map[:, 60:90] = 1 * REGION_ID_ENCODING_MULTIPLIER + 2
+    return matched, mask_solid, quantized, region_id_map
+
+
+class TestRegionReplaceBatch:
+    def test_batch_two_gradient_regions_different_targets(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """Two gradient-region items land different colours in one call.
+        一次请求里两个 gradient region 分别被刷成不同颜色。
+        """
+        matched, mask_solid, quantized, region_id_map = two_red_stripes
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+            region_id_map=region_id_map,
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 1,
+                        "gradient_region_index": 1,
+                    },
+                    {
+                        "replacement_color": "#0000ff",
+                        "gradient_group_index": 1,
+                        "gradient_region_index": 2,
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        updated = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated[:, 10:40] == (0, 255, 0)), "region 1 → green"
+        assert np.all(updated[:, 60:90] == (0, 0, 255)), "region 2 → blue"
+        outside = np.r_[0:10, 40:60, 90:100]
+        assert np.all(updated[:, outside] == (255, 0, 0)), (
+            "pixels outside any gradient region stay red"
+        )
+
+    def test_batch_preserves_gradient_region_id_map(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """region_id_map must survive the batch for further edits.
+        region_id_map 在 batch 之后仍需保留，支持后续编辑。
+        """
+        matched, mask_solid, quantized, region_id_map = two_red_stripes
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+            region_id_map=region_id_map,
+        )
+        client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 1,
+                        "gradient_region_index": 1,
+                    }
+                ],
+            },
+        )
+        assert store.get(sid).get("gradient_region_id_map") is not None
+
+    def test_batch_click_and_gradient_mixed(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """Click-detected item and gradient item can coexist in one batch.
+        一批里混合 click 与 gradient item 都能正常作用。
+        """
+        matched, mask_solid, quantized, region_id_map = two_red_stripes
+        # Give the top-left a distinct colour so flood-fill from (5, 5)
+        # picks up exactly that quadrant (not the whole canvas).
+        # 在左上角打一块白，flood-fill 只会选这一块。
+        matched[0:5, 0:5] = (200, 200, 200)
+        quantized = matched.copy()
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+            region_id_map=region_id_map,
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#000000",
+                        "click_x": 2,
+                        "click_y": 2,
+                    },
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 1,
+                        "gradient_region_index": 1,
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        updated = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated[0:5, 0:5] == (0, 0, 0)), "click region → black"
+        assert np.all(updated[:, 10:40] == (0, 255, 0)), "gradient region 1 → green"
+
+    def test_batch_gradient_without_region_id_map_returns_409(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        matched, mask_solid, quantized, _ = two_red_stripes
+        client, sid, _ = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 1,
+                        "gradient_region_index": 1,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 409
+        assert "gradient_region_id_map" in response.json()["detail"]
+
+    def test_batch_unknown_gradient_region_returns_404(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        matched, mask_solid, quantized, region_id_map = two_red_stripes
+        client, sid, _ = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+            region_id_map=region_id_map,
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 9,
+                        "gradient_region_index": 9,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 404
+
+    def test_batch_item_missing_mask_source_returns_400(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """No click coords, no gradient indices → 400.
+        既没传 click 坐标也没传 gradient 索引，返回 400。
+        """
+        matched, mask_solid, quantized, _ = two_red_stripes
+        client, sid, _ = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [{"replacement_color": "#00ff00"}],
+            },
+        )
+        assert response.status_code == 400
+
+    def test_batch_group_only_covers_whole_group(
+        self,
+        two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """gradient_group_index alone flattens the entire group.
+        只传 gradient_group_index（不传 region）= 整组 mask。
+        """
+        matched, mask_solid, quantized, region_id_map = two_red_stripes
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+            region_id_map=region_id_map,
+        )
+        response = client.post(
+            "/api/convert/region-replace-batch",
+            json={
+                "session_id": sid,
+                "items": [
+                    {
+                        "replacement_color": "#00ff00",
+                        "gradient_group_index": 1,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        updated = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated[:, 10:40] == (0, 255, 0)), "region 1 → green"
+        assert np.all(updated[:, 60:90] == (0, 255, 0)), "region 2 → green"

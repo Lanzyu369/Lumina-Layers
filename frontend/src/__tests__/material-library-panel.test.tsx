@@ -146,12 +146,120 @@ describe("MaterialLibraryPanel", () => {
       expect(updateGradientCardMaterial).toHaveBeenCalledWith("pla-basic", {
         materialName: "PLA Matte",
         brand: "Bambu Lab",
+        estimatedRgb: [100, 120, 140],
       });
     });
     await waitFor(() => {
       expect(screen.getByText("PLA Matte")).toBeInTheDocument();
     });
     expect(screen.getByTestId("material-library-item-brand")).toHaveTextContent("Bambu Lab");
+  });
+
+  it("edits the display color via hex input from the library", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "pla-basic",
+          brand: null,
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/pla-basic/material.json",
+          stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json",
+          stage_a_params_url: "/api/files/stage-a-json",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+    vi.mocked(updateGradientCardMaterial).mockResolvedValue({
+      status: "ok",
+      message: "updated",
+      material: {
+        material_name: "PLA Basic",
+        directory_name: "pla-basic",
+        brand: null,
+        created_at: "2026-04-16T10:00:00Z",
+        updated_at: "2026-04-17T11:00:00Z",
+        archive_path: "materials/pla-basic/material.json",
+        stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+        material_file_url: "/api/files/material-json-updated",
+        stage_a_params_url: "/api/files/stage-a-json-updated",
+        estimated_rgb: [255, 128, 0],
+        layer_height_mm: 0.04,
+        mean_delta_e: 1.23,
+        verification_count: 3,
+        verification_history: [],
+      },
+    });
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
+
+    const hexInput = screen.getByTestId("material-library-edit-color-hex-input") as HTMLInputElement;
+    expect(hexInput.value.toUpperCase()).toBe("#64788C");
+
+    fireEvent.change(hexInput, { target: { value: "#FF8000" } });
+
+    const picker = screen.getByTestId("material-library-edit-color-picker") as HTMLInputElement;
+    expect(picker.value.toLowerCase()).toBe("#ff8000");
+
+    fireEvent.click(screen.getByRole("button", { name: /保存修改|save changes/i }));
+
+    await waitFor(() => {
+      expect(updateGradientCardMaterial).toHaveBeenCalledWith("pla-basic", {
+        materialName: "PLA Basic",
+        brand: null,
+        estimatedRgb: [255, 128, 0],
+      });
+    });
+  });
+
+  it("rejects invalid hex input in the edit dialog", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "pla-basic",
+          brand: null,
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/pla-basic/material.json",
+          stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json",
+          stage_a_params_url: "/api/files/stage-a-json",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /编辑信息|edit details/i }));
+
+    const hexInput = screen.getByTestId("material-library-edit-color-hex-input") as HTMLInputElement;
+    fireEvent.change(hexInput, { target: { value: "not-a-color" } });
+
+    expect(screen.getByTestId("material-library-edit-color-hex-error")).toBeInTheDocument();
   });
 
   it("opens saved material verification history in a dialog", async () => {

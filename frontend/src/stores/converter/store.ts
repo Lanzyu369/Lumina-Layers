@@ -38,14 +38,18 @@ import {
   cropImage as apiCropImage,
   convertBatch as apiConvertBatch,
   replaceColor as apiReplaceColor,
+  replaceColorsBatch as apiReplaceColorsBatch,
   colorHighlight as apiColorHighlight,
   detectRegion as apiDetectRegion,
   regionReplace as apiRegionReplace,
+  regionReplaceBatch as apiRegionReplaceBatch,
+  regionRequantize as apiRegionRequantize,
   applyRecipeOverride as apiApplyRecipeOverride,
   resetReplacements as apiResetReplacements,
   autoDetectColors as apiAutoDetectColors,
   cleanupSessionFiles as apiCleanupSessionFiles,
   uploadLut as apiUploadLut,
+  getGlbStatus as apiGetGlbStatus,
 } from "../../api/converter";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -1296,6 +1300,20 @@ export interface ConverterState {
    */
   gradientSelection: GradientSelectionSource | null;
 
+  /**
+   * Ordered list of regions the user ticked in the Gradient Groups panel
+   * for merged flatten/recolor. All entries share the same ``groupIndex``
+   * (same-group invariant enforced by the toggle action). Empty array
+   * means "no multi-region selection" — the existing single-region /
+   * single-group flows stay untouched.
+   * 用户在面板勾选的 region 列表（保持勾选顺序），用于"合并去海带纹 / 合并
+   * 换色"；同 group 不变式由 toggle action 守护。
+   */
+  selectedGradientRegions: Array<{
+    groupIndex: number;
+    regionIndex: number;
+  }>;
+
   // 热床尺寸
   bed_label: string;
   bedSizes: BedSizeItem[];
@@ -1481,6 +1499,15 @@ export interface ConverterActions {
   // GLB 预览
   setPreviewGlbUrl: (url: string | null) => void;
 
+  /**
+   * Poll ``/api/convert/glb-status`` after a replace-* endpoint returned
+   * ``preview_glb_url: null``; on ``ready`` the new URL is written into
+   * ``previewGlbUrl``. Re-entrant: later replace calls override the
+   * poller via a monotonic token so stale results can never overwrite
+   * the freshest GLB. 异步 GLB 轮询；各 replace 成功后一行调用即可。
+   */
+  _pollAsyncGlb: () => void;
+
   // 模型边界
   setModelBounds: (bounds: ConverterState["modelBounds"]) => void;
 
@@ -1572,6 +1599,64 @@ export interface ConverterActions {
     regionIndex: number,
     targetHex: string,
   ) => Promise<void>;
+
+  /**
+   * Toggle a sub-region's checkbox in the Gradient Groups panel.
+   *
+   * Same-group invariant: if the new region's ``groupIndex`` differs from
+   * the current selection's group, the existing list is dropped and only
+   * the new region kept. This prevents users accidentally merging regions
+   * from unrelated gradients (e.g. a sky band + a skin band) while still
+   * letting them switch groups smoothly without an explicit clear.
+   * 勾选同一 group 内的 region；点了别的 group 的 region 时清空旧选择，
+   * 避免把不相关的渐变误合并。
+   */
+  toggleGradientRegionSelection: (
+    groupIndex: number,
+    regionIndex: number,
+  ) => void;
+  /** Clear all multi-region checkboxes. 清空多区域勾选。 */
+  clearGradientRegionSelection: () => void;
+  /**
+   * Flatten the currently-checked regions by computing one pixel-count-
+   * weighted representative colour across their union and repainting all
+   * of them to that colour in a single ``/region-replace-batch`` call.
+   * Noop when fewer than 2 regions are selected.
+   * 对勾选的 region 求像素加权代表色，一次 batch 调用统一刷成该色。
+   */
+  flattenSelectedGradientRegions: () => Promise<void>;
+  /**
+   * Re-quantise gradient regions through the material-archive solver with
+   * a fresh per-region palette of ``localQuantizeColors`` colours (range
+   * 12-256). Unlike flatten which collapses everything to one
+   * representative hex, this keeps each region's low-frequency gradient
+   * by giving it a dedicated colour budget and re-matching those colours
+   * to material recipes.
+   *
+   * Two call modes:
+   *   - **Implicit** (``targets`` omitted): operates on
+   *     ``selectedGradientRegions`` (the checkbox-driven list) and clears
+   *     it on success so the panel resets to "nothing checked".
+   *   - **Explicit** (``targets`` provided): operates on the caller-
+   *     supplied list. Leaves ``selectedGradientRegions`` untouched so a
+   *     per-region "re-quantize" button can run without nuking an
+   *     unrelated batch selection the user was assembling.
+   *
+   * 支持两种调用形式：缺省 targets 走当前勾选列表并清空；显式 targets
+   * 则仅量化调用方传入的 region 并保留 ``selectedGradientRegions``，便于
+   * "某一个 region 单独二次量化"的按钮不破坏用户正在构造的批量选择。
+   */
+  requantizeSelectedGradientRegions: (
+    localQuantizeColors: number,
+    targets?: ReadonlyArray<{ groupIndex: number; regionIndex: number }>,
+  ) => Promise<void>;
+  /**
+   * Repaint every currently-checked region with ``targetHex`` via a single
+   * ``/region-replace-batch`` call. Used by the LUT picker flow when the
+   * user has a multi-region selection and picks a target colour.
+   * 用户从 LUT 选定 ``targetHex`` 后，把所有勾选的 region 一次 batch 刷成该色。
+   */
+  applyMultiRegionPixelReplace: (targetHex: string) => Promise<void>;
   setSourceVersion: (version: SourceVersion) => void;
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
@@ -1881,6 +1966,7 @@ export const DEFAULT_STATE: ConverterState = {
   gradientGroupsError: null,
   gradientGroupsSessionId: null,
   gradientSelection: null,
+  selectedGradientRegions: [],
   bed_label: "256脳256 mm",
   bedSizes: [],
   bedSizesLoading: false,
@@ -2039,6 +2125,97 @@ function buildPuzzlePreviewParams(
     irregularity_strength: state.irregularityStrength,
     min_neck_width_mm: state.minNeckWidthMm,
   } as const;
+}
+
+// ========== Async segmented-GLB polling ==========
+//
+// The backend replace endpoints (replace-color, region-replace and their
+// batch variants, apply-recipe-override, reset-replacements) now return
+// ``preview_glb_url: null`` immediately and rebuild the segmented GLB on
+// a background thread — this dropped the typical ``/region-replace``
+// latency from ~45 s to ~10 s for 6 Mpix images. The frontend therefore
+// has to poll ``/api/convert/glb-status/{sid}`` after every replace to
+// pick up the new GLB URL once the worker finishes.
+// 由于 replace 端点改为异步生成 GLB，前端需要在每次 replace 后轮询
+// /glb-status，拿到新 URL 后再刷新 3D 预览（previewGlbUrl）。
+const GLB_POLL_INTERVAL_MS = 500;
+// Segmented-GLB builds for large material-archive images can run 35–60 s;
+// allow 5 minutes of wall time before giving up so we don't leave the
+// user staring at a stale 3D preview during very heavy edits.
+// 超大图的 GLB 构建可达分钟级；给 5 分钟上限避免永久轮询。
+const GLB_POLL_MAX_MS = 5 * 60_000;
+// Monotonic token used by every poll loop; starting a new poll or
+// changing sessionId bumps this so any older loop exits on its next tick.
+// 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
+// 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
+let _glbPollSequence = 0;
+
+function _startGlbStatusPolling(
+  sessionId: string,
+  applyGlbUrl: (url: string) => void,
+  getCurrentSessionId: () => string | null,
+): void {
+  _glbPollSequence += 1;
+  const mySeq = _glbPollSequence;
+  const started = Date.now();
+
+  const tick = async (): Promise<void> => {
+    // Lost-focus guard: if a newer poll started, the user switched
+    // sessions, or we've been polling longer than the max, exit silently.
+    // 三重退出条件：被新轮询覆盖 / session 切换 / 达到超时上限。
+    if (_glbPollSequence !== mySeq) return;
+    if (getCurrentSessionId() !== sessionId) return;
+    if (Date.now() - started > GLB_POLL_MAX_MS) return;
+
+    try {
+      const status = await apiGetGlbStatus(sessionId);
+      // Re-check all guards after the awaited round-trip: another replace
+      // may have scheduled a newer build while we waited, and its token
+      // will surface via the next poll started by that replace — we must
+      // not race it by writing stale state here.
+      // 网络往返后再次校验，避免把中途被覆盖的旧 URL 写进 state。
+      if (_glbPollSequence !== mySeq) return;
+      if (getCurrentSessionId() !== sessionId) return;
+
+      if (status.status === "ready" && status.glb_url) {
+        const normalized = normalizeResourceUrl(status.glb_url);
+        if (normalized) {
+          applyGlbUrl(normalized);
+        }
+        return;
+      }
+      if (status.status === "error") {
+        // GLB build failed but the 2D preview already updated; keep the
+        // old 3D preview rather than surfacing a modal — the user can
+        // retry via any replace action to re-trigger a build.
+        // GLB 生成失败时不弹错；2D 已可用，旧 3D 继续显示，再次替换即重试。
+        postClientLog("converter: glb async build failed", {
+          scope: "converter",
+          phase: "glb-error",
+          details: { session_id: sessionId, error: status.error },
+        });
+        return;
+      }
+      // idle / pending — continue polling on next tick.
+      // idle / pending 继续轮询下一轮。
+      window.setTimeout(() => {
+        void tick();
+      }, GLB_POLL_INTERVAL_MS);
+    } catch (err) {
+      // Network blip: log and stop. Next replace will kick off a fresh
+      // poll, so we'd only mask a transient error by retrying here.
+      // 网络抖动时停止，下一次 replace 会重新起轮询，无需原地重试。
+      postClientLog("converter: glb poll network error", {
+        scope: "converter",
+        phase: "glb-poll-error",
+        details: { session_id: sessionId, error: summarizeErrorForLog(err) },
+      });
+    }
+  };
+
+  window.setTimeout(() => {
+    void tick();
+  }, GLB_POLL_INTERVAL_MS);
 }
 
 // ========== Store ==========
@@ -3037,13 +3214,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     applyBatchColorRemap: async (newHex: string) => {
       const state = _get();
       const colors = Array.from(state.selectedColors);
-      if (colors.length === 0) return;
+      if (colors.length === 0 || !state.sessionId) return;
 
-      // 1. 快照当前 colorRemapMap，作为单条记录推入 remapHistory
+      // Snapshot + optimistic remap map update (kept exactly as before so
+      // the undo/redo stack is unchanged).
+      // 快照 colorRemapMap + 乐观更新（保留原 undo/redo 行为）。
       const snapshot = { ...state.colorRemapMap };
       const newHistory = [...state.remapHistory, snapshot];
-
-      // 2. 批量更新 colorRemapMap
       const newMap = { ...state.colorRemapMap };
       for (const hex of colors) {
         newMap[hex] = newHex;
@@ -3056,19 +3233,38 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         downloadUrl: null,
       });
 
-      // 3. 依次调用后端替换
+      // Single round-trip: the backend runs styled PNG + segmented GLB +
+      // material-matrix sync exactly once instead of N times. This is the
+      // main "batch colour swap feels slow" fix.
+      // 单次请求：后端 PNG + GLB + 物料 sync 只跑 1 次（不再 N 次），
+      // 解决"多色一起替换很慢"的问题。
       try {
-        for (const hex of colors) {
-          await _get().submitSingleReplace(hex, newHex);
+        const response = await apiReplaceColorsBatch(
+          state.sessionId,
+          colors.map((hex) => ({
+            selectedColor: `#${hex}`,
+            replacementColor: `#${newHex}`,
+          })),
+        );
+        const updates: Partial<ConverterState> = {
+          replacePreviewLoading: false,
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (response.preview_3d_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
-        set({ replacePreviewLoading: false });
-      } catch {
-        // 回滚整个批量操作
+        set(updates);
+        _get()._pollAsyncGlb();
+      } catch (err) {
+        // Roll the whole batch back — same semantics as the old loop.
+        // 整批回滚，和旧循环语义一致。
         set({
           colorRemapMap: snapshot,
           remapHistory: state.remapHistory,
           replacePreviewLoading: false,
-          error: "批量颜色替换失败",
+          error: err instanceof Error ? err.message : "批量颜色替换失败",
         });
       }
     },
@@ -3328,6 +3524,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
         // 不递增 regionReplacementCount（已在 confirmReplacement 中处理）
         set(updates);
+        _get()._pollAsyncGlb();
       } catch (err) {
         set({
           replacePreviewLoading: false,
@@ -3386,10 +3583,320 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           updates.colorContours = response.color_contours;
         }
         set(updates);
+        _get()._pollAsyncGlb();
       } catch (err) {
         set({
           replacePreviewLoading: false,
           error: err instanceof Error ? err.message : "区域颜色替换失败",
+        });
+      }
+    },
+
+    toggleGradientRegionSelection: (
+      groupIndex: number,
+      regionIndex: number,
+    ) => {
+      const state = _get();
+      const current = state.selectedGradientRegions;
+      // Same-group invariant: a click on a region belonging to a different
+      // group drops the prior list entirely and seeds the selection with
+      // just the new region, so the user can "switch" between groups
+      // without first pressing Clear. Matches the intuition that merging
+      // regions from unrelated gradients isn't meaningful.
+      // 同 group 不变式：点跨 group 的 region 时清空旧选择并只保留新的。
+      const isCrossGroup =
+        current.length > 0 && current[0].groupIndex !== groupIndex;
+      let next: Array<{ groupIndex: number; regionIndex: number }>;
+      if (isCrossGroup) {
+        next = [{ groupIndex, regionIndex }];
+      } else {
+        const existingIdx = current.findIndex(
+          (r) => r.groupIndex === groupIndex && r.regionIndex === regionIndex,
+        );
+        next =
+          existingIdx >= 0
+            ? [
+                ...current.slice(0, existingIdx),
+                ...current.slice(existingIdx + 1),
+              ]
+            : [...current, { groupIndex, regionIndex }];
+      }
+      // gradientSelection mirrors selectedGradientRegions so LUT dispatch
+      // can route through applyMultiRegionPixelReplace via a single source
+      // of truth. Empty list → null; single-entry list still uses
+      // "multi-region" so the batch path stays active even with 1 box
+      // ticked.
+      // gradientSelection 与 selectedGradientRegions 同步，即便只勾 1 个
+      // 也走 batch 路径，语义统一。
+      const source: GradientSelectionSource | null =
+        next.length === 0
+          ? null
+          : {
+              kind: "multi-region",
+              groupIndex: next[0].groupIndex,
+              regionIndices: next.map((r) => r.regionIndex),
+            };
+      // Reset the 2D preview highlight state so ticking a checkbox is a
+      // pure "mark region for batch merge" action — it must NOT trigger a
+      // select-all-style cyan overlay on the canvas. Without this reset,
+      // any leftover ``selectedColors`` / ``regionData`` / highlight PNG
+      // from a prior "Select group" / "Select region" click or palette
+      // tile interaction would still be visible, looking as if the
+      // checkbox itself caused the highlight.
+      // 勾选 checkbox 只是"标记 region 加入合并"，不应触发 2D 高亮。重置
+      // selectedColors/regionData 并把 previewImageUrl 回退到 base，避免
+      // 先前"选中整组/区域"或调色板点击留下的 cyan 覆盖被误认为是
+      // checkbox 触发的。
+      const baseUrl = getPreviewBaseUrl(state);
+      set({
+        selectedGradientRegions: next,
+        gradientSelection: source,
+        selectedColors: new Set<string>(),
+        selectedColor: null,
+        regionData: null,
+        selectedRegions: [],
+        previewImageUrl: baseUrl,
+      });
+    },
+
+    clearGradientRegionSelection: () => {
+      // Also null out gradientSelection when it was tracking the multi-
+      // region list; leave the region/group kinds alone so clearing does
+      // not disturb an unrelated single-row highlight.
+      // 同步清空 multi-region 源标识；单 region/group 的高亮标识不受影响。
+      const current = _get().gradientSelection;
+      const nextSource = current?.kind === "multi-region" ? null : current;
+      set({
+        selectedGradientRegions: [],
+        gradientSelection: nextSource,
+      });
+    },
+
+    flattenSelectedGradientRegions: async () => {
+      const state = _get();
+      const sid = state.sessionId;
+      if (!sid) return;
+      const regions = state.selectedGradientRegions;
+      if (regions.length < 2) return;
+      const groups = state.gradientGroups;
+      if (!groups || groups.length === 0) return;
+      const groupIndex = regions[0].groupIndex;
+      const group = groups.find((g) => g.group_index === groupIndex);
+      if (!group) return;
+
+      // Pixel-count-weighted representative across the union of the
+      // selected regions' material_breakdowns: sum pixel_count per hex
+      // across every picked region, then keep the hex with the largest
+      // total. This matches the existing group-level representative_hex
+      // semantics (majority colour wins) but restricted to the subset the
+      // user actually checked, so merging "region 1 + region 3" collapses
+      // to whatever colour dominates those two regions specifically — not
+      // the whole-group majority.
+      // 按勾选 region 的 material_breakdown 累加像素数，最多的 hex 做代表色。
+      // 与整组 representative_hex 同思想，但只在选中的子集里评估，避免把未
+      // 勾选的 region 纳入计算。
+      const selectedRegionSet = new Set(regions.map((r) => r.regionIndex));
+      const totals = new Map<string, number>();
+      for (const region of group.regions) {
+        if (!selectedRegionSet.has(region.region_index)) continue;
+        for (const mb of region.material_breakdown) {
+          const hex = mb.hex.replace(/^#/, "").toLowerCase();
+          totals.set(hex, (totals.get(hex) ?? 0) + (mb.pixel_count ?? 0));
+        }
+      }
+      if (totals.size === 0) return;
+      let targetHex = "";
+      let best = -1;
+      for (const [hex, count] of totals.entries()) {
+        if (count > best) {
+          best = count;
+          targetHex = hex;
+        }
+      }
+      if (!targetHex) return;
+
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiRegionReplaceBatch(
+          sid,
+          regions.map((r) => ({
+            gradientGroupIndex: r.groupIndex,
+            gradientRegionIndex: r.regionIndex,
+            replacementColor: `#${targetHex}`,
+          })),
+        );
+        const updates: Partial<ConverterState> = {
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          replacePreviewLoading: false,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          // Matched to applyGradientRegionPixelReplace / regionReplace
+          // post-state: clear selection and bump regionReplacementCount so
+          // downstream generate() takes the cached-matched_rgb shortcut.
+          // 与单 region 替换后一致：清空选择 + regionReplacementCount 自增。
+          gradientSelection: null,
+          selectedGradientRegions: [],
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          regionData: null,
+          regionReplacementCount: state.regionReplacementCount + regions.length,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (response.preview_glb_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(
+            response.preview_glb_url,
+          );
+        }
+        if (response.color_contours) {
+          updates.colorContours = response.color_contours;
+        }
+        set(updates);
+        _get()._pollAsyncGlb();
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "合并去海带纹失败",
+        });
+      }
+    },
+
+    requantizeSelectedGradientRegions: async (
+      localQuantizeColors: number,
+      explicitTargets?: ReadonlyArray<{
+        groupIndex: number;
+        regionIndex: number;
+      }>,
+    ) => {
+      const state = _get();
+      const sid = state.sessionId;
+      if (!sid) return;
+      // Explicit targets from a per-region button: honour them and leave
+      // the batch checkbox list intact so the user's in-progress merge
+      // selection survives. Falls back to the checkbox list otherwise.
+      // 显式 targets：per-region 按钮传入，保留用户已有的批量勾选。
+      const usingExplicitTargets =
+        explicitTargets !== undefined && explicitTargets.length > 0;
+      const regions = usingExplicitTargets
+        ? (explicitTargets as ReadonlyArray<{ groupIndex: number; regionIndex: number }>)
+        : state.selectedGradientRegions;
+      if (regions.length === 0) return;
+      // Clamp to the backend's validated range [12, 256]. The dialog enforces
+      // it too, but belt-and-braces protects against rogue callers.
+      // 边界兜底：后端也校验 12-256，这里再夹一道避免发送非法值。
+      const clamped = Math.max(12, Math.min(256, Math.round(localQuantizeColors)));
+
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiRegionRequantize(
+          sid,
+          regions.map((r) => ({
+            gradientGroupIndex: r.groupIndex,
+            gradientRegionIndex: r.regionIndex,
+          })),
+          clamped,
+        );
+        const updates: Partial<ConverterState> = {
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          replacePreviewLoading: false,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          // Match post-state of flatten / region-replace so generate() picks
+          // up the cached-matched_rgb shortcut and layer images are invalidated.
+          // 与 flatten 保持一致：LUT 选中/高亮一律清空；批量勾选仅在隐式调用
+          // （走当前勾选列表）时清空，显式 per-region 操作保留用户选中。
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          regionData: null,
+          regionReplacementCount: state.regionReplacementCount + regions.length,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (!usingExplicitTargets) {
+          updates.gradientSelection = null;
+          updates.selectedGradientRegions = [];
+        }
+        if (response.preview_glb_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(
+            response.preview_glb_url,
+          );
+        }
+        if (response.color_contours) {
+          updates.colorContours = response.color_contours;
+        }
+        // The backend re-runs gradient-group analysis because requantize
+        // shifts matched_rgb enough to change the segmentation. When the
+        // response carries the refreshed groups, write them straight into
+        // the store (and pin gradientGroupsSessionId so the cached-short
+        // circuit in fetchGradientGroups keeps working for later reads).
+        // Without this, the panel would keep showing the pre-requantize
+        // groups and the user would feel the panel is "frozen".
+        // 后端在二次量化后会重跑分组分析；响应带了新分组时直接写进 store，
+        // 并把 gradientGroupsSessionId 置回当前 session，保持
+        // fetchGradientGroups 的缓存短路对后续读取仍然有效。
+        if (response.gradient_groups !== undefined) {
+          updates.gradientGroups = response.gradient_groups ?? [];
+          updates.gradientGroupsError = null;
+          updates.gradientGroupsLoading = false;
+          updates.gradientGroupsSessionId = sid;
+        }
+        set(updates);
+        _get()._pollAsyncGlb();
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "区域二次量化失败",
+        });
+      }
+    },
+
+    applyMultiRegionPixelReplace: async (targetHex: string) => {
+      const state = _get();
+      const sid = state.sessionId;
+      if (!sid) return;
+      const regions = state.selectedGradientRegions;
+      if (regions.length === 0) return;
+      const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
+      if (!hexNoHash) return;
+
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiRegionReplaceBatch(
+          sid,
+          regions.map((r) => ({
+            gradientGroupIndex: r.groupIndex,
+            gradientRegionIndex: r.regionIndex,
+            replacementColor: `#${hexNoHash}`,
+          })),
+        );
+        const updates: Partial<ConverterState> = {
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          replacePreviewLoading: false,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          gradientSelection: null,
+          selectedGradientRegions: [],
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          regionData: null,
+          regionReplacementCount: state.regionReplacementCount + regions.length,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (response.preview_glb_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(
+            response.preview_glb_url,
+          );
+        }
+        if (response.color_contours) {
+          updates.colorContours = response.color_contours;
+        }
+        set(updates);
+        _get()._pollAsyncGlb();
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "合并换色失败",
         });
       }
     },
@@ -3477,6 +3984,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             override: true,
           },
         }));
+        _get()._pollAsyncGlb();
       } catch (err) {
         set({
           replacePreviewLoading: false,
@@ -3511,6 +4019,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       // 服务端从 region_id_map 生成精确 mask，仅改该区域像素，避免全图
       // hex 替换误伤共享同色的其它区域。
       const gradSel = state.gradientSelection;
+      if (gradSel?.kind === "multi-region") {
+        // Multi-region checkbox flow: the user ticked ≥1 region box and
+        // then picked a LUT colour. Fan out the pick to every selected
+        // region via a single /region-replace-batch call (same spatial
+        // path applyGradientRegionPixelReplace uses for one region).
+        // 多勾 region → LUT 点色：一次 batch 把所有勾选 region 刷成该色，
+        // 与单 region 的空间替换路径同源。
+        await _get().applyMultiRegionPixelReplace(pending.targetHex);
+        return;
+      }
       if (gradSel?.kind === "region") {
         await _get().applyGradientRegionPixelReplace(
           gradSel.groupIndex,
@@ -3534,63 +4052,73 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           }
           break;
         case "multi-select": {
-          // 多区域模式：顺序 re-detect → replace 每个连通区域
+          // Multi-region mode: send every region's click coord + target in
+          // one batch request. The server rebuilds each mask via the same
+          // flood-fill kernel /region-detect uses, applies all mutations
+          // to matched_rgb cumulatively, and renders PNG + GLB exactly
+          // once for the whole batch. Previously this path looped N times
+          // and triggered N GLB rebuilds — the main "multi-region replace
+          // feels slow" regression we are fixing.
+          // 多区域模式：每条 region 的 click 坐标 + 目标色一次性发批量请求，
+          // 后端内部循环建 mask 并累积应用，PNG/GLB/物料 sync 各只跑 1 次。
+          // 旧实现是 N 次 detect + N 次 replace → N 次 GLB 重建。
           const regions = pending.sourceRegions ?? [];
           if (regions.length === 0) break;
           const curState = _get();
           const sid = curState.sessionId;
           if (!sid) break;
+          const batchItems = regions
+            .filter((r) => r.clickX != null && r.clickY != null)
+            .map((r) => ({
+              clickX: r.clickX as number,
+              clickY: r.clickY as number,
+              replacementColor: `#${pending.targetHex}`,
+            }));
+          if (batchItems.length === 0) break;
           set({
             replacePreviewLoading: true,
             regionReplacementCount:
-              curState.regionReplacementCount + regions.length,
+              curState.regionReplacementCount + batchItems.length,
             threemfDiskPath: null,
             downloadUrl: null,
           });
           try {
-            const newEntries: ColorReplacementItem[] = [];
-            for (const region of regions) {
-              if (region.clickX != null && region.clickY != null) {
-                await apiDetectRegion(sid, region.clickX, region.clickY);
-              }
-              const response = await apiRegionReplace(
-                sid,
-                `#${pending.targetHex}`,
-              );
-              const updates: Partial<ConverterState> = {
-                previewImageUrl: normalizeResourceUrl(response.preview_url),
-                previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
-                ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
-              };
-              if (response.preview_glb_url) {
-                updates.previewGlbUrl = normalizeResourceUrl(
-                  response.preview_glb_url,
-                );
-              }
-              if (response.color_contours) {
-                updates.colorContours = response.color_contours;
-              }
-              set(updates);
-              // 记录替换条目，供分享卡导出使用
-              const pe = curState.palette.find(
-                (p) => p.matched_hex === region.colorHex,
-              );
-              newEntries.push({
-                quantized_hex: pe?.quantized_hex ?? region.colorHex,
-                matched_hex: region.colorHex,
-                replacement_hex: pending.targetHex,
-              });
-            }
-            set({
+            const response = await apiRegionReplaceBatch(sid, batchItems);
+            const updates: Partial<ConverterState> = {
+              previewImageUrl: normalizeResourceUrl(response.preview_url),
+              previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
               replacePreviewLoading: false,
               selectedRegions: [],
               regionData: null,
               selectedColor: null,
-              replacement_regions: [
-                ..._get().replacement_regions,
-                ...newEntries,
-              ],
+              ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+            };
+            if (response.preview_glb_url) {
+              updates.previewGlbUrl = normalizeResourceUrl(
+                response.preview_glb_url,
+              );
+            }
+            if (response.color_contours) {
+              updates.colorContours = response.color_contours;
+            }
+            // Record per-region replacement entries for share-card export.
+            // 记录每个区域的替换条目，供分享卡导出使用。
+            const newEntries: ColorReplacementItem[] = regions.map((region) => {
+              const pe = curState.palette.find(
+                (p) => p.matched_hex === region.colorHex,
+              );
+              return {
+                quantized_hex: pe?.quantized_hex ?? region.colorHex,
+                matched_hex: region.colorHex,
+                replacement_hex: pending.targetHex,
+              };
             });
+            updates.replacement_regions = [
+              ..._get().replacement_regions,
+              ...newEntries,
+            ];
+            set(updates);
+            _get()._pollAsyncGlb();
           } catch (err) {
             set({
               replacePreviewLoading: false,
@@ -3686,6 +4214,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               updates.previewGlbUrl = `${res.preview_glb_url}`;
             }
             set(updates);
+            _get()._pollAsyncGlb();
           })
           .catch(() => {
             const fallback = _get().originalPreviewUrl;
@@ -3753,6 +4282,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
     // --- GLB 预览 ---
     setPreviewGlbUrl: (url: string | null) => set({ previewGlbUrl: url }),
+
+    _pollAsyncGlb: () => {
+      const sid = _get().sessionId;
+      if (!sid) return;
+      _startGlbStatusPolling(
+        sid,
+        (url) => set({ previewGlbUrl: url }),
+        () => _get().sessionId,
+      );
+    },
 
     // --- 模型边界 ---
     setModelBounds: (bounds: ConverterState["modelBounds"]) =>
@@ -4260,6 +4799,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           updates.colorContours = response.color_contours;
         }
         set(updates);
+        _get()._pollAsyncGlb();
       } catch (err) {
         set({
           replacePreviewLoading: false,
@@ -5220,6 +5760,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
         set(updates);
+        _get()._pollAsyncGlb();
       } catch (err) {
         // 回滚 colorRemapMap 到操作前状态
         const currentHistory = _get().remapHistory;
@@ -5248,36 +5789,34 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
       set({ replacePreviewLoading: true, error: null });
       try {
-        let lastPreviewUrl = state.previewImageUrl;
-        let lastGlbUrl: string | null = null;
-        for (const [origHex, newHex] of entries) {
-          // 查找 palette 中对应的 matched_hex 作为 selected_color
+        // Resolve each remap entry to its palette-backed selected_color
+        // (falling back to the key if the palette doesn't list it) and
+        // send them in a single batch request — the backend runs PNG +
+        // GLB + material sync exactly once for the whole map.
+        // 将 colorRemapMap 一次性打包发给 /replace-colors-batch，后端
+        // PNG/GLB/物料 sync 只跑 1 次，代替老的 N 次循环。
+        const pairs = entries.map(([origHex, newHex]) => {
           const paletteEntry = state.palette.find(
             (p) => p.matched_hex === origHex,
           );
-          const selectedColor = `#${paletteEntry ? paletteEntry.matched_hex : origHex}`;
-          const replacementColor = `#${newHex}`;
-
-          const response = await apiReplaceColor(
-            state.sessionId,
-            selectedColor,
-            replacementColor,
-          );
-          lastPreviewUrl = normalizeResourceUrl(response.preview_url);
-          if (response.preview_3d_url) {
-            lastGlbUrl = normalizeResourceUrl(response.preview_3d_url);
-          }
-        }
+          const sel = paletteEntry ? paletteEntry.matched_hex : origHex;
+          return {
+            selectedColor: `#${sel}`,
+            replacementColor: `#${newHex}`,
+          };
+        });
+        const response = await apiReplaceColorsBatch(state.sessionId, pairs);
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
-          previewImageUrl: lastPreviewUrl,
-          previewBaseImageUrl: lastPreviewUrl,
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
-        if (lastGlbUrl) {
-          updates.previewGlbUrl = lastGlbUrl;
+        if (response.preview_3d_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
         set(updates);
+        _get()._pollAsyncGlb();
       } catch (err) {
         set({
           replacePreviewLoading: false,

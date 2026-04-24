@@ -44,25 +44,14 @@ export default function MaterialColorPicker() {
     return "#888888";
   }, [selectedColor]);
 
-  const [draftTarget, setDraftTarget] = useState<string>(initialTarget);
-
   const hasMaterials = (selectedMaterialDirNames ?? []).length > 0;
 
-  const normalizedTarget = useMemo(
-    () => _normalizeHex(draftTarget),
-    [draftTarget],
-  );
-
-  const handleSubmit = useCallback(() => {
-    if (!hasMaterials || !normalizedTarget) return;
-    void fetchSuggestions(normalizedTarget);
-  }, [fetchSuggestions, hasMaterials, normalizedTarget]);
-
-  const handleSubmitOnEnter = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") handleSubmit();
+  const handleSubmitTarget = useCallback(
+    (normalizedTarget: string) => {
+      if (!hasMaterials) return;
+      void fetchSuggestions(normalizedTarget);
     },
-    [handleSubmit],
+    [fetchSuggestions, hasMaterials],
   );
 
   const handleSuggestionClick = useCallback(
@@ -209,38 +198,11 @@ export default function MaterialColorPicker() {
         ) : (
           <>
             {/* Target color input row */}
-            <div className={cx(workstationInsetCardClass, "flex flex-col gap-2")}>
-              <label className="text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-slate-600 dark:text-slate-300">
-                {t("material_picker_target_label")}
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  aria-label={t("material_picker_target_label")}
-                  value={normalizedTarget || "#888888"}
-                  onChange={(e) => setDraftTarget(e.target.value)}
-                  className="h-8 w-10 cursor-pointer rounded-lg border border-slate-300/80 bg-transparent dark:border-slate-700/80"
-                />
-                <input
-                  type="text"
-                  inputMode="text"
-                  spellCheck={false}
-                  placeholder={t("material_picker_target_placeholder")}
-                  value={draftTarget}
-                  onChange={(e) => setDraftTarget(e.target.value)}
-                  onKeyDown={handleSubmitOnEnter}
-                  className="flex-1 rounded-xl border border-slate-200/80 bg-slate-100/78 px-3 py-1.5 font-mono text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
-                />
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={!normalizedTarget || loading}
-                  className="rounded-full bg-blue-600 px-3 py-1.5 text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:opacity-60 dark:disabled:bg-slate-700"
-                >
-                  {t("material_picker_submit")}
-                </button>
-              </div>
-            </div>
+            <TargetColorInputRow
+              initialTarget={initialTarget}
+              loading={loading}
+              onSubmit={handleSubmitTarget}
+            />
 
             {/* Status line — source + count, after a successful response */}
             {suggestions && (
@@ -304,6 +266,84 @@ export default function MaterialColorPicker() {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Target color input row
+// ---------------------------------------------------------------------------
+
+interface TargetColorInputRowProps {
+  initialTarget: string;
+  loading: boolean;
+  onSubmit: (normalizedTarget: string) => void;
+}
+
+/**
+ * Isolated color-picker / hex-input / submit trio.
+ * 隔离的取色器 / 十六进制输入 / 提交按钮行。
+ *
+ * Kept as its own component so continuous ``<input type="color">`` drag
+ * events only re-render this small subtree rather than the whole picker
+ * (pending-replacement bar, gradient groups, suggestion grid, etc.).
+ * 独立组件保证拖动取色器时只重渲染这一小块子树，不会带着上方待替换条、
+ * 渐变分组、建议网格一起刷。
+ */
+const TargetColorInputRow = memo(function TargetColorInputRow({
+  initialTarget,
+  loading,
+  onSubmit,
+}: TargetColorInputRowProps) {
+  const { t } = useI18n();
+  const [draftTarget, setDraftTarget] = useState<string>(initialTarget);
+
+  const normalizedTarget = useMemo(() => _normalizeHex(draftTarget), [draftTarget]);
+
+  const handleSubmit = useCallback(() => {
+    if (!normalizedTarget) return;
+    onSubmit(normalizedTarget);
+  }, [normalizedTarget, onSubmit]);
+
+  const handleSubmitOnEnter = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") handleSubmit();
+    },
+    [handleSubmit],
+  );
+
+  return (
+    <div className={cx(workstationInsetCardClass, "flex flex-col gap-2")}>
+      <label className="text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-slate-600 dark:text-slate-300">
+        {t("material_picker_target_label")}
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          aria-label={t("material_picker_target_label")}
+          value={normalizedTarget || "#888888"}
+          onChange={(e) => setDraftTarget(e.target.value)}
+          className="h-8 w-10 cursor-pointer rounded-lg border border-slate-300/80 bg-transparent dark:border-slate-700/80"
+        />
+        <input
+          type="text"
+          inputMode="text"
+          spellCheck={false}
+          placeholder={t("material_picker_target_placeholder")}
+          value={draftTarget}
+          onChange={(e) => setDraftTarget(e.target.value)}
+          onKeyDown={handleSubmitOnEnter}
+          className="flex-1 rounded-xl border border-slate-200/80 bg-slate-100/78 px-3 py-1.5 font-mono text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+        />
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!normalizedTarget || loading}
+          className="rounded-full bg-blue-600 px-3 py-1.5 text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:opacity-60 dark:disabled:bg-slate-700"
+        >
+          {t("material_picker_submit")}
+        </button>
+      </div>
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -9,7 +9,7 @@ import zipfile
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import cv2
 import numpy as np
@@ -1696,11 +1696,49 @@ def save_stage_a_material_archive(
     )
 
 
+_ESTIMATED_RGB_UNSET: Any = object()
+
+
+def _validate_estimated_rgb_override(value: Sequence[int]) -> list[int]:
+    """Validate and normalize a user-supplied sRGB override triplet.
+    校验并归一化用户提供的 sRGB 覆盖三元组。
+
+    Args:
+        value: Iterable of 3 integer channels in [0, 255]. (3 个 [0, 255] 内整数通道)
+
+    Returns:
+        Normalized ``[R, G, B]`` list of ints. (归一化后的 ``[R, G, B]`` 整数列表)
+
+    Raises:
+        ValueError: If the value is not a 3-length iterable of valid channels.
+    """
+    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+        raise ValueError("estimated_rgb must be a 3-element sequence of integers")
+    channels = list(value)
+    if len(channels) != 3:
+        raise ValueError("estimated_rgb must contain exactly 3 channels")
+    normalized: list[int] = []
+    for channel in channels:
+        try:
+            channel_int = int(channel)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "estimated_rgb channels must be integers in [0, 255]"
+            ) from exc
+        if not 0 <= channel_int <= 255:
+            raise ValueError(
+                "estimated_rgb channels must be integers in [0, 255]"
+            )
+        normalized.append(channel_int)
+    return normalized
+
+
 def update_saved_stage_a_material_archive_metadata(
     *,
     directory_name: str,
     material_name: str,
     brand: str | None = None,
+    estimated_rgb: Sequence[int] | Any = _ESTIMATED_RGB_UNSET,
     materials_dir: str | None = None,
 ) -> MaterialArchiveUpdateResult:
     """Update editable metadata on a saved Stage A material archive.
@@ -1710,6 +1748,10 @@ def update_saved_stage_a_material_archive_metadata(
         directory_name: Saved material directory name. (已保存的耗材目录名)
         material_name: Updated user-facing material name. (更新后的耗材名称)
         brand: Updated optional brand label. (更新后的可选品牌标签)
+        estimated_rgb: Optional user-overridden display sRGB ``[R, G, B]``
+            triplet. Pass ``_ESTIMATED_RGB_UNSET`` (default) to leave the
+            previously stored value unchanged. (可选的用户覆盖显示 sRGB 三元组;
+            默认 ``_ESTIMATED_RGB_UNSET`` 时保留原值不变)
         materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
 
     Returns:
@@ -1722,6 +1764,12 @@ def update_saved_stage_a_material_archive_metadata(
     if isinstance(brand, str):
         stripped_brand = brand.strip()
         cleaned_brand = stripped_brand or None
+
+    normalized_estimated_rgb: list[int] | None
+    if estimated_rgb is _ESTIMATED_RGB_UNSET:
+        normalized_estimated_rgb = None
+    else:
+        normalized_estimated_rgb = _validate_estimated_rgb_override(estimated_rgb)
 
     target_root = Path(materials_dir or MATERIALS_DIR)
     material_dir = _resolve_material_dir(target_root, directory_name)
@@ -1746,6 +1794,12 @@ def update_saved_stage_a_material_archive_metadata(
     archive_payload["material_name"] = cleaned_material_name
     archive_payload["brand"] = cleaned_brand
     archive_payload["updated_at"] = updated_at
+    if normalized_estimated_rgb is not None:
+        material_summary = archive_payload.get("material_summary")
+        if not isinstance(material_summary, dict):
+            material_summary = {}
+            archive_payload["material_summary"] = material_summary
+        material_summary["estimated_rgb"] = normalized_estimated_rgb
     fit_summary = archive_payload.get("fit_summary")
     if isinstance(fit_summary, dict):
         fit_summary["colors"] = [cleaned_material_name]

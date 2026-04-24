@@ -1,5 +1,29 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as fc from "fast-check";
+
+// Intercept the converter API so applyBatchColorRemap (now routed through
+// /replace-colors-batch instead of looping /replace-color) resolves
+// without hitting the network. Without this mock, the batch call's
+// catch branch would roll back colorRemapMap and break the property
+// assertions below.
+// Mock converter API 让 applyBatchColorRemap 内部的 replaceColorsBatch
+// resolve，否则 catch 分支会回滚 colorRemapMap 导致属性测试失败。
+vi.mock("../api/converter", async () => {
+  const actual =
+    await vi.importActual<typeof import("../api/converter")>(
+      "../api/converter",
+    );
+  return {
+    ...actual,
+    replaceColorsBatch: vi.fn().mockResolvedValue({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/fake-preview.png",
+      replacement_count: 1,
+    }),
+  };
+});
+
 import { useConverterStore } from "../stores/converter";
 import type { SelectionMode } from "../stores/converter";
 import type { PaletteEntry } from "../api/types";
@@ -60,7 +84,10 @@ describe("Feature: color-selection-modes — Property-Based Tests", () => {
       fc.assert(
         fc.property(paletteArb, (palette) => {
           resetStore();
-          useConverterStore.setState({ palette, selectedColors: new Set(["aabbcc", "ddeeff"]) });
+          useConverterStore.setState({
+            palette,
+            selectedColors: new Set(["aabbcc", "ddeeff"]),
+          });
 
           useConverterStore.getState().setSelectionMode("select-all");
 
@@ -81,7 +108,12 @@ describe("Feature: color-selection-modes — Property-Based Tests", () => {
       fc.assert(
         fc.property(
           selectedColorsArb,
-          fc.constantFrom<SelectionMode>("current", "select-all", "multi-select", "region"),
+          fc.constantFrom<SelectionMode>(
+            "current",
+            "select-all",
+            "multi-select",
+            "region",
+          ),
           (colors, targetMode) => {
             resetStore();
             // Set up a non-empty selectedColors state
@@ -106,26 +138,22 @@ describe("Feature: color-selection-modes — Property-Based Tests", () => {
   describe("Property 3: 多选模式下颜色切换的自逆性", () => {
     it("toggling the same color twice in multi-select mode restores selectedColors to initial state", () => {
       fc.assert(
-        fc.property(
-          selectedColorsArb,
-          hexColor,
-          (initialColors, toggleHex) => {
-            resetStore();
-            useConverterStore.setState({
-              selectionMode: "multi-select",
-              selectedColors: new Set(initialColors),
-            });
+        fc.property(selectedColorsArb, hexColor, (initialColors, toggleHex) => {
+          resetStore();
+          useConverterStore.setState({
+            selectionMode: "multi-select",
+            selectedColors: new Set(initialColors),
+          });
 
-            const before = new Set(useConverterStore.getState().selectedColors);
+          const before = new Set(useConverterStore.getState().selectedColors);
 
-            // Toggle twice
-            useConverterStore.getState().toggleColorInSelection(toggleHex);
-            useConverterStore.getState().toggleColorInSelection(toggleHex);
+          // Toggle twice
+          useConverterStore.getState().toggleColorInSelection(toggleHex);
+          useConverterStore.getState().toggleColorInSelection(toggleHex);
 
-            const after = useConverterStore.getState().selectedColors;
-            expect(after).toEqual(before);
-          },
-        ),
+          const after = useConverterStore.getState().selectedColors;
+          expect(after).toEqual(before);
+        }),
         { numRuns: 100 },
       );
     });
@@ -180,10 +208,10 @@ describe("Feature: color-selection-modes — Property-Based Tests", () => {
         fc.asyncProperty(
           selectedColorsArb,
           hexColor,
-          fc.array(
-            fc.record({ key: hexColor, value: hexColor }),
-            { minLength: 0, maxLength: 5 },
-          ),
+          fc.array(fc.record({ key: hexColor, value: hexColor }), {
+            minLength: 0,
+            maxLength: 5,
+          }),
           async (colors, targetHex, priorRemaps) => {
             resetStore();
 

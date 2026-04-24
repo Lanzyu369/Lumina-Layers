@@ -423,3 +423,77 @@ def test_invalid_input_shapes_raise() -> None:
             quantized_rgb=np.zeros((4, 4), dtype=np.uint8),
             mask_solid=s,
         )
+
+
+def test_regions_are_ordered_by_spatial_adjacency() -> None:
+    """Four CC regions laid out L→R in a row should come out as a NN
+    traversal (largest first, then nearest unvisited by centroid), never
+    in an order that skips over a spatial neighbour.
+
+    The legacy "sort by descending pixel_count" ordering could interleave
+    regions of nearly equal size regardless of where they sit on the
+    canvas — breaking the user mental model that "adjacent squares in the
+    panel list ≈ adjacent bands on the image". This test pins the NN
+    behaviour so the panel's checkbox list stays spatially coherent.
+
+    布局：等高等宽的 4 块同组渐变色区，从左到右依次摆放且像素数递减。
+    预期顺序 = 从最大（第 1 块）开始依次向右邻居推进。
+    """
+
+    # Shared two-colour band so all four regions are one gradient group.
+    band_a = _hex_to_rgb("#a03030")
+    band_b = _hex_to_rgb("#a05050")
+
+    # Row height 40 makes each region tall enough to beat min_region_pixels.
+    # Widths decrease left→right so NN order == input order (1,2,3,4).
+    # Left→right 宽度递减，NN 顺序应等于输入顺序。
+    region_widths = [200, 160, 120, 80]
+    gap = 20
+    height = 40
+    width = sum(region_widths) + gap * (len(region_widths) - 1) + 20
+    matched = np.full((height, width, 3), 255, dtype=np.uint8)
+    quantized = matched.copy()
+    solid = np.zeros((height, width), dtype=bool)
+
+    x = 10
+    for w in region_widths:
+        # Alternate band_a / band_b rows inside each region to form the
+        # gradient banding the analyzer requires; the exact band pattern
+        # doesn't matter for ordering, just that the region mask is one
+        # connected component.
+        # 每个区域内部用两色条纹制造 banding，保证分析器识别为渐变组。
+        matched[: height // 2, x : x + w] = band_a
+        matched[height // 2 :, x : x + w] = band_b
+        quantized[: height // 2, x : x + w] = band_a
+        quantized[height // 2 :, x : x + w] = band_b
+        solid[:, x : x + w] = True
+        x += w + gap
+
+    params = GradientGroupAnalysisParams(
+        boundary_delta_e=50.0,
+        min_boundary_pixels=1,
+        min_material_pixels=10,
+        min_region_pixels=100,
+        region_connectivity=4,
+        merge_small_regions=False,
+    )
+    groups = analyze_gradient_groups(
+        matched_rgb=matched,
+        quantized_rgb=quantized,
+        mask_solid=solid,
+        params=params,
+    )
+
+    assert len(groups) == 1, "The 4 regions should collapse into one gradient group"
+    regions = groups[0].regions
+    assert len(regions) == len(region_widths)
+    # Region 1 must be the largest (leftmost here since widths decrease).
+    # 第 1 位必须是最大区域。
+    assert regions[0].pixel_count == max(r.pixel_count for r in regions)
+    # The centroid X should increase monotonically — NN traversal from the
+    # largest (leftmost) must walk right neighbour by neighbour, never
+    # skipping one in the middle. 质心 X 必须单调递增，证明 NN 顺序生效。
+    centroid_xs = [r.centroid[0] for r in regions]
+    assert centroid_xs == sorted(centroid_xs), (
+        f"regions should be ordered L→R by centroid X, got {centroid_xs}"
+    )

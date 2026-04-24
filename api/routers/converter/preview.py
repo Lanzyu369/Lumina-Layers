@@ -32,16 +32,12 @@ from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import BedManager, PrinterConfig, TEMP_DIR
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
-from core.gradient_group_analyzer import (
-    GradientGroupAnalysisParams,
-    analyze_gradient_groups_with_region_id_map,
-    gradient_groups_to_json,
-)
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
+from .async_glb import get_glb_status
 from .common import (
     EPHEMERAL_PREVIEW_TTL_SECONDS,
     NON_FATAL_GLB_ERRORS,
@@ -50,6 +46,7 @@ from .common import (
     _image_to_png_bytes,
     _require_preview_cache,
     _require_session,
+    recompute_gradient_groups_into_session,
 )
 
 router = APIRouter()
@@ -69,72 +66,6 @@ def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str
             return source_basename
     fallback_basename = os.path.splitext(os.path.basename(temp_path))[0]
     return normalize_large_format_source_basename(fallback_basename) or fallback_basename
-
-
-def _compute_and_store_gradient_groups(
-    cache_data: dict | None,
-    session_id: str,
-    store: SessionStore,
-) -> None:
-    """Analyse preview cache for gradient-banding groups and cache the result.
-    分析预览缓存中的渐变海带纹分组，并将结果写入 session。
-
-    Runs synchronously after the preview worker returns. The analyser is
-    pure NumPy / OpenCV and typically finishes within 1-2s even on 2k x 3k
-    images. Failures are non-fatal — we log a warning and leave the session
-    without gradient-group metadata so the UI can degrade gracefully.
-    """
-    if cache_data is None:
-        return
-    matched_rgb = cache_data.get("matched_rgb")
-    quantized_image = cache_data.get("quantized_image")
-    mask_solid = cache_data.get("mask_solid")
-    if matched_rgb is None or quantized_image is None or mask_solid is None:
-        log.debug(
-            "Skipping gradient-group analysis: preview cache is missing inputs",
-            extra={"event": "gradient_groups_skipped_missing_inputs"},
-        )
-        return
-    _t = time.perf_counter()
-    try:
-        analysis = analyze_gradient_groups_with_region_id_map(
-            matched_rgb=np.asarray(matched_rgb, dtype=np.uint8),
-            quantized_rgb=np.asarray(quantized_image, dtype=np.uint8),
-            mask_solid=np.asarray(mask_solid, dtype=bool),
-            params=GradientGroupAnalysisParams(),
-        )
-    except (ValueError, RuntimeError) as exc:
-        log.warning(
-            "Gradient-group analysis failed",
-            extra={
-                "event": "gradient_groups_failed",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        return
-    payload = gradient_groups_to_json(analysis.groups)
-    store.put(session_id, "gradient_groups", payload)
-    # Cache the per-pixel region_id_map so the color-highlight endpoint can
-    # clip overlays to the *exact* pixel mask of a selected sub-region. This
-    # replaces the previous bounding-box approximation, which bled into same-
-    # colour pixels outside the region's true connected component.
-    # 缓存每像素 (group, region) 编码图，让 color-highlight 端点能按精确
-    # 像素 mask 裁剪预览，解决子区域高亮点亮整组像素的问题。
-    store.put(
-        session_id,
-        "gradient_region_id_map",
-        np.ascontiguousarray(analysis.region_id_map, dtype=np.uint32),
-    )
-    log.info(
-        "Gradient groups computed",
-        extra={
-            "event": "gradient_groups_computed",
-            "duration_ms": round((time.perf_counter() - _t) * 1000, 3),
-            "group_count": len(payload),
-            "total_regions": sum(len(g.get("regions", [])) for g in payload),
-        },
-    )
 
 
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
@@ -586,7 +517,7 @@ async def convert_preview(
     # without a second round-trip. Best-effort: failures are logged and do
     # not block the preview response.
     # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
-    _compute_and_store_gradient_groups(cache_data, session_id, store)
+    recompute_gradient_groups_into_session(cache_data, session_id, store)
     store.put(session_id, "image_path", temp_path)
     source_basename = _resolve_upload_source_basename(image.filename, temp_path)
     store.put(session_id, "source_basename", source_basename)
@@ -770,6 +701,33 @@ async def convert_preview(
 
 
 
+def _compute_layer_images_cache_key(
+    material_matrix: np.ndarray,
+    preview_colors_src: object,
+    slots_src: object,
+) -> str:
+    """Hash key derived from the inputs that determine the rendered layer PNGs.
+    Key = sha1(material_matrix bytes + shape + preview_colors repr + slots repr).
+    基于决定层图像素内容的输入计算缓存 key；material_matrix / 调色板没变就命中。
+    """
+    import hashlib
+
+    hasher = hashlib.sha1()
+    # material_matrix is dtype-stable (int16) and its bytes uniquely identify
+    # the per-pixel per-layer material id distribution. Include shape so two
+    # different-shaped matrices can't collide.
+    # material_matrix 是决定每层可视内容的唯一数据源；shape 避免不同形状冲突。
+    hasher.update(bytes(str(material_matrix.shape), "ascii"))
+    hasher.update(material_matrix.tobytes())
+    # preview_colors + slots affect only the colour mapping but are cheap to
+    # serialise and small, so include them to stay correct when a caller
+    # rebinds colours in-place without touching material_matrix.
+    # 把调色板也塞进 key，支持颜色 dict 变化但 matrix 不变的边缘情况。
+    hasher.update(repr(preview_colors_src).encode("utf-8", errors="replace"))
+    hasher.update(repr(slots_src).encode("utf-8", errors="replace"))
+    return hasher.hexdigest()
+
+
 @router.get("/layer-images/{session_id}")
 def get_layer_images(
     session_id: str,
@@ -804,9 +762,55 @@ def get_layer_images(
         preview_colors = color_conf.get("preview", {})
         slots = color_conf.get("slots", [])
 
+    # Cache lookup: /layer-images was the single biggest latency contributor
+    # after a replace (~6s for 6 layers at ~500x500) because every request
+    # re-encoded every layer as PNG. Reuse cached PNG bytes when the inputs
+    # that drive pixel content (material_matrix + palette) haven't changed.
+    # 缓存命中：matched_rgb/调色板没改就复用已编码的 PNG bytes，免去 6 秒重算。
+    cache_key = _compute_layer_images_cache_key(
+        material_matrix, preview_colors, slots
+    )
+    cached_entry = session_data.get("layer_images_cache")
+    if (
+        isinstance(cached_entry, dict)
+        and cached_entry.get("key") == cache_key
+        and isinstance(cached_entry.get("layers"), list)
+    ):
+        t_hit = time.perf_counter()
+        layers_out: list[dict] = []
+        for idx, item in enumerate(cached_entry["layers"]):
+            png_bytes = item.get("png_bytes")
+            slot_name = item.get("name", f"Layer {idx}")
+            if not isinstance(png_bytes, (bytes, bytearray)):
+                # Defensive: if somehow malformed, fall through to full recompute
+                # 防御性：cache 坏了就走 miss 路径全量重算，不让端点崩掉。
+                cached_entry = None
+                layers_out = []
+                break
+            file_id = registry.register_bytes(
+                session_id, bytes(png_bytes), f"layer_{idx}.png"
+            )
+            layers_out.append(
+                {
+                    "layer_index": idx,
+                    "name": slot_name,
+                    "url": f"/api/files/{file_id}",
+                }
+            )
+        if cached_entry is not None and layers_out:
+            log.info(
+                "layer-images cache hit",
+                extra={
+                    "event": "converter_layer_images_cache_hit",
+                    "n_layers": len(layers_out),
+                    "duration_ms": round((time.perf_counter() - t_hit) * 1000, 1),
+                },
+            )
+            return {"session_id": session_id, "layers": layers_out}
+
     # Build material_id -> rgba mapping
     # preview_colors can be either dict[str, rgba] (Merged LUT) or dict[int, rgba] (standard)
-    mat_id_to_rgba = {}
+    mat_id_to_rgba: dict[int, object] = {}
     if slots and preview_colors:
         for mat_id, slot_name in enumerate(slots):
             # Try to get color by name first (Merged LUT), then by ID (standard)
@@ -815,24 +819,73 @@ def get_layer_images(
             elif mat_id in preview_colors:
                 mat_id_to_rgba[mat_id] = preview_colors[mat_id]
 
-    layers = []
-    for layer_idx in range(n_layers):
+    t_miss = time.perf_counter()
+
+    # Vectorised palette build: instead of looping over each material and
+    # running ``(layer == mat_id) & mask_solid`` (O(materials * h*w) per layer
+    # plus a boolean mask allocation per material), look up every pixel's RGB
+    # via fancy indexing. Palette slot 0 defaults to the body-grey background
+    # (220,220,220) so any pixel whose material id is not in mat_id_to_rgba
+    # keeps the old visual.
+    # 向量化调色板：把 N_materials×N_layers 的嵌套 mask 计算替换成单次
+    # fancy indexing，层生成耗时从秒级降到几十毫秒。
+    max_mat_id = int(material_matrix.max()) if material_matrix.size > 0 else 0
+    palette_arr = np.full((max_mat_id + 1, 3), 220, dtype=np.uint8)
+    for mat_id, rgba in mat_id_to_rgba.items():
+        if 0 <= mat_id <= max_mat_id:
+            palette_arr[mat_id] = np.asarray(rgba[:3], dtype=np.uint8)
+
+    non_solid_color = np.array([240, 240, 240], dtype=np.uint8)
+    non_solid_mask = ~mask_solid
+
+    # PNG encode tuned for near-flat layer previews. Default PIL compress_level
+    # is 6; dropping to 1 is ~3-5x faster on these images with a negligible
+    # size increase (layers are 2 colours + grey background so entropy is tiny
+    # regardless of level).
+    # 层图几乎是纯色，编码级别从 6 降到 1，速度提升 3-5×，体积几乎无差。
+    def _encode_fast(arr: np.ndarray) -> bytes:
+        import io as _io
+
+        buf = _io.BytesIO()
+        Image.fromarray(arr).save(buf, format="PNG", compress_level=1)
+        return buf.getvalue()
+
+    def _build_layer_array(layer_idx: int) -> np.ndarray:
         layer = material_matrix[:, :, layer_idx]
-        # 浅灰背景
-        layer_img = np.ones((h, w, 3), dtype=np.uint8) * 220
+        # np.clip + fancy indexing: out-of-range ids fall back to slot 0 (body grey).
+        layer_clipped = np.clip(layer, 0, max_mat_id)
+        layer_img = palette_arr[layer_clipped]
+        # Ensure writable contiguous buffer for the non-solid overwrite below
+        # (advanced indexing already returns a copy, but be explicit).
+        # fancy indexing 已返回 copy；此处显式保证写入连通性。
+        layer_img[non_solid_mask] = non_solid_color
+        return layer_img
 
-        for mat_id, rgba in mat_id_to_rgba.items():
-            mat_mask = (layer == mat_id) & mask_solid
-            if np.any(mat_mask):
-                layer_img[mat_mask] = rgba[:3]
+    # Parallel PNG encoding: PIL/libpng releases the GIL during compression so
+    # a ThreadPool scales well on multicore. ``min(n_layers, 4)`` keeps the
+    # pool small enough to avoid thrashing on 2-core machines.
+    # PNG 编码并发：libpng 释放 GIL，线程池在多核上近线性扩展。
+    from concurrent.futures import ThreadPoolExecutor
 
-        # 非实体区域用更浅的灰
-        layer_img[~mask_solid] = [240, 240, 240]
+    def _encode_one(layer_idx: int) -> bytes:
+        return _encode_fast(_build_layer_array(layer_idx))
 
-        png_bytes = _image_to_png_bytes(Image.fromarray(layer_img))
-        file_id = registry.register_bytes(session_id, png_bytes, f"layer_{layer_idx}.png")
+    max_workers = max(1, min(n_layers, 4))
+    if n_layers > 1 and max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            encoded_bytes: list[bytes] = list(pool.map(_encode_one, range(n_layers)))
+    else:
+        encoded_bytes = [_encode_one(0)] if n_layers == 1 else []
 
-        slot_name = slots[layer_idx] if layer_idx < len(slots) else f"Layer {layer_idx}"
+    layers: list[dict] = []
+    cached_layers: list[dict] = []
+    for layer_idx, png_bytes in enumerate(encoded_bytes):
+        file_id = registry.register_bytes(
+            session_id, png_bytes, f"layer_{layer_idx}.png"
+        )
+        slot_name = (
+            slots[layer_idx] if layer_idx < len(slots) else f"Layer {layer_idx}"
+        )
         layers.append(
             {
                 "layer_index": layer_idx,
@@ -840,8 +893,85 @@ def get_layer_images(
                 "url": f"/api/files/{file_id}",
             }
         )
+        cached_layers.append({"name": slot_name, "png_bytes": png_bytes})
+
+    # Persist the newly built PNGs so the next call with the same inputs
+    # hits the fast path above.
+    # 写回缓存，下一次相同 matrix 直接命中。
+    store.put(
+        session_id,
+        "layer_images_cache",
+        {"key": cache_key, "layers": cached_layers},
+    )
+    log.info(
+        "layer-images cache miss",
+        extra={
+            "event": "converter_layer_images_cache_miss",
+            "n_layers": n_layers,
+            "duration_ms": round((time.perf_counter() - t_miss) * 1000, 1),
+            "matrix_shape": list(material_matrix.shape),
+        },
+    )
 
     return {"session_id": session_id, "layers": layers}
+
+
+@router.get("/glb-status/{session_id}")
+def get_segmented_glb_status(
+    session_id: str,
+    store: SessionStore = Depends(get_session_store),
+):
+    """Return the async segmented-GLB build status for *session_id*.
+
+    The replace endpoints (``/replace-color``, ``/region-replace``, batch
+    variants, ``/apply-recipe-override``) no longer wait for
+    ``generate_segmented_glb`` — on a 3k-pixel-wide image that one step
+    alone was responsible for ~35 s (≥75 %) of their total HTTP latency.
+    They now return as soon as the PNG is ready and hand GLB regeneration
+    off to a background thread (see :mod:`api.routers.converter.async_glb`).
+    The frontend polls this endpoint until it sees ``status == "ready"``
+    and then swaps its 3D preview to the newly produced GLB URL.
+    replace 端点不再等 GLB：PNG 一就绪就响应，GLB 在后台线程跑。前端轮询
+    本端点，看到 ``status == "ready"`` 后再用新 GLB URL 刷新 3D 预览。
+
+    Status values / 状态取值：
+        - ``idle``    — 该会话从未调度过 GLB 构建（通常只在预览之前出现）。
+        - ``pending`` — GLB 正在后台生成；``job_token`` 标识当前任务。
+        - ``ready``   — 新 GLB 已写入 FileRegistry，URL 在 ``glb_url`` 中。
+        - ``error``   — 后台构建抛错；错误类型/消息在 ``error`` 中。
+
+    The payload is ``{ status, glb_url, job_token, error }``. ``glb_url``
+    is the same ``/api/files/<id>`` form the synchronous code used to
+    return, so the frontend can feed it straight into ``previewGlbUrl``
+    without any rewriting.
+    返回体字段：``status`` / ``glb_url`` / ``job_token`` / ``error``；
+    ``glb_url`` 与原同步路径返回的格式一致，前端无需额外处理即可直接
+    写入 ``previewGlbUrl``。
+    """
+
+    session_data = _require_session(store, session_id)
+    cache = session_data.get("preview_cache")
+    # No preview cache at all: treat as idle rather than erroring so the
+    # frontend can poll through the brief window between session create
+    # and first /preview completion without getting spurious 409s.
+    # 尚无 preview_cache：视为 idle，避免新会话短暂窗口期 polling 报 409。
+    if not isinstance(cache, dict):
+        return {
+            "session_id": session_id,
+            "status": "idle",
+            "glb_url": None,
+            "job_token": None,
+            "error": None,
+        }
+
+    snapshot = get_glb_status(cache)
+    return {
+        "session_id": session_id,
+        "status": snapshot.get("status", "idle"),
+        "glb_url": snapshot.get("glb_url"),
+        "job_token": snapshot.get("job_token"),
+        "error": snapshot.get("error"),
+    }
 
 
 @router.post("/upload-heightmap")

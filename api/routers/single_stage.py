@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 import zipfile
+from typing import Any
 
 import anyio
 import numpy as np
@@ -431,12 +432,15 @@ async def extractor_update_gradient_card_material(
     """Update saved gradient-card material metadata.
     更新已保存的梯度卡耗材元数据。
     """
+    update_kwargs: dict[str, Any] = {
+        "directory_name": directory_name,
+        "material_name": payload.material_name,
+        "brand": payload.brand,
+    }
+    if payload.estimated_rgb is not None:
+        update_kwargs["estimated_rgb"] = payload.estimated_rgb
     try:
-        result = update_saved_stage_a_material_archive_metadata(
-            directory_name=directory_name,
-            material_name=payload.material_name,
-            brand=payload.brand,
-        )
+        result = update_saved_stage_a_material_archive_metadata(**update_kwargs)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (ValueError, TypeError, OSError, RuntimeError) as exc:

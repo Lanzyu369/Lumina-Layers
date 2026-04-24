@@ -55,6 +55,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Every group and region row now has its own Flatten button — no need to first multi-select and pick a target colour, one click collapses that specific gradient to its representative colour",
           },
           {
+            zh: "区域勾选后新增“二次量化”按钮：弹窗里选一个 12-256 的色数，对每个选中的区域按原图单独做一次局部量化，再走同一个耗材求解器重匹配。能保留脸部/皮肤这类低频渐变，同时把条纹压成大块，效果比直接平坦化更自然",
+            en: "A new Re-quantize button appears next to checked regions: pick a 12-256 colour budget in the dialog and, for each selected region, we run a dedicated K-Means on the original source then re-match through the same material solver — keeps low-frequency gradients like faces and skin while collapsing kelp banding into clean blocks, far more natural than flatten",
+          },
+          {
             zh: "在不同分组之间快速切换时，预览上不会再因为旧请求晚到而显示到旧的高亮色，始终跟当前选中保持一致",
             en: "Rapid switching between gradient groups no longer leaves a stale highlight on the preview: out-of-order responses are dropped so the canvas always matches the current selection",
           },
@@ -75,16 +79,28 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
           },
           {
-            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
-            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
+            zh: '用耗材档案做的模型现在也能改自定义配方了，不会再弹 "没有预测引擎" 的提示',
+            en: 'Models built from the material library now accept custom recipes too — the old "no predictive runtime" blocker is gone',
           },
           {
             zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
             en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
           },
           {
-            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            zh: '点应用之后，分层预览会整屏刷新；不再出现 "只有改过的层亮起、其它层灰掉" 的情况',
             en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
+          },
+          {
+            zh: "展开分层预览面板也变快了：过去每次换色后第一次打开要等好几秒，现在分层图按层并发生成、编码更快，同一状态下再打开几乎是秒开",
+            en: "The per-layer preview panel opens much faster too: after a colour swap the first open used to stall for several seconds, now layer PNGs encode in parallel at a lighter compression and reopens under the same state are effectively instant",
+          },
+          {
+            zh: "替换颜色、去海带纹、区域点击换色现在响应更快：2D 预览一算完就立即更新（大图上通常 10 秒内），耗时最重的 3D 预览交给后台线程重建，完成后自动刷新到 3D 窗口；以往整体要等 30–60 秒才动",
+            en: "Colour swap, banding flatten and region click-to-replace now feel much snappier: the 2D preview updates as soon as it's computed (usually under 10 s even on big images) while the heavy 3D rebuild runs on a background thread and refreshes the 3D viewport on its own — no more 30–60 s stalls end to end",
+          },
+          {
+            zh: '渐变分组面板里每个小区域多了勾选框：勾上同一个分组里的多个小区域后，分组顶部会出现"合并去海带纹"按钮，一键把这些小区域统一成同一个代表色；如果想换成别的颜色，勾选后去 LUT 拍色器点一下即可，所有勾选的小区域都会同步刷成那个色',
+            en: "Each sub-region inside a gradient group now has a checkbox: tick two or more regions of the same group and a new Merge flatten button appears at the group header, collapsing those regions to one unified representative colour in one shot; for a different target, just tick the regions and pick a colour in the LUT picker — every ticked region is repainted to that colour together",
           },
         ],
       },
@@ -103,8 +119,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
           },
           {
-            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
-            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
+            zh: '提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 "详情" 按钮里，主面板干净多了',
+            en: 'The JSON dumps, fit summary and Stage A download link now live behind a single "Details" button, keeping the main panel uncluttered',
           },
           {
             zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
@@ -124,7 +140,11 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           },
           {
             zh: "设置里新增 “穷举数量” 开关：默认关闭，走低档（64³，构建快、内存小）；开启后可以选中（128³）或高（256³），穷举缓存会更细、颜色更准，代价是构建时间、内存占用、每次生成查找都会成倍变长。穷举缓存弹窗里会直接显示当前用哪一档，不同档的缓存分开存放、互不覆盖",
-            en: "New Settings → \"Exhaustive density\" switch: off by default and uses the low tier (64³) — fast to build, low memory; flip it on to pick medium (128³) or high (256³) for tighter colour accuracy at the cost of proportionally longer builds, more memory, and slower per-conversion lookups. The exhaustive-cache dialog shows the active tier, and caches at different tiers are stored separately so switching never overwrites an existing build",
+            en: 'New Settings → "Exhaustive density" switch: off by default and uses the low tier (64³) — fast to build, low memory; flip it on to pick medium (128³) or high (256³) for tighter colour accuracy at the cost of proportionally longer builds, more memory, and slower per-conversion lookups. The exhaustive-cache dialog shows the active tier, and caches at different tiers are stored separately so switching never overwrites an existing build',
+          },
+          {
+            zh: "耗材库的“编辑信息”弹窗里新增显示颜色编辑：可直接用颜色选择器挑色，或输入 #RRGGBB 色号，保存后列表、选色面板和预览上的耗材色块都会跟着更新；再做一次复测会用新的测量值覆盖回去",
+            en: "The Material Library → Edit Details dialog now lets you override the display colour: pick a colour with the native picker or type a #RRGGBB code, and after saving the library, picker and preview swatches all follow suit; running a new verification will overwrite it with the freshly measured colour again",
           },
         ],
       },
@@ -143,7 +163,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "The 3D preview loads dramatically faster: what used to be a 100+ MB model that kept remote users waiting is now typically just a few MB on real multi-colour images, so the 3D scene appears almost immediately; the actual exported 3MF and its print precision are completely unchanged",
           },
           {
-            zh: "厚度等滑条修掉了\"一松手就自动加 0.08\"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）",
+            zh: '厚度等滑条修掉了"一松手就自动加 0.08"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）',
             en: "Sliders like Thickness no longer add an extra 0.08 every time you let go: previously each drag release was silently bumped up by half a step, and typing precise values like 1.5 or 3.5 into the number box on the right got rewritten to the nearest step multiple (such as 1.52)",
           },
         ],
@@ -185,16 +205,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
           },
           {
-            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
-            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
+            zh: '提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 "请求失败 status 422" 这种模糊提示盖住',
+            en: 'When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic "request failed with status 422"',
           },
           {
-            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            zh: '修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 "服务器崩了"，现在已经走正规流程',
             en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
           },
           {
-            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
-            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
+            zh: '耗材档案里的自定义配方应用不再卡在 "LUT/source file missing" 409，整套流程能走通',
+            en: 'Applying a custom recipe on a material-archive model no longer gets stuck on "LUT/source file missing" (409) — the whole flow works end to end',
           },
           {
             zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
@@ -268,15 +288,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
           },
           {
-            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
-            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
+            zh: '用耗材档案做的模型现在也能改自定义配方了，不会再弹 "没有预测引擎" 的提示',
+            en: 'Models built from the material library now accept custom recipes too — the old "no predictive runtime" blocker is gone',
           },
           {
             zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
             en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
           },
           {
-            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            zh: '点应用之后，分层预览会整屏刷新；不再出现 "只有改过的层亮起、其它层灰掉" 的情况',
             en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
           },
         ],
@@ -296,8 +316,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
           },
           {
-            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
-            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
+            zh: '提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 "详情" 按钮里，主面板干净多了',
+            en: 'The JSON dumps, fit summary and Stage A download link now live behind a single "Details" button, keeping the main panel uncluttered',
           },
           {
             zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
@@ -328,7 +348,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "The 3D preview loads dramatically faster: what used to be a 100+ MB model that kept remote users waiting is now typically just a few MB on real multi-colour images, so the 3D scene appears almost immediately; the actual exported 3MF and its print precision are completely unchanged",
           },
           {
-            zh: "厚度等滑条修掉了\"一松手就自动加 0.08\"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）",
+            zh: '厚度等滑条修掉了"一松手就自动加 0.08"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）',
             en: "Sliders like Thickness no longer add an extra 0.08 every time you let go: previously each drag release was silently bumped up by half a step, and typing precise values like 1.5 or 3.5 into the number box on the right got rewritten to the nearest step multiple (such as 1.52)",
           },
         ],
@@ -349,16 +369,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
           },
           {
-            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
-            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
+            zh: '提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 "请求失败 status 422" 这种模糊提示盖住',
+            en: 'When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic "request failed with status 422"',
           },
           {
-            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            zh: '修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 "服务器崩了"，现在已经走正规流程',
             en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
           },
           {
-            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
-            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
+            zh: '耗材档案里的自定义配方应用不再卡在 "LUT/source file missing" 409，整套流程能走通',
+            en: 'Applying a custom recipe on a material-archive model no longer gets stuck on "LUT/source file missing" (409) — the whole flow works end to end',
           },
           {
             zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",

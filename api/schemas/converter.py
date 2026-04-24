@@ -627,6 +627,47 @@ class ColorReplaceRequest(BaseModel):
     replacement_color: str = Field(..., description="替换目标色 (hex)")
 
 
+class ColorReplacePair(BaseModel):
+    """A single ``(selected_color, replacement_color)`` swap entry.
+    单个 (原色, 目标色) 替换项。
+    """
+
+    selected_color: str = Field(..., description="选中的原图颜色 (hex)")
+    replacement_color: str = Field(..., description="替换目标色 (hex)")
+
+
+class ColorReplaceBatchRequest(BaseModel):
+    """Request model for batch-replacing multiple colors in one round-trip.
+    一次请求批量替换多个颜色（用 1 次 PNG+GLB 渲染代替 N 次，N× 提速）。
+
+    Used by ``POST /api/convert/replace-colors-batch``. The server applies
+    every pair to the cached ``matched_rgb`` in a single pass, runs the
+    material-matrix sync once against the combined diff, and regenerates the
+    styled preview PNG + segmented GLB exactly once at the end. Avoids the
+    N-round pattern where each per-colour request triggered a fresh GLB
+    build (``generate_segmented_glb`` is the dominant cost).
+
+    用于 ``POST /api/convert/replace-colors-batch``：一次调用里把多条 pair
+    累加地应用到 ``matched_rgb``，物料矩阵 sync、PNG、GLB 分别只跑 1 次。
+    解决前端 for 循环 N 次 /replace-color 的瓶颈——GLB 生成是主要成本。
+
+    Attributes:
+        session_id: Active session identifier. (Session ID)
+        replacements: Ordered list of (selected_color, replacement_color)
+            pairs. Later pairs see earlier pairs' effects, matching the
+            semantics of calling /replace-color N times in sequence.
+            有序替换对列表；后面的 pair 能看见前面 pair 的效果，语义上
+            等价于顺序调用 N 次 /replace-color。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    replacements: list[ColorReplacePair] = Field(
+        ...,
+        min_length=1,
+        description="批量替换对列表（有序累积应用）",
+    )
+
+
 class ResetReplacementsRequest(BaseModel):
     """Request model for resetting all color replacements in a session.
     重置 session 中所有颜色替换的请求模型。
@@ -910,6 +951,130 @@ class RegionReplaceRequest(BaseModel):
     )
 
 
+class RegionReplaceBatchItem(BaseModel):
+    """One region-replacement entry inside a batch request.
+    批量区域替换中的单条记录。
+
+    Each item defines its own mask source: click coordinates (flood-fill
+    on the quantised preview) OR gradient group/region indices (mask
+    rebuilt from the cached region_id_map) — exactly the same sources as
+    the non-batch :class:`RegionReplaceRequest`. Items are applied in
+    order so the final preview reflects the cumulative result.
+    每条 item 自己定义 mask 来源：点击坐标（泛洪填充）或渐变 group/region
+    索引（从缓存的 region_id_map 重建 mask），与 :class:`RegionReplaceRequest`
+    一致。items 按顺序累积作用到 matched_rgb，最终预览是综合结果。
+
+    Attributes:
+        replacement_color: Target replacement color (hex).
+        click_x, click_y: Click coordinates for flood-fill mask (legacy
+            click-detected path).
+        gradient_group_index, gradient_region_index: Gradient mask
+            coordinates, see :class:`RegionReplaceRequest`.
+    """
+
+    replacement_color: str = Field(..., description="替换目标色 hex")
+    click_x: Optional[int] = Field(None, description="Legacy click-detect 的 X 像素坐标")
+    click_y: Optional[int] = Field(None, description="Legacy click-detect 的 Y 像素坐标")
+    gradient_group_index: Optional[int] = Field(
+        None, description="渐变分组编号（1 起），整组或配合 region 使用"
+    )
+    gradient_region_index: Optional[int] = Field(
+        None, description="渐变分组内的区域编号（1 起）"
+    )
+
+
+class RegionReplaceBatchRequest(BaseModel):
+    """Request model for batch region-replacement in a single round-trip.
+    一次请求里批量执行多个区域替换（PNG + GLB 只渲染 1 次）。
+
+    Used by ``POST /api/convert/region-replace-batch``. Each item in
+    ``items`` defines its own mask + replacement target and they are
+    applied in order; the server runs the material-matrix sync once, then
+    renders the styled PNG and segmented GLB exactly once. Designed for:
+
+    - Multi-select click-detected regions (前端 multi-select 模式).
+    - Multi-region gradient flatten batches.
+
+    用于 ``POST /api/convert/region-replace-batch``：每条 item 独立定义
+    mask 与目标色，按顺序累积应用；物料矩阵 sync、PNG、GLB 各只跑 1 次。
+    覆盖前端"多区域点击"与"批量渐变去海带纹"两种场景。
+
+    Attributes:
+        session_id: Active session identifier. (Session ID)
+        items: Ordered list of region-replacement entries.
+            有序的区域替换条目列表。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    items: list[RegionReplaceBatchItem] = Field(
+        ..., min_length=1, description="批量区域替换条目列表"
+    )
+
+
+class RegionRequantizeTarget(BaseModel):
+    """One gradient-region selector inside a re-quantise request.
+    二次量化请求中的单个渐变 region 选择器。
+
+    Attributes:
+        gradient_group_index: 1-based gradient group index (matches the
+            :class:`GradientGroupsAnalysis` payload returned by
+            ``/gradient-groups``).
+            渐变分组编号（1 起），对应 ``/gradient-groups`` 返回的 group_index。
+        gradient_region_index: 1-based region index inside the group.
+            组内区域编号（1 起）。
+    """
+
+    gradient_group_index: int = Field(..., ge=1, description="渐变分组编号（1 起）")
+    gradient_region_index: int = Field(..., ge=1, description="组内区域编号（1 起）")
+
+
+class RegionRequantizeRequest(BaseModel):
+    """Request model for per-region secondary re-quantisation.
+    区域级二次量化请求模型。
+
+    Used by ``POST /api/convert/region-requantize``. For each selected
+    gradient region, the server (1) extracts the ORIGINAL source pixels
+    inside the region's mask, (2) runs a local K-Means with a dedicated
+    ``local_quantize_colors`` palette, and (3) re-matches the locally
+    quantised colours through the same material solver the preview used,
+    writing the result back into the region.
+
+    This endpoint is scoped to **regions only** (single or multi-select);
+    whole-group re-quantisation is intentionally unsupported — use the
+    existing ``/region-replace`` whole-group flatten for that. The algorithm
+    preserves low-frequency gradients within a region while collapsing
+    high-frequency kelp banding.
+
+    用于 ``POST /api/convert/region-requantize``：对每个选中的 region，
+    取原图像素 → 用 ``local_quantize_colors`` 做局部 K-Means → 重新走
+    管线的材料求解器 → 写回 matched_rgb。仅支持 region 粒度（单选 / 多选），
+    不支持整组；整组去海带纹仍走 ``/region-replace``。
+
+    Attributes:
+        session_id: Active session identifier. (Session ID)
+        targets: Non-empty list of gradient regions to re-quantise.
+            至少一个目标 region。
+        local_quantize_colors: Per-region k-means cluster count; validated
+            against ``[MIN_LOCAL_QUANTIZE_COLORS, MAX_LOCAL_QUANTIZE_COLORS]``
+            = ``[12, 256]`` in :mod:`core.gradient_region_requantize`.
+            每个 region 独立的 k-means 聚类数，范围 12-256。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    targets: list[RegionRequantizeTarget] = Field(
+        ..., min_length=1, description="待二次量化的 region 列表（至少 1 个）"
+    )
+    local_quantize_colors: int = Field(
+        ...,
+        ge=12,
+        le=256,
+        description=(
+            "每个 region 独立 k-means 聚类数（12-256）。越大保留的色阶越多，"
+            "越小越接近 flatten。"
+        ),
+    )
+
+
 class RegionReplaceResponse(BaseModel):
     """Response model for region color replacement.
     区域颜色替换的响应模型。
@@ -922,12 +1087,27 @@ class RegionReplaceResponse(BaseModel):
         preview_url: URL of the post-replacement preview image. (替换后预览图 URL)
         preview_glb_url: URL of the regenerated segmented GLB. (重新生成的分段 GLB URL)
         message: Operation result message. (操作结果消息)
+        gradient_groups: Refreshed gradient-banding analysis payload, when
+            the endpoint re-ran :func:`analyze_gradient_groups`. Only
+            populated by endpoints that mutate ``matched_rgb`` enough to
+            shift the gradient segmentation (e.g. ``/region-requantize``);
+            endpoints that only rewrite a fixed colour leave this ``None``
+            so existing clients continue to use the cached groups.
+            当端点重新分析了渐变分组时返回的新分组负载；像素改动剧烈的
+            端点（如 ``/region-requantize``）会填充此字段，其它仅换固定
+            hex 的端点留空，保持老客户端兼容。
     """
 
     preview_url: str = Field(..., description="替换后预览图 URL")
     preview_glb_url: Optional[str] = Field(None, description="重新生成的分段 GLB URL")
     color_contours: Optional[dict] = Field(None, description="更新后的颜色轮廓数据")
     message: str = Field("Region replaced", description="操作结果消息")
+    gradient_groups: Optional[List["GradientGroupItem"]] = Field(
+        None,
+        description=(
+            "更新后的渐变分组（仅在端点重跑了 gradient-group 分析时提供）"
+        ),
+    )
 
 
 class CleanupSessionFilesRequest(BaseModel):
@@ -1065,3 +1245,12 @@ class GradientGroupsResponse(BaseModel):
     groups: List[GradientGroupItem] = Field(
         default_factory=list, description="渐变组列表（按像素数降序）"
     )
+
+
+# Resolve the forward reference ``RegionReplaceResponse.gradient_groups: Optional[List['GradientGroupItem']]``
+# now that :class:`GradientGroupItem` is defined above. Without an explicit
+# rebuild Pydantic v2 raises at first validation instead of at import time,
+# which makes stacktraces harder to diagnose.
+# 在 GradientGroupItem 定义完成后强制 rebuild 以解析 forward 引用，
+# 避免 Pydantic v2 首次校验时才报错、掩盖真实 import 顺序问题。
+RegionReplaceResponse.model_rebuild()

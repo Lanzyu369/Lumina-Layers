@@ -1,0 +1,279 @@
+"""Async segmented-GLB build scheduling for the converter router.
+
+Background / 背景:
+    ``generate_segmented_glb`` dominates every replace-flow endpoint: on a
+    2984×2000 image with ~64 unique colours it takes ~35 s — roughly 77 %
+    of the total /region-replace latency. Running it inside the HTTP request
+    blocks the UI for tens of seconds even when the 2D preview (PNG) is
+    already known. This module lets a replace endpoint return the freshly
+    rendered 2D PNG immediately while the GLB is rebuilt in a background
+    thread; the frontend polls :func:`get_glb_status` to pick up the new
+    GLB URL once it's ready.
+
+Threading model / 线程模型:
+    A module-level :class:`ThreadPoolExecutor` (``max_workers=2``) runs the
+    per-session GLB builds without competing with FastAPI's request event
+    loop. ``generate_segmented_glb`` spends most of its time inside Shapely,
+    trimesh and NumPy C extensions that release the GIL, so a thread pool
+    is a good fit here — and it avoids the pickle cost we'd pay to ship
+    several-hundred-MB NumPy arrays through the ProcessPool boundary.
+
+Job-token guard / 任务令牌保护:
+    Each scheduling call writes a fresh ``job_token`` into the session's
+    ``preview_cache``. When a newer replace arrives while an older GLB
+    build is still running, the old worker simply notices its token no
+    longer matches the cache and discards its (now stale) result. This
+    prevents races between "batched colour swap still building" and a
+    subsequent region replace landing before the first GLB finishes.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, TypedDict
+
+from api.file_registry import FileRegistry
+from api.session_store import SessionStore
+from api.structured_logging import get_logger
+from core.converter import generate_segmented_glb
+
+from .common import NON_FATAL_GLB_ERRORS
+
+log = get_logger(__name__)
+
+
+# Module-level executor shared by every session. ``max_workers=2`` keeps the
+# pool small so a single browser tab hammering replace endpoints can't
+# starve genuinely concurrent sessions; values larger than the number of
+# physical cores offer no extra parallelism because ``generate_segmented_glb``
+# is CPU-bound inside Shapely/trimesh.
+# 模块级线程池，两并发足以满足单浏览器多次触发的流水线需求；再大也无意义，
+# generate_segmented_glb 是 CPU 密集，线程数 > 核数只会抢占。
+_GLB_EXECUTOR: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="glb-build"
+)
+
+
+class GlbStatus(TypedDict, total=False):
+    """Lightweight snapshot of the async GLB build state for a session."""
+
+    status: str  # "pending" | "ready" | "error" | "idle"
+    glb_url: Optional[str]
+    job_token: Optional[str]
+    error: Optional[str]
+
+
+def schedule_glb_build(
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    cache: dict,
+) -> str:
+    """Start a background segmented-GLB rebuild for *session_id*.
+
+    Writes a fresh ``glb_job_token`` into *cache* (and clears any prior
+    ``glb_url`` / ``glb_error``) before persisting the cache back to the
+    store, so a concurrent :func:`get_glb_status` call sees ``pending``
+    immediately. Submits the build to :data:`_GLB_EXECUTOR` and returns the
+    job token so the caller can include it in the HTTP response for
+    observability.
+    为指定 session 触发后台 GLB 重建：先把新的 ``glb_job_token`` 写回 cache
+    并清空旧的 ``glb_url`` / ``glb_error``，再把重建任务提交给线程池；返回
+    任务 token 便于调用方把它写进响应体用于日志联调。
+
+    Args:
+        session_id (str): SessionStore 中的 session id。
+        store (SessionStore): 会话存储，用于 worker 重新读取最新 cache。
+        registry (FileRegistry): 文件注册表，用于把生成的 GLB 路径映射为
+            ``/api/files/<id>`` URL。
+        cache (dict): 已就绪的 preview_cache 字典 —— 调用方负责在调度前
+            把最新的 matched_rgb / material_matrix 等写入 cache。
+
+    Returns:
+        str: 新分配的 job_token，同时已写入 ``cache['glb_job_token']``。
+    """
+
+    job_token = uuid.uuid4().hex
+    cache["glb_job_token"] = job_token
+    # Clear any previous outcome so the status endpoint reports "pending"
+    # until this new job completes. 清空旧结果让状态查询立即返回 pending。
+    cache["glb_url"] = None
+    cache["glb_error"] = None
+    cache["glb_started_at"] = time.time()
+    store.put(session_id, "preview_cache", cache)
+
+    _GLB_EXECUTOR.submit(
+        _run_glb_build_job, session_id, job_token, store, registry
+    )
+    log.info(
+        "GLB build scheduled",
+        extra={
+            "event": "converter_glb_scheduled",
+            "session_id": session_id,
+            "job_token": job_token,
+        },
+    )
+    return job_token
+
+
+def _run_glb_build_job(
+    session_id: str,
+    job_token: str,
+    store: SessionStore,
+    registry: FileRegistry,
+) -> None:
+    """Worker body: regenerate the segmented GLB and write it back to cache.
+
+    Re-reads the latest ``preview_cache`` on entry so we always work on the
+    most recent matched_rgb / material_matrix snapshot (even if the caller
+    handed us a stale dict). If another scheduling call superseded us while
+    we were waiting, our ``job_token`` no longer matches and we silently
+    discard the result without touching cache — the newer job will be (or
+    is already) running and will fill ``glb_url`` itself.
+    Worker 主体：在任务开始时重新拉取最新 preview_cache，若 job_token 已被
+    新任务覆盖则直接放弃写回，避免新旧 GLB 相互覆盖。
+    """
+
+    t_start = time.perf_counter()
+    try:
+        session_data = store.get(session_id)
+        if session_data is None:
+            log.info(
+                "GLB build aborted: session vanished",
+                extra={
+                    "event": "converter_glb_aborted_no_session",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                },
+            )
+            return
+        latest_cache = session_data.get("preview_cache")
+        if latest_cache is None:
+            log.info(
+                "GLB build aborted: preview cache cleared",
+                extra={
+                    "event": "converter_glb_aborted_no_cache",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                },
+            )
+            return
+        if latest_cache.get("glb_job_token") != job_token:
+            log.info(
+                "GLB build aborted: superseded by newer job",
+                extra={
+                    "event": "converter_glb_aborted_superseded",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                    "current_job_token": latest_cache.get("glb_job_token"),
+                },
+            )
+            return
+
+        glb_path = generate_segmented_glb(latest_cache)
+
+        # Re-check the token post-build: another replace might have landed
+        # while the heavy Shapely/trimesh work was running. Honour the
+        # newer job by leaving its cleared ``glb_url = None`` untouched.
+        # 任务完成后再次确认 token，若期间被新任务覆盖则放弃写回，以免把
+        # 陈旧 GLB 错误地当成"最新"推送给前端。
+        session_data = store.get(session_id)
+        latest_cache = session_data.get("preview_cache") if session_data else None
+        if latest_cache is None:
+            return
+        if latest_cache.get("glb_job_token") != job_token:
+            log.info(
+                "GLB build result discarded: superseded after completion",
+                extra={
+                    "event": "converter_glb_discarded_after_build",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                    "current_job_token": latest_cache.get("glb_job_token"),
+                },
+            )
+            return
+
+        if glb_path and os.path.exists(glb_path):
+            glb_id = registry.register_path(session_id, glb_path)
+            latest_cache["glb_url"] = f"/api/files/{glb_id}"
+            latest_cache["glb_error"] = None
+            # color_contours is populated as a side effect of
+            # generate_segmented_glb; re-expose it here so follow-up calls
+            # can pick up contour highlights without another round-trip.
+            # generate_segmented_glb 会在 cache["color_contours"] 写入轮廓；
+            # 这里无需额外动作即可被后续流程读取。
+        else:
+            latest_cache["glb_url"] = None
+            latest_cache["glb_error"] = "generate_segmented_glb returned no path"
+            log.warning(
+                "GLB build produced no output path",
+                extra={
+                    "event": "converter_glb_no_output",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                },
+            )
+
+        latest_cache["glb_completed_at"] = time.time()
+        store.put(session_id, "preview_cache", latest_cache)
+        log.info(
+            "GLB build completed",
+            extra={
+                "event": "converter_glb_completed",
+                "session_id": session_id,
+                "job_token": job_token,
+                "duration_ms": round((time.perf_counter() - t_start) * 1000, 1),
+                "glb_url_set": latest_cache["glb_url"] is not None,
+            },
+        )
+    except NON_FATAL_GLB_ERRORS as exc:
+        # Record the error so the status endpoint can surface it and the
+        # frontend can stop polling. Do NOT re-raise — this is a detached
+        # worker thread; propagation would only log at the ThreadPoolExecutor.
+        # 记录到 cache 让前端 polling 得到 error 态并停止轮询；不重抛以免
+        # 线程池打印无法关联的 Traceback。
+        log.warning(
+            "GLB build failed",
+            extra={
+                "event": "converter_glb_build_failed",
+                "session_id": session_id,
+                "job_token": job_token,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        session_data = store.get(session_id)
+        latest_cache = session_data.get("preview_cache") if session_data else None
+        if latest_cache is None:
+            return
+        if latest_cache.get("glb_job_token") != job_token:
+            return
+        latest_cache["glb_url"] = None
+        latest_cache["glb_error"] = f"{type(exc).__name__}: {exc}"
+        latest_cache["glb_completed_at"] = time.time()
+        store.put(session_id, "preview_cache", latest_cache)
+
+
+def get_glb_status(cache: dict) -> GlbStatus:
+    """Translate a session's cache into the public GLB build status.
+
+    Precedence / 状态优先级:
+        - ``ready``   : ``cache['glb_url']`` is a non-empty string.
+        - ``error``   : ``cache['glb_error']`` is set (and URL is not set).
+        - ``pending`` : a ``glb_job_token`` exists but no URL/error yet.
+        - ``idle``    : no job has ever been scheduled for this cache.
+    """
+
+    token = cache.get("glb_job_token")
+    url = cache.get("glb_url")
+    err = cache.get("glb_error")
+    if isinstance(url, str) and url:
+        return {"status": "ready", "glb_url": url, "job_token": token, "error": None}
+    if isinstance(err, str) and err:
+        return {"status": "error", "glb_url": None, "job_token": token, "error": err}
+    if isinstance(token, str) and token:
+        return {"status": "pending", "glb_url": None, "job_token": token, "error": None}
+    return {"status": "idle", "glb_url": None, "job_token": None, "error": None}

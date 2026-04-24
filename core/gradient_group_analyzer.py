@@ -134,6 +134,63 @@ class GradientGroup:
 REGION_ID_ENCODING_MULTIPLIER: int = 10000
 
 
+def _order_regions_by_spatial_adjacency(
+    raw: list[GradientGroupRegion],
+) -> list[GradientGroupRegion]:
+    """Reorder regions so spatially adjacent ones land near each other.
+
+    The list is produced by a classic nearest-neighbour TSP heuristic: the
+    region with the most pixels becomes entry 1 (so the UI keeps its
+    "largest / most important first" semantics), then each subsequent
+    entry is the unvisited region whose centroid is closest to the
+    previously placed region's centroid. Ties in pixel count or distance
+    fall back to a stable input order for determinism.
+
+    Purely spatial centroid distance is used. Region shape/adjacency via
+    pixel edges would be more accurate, but the centroid approximation is
+    good enough for list ordering and avoids allocating an N² adjacency
+    graph. Callers are still free to keep pixel-count as a tiebreaker by
+    pre-sorting, which is what both call sites already do.
+
+    最近邻启发式：最大 region 放第 1 位（保留"主要区域在前"的 UI 语义），
+    之后每一项都是离上一个已放置 region 质心最近的未访问 region。距离
+    相等或像素数相等时按输入顺序稳定化，保证结果确定性。
+    """
+
+    if len(raw) <= 1:
+        return list(raw)
+
+    # Pre-sort by descending pixel_count so ties inside the NN loop fall
+    # back to "bigger region wins" — natural for UI display and keeps the
+    # ordering stable for snapshot-style tests. stable sort preserves
+    # caller-supplied order among equal-count regions.
+    # 先按像素数降序，这样 NN 距离相等时倾向大区域，顺序稳定可预期。
+    sorted_raw = sorted(raw, key=lambda r: -r.pixel_count)
+
+    centroids = np.asarray([r.centroid for r in sorted_raw], dtype=np.float64)
+    n = len(sorted_raw)
+    visited = np.zeros(n, dtype=bool)
+    ordered_indices: list[int] = []
+
+    # Start at the largest (index 0 after the sort above).
+    current = 0
+    visited[0] = True
+    ordered_indices.append(0)
+    for _ in range(n - 1):
+        # Squared distance is monotonic with Euclidean distance — skip the
+        # sqrt since we only need argmin. Mask visited entries with +inf.
+        # 用平方距离比较，无需开方；已访问项置 +inf。
+        diff = centroids - centroids[current]
+        dist_sq = np.einsum("ij,ij->i", diff, diff)
+        dist_sq = np.where(visited, np.inf, dist_sq)
+        next_idx = int(np.argmin(dist_sq))
+        visited[next_idx] = True
+        ordered_indices.append(next_idx)
+        current = next_idx
+
+    return [sorted_raw[i] for i in ordered_indices]
+
+
 @dataclass
 class GradientGroupsAnalysis:
     """Analysis output that additionally exposes per-pixel region identities.
@@ -342,11 +399,18 @@ def _split_group_into_regions(
                 material_breakdown=material_breakdown,
             )
         )
-    raw.sort(key=lambda r: -r.pixel_count)
+    # Order regions so spatially adjacent ones are adjacent in the list
+    # (NN heuristic on centroids, largest first). The downstream
+    # ``region_index`` is just a UI display ranking — the CC label_id is
+    # recovered separately by centroid/bbox sampling where needed, so the
+    # switch from "pixel-count descending" to "NN on centroids" has no
+    # effect on the region_id_map / mask-rebuild paths.
+    # 空间相邻 region 在列表里相邻（最近邻启发式，最大区域优先）。
+    ordered = _order_regions_by_spatial_adjacency(raw)
     # We keep the CC label_id in a side-channel so the caller can still map a
     # region back to labels_2d; region_index (1-based) is for UI display.
     regions: list[GradientGroupRegion] = []
-    for idx, r in enumerate(raw, 1):
+    for idx, r in enumerate(ordered, 1):
         regions.append(
             GradientGroupRegion(
                 region_index=idx,
@@ -454,8 +518,11 @@ def _merge_small_regions_into_nearest(
             )
         )
     merged_raw.sort(key=lambda r: -r.pixel_count)
+    # Reorder merged regions the same way as the pre-merge list so the UI
+    # list surfaces spatially close regions together. 同样按最近邻重排。
+    merged_ordered = _order_regions_by_spatial_adjacency(merged_raw)
     merged: list[GradientGroupRegion] = []
-    for idx, r in enumerate(merged_raw, 1):
+    for idx, r in enumerate(merged_ordered, 1):
         merged.append(
             GradientGroupRegion(
                 region_index=idx,

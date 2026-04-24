@@ -12,6 +12,8 @@ import type { GradientGroupItem } from "../api/types";
 const colorHighlightMock = vi.hoisted(() => vi.fn());
 const replaceColorMock = vi.hoisted(() => vi.fn());
 const regionReplaceMock = vi.hoisted(() => vi.fn());
+const regionReplaceBatchMock = vi.hoisted(() => vi.fn());
+const regionRequantizeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/converter", async () => {
   const actual = await vi.importActual<typeof import("../api/converter")>(
@@ -22,6 +24,8 @@ vi.mock("../api/converter", async () => {
     colorHighlight: colorHighlightMock,
     replaceColor: replaceColorMock,
     regionReplace: regionReplaceMock,
+    regionReplaceBatch: regionReplaceBatchMock,
+    regionRequantize: regionRequantizeMock,
   };
 });
 
@@ -76,6 +80,7 @@ function _resetStores(
     gradientGroupsError: null,
     gradientGroupsSessionId: "sess-test",
     gradientSelection: null,
+    selectedGradientRegions: [],
     selectedColor: null,
     selectionMode: "current",
     selectedColors: new Set<string>(),
@@ -537,5 +542,198 @@ describe("GradientGroupsPanel", () => {
     // palette no longer hides selection indicators.
     // 手动编辑多选必须清除区域来源标记，让调色板恢复正常选中态。
     expect(useConverterStore.getState().gradientSelection).toBeNull();
+  });
+
+  // -----------------------------------------------------------------
+  // Multi-region merge feature (checkbox + "Merge flatten" button).
+  // -----------------------------------------------------------------
+
+  it("merge-flatten button is hidden until ≥2 regions of the group are checked", () => {
+    render(<GradientGroupsPanel />);
+    // Expand the group so the region checkboxes render.
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    // No checkboxes ticked yet → no merge button. 未勾选时按钮隐藏。
+    expect(screen.queryByTestId("merge-flatten-1")).toBeNull();
+
+    // Tick one checkbox → still hidden (single region would be a no-op).
+    // 只勾 1 个仍然隐藏。
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    expect(screen.queryByTestId("merge-flatten-1")).toBeNull();
+
+    // Tick the second → button appears with the count.
+    // 勾上第 2 个时按钮出现，显示计数。
+    fireEvent.click(screen.getByTestId("merge-check-1-2"));
+    const mergeBtn = screen.getByTestId("merge-flatten-1");
+    expect(mergeBtn).toBeInTheDocument();
+    expect(mergeBtn.textContent).toMatch(/2/);
+  });
+
+  it("merge-flatten click fires regionReplaceBatch with a unified target for every ticked region", async () => {
+    regionReplaceBatchMock.mockResolvedValue({
+      preview_url: "/api/files/merged.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+    });
+
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    fireEvent.click(screen.getByTestId("merge-check-1-2"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("merge-flatten-1"));
+    });
+
+    expect(regionReplaceBatchMock).toHaveBeenCalledTimes(1);
+    const [, items] = regionReplaceBatchMock.mock.calls[0];
+    // Same replacementColor across all items — this is the whole point of
+    // "merged flatten, one unified color". 所有 items 的 replacementColor
+    // 必须一致，这就是 "合并到同一个色" 的含义。
+    expect(new Set(items.map((i: { replacementColor: string }) => i.replacementColor)).size).toBe(1);
+    expect(items.map((i: { gradientRegionIndex: number }) => i.gradientRegionIndex).sort()).toEqual([
+      1, 2,
+    ]);
+  });
+
+  // -----------------------------------------------------------------
+  // Re-quantize button + dialog (per-region secondary quantization)
+  // 二次量化按钮 + 弹窗：区域级二次量化（12-256 色预算）
+  // -----------------------------------------------------------------
+
+  it("external batch requantize button is disabled when nothing is checked and enabled once a region is ticked", () => {
+    render(<GradientGroupsPanel />);
+    // 0 checked → batch button is present (always discoverable) but
+    // disabled with a tooltip explaining why it cannot fire.
+    // 无勾选时批量按钮始终可见但 disabled，带 tooltip 提示原因。
+    const batchBtn = screen.getByTestId(
+      "gradient-groups-batch-requantize",
+    ) as HTMLButtonElement;
+    expect(batchBtn).toBeInTheDocument();
+    expect(batchBtn.disabled).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    const refreshedBtn = screen.getByTestId(
+      "gradient-groups-batch-requantize",
+    ) as HTMLButtonElement;
+    expect(refreshedBtn.disabled).toBe(false);
+  });
+
+  it("per-region requantize button opens the dialog without requiring a checkbox tick", () => {
+    // The single-region entry is always available on every region row so
+    // the user can correct one banded region without assembling a batch
+    // selection first. This is the core UX promise of this feature.
+    // 单 region 按钮始终可用，不依赖勾选；用户可直接对某个 region 做二次量化。
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    const btn = screen.getByTestId("requantize-region-1-1");
+    expect(btn).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(screen.getByTestId("requantize-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("requantize-dialog-submit")).toBeInTheDocument();
+  });
+
+  it("per-region requantize submits exactly one target and preserves the checkbox selection", async () => {
+    regionRequantizeMock.mockResolvedValue({
+      preview_url: "/api/files/requantized.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+    });
+
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    // Pre-seed a batch-style multi-selection BEFORE pressing the per-region
+    // button. The per-region path must not wipe this selection — that is
+    // the whole reason we disambiguate per-region from batch.
+    // 预先勾选两个 region，用于验证 per-region 量化不会清掉批量勾选。
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    fireEvent.click(screen.getByTestId("merge-check-1-2"));
+
+    fireEvent.click(screen.getByTestId("requantize-region-1-1"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("requantize-dialog-submit"));
+    });
+
+    expect(regionRequantizeMock).toHaveBeenCalledTimes(1);
+    const [, targets] = regionRequantizeMock.mock.calls[0];
+    expect(
+      targets.map((t: { gradientRegionIndex: number }) => t.gradientRegionIndex),
+    ).toEqual([1]);
+    // Pre-existing checkbox selection must survive a per-region submit.
+    // 单 region 按钮提交后，原多选列表保持不变。
+    expect(useConverterStore.getState().selectedGradientRegions).toEqual([
+      { groupIndex: 1, regionIndex: 1 },
+      { groupIndex: 1, regionIndex: 2 },
+    ]);
+  });
+
+  it("batch requantize submits all checked targets and clears the checkbox selection", async () => {
+    regionRequantizeMock.mockResolvedValue({
+      preview_url: "/api/files/requantized.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+    });
+
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    fireEvent.click(screen.getByTestId("merge-check-1-2"));
+
+    fireEvent.click(screen.getByTestId("gradient-groups-batch-requantize"));
+
+    // Belt-and-braces: confirm the numeric input + slider share state.
+    // 通过数字输入设置量化色数，验证与滑块共享状态。
+    fireEvent.change(screen.getByTestId("requantize-dialog-input"), {
+      target: { value: "32" },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("requantize-dialog-submit"));
+    });
+
+    expect(regionRequantizeMock).toHaveBeenCalledTimes(1);
+    const [, targets, count] = regionRequantizeMock.mock.calls[0];
+    expect(count).toBe(32);
+    expect(
+      targets
+        .map((t: { gradientRegionIndex: number }) => t.gradientRegionIndex)
+        .sort(),
+    ).toEqual([1, 2]);
+    // Dialog closes on submit; batch path clears the checkbox list so the
+    // panel returns to a clean state (consistent with flatten / merge UX).
+    // 批量路径提交后弹窗关闭且勾选清空，与 flatten 一致。
+    expect(screen.queryByTestId("requantize-dialog")).toBeNull();
+    expect(useConverterStore.getState().selectedGradientRegions).toEqual([]);
+  });
+
+  it("checkbox is a controlled input bound to selectedGradientRegions", () => {
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    const box = screen.getByTestId("merge-check-1-1") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(useConverterStore.getState().selectedGradientRegions).toEqual([
+      { groupIndex: 1, regionIndex: 1 },
+    ]);
+    expect(
+      (screen.getByTestId("merge-check-1-1") as HTMLInputElement).checked,
+    ).toBe(true);
   });
 });

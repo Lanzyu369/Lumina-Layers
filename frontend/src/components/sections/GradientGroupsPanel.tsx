@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useState, type ChangeEvent } from "react";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../i18n/context";
@@ -28,6 +28,41 @@ import { normalizeResourceUrl } from "../../utils/resourceUrl";
 interface HighlightDialogState {
   title: string;
   imageUrl: string;
+}
+
+/**
+ * Hard bounds matching ``MIN_LOCAL_QUANTIZE_COLORS`` and
+ * ``MAX_LOCAL_QUANTIZE_COLORS`` in :mod:`core.gradient_region_requantize`.
+ * The backend rejects values outside this range with HTTP 422, so the
+ * slider + input in the dialog are clamped here to fail fast in the UI.
+ * 二次量化弹窗滑块的上下界，必须与后端 core 常量一致，超出范围会被
+ * FastAPI 422 校验拒绝。
+ */
+const REQUANTIZE_COLORS_MIN = 12;
+const REQUANTIZE_COLORS_MAX = 256;
+const REQUANTIZE_COLORS_DEFAULT = 64;
+
+/**
+ * Explicit list of targets for the re-quantise dialog. The dialog is
+ * driven by this list rather than by a single ``groupIndex`` so the same
+ * component can serve:
+ *   - per-region buttons (``targets.length === 1``),
+ *   - the external batch button (may span multiple groups).
+ * 明确保存 targets 而非单个 group：让同一个 dialog 同时服务"单 region"
+ * 与"外部批量"两种触发路径。
+ */
+interface RequantizeDialogState {
+  targets: ReadonlyArray<{ groupIndex: number; regionIndex: number }>;
+  /** Currently-configured colour budget in the slider/input. */
+  value: number;
+  /**
+   * When true, clear the checkbox-based selection after a successful
+   * submit. Set by the batch path (the dialog already snapshotted the
+   * selection into ``targets`` so clearing is safe), cleared for the
+   * per-region path so the user's in-progress selection survives.
+   * 批量路径提交后清空勾选；单 region 路径保留勾选。
+   */
+  clearSelectionOnSubmit: boolean;
 }
 
 /**
@@ -73,9 +108,31 @@ export default function GradientGroupsPanel() {
   const applyGradientReplaceForGroup = useConverterStore(
     (s) => s.applyGradientReplaceForGroup,
   );
+  const selectedGradientRegions = useConverterStore(
+    (s) => s.selectedGradientRegions,
+  );
+  const toggleGradientRegionSelection = useConverterStore(
+    (s) => s.toggleGradientRegionSelection,
+  );
+  const flattenSelectedGradientRegions = useConverterStore(
+    (s) => s.flattenSelectedGradientRegions,
+  );
+  const requantizeSelectedGradientRegions = useConverterStore(
+    (s) => s.requantizeSelectedGradientRegions,
+  );
+  const clearGradientRegionSelection = useConverterStore(
+    (s) => s.clearGradientRegionSelection,
+  );
   const autoReplaceEnabled = useSettingsStore(
     (s) => s.autoReplaceGradientBanding,
   );
+
+  // Re-quantise dialog: user must pick a quantize count (12-256) before the
+  // action submits. State is panel-local because the dialog lives inside
+  // this tree; the store-level action only takes the final chosen count.
+  // 二次量化弹窗：用户先选定量化色数（12-256）再提交；状态仅在面板内部。
+  const [requantizeDialog, setRequantizeDialog] =
+    useState<RequantizeDialogState | null>(null);
 
   // Diagnostic "View highlight" dialog: users can peek at the exact cyan
   // mask the backend returns for a given group/region without going through
@@ -127,6 +184,72 @@ export default function GradientGroupsPanel() {
     setHighlightLoading(false);
   }, []);
 
+  /**
+   * Open the requantize dialog for a single region, independently of the
+   * batch checkbox list. Wired to the per-region button so power users can
+   * correct one region without touching their in-progress merge set.
+   * 单 region 二次量化入口；不依赖勾选列表，避免破坏批量选择态。
+   */
+  const handleOpenSingleRegionRequantize = useCallback(
+    (groupIndex: number, regionIndex: number) => {
+      setRequantizeDialog({
+        targets: [{ groupIndex, regionIndex }],
+        value: REQUANTIZE_COLORS_DEFAULT,
+        // Per-region path: keep the in-progress checkbox list intact.
+        // 单 region 入口：保留勾选列表。
+        clearSelectionOnSubmit: false,
+      });
+    },
+    [],
+  );
+
+  /**
+   * Open the requantize dialog for every region currently ticked across
+   * all groups. This powers the external batch button that lives in the
+   * panel header so users don't need to scroll back into a group row to
+   * find the action.
+   * 外部批量按钮：拿全部已勾选 regions（可能跨组）一次性二次量化。
+   */
+  const handleOpenBatchRequantize = useCallback(() => {
+    if (selectedGradientRegions.length === 0) return;
+    setRequantizeDialog({
+      targets: selectedGradientRegions.map((t) => ({
+        groupIndex: t.groupIndex,
+        regionIndex: t.regionIndex,
+      })),
+      value: REQUANTIZE_COLORS_DEFAULT,
+      // Batch path: snapshot the selection into targets, then clear the
+      // checkbox list on submit so the panel returns to a clean state
+      // matching the flatten/merge UX.
+      // 批量入口：快照勾选，提交后清空多选与 flatten 保持一致。
+      clearSelectionOnSubmit: true,
+    });
+  }, [selectedGradientRegions]);
+
+  const closeRequantizeDialog = useCallback(() => {
+    setRequantizeDialog(null);
+  }, []);
+  const submitRequantize = useCallback(() => {
+    if (!requantizeDialog) return;
+    const value = Math.max(
+      REQUANTIZE_COLORS_MIN,
+      Math.min(REQUANTIZE_COLORS_MAX, Math.round(requantizeDialog.value)),
+    );
+    // Always pass explicit targets: the dialog owns the list so the store
+    // action does not accidentally bulldoze the user's in-progress merge
+    // selection when a per-region button triggered the dialog.
+    // Dialog 始终显式传 targets，避免 per-region 调用清掉用户勾选。
+    void requantizeSelectedGradientRegions(value, requantizeDialog.targets);
+    if (requantizeDialog.clearSelectionOnSubmit) {
+      clearGradientRegionSelection();
+    }
+    setRequantizeDialog(null);
+  }, [
+    requantizeDialog,
+    requantizeSelectedGradientRegions,
+    clearGradientRegionSelection,
+  ]);
+
   if (sourceVersion !== "material") {
     return null;
   }
@@ -174,8 +297,8 @@ export default function GradientGroupsPanel() {
       className={cx(workstationInsetCardClass, "flex flex-col gap-2 p-3")}
       data-testid="gradient-groups-panel"
     >
-      <header className="flex items-start justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
+      <header className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
           <h4 className="text-[clamp(0.7rem,0.85vw,0.75rem)] font-semibold text-slate-700 dark:text-slate-200">
             {t("gradient_groups_title")}
           </h4>
@@ -186,16 +309,44 @@ export default function GradientGroupsPanel() {
             )}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            void applyAutoGradientReplace();
-          }}
-          disabled={replacePreviewLoading}
-          className="shrink-0 rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {t("gradient_groups_apply_now")}
-        </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {/* External batch re-quantize button.
+              Lives in the header so the user never has to scroll back to
+              the group a checked region belongs to after assembling the
+              selection. Disabled + explanatory tooltip when nothing is
+              checked so the button is always discoverable.
+              外置批量二次量化按钮：勾完 regions 后直接在顶部点击，
+              无需回到对应 group 行；未勾选时禁用并给出 tooltip 提示。 */}
+          <button
+            type="button"
+            onClick={handleOpenBatchRequantize}
+            disabled={
+              replacePreviewLoading || selectedGradientRegions.length === 0
+            }
+            title={
+              selectedGradientRegions.length === 0
+                ? t("gradient_groups_batch_requantize_empty")
+                : undefined
+            }
+            className="rounded-full bg-purple-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="gradient-groups-batch-requantize"
+          >
+            {t("gradient_groups_batch_requantize").replace(
+              "{count}",
+              String(selectedGradientRegions.length),
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void applyAutoGradientReplace();
+            }}
+            disabled={replacePreviewLoading}
+            className="rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t("gradient_groups_apply_now")}
+          </button>
+        </div>
       </header>
 
       {autoReplaceEnabled && (
@@ -212,6 +363,7 @@ export default function GradientGroupsPanel() {
             selectedColors={selectedColors}
             selectionMode={selectionMode}
             gradientSelection={gradientSelection}
+            selectedGradientRegions={selectedGradientRegions}
             disabled={replacePreviewLoading}
             onSelectGroup={(groupIndex, hexes) =>
               selectGradientGroupColors(hexes, {
@@ -232,6 +384,11 @@ export default function GradientGroupsPanel() {
             onFlattenRegion={(groupIndex, regionIndex) =>
               void applyGradientReplaceForGroup(groupIndex, regionIndex)
             }
+            onToggleRegionCheck={(groupIndex, regionIndex) =>
+              toggleGradientRegionSelection(groupIndex, regionIndex)
+            }
+            onFlattenSelected={() => void flattenSelectedGradientRegions()}
+            onOpenRegionRequantize={handleOpenSingleRegionRequantize}
             onOpenGroupHighlight={(groupIndex, hexes) =>
               void handleOpenHighlight({
                 title: t(
@@ -270,6 +427,20 @@ export default function GradientGroupsPanel() {
           loading={highlightLoading}
           error={highlightError}
           onClose={closeHighlightDialog}
+        />
+      )}
+
+      {requantizeDialog && (
+        <RequantizeDialog
+          state={requantizeDialog}
+          onChangeValue={(value) =>
+            setRequantizeDialog((prev) =>
+              prev ? { ...prev, value } : prev,
+            )
+          }
+          onSubmit={submitRequantize}
+          onClose={closeRequantizeDialog}
+          submitting={replacePreviewLoading}
         />
       )}
     </div>
@@ -365,6 +536,161 @@ function HighlightPreviewDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Requantise dialog
+// 二次量化弹窗：选择 12-256 的量化色数后提交
+// ---------------------------------------------------------------------------
+
+interface RequantizeDialogProps {
+  state: RequantizeDialogState;
+  onChangeValue: (value: number) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+  submitting: boolean;
+}
+
+/**
+ * Modal that asks the user for a per-region quantise count (12-256) before
+ * submitting the re-quantise action. Larger values preserve more colour
+ * detail (closer to the source gradient), smaller values are closer to a
+ * flatten. The slider + numeric input share state so power users can type
+ * an exact value while most users slide. The confirm button is disabled
+ * while ``submitting`` to prevent double submissions during the backend
+ * round-trip.
+ * 量化色数（12-256）选择弹窗：滑块 + 输入框联动；12 偏 flatten，256 最大
+ * 保留原图色阶；提交中禁用确认避免重复请求。
+ */
+function RequantizeDialog({
+  state,
+  onChangeValue,
+  onSubmit,
+  onClose,
+  submitting,
+}: RequantizeDialogProps) {
+  const { t } = useI18n();
+  const handleSliderChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      onChangeValue(Number(event.target.value));
+    },
+    [onChangeValue],
+  );
+  const handleNumberChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const raw = Number(event.target.value);
+      if (Number.isNaN(raw)) return;
+      onChangeValue(
+        Math.max(
+          REQUANTIZE_COLORS_MIN,
+          Math.min(REQUANTIZE_COLORS_MAX, Math.round(raw)),
+        ),
+      );
+    },
+    [onChangeValue],
+  );
+
+  // Derive display-only strings from the targets list. The description
+  // copy reads naturally for both the "one region in group N" case and
+  // the "several regions across multiple groups" case without growing a
+  // second i18n entry — the shared sentinel string (多组 / multiple) swaps
+  // in when the selection spans more than one gradient group.
+  // 文案派生：目标跨组时把 {group} 填成本地化的"多组"哨兵，避免新增第二条
+  // i18n key。单组 + 多 region 与单 region 都能读通。
+  const regionCount = state.targets.length;
+  const groupIndices = Array.from(
+    new Set(state.targets.map((t) => t.groupIndex)),
+  );
+  const groupLabel =
+    groupIndices.length === 1
+      ? String(groupIndices[0])
+      : t("gradient_groups_requantize_dialog_multi_group");
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("gradient_groups_requantize_dialog_title")}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+      style={{ background: "var(--surface-scrim)" }}
+      onClick={onClose}
+    >
+      <div
+        className="flex w-[min(88vw,420px)] flex-col gap-3 rounded-xl border p-4 shadow-2xl"
+        style={{
+          borderColor: "var(--surface-outline)",
+          background: "var(--surface-panel-strong)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        data-testid="requantize-dialog"
+      >
+        <div className="flex flex-col gap-1">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {t("gradient_groups_requantize_dialog_title")}
+          </h3>
+          <p className="text-[11px] leading-tight text-slate-500 dark:text-slate-400">
+            {t("gradient_groups_requantize_dialog_description")
+              .replace("{count}", String(regionCount))
+              .replace("{group}", groupLabel)}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={REQUANTIZE_COLORS_MIN}
+            max={REQUANTIZE_COLORS_MAX}
+            step={1}
+            value={state.value}
+            onChange={handleSliderChange}
+            aria-label={t("gradient_groups_requantize_dialog_slider_label")}
+            className="flex-1 cursor-pointer accent-purple-600"
+            data-testid="requantize-dialog-slider"
+          />
+          <input
+            type="number"
+            min={REQUANTIZE_COLORS_MIN}
+            max={REQUANTIZE_COLORS_MAX}
+            step={1}
+            value={state.value}
+            onChange={handleNumberChange}
+            aria-label={t("gradient_groups_requantize_dialog_slider_label")}
+            className="w-16 rounded-md border px-2 py-1 text-center text-xs"
+            style={{
+              borderColor: "var(--surface-outline)",
+              background: "var(--surface-panel-inset)",
+              color: "var(--text-primary)",
+            }}
+            data-testid="requantize-dialog-input"
+          />
+        </div>
+        <p className="text-[10px] leading-tight text-slate-500 dark:text-slate-400">
+          {t("gradient_groups_requantize_dialog_hint")
+            .replace("{min}", String(REQUANTIZE_COLORS_MIN))
+            .replace("{max}", String(REQUANTIZE_COLORS_MAX))}
+        </p>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full bg-slate-300 px-3 py-1 text-xs font-medium text-slate-800 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
+          >
+            {t("gradient_groups_requantize_dialog_cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting}
+            className="rounded-full bg-purple-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+            data-testid="requantize-dialog-submit"
+          >
+            {submitting
+              ? t("gradient_groups_requantize_dialog_submitting")
+              : t("gradient_groups_requantize_dialog_submit")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Row components
 // ---------------------------------------------------------------------------
 
@@ -373,6 +699,10 @@ interface GradientGroupRowProps {
   selectedColors: Set<string>;
   selectionMode: string;
   gradientSelection: GradientSelectionSource | null;
+  selectedGradientRegions: ReadonlyArray<{
+    groupIndex: number;
+    regionIndex: number;
+  }>;
   disabled: boolean;
   onSelectGroup: (groupIndex: number, hexes: string[]) => void;
   onSelectRegion: (
@@ -382,6 +712,16 @@ interface GradientGroupRowProps {
   ) => void;
   onFlattenGroup: (groupIndex: number) => void;
   onFlattenRegion: (groupIndex: number, regionIndex: number) => void;
+  onToggleRegionCheck: (groupIndex: number, regionIndex: number) => void;
+  onFlattenSelected: () => void;
+  /**
+   * Opens the requantize dialog for a single region. Wired into the
+   * per-region row so the user can re-quantize without touching the
+   * checkbox-based merge list. Called on the child row via the pass-
+   * through; the group row itself no longer exposes a requantize button.
+   * 每个 region 行的二次量化入口，不干扰已有的多选勾选。
+   */
+  onOpenRegionRequantize: (groupIndex: number, regionIndex: number) => void;
   onOpenGroupHighlight: (groupIndex: number, hexes: string[]) => void;
   onOpenRegionHighlight: (
     groupIndex: number,
@@ -395,11 +735,15 @@ const GradientGroupRow = memo(function GradientGroupRow({
   selectedColors,
   selectionMode,
   gradientSelection,
+  selectedGradientRegions,
   disabled,
   onSelectGroup,
   onSelectRegion,
   onFlattenGroup,
   onFlattenRegion,
+  onToggleRegionCheck,
+  onFlattenSelected,
+  onOpenRegionRequantize,
   onOpenGroupHighlight,
   onOpenRegionHighlight,
 }: GradientGroupRowProps) {
@@ -441,6 +785,19 @@ const GradientGroupRow = memo(function GradientGroupRow({
     selectionMode === "select-all" &&
     selectedColors.size === normalisedGroupHexes.length &&
     normalisedGroupHexes.every((hex) => selectedColors.has(hex));
+
+  // Count of this group's regions that are currently ticked in the merge
+  // checklist. Drives the conditional 'Merge flatten' button: shown only
+  // when ≥2 regions of *this specific* group are checked, because the
+  // flow is a no-op (or indistinguishable from the per-region flatten)
+  // for a single checked row.
+  // 本 group 内被勾选的 region 数量；仅当 ≥2 时显示"合并去海带纹"按钮。
+  const mergeCount = selectedGradientRegions.filter(
+    (r) => r.groupIndex === group.group_index,
+  ).length;
+  const handleFlattenSelected = useCallback(() => {
+    onFlattenSelected();
+  }, [onFlattenSelected]);
 
   return (
     <li
@@ -489,6 +846,20 @@ const GradientGroupRow = memo(function GradientGroupRow({
           >
             {t("gradient_groups_flatten_group")}
           </button>
+          {mergeCount >= 2 && (
+            <button
+              type="button"
+              onClick={handleFlattenSelected}
+              disabled={disabled}
+              className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              data-testid={`merge-flatten-${group.group_index}`}
+            >
+              {t("gradient_groups_merge_flatten").replace(
+                "{count}",
+                String(mergeCount),
+              )}
+            </button>
+          )}
           <HighlightEyeButton
             onClick={handleOpenGroupHighlight}
             ariaLabel={t("gradient_groups_view_highlight")}
@@ -514,20 +885,30 @@ const GradientGroupRow = memo(function GradientGroupRow({
 
       {expanded && group.regions.length > 0 && (
         <ul className="flex flex-col gap-1 pl-1">
-          {group.regions.map((region) => (
-            <GradientRegionRow
-              key={region.region_index}
-              groupIndex={group.group_index}
-              region={region}
-              selectedColors={selectedColors}
-              selectionMode={selectionMode}
-              gradientSelection={gradientSelection}
-              disabled={disabled}
-              onSelectRegion={onSelectRegion}
-              onFlattenRegion={onFlattenRegion}
-              onOpenRegionHighlight={onOpenRegionHighlight}
-            />
-          ))}
+          {group.regions.map((region) => {
+            const isChecked = selectedGradientRegions.some(
+              (r) =>
+                r.groupIndex === group.group_index &&
+                r.regionIndex === region.region_index,
+            );
+            return (
+              <GradientRegionRow
+                key={region.region_index}
+                groupIndex={group.group_index}
+                region={region}
+                selectedColors={selectedColors}
+                selectionMode={selectionMode}
+                gradientSelection={gradientSelection}
+                isChecked={isChecked}
+                disabled={disabled}
+                onSelectRegion={onSelectRegion}
+                onFlattenRegion={onFlattenRegion}
+                onToggleCheck={onToggleRegionCheck}
+                onOpenRegionHighlight={onOpenRegionHighlight}
+                onOpenRegionRequantize={onOpenRegionRequantize}
+              />
+            );
+          })}
         </ul>
       )}
     </li>
@@ -540,6 +921,7 @@ interface GradientRegionRowProps {
   selectedColors: Set<string>;
   selectionMode: string;
   gradientSelection: GradientSelectionSource | null;
+  isChecked: boolean;
   disabled: boolean;
   onSelectRegion: (
     groupIndex: number,
@@ -547,11 +929,19 @@ interface GradientRegionRowProps {
     hexes: string[],
   ) => void;
   onFlattenRegion: (groupIndex: number, regionIndex: number) => void;
+  onToggleCheck: (groupIndex: number, regionIndex: number) => void;
   onOpenRegionHighlight: (
     groupIndex: number,
     regionIndex: number,
     hexes: string[],
   ) => void;
+  /**
+   * Opens the requantize dialog for this one region. Independent of the
+   * checkbox list so the user can correct one region without losing an
+   * in-progress batch selection.
+   * 单 region 二次量化弹窗入口，与多选状态无关。
+   */
+  onOpenRegionRequantize: (groupIndex: number, regionIndex: number) => void;
 }
 
 const GradientRegionRow = memo(function GradientRegionRow({
@@ -560,10 +950,13 @@ const GradientRegionRow = memo(function GradientRegionRow({
   selectedColors,
   selectionMode,
   gradientSelection,
+  isChecked,
   disabled,
   onSelectRegion,
   onFlattenRegion,
+  onToggleCheck,
   onOpenRegionHighlight,
+  onOpenRegionRequantize,
 }: GradientRegionRowProps) {
   const { t } = useI18n();
 
@@ -580,6 +973,12 @@ const GradientRegionRow = memo(function GradientRegionRow({
   const handleOpenHighlight = useCallback(() => {
     onOpenRegionHighlight(groupIndex, region.region_index, hexes);
   }, [groupIndex, region.region_index, hexes, onOpenRegionHighlight]);
+  const handleToggleCheck = useCallback(() => {
+    onToggleCheck(groupIndex, region.region_index);
+  }, [groupIndex, region.region_index, onToggleCheck]);
+  const handleOpenRequantize = useCallback(() => {
+    onOpenRegionRequantize(groupIndex, region.region_index);
+  }, [groupIndex, region.region_index, onOpenRegionRequantize]);
 
   // Mirrors the group-row logic: only this exact region should light up as
   // the selection origin, so clicking a region does *not* leave the parent
@@ -603,6 +1002,18 @@ const GradientRegionRow = memo(function GradientRegionRow({
       )}
     >
       <div className="flex min-w-0 items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={isChecked}
+          onChange={handleToggleCheck}
+          disabled={disabled}
+          aria-label={t("gradient_groups_merge_checkbox_label").replace(
+            "{index}",
+            String(region.region_index),
+          )}
+          data-testid={`merge-check-${groupIndex}-${region.region_index}`}
+          className="h-3 w-3 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed"
+        />
         <SwatchRow colors={hexes} max={6} />
         <span className="text-[10px] text-slate-500 dark:text-slate-400">
           {t("gradient_groups_region_label").replace(
@@ -638,6 +1049,21 @@ const GradientRegionRow = memo(function GradientRegionRow({
           className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {t("gradient_groups_flatten_region")}
+        </button>
+        {/* Per-region re-quantize button.
+            Runs through ``handleOpenSingleRegionRequantize`` at the panel
+            level with an explicit 1-region target list, so it does NOT
+            disturb an in-progress checkbox selection. Purple styling
+            matches the external batch button to signal "same action".
+            单 region 二次量化：与外部批量按钮同色区分，内部不依赖勾选列表。 */}
+        <button
+          type="button"
+          onClick={handleOpenRequantize}
+          disabled={disabled}
+          className="rounded-full bg-purple-600 px-2 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-60"
+          data-testid={`requantize-region-${groupIndex}-${region.region_index}`}
+        >
+          {t("gradient_groups_requantize_region")}
         </button>
         <HighlightEyeButton
           onClick={handleOpenHighlight}

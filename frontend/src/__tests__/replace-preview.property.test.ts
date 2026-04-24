@@ -14,11 +14,16 @@ vi.mock("../api/converter", () => ({
   cropImage: vi.fn(),
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
+  replaceColorsBatch: vi.fn(),
 }));
 
-import { replaceColor } from "../api/converter";
+import { replaceColorsBatch } from "../api/converter";
 
-const mockReplaceColor = vi.mocked(replaceColor);
+// submitReplacePreview now routes through /replace-colors-batch (single
+// round-trip with one PNG+GLB render for the whole remap) instead of the
+// old per-entry /replace-color loop. The mock target matches.
+// submitReplacePreview 改走批量端点，mock 跟随更新。
+const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 
 vi.stubGlobal(
   "URL",
@@ -143,7 +148,7 @@ describe("replace preview behavior", () => {
             preview_url: previewPath,
             replacement_count: 1,
           };
-          mockReplaceColor.mockResolvedValue(mockResponse);
+          mockReplaceColorsBatch.mockResolvedValue(mockResponse);
 
           await useConverterStore.getState().submitReplacePreview();
           const state = useConverterStore.getState();

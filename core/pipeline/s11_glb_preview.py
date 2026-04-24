@@ -497,7 +497,16 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
             - mask_solid: (H, W) bool array
             - target_w, target_h: pixel dimensions
             - target_width_mm: physical width in mm
-        max_meshes (int): Maximum Mesh count before merging (default 64).
+            - glb_max_meshes (optional): per-session override that bumps
+              the merge cap above the function default. Set by edit
+              endpoints (e.g. ``/region-requantize``) that intentionally
+              add many low-frequency colours which would otherwise be
+              wiped out by the default 64-mesh merge.
+              可选：调用方写入的 mesh 数上限覆盖。例如二次量化会引入
+              大量低频新色，若按默认 64 合并它们会被丢回原色，导致 GLB
+              和 2D 预览不一致。
+        max_meshes (int): Default Mesh count before merging when no cache
+            override is present (default 64).
 
     Returns:
         str: Path to the exported GLB file, or None on failure.
@@ -512,6 +521,17 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
 
     if matched_rgb is None or mask_solid is None:
         return None
+
+    # Honour per-session override before the merge step. Anything below
+    # the function default is ignored — we never want to merge MORE than
+    # the caller-provided default (which is sized to a known-good upper
+    # bound for three.js perf). Anything above bumps the cap so newly
+    # added colours from edit endpoints survive into the segmented GLB.
+    # 仅在 cache 覆盖值大于默认时生效；小于默认时退回默认，避免下调上限
+    # 反而让正常预览的颜色被多砍。
+    cache_override = cache.get("glb_max_meshes")
+    if isinstance(cache_override, (int, np.integer)) and int(cache_override) > max_meshes:
+        max_meshes = int(cache_override)
 
     try:
         _glb_t0 = time.perf_counter()
@@ -559,13 +579,30 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
             return_counts=True,
         )
         n_unique = len(unique_codes)
-        _log.info(f"[SEGMENTED_GLB] Found {n_unique} unique colors")
+        _log.info(
+            "[SEGMENTED_GLB] unique-colour scan",
+            extra={
+                "event": "segmented_glb_unique_scan",
+                "n_unique": int(n_unique),
+                "max_meshes": int(max_meshes),
+                "cache_override": int(cache_override) if isinstance(cache_override, (int, np.integer)) else None,
+                "will_merge": bool(n_unique > max_meshes),
+            },
+        )
         _t_unique = time.perf_counter() - _t
 
         # 3. Merge low-frequency colors if exceeding max_meshes
         _t = time.perf_counter()
         if n_unique > max_meshes:
-            _log.info(f"[SEGMENTED_GLB] Merging {n_unique} colors down to {max_meshes}")
+            _log.info(
+                "[SEGMENTED_GLB] merging low-frequency colours",
+                extra={
+                    "event": "segmented_glb_merge_low_freq",
+                    "n_unique_before": int(n_unique),
+                    "max_meshes": int(max_meshes),
+                    "n_to_merge": int(n_unique - max_meshes),
+                },
+            )
             unique_colors = np.column_stack(
                 [
                     (unique_codes >> 16) & 0xFF,

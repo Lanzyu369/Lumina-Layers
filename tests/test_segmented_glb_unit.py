@@ -206,6 +206,95 @@ class TestExactly64Colors:
 
 
 # ============================================================================
+# Test 3b: cache['glb_max_meshes'] override survives the merge step
+# Region re-quantize introduces many low-frequency colours that would be
+# wiped out by the default 64-mesh cap; the override must keep them.
+# 二次量化会引入大量低频新色，默认 64 上限会把它们合并掉。这里验证 cache
+# 中写入的覆盖值能在合并阶段生效，让全部新色保留为独立 mesh。
+# ============================================================================
+
+
+class TestCacheMaxMeshesOverride:
+    """Tests for the per-cache ``glb_max_meshes`` override."""
+
+    @staticmethod
+    def _build_72_color_image() -> tuple[np.ndarray, np.ndarray]:
+        """Synthesise a 72-unique-colour image (above the default 64 cap)."""
+        # 72 distinct colours laid out as 1 pixel per row in a 72x2 image.
+        # Two-pixel width keeps the contour-extrusion path happy without
+        # inflating mesh size; one row per colour gives every colour an
+        # equal pixel count so frequency-based merging is well-defined.
+        # 72 行各一种颜色，宽度 2 像素以保证轮廓挤出路径成立。
+        colors: list[list[int]] = []
+        for idx in range(72):
+            r = (idx * 11) & 0xFF
+            g = (idx * 31) & 0xFF
+            b = (idx * 71) & 0xFF
+            # Avoid all-zero black which can collide with the background.
+            colors.append([max(r, 1), max(g, 1), max(b, 1)])
+        h, w = 72, 2
+        matched_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        for i, c in enumerate(colors):
+            matched_rgb[i, :, :] = c
+        mask_solid = np.ones((h, w), dtype=bool)
+        return matched_rgb, mask_solid
+
+    def test_override_above_default_keeps_all_unique_colors(self) -> None:
+        """``glb_max_meshes`` larger than default must survive into the GLB.
+        覆盖值高于默认时，所有唯一色都要保留为独立 mesh。
+        """
+        matched_rgb, mask_solid = self._build_72_color_image()
+        cache = _make_cache(matched_rgb, mask_solid)
+        # 72 unique colours, override the cap to 128 so none gets merged.
+        cache["glb_max_meshes"] = 128
+
+        glb_path = generate_segmented_glb(cache)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_nodes = _get_color_nodes(scene)
+
+        # All 72 unique colours must survive — the override prevented merging.
+        assert len(color_nodes) == 72
+
+    def test_override_below_default_is_ignored(self) -> None:
+        """Override < default must NOT lower the cap (safety floor).
+        覆盖值小于默认时不能反向降低上限，避免误伤普通预览。
+        """
+        matched_rgb, mask_solid = self._build_72_color_image()
+        cache = _make_cache(matched_rgb, mask_solid)
+        # Pretend a stale request set the override to 16; the default
+        # max_meshes=64 must still apply.
+        cache["glb_max_meshes"] = 16
+
+        glb_path = generate_segmented_glb(cache, max_meshes=64)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_nodes = _get_color_nodes(scene)
+
+        # Should merge to 64, not down to 16, since override < default.
+        assert len(color_nodes) == 64
+
+    def test_no_override_keeps_function_default(self) -> None:
+        """Without override the function default still rules.
+        无覆盖时仍按函数默认 max_meshes 合并。
+        """
+        matched_rgb, mask_solid = self._build_72_color_image()
+        cache = _make_cache(matched_rgb, mask_solid)
+        # No glb_max_meshes key in cache.
+
+        glb_path = generate_segmented_glb(cache, max_meshes=64)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_nodes = _get_color_nodes(scene)
+
+        # 72 colours -> merged down to 64.
+        assert len(color_nodes) == 64
+
+
+# ============================================================================
 # Test 4: Contour-extrusion size + coverage regression
 # Guards the S11 refactor that replaced per-pixel voxel boxes with
 # contour-extruded prisms. On a 256x256 / 6-colour representative image the

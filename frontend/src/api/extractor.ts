@@ -136,14 +136,27 @@ export async function updateGradientCardMaterial(
   payload: {
     materialName: string;
     brand?: string | null;
+    estimatedRgb?: [number, number, number] | null;
   },
 ): Promise<GradientCardMaterialUpdateResponse> {
+  const body: {
+    material_name: string;
+    brand: string | null;
+    estimated_rgb?: [number, number, number];
+  } = {
+    material_name: payload.materialName.trim(),
+    brand: payload.brand?.trim() || null,
+  };
+  if (Array.isArray(payload.estimatedRgb) && payload.estimatedRgb.length === 3) {
+    body.estimated_rgb = [
+      Math.max(0, Math.min(255, Math.round(payload.estimatedRgb[0]))),
+      Math.max(0, Math.min(255, Math.round(payload.estimatedRgb[1]))),
+      Math.max(0, Math.min(255, Math.round(payload.estimatedRgb[2]))),
+    ];
+  }
   const response = await apiClient.patch<GradientCardMaterialUpdateResponse>(
     `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
-    {
-      material_name: payload.materialName.trim(),
-      brand: payload.brand?.trim() || null,
-    },
+    body,
     { timeout: 3_600_000 },
   );
   return response.data;

@@ -58,6 +58,13 @@ class GradientCardMaterialUpdateRequest(BaseModel):
         None,
         description="Updated optional brand label.",
     )
+    estimated_rgb: list[int] | None = Field(
+        None,
+        description=(
+            "Optional user-overridden display sRGB [R, G, B] triplet in [0, 255]. "
+            "Leave null or omit to keep the previously stored display color."
+        ),
+    )
 
     @field_validator("material_name")
     @classmethod
@@ -74,6 +81,28 @@ class GradientCardMaterialUpdateRequest(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("estimated_rgb")
+    @classmethod
+    def validate_estimated_rgb(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if len(value) != 3:
+            raise ValueError("estimated_rgb must contain exactly 3 channels")
+        normalized: list[int] = []
+        for channel in value:
+            try:
+                channel_int = int(channel)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "estimated_rgb channels must be integers in [0, 255]"
+                ) from exc
+            if not 0 <= channel_int <= 255:
+                raise ValueError(
+                    "estimated_rgb channels must be integers in [0, 255]"
+                )
+            normalized.append(channel_int)
+        return normalized
 
 
 class MaterialLibraryBulkExportRequest(BaseModel):
