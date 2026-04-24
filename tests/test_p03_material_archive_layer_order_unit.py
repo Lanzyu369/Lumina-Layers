@@ -33,6 +33,46 @@ from core.material_color_solver import (
 from core.pipeline.p03_core_processing import _run_material_archive_branch
 
 
+class _FakeCache:
+    """Minimal stub that mimics MaterialSolverCache for P03 on-the-fly path."""
+
+    def __init__(self, matched_rgb, recipes, delta_e, layer_count):
+        self._matched_rgb = matched_rgb
+        self._recipes = recipes
+        self._delta_e = delta_e
+        self._layer_count = layer_count
+        self.valid_cell_count = 1
+        self.metadata = {
+            "palette_hash": "test",
+            "grid_resolution": 64,
+            "layer_count": layer_count,
+            "mean_delta_e": 0.0,
+            "max_delta_e": 0.0,
+            "build_time_seconds": 0.01,
+            "built_at": "2026-01-01T00:00:00Z",
+        }
+
+    @property
+    def palette_hash(self):
+        return self.metadata["palette_hash"]
+
+    @property
+    def grid_resolution(self):
+        return int(self.metadata["grid_resolution"])
+
+    @property
+    def layer_count(self):
+        return self._layer_count
+
+    def lookup(self, target_srgb, user_materials):
+        n = target_srgb.shape[0]
+        return (
+            np.broadcast_to(self._matched_rgb, (n, 3)).copy(),
+            np.broadcast_to(self._recipes, (n, self._layer_count)).copy(),
+            np.broadcast_to(self._delta_e, (n,)).copy(),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -104,24 +144,20 @@ class TestLayerOrderConversion:
         image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
         ctx = _make_ctx(image_path)
 
-        # Mock the solver to return a known asymmetric recipe for any target.
+        # Mock the on-the-fly cache to return a known asymmetric recipe.
         recipe_bottom_to_top = np.asarray([[0, 1, 2, 3, 4]], dtype=np.int32)
         mocked_matched_rgb = np.asarray([[220, 40, 30]], dtype=np.uint8)
         mocked_delta_e = np.asarray([0.0], dtype=np.float64)
+        fake_cache = _FakeCache(mocked_matched_rgb, recipe_bottom_to_top, mocked_delta_e, 5)
 
-        def _mock_solver(unique_colors, materials, **kwargs):
-            # The image is a single solid color so exactly one unique color.
-            assert unique_colors.shape[0] == 1
-            return mocked_matched_rgb, recipe_bottom_to_top, mocked_delta_e
-
-        monkeypatch.setattr(
-            "core.material_lut_synthesis.solve_image_colors_optimal",
-            _mock_solver,
-        )
-        # Ensure no on-disk cache is found so the B&B path runs.
+        # Ensure no on-disk cache is found so the on-the-fly build runs.
         monkeypatch.setattr(
             "core.material_cache.load_material_solver_cache",
-            lambda **kwargs: None,
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: fake_cache,
         )
 
         result = _run_material_archive_branch(ctx)
@@ -166,21 +202,18 @@ class TestLayerOrderConversion:
             substrate_linear=np.ones(3, dtype=np.float64),
         )
         predicted_srgb = linear_to_srgb_uint8(predicted_linear.reshape(1, 3))[0]
-
-        def _mock_solver(unique_colors, materials, **kwargs):
-            return (
-                np.tile(predicted_srgb.reshape(1, 3), (unique_colors.shape[0], 1)),
-                np.tile(recipe_bottom_to_top, (unique_colors.shape[0], 1)),
-                np.zeros(unique_colors.shape[0], dtype=np.float64),
-            )
-
-        monkeypatch.setattr(
-            "core.material_lut_synthesis.solve_image_colors_optimal",
-            _mock_solver,
+        fake_cache = _FakeCache(
+            predicted_srgb.reshape(1, 3), recipe_bottom_to_top,
+            np.asarray([0.0], dtype=np.float64), 5,
         )
+
         monkeypatch.setattr(
             "core.material_cache.load_material_solver_cache",
-            lambda **kwargs: None,
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: fake_cache,
         )
 
         result = _run_material_archive_branch(ctx)
@@ -221,17 +254,15 @@ class TestLayerOrderConversion:
         recipe = np.asarray([[2]], dtype=np.int32)
         mocked_matched_rgb = np.asarray([[30, 200, 60]], dtype=np.uint8)
         mocked_delta_e = np.asarray([0.0], dtype=np.float64)
+        fake_cache = _FakeCache(mocked_matched_rgb, recipe, mocked_delta_e, 1)
 
-        def _mock_solver(unique_colors, materials, **kwargs):
-            return mocked_matched_rgb, recipe, mocked_delta_e
-
-        monkeypatch.setattr(
-            "core.material_lut_synthesis.solve_image_colors_optimal",
-            _mock_solver,
-        )
         monkeypatch.setattr(
             "core.material_cache.load_material_solver_cache",
-            lambda **kwargs: None,
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: fake_cache,
         )
 
         result = _run_material_archive_branch(ctx)

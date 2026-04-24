@@ -1,5 +1,5 @@
-"""Material-solver disk cache — 64³ Lab-grid bucketed recipe lookup.
-耗材求解器磁盘缓存 —— 64³ Lab 网格分桶的配方查询。
+"""Material-solver disk cache — 128³ Lab-grid bucketed recipe lookup.
+耗材求解器磁盘缓存 —— 128³ Lab 网格分桶的配方查询。
 
 This module provides a persistent, per-palette cache of optimal Beer-Lambert
 recipes, built by enumerating every ``M**N`` ordered layer sequence, bucketing
@@ -8,19 +8,27 @@ bucket-center-closest recipe per occupied cell.
 
 Runtime lookup: given target sRGB colors, a KD-Tree over occupied bucket
 centers finds the nearest stored recipe. Worst-case ΔE(target, achieved) is
-bounded by a cell's half-diagonal; typical error is ~1-3 ΔE for the 64³ default.
+bounded by a cell's half-diagonal; typical error is ~1-2 ΔE for the 128³ default.
 
 On-disk layout (one ``.npz`` + one ``.meta.json`` sidecar per cache entry):
 
     <cache_root>/
-        <palette_hash>-N<count>-t<height_str>-<substrate>.npz
-        <palette_hash>-N<count>-t<height_str>-<substrate>.meta.json
+        <palette_hash>-N<count>-t<height_str>-<substrate>-g<grid>.npz
+        <palette_hash>-N<count>-t<height_str>-<substrate>-g<grid>.meta.json
 
 Filename components:
     palette_hash       — 16-char sha256 prefix of the canonically-ordered palette
     N<count>           — zero-padded layer count (e.g. ``N10``)
     t<height_str>      — layer height with dots replaced by underscores (e.g. ``t0_08``)
     <substrate>        — ``"white"`` or ``"black"``
+    g<grid>            — zero-padded Lab grid resolution (e.g. ``g128``)
+
+Legacy caches written before the grid-resolution suffix was introduced live
+at ``<...>-<substrate>.npz`` (no ``-g<grid>`` tail). The loader falls back to
+that legacy path whenever the new suffixed path is missing **and** the legacy
+file's metadata reports a ``grid_resolution`` that matches the caller's
+expected value; this keeps pre-existing 64³ caches readable for callers that
+explicitly request ``grid_resolution=64``.
 
 Public API:
     - ``MaterialSolverCache``          — loaded cache with ``lookup()``
@@ -38,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,8 +80,47 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_GRID_RESOLUTION: int = 64
 """Lab grid cells per axis. Total cell count is ``grid_resolution ** 3``.
-Default 64 gives ~4 MB raw cache with worst-case lookup ΔE ≤ cell half-diagonal
-(~4 ΔE). Higher resolutions trade disk/build cost for lower ΔE."""
+
+Default 64 (`low`) keeps compressed caches around ~4 MB, with a
+worst-case bucket-diagonal ΔE of ~5.5 — visible but acceptable for the
+default preview-grade workflow where build speed and RAM budget matter
+most. Users who want tighter color accuracy can opt in via the
+"Exhaustive density" setting and choose `medium` (128, ~30 MB cache,
+ΔE ~2.7) or `high` (256, ~240 MB cache, ΔE ~1.4); these raise build
+time, memory, and per-conversion lookup work proportionally to
+``grid_resolution ** 3``.
+
+Supported values are enumerated in :data:`ALLOWED_GRID_RESOLUTIONS`;
+callers outside the CLI (API, tests) are expected to validate against
+that whitelist. On-disk caches at any supported resolution remain
+loadable regardless of the current default, thanks to the ``-g<grid>``
+filename suffix and the legacy-path fallback in
+:func:`load_material_solver_cache`.
+
+默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，属于"明显可见"
+区间但对默认预览工作流是可以接受的折衷（构建快、内存占用低）。需要
+更严格色彩精度的用户可以在"穷举数量"设置里开启自定义，选择中档
+（128，约 30 MB、ΔE ~2.7）或高档（256，约 240 MB、ΔE ~1.4）；
+构建时间、内存与每次查找的代价都会按 ``grid_resolution ** 3`` 比例放大。
+
+受支持的取值见 :data:`ALLOWED_GRID_RESOLUTIONS`；CLI 之外的调用方
+（API、测试）需要自行对白名单做校验。磁盘上的任意受支持分辨率缓存
+都能被加载，因为缓存文件名使用 ``-g<grid>`` 后缀，且
+:func:`load_material_solver_cache` 对无后缀的旧文件提供受控回退。
+"""
+
+ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256)
+"""Whitelist of user-facing grid resolutions exposed through the UI/API.
+
+Kept deliberately small so every shipped value has been exercised by
+the cache build, lookup, and size-budgeting paths. ``core`` does not
+enforce this whitelist — build/save/load remain flexible for tests and
+internal callers — but API routes and pipeline adapters must reject
+unknown values with a 4xx error.
+
+面向用户的网格分辨率白名单；``core`` 层保持灵活（便于测试与内部调用），
+API 路由与 pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
+"""
 
 CACHE_SCHEMA_VERSION: str = "1.0"
 CACHE_SUBDIR: str = "_solver_cache"
@@ -158,7 +206,24 @@ def _cache_file_stem(
     layer_count: int,
     layer_height_mm: float,
     substrate: str,
+    grid_resolution: int,
 ) -> str:
+    return (
+        f"{palette_hash}-N{int(layer_count):02d}"
+        f"-t{_height_to_str(layer_height_mm)}-{substrate}"
+        f"-g{int(grid_resolution):03d}"
+    )
+
+
+def _legacy_cache_file_stem(
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+) -> str:
+    """Pre-``-g<grid>`` filename stem, used only for backward-compatible loads.
+    引入 ``-g<grid>`` 之前的缓存文件名词干，仅在向后兼容加载时使用。
+    """
     return (
         f"{palette_hash}-N{int(layer_count):02d}"
         f"-t{_height_to_str(layer_height_mm)}-{substrate}"
@@ -171,13 +236,45 @@ def cache_file_path(
     layer_height_mm: float,
     substrate: str,
     *,
+    grid_resolution: int = DEFAULT_GRID_RESOLUTION,
     cache_root: str | Path | None = None,
 ) -> Path:
     """Resolve the canonical ``.npz`` path for the given cache parameters.
     返回指定缓存参数对应的规范 ``.npz`` 路径。
+
+    Args:
+        materials: Palette used for enumeration. (枚举用耗材列表)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        grid_resolution: Lab grid cells per axis written into the filename
+            suffix; defaults to :data:`DEFAULT_GRID_RESOLUTION`. Callers that
+            need a non-default resolution (for testing, multi-resolution
+            coexistence, etc.) must pass it explicitly.
+            (写入文件名后缀的 Lab 网格分辨率，默认 :data:`DEFAULT_GRID_RESOLUTION`)
+        cache_root: Optional override for the cache directory. (可选缓存根目录)
     """
     palette_hash = fingerprint_palette(materials)
-    stem = _cache_file_stem(palette_hash, layer_count, layer_height_mm, substrate)
+    stem = _cache_file_stem(
+        palette_hash, layer_count, layer_height_mm, substrate, grid_resolution
+    )
+    return default_cache_directory(cache_root) / f"{stem}.npz"
+
+
+def _legacy_cache_file_path(
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    *,
+    cache_root: str | Path | None = None,
+) -> Path:
+    """Resolve the pre-``-g<grid>`` legacy ``.npz`` path.
+    返回引入 ``-g<grid>`` 之前的历史 ``.npz`` 路径。
+    """
+    stem = _legacy_cache_file_stem(
+        palette_hash, layer_count, layer_height_mm, substrate
+    )
     return default_cache_directory(cache_root) / f"{stem}.npz"
 
 
@@ -193,8 +290,8 @@ def _cache_meta_path_for(npz_path: Path) -> Path:
 
 @dataclass(frozen=True)
 class MaterialSolverCache:
-    """Loaded 64³ Lab-grid material-recipe cache.
-    已加载的 64³ Lab 网格耗材配方缓存。
+    """Loaded Lab-grid material-recipe cache (default 128³).
+    已加载的 Lab 网格耗材配方缓存（默认 128³）。
 
     Attributes:
         lab_centers: (K, 3) float32 Lab bucket centers that were reached by
@@ -542,8 +639,8 @@ def build_material_solver_cache(
         layer_count: Number of layers (5-10). (层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"``. (基底)
-        grid_resolution: Lab grid cells per axis. Default 64.
-            (Lab 网格分辨率)
+        grid_resolution: Lab grid cells per axis. Default 128.
+            (Lab 网格分辨率，默认 128)
         progress_callback: Optional callback invoked as
             ``cb(progress_fraction, info)`` where ``progress_fraction`` is in
             ``[0, 1]`` and ``info`` carries build stats. (进度回调)
@@ -599,7 +696,8 @@ def build_material_solver_cache(
 
     # Sparse per-bucket state. Use dict mapping flat_bucket_idx -> (delta, rec_row).
     total_buckets = grid_resolution ** 3
-    # Dense arrays for fastest updates — 262K * (few bytes) is tiny at 64³.
+    # Dense arrays for fastest updates — at 128³ this is ~2.1M * (few bytes)
+    # ≈ 60-80 MB peak, still well within an 8 GB-class build budget.
     best_delta = np.full(total_buckets, np.inf, dtype=np.float64)
     best_recipes = np.zeros((total_buckets, layer_count), dtype=np.int8)
     best_achieved_lab = np.zeros((total_buckets, 3), dtype=np.float64)
@@ -754,6 +852,7 @@ def save_material_solver_cache(
         cache.layer_count,
         cache.layer_height_mm,
         cache.substrate,
+        cache.grid_resolution,
     )
     npz_path = directory / f"{stem}.npz"
     meta_path = _cache_meta_path_for(npz_path)
@@ -787,21 +886,68 @@ def load_material_solver_cache(
     layer_height_mm: float,
     substrate: str = "white",
     *,
+    grid_resolution: int = DEFAULT_GRID_RESOLUTION,
     cache_root: str | Path | None = None,
 ) -> MaterialSolverCache | None:
     """Load a cached solver from disk, or ``None`` if absent/corrupt.
     从磁盘加载缓存；不存在或损坏时返回 ``None``。
+
+    Args:
+        materials: Caller's material palette. Used both to locate the canonical
+            ``-g<grid>`` cache file and to validate the stored fingerprint.
+            (调用方耗材列表，用于定位带 ``-g<grid>`` 后缀的规范文件并校验指纹)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        grid_resolution: Expected Lab grid resolution. The loader first tries
+            the ``-g<grid>`` suffixed path; if it is missing, it falls back to
+            the pre-suffix legacy path **only** when the legacy file's
+            metadata reports the same ``grid_resolution``. This keeps
+            pre-upgrade 64³ caches readable for callers that explicitly ask
+            for ``grid_resolution=64``.
+            (期望的 Lab 网格分辨率；优先读带 ``-g<grid>`` 的新路径，若不存在
+            且旧路径元数据声明的分辨率与调用方一致时允许回退)
+        cache_root: Optional override for the cache directory.
     """
     npz_path = cache_file_path(
         materials,
         layer_count,
         layer_height_mm,
         substrate,
+        grid_resolution=grid_resolution,
         cache_root=cache_root,
     )
     meta_path = _cache_meta_path_for(npz_path)
+
+    # Backward-compatibility: fall back to the legacy pre-``-g<grid>`` path
+    # when the new suffixed file is missing. Acceptance is gated on the legacy
+    # metadata reporting the same grid_resolution so we never silently return
+    # a cache at a resolution the caller did not request.
     if not npz_path.exists() or not meta_path.exists():
-        return None
+        legacy_npz = _legacy_cache_file_path(
+            fingerprint_palette(materials),
+            layer_count,
+            layer_height_mm,
+            substrate,
+            cache_root=cache_root,
+        )
+        legacy_meta = _cache_meta_path_for(legacy_npz)
+        if not (legacy_npz.exists() and legacy_meta.exists()):
+            return None
+        try:
+            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        legacy_grid = int(legacy_metadata.get("grid_resolution", 0))
+        if legacy_grid != int(grid_resolution):
+            _log.info(
+                "[MaterialCache] Legacy cache %s reports grid_resolution=%d but "
+                "caller requested %d; skipping legacy fallback.",
+                legacy_npz.name, legacy_grid, int(grid_resolution),
+            )
+            return None
+        npz_path, meta_path = legacy_npz, legacy_meta
+
     try:
         with np.load(npz_path) as loaded:
             lab_centers = loaded["lab_centers"].astype(np.float32)
@@ -816,7 +962,8 @@ def load_material_solver_cache(
         )
         return None
 
-    # Sanity checks: shapes consistent, fingerprint matches caller's palette.
+    # Sanity checks: shapes consistent, fingerprint matches caller's palette,
+    # stored grid_resolution matches the caller's expectation.
     if (
         recipes.shape[0] != lab_centers.shape[0]
         or recipes.shape[1] != int(metadata.get("layer_count", -1))
@@ -830,6 +977,14 @@ def load_material_solver_cache(
             npz_path.name, expected_hash, metadata.get("palette_hash"),
         )
         return None
+    stored_grid = int(metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION))
+    if stored_grid != int(grid_resolution):
+        _log.info(
+            "[MaterialCache] Cache %s grid_resolution=%d does not match caller's "
+            "expected %d; treating as missing.",
+            npz_path.name, stored_grid, int(grid_resolution),
+        )
+        return None
 
     return MaterialSolverCache(
         lab_centers=lab_centers,
@@ -838,6 +993,161 @@ def load_material_solver_cache(
         center_delta_e=center_delta_e,
         metadata=metadata,
     )
+
+
+def find_any_cached_grid(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    cache_root: str | Path | None = None,
+) -> list[tuple[int, Path]]:
+    """Return every ``(grid_resolution, npz_path)`` cache on disk for this key.
+
+    Scans :func:`default_cache_directory` for files whose stem matches the
+    ``<palette_hash>-N<count>-t<height>-<substrate>[-g<grid>]`` pattern for
+    the caller's palette/layer/substrate parameters. Both the new
+    ``-g<grid>``-suffixed files and any surviving legacy (pre-suffix) file
+    are included; the legacy entry's grid is read from its ``.meta.json``.
+
+    The result is sorted by ``grid_resolution`` descending so callers that
+    want a "finer-first" fallback can iterate directly. File contents are
+    **not** validated here — callers are still expected to invoke
+    :func:`load_material_solver_cache` with the returned grid so the stored
+    palette fingerprint and shapes are rechecked.
+
+    扫描缓存目录下所有与调用方 ``(palette, N, 层高, 基底)`` 匹配、不同
+    ``grid_resolution`` 的缓存文件，按分辨率降序返回 ``(grid, path)`` 列表。
+    文件内容不在此处校验，调用方仍需通过 :func:`load_material_solver_cache`
+    完成指纹/形状等完整性检查。
+
+    Args:
+        materials: Palette to match. (调色板)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        cache_root: Optional override for the cache directory. (缓存根目录)
+
+    Returns:
+        A list of ``(grid_resolution, npz_path)`` tuples sorted by
+        resolution descending. Empty when the cache directory is missing or
+        no matching file exists.
+    """
+    cache_dir = default_cache_directory(cache_root)
+    if not cache_dir.is_dir():
+        return []
+
+    palette_hash = fingerprint_palette(materials)
+    legacy_stem = _legacy_cache_file_stem(
+        palette_hash, layer_count, layer_height_mm, substrate
+    )
+
+    # Collect grid -> path without allowing duplicates; new-style suffixed
+    # files take priority over a legacy file that happens to report the same
+    # grid in its metadata.
+    # 收集 grid -> path 且不允许重复；带 ``-g`` 后缀的新文件优先于报告相同
+    # grid 的旧格式文件。
+    by_grid: dict[int, Path] = {}
+
+    suffix_pattern = re.compile(
+        rf"^{re.escape(legacy_stem)}-g(\d+)$"
+    )
+    for npz_path in cache_dir.glob(f"{legacy_stem}-g*.npz"):
+        match = suffix_pattern.match(npz_path.stem)
+        if match is None:
+            continue
+        meta_path = _cache_meta_path_for(npz_path)
+        if not meta_path.exists():
+            continue
+        grid = int(match.group(1))
+        by_grid[grid] = npz_path
+
+    legacy_npz = _legacy_cache_file_path(
+        palette_hash, layer_count, layer_height_mm, substrate,
+        cache_root=cache_root,
+    )
+    legacy_meta = _cache_meta_path_for(legacy_npz)
+    if legacy_npz.exists() and legacy_meta.exists():
+        try:
+            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            legacy_metadata = None
+        if legacy_metadata is not None:
+            legacy_grid = int(
+                legacy_metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION)
+            )
+            by_grid.setdefault(legacy_grid, legacy_npz)
+
+    return sorted(by_grid.items(), key=lambda item: item[0], reverse=True)
+
+
+def load_material_solver_cache_with_fallback(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    grid_resolution: int = DEFAULT_GRID_RESOLUTION,
+    cache_root: str | Path | None = None,
+) -> tuple["MaterialSolverCache | None", int | None]:
+    """Load the requested grid; on miss, retry any other grid on disk.
+
+    This wraps :func:`load_material_solver_cache` with a "finer grid first"
+    fallback: if the caller-requested resolution has no valid cache file, the
+    helper enumerates every cached resolution on disk for the same palette
+    /layer/substrate via :func:`find_any_cached_grid` and tries each (highest
+    first) until one loads. This keeps the hot pipeline path off the slow
+    MITM solver even when the UI's currently-selected grid does not match
+    what the user actually built.
+
+    先按 ``grid_resolution`` 加载；未命中时按磁盘上其它已存分辨率（由密到疏）
+    依次回退，直到成功或全部失败。确保 UI 所选网格与用户实际构建的缓存不一致
+    时也能命中持久化结果，而不是回落到 MITM 求解器。
+
+    Args:
+        materials: Palette to match. (调色板)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        grid_resolution: Preferred Lab grid resolution to try first.
+            (优先尝试的 Lab 网格分辨率)
+        cache_root: Optional override for the cache directory. (缓存根目录)
+
+    Returns:
+        ``(cache, actual_grid)`` where ``actual_grid`` is the resolution of
+        the cache that was successfully loaded (may differ from the
+        requested one). Returns ``(None, None)`` when no usable cache file
+        exists on disk.
+    """
+    cache = load_material_solver_cache(
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution, cache_root=cache_root,
+    )
+    if cache is not None:
+        return cache, int(grid_resolution)
+
+    candidates = find_any_cached_grid(
+        materials, layer_count, layer_height_mm, substrate,
+        cache_root=cache_root,
+    )
+    for candidate_grid, _path in candidates:
+        if candidate_grid == int(grid_resolution):
+            # Already tried and missed above; avoid redundant disk read.
+            continue
+        fallback = load_material_solver_cache(
+            materials, layer_count, layer_height_mm, substrate,
+            grid_resolution=candidate_grid, cache_root=cache_root,
+        )
+        if fallback is not None:
+            _log.info(
+                "[MaterialCache] Requested grid=%d has no usable cache; "
+                "falling back to grid=%d found on disk.",
+                int(grid_resolution), int(candidate_grid),
+            )
+            return fallback, int(candidate_grid)
+
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -884,18 +1194,48 @@ def delete_cached_entry(
     layer_height_mm: float,
     substrate: str = "white",
     *,
+    grid_resolution: int = DEFAULT_GRID_RESOLUTION,
     cache_root: str | Path | None = None,
 ) -> bool:
     """Remove the cache entry for the given parameters. Returns ``True`` on hit.
     删除指定参数的缓存条目；命中返回 ``True``。
+
+    Removes the canonical ``-g<grid>`` entry first, then also sweeps any
+    pre-suffix legacy entry whose metadata reports the matching
+    ``grid_resolution`` so old 64³/128³ files do not silently pile up.
+    (先删除带 ``-g<grid>`` 后缀的规范条目，并按元数据声明的分辨率一并清理
+    没有后缀的历史条目，避免新旧缓存文件在磁盘上堆积。)
     """
     npz_path = cache_file_path(
         materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
         cache_root=cache_root,
     )
     meta_path = _cache_meta_path_for(npz_path)
+    targets: list[Path] = [npz_path, meta_path]
+
+    # Also sweep the legacy pre-``-g<grid>`` file pair when its metadata
+    # reports the same grid_resolution, so repeated deletes from modern
+    # callers do not leave orphan legacy files behind.
+    legacy_npz = _legacy_cache_file_path(
+        fingerprint_palette(materials),
+        layer_count,
+        layer_height_mm,
+        substrate,
+        cache_root=cache_root,
+    )
+    legacy_meta = _cache_meta_path_for(legacy_npz)
+    if legacy_npz.exists() and legacy_meta.exists():
+        try:
+            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
+            legacy_grid = int(legacy_metadata.get("grid_resolution", 0))
+        except (OSError, json.JSONDecodeError):
+            legacy_grid = 0
+        if legacy_grid == int(grid_resolution):
+            targets.extend((legacy_npz, legacy_meta))
+
     removed_any = False
-    for path in (npz_path, meta_path):
+    for path in targets:
         if path.exists():
             try:
                 path.unlink()

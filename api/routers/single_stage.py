@@ -39,6 +39,7 @@ from api.schemas.responses import (
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id
 from core.material_cache import (
+    ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
     DEFAULT_GRID_RESOLUTION,
     build_material_solver_cache,
@@ -658,6 +659,25 @@ def _validate_cache_parameters(
         )
 
 
+def _validate_grid_resolution(grid_resolution: int) -> None:
+    """Reject grid resolutions outside the user-facing whitelist.
+    拒绝白名单之外的网格分辨率。
+
+    The whitelist is enforced at the API boundary so every shipped value
+    has matching UI/docs/build-size expectations. ``core`` keeps looser
+    constraints (positive integer) so tests and internal callers can
+    still exercise arbitrary resolutions.
+    """
+    if int(grid_resolution) not in ALLOWED_GRID_RESOLUTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"grid_resolution must be one of {list(ALLOWED_GRID_RESOLUTIONS)}, "
+                f"got {grid_resolution}"
+            ),
+        )
+
+
 def _load_palette_or_raise(directory_names: list[str]):
     """Load MaterialParams for the given directory names with API-friendly errors."""
     try:
@@ -729,19 +749,23 @@ async def material_solver_cache_status(
     layer_count: int = Form(...),
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
+    grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
 ) -> MaterialSolverCacheStatusResponse:
     """Check whether a cache exists for the given palette & parameters.
     查询指定调色板与参数组合的缓存是否存在。
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
     palette_hash = fingerprint_palette(materials)
     npz_path = cache_file_path(
-        materials, layer_count, layer_height_mm, substrate
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
     )
     cache = load_material_solver_cache(
-        materials, layer_count, layer_height_mm, substrate
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
     )
     if cache is None:
         return MaterialSolverCacheStatusResponse(
@@ -793,11 +817,7 @@ async def material_solver_cache_build(
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
-    if grid_resolution < 8 or grid_resolution > 256:
-        raise HTTPException(
-            status_code=422,
-            detail=f"grid_resolution must be in [8, 256], got {grid_resolution}",
-        )
+    _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
 
     def _run_build():
@@ -848,16 +868,19 @@ async def material_solver_cache_delete(
     layer_count: int = Form(...),
     layer_height_mm: float = Form(...),
     substrate: str = Form("white"),
+    grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
 ) -> MaterialSolverCacheDeleteResponse:
     """Delete a persisted solver cache entry.
     删除已持久化的求解器缓存条目。
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
     palette_hash = fingerprint_palette(materials)
     deleted = delete_cached_entry(
-        materials, layer_count, layer_height_mm, substrate
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
     )
     return MaterialSolverCacheDeleteResponse(
         status="ok",
@@ -954,6 +977,7 @@ async def material_solver_cache_suggest_colors(
     top_k: int = Form(DEFAULT_SUGGEST_TOP_K),
     min_spacing: float = Form(DEFAULT_SUGGEST_MIN_SPACING),
     max_combinations: int = Form(DEFAULT_SUGGEST_MAX_COMBINATIONS),
+    grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
 ) -> MaterialColorSuggestionsResponse:
     """Return up to ``top_k`` achievable colors near ``target_hex``.
     为 ``target_hex`` 返回至多 ``top_k`` 个可达近似色建议。
@@ -971,6 +995,7 @@ async def material_solver_cache_suggest_colors(
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_grid_resolution(grid_resolution)
     _validate_suggest_parameters(top_k, min_spacing, max_combinations)
     target_hex_clean, target_rgb_tuple = _parse_target_hex(target_hex)
     materials = _load_palette_or_raise(dir_names)
@@ -979,7 +1004,8 @@ async def material_solver_cache_suggest_colors(
     target_rgb_arr = np.asarray(target_rgb_tuple, dtype=np.uint8)
 
     cache = load_material_solver_cache(
-        materials, layer_count, layer_height_mm, substrate
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
     )
     if cache is not None:
         try:

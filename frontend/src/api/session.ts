@@ -10,7 +10,7 @@ export async function heartbeatSession(sessionId: string): Promise<void> {
   await apiClient.post(
     "/session/heartbeat",
     { session_id: sessionId },
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
 }
 
@@ -19,11 +19,7 @@ export async function heartbeatSession(sessionId: string): Promise<void> {
  */
 export async function closeSession(sessionId: string): Promise<void> {
   await apiClient
-    .post(
-      "/session/close",
-      { session_id: sessionId },
-      { timeout: 5_000 },
-    )
+    .post("/session/close", { session_id: sessionId }, { timeout: 3_600_000 })
     .catch(() => {
       /* fire-and-forget: ignore close failures */
     });

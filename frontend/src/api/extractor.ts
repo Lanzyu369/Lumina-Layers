@@ -47,7 +47,7 @@ export async function extractColors(
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/extract",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -76,7 +76,7 @@ export async function extractGradientCardStageA(params: {
   const response = await apiClient.post<GradientCardStageAExtractResponse>(
     "/extractor/extract-gradient-card-stage-a",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -103,7 +103,7 @@ export async function saveGradientCardMaterial(params: {
   const response = await apiClient.post<GradientCardMaterialSaveResponse>(
     "/extractor/save-gradient-card-material",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -126,7 +126,7 @@ export async function deleteGradientCardMaterial(
 ): Promise<GradientCardMaterialDeleteResponse> {
   const response = await apiClient.delete<GradientCardMaterialDeleteResponse>(
     `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
-    { timeout: 60_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -144,7 +144,7 @@ export async function updateGradientCardMaterial(
       material_name: payload.materialName.trim(),
       brand: payload.brand?.trim() || null,
     },
-    { timeout: 60_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -152,7 +152,7 @@ export async function updateGradientCardMaterial(
 export async function listGradientCardMaterials(): Promise<GradientCardMaterialLibraryResponse> {
   const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
     "/extractor/gradient-card-materials",
-    { timeout: 60_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -163,7 +163,7 @@ export async function exportGradientCardMaterials(
   const response = await apiClient.post<GradientCardMaterialBulkExportResponse>(
     "/extractor/gradient-card-materials/export",
     { directory_names: directoryNames },
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -178,7 +178,7 @@ export async function importGradientCardMaterials(
   const response = await apiClient.post<GradientCardMaterialBulkImportResponse>(
     "/extractor/gradient-card-materials/import",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -207,7 +207,7 @@ export async function mergeEightColor(
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/merge-8color",
     { eight_color_full_export: eightColorFullExport },
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -217,7 +217,7 @@ export async function mergeFiveColorExtended(): Promise<ExtractResponse> {
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/merge-5color-extended",
     {},
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -233,7 +233,7 @@ export async function previewAutoWb(
     preview_url: string;
     width: number;
     height: number;
-  }>("/extractor/preview-wb", fd, { timeout: 60_000 });
+  }>("/extractor/preview-wb", fd, { timeout: 3_600_000 });
   return response.data;
 }
 
@@ -248,7 +248,7 @@ export async function rotateExtractorImage(
     preview_url: string;
     width: number;
     height: number;
-  }>("/extractor/rotate", fd, { timeout: 60_000 });
+  }>("/extractor/rotate", fd, { timeout: 3_600_000 });
   return response.data;
 }
 
@@ -272,7 +272,7 @@ export async function extractSingleStageDataset(
   const response = await apiClient.post<SingleStageExtractResponse>(
     "/extractor/extract-single-stage",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -292,7 +292,7 @@ export async function fitStageA(params: {
   const response = await apiClient.post<StageAFitResponse>(
     "/extractor/fit-stage-a",
     fd,
-    { timeout: 600_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }

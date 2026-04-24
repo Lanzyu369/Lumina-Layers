@@ -23,9 +23,11 @@ from core.material_cache import (
     canonical_palette_order,
     default_cache_directory,
     delete_cached_entry,
+    find_any_cached_grid,
     fingerprint_palette,
     list_cached_entries,
     load_material_solver_cache,
+    load_material_solver_cache_with_fallback,
     save_material_solver_cache,
 )
 from core.material_color_solver import (
@@ -118,7 +120,8 @@ class TestCacheFilePath:
         assert name.startswith(fingerprint_palette(SMALL_PALETTE))
         assert "-N05-" in name
         assert "-t0_08-" in name
-        assert "-white.npz" in name
+        # Default grid is 128, so the canonical stem ends with -white-g128.npz.
+        assert name.endswith(f"-white-g{DEFAULT_GRID_RESOLUTION:03d}.npz")
 
     def test_path_differs_for_different_substrate(self, tmp_path: Path):
         p_white = cache_file_path(
@@ -128,6 +131,19 @@ class TestCacheFilePath:
             SMALL_PALETTE, 5, 0.08, "black", cache_root=tmp_path,
         )
         assert p_white != p_black
+
+    def test_path_differs_for_different_grid_resolution(self, tmp_path: Path):
+        p_64 = cache_file_path(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=64, cache_root=tmp_path,
+        )
+        p_128 = cache_file_path(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=128, cache_root=tmp_path,
+        )
+        assert p_64 != p_128
+        assert p_64.name.endswith("-white-g064.npz")
+        assert p_128.name.endswith("-white-g128.npz")
 
     def test_default_cache_directory_includes_subdir(self, tmp_path: Path):
         d = default_cache_directory(tmp_path)
@@ -219,7 +235,7 @@ class TestSaveLoadRoundtrip:
         save_material_solver_cache(cache, cache_root=tmp_path)
         loaded = load_material_solver_cache(
             SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
-            substrate="white", cache_root=tmp_path,
+            substrate="white", grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
         np.testing.assert_allclose(loaded.lab_centers, cache.lab_centers, atol=1e-3)
@@ -233,7 +249,8 @@ class TestSaveLoadRoundtrip:
 
     def test_load_returns_none_when_absent(self, tmp_path: Path):
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
 
@@ -244,11 +261,13 @@ class TestSaveLoadRoundtrip:
         save_material_solver_cache(cache, cache_root=tmp_path)
         # Corrupt the npz file.
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         npz_path.write_bytes(b"not a valid npz file")
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
 
@@ -261,7 +280,69 @@ class TestSaveLoadRoundtrip:
         # cache_file_path will resolve to a different file (palette_hash differs),
         # so the loader simply returns None.
         result = load_material_solver_cache(
-            MEDIUM_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            MEDIUM_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        assert result is None
+
+    def test_load_returns_none_when_grid_resolution_mismatched(self, tmp_path: Path):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        # Asking for a different grid resolution must neither read the suffixed
+        # file (paths differ) nor silently upgrade/downgrade; result is None.
+        result = load_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=64, cache_root=tmp_path,
+        )
+        assert result is None
+
+    def test_legacy_path_accepted_when_grid_matches(self, tmp_path: Path):
+        """A pre-`-g<grid>` cache is picked up when its metadata grid matches."""
+        import json
+
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        # Rename the suffixed file pair to the legacy (pre-g<grid>) stem.
+        suffixed_npz = cache_file_path(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        suffixed_meta = suffixed_npz.with_suffix(".meta.json")
+        directory = suffixed_npz.parent
+        palette_hash = fingerprint_palette(SMALL_PALETTE)
+        legacy_stem = f"{palette_hash}-N05-t0_08-white"
+        legacy_npz = directory / f"{legacy_stem}.npz"
+        legacy_meta = directory / f"{legacy_stem}.meta.json"
+        suffixed_npz.replace(legacy_npz)
+        suffixed_meta.replace(legacy_meta)
+        # Sanity: the suffixed path is gone, legacy path exists.
+        assert not suffixed_npz.exists()
+        assert legacy_npz.exists()
+
+        # Legacy metadata already records grid_resolution=32, so the loader
+        # should accept it when the caller explicitly asks for grid 32.
+        loaded = load_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert loaded.grid_resolution == 32
+
+        # But if the legacy file's metadata reports a different resolution
+        # than the caller requests, we must refuse the fallback.
+        metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
+        metadata["grid_resolution"] = 64
+        legacy_meta.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        result = load_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
 
@@ -444,13 +525,15 @@ class TestListingAndDeletion:
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         meta_path = npz_path.with_suffix(".meta.json")
         assert npz_path.exists() and meta_path.exists()
 
         removed = delete_cached_entry(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         assert removed is True
         assert not npz_path.exists()
@@ -458,7 +541,8 @@ class TestListingAndDeletion:
 
     def test_delete_returns_false_when_absent(self, tmp_path: Path):
         result = delete_cached_entry(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
         )
         assert result is False
 
@@ -483,4 +567,120 @@ class TestInternalConsistency:
             )
 
     def test_default_grid_resolution_constant(self):
+        # Low-density is the shipped default so the build cost stays within the
+        # budget every user pays without opting in. Upgrading the default is a
+        # UX choice that should flip this assertion together with the UI.
         assert DEFAULT_GRID_RESOLUTION == 64
+
+    def test_allowed_grid_resolutions_whitelist(self):
+        from core.material_cache import ALLOWED_GRID_RESOLUTIONS
+
+        # Whitelist exposes exactly three tiers ("low/medium/high" in the UI);
+        # adding a tier requires matching translation/UI/settings changes.
+        assert ALLOWED_GRID_RESOLUTIONS == (64, 128, 256)
+        assert DEFAULT_GRID_RESOLUTION in ALLOWED_GRID_RESOLUTIONS
+
+
+# ---------------------------------------------------------------------------
+# find_any_cached_grid + load_material_solver_cache_with_fallback
+# ---------------------------------------------------------------------------
+
+
+class TestFindAnyCachedGrid:
+    """Verify directory-scanning grid discovery."""
+
+    def test_empty_directory_returns_empty(self, tmp_path: Path):
+        result = find_any_cached_grid(
+            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+        )
+        assert result == []
+
+    def test_finds_single_suffixed_cache(self, tmp_path: Path):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        result = find_any_cached_grid(
+            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+        )
+        assert len(result) == 1
+        assert result[0][0] == 32
+
+    def test_finds_multiple_grids_sorted_descending(self, tmp_path: Path):
+        for grid in (16, 32):
+            cache = build_material_solver_cache(
+                SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+                substrate="white", grid_resolution=grid,
+            )
+            save_material_solver_cache(cache, cache_root=tmp_path)
+        result = find_any_cached_grid(
+            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+        )
+        grids = [g for g, _ in result]
+        assert grids == [32, 16], "should be sorted descending"
+
+    def test_different_palette_not_found(self, tmp_path: Path):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        result = find_any_cached_grid(
+            MEDIUM_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+        )
+        assert result == []
+
+
+class TestLoadWithFallback:
+    """Verify the requested-grid-first, any-grid-fallback loader."""
+
+    def test_exact_hit_returns_requested_grid(self, tmp_path: Path):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        loaded, actual_grid = load_material_solver_cache_with_fallback(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert actual_grid == 32
+
+    def test_fallback_to_different_grid(self, tmp_path: Path):
+        # Build only grid=32; request grid=64 — should fall back to 32.
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        loaded, actual_grid = load_material_solver_cache_with_fallback(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=64, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert actual_grid == 32, "should fall back to the only available grid"
+
+    def test_fallback_prefers_finer_grid(self, tmp_path: Path):
+        # Build both 16 and 32; request 64 — should fall back to 32 (finer).
+        for grid in (16, 32):
+            c = build_material_solver_cache(
+                SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+                substrate="white", grid_resolution=grid,
+            )
+            save_material_solver_cache(c, cache_root=tmp_path)
+        loaded, actual_grid = load_material_solver_cache_with_fallback(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=64, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert actual_grid == 32, "finer grid should be preferred"
+
+    def test_returns_none_when_no_cache_exists(self, tmp_path: Path):
+        loaded, actual_grid = load_material_solver_cache_with_fallback(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=64, cache_root=tmp_path,
+        )
+        assert loaded is None
+        assert actual_grid is None

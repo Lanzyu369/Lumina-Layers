@@ -3,6 +3,7 @@ import { useConverterStore } from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
 import type { MaterialColorSuggestionItem } from "../../api/types";
+import GradientGroupsPanel from "./GradientGroupsPanel";
 
 /**
  * Material-archive color picker.
@@ -196,6 +197,9 @@ export default function MaterialColorPicker() {
             {t("material_picker_hint")}
           </p>
         </div>
+
+        {/* Gradient banding groups (material-archive only; self-hides if none). */}
+        <GradientGroupsPanel />
 
         {/* No-material guard */}
         {!hasMaterials ? (

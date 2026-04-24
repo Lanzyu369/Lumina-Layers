@@ -216,6 +216,7 @@ def convert_image_to_3d(
     selected_materials: Optional[List[str]] = None,
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
+    material_grid_resolution: Optional[int] = None,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -269,6 +270,7 @@ def generate_preview_cached(
     selected_materials: Optional[List[str]] = None,
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
+    material_grid_resolution: Optional[int] = None,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -381,6 +383,7 @@ def generate_final_model(
     selected_materials: Optional[List[str]] = None,
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
+    material_grid_resolution: Optional[int] = None,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -499,6 +502,7 @@ def generate_final_model(
         selected_materials=selected_materials,
         material_layer_count=material_layer_count,
         material_layer_height_mm=material_layer_height_mm,
+        material_grid_resolution=material_grid_resolution,
     )
 
 

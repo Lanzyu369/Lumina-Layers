@@ -1747,6 +1747,68 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to clear cache. Please try again.",
   },
 
+  // ==================== Settings Panel (Solver Cache Density) ====================
+  "settings.advanced": {
+    zh: "高级",
+    en: "Advanced",
+  },
+  "settings.solver_cache_density_heading": {
+    zh: "穷举数量",
+    en: "Exhaustive density",
+  },
+  "settings.solver_cache_density_description": {
+    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择中/高档以获得更低的色差，代价是构建时间、内存与每次查找都会成倍增加。",
+    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to medium or high for tighter color accuracy at the cost of proportionally longer build times, higher memory, and slower per-conversion lookups.",
+  },
+  "settings.solver_cache_density_enable_label": {
+    zh: "允许自定义穷举数量",
+    en: "Customise exhaustive density",
+  },
+  "settings.solver_cache_density_default_hint": {
+    zh: "未开启时统一使用低档（64³），构建快、内存占用低。",
+    en: "When disabled, every build uses the low tier (64³) — fast to build, low memory.",
+  },
+  "settings.solver_cache_density_select_label": {
+    zh: "穷举数量",
+    en: "Exhaustive density",
+  },
+  "settings.solver_cache_density_option_64": {
+    zh: "低（64³）",
+    en: "Low (64³)",
+  },
+  "settings.solver_cache_density_option_128": {
+    zh: "中（128³）",
+    en: "Medium (128³)",
+  },
+  "settings.solver_cache_density_option_256": {
+    zh: "高（256³）",
+    en: "High (256³)",
+  },
+  "settings.solver_cache_density_tip": {
+    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击“构建”时会产生对应分辨率的新缓存文件。",
+    en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
+  },
+  "settings.auto_replace_gradient_heading": {
+    zh: "渐变自动换色",
+    en: "Auto replace gradient banding",
+  },
+  "settings.auto_replace_gradient_description": {
+    zh: "开启后，每次预览成功会自动把每一条海带纹渐变内的多个耗材色统一替换为组内代表色（组内像素最多的那一个），一键去掉渐变被量化切割出来的条纹。仍可在颜色工作站手动撤销或进一步调整。",
+    en: "When enabled, every successful preview automatically collapses each detected banding gradient to the group's representative colour (the material with the most pixels), erasing the stripes in one shot. You can still undo or fine-tune from the Color Workstation.",
+  },
+  "settings.auto_replace_gradient_label": {
+    zh: "自动应用渐变换色",
+    en: "Auto-apply gradient replacement",
+  },
+  "settings.auto_replace_gradient_default_hint": {
+    zh: "默认关闭：预览保留原始渐变，由你在颜色工作站里按需替换。",
+    en: "Off by default: previews keep the original banded gradient, you apply the fix manually from the Color Workstation.",
+  },
+  "settings.auto_replace_gradient_tip": {
+    zh: "开启后渐变较多的图片在预览后会略慢一步出现最终效果（需要额外的批量替换）。若关闭，同样的功能仍可在颜色工作站里手动使用。",
+    en: "With this on, images rich in gradients show the final banding-free result a beat later (extra batch replacement runs). Turning it off keeps the same capability available as a manual action in the Color Workstation.",
+  },
+
   // ==================== Settings Panel (Slicer Settings) ====================
   "settings.slicer_settings": {
     zh: "切片软件设置",
@@ -2818,8 +2880,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Exhaustive cache\u2026",
   },
   basic_material_cache_section_description: {
-    zh: "为当前耗材组合构建 64³ Lab 网格配方库，后续出图直接查表。",
-    en: "Build a 64³ Lab-grid recipe library for this palette so future conversions are served from cache.",
+    zh: "为当前耗材组合构建 Lab 网格配方库，后续出图直接查表。",
+    en: "Build a Lab-grid recipe library for this palette so future conversions are served from cache.",
+  },
+  basic_material_cache_active_grid_label: {
+    zh: "当前穷举数量：{tier}（{grid}³）。可在设置里切换。",
+    en: "Current density: {tier} ({grid}³). Change in Settings.",
   },
   basic_material_cache_status_idle: {
     zh: "请选择至少一种耗材后查看缓存状态。",
@@ -3584,6 +3650,96 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_picker_delta_e_label: {
     zh: "ΔE{value}",
     en: "ΔE{value}",
+  },
+
+  // ==================== Gradient groups panel (banding detection) ====================
+  gradient_groups_title: {
+    zh: "渐变分组（海带纹）",
+    en: "Gradient groups (banding)",
+  },
+  gradient_groups_hint: {
+    zh: "发现 {count} 条平滑渐变被切成多个耗材色。点击“选中整组”可一次性选中组内所有颜色，再配合上方的拾色器换成同一个目标色。",
+    en: "Detected {count} smooth gradients split across multiple material colors. Click Select all to multi-select the whole group, then use the picker above to replace them with a single target color.",
+  },
+  gradient_groups_loading: {
+    zh: "正在读取渐变分组...",
+    en: "Loading gradient groups...",
+  },
+  gradient_groups_empty: {
+    zh: "未检测到海带纹渐变。",
+    en: "No banding gradients detected.",
+  },
+  gradient_groups_error: {
+    zh: "读取失败：{message}",
+    en: "Failed: {message}",
+  },
+  gradient_groups_select_group: {
+    zh: "选中整组",
+    en: "Select all",
+  },
+  gradient_groups_select_region: {
+    zh: "选中区域",
+    en: "Select region",
+  },
+  gradient_groups_view_highlight: {
+    zh: "查看高亮图",
+    en: "View highlight",
+  },
+  gradient_groups_view_highlight_group_title: {
+    zh: "第 {index} 组 高亮预览",
+    en: "Group #{index} highlight preview",
+  },
+  gradient_groups_view_highlight_region_title: {
+    zh: "第 {group} 组 · 区域 {region} 高亮预览",
+    en: "Group #{group} · region #{region} highlight preview",
+  },
+  gradient_groups_view_highlight_loading: {
+    zh: "生成高亮图中…",
+    en: "Generating highlight…",
+  },
+  gradient_groups_view_highlight_error: {
+    zh: "生成高亮图失败：{message}",
+    en: "Failed to generate highlight: {message}",
+  },
+  gradient_groups_view_highlight_close: {
+    zh: "关闭",
+    en: "Close",
+  },
+  gradient_groups_expand_regions: {
+    zh: "展开区域（{count}）",
+    en: "Expand regions ({count})",
+  },
+  gradient_groups_collapse_regions: {
+    zh: "收起区域",
+    en: "Collapse regions",
+  },
+  gradient_groups_materials_count: {
+    zh: "{count} 种颜色",
+    en: "{count} colors",
+  },
+  gradient_groups_pixels_count: {
+    zh: "{count} 像素",
+    en: "{count} px",
+  },
+  gradient_groups_region_label: {
+    zh: "区域 {index}",
+    en: "Region {index}",
+  },
+  gradient_groups_auto_banner: {
+    zh: "已按设置自动替换为代表色，可在高级设置关闭。",
+    en: "Auto-replaced with representative colors (toggle off in Advanced Settings).",
+  },
+  gradient_groups_apply_now: {
+    zh: "一键去除海带纹",
+    en: "Flatten all gradients",
+  },
+  gradient_groups_flatten_group: {
+    zh: "去海带纹",
+    en: "Flatten",
+  },
+  gradient_groups_flatten_region: {
+    zh: "去海带纹",
+    en: "Flatten",
   },
   lut_grid_total_colors: {
     zh: "共 {total} 色，显示 {visible} 色",

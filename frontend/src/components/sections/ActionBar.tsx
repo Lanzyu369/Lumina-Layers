@@ -4,6 +4,7 @@ import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverte
 import Button from "../ui/Button"
 import BatchResultSummary from "../ui/BatchResultSummary"
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../ui/CanvasPreviewSurface"
+import LayerMaskViewerDialog from "../ui/LayerMaskViewerDialog"
 import PreviewHoverInspector from "../ui/PreviewHoverInspector"
 import {
   HOVER_POPOVER_DELAY_MS,
@@ -774,6 +775,15 @@ export default function ActionBar() {
       )}
       {hoverInspectorOverlay}
 
+      <LayerMaskViewerDialog
+        open={zoomedLayerIdx !== null && !!activeLayerImages[zoomedLayerIdx]}
+        layers={activeLayerImages}
+        activeIndex={zoomedLayerIdx}
+        onChangeIndex={setZoomedLayerIdx}
+        onClose={() => setZoomedLayerIdx(null)}
+        isCompact={workspace.isCompact}
+      />
+
       {activeLayerImages.length > 0 && (
         <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
           <h4 className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-400">
@@ -808,59 +818,6 @@ export default function ActionBar() {
             ))}
           </div>
         </div>
-      )}
-
-      {zoomedLayerIdx !== null && activeLayerImages[zoomedLayerIdx] && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80"
-          onClick={() => setZoomedLayerIdx(null)}
-        >
-          <div
-            className="relative flex max-h-[95vh] max-w-[95vw] flex-col items-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex w-full items-center justify-between">
-              <span className="text-base font-medium text-white">
-                {t("action_layer_nth")}{zoomedLayerIdx + 1}{t("action_layer_unit")}
-              </span>
-              <div
-                className={`items-center gap-2 ${workspace.isCompact ? "grid grid-cols-[1fr_auto] gap-y-1" : "flex"}`}
-              >
-                <button
-                  className="rounded-lg px-3 py-1 text-sm text-white/80 hover:bg-slate-200/15 disabled:opacity-30 dark:hover:bg-slate-700/30"
-                  onClick={() => setZoomedLayerIdx(Math.max(0, zoomedLayerIdx - 1))}
-                  disabled={zoomedLayerIdx === 0}
-                >
-                  {t("action_layer_prev_arrow")} {t("action_layer_prev")}
-                </button>
-                <span className="text-sm text-white/60">
-                  {zoomedLayerIdx + 1} / {activeLayerImages.length}
-                </span>
-                <button
-                  className="rounded-lg px-3 py-1 text-sm text-white/80 hover:bg-slate-200/15 disabled:opacity-30 dark:hover:bg-slate-700/30"
-                  onClick={() => setZoomedLayerIdx(Math.min(activeLayerImages.length - 1, zoomedLayerIdx + 1))}
-                  disabled={zoomedLayerIdx === activeLayerImages.length - 1}
-                >
-                  {t("action_layer_next")} {t("action_layer_next_arrow")}
-                </button>
-                <button
-                  className="ml-2 rounded-lg p-2 text-white/80 hover:bg-slate-200/15 dark:hover:bg-slate-700/30"
-                  onClick={() => setZoomedLayerIdx(null)}
-                  aria-label={t("action_close_overlay")}
-                >
-                  {t("action_close_icon")}
-                </button>
-              </div>
-            </div>
-            <img
-              src={activeLayerImages[zoomedLayerIdx].url}
-              alt={`${t("action_layer_nth")}${zoomedLayerIdx + 1}${t("action_layer_unit")}`}
-              className="max-h-[85vh] max-w-full rounded-lg object-contain"
-              draggable={false}
-            />
-          </div>
-        </div>,
-        document.body,
       )}
 
       <SlicerSelector

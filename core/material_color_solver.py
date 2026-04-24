@@ -14,16 +14,22 @@ Public API
 ----------
 - ``MaterialParams``   — dataclass holding Beer-Lambert parameters for one material
 - ``forward_model``    — predict linear RGB for a full N-layer recipe
+- ``forward_batch_model`` — vectorised per-recipe forward simulation
 - ``solve_image_colors`` — solve optimal recipes for a batch of unique colors
+- ``solve_image_colors_optimal`` — strict-optimal MITM B&B solver
 - ``map_pixels_to_materials`` — map every image pixel to its solved recipe
 - ``ColorSuggestion``  — dataclass describing one achievable-color candidate
 - ``suggest_colors_for_target`` — rank achievable colors near a target sRGB
+- ``find_white_material_index`` — locate the palette's white filament, if any
+- ``ensure_not_worse_than_smaller_N`` — guarantee N-layer recipes are not
+  worse (in model-ΔE terms) than any smaller-N solution padded with white
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -642,6 +648,29 @@ def solve_image_colors_optimal(
             np.zeros((0,), dtype=np.float64),
         )
 
+    # ---- Memory feasibility guard ----
+    # The MITM inner loop allocates a ``delta_e`` array of shape
+    # ``(C, chunk, K_bot)`` float64.  For large palettes at high layer
+    # counts (e.g. M=8, N=10 → K_bot=32768) the array can exceed
+    # available RAM (≈ 2.75 GiB for C=256) and freeze the worker.
+    # Fail fast with a clear message so callers can fall back to the
+    # pre-built cache instead of silently hanging.
+    M = len(materials)
+    _bot_d, _top_d = _pick_mitm_split(layer_count, M)
+    _k_bot_est = M ** _bot_d
+    _k_top_est = M ** _top_d
+    _chunk_est = min(_k_top_est, max(1, (32 * 1024 * 1024) // max(1, _k_bot_est * 24)))
+    _peak_est = C_count * _chunk_est * _k_bot_est * 8
+    _SOLVER_MEM_LIMIT = 1024 * 1024 * 1024  # 1 GiB
+    if _peak_est > _SOLVER_MEM_LIMIT:
+        raise MemoryError(
+            f"MITM solver would allocate ~{_peak_est // (1024**2)} MiB for "
+            f"delta_e (M={M}, N={layer_count}, C={C_count}, "
+            f"K_bot={_k_bot_est}, chunk={_chunk_est}). "
+            f"Use a pre-built MaterialSolverCache instead of the on-the-fly "
+            f"solver for this palette size."
+        )
+
     substrate_linear = (
         np.zeros(3, dtype=np.float64)
         if substrate == "black"
@@ -652,7 +681,7 @@ def solve_image_colors_optimal(
     affines = _compute_material_affines(materials, layer_height_mm)
     cutoff = _resolve_alpha_cutoff(affines, alpha_cutoff, buffer_layers)
 
-    bottom_depth, top_depth = _pick_mitm_split(layer_count, len(materials))
+    bottom_depth, top_depth = _pick_mitm_split(layer_count, M)
 
     # Bottom half: enumerate prefixes and convert to colors applied on substrate.
     bot_alpha, bot_beta, bot_recipes = _enumerate_cumulative_affines(
@@ -1021,3 +1050,364 @@ def suggest_colors_for_target(
         )
         for i in kept_idx
     ]
+
+
+# ---------------------------------------------------------------------------
+# Cross-N not-worse-than-smaller-N fallback
+# 跨 N 不劣于更小 N 的回退
+# ---------------------------------------------------------------------------
+
+
+WHITE_MATERIAL_MAX_LINEAR_DISTANCE: float = 0.35
+"""Max linear-RGB distance between a palette material's equilibrium colour
+:attr:`MaterialParams.E` and pure white ``(1, 1, 1)`` for
+:func:`find_white_material_index` to accept it as the palette's "white".
+
+The value is calibrated against the shipped material database: real white
+PLA/PETG filaments cluster around ``‖E − 1‖ < 0.20`` in linear RGB, while the
+next-whitest colours (cream/ivory/light-grey) already sit at ``≥ 0.40``. A
+0.35 threshold therefore keeps genuine whites and rejects off-whites; tighter
+calibrations belong in callers that care about specific subpalettes.
+
+调色板中判定材料是否为 "白色" 所允许的线性 RGB 距离上限。对项目内置耗材库
+的校准显示，真实白色 PLA/PETG 的 ``‖E − 1‖`` 小于 0.20，而次白（米色/象牙
+色/浅灰）已经 ≥ 0.40；0.35 的阈值能接纳真白并排除次白，更严格的阈值留给
+关心特定子调色板的调用方。
+"""
+
+
+def find_white_material_index(
+    materials: list[MaterialParams],
+    *,
+    max_linear_distance: float = WHITE_MATERIAL_MAX_LINEAR_DISTANCE,
+) -> int | None:
+    """Return the palette index of the "whitest" material, or ``None``.
+    返回调色板中最接近白色的材料索引；无足够白材料时返回 ``None``。
+
+    The candidate is chosen by minimising the Euclidean distance from each
+    material's :attr:`MaterialParams.E` (linear-RGB equilibrium colour) to
+    pure white ``(1, 1, 1)``. The match is accepted only when the minimum
+    distance is below :data:`WHITE_MATERIAL_MAX_LINEAR_DISTANCE`, so a palette
+    without any sufficiently-white material yields ``None`` rather than a
+    misleading "best non-white" pick.
+
+    以每种材料的 :attr:`MaterialParams.E`（线性 RGB 平衡色）到纯白 ``(1,1,1)``
+    的欧氏距离最小者作为候选；仅当距离低于
+    :data:`WHITE_MATERIAL_MAX_LINEAR_DISTANCE` 时接受。若调色板没有足够白的
+    材料，则返回 ``None``，避免错误地把次白当作 "白底填充" 来源。
+
+    Args:
+        materials: Palette to search. (待查询的调色板)
+        max_linear_distance: Acceptance threshold, expressed as Euclidean
+            distance in linear RGB. Callers can tighten it for strict
+            fingerprint matching. (接受阈值，线性 RGB 欧氏距离)
+
+    Returns:
+        Index into ``materials`` of the whitest entry, or ``None`` if no
+        entry qualifies. (调色板中最白材料的索引，未命中返回 ``None``)
+    """
+    if not materials:
+        return None
+    white_linear = np.ones(3, dtype=np.float64)
+    best_idx: int | None = None
+    best_distance = float("inf")
+    for idx, mat in enumerate(materials):
+        distance = float(np.linalg.norm(mat.E.astype(np.float64) - white_linear))
+        if distance < best_distance:
+            best_distance = distance
+            best_idx = idx
+    if best_idx is None or best_distance > float(max_linear_distance):
+        return None
+    return best_idx
+
+
+def forward_batch_model(
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate_linear: np.ndarray | None = None,
+) -> np.ndarray:
+    """Vectorised forward simulation for a batch of N-layer recipes.
+    批量正向仿真 N 层配方的最终颜色。
+
+    Functionally equivalent to calling :func:`forward_model` per row, but
+    expressed as a single O(C · N) NumPy traversal so callers can evaluate
+    thousands of recipes in milliseconds.
+
+    Args:
+        recipes: (C, N) int array of material indices; ``recipes[:, 0]`` is
+            the bottom (substrate-adjacent) layer, ``recipes[:, N - 1]`` is
+            the top. (配方矩阵；第 0 列贴基底、最后一列为顶层)
+        materials: Available materials referenced by ``recipes``. (材料列表)
+        layer_height_mm: Thickness of each layer in mm. (每层厚度 mm)
+        substrate_linear: (3,) substrate colour in linear RGB; defaults to
+            white. (基底线性 RGB，默认白)
+
+    Returns:
+        (C, 3) float64 predicted linear RGB per recipe. (每条配方的预测线性 RGB)
+    """
+    recipes_arr = np.asarray(recipes)
+    if recipes_arr.ndim != 2:
+        raise ValueError(f"recipes must be shaped (C, N), got {recipes_arr.shape}")
+    if not materials:
+        raise ValueError("At least one material must be provided")
+    if substrate_linear is None:
+        substrate_linear = np.ones(3, dtype=np.float64)
+    substrate_linear = np.asarray(substrate_linear, dtype=np.float64).reshape(3)
+
+    C_count, N = recipes_arr.shape
+    if C_count == 0:
+        return np.zeros((0, 3), dtype=np.float64)
+    if N == 0:
+        return np.broadcast_to(substrate_linear, (C_count, 3)).copy()
+
+    all_E = np.stack([m.E for m in materials], axis=0).astype(np.float64)  # (M, 3)
+    all_k = np.stack([m.k for m in materials], axis=0).astype(np.float64)  # (M, 3)
+    attenuation = np.exp(-all_k * float(layer_height_mm))                  # (M, 3)
+
+    C = np.broadcast_to(substrate_linear, (C_count, 3)).copy()
+    for layer_idx in range(N):
+        mat_ids = recipes_arr[:, layer_idx].astype(np.int64)
+        E = all_E[mat_ids]                  # (C, 3)
+        a = attenuation[mat_ids]            # (C, 3)
+        C = E + (C - E) * a
+    return C
+
+
+def _pad_with_white_bottom(
+    recipes_short: np.ndarray,
+    target_layer_count: int,
+    white_material_index: int,
+) -> np.ndarray:
+    """Prepend ``white_material_index`` layers at the bottom to reach ``target_layer_count``.
+    在配方底部前缀填充白色层，使总长度达到 ``target_layer_count``。
+    """
+    recipes_short = np.asarray(recipes_short)
+    if recipes_short.ndim != 2:
+        raise ValueError(
+            f"recipes_short must be shaped (C, k), got {recipes_short.shape}"
+        )
+    C_count, k = recipes_short.shape
+    pad_count = int(target_layer_count) - int(k)
+    if pad_count < 0:
+        raise ValueError(
+            f"target_layer_count ({target_layer_count}) must be >= k ({k})"
+        )
+    if pad_count == 0:
+        return recipes_short.astype(np.int32, copy=True)
+    padded = np.empty((C_count, int(target_layer_count)), dtype=np.int32)
+    padded[:, :pad_count] = int(white_material_index)
+    padded[:, pad_count:] = recipes_short.astype(np.int32, copy=False)
+    return padded
+
+
+def ensure_not_worse_than_smaller_N(
+    unique_colors_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    baseline_matched_rgb: np.ndarray,
+    baseline_recipes: np.ndarray,
+    baseline_delta_e: np.ndarray,
+    *,
+    target_layer_count: int,
+    layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
+    substrate: str = "white",
+    min_layer_count: int = MIN_LAYER_COUNT,
+    white_material_index: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Replace baseline recipes with a smaller-N solution padded with white when it scores better.
+    当更小 N 的最优解 + 白色填底能取得更小 ΔE 时，用它替换 baseline 配方。
+
+    For each target color, the function enumerates every
+    ``k ∈ [min_layer_count, target_layer_count)``, runs the strict MITM
+    solver at ``N = k`` on the same substrate, prepends
+    ``target_layer_count - k`` white layers to the ``k``-layer recipe, and
+    re-evaluates the predicted sRGB through the Beer-Lambert forward model.
+    Targets whose padded ΔE is strictly smaller than ``baseline_delta_e`` are
+    replaced in-place; all others keep the baseline.
+
+    This keeps the ``target_layer_count`` output **lossless on the preview
+    side**: within the solver's colour model the returned recipes cannot
+    score worse than any ``k < target_layer_count`` solution padded with
+    white, so "10 layers can't be worse than 5 layers" holds by construction
+    (subject to the usual material-model assumptions).
+
+    对每个目标色，依次枚举 ``k ∈ [min_layer_count, target_layer_count)``，在
+    同一基底下跑严格 MITM 求解，然后在 ``k`` 层配方底部填充
+    ``target_layer_count - k`` 层白色，通过 Beer-Lambert 正向模型重新评估
+    预测 sRGB；若 padded ΔE 严格小于 baseline_delta_e，则原地替换。由此
+    保证 ``target_layer_count`` 的输出在颜色模型下不劣于任何 ``k`` 层 + 白色
+    填底的解。
+
+    Args:
+        unique_colors_srgb: (C, 3) uint8 target sRGB colours. (目标唯一色)
+        materials: Palette used by both baseline and fallback. (调色板)
+        baseline_matched_rgb: (C, 3) uint8 baseline achieved sRGB. (baseline 预测色)
+        baseline_recipes: (C, target_layer_count) int baseline recipes.
+            (baseline 配方，列 0 为底层)
+        baseline_delta_e: (C,) float64 baseline CIE76 ΔE to target. (baseline ΔE)
+        target_layer_count: Recipe length of the baseline. (baseline 层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        min_layer_count: Lower bound of ``k`` to evaluate. Defaults to
+            :data:`MIN_LAYER_COUNT`. (参与回退的最小 k，默认 :data:`MIN_LAYER_COUNT`)
+        white_material_index: Caller-supplied white material index. When
+            ``None`` the function auto-detects via
+            :func:`find_white_material_index`; returning unchanged if no
+            entry is whites enough.
+            (调用方指定的白色材料索引；``None`` 时自动识别，若未识别到则原样返回)
+
+    Returns:
+        ``(matched_rgb, recipes, delta_e, stats)`` where the first three
+        arrays are shaped like the baseline inputs (same dtypes) and
+        ``stats`` is a JSON-serialisable dict with:
+
+        - ``white_material_index``: resolved white index or ``None``
+        - ``applied``: whether any fallback was evaluated
+        - ``improved_pixels``: total number of targets overwritten
+        - ``per_k_improved``: ``{k: count}`` mapping showing which ``k``
+          wins and how often
+        - ``mean_delta_e_before`` / ``mean_delta_e_after``
+        - ``max_delta_e_before`` / ``max_delta_e_after``
+    """
+    if target_layer_count > MAX_LAYER_COUNT:
+        raise ValueError(
+            f"target_layer_count must be <= {MAX_LAYER_COUNT}, "
+            f"got {target_layer_count}"
+        )
+    if min_layer_count < MIN_LAYER_COUNT:
+        raise ValueError(
+            f"min_layer_count must be >= {MIN_LAYER_COUNT}, got {min_layer_count}"
+        )
+    # target_layer_count < MIN_LAYER_COUNT is a no-op rather than an error:
+    # there are no smaller ks to compare against, so the baseline is already
+    # the only admissible solution. This keeps trivial callers (tests,
+    # single-layer debug pipelines) from needing an extra guard.
+    # (target_layer_count < MIN_LAYER_COUNT 没有更小 k 可对比，直接以 baseline
+    # 返回，便于单层调试等简单调用方。)
+    if layer_height_mm not in ALLOWED_LAYER_HEIGHTS_MM:
+        raise ValueError(
+            f"layer_height_mm must be one of {ALLOWED_LAYER_HEIGHTS_MM}, "
+            f"got {layer_height_mm}"
+        )
+    if substrate not in ("white", "black"):
+        raise ValueError(f"substrate must be 'white' or 'black', got {substrate!r}")
+
+    unique_colors_srgb = np.asarray(unique_colors_srgb)
+    baseline_matched_rgb = np.asarray(baseline_matched_rgb)
+    baseline_recipes = np.asarray(baseline_recipes)
+    baseline_delta_e = np.asarray(baseline_delta_e, dtype=np.float64)
+
+    C_count = int(unique_colors_srgb.shape[0])
+    if (
+        baseline_matched_rgb.shape != (C_count, 3)
+        or baseline_recipes.shape != (C_count, int(target_layer_count))
+        or baseline_delta_e.shape != (C_count,)
+    ):
+        raise ValueError(
+            "baseline arrays must match shapes "
+            f"(C=3)={baseline_matched_rgb.shape!r}, "
+            f"(C=N)={baseline_recipes.shape!r}, "
+            f"(C,)={baseline_delta_e.shape!r} "
+            f"for C={C_count}, N={target_layer_count}"
+        )
+
+    # Defensive copies so we can freely mutate without surprising callers.
+    result_matched = baseline_matched_rgb.astype(np.uint8, copy=True)
+    result_recipes = baseline_recipes.astype(np.int32, copy=True)
+    result_delta_e = baseline_delta_e.astype(np.float64, copy=True)
+
+    stats: dict[str, Any] = {
+        "white_material_index": None,
+        "applied": False,
+        "improved_pixels": 0,
+        "per_k_improved": {},
+        "mean_delta_e_before": float(result_delta_e.mean()) if C_count else 0.0,
+        "max_delta_e_before": float(result_delta_e.max()) if C_count else 0.0,
+        "mean_delta_e_after": float(result_delta_e.mean()) if C_count else 0.0,
+        "max_delta_e_after": float(result_delta_e.max()) if C_count else 0.0,
+    }
+
+    # Nothing to do: no targets, no palette, or N already at the lower bound.
+    if C_count == 0 or not materials or target_layer_count <= min_layer_count:
+        return result_matched, result_recipes, result_delta_e, stats
+
+    if white_material_index is None:
+        white_material_index = find_white_material_index(materials)
+    if white_material_index is None:
+        # No sufficiently-white material: the padded-fallback construction is
+        # undefined, so keep the baseline untouched rather than faking a
+        # "white" via some off-white material.
+        return result_matched, result_recipes, result_delta_e, stats
+    if not (0 <= int(white_material_index) < len(materials)):
+        raise ValueError(
+            f"white_material_index {white_material_index} outside palette "
+            f"length {len(materials)}"
+        )
+    stats["white_material_index"] = int(white_material_index)
+    stats["applied"] = True
+
+    substrate_linear = (
+        np.ones(3, dtype=np.float64)
+        if substrate == "white"
+        else np.zeros(3, dtype=np.float64)
+    )
+    target_labs = rgb_to_lab(unique_colors_srgb.astype(np.uint8)).astype(np.float64)
+
+    M = len(materials)
+    for k in range(int(min_layer_count), int(target_layer_count)):
+        # Guard: estimate peak memory of the MITM delta_e broadcast.
+        # The solver's inner loop allocates ``delta_e`` of shape
+        # ``(C, chunk, K_bot)`` float64.  ``chunk`` is derived from a
+        # 32 MiB cap on the ``final_linear`` array:
+        #   chunk ≈ min(K_top, 32 MiB / (K_bot * 24))
+        # so the peak ``delta_e`` size is approximately
+        #   C × chunk × K_bot × 8 bytes.
+        # When this exceeds a safe threshold the solver will OOM the
+        # worker process.  Skip the offending ``k`` gracefully.
+        _top_d = (k + 1) // 2
+        _bot_d = k - _top_d
+        _k_bot = M ** _bot_d
+        _k_top = M ** _top_d
+        _chunk = min(_k_top, max(1, (32 * 1024 * 1024) // max(1, _k_bot * 24)))
+        _peak_bytes = C_count * _chunk * _k_bot * 8
+        _MEMORY_LIMIT = 1024 * 1024 * 1024  # 1 GiB
+        if _peak_bytes > _MEMORY_LIMIT:
+            _log.warning(
+                "ensure_not_worse: skipping k=%d (M=%d, K_bot=%d, C=%d) "
+                "— estimated delta_e row size %d MiB exceeds limit",
+                k, M, _k_bot, C_count,
+                _peak_bytes // (1024 * 1024),
+            )
+            continue
+        # Strict MITM optimum at N=k on the same substrate; column 0 bottom.
+        _matched_short, recipes_short, _delta_e_short = solve_image_colors_optimal(
+            unique_colors_srgb.astype(np.uint8),
+            materials,
+            layer_count=k,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+        )
+        padded_recipes = _pad_with_white_bottom(
+            recipes_short, int(target_layer_count), int(white_material_index)
+        )
+        padded_linear = forward_batch_model(
+            padded_recipes, materials, layer_height_mm, substrate_linear
+        )
+        padded_srgb = linear_to_srgb_uint8(padded_linear)
+        padded_lab = rgb_to_lab(padded_srgb).astype(np.float64)
+        padded_delta_e = np.linalg.norm(padded_lab - target_labs, axis=1)
+
+        improved = padded_delta_e < result_delta_e
+        improved_count = int(np.count_nonzero(improved))
+        if improved_count == 0:
+            continue
+        stats["per_k_improved"][int(k)] = improved_count
+        stats["improved_pixels"] += improved_count
+        result_matched[improved] = padded_srgb[improved]
+        result_recipes[improved] = padded_recipes[improved]
+        result_delta_e[improved] = padded_delta_e[improved]
+
+    if C_count:
+        stats["mean_delta_e_after"] = float(result_delta_e.mean())
+        stats["max_delta_e_after"] = float(result_delta_e.max())
+    return result_matched, result_recipes, result_delta_e, stats

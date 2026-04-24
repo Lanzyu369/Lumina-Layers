@@ -307,6 +307,74 @@ describe('ColorPreview2D hover inspector', () => {
     expect(canvasCreateCount).toBe(initialCanvasCreateCount);
   });
 
+  it('suppresses SVG contour overlay and shows backend cyan image when selection came from a gradient region', async () => {
+    // Regression: picking a region button in the Gradient Groups panel
+    // previously left the frontend painting cyan outlines for *every*
+    // pixel of the selected hexes across the whole canvas (because
+    // ``colorContours`` is a whole-image structure), while simultaneously
+    // keeping the preview anchored to the plain base image. The exact
+    // cyan mask the backend produced (``previewImageUrl``) was never shown.
+    // Users saw "the whole body lit cyan" instead of just the region.
+    // This test pins both halves of the fix: region-scoped selection
+    // (1) loads ``previewImageUrl`` instead of ``previewBaseImageUrl``
+    // (2) renders no contour polygons (the mask is already baked into
+    //     the backend image).
+    // 回归：点击区域按钮时前端原本用全图 colorContours 绘制 cyan 轮廓，
+    // 同时预览仍指向干净的 previewBaseImageUrl，后端精确 mask 图反而没
+    // 被显示——于是"区域选中"看起来全身都亮。本测试锁定修复的两半：
+    // 区域来源时应显示 previewImageUrl 并跳过 contour 绘制。
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/base.png',
+      previewImageUrl: '/cyan-region.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      selectedColor: null,
+      selectedColors: new Set(['aabbcc', 'ddeeff']),
+      colorContours: {
+        aabbcc: [
+          [
+            [0, 0],
+            [20, 0],
+            [20, 20],
+          ],
+        ],
+        ddeeff: [
+          [
+            [30, 30],
+            [50, 30],
+            [50, 50],
+          ],
+        ],
+      },
+      gradientSelection: { kind: 'region', groupIndex: 3, regionIndex: 1 },
+      preview_width_mm: 100,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    const { container } = render(<ColorPreview2D />);
+    const surface = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(surface);
+
+    flushPendingImages('/cyan-region.png');
+
+    // (1) Preloader must have requested the backend's precise cyan image,
+    // not the stable base preview.
+    const loadedSrcs = TestImage.instances.map((image) => image.src);
+    expect(loadedSrcs).toContain('/cyan-region.png');
+
+    // (2) No SVG contour polygons may be rendered: the cyan mask is
+    // already baked into the loaded image, and ``colorContours`` would
+    // otherwise outline pixels that are outside of the region.
+    expect(container.querySelector('polygon')).toBeNull();
+  });
+
   it('keeps SVG contour overlays aligned on top of the shared canvas preview surface', async () => {
     useConverterStore.setState({
       ...DEFAULT_STATE,

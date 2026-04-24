@@ -118,6 +118,7 @@ def _apply_material_archive_color_replacements(
     layer_count: int,
     layer_height_mm: float,
     substrate: str,
+    grid_resolution: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Apply ``{orig_hex: repl_hex}`` replacements using the material solver.
     使用耗材求解器在材料档案模式下应用 ``{orig_hex: repl_hex}`` 全局替换。
@@ -188,8 +189,14 @@ def _apply_material_archive_color_replacements(
     # to the strict MITM solver otherwise.
     # 优先走持久化缓存；无缓存时退回严格 MITM 求解器。
     try:
-        from core.material_cache import load_material_solver_cache
-        from core.material_lut_synthesis import solve_image_colors_optimal
+        from core.material_cache import (
+            DEFAULT_GRID_RESOLUTION,
+            load_material_solver_cache_with_fallback,
+        )
+        from core.material_lut_synthesis import (
+            ensure_not_worse_than_smaller_N,
+            solve_image_colors_optimal,
+        )
     except ImportError as exc:
         _log.warning(
             "[S03-Material] Solver modules unavailable (%s); replacements skipped",
@@ -197,11 +204,13 @@ def _apply_material_archive_color_replacements(
         )
         return matched_rgb, material_matrix, 0
 
-    cache = load_material_solver_cache(
+    effective_grid = int(grid_resolution or DEFAULT_GRID_RESOLUTION)
+    cache, _actual_grid = load_material_solver_cache_with_fallback(
         materials=materials,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
+        grid_resolution=effective_grid,
     )
     try:
         if cache is not None:
@@ -224,6 +233,41 @@ def _apply_material_archive_color_replacements(
             exc, len(jobs),
         )
         return matched_rgb, material_matrix, 0
+
+    # Enforce "N-layer recipe not worse than any k<N + white padding" on the
+    # replacement solves, mirroring the P03 guarantee. Failure here must not
+    # block replacements; on exception we keep the baseline recipes and log.
+    # (按 P03 的方式，对替换求解结果施加跨 N 不劣保证；若 fallback 失败
+    # 则保留基线 recipe 并记录日志，确保替换流程不被中断。)
+    try:
+        matched_rgb_unique, recipes_unique, delta_e, fallback_stats = (
+            ensure_not_worse_than_smaller_N(
+                unique_repl_srgb,
+                materials,
+                matched_rgb_unique,
+                recipes_unique,
+                delta_e,
+                target_layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+            )
+        )
+        if fallback_stats["applied"] and fallback_stats["improved_pixels"] > 0:
+            _log.info(
+                "[S03-Material] Not-worse fallback replaced %d/%d replacement "
+                "colours (mean ΔE %.2f→%.2f, max ΔE %.2f→%.2f)",
+                fallback_stats["improved_pixels"],
+                int(unique_repl_srgb.shape[0]),
+                fallback_stats["mean_delta_e_before"],
+                fallback_stats["mean_delta_e_after"],
+                fallback_stats["max_delta_e_before"],
+                fallback_stats["max_delta_e_after"],
+            )
+    except (ValueError, TypeError, RuntimeError) as exc:
+        _log.warning(
+            "[S03-Material] Not-worse fallback failed (%s); keeping baseline recipes",
+            exc,
+        )
 
     # Solver output is Bottom2Top; the pipeline stores Top2Bottom. Mirror the
     # same reversal used by P03 (see core/pipeline/p03_core_processing.py) so
@@ -610,6 +654,7 @@ def run(ctx: dict) -> dict:
         layer_count_mat = int(ctx.get("color_layers") or material_matrix.shape[2])
         layer_height_mat = float(ctx.get("layer_height_mm") or 0.08)
         substrate_mat = str(ctx.get("material_substrate") or "white")
+        grid_res = ctx.get("grid_resolution")
         matched_rgb, material_matrix, applied = _apply_material_archive_color_replacements(
             matched_rgb,
             material_matrix,
@@ -619,6 +664,7 @@ def run(ctx: dict) -> dict:
             layer_count_mat,
             layer_height_mat,
             substrate_mat,
+            grid_resolution=grid_res,
         )
         _log.info("[S03] Applied %d material-archive color replacements", applied)
     elif effective_color_replacements:

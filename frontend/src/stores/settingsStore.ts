@@ -6,6 +6,18 @@ import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
 
 // ========== State Interface ==========
 
+/**
+ * User-facing grid-resolution tiers for the material-solver exhaustive
+ * cache. The numeric value equals the Lab bucket count per axis and must
+ * stay in sync with ``ALLOWED_GRID_RESOLUTIONS`` on the backend.
+ * 穷举数量的三档用户选项；数值等于 Lab 网格每轴桶数，必须与后端
+ * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。
+ */
+export type SolverCacheGridResolution = 64 | 128 | 256;
+
+export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
+  [64, 128, 256] as const;
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -23,6 +35,28 @@ export interface SettingsState {
   slicerSoftware: string;
   nozzleSize: "0.2" | "0.4";
   enableBaseLayerHeightModifier: boolean;
+  /**
+   * When ``false`` (default) the exhaustive-cache dialog hides its
+   * density selector and builds always use the low-tier default on the
+   * backend. Flipping to ``true`` reveals the dropdown, but does *not*
+   * change the current value of ``solverCacheGridResolution``.
+   */
+  enableSolverCacheGridSelection: boolean;
+  /**
+   * Currently-selected grid resolution. Only consumed by the build flow
+   * when ``enableSolverCacheGridSelection`` is true; otherwise callers
+   * must fall through to the backend default (64).
+   */
+  solverCacheGridResolution: SolverCacheGridResolution;
+  /**
+   * Advanced: when true, successful previews automatically collapse every
+   * gradient-banding group to its representative colour (the material with
+   * the highest pixel count). Off by default so first-time users see the
+   * raw banded preview and opt into the fix from the color workstation.
+   * 高级设置：开启后，每次预览成功会自动把每个渐变海带纹分组统一替换为组
+   * 内代表色（像素最多的那一个），一键去掉海带纹；默认关闭。
+   */
+  autoReplaceGradientBanding: boolean;
 }
 
 // ========== Actions Interface ==========
@@ -44,6 +78,9 @@ export interface SettingsActions {
   setSlicerSoftware: (id: string) => void;
   setNozzleSize: (size: "0.2" | "0.4") => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
+  setEnableSolverCacheGridSelection: (enabled: boolean) => void;
+  setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
+  setAutoReplaceGradientBanding: (enabled: boolean) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -67,6 +104,12 @@ export const DEFAULT_SETTINGS: SettingsState = {
   slicerSoftware: "BambuStudio",
   nozzleSize: "0.4",
   enableBaseLayerHeightModifier: true,
+  // Opt-in feature: the density dropdown is hidden by default so the
+  // exhaustive-cache dialog stays focused for first-time users. When the
+  // toggle is off, builds silently use the low (64) default on the backend.
+  enableSolverCacheGridSelection: false,
+  solverCacheGridResolution: 64,
+  autoReplaceGradientBanding: false,
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
@@ -167,20 +210,22 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableBlur: (enabled: boolean) => set({ enableBlur: enabled }),
 
-      setEnableFancyLoading: (enabled: boolean) => set({ enableFancyLoading: enabled }),
+      setEnableFancyLoading: (enabled: boolean) =>
+        set({ enableFancyLoading: enabled }),
 
-      setEnableWittyLoading: (enabled: boolean) => set({ enableWittyLoading: enabled }),
+      setEnableWittyLoading: (enabled: boolean) =>
+        set({ enableWittyLoading: enabled }),
 
       setPaletteMode: (mode: "swatch" | "card") => set({ paletteMode: mode }),
 
       setPrinterModel: (id: string) => {
         set({ printerModel: id });
         invalidateGeneratedArtifacts();
-        
+
         // 延迟导入避免循环依赖
         import("./converter").then(({ useConverterStore }) => {
           const { bedSizes, setBedLabel } = useConverterStore.getState();
-          const printerBed = bedSizes.find(bed => bed.printer_id === id);
+          const printerBed = bedSizes.find((bed) => bed.printer_id === id);
           if (printerBed) {
             setBedLabel(printerBed.label);
           }
@@ -201,6 +246,23 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         set({ enableBaseLayerHeightModifier: enabled });
         invalidateGeneratedArtifacts();
       },
+
+      setEnableSolverCacheGridSelection: (enabled: boolean) =>
+        set({ enableSolverCacheGridSelection: enabled }),
+
+      setSolverCacheGridResolution: (value: SolverCacheGridResolution) => {
+        if (!SOLVER_CACHE_GRID_RESOLUTIONS.includes(value)) {
+          // Defensive guard: callers should only pass whitelisted values,
+          // but a stale persisted snapshot or an external caller could
+          // still slip through; treat unknown inputs as a no-op rather
+          // than corrupting the store.
+          return;
+        }
+        set({ solverCacheGridResolution: value });
+      },
+
+      setAutoReplaceGradientBanding: (enabled: boolean) =>
+        set({ autoReplaceGradientBanding: enabled }),
 
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();
@@ -249,6 +311,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     }),
     {
       name: "lumina-settings",
-    }
-  )
+    },
+  ),
 );

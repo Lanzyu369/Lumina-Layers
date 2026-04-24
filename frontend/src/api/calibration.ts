@@ -13,7 +13,7 @@ export async function calibrationGenerate(
   const response = await apiClient.post<CalibrationResponse>(
     "/calibration/generate",
     request,
-    { timeout: 30 * 60_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -25,7 +25,7 @@ export async function generateSingleStageKit(
   const response = await apiClient.post<SingleStageKitResponse>(
     "/calibration/generate-single-stage-kit",
     request,
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }

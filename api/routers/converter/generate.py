@@ -552,6 +552,14 @@ async def convert_generate(
         params["selected_materials"] = session_data.get("selected_materials") or []
         params["material_layer_count"] = session_data.get("material_layer_count")
         params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
+        # Plumb the opt-in exhaustive-cache grid_resolution from preview time
+        # so the 3MF generation path hits the same cache file the user built
+        # in the dialog. ``None`` keeps the backend's low-tier default.
+        # 把预览阶段确定的穷举缓存网格分辨率透传过来，让 3MF 生成命中用户
+        # 在弹窗里实际构建的那份缓存文件。``None`` 表示走低档默认。
+        params["material_grid_resolution"] = session_data.get(
+            "material_grid_resolution"
+        )
 
     # 3. CPU computation offloaded to process pool (only paths and scalars)
     worker_t0 = time.perf_counter()

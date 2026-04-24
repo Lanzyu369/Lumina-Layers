@@ -14,6 +14,7 @@ import time
 import logging
 
 from config import ModelingMode, ColorSystem
+from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
 from core.material_lut_synthesis import (
     build_material_preview_colors,
     build_material_slot_names,
@@ -103,11 +104,30 @@ def run(ctx: dict) -> dict:
         ctx["layer_height_mm"] = material_layer_height
         ctx["_material_params"] = materials
         ctx["material_source"] = "material_archive"
+        # Normalise opt-in exhaustive-cache grid_resolution.
+        requested_grid = ctx.get("material_grid_resolution")
+        if requested_grid is None:
+            resolved_grid = int(DEFAULT_GRID_RESOLUTION)
+        else:
+            try:
+                requested_grid_int = int(requested_grid)
+            except (TypeError, ValueError):
+                requested_grid_int = None
+            if requested_grid_int in ALLOWED_GRID_RESOLUTIONS:
+                resolved_grid = requested_grid_int
+            else:
+                _log.warning(
+                    "[P01] material_archive mode: ignoring unsupported "
+                    "material_grid_resolution=%r, falling back to default=%d",
+                    requested_grid, int(DEFAULT_GRID_RESOLUTION),
+                )
+                resolved_grid = int(DEFAULT_GRID_RESOLUTION)
+        ctx["grid_resolution"] = resolved_grid
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
         _log.info(
-            "[P01] material_archive mode: %d materials, %d layers, %.2f mm/layer",
-            len(materials), material_layer_count, material_layer_height,
+            "[P01] material_archive mode: %d materials, %d layers, %.2f mm/layer, grid=%d",
+            len(materials), material_layer_count, material_layer_height, resolved_grid,
         )
         return ctx
 

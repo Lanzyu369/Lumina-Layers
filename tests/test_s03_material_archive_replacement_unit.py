@@ -283,3 +283,111 @@ class TestS03RunMaterialArchiveBranch:
         ) as mock_apply:
             run(ctx)
         mock_apply.assert_not_called()
+
+
+class TestS03NotWorseFallbackWiring:
+    """S03 must invoke the cross-N not-worse fallback on the baseline solve,
+    and must degrade gracefully when the fallback itself raises.
+    S03 必须在基线求解之后调用跨 N 不劣回退；回退自身抛错时必须安全降级。
+    """
+
+    def test_fallback_is_called_after_cache_lookup(self):
+        matched = np.full((2, 2, 3), [200, 100, 50], dtype=np.uint8)
+        mat = np.zeros((2, 2, 5), dtype=np.int32)
+        mask = np.ones((2, 2), dtype=bool)
+
+        class _StubCache:
+            def lookup(self, unique_srgb, user_materials):
+                n = unique_srgb.shape[0]
+                return (
+                    np.full((n, 3), [10, 200, 20], dtype=np.uint8),
+                    np.zeros((n, 5), dtype=np.int32),
+                    np.full(n, 2.0, dtype=np.float32),
+                )
+
+        fallback_calls: list[dict] = []
+
+        def _mock_fallback(
+            targets, materials, matched_rgb_unique, recipes_unique, delta_e,
+            **kwargs,
+        ):
+            fallback_calls.append({
+                "target_layer_count": kwargs["target_layer_count"],
+                "substrate": kwargs["substrate"],
+                "targets_shape": targets.shape,
+            })
+            return matched_rgb_unique, recipes_unique, delta_e, {
+                "white_material_index": 2,
+                "applied": True,
+                "improved_pixels": 0,
+                "per_k_improved": {},
+                "mean_delta_e_before": 2.0,
+                "max_delta_e_before": 2.0,
+                "mean_delta_e_after": 2.0,
+                "max_delta_e_after": 2.0,
+            }
+
+        with patch(
+            "core.material_cache.load_material_solver_cache",
+            return_value=_StubCache(),
+        ), patch(
+            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+            side_effect=_mock_fallback,
+        ):
+            out_rgb, out_mat, applied = _apply_material_archive_color_replacements(
+                matched, mat, mask, {"#c86432": "#14c814"},
+                _SMALL_PALETTE, 5, 0.08, "white",
+            )
+
+        assert applied == 1
+        assert len(fallback_calls) == 1
+        assert fallback_calls[0]["target_layer_count"] == 5
+        assert fallback_calls[0]["substrate"] == "white"
+        # Exactly one unique replacement target (#14c814) was solved.
+        assert fallback_calls[0]["targets_shape"] == (1, 3)
+
+    def test_fallback_exception_keeps_baseline(self, caplog):
+        """If the fallback helper raises, S03 must log a warning and keep
+        the baseline recipe/achieved color from the solver unchanged."""
+        import logging
+
+        matched = np.full((2, 2, 3), [200, 100, 50], dtype=np.uint8)
+        mat = np.zeros((2, 2, 5), dtype=np.int32)
+        mask = np.ones((2, 2), dtype=bool)
+
+        class _StubCache:
+            def lookup(self, unique_srgb, user_materials):
+                n = unique_srgb.shape[0]
+                return (
+                    np.full((n, 3), [10, 200, 20], dtype=np.uint8),
+                    # A recognisable non-zero recipe so we can verify it survives.
+                    np.full((n, 5), 1, dtype=np.int32),
+                    np.full(n, 1.2, dtype=np.float32),
+                )
+
+        with patch(
+            "core.material_cache.load_material_solver_cache",
+            return_value=_StubCache(),
+        ), patch(
+            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+            side_effect=RuntimeError("synthetic fallback failure"),
+        ), caplog.at_level(logging.WARNING, logger="core.pipeline.s03_color_replacement"):
+            out_rgb, out_mat, applied = _apply_material_archive_color_replacements(
+                matched, mat, mask, {"#c86432": "#14c814"},
+                _SMALL_PALETTE, 5, 0.08, "white",
+            )
+
+        assert applied == 1
+        # Baseline achieved color still reached every matching pixel.
+        assert np.all(out_rgb[:, 1:] == np.asarray([10, 200, 20], dtype=np.uint8))
+        # Baseline recipe (all 1s) reached the matrix, reversed Top2Bottom
+        # (reversing a constant vector is a no-op).
+        assert np.all(out_mat[:, 1:] == 1)
+        # A warning mentioning the fallback failure was recorded.
+        failure_warnings = [
+            r for r in caplog.records
+            if "Not-worse fallback failed" in r.getMessage()
+        ]
+        assert failure_warnings, (
+            "Expected a warning entry when the not-worse fallback raises"
+        )

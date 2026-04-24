@@ -32,6 +32,11 @@ from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import BedManager, PrinterConfig, TEMP_DIR
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
+from core.gradient_group_analyzer import (
+    GradientGroupAnalysisParams,
+    analyze_gradient_groups_with_region_id_map,
+    gradient_groups_to_json,
+)
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
@@ -64,6 +69,72 @@ def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str
             return source_basename
     fallback_basename = os.path.splitext(os.path.basename(temp_path))[0]
     return normalize_large_format_source_basename(fallback_basename) or fallback_basename
+
+
+def _compute_and_store_gradient_groups(
+    cache_data: dict | None,
+    session_id: str,
+    store: SessionStore,
+) -> None:
+    """Analyse preview cache for gradient-banding groups and cache the result.
+    分析预览缓存中的渐变海带纹分组，并将结果写入 session。
+
+    Runs synchronously after the preview worker returns. The analyser is
+    pure NumPy / OpenCV and typically finishes within 1-2s even on 2k x 3k
+    images. Failures are non-fatal — we log a warning and leave the session
+    without gradient-group metadata so the UI can degrade gracefully.
+    """
+    if cache_data is None:
+        return
+    matched_rgb = cache_data.get("matched_rgb")
+    quantized_image = cache_data.get("quantized_image")
+    mask_solid = cache_data.get("mask_solid")
+    if matched_rgb is None or quantized_image is None or mask_solid is None:
+        log.debug(
+            "Skipping gradient-group analysis: preview cache is missing inputs",
+            extra={"event": "gradient_groups_skipped_missing_inputs"},
+        )
+        return
+    _t = time.perf_counter()
+    try:
+        analysis = analyze_gradient_groups_with_region_id_map(
+            matched_rgb=np.asarray(matched_rgb, dtype=np.uint8),
+            quantized_rgb=np.asarray(quantized_image, dtype=np.uint8),
+            mask_solid=np.asarray(mask_solid, dtype=bool),
+            params=GradientGroupAnalysisParams(),
+        )
+    except (ValueError, RuntimeError) as exc:
+        log.warning(
+            "Gradient-group analysis failed",
+            extra={
+                "event": "gradient_groups_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return
+    payload = gradient_groups_to_json(analysis.groups)
+    store.put(session_id, "gradient_groups", payload)
+    # Cache the per-pixel region_id_map so the color-highlight endpoint can
+    # clip overlays to the *exact* pixel mask of a selected sub-region. This
+    # replaces the previous bounding-box approximation, which bled into same-
+    # colour pixels outside the region's true connected component.
+    # 缓存每像素 (group, region) 编码图，让 color-highlight 端点能按精确
+    # 像素 mask 裁剪预览，解决子区域高亮点亮整组像素的问题。
+    store.put(
+        session_id,
+        "gradient_region_id_map",
+        np.ascontiguousarray(analysis.region_id_map, dtype=np.uint32),
+    )
+    log.info(
+        "Gradient groups computed",
+        extra={
+            "event": "gradient_groups_computed",
+            "duration_ms": round((time.perf_counter() - _t) * 1000, 3),
+            "group_count": len(payload),
+            "total_regions": sum(len(g.get("regions", [])) for g in payload),
+        },
+    )
 
 
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
@@ -322,6 +393,15 @@ async def convert_preview(
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
     material_layer_count: int | None = Form(None, description="耗材模式叠色层数 (5-10)"),
     material_layer_height_mm: float | None = Form(None, description="耗材模式层高 (mm)"),
+    material_grid_resolution: int | None = Form(
+        None,
+        description=(
+            "Opt-in exhaustive-cache Lab grid resolution (64/128/256); "
+            "forwarded to the solver cache lookup. ``None`` uses the backend "
+            "default so low-tier caches keep working unchanged. "
+            "穷举缓存 Lab 网格分辨率，None 时走后端默认。"
+        ),
+    ),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -449,6 +529,7 @@ async def convert_preview(
             _selected_mats,
             material_layer_count,
             material_layer_height_mm,
+            material_grid_resolution,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True
@@ -500,6 +581,12 @@ async def convert_preview(
     session_id = store.create()
     bind_session_id(session_id)
     store.put(session_id, "preview_cache", cache_data)
+    # Synchronously compute gradient-banding groups so the Color Workstation
+    # can surface them (group-level multi-select + optional auto-replace)
+    # without a second round-trip. Best-effort: failures are logged and do
+    # not block the preview response.
+    # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
+    _compute_and_store_gradient_groups(cache_data, session_id, store)
     store.put(session_id, "image_path", temp_path)
     source_basename = _resolve_upload_source_basename(image.filename, temp_path)
     store.put(session_id, "source_basename", source_basename)
@@ -521,6 +608,11 @@ async def convert_preview(
         store.put(session_id, "selected_materials", _selected_mats or [])
         store.put(session_id, "material_layer_count", material_layer_count)
         store.put(session_id, "material_layer_height_mm", material_layer_height_mm)
+        store.put(
+            session_id,
+            "material_grid_resolution",
+            material_grid_resolution,
+        )
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())

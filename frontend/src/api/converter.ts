@@ -18,6 +18,7 @@ import type {
   BatchResponse,
   ColorReplaceResponse,
   ColorHighlightResponse,
+  GradientGroupsResponse,
   RegionDetectResponse,
   RegionReplaceResponse,
   RecipePredictRequest,
@@ -93,7 +94,7 @@ export async function convertPuzzleLayoutPreview(
   const response = await apiClient.post<PuzzleLayoutPreviewResponse>(
     "/convert/puzzle-layout-preview",
     { session_id: sessionId, params },
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -114,7 +115,7 @@ export async function convertGeneratePuzzle(
 /** 获取可用 LUT 列表 */
 export async function fetchLutList(): Promise<LutListResponse> {
   const response = await apiClient.get<LutListResponse>("/lut/list", {
-    timeout: 5_000,
+    timeout: 3_600_000,
   });
   return response.data;
 }
@@ -129,7 +130,7 @@ export async function uploadLut(
     status: string;
     message: string;
     name: string;
-  }>("/lut/upload", fd, { timeout: 30_000 });
+  }>("/lut/upload", fd, { timeout: 3_600_000 });
   return response.data;
 }
 
@@ -177,7 +178,7 @@ export async function fetchLutColors(
 ): Promise<LutColorsResponse> {
   const response = await apiClient.get<LutColorsResponse>(
     `/lut/${encodeURIComponent(lutName)}/colors`,
-    { timeout: 10_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -243,7 +244,7 @@ export async function replaceColor(
       selected_color: selectedColor,
       replacement_color: replacementColor,
     },
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -266,20 +267,59 @@ export async function fetchLayerImages(
 ): Promise<LayerImagesResponse> {
   const response = await apiClient.get<LayerImagesResponse>(
     `/convert/layer-images/${sessionId}`,
-    { timeout: 15_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
 
-/** 高亮指定颜色的所有像素 */
+/** Optional scope arguments for ``colorHighlight``.
+ * colorHighlight 的可选裁剪参数。
+ *
+ * Prefer ``gradientGroupIndex + gradientRegionIndex`` to restrict the
+ * highlight to the exact pixel mask of a single gradient sub-region — this
+ * is the correct fix for "clicking a sub-region lights up the whole group"
+ * because it consults the cached per-pixel region_id_map on the backend
+ * instead of an imprecise bounding rectangle.
+ * ``regionBbox`` remains as a legacy fallback for clients that cannot yet
+ * supply region identifiers; its accuracy is limited to the region's
+ * external rectangle and should be avoided for gradient-region flows.
+ */
+export interface ColorHighlightScope {
+  gradientGroupIndex?: number;
+  gradientRegionIndex?: number;
+  regionBbox?: [number, number, number, number];
+}
+
+/**
+ * 高亮指定颜色的所有像素。
+ *
+ * - 若传入 ``gradientGroupIndex + gradientRegionIndex``，后端使用预览生成
+ *   时缓存的每像素 region 编码图精确裁剪，只点亮该子区域的像素。
+ * - 否则若传入 ``regionBbox``，按矩形 bbox 回退裁剪。
+ * - 两者都未传时，点亮整张预览上所有匹配像素。
+ */
 export async function colorHighlight(
   sessionId: string,
   colorHexes: string[],
+  scope?: ColorHighlightScope,
 ): Promise<ColorHighlightResponse> {
+  const body: Record<string, unknown> = {
+    session_id: sessionId,
+    color_hexes: colorHexes,
+  };
+  if (
+    scope?.gradientGroupIndex !== undefined &&
+    scope?.gradientRegionIndex !== undefined
+  ) {
+    body.gradient_group_index = scope.gradientGroupIndex;
+    body.gradient_region_index = scope.gradientRegionIndex;
+  } else if (scope?.regionBbox) {
+    body.region_bbox = scope.regionBbox;
+  }
   const response = await apiClient.post<ColorHighlightResponse>(
     "/convert/color-highlight",
-    { session_id: sessionId, color_hexes: colorHexes },
-    { timeout: 15_000 },
+    body,
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -293,20 +333,50 @@ export async function detectRegion(
   const response = await apiClient.post<RegionDetectResponse>(
     "/convert/region-detect",
     { session_id: sessionId, x, y },
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
+}
+
+/**
+ * Scope object for :func:`regionReplace` identifying *which* spatial region
+ * should be edited. Leave undefined to consume the one-shot mask that
+ * :func:`regionDetect` stashed in the session. Provide a
+ * :obj:`GradientRegionReplaceScope` to rebuild the mask on the server from
+ * the cached per-pixel ``gradient_region_id_map`` — the only way to scope
+ * the edit to a single banded sub-region when several disjoint regions
+ * share the same quantised hex.
+ * :func:`regionReplace` 的区域来源：不传 = 用 click-detected 的一次性
+ * mask（legacy）；传 GradientRegionReplaceScope = 服务端从 region_id_map
+ * 现场生成 mask。仅传 ``gradientGroupIndex`` = 整组 mask（去海带纹）；
+ * 同时传 ``gradientRegionIndex`` = 单子区域 mask。
+ */
+export interface GradientRegionReplaceScope {
+  gradientGroupIndex: number;
+  /** 不传时 mask 覆盖整个 group（去海带纹） */
+  gradientRegionIndex?: number;
 }
 
 /** 替换已选中连通区域的颜色 */
 export async function regionReplace(
   sessionId: string,
   replacementColor: string,
+  scope?: GradientRegionReplaceScope,
 ): Promise<RegionReplaceResponse> {
+  const body: Record<string, unknown> = {
+    session_id: sessionId,
+    replacement_color: replacementColor,
+  };
+  if (scope) {
+    body.gradient_group_index = scope.gradientGroupIndex;
+    if (scope.gradientRegionIndex !== undefined) {
+      body.gradient_region_index = scope.gradientRegionIndex;
+    }
+  }
   const response = await apiClient.post<RegionReplaceResponse>(
     "/convert/region-replace",
-    { session_id: sessionId, replacement_color: replacementColor },
-    { timeout: 30_000 },
+    body,
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -324,7 +394,7 @@ export async function predictCustomRecipe(
       color_layers: request.color_layers,
       layer_height_mm: request.layer_height_mm,
     },
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -336,7 +406,7 @@ export async function applyRecipeOverride(
   const response = await apiClient.post<RecipeOverrideApplyResponse>(
     "/convert/apply-recipe-override",
     request,
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -360,7 +430,7 @@ export async function fetchRegionRecipe(
   const response = await apiClient.post<RegionRecipeResponse>(
     "/convert/region-recipe",
     request,
-    { timeout: 15_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -372,7 +442,7 @@ export async function predictRecipe(
   const response = await apiClient.post<RecipePredictResponse>(
     "/convert/predict-recipe",
     payload,
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -392,7 +462,7 @@ export async function resetReplacements(
   const response = await apiClient.post<ResetReplacementsResponse>(
     "/convert/reset-replacements",
     { session_id: sessionId },
-    { timeout: 15_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -442,7 +512,19 @@ export async function autoDetectColors(
   const response = await apiClient.post<AutoDetectColorsResponse>(
     "/convert/auto-detect-colors",
     fd,
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** 读取 session 预览完成后缓存的"渐变海带纹分组"分析。 */
+export async function fetchGradientGroups(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<GradientGroupsResponse> {
+  const response = await apiClient.get<GradientGroupsResponse>(
+    `/convert/gradient-groups/${sessionId}`,
+    { timeout: 30_000, signal },
   );
   return response.data;
 }

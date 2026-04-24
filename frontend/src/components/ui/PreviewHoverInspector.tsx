@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react"
 import { useI18n } from "../../i18n/context"
 import type { HoverLayerColorSample } from "./previewHoverInspectorUtils"
 import { MAGNIFIER_SIZE_PX } from "./previewHoverInspectorUtils"
@@ -5,7 +6,7 @@ import { getHoverInspectorLayout } from "./previewHoverInspectorUtils"
 
 interface PreviewHoverInspectorProps {
   dataTestId: string
-  style: { left: string; top: string }
+  style: CSSProperties
   magnifierCanvasRef: React.RefObject<HTMLCanvasElement | null>
   pixelX: number
   pixelY: number

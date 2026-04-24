@@ -15,11 +15,9 @@ import type {
 } from "./types";
 
 /** 获取指定 LUT 的颜色模式和颜色数量 */
-export async function fetchLutInfo(
-  lutName: string
-): Promise<LutInfoResponse> {
+export async function fetchLutInfo(lutName: string): Promise<LutInfoResponse> {
   const response = await apiClient.get<LutInfoResponse>(
-    `/lut/${encodeURIComponent(lutName)}/info`
+    `/lut/${encodeURIComponent(lutName)}/info`,
   );
   return response.data;
 }
@@ -40,25 +38,21 @@ export async function fetchSessionLutInfo(
 }
 
 /** 执行 LUT 合并操作 */
-export async function mergeLuts(
-  request: MergeRequest
-): Promise<MergeResponse> {
-  const response = await apiClient.post<MergeResponse>(
-    "/lut/merge",
-    request,
-    { timeout: 600_000 }
-  );
+export async function mergeLuts(request: MergeRequest): Promise<MergeResponse> {
+  const response = await apiClient.post<MergeResponse>("/lut/merge", request, {
+    timeout: 3_600_000,
+  });
   return response.data;
 }
 
 /** Compare two LUTs by shared recipe */
 export async function compareLuts(
-  request: CompareRequest
+  request: CompareRequest,
 ): Promise<CompareResponse> {
   const response = await apiClient.post<CompareResponse>(
     "/lut/compare",
     request,
-    { timeout: 600_000 }
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -91,7 +85,7 @@ export async function predictRecipeColor(
   const response = await apiClient.post<RecipeColorPredictResponse>(
     `/lut/${encodeURIComponent(lutName)}/predict-recipe-color`,
     request,
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -104,7 +98,7 @@ export async function searchRecipes(
   const response = await apiClient.post<RecipeSearchResponse>(
     `/lut/${encodeURIComponent(lutName)}/search-recipes`,
     request,
-    { timeout: 120_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }

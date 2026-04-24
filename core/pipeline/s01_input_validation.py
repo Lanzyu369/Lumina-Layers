@@ -15,6 +15,7 @@ import time
 import logging
 
 from config import ColorSystem, ModelingMode
+from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
 from core.material_lut_synthesis import (
     build_material_preview_colors,
     build_material_slot_names,
@@ -102,9 +103,38 @@ def run(ctx: dict) -> dict:
         ctx["layer_height_mm"] = material_layer_height
         ctx["_material_params"] = materials
         ctx["material_source"] = "material_archive"
+        # Normalise the opt-in exhaustive-cache grid_resolution onto the ctx.
+        # ``None`` / unknown values collapse to the backend default so legacy
+        # callers (who never opted in) keep the current behaviour. Non-default
+        # values outside the whitelist fall back to the default with a warning
+        # to avoid wasting the preview/generate pass on an unbuildable grid.
+        # 将选入式穷举缓存网格分辨率规整进 ctx：None 或未知值回落到默认；
+        # 非白名单值同样回落并打印告警，避免用不能构建的分辨率跑整条流程。
+        requested_grid = ctx.get("material_grid_resolution")
+        if requested_grid is None:
+            resolved_grid = int(DEFAULT_GRID_RESOLUTION)
+        else:
+            try:
+                requested_grid_int = int(requested_grid)
+            except (TypeError, ValueError):
+                requested_grid_int = None
+            if requested_grid_int in ALLOWED_GRID_RESOLUTIONS:
+                resolved_grid = requested_grid_int
+            else:
+                _log.warning(
+                    "[S01] material_archive mode: ignoring unsupported "
+                    "material_grid_resolution=%r, falling back to default=%d",
+                    requested_grid, int(DEFAULT_GRID_RESOLUTION),
+                )
+                resolved_grid = int(DEFAULT_GRID_RESOLUTION)
+        ctx["grid_resolution"] = resolved_grid
         _log.info(
-            "[S01] material_archive mode: %d materials (%s), %d layers, %.2f mm/layer",
-            len(materials), slot_names, material_layer_count, material_layer_height,
+            "[S01] material_archive mode: %d materials (%s), %d layers, %.2f mm/layer, grid=%d",
+            len(materials),
+            slot_names,
+            material_layer_count,
+            material_layer_height,
+            resolved_grid,
         )
         # Fall through to common backing/vector checks below
         # Need to set some defaults first

@@ -44,11 +44,16 @@ function _formData(
  */
 export async function fetchMaterialSolverCacheStatus(
   key: MaterialSolverCacheKey,
+  options?: { gridResolution?: number },
 ): Promise<MaterialSolverCacheStatusResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.gridResolution != null) {
+    extra.grid_resolution = String(options.gridResolution);
+  }
   const response = await apiClient.post<MaterialSolverCacheStatusResponse>(
     "/extractor/material-solver-cache/status",
-    _formData(key),
-    { timeout: 30_000 },
+    _formData(key, extra),
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -70,7 +75,7 @@ export async function buildMaterialSolverCache(
   const response = await apiClient.post<MaterialSolverCacheBuildResponse>(
     "/extractor/material-solver-cache/build",
     _formData(key, extra),
-    { timeout: options?.timeoutMs ?? 10 * 60_000 },
+    { timeout: options?.timeoutMs ?? 3_600_000 },
   );
   return response.data;
 }
@@ -81,11 +86,16 @@ export async function buildMaterialSolverCache(
  */
 export async function deleteMaterialSolverCache(
   key: MaterialSolverCacheKey,
+  options?: { gridResolution?: number },
 ): Promise<MaterialSolverCacheDeleteResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.gridResolution != null) {
+    extra.grid_resolution = String(options.gridResolution);
+  }
   const response = await apiClient.post<MaterialSolverCacheDeleteResponse>(
     "/extractor/material-solver-cache/delete",
-    _formData(key),
-    { timeout: 30_000 },
+    _formData(key, extra),
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -97,7 +107,7 @@ export async function deleteMaterialSolverCache(
 export async function listMaterialSolverCaches(): Promise<MaterialSolverCacheListResponse> {
   const response = await apiClient.get<MaterialSolverCacheListResponse>(
     "/extractor/material-solver-caches",
-    { timeout: 30_000 },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }
@@ -113,6 +123,15 @@ export interface MaterialColorSuggestOptions {
   minSpacing?: number;
   /** Hard cap on ``M ** N`` for the MITM fallback. (MITM 回退上限) */
   maxCombinations?: number;
+  /**
+   * Lab grid resolution (buckets per axis) to target. Defaults to the
+   * backend's low-tier value; callers must pass this when the user opts
+   * in to a denser cache so the lookup and the build target the same
+   * on-disk file.
+   * Lab 网格分辨率（每轴桶数）；默认走后端低档，用户启用更
+   * 密的缓存时调用方必须传对应值，否则查询与构建会不匹配。
+   */
+  gridResolution?: number;
   /** ``AbortSignal`` to cancel the in-flight request. (用于取消请求) */
   signal?: AbortSignal;
   /** Request timeout. Defaults to 60 s to allow MITM fallback runs. (超时) */
@@ -141,11 +160,14 @@ export async function fetchMaterialColorSuggestions(
   if (options?.maxCombinations != null) {
     extra.max_combinations = String(options.maxCombinations);
   }
+  if (options?.gridResolution != null) {
+    extra.grid_resolution = String(options.gridResolution);
+  }
   const response = await apiClient.post<MaterialColorSuggestionsResponse>(
     "/extractor/material-solver-cache/suggest-colors",
     _formData(key, extra),
     {
-      timeout: options?.timeoutMs ?? 60_000,
+      timeout: options?.timeoutMs ?? 3_600_000,
       signal: options?.signal,
     },
   );

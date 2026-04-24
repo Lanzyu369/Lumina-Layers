@@ -8,6 +8,7 @@ import {
   fetchMaterialSolverCacheStatus,
 } from "../api/materialCache";
 import type { MaterialSolverCacheEntry } from "../api/types";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/materialCache", () => ({
   buildMaterialSolverCache: vi.fn(),
@@ -41,6 +42,13 @@ function buildCacheEntry(
 describe("MaterialSolverCacheStatusCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset the opt-in settings so each test starts from the shipped default
+    // (switch off, low-tier 64) unless it flips the toggle explicitly.
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection:
+        DEFAULT_SETTINGS.enableSolverCacheGridSelection,
+      solverCacheGridResolution: DEFAULT_SETTINGS.solverCacheGridResolution,
+    });
   });
 
   it("shows the idle state when no materials are selected", async () => {
@@ -84,12 +92,17 @@ describe("MaterialSolverCacheStatusCard", () => {
     await waitFor(() => {
       expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledTimes(1);
     });
-    expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledWith({
-      materialDirectoryNames: ["red", "white"],
-      layerCount: 5,
-      layerHeightMm: 0.08,
-      substrate: "white",
-    });
+    expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: ["red", "white"],
+        layerCount: 5,
+        layerHeightMm: 0.08,
+        substrate: "white",
+      },
+      // With the opt-in toggle off, the call omits a concrete
+      // gridResolution so the backend applies its low-tier default.
+      { gridResolution: undefined },
+    );
 
     const pill = await screen.findByTestId(
       "material-solver-cache-status-pill",
@@ -175,12 +188,15 @@ describe("MaterialSolverCacheStatusCard", () => {
     await waitFor(() => {
       expect(buildMaterialSolverCache).toHaveBeenCalledTimes(1);
     });
-    expect(buildMaterialSolverCache).toHaveBeenCalledWith({
-      materialDirectoryNames: ["red", "white"],
-      layerCount: 5,
-      layerHeightMm: 0.08,
-      substrate: "white",
-    });
+    expect(buildMaterialSolverCache).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: ["red", "white"],
+        layerCount: 5,
+        layerHeightMm: 0.08,
+        substrate: "white",
+      },
+      { gridResolution: undefined },
+    );
 
     // After a successful build, pill should transition to "ok".
     await waitFor(() => {
@@ -259,5 +275,88 @@ describe("MaterialSolverCacheStatusCard", () => {
       expect(pill).toHaveAttribute("data-tone", "error");
     });
     expect(screen.getByText(/network down/i)).toBeInTheDocument();
+  });
+
+  it("forwards the chosen gridResolution to every API call when the opt-in toggle is on", async () => {
+    // Flip the store into opt-in mode with medium density before the card mounts.
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 128,
+    });
+
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverCache).mockResolvedValue({
+      status: "ok",
+      message: "Built cache",
+      entry: buildCacheEntry({ grid_resolution: 128 }),
+    });
+    vi.mocked(deleteMaterialSolverCache).mockResolvedValue({
+      status: "ok",
+      message: "Cache deleted",
+      deleted: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    // 1) The initial status query targets grid 128.
+    await waitFor(() => {
+      expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledTimes(1);
+    });
+    expect(fetchMaterialSolverCacheStatus).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { gridResolution: 128 },
+    );
+
+    // 2) Build also targets grid 128.
+    const buildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    await act(async () => {
+      fireEvent.click(buildButton);
+    });
+    await waitFor(() => {
+      expect(buildMaterialSolverCache).toHaveBeenCalledTimes(1);
+    });
+    expect(buildMaterialSolverCache).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { gridResolution: 128 },
+    );
+
+    // 3) Delete the entry and confirm the delete call also targets grid 128.
+    const deleteButton = await screen.findByRole("button", {
+      name: "删除缓存",
+    });
+    await act(async () => {
+      fireEvent.click(deleteButton);
+    });
+    await waitFor(() => {
+      expect(deleteMaterialSolverCache).toHaveBeenCalledTimes(1);
+    });
+    expect(deleteMaterialSolverCache).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { gridResolution: 128 },
+    );
+
+    confirmSpy.mockRestore();
   });
 });

@@ -29,11 +29,43 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "自定义配方可以加 LUT 里没有的颜色了：下拉直接选，导出的 3MF 会自动多一个对象带上这种颜色，切片那边不用自己改",
             en: "You can now add colours that aren't in the LUT to a custom recipe: pick them from the dropdown and the exported 3MF carries them as extra objects, so the slicer just works",
           },
+          {
+            zh: "设置里加了“渐变自动换色”开关：开启后每次预览成功会自动把每一组渐变统一替换成组内代表色，一键去掉海带纹；默认关闭，原有手动换色流程不受影响",
+            en: "New Settings → “Auto replace gradient banding” toggle: when on, every successful preview auto-collapses each gradient group to its representative colour to erase banding in one shot; off by default so the manual flow stays unchanged",
+          },
         ],
       },
       {
         category: { zh: "颜色工作站", en: "Color Workstation" },
         items: [
+          {
+            zh: "耗材档案模式下，预览完成后会自动检测原图里平滑渐变被切成多种耗材色的情况，在颜色面板里列成一组一组，点一下就能把整组色块一次选中送去换色",
+            en: "In material-archive mode, a successful preview automatically detects smooth source gradients that got quantised into several material colours and lists them as gradient groups; one click multi-selects the whole group for batch replacement",
+          },
+          {
+            zh: "每组还能展开看到里面的独立区域（脸、嘴巴、手等），按区域单独选颜色，而不是只能整组一起换",
+            en: "Expand a group to see its spatial regions (face, mouth, hand, etc.) and select a single region's colours instead of the whole group",
+          },
+          {
+            zh: "每个大分组和小分组右边都加了一个“去海带纹”按钮，不必先选中再回到拾色器，直接一键把这一处渐变压成代表色",
+            en: "Every group and region row now has its own Flatten button — no need to first multi-select and pick a target colour, one click collapses that specific gradient to its representative colour",
+          },
+          {
+            zh: "在不同分组之间快速切换时，预览上不会再因为旧请求晚到而显示到旧的高亮色，始终跟当前选中保持一致",
+            en: "Rapid switching between gradient groups no longer leaves a stale highlight on the preview: out-of-order responses are dropped so the canvas always matches the current selection",
+          },
+          {
+            zh: "从整组切到组内某个区域时，整组按钮会正确地变灰、只有被点击的区域保持选中态；不会再出现整组和区域同时显示选中的情况",
+            en: "Clicking a region inside a group correctly dims the parent group button so only the region you just picked stays highlighted, instead of both lighting up at once",
+          },
+          {
+            zh: "点击小分组时，右边预览只会高亮这个小分组所在的那一块区域，不再把整组覆盖的同色像素全部点亮",
+            en: "Clicking a sub-region now highlights only that region in the preview, instead of lighting up every matching pixel across the whole group",
+          },
+          {
+            zh: "选中某个小分组后再从 LUT 里挑颜色换色，现在只会改这一块区域的像素；共享相同颜色的其它区域不会再被一起覆盖",
+            en: "Picking a LUT colour while a sub-region is selected now repaints only that region's pixels; other regions that happen to share the same colour stay untouched",
+          },
           {
             zh: "打开自定义配方，下拉里能看到每种材料的真实颜色，不再是一堆灰方块",
             en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
@@ -139,6 +171,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "导出的 3MF 现在能在 Anycubic 切片软件（纵维立方 Anycubic Slicer Next）里正常打开——之前一拖进去就闪退，原因是自动生成的预览缩略图本身就是损坏的；别的切片软件一直没受影响，是因为它们遇到坏缩略图会静默跳过",
             en: "Exported 3MF files now open normally in Anycubic Slicer Next — they used to crash the moment you dropped one in, because the auto-generated preview thumbnails were themselves corrupt; other slicers were unaffected because they silently skip over broken thumbnails",
           },
+          {
+            zh: "耗材档案预览：偶尔出现的 “10 层效果反而比 5 层差” 已修复。更多层数的匹配结果现在严格不劣于少层数 + 白色垫底的方案，预览颜色趋于稳定",
+            en: "Material-archive preview: the occasional “10 layers look worse than 5 layers” regression is fixed — higher layer counts are now guaranteed to be no worse than any smaller-k solution padded with white, so preview colour stays consistent as you raise the layer count",
+          },
         ],
       },
     ],
@@ -167,15 +203,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
           },
           {
-            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
-            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
+            zh: '用耗材档案做的模型现在也能改自定义配方了，不会再弹 "没有预测引擎" 的提示',
+            en: 'Models built from the material library now accept custom recipes too — the old "no predictive runtime" blocker is gone',
           },
           {
             zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
             en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
           },
           {
-            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            zh: '点应用之后，分层预览会整屏刷新；不再出现 "只有改过的层亮起、其它层灰掉" 的情况',
             en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
           },
         ],
@@ -195,8 +231,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
           },
           {
-            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
-            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
+            zh: '提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 "详情" 按钮里，主面板干净多了',
+            en: 'The JSON dumps, fit summary and Stage A download link now live behind a single "Details" button, keeping the main panel uncluttered',
           },
           {
             zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
@@ -214,6 +250,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "梯度卡校准的默认层高从 0.04 mm 改成 0.08 mm，跟大家平时打印的层高更接近；以前存好的档案保持原样，不会被动",
             en: "Default gradient-card layer height is now 0.08 mm (was 0.04 mm) to match the layer height most people actually print at; archives you saved earlier keep their original layer height",
           },
+          {
+            zh: "设置里新增 “穷举数量” 开关：默认关闭，走低档（64³，构建快、内存小）；开启后可以选中（128³）或高（256³），穷举缓存会更细、颜色更准，代价是构建时间、内存占用、每次生成查找都会成倍变长。穷举缓存弹窗里会直接显示当前用哪一档，不同档的缓存分开存放、互不覆盖",
+            en: 'New Settings → "Exhaustive density" switch: off by default and uses the low tier (64³) — fast to build, low memory; flip it on to pick medium (128³) or high (256³) for tighter colour accuracy at the cost of proportionally longer builds, more memory, and slower per-conversion lookups. The exhaustive-cache dialog shows the active tier, and caches at different tiers are stored separately so switching never overwrites an existing build',
+          },
         ],
       },
       {
@@ -227,7 +267,7 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "The 3D preview loads dramatically faster: what used to be a 100+ MB model that kept remote users waiting is now typically just a few MB on real multi-colour images, so the 3D scene appears almost immediately; the actual exported 3MF and its print precision are completely unchanged",
           },
           {
-            zh: "厚度等滑条修掉了\"一松手就自动加 0.08\"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）",
+            zh: '厚度等滑条修掉了"一松手就自动加 0.08"的问题：之前每次拖动停下来，值都会被悄悄往上多挪半格；右边数字框里手动输入 1.5 / 3.5 也不会再被改成 0.08 的整数倍（如 1.52）',
             en: "Sliders like Thickness no longer add an extra 0.08 every time you let go: previously each drag release was silently bumped up by half a step, and typing precise values like 1.5 or 3.5 into the number box on the right got rewritten to the nearest step multiple (such as 1.52)",
           },
         ],
@@ -244,16 +284,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
           },
           {
-            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
-            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
+            zh: '提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 "请求失败 status 422" 这种模糊提示盖住',
+            en: 'When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic "request failed with status 422"',
           },
           {
-            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            zh: '修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 "服务器崩了"，现在已经走正规流程',
             en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
           },
           {
-            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
-            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
+            zh: '耗材档案里的自定义配方应用不再卡在 "LUT/source file missing" 409，整套流程能走通',
+            en: 'Applying a custom recipe on a material-archive model no longer gets stuck on "LUT/source file missing" (409) — the whole flow works end to end',
           },
           {
             zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
@@ -262,6 +302,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "导出的 3MF 现在能在 Anycubic 切片软件（纵维立方 Anycubic Slicer Next）里正常打开——之前一拖进去就闪退，原因是自动生成的预览缩略图本身就是损坏的；别的切片软件一直没受影响，是因为它们遇到坏缩略图会静默跳过",
             en: "Exported 3MF files now open normally in Anycubic Slicer Next — they used to crash the moment you dropped one in, because the auto-generated preview thumbnails were themselves corrupt; other slicers were unaffected because they silently skip over broken thumbnails",
+          },
+          {
+            zh: "耗材档案预览：偶尔出现的 “10 层效果反而比 5 层差” 已修复。更多层数的匹配结果现在严格不劣于少层数 + 白色垫底的方案，预览颜色趋于稳定",
+            en: "Material-archive preview: the occasional “10 layers look worse than 5 layers” regression is fixed — higher layer counts are now guaranteed to be no worse than any smaller-k solution padded with white, so preview colour stays consistent as you raise the layer count",
           },
         ],
       },
@@ -291,15 +335,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Open the custom recipe dialog and the dropdown swatches show each material's actual colour instead of a row of grey placeholders",
           },
           {
-            zh: "用耗材档案做的模型现在也能改自定义配方了，不会再弹 \"没有预测引擎\" 的提示",
-            en: "Models built from the material library now accept custom recipes too — the old \"no predictive runtime\" blocker is gone",
+            zh: '用耗材档案做的模型现在也能改自定义配方了，不会再弹 "没有预测引擎" 的提示',
+            en: 'Models built from the material library now accept custom recipes too — the old "no predictive runtime" blocker is gone',
           },
           {
             zh: "打开配方时，每层的初始值就是这个色块实际在用的配方，而不是全白；只改一两层不会再把别的层覆盖掉",
             en: "When you open the recipe dialog, every layer starts with the colour it's actually using, not pure white — so tweaking one or two layers doesn't wipe the rest",
           },
           {
-            zh: "点应用之后，分层预览会整屏刷新；不再出现 \"只有改过的层亮起、其它层灰掉\" 的情况",
+            zh: '点应用之后，分层预览会整屏刷新；不再出现 "只有改过的层亮起、其它层灰掉" 的情况',
             en: "Hitting apply now refreshes every layer in the preview, so you don't end up with only the edited layers showing colour and the rest looking greyed-out",
           },
         ],
@@ -319,8 +363,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Brand input is now a dropdown: it auto-lists brands you've used before, and you can still type a new one on the spot",
           },
           {
-            zh: "提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 \"详情\" 按钮里，主面板干净多了",
-            en: "The JSON dumps, fit summary and Stage A download link now live behind a single \"Details\" button, keeping the main panel uncluttered",
+            zh: '提取完出的一堆 JSON、拟合摘要、Stage A 下载全收进一个 "详情" 按钮里，主面板干净多了',
+            en: 'The JSON dumps, fit summary and Stage A download link now live behind a single "Details" button, keeping the main panel uncluttered',
           },
           {
             zh: "保存成功 / 失败的提示从主面板挪到右上角小浮层，几秒自动消失，不会再把面板挤乱",
@@ -348,16 +392,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "When gradient-card extract / save fails, you now get a clear sentence about what went wrong (bad ZIP, undecodable image, wrong number of corner points, can't tell substrate orientation, expired session, target archive missing, …) instead of a raw English error",
           },
           {
-            zh: "提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 \"请求失败 status 422\" 这种模糊提示盖住",
-            en: "When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic \"request failed with status 422\"",
+            zh: '提交表单填错字段时，弹窗会直接点名哪个字段有问题；之前偶尔会被 "请求失败 status 422" 这种模糊提示盖住',
+            en: 'When form fields are invalid, the dialog now names the offending field directly, instead of sometimes masking it behind a generic "request failed with status 422"',
           },
           {
-            zh: "修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 \"服务器崩了\"，现在已经走正规流程",
+            zh: '修了一个隐藏 bug：有些字段校验错误本来该返回 422，却被内部处理器弄成 500 显示成 "服务器崩了"，现在已经走正规流程',
             en: "Fixed a hidden bug where some field-validation errors (which should be 422) were turning into 500s that looked like server crashes; they now follow the normal path",
           },
           {
-            zh: "耗材档案里的自定义配方应用不再卡在 \"LUT/source file missing\" 409，整套流程能走通",
-            en: "Applying a custom recipe on a material-archive model no longer gets stuck on \"LUT/source file missing\" (409) — the whole flow works end to end",
+            zh: '耗材档案里的自定义配方应用不再卡在 "LUT/source file missing" 409，整套流程能走通',
+            en: 'Applying a custom recipe on a material-archive model no longer gets stuck on "LUT/source file missing" (409) — the whole flow works end to end',
           },
           {
             zh: "扩层时的边界修正：模型外面原本该透明的地方保持透明，不会再多一圈白边；模型里面没改动的像素继续沿用背板材料，不会塌成空层",
@@ -425,7 +469,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         ],
       },
       {
-        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        category: {
+          zh: "提取器（校色卡）",
+          en: "Extractor (Calibration Card)",
+        },
         items: [
           {
             zh: "5 色扩展模式每一页的角点提示修正",

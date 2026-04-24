@@ -93,6 +93,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   selected_materials?: string[];
   material_layer_count?: number;
   material_layer_height_mm?: number;
+  material_grid_resolution?: number;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
@@ -1406,4 +1407,66 @@ export interface RecipeHistoryItem {
    * dropping it collapses virtual-index pixels back onto native channels.
    */
   virtualMaterials?: VirtualMaterial[];
+}
+
+// ============================================================================
+// Gradient-group (banding) analysis
+// 渐变海带纹分组（预览完成后同步计算，驱动颜色工作站的分组多选 + 自动换色）
+// ============================================================================
+
+/** One material colour entry inside a gradient group or its region. */
+export interface GradientMaterialColour {
+  /** Material colour hex, e.g. "#D2AEB4". */
+  hex: string;
+  rgb: [number, number, number];
+  pixel_count: number;
+}
+
+/** A spatial connected region inside a gradient group. */
+export interface GradientRegionItem {
+  /** 1-based index ordered by descending pixel_count within the group. */
+  region_index: number;
+  pixel_count: number;
+  /** [x0, y0, x1, y1] with x1/y1 exclusive (pixel coordinates). */
+  bbox: [number, number, number, number];
+  /** Centroid [cx, cy] in pixel coordinates. */
+  centroid: [number, number];
+  material_breakdown: GradientMaterialColour[];
+}
+
+/** A cluster of material colours that originated from one smooth source gradient. */
+export interface GradientGroupItem {
+  /** 1-based index ordered by descending total_pixel_count. */
+  group_index: number;
+  total_pixel_count: number;
+  material_colour_count: number;
+  material_colours: GradientMaterialColour[];
+  /** Representative colour hex (defaults to the pixel-count majority). */
+  representative_hex: string;
+  representative_rgb: [number, number, number];
+  boundary_pair_count: number;
+  regions: GradientRegionItem[];
+}
+
+/**
+ * Identifies which gradient group or region is the current "origin" of the
+ * multi-select, so the panel can show the exact row the user just clicked
+ * even when a region's material breakdown equals the enclosing group's
+ * material colours (otherwise identical hex sets make both buttons look
+ * highlighted).
+ *
+ * 渐变选中来源标识：用于区分"点了整组"还是"点了组内某区域"，解决
+ * region.material_breakdown 与 group.material_colours 重合时两个按钮同时
+ * 高亮的问题。
+ */
+export type GradientSelectionSource =
+  | { kind: "group"; groupIndex: number }
+  | { kind: "region"; groupIndex: number; regionIndex: number };
+
+/** Response payload for ``GET /convert/gradient-groups/{session_id}``. */
+export interface GradientGroupsResponse {
+  session_id: string;
+  /** ``"ok"`` when groups are available; ``"unavailable"`` otherwise. */
+  status: "ok" | "unavailable";
+  groups: GradientGroupItem[];
 }

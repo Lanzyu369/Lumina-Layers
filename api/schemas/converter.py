@@ -735,18 +735,61 @@ class ColorHighlightRequest(BaseModel):
 
     Used by ``POST /api/convert/color-highlight`` to generate a preview
     image with semi-transparent cyan overlay on all pixels matching any
-    of the given color hex values.
-    用于 ``POST /api/convert/color-highlight``，生成对所有匹配给定颜色
-    hex 值的像素施加半透明青色叠加的预览图。
+    of the given color hex values. Two optional clipping modes are
+    supported, checked in priority order:
+
+    1. ``gradient_group_index + gradient_region_index`` — clip the highlight
+       to the *exact* pixel mask of one spatial sub-region inside a gradient
+       group. This uses the cached per-pixel region-id map computed during
+       preview generation; it is the correct choice when the UI wants to
+       focus on one specific sub-region without leaking into other
+       same-colour pixels elsewhere.
+       最精确模式：按单个渐变子区域的精确像素 mask 裁剪，依赖预览生成时
+       缓存的 region_id_map，完全不会污染组外或同色其他区域。
+    2. ``region_bbox`` — clip the highlight to a rectangular region. This is
+       a cheap legacy fallback for clients that don't yet pass region
+       identifiers; its accuracy is limited to the region's bounding box.
+       回退模式：按矩形 bbox 裁剪，精度受限于区域外接矩形。
+
+    If neither clipping field is provided, the highlight covers every
+    matching pixel on the whole canvas.
+    若两个裁剪字段都未提供，则在整张预览上高亮所有匹配像素。
 
     Attributes:
         session_id: Active session identifier. (Session ID)
         color_hexes: List of hex color strings to highlight (with or without '#' prefix).
             要高亮的颜色 hex 列表（可带或不带 '#' 前缀）。
+        gradient_group_index: Optional 1-based group index from the gradient-groups
+            analysis. Must be combined with ``gradient_region_index``.
+            渐变分组编号（1-based），与 ``gradient_region_index`` 成对使用。
+        gradient_region_index: Optional 1-based sub-region index inside the
+            identified gradient group.
+            渐变分组内子区域编号（1-based）。
+        region_bbox: Optional ``[x0, y0, x1, y1]`` (inclusive-exclusive in
+            pixel coordinates) fallback rectangle. Ignored when both
+            ``gradient_group_index`` and ``gradient_region_index`` are set.
+            可选 ``[x0, y0, x1, y1]`` 边界框（像素坐标，x1/y1 开区间）。
+            当渐变分组/子区域字段都存在时忽略此字段。
     """
 
     session_id: str = Field(..., description="Session ID")
     color_hexes: List[str] = Field(..., min_length=1, description="要高亮的颜色 hex 列表")
+    gradient_group_index: Optional[int] = Field(
+        None,
+        ge=1,
+        description="可选：渐变分组编号（1-based），与 gradient_region_index 成对使用",
+    )
+    gradient_region_index: Optional[int] = Field(
+        None,
+        ge=1,
+        description="可选：渐变分组内子区域编号（1-based）",
+    )
+    region_bbox: Optional[List[int]] = Field(
+        None,
+        min_length=4,
+        max_length=4,
+        description="可选 [x0, y0, x1, y1] 边界框（像素坐标），只在该矩形内扫描；当 gradient_group_index/gradient_region_index 给出时被忽略",
+    )
 
 
 class ColorHighlightResponse(BaseModel):
@@ -806,18 +849,65 @@ class RegionReplaceRequest(BaseModel):
     """Request model for replacing color in a selected connected region.
     替换选中连通区域颜色的请求模型。
 
-    Used by ``POST /api/converter/region-replace`` to replace the color
-    of a previously detected connected region with a new target color.
-    用于 ``POST /api/converter/region-replace``，将先前检测到的
-    连通区域颜色替换为新的目标颜色。
+    Used by ``POST /api/converter/region-replace`` to replace the colour
+    inside a spatially confined mask with a target colour. Supports two
+    mask-source modes:
+
+    - **Click-detected region** (legacy). The endpoint reads the mask stored
+      by :func:`region_detect` under ``selected_region_mask``. The caller
+      must have hit :func:`region_detect` first.
+    - **Gradient region** (new). When ``gradient_group_index`` /
+      ``gradient_region_index`` are provided, the mask is derived on the
+      fly from the cached per-pixel ``gradient_region_id_map``. This lets
+      the Gradient Groups panel apply a target colour only inside a single
+      banded sub-region, without polluting other regions that happen to
+      share the same quantised hex.
+
+    用于 ``POST /api/converter/region-replace``：把一个空间受限 mask 内的
+    像素替换为目标色。支持两种 mask 来源：
+
+    - **点击检测的区域**（legacy）：从 session_data["selected_region_mask"]
+      读取（需要先调 region-detect）。
+    - **渐变区域**（新）：传入 ``gradient_group_index`` /
+      ``gradient_region_index`` 时，从缓存的 per-pixel region_id_map
+      现场生成 mask。用于"仅在这一个渐变区域内换色"的场景，避免污染
+      共用同一量化 hex 的其它区域。
+
+    Exactly one source must be usable: if both gradient indices are given
+    together, they take precedence over the click-detected mask.
+    两种来源不互斥；传了 gradient 索引时优先用 gradient region mask。
 
     Attributes:
         session_id: Active session identifier. (Session ID)
         replacement_color: Target replacement color in hex format. (替换目标色 hex)
+        gradient_group_index: 1-based gradient group index from the panel.
+            When provided alone, the mask covers the entire group ("去海带纹"
+            whole-group flatten). When paired with ``gradient_region_index``,
+            the mask narrows to a single sub-region.
+            渐变分组编号（1 起）。单独传 = 整组 mask；配合
+            ``gradient_region_index`` = 单区域 mask。
+        gradient_region_index: Optional 1-based region index inside the
+            gradient group. Only meaningful when ``gradient_group_index``
+            is also provided.
+            渐变分组内的区域编号（1 起），仅在同时提供分组编号时生效。
     """
 
     session_id: str = Field(..., description="Session ID")
     replacement_color: str = Field(..., description="替换目标色 hex")
+    gradient_group_index: Optional[int] = Field(
+        None,
+        description=(
+            "1-based gradient group index; pair with gradient_region_index "
+            "to restrict replacement to a gradient sub-region."
+        ),
+    )
+    gradient_region_index: Optional[int] = Field(
+        None,
+        description=(
+            "1-based region index inside the gradient group; pair with "
+            "gradient_group_index."
+        ),
+    )
 
 
 class RegionReplaceResponse(BaseModel):
@@ -901,3 +991,77 @@ class BedSizeListResponse(BaseModel):
     """
 
     beds: List[BedSizeItem] = Field(..., description="热床尺寸列表")
+
+
+# ========== Gradient group (banding) analysis ==========
+
+
+class GradientMaterialColour(BaseModel):
+    """A material colour that contributes to a gradient group or region.
+    构成渐变组或区域的单个耗材色。
+    """
+
+    hex: str = Field(..., description="耗材色 hex，形如 #RRGGBB")
+    rgb: List[int] = Field(..., min_length=3, max_length=3, description="RGB 值 (0-255)")
+    pixel_count: int = Field(..., ge=0, description="该耗材色在本作用域的像素数")
+
+
+class GradientRegionItem(BaseModel):
+    """A connected spatial region inside a gradient group.
+    渐变大分组内一个空间连通区域。
+    """
+
+    region_index: int = Field(..., ge=1, description="1 起始的区域编号（按像素数降序）")
+    pixel_count: int = Field(..., ge=0, description="区域像素数")
+    bbox: List[int] = Field(
+        ...,
+        min_length=4,
+        max_length=4,
+        description="边界框 [x0, y0, x1, y1]（像素坐标，x1/y1 开区间）",
+    )
+    centroid: List[float] = Field(
+        ...,
+        min_length=2,
+        max_length=2,
+        description="质心 [cx, cy]，像素坐标",
+    )
+    material_breakdown: List[GradientMaterialColour] = Field(
+        ..., description="区域内耗材色按像素数降序列表"
+    )
+
+
+class GradientGroupItem(BaseModel):
+    """A gradient cluster of material colours caused by quantisation banding.
+    由量化海带纹造成的一个耗材色渐变聚类。
+    """
+
+    group_index: int = Field(..., ge=1, description="1 起始的分组编号（按像素数降序）")
+    total_pixel_count: int = Field(..., ge=0, description="分组总像素数")
+    material_colour_count: int = Field(..., ge=2, description="分组内耗材色数（>= 2）")
+    material_colours: List[GradientMaterialColour] = Field(
+        ..., description="分组内耗材色按像素数降序列表"
+    )
+    representative_hex: str = Field(
+        ..., description="分组代表色（默认为像素数最多的那一个）"
+    )
+    representative_rgb: List[int] = Field(
+        ..., min_length=3, max_length=3, description="代表色 RGB"
+    )
+    boundary_pair_count: int = Field(
+        ..., ge=0, description="分组内部认定为海带纹的相邻对数量"
+    )
+    regions: List[GradientRegionItem] = Field(
+        ..., description="分组内空间连通区域列表（按像素数降序）"
+    )
+
+
+class GradientGroupsResponse(BaseModel):
+    """Response model for the gradient-groups GET endpoint.
+    渐变分组查询端点的响应模型。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    status: str = Field("ok", description="'ok' / 'pending' / 'unavailable'")
+    groups: List[GradientGroupItem] = Field(
+        default_factory=list, description="渐变组列表（按像素数降序）"
+    )

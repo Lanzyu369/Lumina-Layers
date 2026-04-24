@@ -1,9 +1,11 @@
 # Repository Guidelines
 
 ## Scope
+
 Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow built around `api/` + `api_server.py` + `frontend/` (FastAPI `:8000` + Vite `:5174`).
 
 ## Structure
+
 - `core/`: UI-agnostic domain logic and the staged pipeline in `core/pipeline/`
 - `api/`: FastAPI routers, schemas, session/file lifecycle, and worker orchestration
 - `frontend/src/`: React 19, TypeScript, Zustand, Axios, Three.js, Tailwind, and Vitest
@@ -11,6 +13,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `printer_profiles/`, `assets/`, `lut-preset/`: templates, runtime assets, and LUT presets
 
 ## Common Commands
+
 - `pip install -r requirements.txt`
 - `cd frontend && npm install`
 - `python api_server.py` | `python start_dev.py`
@@ -27,6 +30,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `docker build -t lumina-layers . && docker run -p 7860:7860 lumina-layers`
 
 ## Engineering Rules
+
 - Python: PEP 8, explicit type hints, bilingual Google-style docstrings for new or changed public APIs
 - Prefer NumPy/vectorized operations in hot paths
 - Code shall favor good OO design: clear abstractions, single responsibility, high cohesion, low coupling, and readable composition
@@ -36,6 +40,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - New color modes, modeling modes, printer profiles, or slicer integrations must update validation, UI, translations, persisted settings, and tests together
 
 ## Encoding & Text Safety
+
 - All source files that contain Chinese or other non-ASCII text must be read, edited, and saved as UTF-8; do not rely on terminal or shell default code pages
 - Treat mojibake as real data corruption until proven otherwise; if text looks like `锟`, `鎷`, `鍙`, `涓`, etc., verify the file with an explicit UTF-8 read before making further edits
 - When inspecting non-ASCII content from the shell, use explicit UTF-8 reads such as `Get-Content -Encoding UTF8`; do not trust default `Get-Content`, redirected output, or terminal rendering alone
@@ -45,11 +50,13 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - If a public API requires bilingual docstrings, verify both languages after the edit; if a private comment/docstring is non-essential and encoding risk is high, prefer concise ASCII-only wording over corrupted Chinese
 
 ## Lossless Refactoring
+
 - Keep all existing public API signatures unchanged during refactors
 - Write tests to verify current behavior before modifying implementation
 - Each refactor should focus on a single responsibility; avoid sweeping changes
 
 ## Frontend Rules
+
 - All user-facing strings must come from `frontend/src/i18n/translations.ts`
 - Support both light and dark themes via tokens/Tailwind vars; no raw UI colors like `#fff`, `bg-white`, or `text-black`
 - Keep frontend resource/file URLs as relative paths in state/domain logic; only normalization-focused tests may use absolute localhost inputs
@@ -57,6 +64,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Preserve `settingsStore` persistence and best-effort backend sync
 
 ## Architecture & Robustness
+
 - Preserve layering: `core/` -> API/workers -> UI
 - Put reusable business logic in `core/`; routes do validation, session/file handling, and error translation; CPU-heavy work belongs in workers or `core/`
 - The staged pipeline lives in `core/pipeline/` (S01–S12 step modules coordinated by `coordinator.py`)
@@ -71,6 +79,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Current supported workflows include calibration, extraction/manual correction, LUT merge/inspection, preview/generation, batch conversion, large-format tiled generation, printer/slicer integration, and BW/4-color/6-color/8-color/5-color-extended modes
 
 ## Tests
+
 - Backend: `pytest` + Hypothesis; Frontend: Vitest + fast-check
 - File naming: `test_*_unit.py` / `test_*_properties.py` (Python); `*.test.ts(x)` / `*.property.test.ts` (Frontend)
 - Add focused regression tests for new algorithms, bug fixes, cache/session/temp-file cleanup, timeout/fallback paths, invalid uploads/LUTs, and out-of-bounds/background clicks
@@ -79,6 +88,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Maintain governance tests (`tests/test_logging_exception_governance_unit.py`, URL/resource contract guards) when changing logging, exception boundaries, or URL semantics
 
 ## Hygiene & Commits
+
 - Do not commit secrets, machine-local config, IDE junk, generated caches, or transient artifacts
 - `user_settings.json` is optional runtime data; code must tolerate missing or partial values safely
 - Use Conventional Commits: `<type>(<scope>): <subject>`
@@ -86,6 +96,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Summaries should explain why, not just touched files
 
 ## In-App Announcement Maintenance
+
 - Source of truth: `frontend/src/data/announcements.ts`; rendered by `AnnouncementDialog` via `useAnnouncement` on first launch
 - Any PR merged to the default branch that introduces a user-visible change (new feature, behavior change, UX fix, notable stability fix) must be reflected in the announcement file in a follow-up commit or PR
 - Versioning is by **publish date in Beijing time (UTC+8)**, formatted `YYYY-MM-DD`; never use semver here, never backdate, never use a future date
@@ -96,3 +107,5 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep `title` stable within a release cycle; only bump it when the marketing framing actually changes (bump both zh and en together)
 - After editing, run `cd frontend && npx tsc --noEmit` plus `npx vitest run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
 - Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) distill each into one bilingual bullet under the right category (write zh first, then mirror in en), (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
+
+你的思考和回复，都用中文！！！

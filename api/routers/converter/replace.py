@@ -39,12 +39,13 @@ from api.session_store import SessionStore
 from config import LUTMetadata, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
+from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
 from core.converter import (
     extract_color_palette,
     generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
-from core.material_cache import load_material_solver_cache
+from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
 from core.material_lut_synthesis import load_multiple_materials, solve_image_colors_optimal
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
@@ -264,13 +265,32 @@ def _sync_material_archive_matrix_for_diff(
     )
     target_rgbs = np.unique(updated_rgb[diff_mask], axis=0).astype(np.uint8, copy=False)
 
+    grid_resolution = int(
+        session_data.get("material_grid_resolution")
+        or DEFAULT_GRID_RESOLUTION
+    )
+    log.info(
+        "material-archive matrix sync: solving",
+        extra={
+            "event": "converter_replace_material_sync_solve",
+            "target_rgb_count": int(target_rgbs.shape[0]),
+            "target_rgbs_sample": target_rgbs[:3].tolist(),
+            "grid_resolution": grid_resolution,
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "material_count": len(materials),
+        },
+    )
     try:
-        solver_cache = load_material_solver_cache(
+        solver_cache, _actual_grid = load_material_solver_cache_with_fallback(
             materials=materials,
             layer_count=layer_count,
             layer_height_mm=layer_height_mm,
             substrate=substrate,
+            grid_resolution=grid_resolution,
         )
+        _solve_path = "cache" if solver_cache is not None else "mitm"
         if solver_cache is not None:
             resolved_rgb, recipes, _delta_e = solver_cache.lookup(target_rgbs, materials)
         else:
@@ -281,6 +301,16 @@ def _sync_material_archive_matrix_for_diff(
                 layer_height_mm=layer_height_mm,
                 substrate=substrate,
             )
+        log.info(
+            "material-archive matrix sync: solved",
+            extra={
+                "event": "converter_replace_material_sync_solved",
+                "solve_path": _solve_path,
+                "actual_grid": _actual_grid,
+                "target_rgbs_sample": target_rgbs[:3].tolist(),
+                "resolved_rgbs_sample": resolved_rgb[:3].tolist() if resolved_rgb is not None else None,
+            },
+        )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         log.warning(
             "Material-archive replacement stack sync solve failed",
@@ -399,6 +429,24 @@ def replace_color(
         matched_rgb: np.ndarray = cache["matched_rgb"]
         previous_rgb = matched_rgb.copy()
         replaced_rgb = manager.apply_to_image(matched_rgb)
+
+        # --- diagnostic logging ---
+        diff_pixels = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
+        log.info(
+            "replace-color diag",
+            extra={
+                "event": "converter_replace_color_diag",
+                "selected_color": request.selected_color,
+                "replacement_color": request.replacement_color,
+                "material_source": session_data.get("material_source"),
+                "matched_rgb_shape": list(matched_rgb.shape),
+                "diff_pixel_count": diff_pixels,
+                "replacement_region_count": len(session_data.get("replacement_regions", [])),
+                "has_material_matrix": cache.get("material_matrix") is not None,
+                "has_mask_solid": cache.get("mask_solid") is not None,
+            },
+        )
+        # --- end diagnostic logging ---
 
         # Update cache so 3D preview reflects replacements
         cache["matched_rgb"] = replaced_rgb
@@ -604,10 +652,119 @@ def color_highlight(
         if not target_rgbs:
             raise HTTPException(status_code=400, detail="No valid color hex values provided.")
 
+        # Optional region-scope constraint. When the Gradient Groups panel
+        # asks us to highlight the colours inside one specific sub-region,
+        # we clip the scan to the *exact* pixel mask of that sub-region so
+        # unrelated same-colour pixels elsewhere on the canvas stay dark —
+        # fixes the "clicking a sub-region lights up the whole group" UX
+        # bug. Preferred path: ``gradient_group_index`` + ``gradient_region_index``
+        # pair (uses the cached per-pixel region_id_map). Legacy fallback:
+        # ``region_bbox`` rectangular scope.
+        # 可选区域裁剪：最优先使用渐变分组/子区域编号精确裁剪，回退到
+        # 矩形 bbox。修复"点小分组把整组都点亮"的 UX 问题。
+        img_h, img_w = matched_rgb.shape[:2]
+        region_scope_mask: np.ndarray | None = None
+
+        group_idx = request.gradient_group_index
+        region_idx = request.gradient_region_index
+        # Diagnostic: capture which scope path the endpoint actually takes
+        # given the request payload it actually received. This is the most
+        # reliable way to tell apart "frontend forgot to send identifiers"
+        # from "backend silently dropped them because the process wasn't
+        # restarted after the schema change".
+        # 诊断日志：明确记录 endpoint 真正收到的 scope 字段与分支走向，
+        # 便于区分"前端未传"与"后端未重启（静默丢弃字段）"。
+        log.info(
+            "color_highlight_invoked",
+            extra={
+                "event": "color_highlight_invoked",
+                "session_id": request.session_id,
+                "color_hex_count": len(request.color_hexes),
+                "received_gradient_group_index": group_idx,
+                "received_gradient_region_index": region_idx,
+                "received_region_bbox": request.region_bbox,
+                "image_shape": [img_h, img_w],
+            },
+        )
+        if (group_idx is None) != (region_idx is None):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "gradient_group_index and gradient_region_index must be "
+                    "provided together."
+                ),
+            )
+        if group_idx is not None and region_idx is not None:
+            # region_id_map is stored alongside ``gradient_groups`` at the
+            # session-data top level (not inside ``preview_cache``) because
+            # it's derived metadata computed *after* the preview cache is
+            # finalised. Mirror that layout here for consistency.
+            # region_id_map 与 gradient_groups 并列存于 session_data 顶层，
+            # 与 preview_cache 分离。
+            region_id_map = session_data.get("gradient_region_id_map")
+            if region_id_map is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Preview cache has no gradient_region_id_map; "
+                        "re-run /preview to refresh gradient-region metadata."
+                    ),
+                )
+            region_id_arr = np.asarray(region_id_map)
+            if region_id_arr.shape != (img_h, img_w):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cached gradient_region_id_map shape "
+                        f"{region_id_arr.shape} does not match preview "
+                        f"{img_h}x{img_w}; re-run /preview."
+                    ),
+                )
+            encoded_id = (
+                int(group_idx) * REGION_ID_ENCODING_MULTIPLIER + int(region_idx)
+            )
+            region_scope_mask = region_id_arr == np.uint32(encoded_id)
+            region_pixel_count = int(region_scope_mask.sum())
+            log.info(
+                "color_highlight_using_region_mask",
+                extra={
+                    "event": "color_highlight_scope_region_mask",
+                    "group_index": int(group_idx),
+                    "region_index": int(region_idx),
+                    "encoded_id": int(encoded_id),
+                    "region_pixel_count": region_pixel_count,
+                    "region_id_map_nonzero_count": int(
+                        (region_id_arr != 0).sum()
+                    ),
+                },
+            )
+            if region_pixel_count == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No pixels found for gradient group "
+                        f"{group_idx}, region {region_idx}."
+                    ),
+                )
+        elif request.region_bbox is not None:
+            x0, y0, x1, y1 = request.region_bbox
+            if not (0 <= x0 < x1 <= img_w and 0 <= y0 < y1 <= img_h):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"region_bbox {request.region_bbox} out of bounds for "
+                        f"image {img_w}x{img_h}."
+                    ),
+                )
+            region_scope_mask = np.zeros((img_h, img_w), dtype=bool)
+            region_scope_mask[y0:y1, x0:x1] = True
+
         # Build combined mask: pixels matching ANY of the given colors
-        combined_mask = np.zeros(matched_rgb.shape[:2], dtype=bool)
+        combined_mask = np.zeros((img_h, img_w), dtype=bool)
         for rgb in target_rgbs:
             combined_mask |= np.all(matched_rgb == rgb, axis=-1) & mask_solid
+        if region_scope_mask is not None:
+            combined_mask &= region_scope_mask
 
         # Apply cyan highlight (same style as region-detect)
         highlight_color = np.array([0, 200, 255], dtype=np.uint8)
@@ -804,12 +961,90 @@ def region_replace(
                 detail="Preview cache missing matched_rgb.",
             )
 
-        region_mask: np.ndarray | None = session_data.get("selected_region_mask")
-        if region_mask is None:
-            raise HTTPException(
-                status_code=409,
-                detail="No region selected. Call POST /api/convert/region-detect first.",
-            )
+        # Two mask sources are supported. When the Gradient Groups panel
+        # routes a "replace inside this banded region only" click, the
+        # payload carries ``gradient_group_index`` + ``gradient_region_index``
+        # and we rebuild the mask from the cached per-pixel region_id_map.
+        # Otherwise we fall back to the legacy click-detected flood-fill mask
+        # that ``region_detect`` stashed under ``selected_region_mask``.
+        # Rebuilding from region_id_map lets one gradient sub-region be
+        # edited without touching other regions that happen to share the
+        # same quantised hex — that was the "replace cyan band → whole body
+        # turns red" bug we are fixing.
+        # 支持两种 mask 来源：渐变区域（优先，使用缓存 region_id_map）和
+        # 点击检测区域（legacy）。渐变区域路径让单个子区域换色不会污染
+        # 共用同一量化 hex 的其它区域——修复"换一条 cyan 带 → 全身皮肤
+        # 变色"的 bug。
+        img_h, img_w = matched_rgb.shape[:2]
+        region_mask: np.ndarray | None = None
+        mask_source: str = "click"
+        gradient_group_idx = request.gradient_group_index
+        gradient_region_idx = request.gradient_region_index
+        if gradient_group_idx is not None:
+            region_id_map = session_data.get("gradient_region_id_map")
+            if region_id_map is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Preview cache has no gradient_region_id_map; "
+                        "re-run /preview to refresh gradient-region metadata."
+                    ),
+                )
+            region_id_arr = np.asarray(region_id_map)
+            if region_id_arr.shape != (img_h, img_w):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cached gradient_region_id_map shape "
+                        f"{region_id_arr.shape} does not match preview "
+                        f"{img_h}x{img_w}; re-run /preview."
+                    ),
+                )
+            if gradient_region_idx is not None:
+                # Single region within the group
+                mask_source = "gradient_region"
+                encoded_id = (
+                    int(gradient_group_idx) * REGION_ID_ENCODING_MULTIPLIER
+                    + int(gradient_region_idx)
+                )
+                region_mask = region_id_arr == np.uint32(encoded_id)
+                if not np.any(region_mask):
+                    raise HTTPException(
+                        status_code=404,
+                        detail=(
+                            f"No pixels found for gradient group "
+                            f"{gradient_group_idx}, region "
+                            f"{gradient_region_idx}."
+                        ),
+                    )
+            else:
+                # Whole group: mask all pixels whose encoded group matches
+                # 整组去海带纹：mask 覆盖该组所有像素
+                mask_source = "gradient_group"
+                group_of_pixel = region_id_arr // np.uint32(
+                    REGION_ID_ENCODING_MULTIPLIER
+                )
+                region_mask = group_of_pixel == np.uint32(
+                    int(gradient_group_idx)
+                )
+                if not np.any(region_mask):
+                    raise HTTPException(
+                        status_code=404,
+                        detail=(
+                            f"No pixels found for gradient group "
+                            f"{gradient_group_idx}."
+                        ),
+                    )
+        else:
+            region_mask = session_data.get("selected_region_mask")
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "No region selected. Call POST /api/convert/region-detect first, "
+                        "or supply gradient_group_index + gradient_region_index."
+                    ),
+                )
 
         # Parse replacement hex to RGB tuple
         replacement_rgb = np.array(
@@ -821,13 +1056,44 @@ def region_replace(
         replaced_rgb: np.ndarray = matched_rgb.copy()
         replaced_rgb[region_mask] = replacement_rgb
 
+        import time as _time
+        _region_pixels = int(region_mask.sum())
+        _diff_before_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
+        log.info(
+            "region-replace diag: before sync",
+            extra={
+                "event": "converter_region_replace_diag_pre",
+                "replacement_color": request.replacement_color,
+                "material_source": session_data.get("material_source"),
+                "region_mask_pixels": _region_pixels,
+                "diff_pixel_count": _diff_before_sync,
+                "has_material_matrix": cache.get("material_matrix") is not None,
+                "has_mask_solid": cache.get("mask_solid") is not None,
+                "matched_rgb_shape": list(matched_rgb.shape),
+            },
+        )
+
         # Update matched_rgb in session cache
         cache["matched_rgb"] = replaced_rgb
+        _t_sync = _time.perf_counter()
         _sync_material_matrix_after_rgb_change(
             session_data,
             cache,
             matched_rgb,
             replaced_rgb,
+        )
+        _sync_ms = (_time.perf_counter() - _t_sync) * 1000
+
+        _diff_after_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
+        log.info(
+            "region-replace diag: after sync",
+            extra={
+                "event": "converter_region_replace_diag_post",
+                "sync_ms": round(_sync_ms, 1),
+                "diff_pixel_count_after_sync": _diff_after_sync,
+                "replaced_rgb_sample": replaced_rgb[region_mask][0].tolist() if _region_pixels > 0 else None,
+                "original_rgb_sample": matched_rgb[region_mask][0].tolist() if _region_pixels > 0 else None,
+            },
         )
         store.put(request.session_id, "preview_cache", cache)
 
@@ -855,9 +1121,16 @@ def region_replace(
         # Extract updated color_contours from cache
         contours_data: dict | None = cache.get("color_contours")
 
-        # Clear region mask after replacement
-        store.put(request.session_id, "selected_region_mask", None)
-        store.put(request.session_id, "selected_region_id", None)
+        # Only clear the one-shot click-detected region mask, and only when
+        # that was the actual source we consumed. The cached
+        # ``gradient_region_id_map`` is derived reusable metadata and must
+        # survive so the user can replace several banded regions in a row
+        # without re-running ``/preview`` between each one.
+        # 仅在 click 模式下清理一次性 mask；gradient region 路径复用缓存
+        # 的 region_id_map，保留以便连续替换多个区域。
+        if mask_source == "click":
+            store.put(request.session_id, "selected_region_mask", None)
+            store.put(request.session_id, "selected_region_id", None)
 
     except HTTPException:
         raise

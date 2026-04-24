@@ -73,7 +73,12 @@ import {
 import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
-import type { MaterialColorSuggestionsResponse } from "../../api/types";
+import { fetchGradientGroups as apiFetchGradientGroups } from "../../api/converter";
+import type {
+  GradientGroupItem,
+  GradientSelectionSource,
+  MaterialColorSuggestionsResponse,
+} from "../../api/types";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -110,6 +115,12 @@ const _materialSuggestCache = new Map<
  * 持有当前未完成请求，便于后续请求取消前者、避免状态竞态。
  */
 let _materialSuggestAbortController: AbortController | null = null;
+
+/**
+ * In-flight gradient-groups request controller.
+ * 当前未完成的渐变分组请求控制器。
+ */
+let _gradientGroupsAbortController: AbortController | null = null;
 
 /**
  * Build a deterministic cache key from a suggestion request's parameters.
@@ -986,6 +997,10 @@ function buildMaterialSourceParams(
     "selectedMaterialDirNames" | "materialLayerCount" | "materialLayerHeightMm"
   >,
 ) {
+  const settingsState = useSettingsStore.getState();
+  const materialGridResolution = settingsState.enableSolverCacheGridSelection
+    ? settingsState.solverCacheGridResolution
+    : undefined;
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
@@ -993,6 +1008,7 @@ function buildMaterialSourceParams(
     selected_materials: state.selectedMaterialDirNames,
     material_layer_count: state.materialLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
+    material_grid_resolution: materialGridResolution,
   };
 }
 
@@ -1259,6 +1275,27 @@ export interface ConverterState {
   materialSuggestionsTargetHex: string | null;
   materialSuggestionsError: string | null;
 
+  // 预览完成后后端同步计算的"渐变海带纹分组"。用于颜色工作站的按组多选替换
+  // 以及可选的自动去海带纹批量换色。未计算 / 未命中时保持为 ``null``。
+  // Gradient-banding groups computed synchronously by the preview pipeline.
+  // Drives the Color Workstation group multi-select flow and the optional
+  // "auto replace gradient banding" setting. Stays ``null`` until a fetch
+  // completes; ``[]`` means the backend ran but reported no banding.
+  gradientGroups: GradientGroupItem[] | null;
+  gradientGroupsLoading: boolean;
+  gradientGroupsError: string | null;
+  /** Session ID of the currently-loaded groups (for staleness checks). */
+  gradientGroupsSessionId: string | null;
+  /**
+   * Which gradient group/region the user most recently clicked in the
+   * Gradient Groups panel. ``null`` when the current multi-selection was not
+   * initiated from the panel. UI uses this to disambiguate group vs region
+   * highlight when their hex sets are identical.
+   *
+   * 面板最近一次点击的分组/区域标识；当前多选不是由面板发起时为 null。
+   */
+  gradientSelection: GradientSelectionSource | null;
+
   // 热床尺寸
   bed_label: string;
   bedSizes: BedSizeItem[];
@@ -1457,6 +1494,84 @@ export interface ConverterActions {
   // Query achievable-color suggestions for a target hex (material-archive mode).
   fetchMaterialSuggestions: (targetHex: string) => Promise<void>;
   clearMaterialSuggestions: () => void;
+
+  /**
+   * Pull the preview's gradient-banding groups from the backend session.
+   * Safe to call multiple times: if ``sessionId`` matches the currently
+   * loaded groups the call is a cheap no-op. A new session triggers a
+   * fresh fetch that aborts any in-flight request.
+   *
+   * 从后端 session 拉取渐变海带纹分组：同 sessionId 直接复用缓存，不同则
+   * 触发新请求并取消旧请求。
+   */
+  fetchGradientGroups: (sessionId: string) => Promise<void>;
+  /** Reset gradient-group state (e.g. on new image upload or mode switch). */
+  clearGradientGroups: () => void;
+  /**
+   * Collapse every gradient group to its representative colour by populating
+   * ``colorRemapMap`` with non-representative → representative pairs and
+   * flushing the batch through the existing replace-preview path.
+   *
+   * 把每个渐变分组统一替换为代表色：在 ``colorRemapMap`` 里注册非代表色 →
+   * 代表色的映射，然后走既有的 ``submitReplacePreview`` 批量通道。
+   *
+   * Called automatically when ``autoReplaceGradientBanding`` is on, but
+   * also exposed so a button can trigger it on demand.
+   */
+  applyAutoGradientReplace: () => Promise<void>;
+  /**
+   * Replace ``selectedColors`` with the given hexes in one shot and switch
+   * to ``select-all`` mode. Used by the Gradient Groups panel so a single
+   * click multi-selects every colour inside a gradient group or region
+   * without firing N sequential highlight requests. When ``source`` is
+   * provided the store remembers *which* group/region triggered the batch
+   * so the panel can highlight exactly one row even when a region and its
+   * enclosing group share an identical hex set.
+   *
+   * 一次性把渐变分组内的所有耗材色写入多选集合：切到 select-all 模式 +
+   * 合并成一次高亮预览请求。传 ``source`` 可记录触发本次多选的分组/区域，
+   * 供面板按钮排它性高亮使用。
+   */
+  selectGradientGroupColors: (
+    hexes: string[],
+    source?: GradientSelectionSource,
+  ) => void;
+  /**
+   * Flatten gradient banding for a single group — or a specific region
+   * inside that group — without requiring the user to first multi-select
+   * and pick a target colour. Mirrors :func:`applyAutoGradientReplace`
+   * but scoped to one gradient, so the user can fix one band at a time.
+   *
+   * 针对单个渐变分组（或组内某个区域）一键去除海带纹：把非代表色映射
+   * 到代表色并走 ``submitReplacePreview`` 刷预览，无需先选中再拾色器。
+   */
+  applyGradientReplaceForGroup: (
+    groupIndex: number,
+    regionIndex?: number,
+  ) => Promise<void>;
+  /**
+   * Replace the pixels inside exactly one gradient sub-region with
+   * ``targetHex``. Backed by ``POST /api/convert/region-replace`` with
+   * ``gradient_group_index`` / ``gradient_region_index``; the server
+   * rebuilds the mask from the cached per-pixel ``gradient_region_id_map``
+   * so only that banded region changes, even when other regions on the
+   * canvas share the same quantised hex.
+   *
+   * Unlike :func:`confirmReplacement` + ``colorRemapMap`` (which is a
+   * whole-image ``hex → hex`` mapping and would recolour every matching
+   * pixel), this action is strictly spatial. Callers are the Gradient
+   * Groups panel + LUT picker when the current selection originated from
+   * a region button.
+   *
+   * 仅替换某个 gradient 子区域内的像素为 ``targetHex``。用后端 region-replace
+   * 的 gradient 路径，通过缓存的 region_id_map 精确定位，不会误伤共享
+   * 同一量化 hex 的其它区域——修复"换一条 cyan 带 → 全身皮肤变色"的 bug。
+   */
+  applyGradientRegionPixelReplace: (
+    groupIndex: number,
+    regionIndex: number,
+    targetHex: string,
+  ) => Promise<void>;
   setSourceVersion: (version: SourceVersion) => void;
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
@@ -1761,6 +1876,11 @@ export const DEFAULT_STATE: ConverterState = {
   materialSuggestionsLoading: false,
   materialSuggestionsTargetHex: null,
   materialSuggestionsError: null,
+  gradientGroups: null,
+  gradientGroupsLoading: false,
+  gradientGroupsError: null,
+  gradientGroupsSessionId: null,
+  gradientSelection: null,
   bed_label: "256脳256 mm",
   bedSizes: [],
   bedSizesLoading: false,
@@ -2830,6 +2950,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             regionData: null,
             selectedRegions: [],
             previewImageUrl: baseCur,
+            gradientSelection: null,
           });
           break;
         }
@@ -2840,6 +2961,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             selectedColors: new Set<string>(),
             selectedRegions: [],
             previewImageUrl: baseSelectAll,
+            gradientSelection: null,
           });
           break;
         }
@@ -2852,6 +2974,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             regionData: null,
             selectedRegions: [],
             previewImageUrl: baseMulti,
+            gradientSelection: null,
           });
           break;
         }
@@ -2864,6 +2987,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             regionData: null,
             selectedRegions: [],
             previewImageUrl: baseRegion,
+            gradientSelection: null,
           });
           break;
         }
@@ -2879,7 +3003,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       } else {
         next.add(hex);
       }
-      set({ selectedColors: next });
+      // Any manual tweak to the multi-select set implies the user is no
+      // longer inside a "gradient region"-scoped selection. Drop that stamp
+      // so the palette tiles recover their normal selection rendering;
+      // otherwise the palette would keep hiding selection borders even
+      // after the user has diverged from the region's exact colour list.
+      // 用户手动改动多选集合时，表示已从"区域选中"转为常规多选，清除
+      // gradientSelection 让调色板恢复正常的选中态渲染。
+      set({ selectedColors: next, gradientSelection: null });
 
       // 2D 预览高亮：调用后端生成颜色高亮预览（与 detectRegion 同风格）
       const state = _get();
@@ -3205,6 +3336,64 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       }
     },
 
+    applyGradientRegionPixelReplace: async (
+      groupIndex: number,
+      regionIndex: number,
+      targetHex: string,
+    ) => {
+      const state = _get();
+      const sid = state.sessionId;
+      if (!sid) {
+        set({ error: "请先预览图片" });
+        return;
+      }
+      const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiRegionReplace(sid, `#${hexNoHash}`, {
+          gradientGroupIndex: groupIndex,
+          gradientRegionIndex: regionIndex,
+        });
+        const updates: Partial<ConverterState> = {
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          replacePreviewLoading: false,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          // The edit is spatial and the chosen region's pixels are now
+          // ``targetHex``; keep the panel state consistent by clearing
+          // the region highlight and any leftover multi-selection so the
+          // LUT picker/preview return to the default "nothing selected"
+          // mode after the replace completes.
+          // 空间替换完成后清除区域高亮与遗留的多选集合，恢复默认态。
+          gradientSelection: null,
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          regionData: null,
+          // generate() must reuse the cached matched_rgb (which the server
+          // has just mutated) rather than re-running the fresh-pipeline,
+          // exactly like applyRegionReplace does.
+          // 与 applyRegionReplace 一致：让 generate 走 use_cached_matched_rgb。
+          regionReplacementCount: state.regionReplacementCount + 1,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (response.preview_glb_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(
+            response.preview_glb_url,
+          );
+        }
+        if (response.color_contours) {
+          updates.colorContours = response.color_contours;
+        }
+        set(updates);
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "区域颜色替换失败",
+        });
+      }
+    },
+
     applyCustomRecipeOverride: async (
       regionIds: string[],
       recipe: number[],
@@ -3308,6 +3497,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
       // 清除 pending 状态
       set({ pendingReplacement: null });
+
+      // When the pending replacement was seeded by a Gradient Groups
+      // *region* button, the user's intent is strictly spatial: repaint
+      // only the pixels inside that banded sub-region. The classic
+      // ``select-all`` branch below would apply a whole-image ``hex →
+      // hex`` remap which recolours every matching pixel on the canvas —
+      // that's exactly the "replace cyan band → whole body turns red"
+      // regression we are fixing. Route to :func:`applyGradientRegionPixelReplace`
+      // first so the backend rebuilds the mask from the cached
+      // per-pixel ``gradient_region_id_map``.
+      // 区域来源时改走空间替换：用 /region-replace 的 gradient 路径，
+      // 服务端从 region_id_map 生成精确 mask，仅改该区域像素，避免全图
+      // hex 替换误伤共享同色的其它区域。
+      const gradSel = state.gradientSelection;
+      if (gradSel?.kind === "region") {
+        await _get().applyGradientRegionPixelReplace(
+          gradSel.groupIndex,
+          gradSel.regionIndex,
+          pending.targetHex,
+        );
+        return;
+      }
 
       switch (pending.mode) {
         case "select-all":
@@ -3793,6 +4004,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         materialSuggestionsTargetHex: cleaned,
         materialSuggestionsError: null,
       });
+      // Forward the opt-in grid resolution so the suggest-colors lookup
+      // hits the same on-disk cache the user built through the dialog;
+      // otherwise we would silently fall back to a slower MITM run.
+      const settingsState = useSettingsStore.getState();
+      const gridResolutionOverride =
+        settingsState.enableSolverCacheGridSelection
+          ? settingsState.solverCacheGridResolution
+          : undefined;
       try {
         const response = await fetchMaterialColorSuggestions(
           {
@@ -3802,7 +4021,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             substrate: "white",
           },
           cleaned,
-          { signal },
+          { signal, gridResolution: gridResolutionOverride },
         );
         // Stash into LRU, evicting oldest when over limit.
         // 写入 LRU，超额时淘汰最早项。
@@ -3841,6 +4060,246 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         materialSuggestionsTargetHex: null,
         materialSuggestionsError: null,
       });
+    },
+
+    fetchGradientGroups: async (sessionId: string) => {
+      if (!sessionId) {
+        return;
+      }
+      // Reuse cached groups when the session hasn't changed — the backend
+      // recomputes synchronously on every new preview, so a matching session
+      // id means the payload is still fresh.
+      // 同一 session 的结果是稳定的，命中直接复用。
+      const current = _get();
+      if (
+        current.gradientGroupsSessionId === sessionId &&
+        current.gradientGroups !== null
+      ) {
+        return;
+      }
+      _gradientGroupsAbortController?.abort();
+      _gradientGroupsAbortController = new AbortController();
+      const { signal } = _gradientGroupsAbortController;
+
+      set({
+        gradientGroupsLoading: true,
+        gradientGroupsError: null,
+      });
+      try {
+        const response = await apiFetchGradientGroups(sessionId, signal);
+        // Abandon the response if the user moved on to another session
+        // between the request start and the response arrival.
+        // 期间换了 session 则丢弃这次结果。
+        if (_get().sessionId !== sessionId) {
+          return;
+        }
+        set({
+          gradientGroups: response.status === "ok" ? response.groups : [],
+          gradientGroupsLoading: false,
+          gradientGroupsError: null,
+          gradientGroupsSessionId: sessionId,
+        });
+        // Advanced setting: after groups land, automatically collapse every
+        // gradient to its representative colour so the user sees a clean
+        // preview without touching the color workstation.
+        // 高级设置：分组拉到手后，如果开启了"渐变自动换色"，自动批量折叠。
+        if (
+          useSettingsStore.getState().autoReplaceGradientBanding &&
+          response.status === "ok" &&
+          response.groups.length > 0
+        ) {
+          void _get().applyAutoGradientReplace();
+        }
+      } catch (err) {
+        if (signal.aborted) {
+          return; // Superseded by a newer fetch or an explicit clear.
+        }
+        set({
+          gradientGroupsLoading: false,
+          gradientGroupsError:
+            err instanceof Error
+              ? err.message
+              : "Failed to load gradient groups",
+        });
+      }
+    },
+
+    clearGradientGroups: () => {
+      _gradientGroupsAbortController?.abort();
+      _gradientGroupsAbortController = null;
+      set({
+        gradientGroups: null,
+        gradientGroupsLoading: false,
+        gradientGroupsError: null,
+        gradientGroupsSessionId: null,
+        gradientSelection: null,
+      });
+    },
+
+    selectGradientGroupColors: (
+      hexes: string[],
+      source?: GradientSelectionSource,
+    ) => {
+      const normalised = Array.from(
+        new Set(hexes.map((h) => h.replace(/^#/, "").toLowerCase())),
+      );
+      if (normalised.length === 0) {
+        return;
+      }
+      // Enter multi-colour mode and overwrite selectedColors atomically so
+      // the existing MaterialColorPicker flow picks this up as a normal
+      // "select-all" batch replacement source. The ``gradientSelection``
+      // state records which panel row (group vs specific region) initiated
+      // the batch, so the UI can highlight exactly one button even when a
+      // region shares its material breakdown with the enclosing group.
+      // 切到 select-all 模式并原子覆盖选中集合；``gradientSelection`` 记录
+      // 此次批量的发起方（整组 / 哪个区域），供按钮排它性高亮使用。
+      const baseUrl = getPreviewBaseUrl(_get());
+      set({
+        selectionMode: "select-all",
+        selectedColors: new Set(normalised),
+        selectedColor: null,
+        regionData: null,
+        selectedRegions: [],
+        previewImageUrl: baseUrl,
+        gradientSelection: source ?? null,
+      });
+      const sid = _get().sessionId;
+      if (!sid) return;
+      // If this batch originated from a specific region row, forward the
+      // (group_index, region_index) identifiers so the backend clips the
+      // highlight to that sub-region's *exact* pixel mask (via the cached
+      // per-pixel region_id_map). A rectangular bbox is nowhere near
+      // precise enough — a region's external rectangle almost always
+      // contains many same-coloured pixels belonging to other regions of
+      // the same group or unrelated background, which is exactly why
+      // clicking a sub-region used to "light up the whole group".
+      // 区域来源时传 (group_index, region_index) 让后端用精确像素 mask
+      // 裁剪；矩形 bbox 无法避免把同色其他区域一起点亮。
+      const scope =
+        source?.kind === "region"
+          ? {
+              gradientGroupIndex: source.groupIndex,
+              gradientRegionIndex: source.regionIndex,
+            }
+          : undefined;
+      // Fire a single highlight request so the preview shows every chosen
+      // colour at once, mirroring the visual feedback users already get
+      // from :func:`toggleColorInSelection`.
+      // 触发一次高亮请求，让预览整体高亮所有选中色块。
+      void apiColorHighlight(sid, normalised, scope)
+        .then((res) => {
+          // Stale-response guard: if the user clicked a *different* group or
+          // region while this request was in flight, the selection has
+          // already changed and the returned preview URL would overwrite the
+          // newer highlight with stale pixels. Only apply when the current
+          // selection still equals the one this request asked for.
+          // 过期响应丢弃：请求期间用户切换了别的分组/区域时，忽略本次返回。
+          const current = _get().selectedColors;
+          if (current.size !== normalised.length) return;
+          if (!normalised.every((h) => current.has(h))) return;
+          set({
+            previewImageUrl: normalizeResourceUrl(res.preview_url),
+          });
+        })
+        .catch(() => {
+          // Silent: highlight is a best-effort UX nicety.
+        });
+    },
+
+    applyGradientReplaceForGroup: async (
+      groupIndex: number,
+      regionIndex?: number,
+    ) => {
+      const state = _get();
+      const sid = state.sessionId;
+      if (!sid) return;
+      const groups = state.gradientGroups;
+      if (!groups || groups.length === 0) return;
+      const group = groups.find((g) => g.group_index === groupIndex);
+      if (!group) return;
+
+      const rep = group.representative_hex.replace(/^#/, "").toLowerCase();
+      if (!rep) return;
+
+      // Use the spatially-scoped /region-replace endpoint so that only
+      // pixels inside the gradient group (or single region) are repainted
+      // with the representative colour. The old colorRemapMap approach
+      // was a whole-image hex→hex remap that would pollute unrelated areas
+      // sharing the same quantised hex — the "去海带纹 repaints the whole
+      // body" bug.
+      // 走空间受限的 /region-replace 端点，仅把组内（或单区域内）像素刷成
+      // 代表色。旧方案 colorRemapMap 是全图 hex→hex，会误伤其它同色区域。
+      const scope =
+        regionIndex !== undefined
+          ? { gradientGroupIndex: groupIndex, gradientRegionIndex: regionIndex }
+          : { gradientGroupIndex: groupIndex };
+
+      set({ replacePreviewLoading: true, error: null });
+      try {
+        const response = await apiRegionReplace(sid, `#${rep}`, scope);
+        const updates: Partial<ConverterState> = {
+          previewImageUrl: normalizeResourceUrl(response.preview_url),
+          previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+          replacePreviewLoading: false,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          gradientSelection: null,
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          regionData: null,
+          regionReplacementCount: state.regionReplacementCount + 1,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        if (response.preview_glb_url) {
+          updates.previewGlbUrl = normalizeResourceUrl(
+            response.preview_glb_url,
+          );
+        }
+        if (response.color_contours) {
+          updates.colorContours = response.color_contours;
+        }
+        set(updates);
+      } catch (err) {
+        set({
+          replacePreviewLoading: false,
+          error: err instanceof Error ? err.message : "去海带纹替换失败",
+        });
+      }
+    },
+
+    applyAutoGradientReplace: async () => {
+      const state = _get();
+      if (!state.sessionId) return;
+      const groups = state.gradientGroups;
+      if (!groups || groups.length === 0) return;
+
+      // Build "non-rep → rep" map from the groups. Hex values are stored
+      // without the leading '#' and in lowercase, matching the frontend
+      // ``colorRemapMap`` convention.
+      // 构建 "非代表色 → 代表色" 映射（去掉 '#'、统一小写）。
+      const remap: Record<string, string> = {};
+      for (const g of groups) {
+        const rep = g.representative_hex.replace(/^#/, "").toLowerCase();
+        for (const mc of g.material_colours) {
+          const src = mc.hex.replace(/^#/, "").toLowerCase();
+          if (!src || src === rep) continue;
+          remap[src] = rep;
+        }
+      }
+      if (Object.keys(remap).length === 0) return;
+
+      // Merge into existing remap map so earlier user edits survive.
+      // 与已有手工 remap 合并，保留用户先前的手动替换。
+      const snapshot = { ...state.colorRemapMap };
+      const mergedMap = { ...state.colorRemapMap, ...remap };
+      set({
+        colorRemapMap: mergedMap,
+        remapHistory: [...state.remapHistory, snapshot],
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
+      await _get().submitReplacePreview();
     },
 
     submitPreview: async () => {
@@ -3902,9 +4361,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               ? buildNativeSourceParams(resolvedSourceSelection, state)
               : buildLegacySourceParams(state.lut_name);
         if (!sourceParams) {
-          _previewClientLog("preview: invalid source", {
-            source_version: state.source_version,
-          }, "warn");
+          _previewClientLog(
+            "preview: invalid source",
+            {
+              source_version: state.source_version,
+            },
+            "warn",
+          );
           set({
             isLoading: false,
             error: "请先选择品牌和数据库",
@@ -4026,6 +4489,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           hasManualPreview: true,
           layerImages: [],
           layerImagesOpen: false,
+          // Reset gradient-group cache so the panel shows loading while the
+          // new session's groups are fetched below. Without this the UI
+          // would briefly show stale groups from the previous preview.
+          // 新预览就位后先清空渐变组缓存，避免面板短暂显示旧 session 的分组。
+          gradientGroups: null,
+          gradientGroupsLoading: false,
+          gradientGroupsError: null,
+          gradientGroupsSessionId: null,
+          gradientSelection: null,
         });
         console.log(
           "[DEBUG] submitPreview success: cleared layerImages for new sessionId",
@@ -4056,17 +4528,29 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             // Best-effort: if the session hasn't been bound yet or the
             // endpoint errors, leave selectedLutInfo untouched.
           });
+        // Non-blocking fetch of gradient-banding groups. Backend computed
+        // these synchronously during preview, so this is a cheap read.
+        // 非阻塞拉取渐变分组：后端已在预览流程中同步算完，这里只是读缓存。
+        void _get().fetchGradientGroups(previewSessionId);
       } catch (err) {
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {
-          _previewClientLog("preview: canceled", summarizeErrorForLog(err), "warn");
+          _previewClientLog(
+            "preview: canceled",
+            summarizeErrorForLog(err),
+            "warn",
+          );
           return;
         }
         set({
           isLoading: false,
           error: err instanceof Error ? err.message : "预览失败",
         });
-        _previewClientLog("preview: failed", summarizeErrorForLog(err), "error");
+        _previewClientLog(
+          "preview: failed",
+          summarizeErrorForLog(err),
+          "error",
+        );
       } finally {
         _endPreviewTimer();
       }

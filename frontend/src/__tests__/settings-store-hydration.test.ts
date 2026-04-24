@@ -43,7 +43,8 @@ async function loadStores() {
   const converterStoreModule = await import("../stores/converter");
   const systemApi = await import("../api/system");
   const converterApi = await import("../api/converter");
-  const artifactModule = await import("../stores/generatedArtifactInvalidation");
+  const artifactModule =
+    await import("../stores/generatedArtifactInvalidation");
 
   settingsStoreModule.useSettingsStore.setState({
     ...settingsStoreModule.DEFAULT_SETTINGS,
@@ -71,9 +72,9 @@ describe("settings store hydration and base-layer modifier wiring", () => {
   it("default enableBaseLayerHeightModifier is true", async () => {
     const { settingsStoreModule } = await loadStores();
 
-    expect(settingsStoreModule.DEFAULT_SETTINGS.enableBaseLayerHeightModifier).toBe(
-      true,
-    );
+    expect(
+      settingsStoreModule.DEFAULT_SETTINGS.enableBaseLayerHeightModifier,
+    ).toBe(true);
     expect(
       settingsStoreModule.useSettingsStore.getState()
         .enableBaseLayerHeightModifier,
@@ -91,7 +92,65 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       settingsStoreModule.useSettingsStore.getState()
         .enableBaseLayerHeightModifier,
     ).toBe(false);
-    expect(artifactModule.invalidateGeneratedArtifacts).toHaveBeenCalledTimes(1);
+    expect(artifactModule.invalidateGeneratedArtifacts).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("solver cache grid selection ships disabled with the low-tier default", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    expect(
+      settingsStoreModule.DEFAULT_SETTINGS.enableSolverCacheGridSelection,
+    ).toBe(false);
+    expect(settingsStoreModule.DEFAULT_SETTINGS.solverCacheGridResolution).toBe(
+      64,
+    );
+    expect(settingsStoreModule.SOLVER_CACHE_GRID_RESOLUTIONS).toEqual([
+      64, 128, 256,
+    ]);
+  });
+
+  it("setSolverCacheGridResolution accepts whitelisted tiers and rejects others", async () => {
+    const { settingsStoreModule } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    // Accepted: every value from the whitelist flips the store state.
+    for (const tier of settingsStoreModule.SOLVER_CACHE_GRID_RESOLUTIONS) {
+      useSettingsStore.getState().setSolverCacheGridResolution(tier);
+      expect(useSettingsStore.getState().solverCacheGridResolution).toBe(tier);
+    }
+
+    // Rejected: arbitrary values leave the store at its last accepted tier
+    // rather than poisoning it with an unsupported resolution.
+    useSettingsStore.getState().setSolverCacheGridResolution(128);
+    // TS would normally catch this; the cast emulates a malformed persisted
+    // snapshot from an older or hand-edited client.
+    useSettingsStore
+      .getState()
+      .setSolverCacheGridResolution(96 as unknown as 64 | 128 | 256);
+    expect(useSettingsStore.getState().solverCacheGridResolution).toBe(128);
+  });
+
+  it("setEnableSolverCacheGridSelection toggles the opt-in flag without touching the tier", async () => {
+    const { settingsStoreModule } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    useSettingsStore.getState().setSolverCacheGridResolution(256);
+    useSettingsStore.getState().setEnableSolverCacheGridSelection(true);
+
+    expect(useSettingsStore.getState().enableSolverCacheGridSelection).toBe(
+      true,
+    );
+    expect(useSettingsStore.getState().solverCacheGridResolution).toBe(256);
+
+    useSettingsStore.getState().setEnableSolverCacheGridSelection(false);
+    expect(useSettingsStore.getState().enableSolverCacheGridSelection).toBe(
+      false,
+    );
+    // Tier survives the toggle flip so a user who disables the feature
+    // keeps their previous choice pre-filled when they re-enable it.
+    expect(useSettingsStore.getState().solverCacheGridResolution).toBe(256);
   });
 
   it("syncToBackend includes enable_base_layer_height_modifier payload field", async () => {

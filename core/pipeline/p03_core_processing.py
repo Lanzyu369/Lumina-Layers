@@ -34,10 +34,14 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     """
     from PIL import Image
 
-    from core.material_cache import load_material_solver_cache
+    from core.material_cache import (
+        DEFAULT_GRID_RESOLUTION,
+        build_material_solver_cache,
+        load_material_solver_cache_with_fallback,
+    )
     from core.material_lut_synthesis import (
+        ensure_not_worse_than_smaller_N,
         map_pixels_to_materials,
-        solve_image_colors_optimal,
     )
     from core.pipeline.processing_ops.bilateral_filter import apply_bilateral_filter
     from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors as kmeans_quantize
@@ -55,6 +59,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     layer_count = int(ctx.get("color_layers") or 5)
     layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
     substrate = str(ctx.get("material_substrate") or "white")
+    requested_grid = int(ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION)
 
     # ---- Load and resize ----
     from config import ModelingMode
@@ -88,19 +93,32 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     mask_solid = ~mask_transparent
 
     # ---- Quantize ----
+    # Pass ``skip_post_blur=True``: the material-archive solver (and its
+    # cache) consumes ``unique_colors`` and relies on the quantization
+    # contract (``unique RGB count <= quantize_colors_n``). Letting
+    # ``cv2.medianBlur`` run would inflate unique_colors by 10-100x and
+    # produce visible banding at higher layer counts because neighbouring
+    # pixels get mapped to distinct recipes for colors that were supposed
+    # to collapse into the same cluster.
+    # (耗材档案分支必须关闭后量化模糊：medianBlur 逐通道取中值会把 unique
+    # RGB 数炸到 10-100 倍，层数越多相邻像素越容易被映射到不同配方，从而
+    # 在预览里表现为肉眼可见的色块/带状化。)
     rgb_processed = apply_bilateral_filter(rgb_arr, 10)
     rgb_processed = apply_median_filter(rgb_processed, 0)
-    quantized_image = kmeans_quantize(rgb_processed, quantize_colors_n)
+    quantized_image = kmeans_quantize(
+        rgb_processed, quantize_colors_n, skip_post_blur=True
+    )
     unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
     _log.info("[P03-Material] %d unique colors after quantization", len(unique_colors))
 
     # ---- Resolve recipes: cache lookup or per-image B&B fallback ----
     solver_t0 = time.perf_counter()
-    cache = load_material_solver_cache(
+    cache, actual_grid = load_material_solver_cache_with_fallback(
         materials=materials,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
+        grid_resolution=requested_grid,
     )
     solver_path: str
     solver_meta: dict = {}
@@ -111,22 +129,75 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         solver_path = "cache"
         solver_meta = {
             "palette_hash": cache.palette_hash,
+            "requested_grid_resolution": requested_grid,
             "grid_resolution": cache.grid_resolution,
+            "grid_fallback_used": actual_grid != requested_grid,
             "valid_cell_count": cache.valid_cell_count,
             "built_at": cache.metadata.get("built_at"),
             "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
             "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
         }
     else:
-        matched_rgb_unique, recipes_unique, delta_e = solve_image_colors_optimal(
-            unique_colors,
-            materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
+        # No persisted cache found — build a temporary low-res (64³) cache
+        # in-memory and use it for lookup.  This avoids the MITM per-pixel
+        # solver whose delta_e broadcast (C, chunk, K_bot) can exceed
+        # available RAM for large palettes (e.g. M=8, N=10 → ~2.7 GiB).
+        # The cache builder uses a per-bucket approach that stays within
+        # ~100 MiB per chunk regardless of palette size.
+        # 没有持久化缓存时，现场构建一个最低分辨率（64³）的临时缓存用于匹配。
+        # 缓存构建器采用逐桶写入模式，内存可控，不会像 MITM 求解器那样 OOM。
+        _MIN_FALLBACK_GRID = 64
+        _log.info(
+            "[P03-Material] No cache found; building temporary grid=%d "
+            "cache in-memory (M=%d, N=%d) …",
+            _MIN_FALLBACK_GRID, len(materials), layer_count,
         )
-        solver_path = "bnb_exhaustive"
-        solver_meta = {"reason": "no_cache" if cache is None else "empty_targets"}
+        try:
+            cache = build_material_solver_cache(
+                materials=materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                grid_resolution=_MIN_FALLBACK_GRID,
+            )
+        except (MemoryError, ValueError) as exc:
+            _log.error(
+                "[P03-Material] Temporary cache build failed: %s", exc
+            )
+            ctx["error"] = (
+                "[P03] 临时缓存构建失败，请先为该调色板构建穷举缓存。"
+                " / Temporary cache build failed. "
+                "Please build the solver cache for this palette first."
+            )
+            return ctx
+        _log.info(
+            "[P03-Material] Temporary cache built: %d valid cells, "
+            "mean_ΔE=%.2f, build=%.1fs",
+            cache.valid_cell_count,
+            float(cache.metadata.get("mean_delta_e", 0.0)),
+            float(cache.metadata.get("build_time_seconds", 0.0)),
+        )
+        if unique_colors.shape[0] > 0:
+            matched_rgb_unique, recipes_unique, delta_e = cache.lookup(
+                unique_colors, materials
+            )
+        else:
+            matched_rgb_unique = np.zeros((0, 3), dtype=np.uint8)
+            recipes_unique = np.zeros((0, layer_count), dtype=np.int32)
+            delta_e = np.zeros((0,), dtype=np.float64)
+        solver_path = "cache_built_on_the_fly"
+        solver_meta = {
+            "palette_hash": cache.palette_hash,
+            "requested_grid_resolution": requested_grid,
+            "grid_resolution": cache.grid_resolution,
+            "grid_fallback_used": True,
+            "valid_cell_count": cache.valid_cell_count,
+            "built_at": cache.metadata.get("built_at"),
+            "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
+            "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
+            "build_time_seconds": float(cache.metadata.get("build_time_seconds", 0.0)),
+            "reason": "no_persisted_cache",
+        }
     solver_elapsed = time.perf_counter() - solver_t0
     _log.info(
         "[P03-Material] Solver path=%s colors=%d mean_ΔE=%.2f max_ΔE=%.2f elapsed=%.2fs",
@@ -136,6 +207,53 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         float(np.max(delta_e)) if delta_e.size else 0.0,
         solver_elapsed,
     )
+
+    # ---- Enforce "N-layer recipe not worse than smaller-N + white padding" ----
+    # Only run the cross-N fallback when the solver ran exhaustively on-the-fly.
+    # When a cache was loaded, the exhaustive grid already encodes globally-optimal
+    # N-layer solutions; re-solving k<N via the MITM solver would be redundant and
+    # catastrophically expensive for large palettes (e.g. M=8, k≥8 creates multi-GB
+    # MITM tables that OOM the worker process).
+    # (仅在走了在线穷举路径时才做跨 N 比较。缓存命中时网格已全局最优，且大调色板
+    # k≥8 的 MITM 求解会产生数 GB 表引发 OOM。)
+    _run_cross_n = unique_colors.shape[0] > 0 and solver_path not in ("cache", "cache_built_on_the_fly")
+    if _run_cross_n:
+        fallback_t0 = time.perf_counter()
+        matched_rgb_unique, recipes_unique, delta_e, fallback_stats = (
+            ensure_not_worse_than_smaller_N(
+                unique_colors,
+                materials,
+                matched_rgb_unique,
+                recipes_unique,
+                delta_e,
+                target_layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+            )
+        )
+        fallback_elapsed = time.perf_counter() - fallback_t0
+        solver_meta["not_worse_fallback"] = {
+            **fallback_stats,
+            "elapsed_seconds": float(fallback_elapsed),
+        }
+        if fallback_stats["applied"] and fallback_stats["improved_pixels"] > 0:
+            _log.info(
+                "[P03-Material] Not-worse fallback replaced %d/%d unique colours "
+                "(mean ΔE %.2f→%.2f, max ΔE %.2f→%.2f, elapsed=%.2fs)",
+                fallback_stats["improved_pixels"],
+                int(unique_colors.shape[0]),
+                fallback_stats["mean_delta_e_before"],
+                fallback_stats["mean_delta_e_after"],
+                fallback_stats["max_delta_e_before"],
+                fallback_stats["max_delta_e_after"],
+                fallback_elapsed,
+            )
+        elif not fallback_stats["applied"]:
+            _log.info(
+                "[P03-Material] Not-worse fallback skipped (no white material "
+                "detected in palette or N=%d already at the lower bound).",
+                layer_count,
+            )
 
     # ---- Convert layer order: solver "Bottom2Top" -> pipeline "Top2Bottom" ----
     # 层序转换：求解器/缓存输出的 ``recipes_unique[:, 0]`` 是底层（贴基底、
@@ -292,5 +410,5 @@ def run(ctx: dict) -> dict:
     ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p03_s'] = _elapsed
-    print(f"[P03] core_processing done: {_elapsed:.3f}s")
+    _log.info("[P03] core_processing done: %.3fs", _elapsed)
     return ctx

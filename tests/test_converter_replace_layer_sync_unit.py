@@ -222,8 +222,8 @@ class TestMaterialArchiveReplaceLayerSync:
             lambda names: [object() for _ in names],
         )
         monkeypatch.setattr(
-            "api.routers.converter.replace.load_material_solver_cache",
-            lambda **kwargs: None,
+            "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+            lambda *args, **kwargs: (None, None),
         )
         monkeypatch.setattr(
             "api.routers.converter.replace.solve_image_colors_optimal",

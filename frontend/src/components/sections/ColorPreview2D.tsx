@@ -99,7 +99,23 @@ export default function ColorPreview2D({
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl);
   const originalUploadUrl = useConverterStore((s) => s.imagePreviewUrl);
-  const stableImageUrl = previewBaseImageUrl ?? previewImageUrl;
+  const gradientSelection = useConverterStore((s) => s.gradientSelection);
+  // Region-scoped gradient selection must route through ``previewImageUrl``
+  // (the exact cyan mask the backend computed for just this connected
+  // component). Falling back to the SVG contour overlay path lights up
+  // every pixel of those colours across the whole canvas, which is wrong:
+  // the region is a strict *spatial* subset of those colours' pixels.
+  // The whole-group and region-less flows still use the stable base image +
+  // contour overlay because their mask really is "all pixels of these hexes
+  // on the canvas", so the contour path is correct there.
+  // 区域来源时必须显示后端精确 mask 图（previewImageUrl），不能走前端全图
+  // 同色轮廓叠加——否则会把属于该区域材料色的所有像素都高亮，违背"区域"
+  // 只是这些颜色在图上某一连通块的语义。整组/无来源仍走稳定 base + 轮廓
+  // 叠加，因为它们的语义确实是"全图这些色"。
+  const isRegionScopedSelection = gradientSelection?.kind === 'region';
+  const stableImageUrl = isRegionScopedSelection
+    ? (previewImageUrl ?? previewBaseImageUrl)
+    : (previewBaseImageUrl ?? previewImageUrl);
   const [showOriginal, setShowOriginal] = useState(false);
   const releaseOriginalView = useCallback(() => setShowOriginal(false), []);
 
@@ -619,7 +635,19 @@ export default function ColorPreview2D({
           targets.push({ hex, polygons: region.contours });
         }
       }
-    } else if (selectionMode === 'select-all' && selectedColors.size > 0) {
+    } else if (
+      selectionMode === 'select-all' &&
+      selectedColors.size > 0 &&
+      !isRegionScopedSelection
+    ) {
+      // Skip when the selection is region-scoped: ``colorContours`` lists
+      // every pixel of each hex across the whole canvas, which would paint
+      // cyan outlines far beyond the region's connected component. The
+      // region flow already displays the backend's exact mask via
+      // ``previewImageUrl`` above, so no client-side overlay is needed.
+      // 区域来源跳过 contour 叠加——colorContours 是全图同色轮廓，叠上去
+      // 会把区域外的同色像素也框住；区域流程已经通过 previewImageUrl 显
+      // 示精确 mask 图，无需再叠轮廓。
       for (const hex of selectedColors) {
         if (colorContours[hex]) {
           targets.push({ hex, polygons: colorContours[hex] });
@@ -639,6 +667,7 @@ export default function ColorPreview2D({
     colorContours,
     previewPixelWidth,
     previewPixelHeight,
+    isRegionScopedSelection,
   ]);
 
   const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample, {

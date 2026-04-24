@@ -31,6 +31,7 @@ from core.material_color_solver import (  # noqa: F401
     MIN_LAYER_COUNT,
     MaterialParams,
     beer_lambert_layer as _beer_lambert_layer,
+    ensure_not_worse_than_smaller_N,
     forward_model,
     linear_to_srgb_uint8 as _linear_to_srgb_uint8,
     map_pixels_to_materials,

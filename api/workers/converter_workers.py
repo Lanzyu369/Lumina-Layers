@@ -76,6 +76,7 @@ def worker_generate_preview(
     selected_materials: list[str] | None = None,
     material_layer_count: int | None = None,
     material_layer_height_mm: float | None = None,
+    material_grid_resolution: int | None = None,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -138,6 +139,7 @@ def worker_generate_preview(
             "enable_cleanup": enable_cleanup,
             "material_source": material_source,
             "selected_material_count": len(selected_materials or []),
+            "material_grid_resolution": material_grid_resolution,
             "model_enable": model_enable,
             "model_only": model_only,
         },
@@ -166,6 +168,7 @@ def worker_generate_preview(
             selected_materials=selected_materials,
             material_layer_count=material_layer_count,
             material_layer_height_mm=material_layer_height_mm,
+            material_grid_resolution=material_grid_resolution,
         )
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
         log.exception(

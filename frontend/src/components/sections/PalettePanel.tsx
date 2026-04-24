@@ -243,6 +243,7 @@ export default function PalettePanel({
   const heightmap_max_height = useConverterStore((s) => s.heightmap_max_height);
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const setSelectionMode = useConverterStore((s) => s.setSelectionMode);
+  const gradientSelection = useConverterStore((s) => s.gradientSelection);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
   const regionData = useConverterStore((s) => s.regionData);
   const removeRegionFromSelection = useConverterStore((s) => s.removeRegionFromSelection);
@@ -291,11 +292,28 @@ export default function PalettePanel({
     ? new Set(selectedRegions.map((r) => r.colorHex.replace(/^#/, "")))
     : null;
 
+  // When the current select-all set was populated from a gradient *region*
+  // (not a whole group), the palette must NOT draw its usual "selected"
+  // borders on those colour tiles. Each of the region's colours typically
+  // appears elsewhere on the canvas too, so lighting up the tiles falsely
+  // suggests "every instance of this colour is selected across the whole
+  // image" — which is exactly the confusion users ran into: the preview
+  // correctly showed only the region, but the palette made it look like a
+  // whole-image multi-select.
+  // 来源是"区域"的 select-all 不应把调色板色块渲染为选中态：同色在图上
+  // 通常出现在多处，点亮色块会误导用户以为"全图这些色都被选中"，和预览
+  // 上只点亮单个区域的事实不符。
+  const isRegionScopedSelection = gradientSelection?.kind === 'region';
+
   const getIsSelected = (hex: string): boolean => {
     if (multiSelectHexSet) {
       return multiSelectHexSet.has(hex);
     }
-    if (selectionMode === 'select-all' && selectedColors.size > 0) {
+    if (
+      selectionMode === 'select-all' &&
+      selectedColors.size > 0 &&
+      !isRegionScopedSelection
+    ) {
       return selectedColors.has(hex);
     }
     return selectedColor === hex;
@@ -443,8 +461,15 @@ export default function PalettePanel({
           </div>
 
           <div className="shrink-0 flex flex-col gap-1.5">
-            {/* Select-all multi-color indicator */}
-            {selectionMode === 'select-all' && selectedColors.size > 0 && (
+            {/* Select-all multi-color indicator. Hidden when the selection
+                came from a gradient region — the amber "N colours selected"
+                chip strip duplicates the already-confusing selection-border
+                rendering on the palette and reinforces the wrong impression
+                that the whole image will be acted on. The Gradient Groups
+                panel itself still shows which region is active. */}
+            {selectionMode === 'select-all' &&
+              selectedColors.size > 0 &&
+              !isRegionScopedSelection && (
             <div className={cx(workstationInsetCardClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
               <span className="text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_count").replace("{count}", String(selectedColors.size))}

@@ -367,6 +367,11 @@ function LutColorGridInner() {
 
     const hexNoHash = clickedHex.replace("#", "");
 
+    // Gradient-region-aware routing lives in ``confirmReplacement`` so
+    // the user still sees the familiar source→target preview bar and can
+    // cancel before committing. See store.ts :func:`confirmReplacement`.
+    // 区域精确替换的分岔放在 confirmReplacement 里，让用户保留"确认替换"
+    // 按钮的交互；此处仍走既有 setPendingReplacement 流程。
     switch (selectionMode) {
       case 'select-all': {
         // 全选模式：支持多选源色批量替换

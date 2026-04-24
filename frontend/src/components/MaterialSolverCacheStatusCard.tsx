@@ -9,6 +9,7 @@ import {
 import type { MaterialSolverCacheEntry } from "../api/types";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
+import { useSettingsStore } from "../stores/settingsStore";
 import Button from "./ui/Button";
 
 interface MaterialSolverCacheStatusCardProps {
@@ -56,6 +57,22 @@ export default function MaterialSolverCacheStatusCard({
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const enableSolverCacheGridSelection = useSettingsStore(
+    (s) => s.enableSolverCacheGridSelection,
+  );
+  const solverCacheGridResolution = useSettingsStore(
+    (s) => s.solverCacheGridResolution,
+  );
+
+  // Only forward the user-selected resolution when the opt-in toggle is on.
+  // With the toggle off every request omits ``grid_resolution`` so the
+  // backend uses its low (64) default, matching what the user sees in the UI.
+  const effectiveGridResolution = enableSolverCacheGridSelection
+    ? solverCacheGridResolution
+    : undefined;
+  const activeGridResolution =
+    effectiveGridResolution ?? solverCacheGridResolution;
+
   const cacheKey = useMemo<MaterialSolverCacheKey>(
     () => ({
       materialDirectoryNames,
@@ -80,7 +97,9 @@ export default function MaterialSolverCacheStatusCard({
     const thisRequest = ++requestIdRef.current;
     setState((prev) => ({ ...prev, phase: "checking", errorMessage: null }));
     try {
-      const response = await fetchMaterialSolverCacheStatus(cacheKey);
+      const response = await fetchMaterialSolverCacheStatus(cacheKey, {
+        gridResolution: effectiveGridResolution,
+      });
       if (requestIdRef.current !== thisRequest) return;
       if (response.cached && response.entry) {
         setState({
@@ -97,7 +116,7 @@ export default function MaterialSolverCacheStatusCard({
         error instanceof Error ? error.message : String(error ?? "");
       setState({ phase: "error", entry: null, errorMessage: message });
     }
-  }, [materialDirectoryNames.length, cacheKey]);
+  }, [materialDirectoryNames.length, cacheKey, effectiveGridResolution]);
 
   useEffect(() => {
     refreshStatus();
@@ -108,7 +127,9 @@ export default function MaterialSolverCacheStatusCard({
     setActionError(null);
     setIsBuilding(true);
     try {
-      const response = await buildMaterialSolverCache(cacheKey);
+      const response = await buildMaterialSolverCache(cacheKey, {
+        gridResolution: effectiveGridResolution,
+      });
       setState({
         phase: "cached",
         entry: response.entry,
@@ -123,7 +144,7 @@ export default function MaterialSolverCacheStatusCard({
     } finally {
       setIsBuilding(false);
     }
-  }, [cacheKey, materialDirectoryNames.length]);
+  }, [cacheKey, materialDirectoryNames.length, effectiveGridResolution]);
 
   const handleDelete = useCallback(async () => {
     if (materialDirectoryNames.length === 0) return;
@@ -132,7 +153,9 @@ export default function MaterialSolverCacheStatusCard({
     setActionError(null);
     setIsDeleting(true);
     try {
-      await deleteMaterialSolverCache(cacheKey);
+      await deleteMaterialSolverCache(cacheKey, {
+        gridResolution: effectiveGridResolution,
+      });
       setState({ phase: "missing", entry: null, errorMessage: null });
     } catch (error) {
       const message =
@@ -143,7 +166,7 @@ export default function MaterialSolverCacheStatusCard({
     } finally {
       setIsDeleting(false);
     }
-  }, [cacheKey, materialDirectoryNames.length, t]);
+  }, [cacheKey, materialDirectoryNames.length, effectiveGridResolution, t]);
 
   const combinationsEstimate = useMemo(
     () =>
@@ -201,6 +224,18 @@ export default function MaterialSolverCacheStatusCard({
         </div>
         <StatusPill tone={statusTone} label={statusText} />
       </header>
+
+      <p
+        data-testid="material-solver-cache-active-grid"
+        className="text-[11px] leading-snug text-slate-500 dark:text-slate-400"
+      >
+        {tRuntime("basic_material_cache_active_grid_label", {
+          tier: t(
+            `settings.solver_cache_density_option_${activeGridResolution}`,
+          ),
+          grid: activeGridResolution,
+        })}
+      </p>
 
       {state.phase === "error" && state.errorMessage ? (
         <p className="text-xs text-rose-500">
