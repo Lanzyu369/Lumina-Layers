@@ -1525,6 +1525,14 @@ class VectorProcessor:
 
             _log.info("[VECTOR] Merging %s parts for %s...", len(mesh_list), name)
             combined = trimesh.util.concatenate(mesh_list) if len(mesh_list) > 1 else mesh_list[0]
+            # Weld coincident border vertices produced by independent per-shape
+            # ``_extrude_geometry`` calls so Three.js / exporters do not render
+            # visible seams along shape boundaries. 对相邻 shape 独立 extrude
+            # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
+            try:
+                combined.merge_vertices()
+            except Exception:
+                pass
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -1683,6 +1691,7 @@ class VectorProcessor:
         analysis: "VectorAnalysis",
         pixels_per_mm: float = 10.0,
         max_width_px: int = 1600,
+        supersample_preview: int = 2,
     ) -> dict:
         """Rasterise vector analysis into preview-cache arrays.
         将矢量分析结果光栅化为预览缓存数组，供预览/调色板/GLB 复用。
@@ -1690,6 +1699,23 @@ class VectorProcessor:
         Unlike ``render_preview()``, this method preserves separate
         ``matched_rgb`` / ``quantized_image`` / ``mask_solid`` data so the
         frontend preview cache stays aligned with the native vector pipeline.
+
+        ``matched_rgb`` / ``mask_solid`` / ``material_matrix`` /
+        ``quantized_image`` are always rasterised at ``pixels_per_mm`` with
+        hard-edged ``cv2.fillPoly`` because several downstream APIs
+        (color-highlight bbox, region id map, color recipe logger) rely on
+        exact pixel-indexed membership.
+
+        ``preview_rgba`` — the display-facing RGBA image read by the frontend
+        preview canvas — is rasterised at ``pixels_per_mm * supersample_preview``
+        and box-filter downsampled with ``cv2.INTER_AREA`` so shape boundaries
+        carry an anti-aliased alpha gradient. Without this the hard-edged
+        pixels composited on the page's white background produced the
+        stair-stepped jaggies users saw at stroke-heavy borders. Passing
+        ``supersample_preview=1`` reverts to the legacy hard-edged behaviour.
+
+        ``preview_rgba`` 使用 supersample + INTER_AREA 降采样做边缘抗锯齿；其
+        他掩膜数组保持硬边，保证下游像素索引 API 语义不变。
         """
         real_w = analysis.bbox[2]
         real_h = analysis.bbox[3]
@@ -1714,6 +1740,12 @@ class VectorProcessor:
         mask_solid = np.zeros((h_px, w_px), dtype=bool)
         material_matrix = np.full((h_px, w_px, analysis.num_layers), -1, dtype=np.int16)
 
+        ss = max(1, int(supersample_preview))
+        ss_h = h_px * ss
+        ss_w = w_px * ss
+        ss_coord_scale = coord_scale * ss
+        preview_rgba_ss = np.zeros((ss_h, ss_w, 4), dtype=np.uint8) if ss > 1 else None
+
         def _iter_polygons(geom):
             if geom is None or geom.is_empty:
                 return []
@@ -1723,28 +1755,28 @@ class VectorProcessor:
                 return list(geom.geoms)
             return []
 
-        def _coords_to_pts(coords):
+        def _coords_to_pts(coords, scale):
             pts = np.column_stack(
                 [
-                    coords[:, 0] * coord_scale,
-                    coords[:, 1] * coord_scale,
+                    coords[:, 0] * scale,
+                    coords[:, 1] * scale,
                 ]
             ).astype(np.int32)
             if len(pts) < 3:
                 return None
             return pts
 
-        def _polygon_mask(poly):
-            region = np.zeros((h_px, w_px), dtype=np.uint8)
+        def _polygon_mask(poly, height, width, scale):
+            region = np.zeros((height, width), dtype=np.uint8)
             ext_coords = np.array(poly.exterior.coords)
-            ext_pts = _coords_to_pts(ext_coords)
+            ext_pts = _coords_to_pts(ext_coords, scale)
             if ext_pts is None:
                 return None
             cv2.fillPoly(region, [ext_pts], 255)
 
             for interior in poly.interiors:
                 hole_coords = np.array(interior.coords)
-                hole_pts = _coords_to_pts(hole_coords)
+                hole_pts = _coords_to_pts(hole_coords, scale)
                 if hole_pts is not None:
                     cv2.fillPoly(region, [hole_pts], 0)
 
@@ -1772,7 +1804,7 @@ class VectorProcessor:
             for poly in _iter_polygons(geom):
                 if poly.is_empty:
                     continue
-                region_mask = _polygon_mask(poly)
+                region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
                 if region_mask is None or not np.any(region_mask):
                     continue
 
@@ -1781,9 +1813,20 @@ class VectorProcessor:
                 mask_solid[region_mask] = True
                 material_matrix[region_mask] = recipe_full
 
-        preview_rgba = np.zeros((h_px, w_px, 4), dtype=np.uint8)
-        preview_rgba[mask_solid, :3] = matched_rgb[mask_solid]
-        preview_rgba[mask_solid, 3] = 255
+                if preview_rgba_ss is not None:
+                    ss_mask = _polygon_mask(poly, ss_h, ss_w, ss_coord_scale)
+                    if ss_mask is not None and np.any(ss_mask):
+                        preview_rgba_ss[ss_mask, :3] = matched_color
+                        preview_rgba_ss[ss_mask, 3] = 255
+
+        if preview_rgba_ss is not None:
+            preview_rgba = cv2.resize(
+                preview_rgba_ss, (w_px, h_px), interpolation=cv2.INTER_AREA,
+            )
+        else:
+            preview_rgba = np.zeros((h_px, w_px, 4), dtype=np.uint8)
+            preview_rgba[mask_solid, :3] = matched_rgb[mask_solid]
+            preview_rgba[mask_solid, 3] = 255
 
         return {
             "target_w": w_px,
@@ -2584,8 +2627,17 @@ class VectorProcessor:
 
         scale_factor = target_width_mm / real_w
         min_area_svg = max(0.0, (self.sampling_precision**2) / max(scale_factor**2, 1e-12) * 0.25)
-        min_printable_stroke_svg = PrinterConfig.NOZZLE_WIDTH / max(scale_factor, 1e-12)
         simplify_tol_svg = max(0.0, (self.sampling_precision / max(scale_factor, 1e-9)) * 0.5)
+        # NOTE: a silent 'widen thin stroke to nozzle width' step (added in
+        # PR #24 overhaul, 34a22dc) used to outward-buffer every sub-nozzle
+        # stroke shape by ``0.5*(nozzle-stroke)`` with ``join_style='mitre',
+        # mitre_limit=2.0``. On illustrated SVGs this made every fine contour
+        # chunky and produced mitre spikes at sharp corners. Removed here
+        # because sub-nozzle stroke handling belongs to the slicer/export
+        # boundary, not the shared preview/mesh geometry stage.
+        # 曾经的 "按 nozzle 宽度外扩细描边" 步骤（PR #24 overhaul 引入）会让细
+        # 笔触整体变粗、尖角产生毛刺；这类打印兼容处理应放在切片/导出边界层
+        # 而非预览/mesh 几何共用阶段，此处不再做。
         final_shapes = []
         for item in raw_shapes:
             shifted = affinity.translate(item["poly"], xoff=-gx0, yoff=-gy0)
@@ -2597,17 +2649,6 @@ class VectorProcessor:
 
             if not shifted.is_valid:
                 shifted = make_valid(shifted)
-
-            stroke_width_svg = float(item.get("stroke_width_svg", 0.0) or 0.0)
-            if stroke_width_svg > 0.0 and stroke_width_svg < min_printable_stroke_svg:
-                try:
-                    delta = 0.5 * (min_printable_stroke_svg - stroke_width_svg)
-                    expanded = shifted.buffer(delta, join_style="mitre", mitre_limit=2.0)
-                    expanded = VectorProcessor._extract_polygonal_geometry(make_valid(expanded))
-                    if expanded is not None and not expanded.is_empty:
-                        shifted = expanded
-                except VECTOR_HANDLED_ERRORS:
-                    pass
 
             if shifted.is_empty or shifted.area <= min_area_svg:
                 continue

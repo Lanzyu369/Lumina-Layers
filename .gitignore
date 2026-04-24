@@ -286,6 +286,7 @@ scripts/userscripts/
 
 # Performance profiling (ephemeral, machine-specific)
 artifacts/perf_latest.json
+artifacts/
 
 # Local test images at project root (not part of repo)
 /TCT.jpg

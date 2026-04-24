@@ -149,8 +149,29 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         ],
       },
       {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "含描边的 SVG 生成更贴合线稿：默认忽略纯描边轮廓与同色描边扩边，避免黑边与线条变粗",
+            en: "SVGs with strokes now match the drawing more closely: stroke-only outlines and same-colour stroke padding are ignored by default, removing dark edges and thickened lines",
+          },
+          {
+            zh: "插画类 SVG 预览回到干净矢量效果：细描边的粗细和源文件保持一致，不再被整体加粗；尖角也不会外突出锯齿毛刺",
+            en: "Illustrated SVGs now preview as clean vectors: thin stroke widths follow the source file instead of being globally thickened, and sharp corners no longer produce outward spikes or fuzzy jaggies",
+          },
+          {
+            zh: "2D 预览形状边缘过渡更平滑，告别像素化阶梯锯齿",
+            en: "2D preview shape boundaries are noticeably smoother, replacing the stair-stepped pixel jaggies with anti-aliased edges",
+          },
+        ],
+      },
+      {
         category: { zh: "稳定性", en: "Stability" },
         items: [
+          {
+            zh: "与参考实现对齐 backing silhouette 的 close / hole / slit 过滤阈值，并为色块层补充空洞过滤，减少白色气泡。",
+            en: "Align backing silhouette close / hole / slit thresholds and add color-layer hole filtering with the reference implementation to reduce white bubble artifacts.",
+          },
           {
             zh: "SVG 矢量图 + 传统 LUT 模式下，自定义配方里改过的颜色和加过的层，现在会真实写进导出的 3MF；之前只能在 2D 预览里看到效果，实际 3MF 会悄悄退回 LUT 默认配色，加的层也像没加过一样",
             en: "For SVG vector inputs with a traditional LUT, recipe edits and extra layers made in the custom recipe dialog now actually land in the exported 3MF; previously the 2D preview reflected them but the 3MF silently fell back to the LUT's default match, as if the custom recipe and added layers had never been applied",
