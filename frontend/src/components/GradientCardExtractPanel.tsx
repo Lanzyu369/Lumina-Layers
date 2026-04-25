@@ -461,8 +461,6 @@ export default function GradientCardExtractPanel() {
     isSaving,
     saveError,
     saveSuccess,
-    materialFileUrl,
-    savedStageAParamsUrl,
     savedMaterialSummary,
     setDatasetFile,
     setWhiteImageFile,
@@ -701,22 +699,19 @@ export default function GradientCardExtractPanel() {
               {t("mat_gradient_upload_desc")}
             </p>
           </div>
-          <div className={`${mutedSectionCardClass} flex flex-col gap-3 mt-auto`}>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                {t("ext_single_stage_zip_label")}
-              </span>
-              <span className="text-sm text-slate-500 dark:text-slate-400">
-                {datasetFile?.name ?? t("mat_gradient_no_dataset_selected")}
-              </span>
+            <div className="flex flex-col gap-3 mt-auto">
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {datasetFile?.name ?? t("mat_gradient_no_dataset_selected")}
+                </span>
+              </div>
+              <Button
+                label={t("mat_gradient_select_dataset_btn")}
+                variant="secondary"
+                onClick={() => datasetInputRef.current?.click()}
+                className="w-full"
+              />
             </div>
-            <Button
-              label={t("mat_gradient_select_dataset_btn")}
-              variant="secondary"
-              onClick={() => datasetInputRef.current?.click()}
-              className="w-full"
-            />
-          </div>
         </section>
 <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
             <div>
@@ -1041,38 +1036,6 @@ export default function GradientCardExtractPanel() {
             </section>
           )}
 
-          {(materialFileUrl || savedStageAParamsUrl) && (
-            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                  {t("mat_gradient_saved_material_title")}
-                </h3>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {materialFileUrl && (
-                  <a
-                    data-testid="material-link"
-                    href={materialFileUrl}
-                    download
-                    className="inline-flex min-h-11 items-center justify-center rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-[var(--shadow-control-hover)] transition-colors hover:bg-blue-700"
-                  >
-                    {t("mat_gradient_download_material_btn")}
-                  </a>
-                )}
-                {savedStageAParamsUrl && (
-                  <a
-                    data-testid="saved-stage-a-link"
-                    href={savedStageAParamsUrl}
-                    download
-                    className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/80 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 dark:border-slate-600/80 dark:text-slate-200"
-                  >
-                    {t("ext_single_stage_download_stage_a")}
-                  </a>
-                )}
-              </div>
-            </section>
-          )}
-
           {materialSummary && (
             <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
               <div>
@@ -1334,22 +1297,6 @@ export default function GradientCardExtractPanel() {
                           className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}
                         >
                           {JSON.stringify(fitSummary, null, 2)}
-                        </pre>
-                      </section>
-                    ) : null}
-
-                    {savedMaterialSummary ? (
-                      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-                        <div>
-                          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                            {t("mat_gradient_saved_material_title")}
-                          </h4>
-                        </div>
-                        <pre
-                          data-testid="saved-material-summary-json"
-                          className={`${mutedSectionCardClass} overflow-x-auto text-xs leading-6 text-slate-700 dark:text-slate-200`}
-                        >
-                          {JSON.stringify(savedMaterialSummary, null, 2)}
                         </pre>
                       </section>
                     ) : null}

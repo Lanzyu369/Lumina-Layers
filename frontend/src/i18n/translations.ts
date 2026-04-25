@@ -5224,8 +5224,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Extract Gradient Card Data",
   },
   mat_gradient_extract_desc: {
-    zh: "上传梯度卡套件 ZIP、白底图和黑底图，分别点选四角并提取 Stage A 耗材参数。",
-    en: "Upload the gradient card kit ZIP plus white/black substrate images, mark four corners on each, and extract Stage A material parameters.",
+    zh: "首先导入下载好的梯度卡ZIP，然后分别上传白底与黑底照片，并框选出色块区域即可完成提取。",
+    en: "First import the downloaded gradient card ZIP, then upload the white and black background photos separately, and bound the color blocks area to complete extraction.",
   },
   mat_gradient_view_details_btn: {
     zh: "查看详细信息",
@@ -5320,12 +5320,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Output",
   },
   mat_gradient_upload_title: {
-    zh: "上传与点角",
-    en: "Upload and Corner Marking",
+    zh: "导入生成的梯度卡ZIP",
+    en: "Import Generated Gradient Card ZIP",
   },
   mat_gradient_upload_desc: {
-    zh: "先上传套件 ZIP 与两张梯度卡照片，再分别在白底图和黑底图上点选四角。",
-    en: "Upload the kit ZIP and both gradient card photos, then mark four corners on the white and black images.",
+    zh: "导入您在梯度卡生成工具中下载的zip。",
+    en: "Import the ZIP you downloaded from the gradient card generation tool.",
   },
   mat_gradient_white_image_label: {
     zh: "白底梯度卡图片",
@@ -5544,12 +5544,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "This substrate's gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — pick the matching anchor in the \"Pure Block Position\" selector above.",
   },
   mat_gradient_saved_material_title: {
-    zh: "已保存的耗材档案",
-    en: "Saved Material Archive",
+    zh: "底层参数文件（可选导出）",
+    en: "Low-Level Parameter Files (Optional Export)",
+  },
+  mat_gradient_saved_material_desc: {
+    zh: "提取结果已自动保存至软件本地，普通用户无需下载。这些底层文件仅供跨设备备份或高级调试使用。",
+    en: "Extraction results are automatically saved locally; normal users do not need to download them. These low-level files are only for cross-device backup or advanced debugging.",
   },
   mat_gradient_download_material_btn: {
-    zh: "下载 material.json",
-    en: "Download material.json",
+    zh: "导出基础耗材信息 (material.json)",
+    en: "Export Basic Material Info (material.json)",
   },
   mat_gradient_library_title: {
     zh: "耗材库",
@@ -5844,8 +5848,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Stage A",
   },
   ext_single_stage_download_stage_a: {
-    zh: "下载 stage_A_parameters.json",
-    en: "Download stage_A_parameters.json",
+    zh: "导出预测模型参数 (stage_A_parameters.json)",
+    en: "Export Predictive Model Parameters (stage_A_parameters.json)",
   },
   ext_single_stage_summary_title: {
     zh: "数据集摘要",

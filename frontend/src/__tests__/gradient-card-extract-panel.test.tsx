@@ -176,10 +176,6 @@ describe("GradientCardExtractPanel", () => {
 
     render(<GradientCardExtractPanel />);
 
-    expect(screen.getByTestId("material-link")).toHaveAttribute(
-      "href",
-      "/api/files/material.json",
-    );
     expect(screen.getByTestId("white-warp-preview")).toHaveAttribute(
       "data-image-url",
       "/api/files/white-warp.png",
@@ -234,7 +230,6 @@ describe("GradientCardExtractPanel", () => {
     );
     expect(screen.getByTestId("material-summary-json")).toHaveTextContent("estimated_rgb");
     expect(screen.getByTestId("fit-summary-json")).toHaveTextContent("overall_validation");
-    expect(screen.getByTestId("saved-material-summary-json")).toHaveTextContent("Test Material");
   });
 
   it("shows unreliable orientation badge when delta_e_gap is below threshold", () => {
