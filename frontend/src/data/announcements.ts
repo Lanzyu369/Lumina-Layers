@@ -24,6 +24,18 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     sections: [
       {
         category: {
+          zh: "校准 & 材料",
+          en: "Calibration & Materials",
+        },
+        items: [
+          {
+            zh: "梯度卡生成界面重新排版并去除了中英夹杂：现在清晰分为“生成设置”与“使用须知”，在线模型链接和两张卡（白底/黑底）的打印说明一目了然，不用再到处找教程了。",
+            en: "The Gradient Generator panel has been redesigned with clean, plain-language sections: “Generation Settings” and “Instructions & Online Models” are clearly separated, and the requirement to print two cards (white base and black base) is prominently explained so you no longer have to hunt for tutorials.",
+          },
+        ],
+      },
+      {
+        category: {
           zh: "提取器（校色卡）",
           en: "Extractor (Calibration Card)",
         },

@@ -1654,11 +1654,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   "tab.gradientCardGenerate": {
     zh: "梯度卡生成",
-    en: "Gradient Card Generate",
+    en: "Gradient Generator",
   },
   "tab.gradientCardExtract": {
     zh: "梯度卡提取",
-    en: "Gradient Card Extract",
+    en: "Gradient Extractor",
   },
   "tab.materialLibrary": {
     zh: "耗材库",
@@ -5200,24 +5200,56 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Generate Gradient Card",
   },
   mat_gradient_generate_desc: {
-    zh: "生成用于耗材表征的共享梯度卡套件，并保留 manifest、层高等元数据。",
-    en: "Generate a shared gradient card kit for material characterization while preserving manifest metadata such as layer height.",
+    zh: "生成用于打印和提取的梯度卡文件包（包含不同层高的切片配置文件和参数信息）。",
+    en: "Generate gradient card print files (including slicer profiles and parameters) used for printing and color extraction.",
+  },
+  mat_gradient_generate_section_title: {
+    zh: "生成设置",
+    en: "Generation Settings",
+  },
+  mat_gradient_generate_section_desc: {
+    zh: "选择你的打印层高，生成包含 3MF 打印文件和提取所需的配置包。",
+    en: "Select your print layer height and generate the package containing 3MF print files and configuration needed for extraction.",
+  },
+  mat_gradient_generate_notice_title: {
+    zh: "使用须知与线上模型",
+    en: "Instructions & Online Models",
+  },
+  mat_gradient_generate_notice_desc: {
+    zh: "打印前请务必阅读此说明，以确保后续操作顺利进行。",
+    en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "色卡一个颜色，需要打两张，一张白色底，一张黑色底。不管你使用生成还是在线模型，你都需要下载 Kit zip 包。因为提取的时候会用到。",
-    en: "Each color in the card needs two prints: one on a white base and one on a black base. Whether you use the generated model or the online model, you still need to download the Kit ZIP package because it is required during extraction.",
+    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续“提取梯度卡”步骤会用到它。",
+    en: "Note: Each test material requires printing two gradient cards (one on a white base, one on a black base). Whether you generate them locally or download the online models, you must generate and download the configuration package (ZIP) here, as it is required for the 'Extract Gradient Card' step later.",
   },
   mat_gradient_generate_notice_online_model: {
-    zh: "线上模型和你生成的模型是一样的，如果你愿意使用在线模型生成，会给 Lumina 提供 MW 积分，积分将用于抽奖。",
-    en: "The online models are the same as the ones generated here. If you choose to use the online versions, Lumina will receive MakerWorld points that will be used for giveaways.",
+    zh: "线上模型与本地生成的模型完全相同。如果你通过 MakerWorld 下载在线模型，可以为 Lumina 团队提供积分支持，积分将用于社区抽奖福利。",
+    en: "The online models are identical to the locally generated ones. Downloading via MakerWorld provides points to the Lumina team, which will be used for community giveaways.",
   },
   mat_gradient_generate_online_model_link: {
-    zh: "梯度色卡在线模型",
-    en: "Gradient card online model",
+    zh: "梯度卡在线模型",
+    en: "Gradient Card Online Model",
   },
   mat_gradient_generate_parametric_box_link: {
-    zh: "梯度色卡参数化盒子",
-    en: "Gradient card parametric box",
+    zh: "梯度卡收纳盒在线模型",
+    en: "Gradient Card Parametric Storage Box",
+  },
+  mat_gradient_generate_btn: {
+    zh: "生成配置文件包",
+    en: "Generate Configuration Package",
+  },
+  mat_gradient_download_title: {
+    zh: "下载结果",
+    en: "Download Result",
+  },
+  mat_gradient_download_desc: {
+    zh: "配置包已生成，请下载并妥善保存。在提取色彩时需要上传此 ZIP 文件。",
+    en: "Configuration package generated. Please download and save it. You will need to upload this ZIP file during color extraction.",
+  },
+  mat_gradient_download_btn: {
+    zh: "下载配置文件包 (.zip)",
+    en: "Download Configuration Package (.zip)",
   },
   mat_gradient_extract_title: {
     zh: "提取梯度卡数据",
