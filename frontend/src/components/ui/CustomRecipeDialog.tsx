@@ -429,6 +429,11 @@ export default function CustomRecipeDialog({
     regionIds.filter((regionId) => regionId.length > 0),
     regionIdsKey,
   );
+  const initializationKey = `${sessionId}|${regionIdsKey}|${layerOrder}`;
+  const initializedKeyRef = useRef<string | null>(null);
+  const requestVersionRef = useRef(0);
+  const draftVersionRef = useRef(0);
+  const draftEditedRef = useRef(false);
 
   // 8 原色的 display palette：LUT 有就用原生通道，缺的按最近 RGB 映射。
   // 下拉与 pattern 输入都基于此，保证视觉上永远是 8 原色。
@@ -466,14 +471,32 @@ export default function CustomRecipeDialog({
     [effectivePalette, baseChannelIdx],
   );
 
+  const markDraftEdited = () => {
+    draftEditedRef.current = true;
+    draftVersionRef.current += 1;
+  };
+
   useEffect(() => {
     if (!open) {
+      initializedKeyRef.current = null;
+      requestVersionRef.current += 1;
+      draftVersionRef.current += 1;
+      draftEditedRef.current = false;
       setPendingUpgrade(false);
       setEditStack([]);
       setAppliedAt(null);
       setAppliedRegionHex(null);
       return;
     }
+    if (initializedKeyRef.current === initializationKey) {
+      return;
+    }
+    initializedKeyRef.current = initializationKey;
+    requestVersionRef.current += 1;
+    draftVersionRef.current += 1;
+    const requestVersion = requestVersionRef.current;
+    const seedDraftVersion = draftVersionRef.current;
+    draftEditedRef.current = false;
     // Seed an immediate synchronous default so the dropdowns never render
     // empty while the region-recipe fetch is in flight. The fetch below
     // replaces this with the region's real matched stack when available.
@@ -505,14 +528,20 @@ export default function CustomRecipeDialog({
     // 配方，Apply 后覆盖成全白。若 session/region 缺失或请求失败，保留
     // 上面的同步默认，保证对话框依旧可用。
     if (!sessionId || stableRegionIds.length === 0) return;
-    let cancelled = false;
     fetchRegionRecipe({
       session_id: sessionId,
       region_ids: stableRegionIds,
       layer_order: layerOrder,
     })
       .then((response) => {
-        if (cancelled) return;
+        if (
+          requestVersionRef.current !== requestVersion ||
+          initializedKeyRef.current !== initializationKey ||
+          draftEditedRef.current ||
+          draftVersionRef.current !== seedDraftVersion
+        ) {
+          return;
+        }
         // Multiple selected regions → use the first region's recipe as the
         // dropdown seed. This mirrors the existing "Apply overwrites every
         // selected region with the single recipe the user edited" contract;
@@ -582,13 +611,11 @@ export default function CustomRecipeDialog({
         // Silent: the synchronous default already covers the UI.
         // 静默：前面已经写了同步默认值，兜底不报错。
       });
-    return () => {
-      cancelled = true;
-    };
   }, [
     open,
-    regionIdsKey,
+    initializationKey,
     baseChannelIdx,
+    colorLayers,
     sessionId,
     layerOrder,
     displayPalette,
@@ -596,12 +623,15 @@ export default function CustomRecipeDialog({
   ]);
 
   const snapshotBeforeEdit = () => {
+    markDraftEdited();
     setEditStack((prev) => [...prev, [...recipe]]);
     setAppliedAt(null);
     setLastPredictFromModel(false);
   };
 
   const handleUndo = () => {
+    if (editStack.length === 0) return;
+    markDraftEdited();
     setEditStack((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];

@@ -16,7 +16,7 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-04-25",
+    version: "2026-04-26",
     title: {
       zh: "Lumina Layers — 近三天更新速览",
       en: "Lumina Layers — What's new in the past three days",
@@ -101,6 +101,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "点历史配方时，每层颜色会稳定停在这条历史配方上，不会因为面板刷新或层数同步又跳回旧颜色。",
             en: "When you click a recipe history entry, every layer now stays on that history recipe instead of jumping back to old colours after the panel refreshes or layer count syncs.",
+          },
+          {
+            zh: "自定义配方还没应用时，加到 10 层再调整窗口或刷新面板，层数会继续留在 10 层，不会又退回 5 层。",
+            en: "Before a custom recipe is applied, adding it to 10 layers now stays at 10 through window resizing or panel refreshes instead of falling back to 5.",
           },
         ],
       },

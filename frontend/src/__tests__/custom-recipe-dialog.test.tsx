@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   RecipeHistoryItem,
@@ -80,6 +86,16 @@ function renderDialog(
   overrides: Partial<typeof baseProps> = {},
 ): ReturnType<typeof render> {
   return render(<CustomRecipeDialog {...baseProps} {...overrides} />);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("CustomRecipeDialog", () => {
@@ -715,5 +731,158 @@ describe("CustomRecipeDialog", () => {
     expect(screen.getByTestId("recipe-layer-swatch-2")).toHaveStyle({
       backgroundColor: "rgb(229, 57, 53)",
     });
+  });
+
+  it("keeps locally added layers when a delayed region recipe returns", async () => {
+    const pendingFetch = deferred<Awaited<ReturnType<typeof fetchRegionRecipeMock>>>();
+    fetchRegionRecipeMock.mockReturnValueOnce(pendingFetch.promise);
+    renderDialog({
+      palette: canonicalNamePalette,
+      colorLayers: 5,
+      regionIds: ["region-1"],
+    });
+
+    const addLayerButton = screen.getByRole("button", {
+      name: "recipe_custom_add_layer",
+    });
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(addLayerButton);
+    }
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(10);
+
+    await act(async () => {
+      pendingFetch.resolve({
+        status: "ok",
+        message: "ok",
+        recipes: [
+          {
+            region_id: "region-1",
+            recipe: [0, 0, 0, 0, 0],
+            color_layers: 5,
+            layer_height_mm: 0.08,
+            layer_order: "Top2Bottom",
+          },
+        ],
+      });
+      await pendingFetch.promise;
+    });
+
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(10);
+  });
+
+  it("keeps locally added layers when the parent rerenders with equivalent props", async () => {
+    const { rerender } = renderDialog({
+      palette: canonicalNamePalette,
+      colorLayers: 5,
+      regionIds: ["region-1"],
+    });
+    await waitFor(() => expect(fetchRegionRecipeMock).toHaveBeenCalledOnce());
+
+    const addLayerButton = screen.getByRole("button", {
+      name: "recipe_custom_add_layer",
+    });
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(addLayerButton);
+    }
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(10);
+
+    rerender(
+      <CustomRecipeDialog
+        {...baseProps}
+        palette={canonicalNamePalette.map((entry) => ({ ...entry }))}
+        colorLayers={5}
+        regionIds={["region-1"]}
+      />,
+    );
+
+    expect(fetchRegionRecipeMock).toHaveBeenCalledOnce();
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(10);
+  });
+
+  it("reinitializes from the fetched recipe after switching to different regions", async () => {
+    fetchRegionRecipeMock
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "ok",
+        recipes: [],
+      })
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "ok",
+        recipes: [
+          {
+            region_id: "region-2",
+            recipe: [1, 1, 1, 1, 1],
+            color_layers: 5,
+            layer_height_mm: 0.08,
+            layer_order: "Top2Bottom",
+          },
+        ],
+      });
+    const { rerender } = renderDialog({
+      palette: canonicalNamePalette,
+      colorLayers: 5,
+      regionIds: ["region-1"],
+    });
+    await waitFor(() => expect(fetchRegionRecipeMock).toHaveBeenCalledOnce());
+
+    const addLayerButton = screen.getByRole("button", {
+      name: "recipe_custom_add_layer",
+    });
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(addLayerButton);
+    }
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(10);
+
+    rerender(
+      <CustomRecipeDialog
+        {...baseProps}
+        palette={canonicalNamePalette.map((entry) => ({ ...entry }))}
+        colorLayers={5}
+        regionIds={["region-2"]}
+      />,
+    );
+
+    await waitFor(() => expect(fetchRegionRecipeMock).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(5);
+    await waitFor(() =>
+      expect(screen.getByTestId("recipe-layer-swatch-0")).toHaveStyle({
+        backgroundColor: "rgb(229, 57, 53)",
+      }),
+    );
+  });
+
+  it("confirms before applying a ten-layer recipe upgrade", async () => {
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    renderDialog({
+      palette: canonicalNamePalette,
+      colorLayers: 5,
+      regionIds: ["region-1"],
+    });
+
+    const addLayerButton = screen.getByRole("button", {
+      name: "recipe_custom_add_layer",
+    });
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(addLayerButton);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    expect(applyRecipeOverrideMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("recipe_custom_layer_upgrade_warning"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "recipe_custom_layer_upgrade_confirm",
+      }),
+    );
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
+    expect(payload).toEqual(expect.objectContaining({ color_layers: 10 }));
+    expect(payload.recipe).toHaveLength(10);
   });
 });
