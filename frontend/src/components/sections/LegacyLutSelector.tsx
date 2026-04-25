@@ -36,24 +36,6 @@ interface LegacyLutSelectorProps {
   };
 }
 
-function RefreshIcon({ spinning }: { spinning: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 20 20"
-      className={cx("h-4 w-4", spinning && "animate-spin")}
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-    >
-      <path d="M16 6.5A7 7 0 1 0 17 10" />
-      <path d="M16 3.5v3h-3" />
-    </svg>
-  );
-}
-
 export default function LegacyLutSelector({
   manufacturer,
   lutName,
@@ -83,9 +65,14 @@ export default function LegacyLutSelector({
       disabled={refreshing}
       aria-label={labels.refreshTooltip}
       title={labels.refreshTooltip}
-      className="inline-flex min-h-11 w-full items-center justify-center rounded-2xl border border-slate-200/80 bg-slate-100/75 px-3 text-slate-600 shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/70 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/75 dark:hover:text-slate-100"
+      className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
     >
-      <RefreshIcon spinning={refreshing} />
+      <span
+        className={cx("text-[13px] leading-none", refreshing && "animate-spin")}
+        aria-hidden="true"
+      >
+        ⟳
+      </span>
     </button>
   );
 
@@ -110,7 +97,6 @@ export default function LegacyLutSelector({
           placeholder={labels.manufacturerPlaceholder}
           disabled={loading || manufacturerOptions.length === 0}
         />
-        {refreshButton}
         <Dropdown
           label={labels.lut}
           value={lutName}
@@ -118,6 +104,7 @@ export default function LegacyLutSelector({
           onChange={onLutChange}
           placeholder={labels.lutPlaceholder}
           disabled={lutDisabled}
+          labelAccessory={refreshButton}
         />
         {uploadButton}
         {helperText && (
@@ -131,19 +118,14 @@ export default function LegacyLutSelector({
 
   return (
     <div className="grid grid-cols-1 gap-2">
-      <div className="flex items-end gap-2">
-        <div className="min-w-0 flex-1">
-          <Dropdown
-            label={labels.manufacturer}
-            value={manufacturer}
-            options={manufacturerOptions}
-            onChange={onManufacturerChange}
-            placeholder={labels.manufacturerPlaceholder}
-            disabled={loading || manufacturerOptions.length === 0}
-          />
-        </div>
-        <div className="w-11 shrink-0">{refreshButton}</div>
-      </div>
+      <Dropdown
+        label={labels.manufacturer}
+        value={manufacturer}
+        options={manufacturerOptions}
+        onChange={onManufacturerChange}
+        placeholder={labels.manufacturerPlaceholder}
+        disabled={loading || manufacturerOptions.length === 0}
+      />
       <div className="flex items-end gap-2">
         <div className="min-w-0 flex-1">
           <Dropdown
@@ -153,6 +135,7 @@ export default function LegacyLutSelector({
             onChange={onLutChange}
             placeholder={labels.lutPlaceholder}
             disabled={lutDisabled}
+            labelAccessory={refreshButton}
           />
         </div>
         <div className="shrink-0">{uploadButton}</div>
