@@ -652,6 +652,7 @@ export default function PalettePanel({
             layerImages: [] as typeof state.layerImages,
             layerImagesSourceKey: null,
           }));
+          useConverterStore.getState()._pollAsyncGlb();
         }}
       />
     </div>

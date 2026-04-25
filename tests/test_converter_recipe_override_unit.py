@@ -70,6 +70,52 @@ def test_predict_recipe_endpoint_returns_prediction(monkeypatch, tmp_path: Path)
     assert body["runtime_mode_key"] == "0.08x5"
 
 
+def test_predict_recipe_endpoint_keeps_runtime_package_exact_miss_as_422(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    store.put(session_id, "lut_path", str(lut_path))
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            np.zeros((0, 3), dtype=np.uint8),
+            None,
+            LUTMetadata(max_color_layers=10, layer_height_mm=0.08),
+        ),
+    )
+
+    def _raise_package_only_exact_miss(*_args, **_kwargs):
+        raise ValueError(
+            "Recipe is not present in the runtime package; "
+            "exact prediction unavailable for package-only source"
+        )
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        _raise_package_only_exact_miss,
+    )
+
+    response = client.post(
+        "/api/convert/predict-recipe",
+        json={
+            "session_id": session_id,
+            "recipe": [0, 1, 2, 3, 4],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Recipe is not present in the runtime package" in response.json()["detail"]
+
+
 def test_apply_recipe_override_endpoint_updates_preview_cache(
     monkeypatch,
     tmp_path: Path,
@@ -114,8 +160,8 @@ def test_apply_recipe_override_endpoint_updates_preview_cache(
         },
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(
@@ -221,8 +267,8 @@ def test_apply_recipe_override_falls_back_to_pure_stack_when_forward_model_missi
         _raise_no_runtime,
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(
@@ -251,6 +297,113 @@ def test_apply_recipe_override_falls_back_to_pure_stack_when_forward_model_missi
     )
     assert updated_cache["lut_match_info"]["match_mode"] == "pure_stack_fallback"
     assert updated_cache["lut_match_info"]["source"] == "pure_stack_fallback"
+
+
+def test_apply_recipe_override_falls_back_when_runtime_package_lacks_recipe(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Package-only predictive LUTs must not block applying custom recipes.
+
+    反推 LUT 的 runtime 包只能精确预测包内配方；自定义配方不在包内时，
+    预览颜色可以报无法精确预测，但应用配方必须继续走纯色栈兜底。
+    """
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    preview_cache = {
+        "matched_rgb": matched_rgb.copy(),
+        "material_matrix": material_matrix.copy(),
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+    }
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "preview_cache", preview_cache)
+    store.put(session_id, "selected_region_mask", mask)
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+
+    fake_stacks = np.array(
+        [
+            [0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.int32,
+    )
+    fake_rgb = np.array(
+        [
+            [0, 0, 0],
+            [255, 255, 255],
+            [10, 20, 30],
+        ],
+        dtype=np.uint8,
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            fake_rgb,
+            fake_stacks,
+            LUTMetadata(max_color_layers=5, layer_height_mm=0.08, base_channel_idx=0),
+        ),
+    )
+
+    def _raise_package_only_exact_miss(*_args, **_kwargs):
+        raise ValueError(
+            "Recipe is not present in the runtime package; "
+            "exact prediction unavailable for package-only source"
+        )
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        _raise_package_only_exact_miss,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [2, 1, 0, 0, 0],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["rgb"] == [10, 20, 30]
+
+    session_data = store.get(session_id)
+    assert session_data is not None
+    updated_cache = session_data["preview_cache"]
+    assert np.all(
+        updated_cache["matched_rgb"][mask] == np.array([10, 20, 30], dtype=np.uint8)
+    )
+    assert np.all(
+        updated_cache["material_matrix"][mask]
+        == np.array([2, 1, 0, 0, 0], dtype=np.int32)
+    )
+    assert updated_cache["lut_match_info"]["match_mode"] == "runtime_package_fallback"
+    assert updated_cache["lut_match_info"]["source"] == "runtime_package_fallback"
+    assert session_data["recipe_overrides"] == [
+        {
+            "region_id": "region-1",
+            "recipe": [2, 1, 0, 0, 0],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        }
+    ]
 
 
 def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region_items(
@@ -308,8 +461,8 @@ def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region
         },
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     apply_response = client.post(
@@ -426,8 +579,8 @@ def test_apply_recipe_override_accepts_virtual_materials_and_extends_palette(
         lambda _path: (np.zeros((0, 3), dtype=np.uint8), None, metadata),
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(
@@ -550,8 +703,8 @@ def test_apply_recipe_override_does_not_pollute_shared_color_system(
         lambda _path: (np.zeros((0, 3), dtype=np.uint8), None, metadata),
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     lut_n = len(original_slots)
@@ -732,8 +885,8 @@ def test_apply_recipe_override_pads_grown_layers_with_mask_solid_aware_fill(
         },
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(
@@ -840,8 +993,8 @@ def test_apply_recipe_override_padding_survives_uint8_material_matrix(
         },
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(
@@ -1132,8 +1285,8 @@ def test_apply_recipe_override_preserves_native_palette_for_layer_images(
         lambda _path: (np.zeros((0, 3), dtype=np.uint8), None, metadata),
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     # Apply a recipe whose topmost layer is a virtual "Black" material
@@ -1332,8 +1485,8 @@ def test_apply_recipe_override_endpoint_supports_material_archive_session(
     # Short-circuit GLB regeneration — the material-archive mesh pipeline is
     # out of scope for this regression and requires a real solver state.
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     # Recipe targets native channel 1 (green = [0, 255, 0]) at the topmost
@@ -1406,8 +1559,8 @@ def test_apply_recipe_override_material_archive_extends_palette_with_virtuals(
     client, store, _registry = _client_with_state()
     session_id, mask = _seed_material_archive_session(store)
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     # Virtual Black at index 5 = LUT.N (5) + 0 (first virtual offset).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import Button from "./Button";
@@ -337,6 +337,14 @@ function extractApiErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+function useStableByKey<T>(value: T, key: string): T {
+  const ref = useRef<{ key: string; value: T } | null>(null);
+  if (!ref.current || ref.current.key !== key) {
+    ref.current = { key, value };
+  }
+  return ref.current.value;
+}
+
 export default function CustomRecipeDialog({
   open,
   sessionId,
@@ -356,6 +364,10 @@ export default function CustomRecipeDialog({
   );
   const pushCustomRecipeHistory = useConverterStore(
     (state) => state.pushCustomRecipeHistory,
+  );
+  const sourceVersion = useConverterStore((state) => state.source_version);
+  const selectedMaterialDirNames = useConverterStore(
+    (state) => state.selectedMaterialDirNames,
   );
   // recipe state stores displayPalette indices (not LUT channel indices) so
   // the dropdown always echoes the exact primary the user clicked, even on a
@@ -396,6 +408,27 @@ export default function CustomRecipeDialog({
   const [appliedRegionHex, setAppliedRegionHex] = useState<string | null>(
     null,
   );
+  const paletteKey = JSON.stringify(
+    palette.map((entry) => [
+      entry.color,
+      entry.material ?? null,
+      entry.hex ?? null,
+    ]),
+  );
+  const stablePalette = useStableByKey<PaletteOption[]>(
+    palette.map((entry) => ({ ...entry })),
+    paletteKey,
+  );
+  const selectedMaterialDirNamesKey = JSON.stringify(selectedMaterialDirNames);
+  const stableSelectedMaterialDirNames = useStableByKey(
+    [...selectedMaterialDirNames],
+    selectedMaterialDirNamesKey,
+  );
+  const regionIdsKey = JSON.stringify(regionIds);
+  const stableRegionIds = useStableByKey(
+    regionIds.filter((regionId) => regionId.length > 0),
+    regionIdsKey,
+  );
 
   // 8 原色的 display palette：LUT 有就用原生通道，缺的按最近 RGB 映射。
   // 下拉与 pattern 输入都基于此，保证视觉上永远是 8 原色。
@@ -407,9 +440,30 @@ export default function CustomRecipeDialog({
   // would flag the direct dep-array reference as a TDZ access otherwise.
   // 必须声明在打开 effect 前面：该 effect 的 body 和 deps 都会直接引用
   // ``displayPalette``，TS 会把后置声明判为暂时性死区访问而报错。
+  const effectivePalette = useMemo<PaletteOption[]>(() => {
+    if (stablePalette.length > 0) {
+      return stablePalette;
+    }
+    if (
+      sourceVersion !== "material" ||
+      stableSelectedMaterialDirNames.length === 0
+    ) {
+      return stablePalette;
+    }
+    return stableSelectedMaterialDirNames.map((dirName) => {
+      const normalized = dirName.replace(/\\/g, "/");
+      const displayName = normalized.split("/").filter(Boolean).pop() ?? dirName;
+      return {
+        color: displayName,
+        material: dirName,
+        hex: null,
+      };
+    });
+  }, [stablePalette, stableSelectedMaterialDirNames, sourceVersion]);
+
   const displayPalette = useMemo(
-    () => buildDisplayPalette(palette, baseChannelIdx),
-    [palette, baseChannelIdx],
+    () => buildDisplayPalette(effectivePalette, baseChannelIdx),
+    [effectivePalette, baseChannelIdx],
   );
 
   useEffect(() => {
@@ -450,11 +504,11 @@ export default function CustomRecipeDialog({
     // 配方永远默认全白"问题。原先打开对话框就丢掉了 pipeline 已匹配的
     // 配方，Apply 后覆盖成全白。若 session/region 缺失或请求失败，保留
     // 上面的同步默认，保证对话框依旧可用。
-    if (!sessionId || regionIds.length === 0) return;
+    if (!sessionId || stableRegionIds.length === 0) return;
     let cancelled = false;
     fetchRegionRecipe({
       session_id: sessionId,
-      region_ids: regionIds,
+      region_ids: stableRegionIds,
       layer_order: layerOrder,
     })
       .then((response) => {
@@ -531,7 +585,15 @@ export default function CustomRecipeDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, regionIds, colorLayers, baseChannelIdx, sessionId, layerOrder, displayPalette]);
+  }, [
+    open,
+    regionIdsKey,
+    baseChannelIdx,
+    sessionId,
+    layerOrder,
+    displayPalette,
+    stableRegionIds,
+  ]);
 
   const snapshotBeforeEdit = () => {
     setEditStack((prev) => [...prev, [...recipe]]);
@@ -582,7 +644,7 @@ export default function CustomRecipeDialog({
     () => buildPaletteHint(displayPalette),
     [displayPalette],
   );
-  const canApply = regionIds.length > 0 && recipe.length > 0;
+  const canApply = stableRegionIds.length > 0 && recipe.length > 0;
   const shouldConfirmUpgrade = pendingUpgrade && recipe.length > colorLayers;
 
   const updateLayer = (index: number, displayIdx: number) => {
@@ -659,7 +721,7 @@ export default function CustomRecipeDialog({
     (
       displayRecipe: number[],
     ): { apiRecipe: number[]; virtualMaterials: VirtualMaterial[] } => {
-      const lutPaletteLength = palette.length;
+      const lutPaletteLength = effectivePalette.length;
       const virtualMaterials: VirtualMaterial[] = [];
       const virtualLookup = new Map<string, number>();
       const apiRecipe: number[] = [];
@@ -685,7 +747,7 @@ export default function CustomRecipeDialog({
       }
       return { apiRecipe, virtualMaterials };
     },
-    [displayPalette, palette.length, baseChannelIdx],
+    [displayPalette, effectivePalette.length, baseChannelIdx],
   );
 
   const handlePredict = async () => {
@@ -740,7 +802,7 @@ export default function CustomRecipeDialog({
         layer_order: layerOrder,
         color_layers: recipe.length,
         layer_height_mm: layerHeightMm,
-        region_ids: regionIds,
+        region_ids: stableRegionIds,
         ...(virtualMaterials.length > 0
           ? { virtual_materials: virtualMaterials }
           : {}),
@@ -826,7 +888,7 @@ export default function CustomRecipeDialog({
     void handleApply();
   };
 
-  const sidePalette: CustomRecipeSidePanelPaletteEntry[] = palette.map(
+  const sidePalette: CustomRecipeSidePanelPaletteEntry[] = effectivePalette.map(
     (entry) => ({
       color: entry.color,
       hex: entry.hex ?? null,
@@ -864,7 +926,7 @@ export default function CustomRecipeDialog({
     setAppliedAt(Date.now());
     void useConverterStore
       .getState()
-      .applyCustomRecipeFromHistory(historyId, regionIds);
+      .applyCustomRecipeFromHistory(historyId, stableRegionIds);
   };
 
   if (!open) return null;
@@ -908,13 +970,13 @@ export default function CustomRecipeDialog({
                   "{count}",
                   String(recipe.length),
                 )}
-                {regionIds.length > 1
+                {stableRegionIds.length > 1
                   ? " · " +
                     t("recipe_custom_region_multiple").replace(
                       "{count}",
-                      String(regionIds.length),
+                      String(stableRegionIds.length),
                     )
-                  : regionIds.length === 1
+                  : stableRegionIds.length === 1
                     ? " · " + t("recipe_custom_current_region")
                     : ""}
               </p>
@@ -1099,7 +1161,7 @@ export default function CustomRecipeDialog({
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {t("recipe_custom_region_count").replace(
                   "{count}",
-                  String(regionIds.length),
+                  String(stableRegionIds.length),
                 )}
               </div>
               {appliedAt && !error && (
@@ -1122,7 +1184,7 @@ export default function CustomRecipeDialog({
 
             <CustomRecipeSidePanel
               palette={sidePalette}
-              regionIds={regionIds}
+              regionIds={stableRegionIds}
               history={customRecipeHistory}
               onApplyHistory={handleApplyHistory}
             />

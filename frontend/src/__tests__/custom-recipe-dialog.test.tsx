@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecipeOverrideApplyResponse } from "../api/types";
+import type {
+  RecipeHistoryItem,
+  RecipeOverrideApplyResponse,
+} from "../api/types";
 import CustomRecipeDialog from "../components/ui/CustomRecipeDialog";
 
 const applyRecipeOverrideMock = vi.hoisted(() => vi.fn());
@@ -10,6 +13,7 @@ const converterStoreState = vi.hoisted(() => ({
   customRecipeHistory: [],
   pushCustomRecipeHistory: vi.fn(),
   source_version: "legacy",
+  selectedMaterialDirNames: [] as string[],
   materialSuggestions: null,
   materialSuggestionsLoading: false,
   materialSuggestionsError: null,
@@ -83,6 +87,7 @@ describe("CustomRecipeDialog", () => {
     vi.clearAllMocks();
     converterStoreState.customRecipeHistory = [];
     converterStoreState.source_version = "legacy";
+    converterStoreState.selectedMaterialDirNames = [];
     converterStoreState.materialSuggestions = null;
     converterStoreState.materialSuggestionsLoading = false;
     converterStoreState.materialSuggestionsError = null;
@@ -168,6 +173,34 @@ describe("CustomRecipeDialog", () => {
     expect(banner).toHaveTextContent("recipe_custom_predict_no_forward_model");
     expect(banner.className).toContain("amber");
     expect(banner.className).not.toContain("red");
+  });
+
+  it("allows applying after a package-only prediction warning", async () => {
+    predictCustomRecipeMock.mockRejectedValueOnce(
+      new Error(
+        "Recipe is not present in the runtime package; exact prediction unavailable for package-only source",
+      ),
+    );
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    const onApplied = vi.fn();
+    renderDialog({ onApplied });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_predict" }),
+    );
+
+    const banner = await screen.findByTestId("recipe-error-banner");
+    expect(banner).toHaveTextContent("recipe_custom_predict_no_forward_model");
+    expect(banner.className).toContain("amber");
+
+    const applyButton = screen.getByRole("button", {
+      name: "recipe_custom_apply",
+    });
+    expect(applyButton).not.toBeDisabled();
+    fireEvent.click(applyButton);
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onApplied).toHaveBeenCalledOnce());
   });
 
   it("renders generic prediction failures as an error", async () => {
@@ -272,6 +305,44 @@ describe("CustomRecipeDialog", () => {
     );
     // Every layer points at the virtual tail (palette.length + 0 == 4).
     expect(payload.recipe).toEqual([4, 4]);
+  });
+
+  it("uses selected material count for virtual primaries while material archive session palette is loading", async () => {
+    // Material-archive preview fetches the channel palette asynchronously
+    // after /preview. If the dialog opens before that best-effort request
+    // finishes, an empty palette must still reserve the selected material
+    // slots so a non-native primary like Black is sent as index N, not 0.
+    // 耗材档案模式的 session palette 是预览后异步拉取的；弹窗提前打开时，
+    // 即使 palette 还空，也必须用已选耗材数量占位。否则 Black 会被发成
+    // index 0，被后端解释成第一个真实耗材，2D/3D/生成都看起来没生效。
+    converterStoreState.source_version = "material";
+    converterStoreState.selectedMaterialDirNames = [
+      "brand/red-pla",
+      "brand/green-pla",
+      "brand/blue-pla",
+      "brand/yellow-pla",
+      "brand/cyan-pla",
+    ];
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    renderDialog({ palette: [], colorLayers: 2 });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
+      { target: { value: "BB" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        recipe: [5, 5],
+        virtual_materials: [{ name: "Black", hex: "#111111" }],
+      }),
+    );
   });
 
   it("omits virtual_materials when every picked primary is LUT-native", async () => {
@@ -526,5 +597,123 @@ describe("CustomRecipeDialog", () => {
     );
     const entry = converterStoreState.pushCustomRecipeHistory.mock.calls[0]?.[0];
     expect(entry).not.toHaveProperty("virtualMaterials");
+  });
+
+  it("keeps a clicked history recipe when the parent rerenders with the same regions", async () => {
+    // PalettePanel builds ``regionIds`` inline, so store updates caused by
+    // history replay can rerender the parent with a fresh array instance even
+    // when the selected regions did not actually change. The dialog must key
+    // its open/fetch effect by region contents, not array identity, otherwise
+    // clicking a history row immediately resets all per-layer pickers back to
+    // the fetched/default recipe ("历史配方一点，每层颜色乱跳").
+    // PalettePanel 会内联构造 regionIds；历史重放触发 store 更新后，父组件
+    // 可能传进一个内容相同但引用全新的数组。Dialog 的初始化 effect 必须
+    // 按 region 内容判断是否变化，不能按数组引用，否则点历史后每层颜色会
+    // 立刻被重置，看起来像乱跳。
+    const historyEntry: RecipeHistoryItem = {
+      id: "1-1@Top2Bottom",
+      recipe: [1, 1],
+      layerOrder: "Top2Bottom",
+      predictedRgb: [229, 57, 53],
+      predictedLab: [50, 60, 70],
+      hex: "#E53935",
+      fromModel: false,
+      createdAtMs: 1,
+      displayHexes: ["#E53935", "#E53935"],
+      displayLabels: ["Red", "Red"],
+    };
+    converterStoreState.customRecipeHistory = [historyEntry];
+
+    const { rerender } = renderDialog({
+      palette: canonicalNamePalette,
+      regionIds: ["region-1"],
+    });
+
+    fireEvent.click(
+      screen.getByTestId("recipe-history-row-1-1@Top2Bottom"),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("recipe-layer-swatch-0")).toHaveStyle({
+        backgroundColor: "rgb(229, 57, 53)",
+      }),
+    );
+
+    rerender(
+      <CustomRecipeDialog
+        {...baseProps}
+        palette={canonicalNamePalette.map((entry) => ({ ...entry }))}
+        regionIds={["region-1"]}
+      />,
+    );
+
+    await waitFor(() => expect(fetchRegionRecipeMock).toHaveBeenCalledOnce());
+    expect(screen.getByTestId("recipe-layer-swatch-0")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+    expect(screen.getByTestId("recipe-layer-swatch-1")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+  });
+
+  it("keeps a longer history recipe through the color layer count update", async () => {
+    // Applying a history recipe can also update store.color_layers. That makes
+    // PalettePanel pass a larger ``colorLayers`` prop on the next render. The
+    // dialog should keep the history recipe the user just chose instead of
+    // treating the layer-count change as a reason to fetch/reset every layer.
+    // 历史配方可能比当前模式层数更多，应用后 store.color_layers 会变大，
+    // 父组件也会把更大的 colorLayers 传回来。这里锁住：不能因为层数 prop
+    // 变化就把刚点的历史配方重置掉。
+    const historyEntry: RecipeHistoryItem = {
+      id: "1-1-1@Top2Bottom",
+      recipe: [1, 1, 1],
+      layerOrder: "Top2Bottom",
+      predictedRgb: [229, 57, 53],
+      predictedLab: [50, 60, 70],
+      hex: "#E53935",
+      fromModel: false,
+      createdAtMs: 1,
+      displayHexes: ["#E53935", "#E53935", "#E53935"],
+      displayLabels: ["Red", "Red", "Red"],
+    };
+    converterStoreState.customRecipeHistory = [historyEntry];
+
+    const { rerender } = renderDialog({
+      palette: canonicalNamePalette,
+      regionIds: ["region-1"],
+      colorLayers: 2,
+    });
+
+    fireEvent.click(
+      screen.getByTestId("recipe-history-row-1-1-1@Top2Bottom"),
+    );
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(3),
+    );
+    expect(screen.getByTestId("recipe-layer-swatch-2")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+
+    rerender(
+      <CustomRecipeDialog
+        {...baseProps}
+        palette={canonicalNamePalette.map((entry) => ({ ...entry }))}
+        regionIds={["region-1"]}
+        colorLayers={3}
+      />,
+    );
+
+    await waitFor(() => expect(fetchRegionRecipeMock).toHaveBeenCalledOnce());
+    expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(3);
+    expect(screen.getByTestId("recipe-layer-swatch-0")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+    expect(screen.getByTestId("recipe-layer-swatch-1")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+    expect(screen.getByTestId("recipe-layer-swatch-2")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
   });
 });

@@ -286,7 +286,7 @@ describe("native bundle converter flow", () => {
     ]);
   });
 
-  it("submitGenerate sends an explicit empty recipe_overrides array when cleared", async () => {
+  it("submitGenerate omits recipe_overrides when local override state is empty", async () => {
     mocks.convertGenerate.mockResolvedValueOnce({
       status: "ok",
       message: "Model generated",
@@ -305,7 +305,7 @@ describe("native bundle converter flow", () => {
     await useConverterStore.getState().submitGenerate();
 
     const [, params] = mocks.convertGenerate.mock.calls.at(-1)!;
-    expect(params.recipe_overrides).toEqual([]);
+    expect(params.recipe_overrides).toBeUndefined();
   });
 
   it("defaults native layer count to 5 when entering native mode without a valid current selection", () => {

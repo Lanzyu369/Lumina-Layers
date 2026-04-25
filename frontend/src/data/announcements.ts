@@ -86,6 +86,22 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "浮雕生成现在会把颜色高度正确叠加到底板厚度上，手动高度、自动高度和拼图生成都会按实际总高度输出。",
             en: "Relief generation now correctly adds colour heights on top of the base spacer, so manual heights, automatic heights, and puzzle output use the intended total height.",
           },
+          {
+            zh: "反推 LUT 下自定义配方不在预测包里时，现在也能应用并真实写进生成；预览会提示无法精确预测，但生成不会再丢掉刚应用的配方。",
+            en: "In inferred LUT mode, custom recipes outside the prediction package can now be applied and carried into real generation; preview warns when exact prediction is unavailable, but generation no longer drops the applied recipe.",
+          },
+          {
+            zh: "耗材档案模式下自定义配方会按已选耗材的真实通道顺序应用，选黑色、加层或生成时不会再被误当成第一个耗材。",
+            en: "In material-archive mode, custom recipes now apply against the real selected-material channel order, so choosing Black, adding layers, or generating no longer gets mistaken for the first material.",
+          },
+          {
+            zh: "耗材档案模式下自定义配方导出 3MF 时会同步注册新增耗材对象，不会再出现预览变了但文件里对应区域空掉。",
+            en: "In material-archive mode, custom recipe 3MF export now registers added material objects as well, so areas that changed in preview no longer become empty in the file.",
+          },
+          {
+            zh: "点历史配方时，每层颜色会稳定停在这条历史配方上，不会因为面板刷新或层数同步又跳回旧颜色。",
+            en: "When you click a recipe history entry, every layer now stays on that history recipe instead of jumping back to old colours after the panel refreshes or layer count syncs.",
+          },
         ],
       },
       {

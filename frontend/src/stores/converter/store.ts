@@ -5389,7 +5389,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             mergedReplacements && mergedReplacements.length > 0
               ? mergedReplacements
               : undefined,
-          recipe_overrides: state.recipe_overrides,
+          recipe_overrides:
+            state.recipe_overrides.length > 0 ? state.recipe_overrides : undefined,
           free_color_set:
             state.free_color_set.size > 0
               ? Array.from(state.free_color_set).map((h) => `#${h}`)

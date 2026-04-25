@@ -240,6 +240,78 @@ class TestSessionLutInfo:
         finally:
             self._clear_override()
 
+    def test_returns_material_archive_palette_for_session_without_lut_file(self) -> None:
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", "__material_archive__")
+        store.put(session_id, "lut_name", "__material_archive__")
+        store.put(session_id, "material_source", "material_archive")
+        store.put(session_id, "selected_materials", [
+            "brand/red-pla",
+            "brand/green-pla",
+            "brand/blue-pla",
+            "brand/yellow-pla",
+            "brand/cyan-pla",
+        ])
+        store.put(session_id, "material_layer_count", 7)
+        store.put(session_id, "material_layer_height_mm", 0.08)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "color_layers": 7,
+                "layer_height_mm": 0.08,
+                "slot_names": [
+                    "PLA Red",
+                    "PLA Green",
+                    "PLA Blue",
+                    "PLA Yellow",
+                    "PLA Cyan",
+                ],
+                "preview_colors": {
+                    0: [255, 0, 0, 255],
+                    1: [0, 255, 0, 255],
+                    2: [0, 0, 255, 255],
+                    3: [255, 255, 0, 255],
+                    4: [0, 255, 255, 255],
+                },
+            },
+        )
+
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["name"] == "__material_archive__"
+            assert data["color_mode"] == "Material Archive"
+            assert data["color_count"] == 5
+            assert data["max_color_layers"] == 7
+            assert data["layer_height_mm"] == 0.08
+            assert [entry["color"] for entry in data["palette"]] == [
+                "PLA Red",
+                "PLA Green",
+                "PLA Blue",
+                "PLA Yellow",
+                "PLA Cyan",
+            ]
+            assert [entry["material"] for entry in data["palette"]] == [
+                "brand/red-pla",
+                "brand/green-pla",
+                "brand/blue-pla",
+                "brand/yellow-pla",
+                "brand/cyan-pla",
+            ]
+            assert [entry["hex_color"] for entry in data["palette"]] == [
+                "#FF0000",
+                "#00FF00",
+                "#0000FF",
+                "#FFFF00",
+                "#00FFFF",
+            ]
+        finally:
+            self._clear_override()
+
 
 class TestPredictRecipeColor:
     """Verify predictive recipe endpoint returns predicted color data."""

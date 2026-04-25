@@ -601,6 +601,118 @@ def _pure_channel_hex(
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
+def _preview_color_to_hex(raw: object) -> str | None:
+    """Convert a cached preview RGBA/RGB row to ``#RRGGBB``.
+
+    将缓存中的 RGB/RGBA 行转换为 ``#RRGGBB``。
+    """
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return None
+    try:
+        r, g, b = (int(raw[0]), int(raw[1]), int(raw[2]))
+    except (TypeError, ValueError):
+        return None
+    if not all(0 <= value <= 255 for value in (r, g, b)):
+        return None
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _cached_preview_color_hex(preview_colors: object, idx: int) -> str | None:
+    """Read channel ``idx`` from ``preview_colors`` with int/string keys."""
+    if not isinstance(preview_colors, dict):
+        return None
+    raw = preview_colors.get(idx)
+    if raw is None:
+        raw = preview_colors.get(str(idx))
+    return _preview_color_to_hex(raw)
+
+
+def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
+    """Build session-scoped LUT info for material-archive sources.
+
+    耗材档案没有真实 LUT 文件；这里从 session 的耗材顺序和 preview cache
+    组装与 LUT info 相同形状的通道 palette，供自定义配方编辑器使用。
+    """
+    selected_materials = session_data.get("selected_materials") or []
+    if not isinstance(selected_materials, list) or not selected_materials:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Material archive session is missing selected materials. "
+                "Run preview again first."
+            ),
+        )
+
+    cache = session_data.get("preview_cache") or {}
+    if not isinstance(cache, dict):
+        cache = {}
+    raw_slot_names = cache.get("slot_names") or []
+    slot_names = raw_slot_names if isinstance(raw_slot_names, list) else []
+    preview_colors = cache.get("preview_colors") or {}
+
+    palette_schema: list[PaletteEntrySchema] = []
+    for idx, dir_name in enumerate(selected_materials):
+        raw_slot = slot_names[idx] if idx < len(slot_names) else None
+        label = str(raw_slot) if raw_slot else str(dir_name)
+        palette_schema.append(
+            PaletteEntrySchema(
+                color=label,
+                material=str(dir_name),
+                hex_color=_cached_preview_color_hex(preview_colors, idx),
+                color_name=label,
+            )
+        )
+
+    color_layers = int(
+        session_data.get("material_layer_count")
+        or cache.get("color_layers")
+        or len(palette_schema)
+        or 5
+    )
+    layer_height_mm = float(
+        session_data.get("material_layer_height_mm")
+        or cache.get("layer_height_mm")
+        or 0.08
+    )
+    metadata = LUTMetadata(
+        max_color_layers=color_layers,
+        layer_height_mm=layer_height_mm,
+        color_mode="Material Archive",
+        capabilities=["custom_recipe"],
+        extensions={
+            "source_kind": "material_archive",
+            "custom_recipe_supported": True,
+            "supported_modes": [
+                {
+                    "color_layers": color_layers,
+                    "layer_height_mm": layer_height_mm,
+                }
+            ],
+        },
+    )
+    display_name = str(session_data.get("lut_name") or "__material_archive__")
+    return LutInfoResponseV2(
+        name=display_name,
+        color_mode="Material Archive",
+        color_count=len(palette_schema),
+        palette=palette_schema,
+        max_color_layers=metadata.max_color_layers,
+        layer_height_mm=metadata.layer_height_mm,
+        line_width_mm=metadata.line_width_mm,
+        base_layers=metadata.base_layers,
+        base_channel_idx=metadata.base_channel_idx,
+        layer_order=metadata.layer_order,
+        schema_version=get_schema_version(metadata),
+        capabilities=get_capabilities(metadata),
+        supports_predictive_match=metadata.supports_predictive_match(),
+        supports_dynamic_layer_height=metadata.supports_dynamic_layer_height(),
+        supports_dynamic_layer_count=metadata.supports_dynamic_layer_count(),
+        supports_custom_recipe=metadata.supports_custom_recipe(),
+        source_kind=metadata.get_source_kind(),
+        supported_modes=metadata.get_supported_modes(),
+    )
+
+
 def _build_lut_info_from_path(path: str, display_name: str) -> LutInfoResponseV2:
     """Assemble :class:`LutInfoResponseV2` from a LUT file on disk.
 
@@ -710,6 +822,8 @@ def get_session_lut_info(
     session_data = store.get(session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    if str(session_data.get("material_source") or "lut") == "material_archive":
+        return _build_material_archive_lut_info(session_data)
     lut_path = session_data.get("lut_path")
     if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
         raise HTTPException(
