@@ -1460,9 +1460,9 @@ def test_gradient_card_stage_a_core_flags_flat_substrate_and_recommends_manual_o
     # Diagnostic signal strengths are present and ordered as expected.
     assert white_info["signal_strength"] < 0.015
     assert black_info["signal_strength"] > white_info["signal_strength"]
-    # Clear Chinese warning steering user to manual_white_orientation.
+    # Clear Chinese warning steering user to the manual orientation UI.
     assert any(
-        "白底" in w and "manual_white_orientation" in w for w in result.warnings
+        "白底" in w and "纯色块位置" in w for w in result.warnings
     )
 
 

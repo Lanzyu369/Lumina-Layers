@@ -7,6 +7,7 @@ interface GradientCardCornerSelectorProps {
   naturalWidth: number | null;
   naturalHeight: number | null;
   cornerPoints: Array<[number, number]>;
+  activePointIndex?: number | null;
   emptyText: string;
   dataTestId: string;
   emptyStateTestId?: string;
@@ -21,6 +22,7 @@ export default function GradientCardCornerSelector({
   naturalWidth,
   naturalHeight,
   cornerPoints,
+  activePointIndex,
   emptyText,
   dataTestId,
   emptyStateTestId,
@@ -37,6 +39,7 @@ export default function GradientCardCornerSelector({
       naturalWidth={naturalWidth}
       naturalHeight={naturalHeight}
       cornerPoints={cornerPoints}
+      activePointIndex={activePointIndex}
       onSelectPoint={onSelectPoint}
       onImageLoad={onImageLoad}
       dataTestId={dataTestId}

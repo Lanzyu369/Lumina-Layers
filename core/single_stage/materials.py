@@ -847,12 +847,12 @@ def extract_stage_a_material_from_gradient_cards(
     if white_orientation_info["flat"] and white_orientation_info["manual_override"] is None:
         warnings.append(
             "白底采样格颜色变化极小（疑似白色耗材打白底），自动方向检测可能不可靠；"
-            "如发现拟合误差偏高，请使用 manual_white_orientation 手动指定方向。"
+            "如发现拟合误差偏高，请使用界面的“纯色块位置”选项手动指定方向。"
         )
     if black_orientation_info["flat"] and black_orientation_info["manual_override"] is None:
         warnings.append(
             "黑底采样格颜色变化极小，自动方向检测可能不可靠；"
-            "如发现拟合误差偏高，请使用 manual_black_orientation 手动指定方向。"
+            "如发现拟合误差偏高，请使用界面的“纯色块位置”选项手动指定方向。"
         )
     fit_summary["orientation_ranking"] = orientation_ranking
     white_warp_rgb = white_candidate.warped_rgb

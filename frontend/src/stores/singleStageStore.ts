@@ -4,15 +4,19 @@ import {
   extractGradientCardStageA,
   rotateExtractorImage,
   saveGradientCardMaterial,
+  type ExtractorRotationDirection,
 } from "../api/extractor";
 import type {
   GradientCardMaterialSummary,
-  ManualOrientationLabel,
   OrientationRanking,
   SavedMaterialSummary,
   StageAFitSummary,
 } from "../api/types";
 import { tRuntime } from "../i18n/runtime";
+import {
+  anchorToOrientationLabel,
+  type GradientCardAnchorCorner,
+} from "../utils/gradientCardAnchor";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 
 export type ExtractorWorkflow = "legacy" | "single-stage";
@@ -32,6 +36,9 @@ interface SingleStageState {
   blackImageNaturalWidth: number | null;
   blackImageNaturalHeight: number | null;
   blackCornerPoints: CornerPoint[];
+  activeCanvas: "white" | "black" | null;
+  activeCornerIndex: number | null;
+  nudgeStep: number;
   isRotatingWhite: boolean;
   isRotatingBlack: boolean;
   isExtracting: boolean;
@@ -44,8 +51,8 @@ interface SingleStageState {
   fitSummary: StageAFitSummary | null;
   materialSummary: GradientCardMaterialSummary | null;
   orientationRanking: OrientationRanking | null;
-  manualWhiteOrientation: ManualOrientationLabel | null;
-  manualBlackOrientation: ManualOrientationLabel | null;
+  manualWhiteAnchor: GradientCardAnchorCorner | null;
+  manualBlackAnchor: GradientCardAnchorCorner | null;
   materialName: string;
   materialBrand: string;
   verificationTargetDirectoryName: string | null;
@@ -65,16 +72,19 @@ interface SingleStageActions {
   setBlackImageFile: (file: File | null) => void;
   setWhiteImageNaturalSize: (width: number, height: number) => void;
   setBlackImageNaturalSize: (width: number, height: number) => void;
-  rotateWhiteImage: () => Promise<void>;
-  rotateBlackImage: () => Promise<void>;
+  rotateWhiteImage: (direction: ExtractorRotationDirection) => Promise<void>;
+  rotateBlackImage: (direction: ExtractorRotationDirection) => Promise<void>;
   addWhiteCornerPoint: (point: CornerPoint) => void;
   addBlackCornerPoint: (point: CornerPoint) => void;
   clearWhiteCornerPoints: () => void;
   clearBlackCornerPoints: () => void;
+  setActiveCanvasAndCorner: (canvas: "white" | "black" | null, index: number | null) => void;
+  setNudgeStep: (value: number) => void;
+  nudgeActiveCorner: (dx: number, dy: number) => void;
   setMaterialName: (value: string) => void;
   setMaterialBrand: (value: string) => void;
-  setManualWhiteOrientation: (value: ManualOrientationLabel | null) => void;
-  setManualBlackOrientation: (value: ManualOrientationLabel | null) => void;
+  setManualWhiteAnchor: (value: GradientCardAnchorCorner | null) => void;
+  setManualBlackAnchor: (value: GradientCardAnchorCorner | null) => void;
   startMaterialVerification: (target: {
     materialName: string;
     directoryName: string;
@@ -83,6 +93,8 @@ interface SingleStageActions {
   clearMaterialVerification: () => void;
   submitExtract: () => Promise<void>;
   submitSave: (saveMode?: "merge" | "override") => Promise<void>;
+  clearExtractError: () => void;
+  clearSaveMessages: () => void;
   clearMessages: () => void;
 }
 
@@ -268,6 +280,9 @@ const DEFAULT_STATE: SingleStageState = {
   blackImageNaturalWidth: null,
   blackImageNaturalHeight: null,
   blackCornerPoints: [],
+  activeCanvas: null,
+  activeCornerIndex: null,
+  nudgeStep: 3,
   isRotatingWhite: false,
   isRotatingBlack: false,
   isExtracting: false,
@@ -280,8 +295,8 @@ const DEFAULT_STATE: SingleStageState = {
   fitSummary: null,
   materialSummary: null,
   orientationRanking: null,
-  manualWhiteOrientation: null,
-  manualBlackOrientation: null,
+  manualWhiteAnchor: null,
+  manualBlackAnchor: null,
   materialName: "",
   materialBrand: "",
   verificationTargetDirectoryName: null,
@@ -322,6 +337,8 @@ export const useSingleStageStore = create<
       whiteImageNaturalWidth: null,
       whiteImageNaturalHeight: null,
       whiteCornerPoints: [],
+      activeCanvas: null,
+      activeCornerIndex: null,
       ...RESULT_RESET_STATE,
     });
   },
@@ -335,6 +352,8 @@ export const useSingleStageStore = create<
       blackImageNaturalWidth: null,
       blackImageNaturalHeight: null,
       blackCornerPoints: [],
+      activeCanvas: null,
+      activeCornerIndex: null,
       ...RESULT_RESET_STATE,
     });
   },
@@ -345,7 +364,7 @@ export const useSingleStageStore = create<
   setBlackImageNaturalSize: (width: number, height: number) =>
     set({ blackImageNaturalWidth: width, blackImageNaturalHeight: height }),
 
-  rotateWhiteImage: async () => {
+  rotateWhiteImage: async (direction: ExtractorRotationDirection) => {
     const { whiteImageFile, whiteImagePreviewUrl } = get();
     if (!whiteImageFile) {
       return;
@@ -360,6 +379,7 @@ export const useSingleStageStore = create<
       const response = await rotateExtractorImage(
         whiteImageFile,
         whiteImageFile.name,
+        direction,
       );
       const previewUrl = normalizeResourceUrl(response.preview_url);
       if (!previewUrl) {
@@ -380,6 +400,8 @@ export const useSingleStageStore = create<
         whiteImageNaturalWidth: response.width,
         whiteImageNaturalHeight: response.height,
         whiteCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
         isRotatingWhite: false,
         ...RESULT_RESET_STATE,
       });
@@ -391,7 +413,7 @@ export const useSingleStageStore = create<
     }
   },
 
-  rotateBlackImage: async () => {
+  rotateBlackImage: async (direction: ExtractorRotationDirection) => {
     const { blackImageFile, blackImagePreviewUrl } = get();
     if (!blackImageFile) {
       return;
@@ -406,6 +428,7 @@ export const useSingleStageStore = create<
       const response = await rotateExtractorImage(
         blackImageFile,
         blackImageFile.name,
+        direction,
       );
       const previewUrl = normalizeResourceUrl(response.preview_url);
       if (!previewUrl) {
@@ -426,6 +449,8 @@ export const useSingleStageStore = create<
         blackImageNaturalWidth: response.width,
         blackImageNaturalHeight: response.height,
         blackCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
         isRotatingBlack: false,
         ...RESULT_RESET_STATE,
       });
@@ -442,8 +467,11 @@ export const useSingleStageStore = create<
     if (whiteCornerPoints.length >= 4) {
       return;
     }
+    const nextPoints = [...whiteCornerPoints, point];
     set({
-      whiteCornerPoints: [...whiteCornerPoints, point],
+      whiteCornerPoints: nextPoints,
+      activeCanvas: "white",
+      activeCornerIndex: nextPoints.length - 1,
       ...RESULT_RESET_STATE,
     });
   },
@@ -453,17 +481,82 @@ export const useSingleStageStore = create<
     if (blackCornerPoints.length >= 4) {
       return;
     }
+    const nextPoints = [...blackCornerPoints, point];
     set({
-      blackCornerPoints: [...blackCornerPoints, point],
+      blackCornerPoints: nextPoints,
+      activeCanvas: "black",
+      activeCornerIndex: nextPoints.length - 1,
       ...RESULT_RESET_STATE,
     });
   },
 
   clearWhiteCornerPoints: () =>
-    set({ whiteCornerPoints: [], ...RESULT_RESET_STATE }),
+    set({ whiteCornerPoints: [], activeCanvas: null, activeCornerIndex: null, ...RESULT_RESET_STATE }),
 
   clearBlackCornerPoints: () =>
-    set({ blackCornerPoints: [], ...RESULT_RESET_STATE }),
+    set({ blackCornerPoints: [], activeCanvas: null, activeCornerIndex: null, ...RESULT_RESET_STATE }),
+
+  setActiveCanvasAndCorner: (canvas: "white" | "black" | null, index: number | null) => {
+    if (canvas === null || index === null) {
+      set({ activeCanvas: null, activeCornerIndex: null });
+      return;
+    }
+    const { whiteCornerPoints, blackCornerPoints } = get();
+    const points = canvas === "white" ? whiteCornerPoints : blackCornerPoints;
+    if (index >= 0 && index < points.length) {
+      set({ activeCanvas: canvas, activeCornerIndex: index });
+    }
+  },
+
+  setNudgeStep: (value: number) => {
+    const clamped = Math.max(1, Math.min(10, Math.round(value)));
+    set({ nudgeStep: clamped });
+  },
+
+  nudgeActiveCorner: (dx: number, dy: number) => {
+    const state = get();
+    if (
+      state.activeCanvas === null ||
+      state.activeCornerIndex === null ||
+      state.activeCornerIndex < 0
+    ) {
+      return;
+    }
+
+    const isWhite = state.activeCanvas === "white";
+    const points = isWhite ? state.whiteCornerPoints : state.blackCornerPoints;
+    if (state.activeCornerIndex >= points.length) {
+      return;
+    }
+
+    const [x, y] = points[state.activeCornerIndex];
+    let nx = x + dx * state.nudgeStep;
+    let ny = y + dy * state.nudgeStep;
+
+    const width = isWhite ? state.whiteImageNaturalWidth : state.blackImageNaturalWidth;
+    const height = isWhite ? state.whiteImageNaturalHeight : state.blackImageNaturalHeight;
+
+    if (width && width > 0) {
+      nx = Math.max(0, Math.min(width - 1, nx));
+    } else {
+      nx = Math.max(0, nx);
+    }
+    if (height && height > 0) {
+      ny = Math.max(0, Math.min(height - 1, ny));
+    } else {
+      ny = Math.max(0, ny);
+    }
+
+    const nextPoints = points.map((pt, i) =>
+      i === state.activeCornerIndex ? ([nx, ny] as CornerPoint) : pt,
+    );
+
+    if (isWhite) {
+      set({ whiteCornerPoints: nextPoints });
+    } else {
+      set({ blackCornerPoints: nextPoints });
+    }
+  },
 
   setMaterialName: (value: string) =>
     set({ materialName: value, saveError: null, saveSuccess: null }),
@@ -471,11 +564,11 @@ export const useSingleStageStore = create<
   setMaterialBrand: (value: string) =>
     set({ materialBrand: value, saveError: null, saveSuccess: null }),
 
-  setManualWhiteOrientation: (value: ManualOrientationLabel | null) =>
-    set({ manualWhiteOrientation: value, extractError: null }),
+  setManualWhiteAnchor: (value: GradientCardAnchorCorner | null) =>
+    set({ manualWhiteAnchor: value, extractError: null }),
 
-  setManualBlackOrientation: (value: ManualOrientationLabel | null) =>
-    set({ manualBlackOrientation: value, extractError: null }),
+  setManualBlackAnchor: (value: GradientCardAnchorCorner | null) =>
+    set({ manualBlackAnchor: value, extractError: null }),
 
   startMaterialVerification: ({
     materialName,
@@ -497,6 +590,8 @@ export const useSingleStageStore = create<
       blackImageNaturalWidth: null,
       blackImageNaturalHeight: null,
       blackCornerPoints: [],
+      activeCanvas: null,
+      activeCornerIndex: null,
       materialName,
       // Re-verification keeps using the existing archive directory, so the
       // brand value cannot be changed at this stage; clear the staged input.
@@ -546,8 +641,12 @@ export const useSingleStageStore = create<
         blackImage: state.blackImageFile,
         whiteCornerPoints: state.whiteCornerPoints,
         blackCornerPoints: state.blackCornerPoints,
-        manualWhiteOrientation: state.manualWhiteOrientation,
-        manualBlackOrientation: state.manualBlackOrientation,
+        manualWhiteOrientation: anchorToOrientationLabel(
+          state.manualWhiteAnchor,
+        ),
+        manualBlackOrientation: anchorToOrientationLabel(
+          state.manualBlackAnchor,
+        ),
       });
       set({
         sessionId: response.session_id,
@@ -599,15 +698,20 @@ export const useSingleStageStore = create<
           ? null
           : state.materialBrand.trim() || null,
       });
+      const newVerificationCount = Number(response.material_summary?.verification_count ?? 0);
+      const successMessage = newVerificationCount > 1
+        ? tRuntime("mat_gradient_verification_saved_success", { count: newVerificationCount })
+        : tRuntime("mat_gradient_material_saved_success");
+
       set({
         materialFileUrl: normalizeResourceUrl(response.material_file_url),
         savedStageAParamsUrl: normalizeResourceUrl(response.stage_a_params_url),
         savedMaterialSummary: response.material_summary ?? null,
         verificationTargetCount: Math.max(
           state.verificationTargetCount,
-          Number(response.material_summary?.verification_count ?? 0),
+          newVerificationCount,
         ),
-        saveSuccess: response.message,
+        saveSuccess: successMessage,
         isSaving: false,
       });
     } catch (err) {
@@ -617,6 +721,14 @@ export const useSingleStageStore = create<
       });
     }
   },
+
+  clearExtractError: () => set({ extractError: null }),
+
+  clearSaveMessages: () =>
+    set({
+      saveError: null,
+      saveSuccess: null,
+    }),
 
   clearMessages: () =>
     set({

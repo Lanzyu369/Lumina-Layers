@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { listGradientCardMaterials } from "../api/extractor";
@@ -7,22 +7,22 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 import Button from "./ui/Button";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
+import Dropdown from "./ui/Dropdown";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
+import { type SubstrateOrientationInfo } from "../api/types";
 import {
-  MANUAL_ORIENTATION_LABELS,
-  type ManualOrientationLabel,
-  type SubstrateOrientationInfo,
-} from "../api/types";
+  GRADIENT_CARD_ANCHOR_CORNERS,
+  type GradientCardAnchorCorner,
+} from "../utils/gradientCardAnchor";
 import {
   PanelIntro,
   StatusBanner,
+  cx,
   mutedSectionCardClass,
-  desktopPrimaryColumnClass,
-  desktopSecondaryColumnClass,
-  resolveDesktopSplitLayoutClass,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
+import WikiTooltip from "./ui/WikiTooltip";
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
@@ -42,10 +42,7 @@ const toHex = (rgb: [number, number, number]) =>
 const formatMetricValue = (value: number | null | undefined, digits = 3) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
 
-const AUTO_ORIENTATION_VALUE = "__auto__";
-
-const selectClass =
-  "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
+const AUTO_ANCHOR_VALUE = "__auto__";
 
 const badgeClass =
   "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4";
@@ -53,8 +50,8 @@ const badgeClass =
 const badgeToneFlat = `${badgeClass} bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300`;
 const badgeToneManual = `${badgeClass} bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300`;
 
-const orientationOptionKey = (label: ManualOrientationLabel) =>
-  `mat_gradient_orientation_option_${label}` as const;
+const anchorOptionKey = (corner: GradientCardAnchorCorner) =>
+  `mat_gradient_anchor_option_${corner}` as const;
 
 const brandMenuClass =
   "absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96";
@@ -62,47 +59,53 @@ const brandMenuClass =
 const brandMenuOptionClass =
   "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 text-slate-700 transition-colors duration-150 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900";
 
-const OrientationSelect = ({
+const AnchorCornerSelect = ({
   label,
   value,
   onChange,
   testId,
+  tooltip,
 }: {
   label: string;
-  value: ManualOrientationLabel | null;
-  onChange: (value: ManualOrientationLabel | null) => void;
+  value: GradientCardAnchorCorner | null;
+  onChange: (value: GradientCardAnchorCorner | null) => void;
   testId: string;
+  tooltip?: string;
 }) => {
   const { t } = useI18n();
-  const selectValue = value ?? AUTO_ORIENTATION_VALUE;
+
+  const options = [
+    { label: t("mat_gradient_anchor_option_auto"), value: AUTO_ANCHOR_VALUE },
+    ...GRADIENT_CARD_ANCHOR_CORNERS.map((corner) => ({
+      label: t(anchorOptionKey(corner)),
+      value: corner,
+    })),
+  ];
+
   return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-600 dark:text-slate-300">
-        {label}
-      </span>
-      <select
-        data-testid={testId}
-        value={selectValue}
-        onChange={(event) => {
-          const next = event.target.value;
+    <div data-testid={testId}>
+      <Dropdown
+        label={label}
+        value={value ?? AUTO_ANCHOR_VALUE}
+        onChange={(next) =>
           onChange(
-            next === AUTO_ORIENTATION_VALUE
+            next === AUTO_ANCHOR_VALUE
               ? null
-              : (next as ManualOrientationLabel),
-          );
-        }}
-        className={selectClass}
-      >
-        <option value={AUTO_ORIENTATION_VALUE}>
-          {t("mat_gradient_orientation_option_auto")}
-        </option>
-        {MANUAL_ORIENTATION_LABELS.map((orientation) => (
-          <option key={orientation} value={orientation}>
-            {t(orientationOptionKey(orientation))}
-          </option>
-        ))}
-      </select>
-    </label>
+              : (next as GradientCardAnchorCorner),
+          )
+        }
+        options={options}
+        labelAccessory={
+          tooltip ? (
+            <WikiTooltip title={label} description={tooltip}>
+              <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">
+                ?
+              </span>
+            </WikiTooltip>
+          ) : undefined
+        }
+      />
+    </div>
   );
 };
 
@@ -299,52 +302,119 @@ const SubstrateSignalCard = ({
   );
 };
 
-type FloatingMessage = {
-  id: number;
-  tone: "error" | "success";
-  message: string;
+const CornerNudgeControl = ({
+  cornerPoints,
+  activePointIndex,
+  onActivePointChange,
+  nudgeStep,
+  onNudgeStepChange,
+  onNudge,
+}: {
+  cornerPoints: [number, number][];
+  activePointIndex: number | null;
+  onActivePointChange: (index: number | null) => void;
+  nudgeStep: number;
+  onNudgeStepChange: (val: number) => void;
+  onNudge: (dx: number, dy: number) => void;
+}) => {
+  const { t } = useI18n();
+  const placedCornerCount = cornerPoints.length;
+  const nudgeEnabled = placedCornerCount > 0 && activePointIndex !== null;
+  const activeCornerPoint = activePointIndex !== null && activePointIndex >= 0 && activePointIndex < placedCornerCount ? cornerPoints[activePointIndex] : null;
+
+  return (
+    <div className="flex flex-col gap-4 mt-2">
+      {placedCornerCount === 0 ? (
+        <StatusBanner tone="info">
+          {t("ext_nudge_hint_empty")}
+        </StatusBanner>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {t("ext_nudge_active_corner_label")}
+          </span>
+          <div role="radiogroup" aria-label={t("ext_nudge_active_corner_label")} className="grid grid-cols-4 gap-2">
+            {[0, 1, 2, 3].map((idx) => {
+              const placed = idx < placedCornerCount;
+              const selected = placed && activePointIndex === idx;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={!placed}
+                  onClick={() => onActivePointChange(idx)}
+                  className={cx(
+                    "flex min-h-9 items-center justify-center rounded-xl border px-2 py-1 text-sm font-medium transition-colors",
+                    selected
+                      ? "border-blue-500 bg-blue-500 text-white shadow-[var(--shadow-control-hover)]"
+                      : "border-slate-200/80 bg-white/70 text-slate-700 hover:border-slate-300 hover:bg-white/90 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-200 dark:hover:border-slate-600",
+                    !placed && "cursor-not-allowed opacity-45"
+                  )}
+                >
+                  {idx + 1}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 items-center">
+         <label className="flex flex-col gap-1 flex-1 min-w-0">
+           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{t("ext_nudge_step_label")}</span>
+           <input type="range" min={1} max={10} step={1} value={nudgeStep} onChange={(e) => onNudgeStepChange(Number(e.target.value))} className="w-full accent-blue-500" />
+         </label>
+         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 tabular-nums w-8 text-right">{nudgeStep}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div />
+        <Button label={`↑`} variant="secondary" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <div />
+        <Button label={`←`} variant="secondary" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <div className="flex items-center justify-center text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+          {activeCornerPoint ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})` : "—"}
+        </div>
+        <Button label={`→`} variant="secondary" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <div />
+        <Button label={`↓`} variant="secondary" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <div />
+      </div>
+    </div>
+  );
 };
 
-const FloatingStatusMessage = ({
+const InlineStatusMessage = ({
   tone,
   message,
-  closeLabel,
   onDismiss,
+  testId,
 }: {
-  tone: "error" | "success";
+  tone: "error" | "success" | "info" | "warning";
   message: string;
-  closeLabel: string;
   onDismiss: () => void;
-}) => (
-  <motion.div
-    key={`${tone}:${message}`}
-    initial={{ opacity: 0, y: -12, scale: 0.98 }}
-    animate={{ opacity: 1, y: 0, scale: 1 }}
-    transition={{ duration: 0.18, ease: "easeOut" }}
-    data-testid="gradient-card-floating-message"
-    role={tone === "error" ? "alert" : "status"}
-    aria-live={tone === "error" ? "assertive" : "polite"}
-    className="pointer-events-none fixed inset-x-4 top-4 z-50 flex justify-end sm:inset-x-auto sm:right-4"
-  >
-    <StatusBanner
-      tone={tone}
-      className="pointer-events-auto w-full max-w-md rounded-[22px] shadow-[var(--shadow-control)]"
-      action={(
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={closeLabel}
-          data-testid="gradient-card-floating-message-close"
-          className="rounded-lg px-2 py-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-        >
-          ×
-        </button>
-      )}
+  testId?: string;
+}) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onDismiss();
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [message, onDismiss]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 10 }}
+      transition={{ duration: 0.2 }}
     >
-      {message}
-    </StatusBanner>
-  </motion.div>
-);
+      <StatusBanner data-testid={testId} tone={tone}>
+        {message}
+      </StatusBanner>
+    </motion.div>
+  );
+};
 
 export default function GradientCardExtractPanel() {
   const { t } = useI18n();
@@ -352,14 +422,9 @@ export default function GradientCardExtractPanel() {
   const datasetInputRef = useRef<HTMLInputElement>(null);
   const whiteImageInputRef = useRef<HTMLInputElement>(null);
   const blackImageInputRef = useRef<HTMLInputElement>(null);
-  const floatingMessageIdRef = useRef(0);
-  const previousExtractErrorRef = useRef<string | null>(null);
-  const previousSaveErrorRef = useRef<string | null>(null);
-  const previousSaveSuccessRef = useRef<string | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [brandOptionsLoading, setBrandOptionsLoading] = useState(false);
-  const [floatingMessage, setFloatingMessage] = useState<FloatingMessage | null>(null);
   const {
     datasetFile,
     whiteImageFile,
@@ -372,6 +437,9 @@ export default function GradientCardExtractPanel() {
     blackImageNaturalWidth,
     blackImageNaturalHeight,
     blackCornerPoints,
+    activeCanvas,
+    activeCornerIndex,
+    nudgeStep,
     isRotatingWhite,
     isRotatingBlack,
     isExtracting,
@@ -384,8 +452,8 @@ export default function GradientCardExtractPanel() {
     fitSummary,
     materialSummary,
     orientationRanking,
-    manualWhiteOrientation,
-    manualBlackOrientation,
+    manualWhiteAnchor,
+    manualBlackAnchor,
     materialName,
     materialBrand,
     verificationTargetDirectoryName,
@@ -407,19 +475,24 @@ export default function GradientCardExtractPanel() {
     addBlackCornerPoint,
     clearWhiteCornerPoints,
     clearBlackCornerPoints,
+    setActiveCanvasAndCorner,
+    setNudgeStep,
+    nudgeActiveCorner,
     setMaterialName,
     setMaterialBrand,
-    setManualWhiteOrientation,
-    setManualBlackOrientation,
+    setManualWhiteAnchor,
+    setManualBlackAnchor,
     clearMaterialVerification,
     submitExtract,
     submitSave,
+    clearExtractError,
+    clearSaveMessages,
   } = useSingleStageStore();
 
   const buildCornerHint = (count: number) =>
     count >= 4
       ? t("mat_gradient_corner_complete")
-      : `${t("mat_gradient_corner_hint_prefix")}: ${count}/4`;
+      : `${t("mat_gradient_corner_hint_prefix")}: ${count}/4 · ${t("mat_gradient_corner_pick_order_hint")}`;
 
   const canExtract =
     !!datasetFile &&
@@ -465,15 +538,6 @@ export default function GradientCardExtractPanel() {
     : t("mat_gradient_save_material_btn");
   const hasDetailInfo = !!stageAParamsUrl || !!materialSummary || !!fitSummary || !!savedMaterialSummary;
 
-  const showFloatingMessage = (tone: FloatingMessage["tone"], message: string) => {
-    floatingMessageIdRef.current += 1;
-    setFloatingMessage({
-      id: floatingMessageIdRef.current,
-      tone,
-      message,
-    });
-  };
-
   useEffect(() => {
     if (isVerificationMode) {
       setBrandOptions([]);
@@ -513,39 +577,57 @@ export default function GradientCardExtractPanel() {
   }, [isVerificationMode]);
 
   useEffect(() => {
-    if (extractError && extractError !== previousExtractErrorRef.current) {
-      showFloatingMessage("error", extractError);
-    }
-    previousExtractErrorRef.current = extractError;
-  }, [extractError]);
-
-  useEffect(() => {
-    if (saveError && saveError !== previousSaveErrorRef.current) {
-      showFloatingMessage("error", saveError);
-    }
-    previousSaveErrorRef.current = saveError;
-  }, [saveError]);
-
-  useEffect(() => {
-    if (saveSuccess && saveSuccess !== previousSaveSuccessRef.current) {
-      showFloatingMessage("success", saveSuccess);
-    }
-    previousSaveSuccessRef.current = saveSuccess;
-  }, [saveSuccess]);
-
-  useEffect(() => {
-    if (!floatingMessage) {
-      return undefined;
-    }
-    const timer = setTimeout(() => {
-      setFloatingMessage((current) =>
-        current?.id === floatingMessage.id ? null : current,
-      );
-    }, 4000);
-    return () => {
-      clearTimeout(timer);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key;
+      if (
+        key !== "ArrowUp" &&
+        key !== "ArrowDown" &&
+        key !== "ArrowLeft" &&
+        key !== "ArrowRight"
+      ) {
+        return;
+      }
+      // Ignore when typing into form controls or contentEditable elements.
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      const {
+        activeCanvas,
+        activeCornerIndex: activeIdx,
+      } = useSingleStageStore.getState();
+      if (activeCanvas === null || activeIdx === null) {
+        return;
+      }
+      e.preventDefault();
+      switch (key) {
+        case "ArrowUp":
+          useSingleStageStore.getState().nudgeActiveCorner(0, -1);
+          break;
+        case "ArrowDown":
+          useSingleStageStore.getState().nudgeActiveCorner(0, 1);
+          break;
+        case "ArrowLeft":
+          useSingleStageStore.getState().nudgeActiveCorner(-1, 0);
+          break;
+        case "ArrowRight":
+          useSingleStageStore.getState().nudgeActiveCorner(1, 0);
+          break;
+      }
     };
-  }, [floatingMessage]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   return (
     <motion.aside
@@ -560,15 +642,6 @@ export default function GradientCardExtractPanel() {
         title={t("mat_gradient_extract_title")}
         description={t("mat_gradient_extract_desc")}
       />
-
-      {floatingMessage ? (
-        <FloatingStatusMessage
-          tone={floatingMessage.tone}
-          message={floatingMessage.message}
-          closeLabel={t("mat_gradient_details_close_btn")}
-          onDismiss={() => setFloatingMessage(null)}
-        />
-      ) : null}
 
       {isVerificationMode ? (
         <StatusBanner
@@ -617,159 +690,176 @@ export default function GradientCardExtractPanel() {
         }}
       />
 
-      <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
-        <div className={desktopPrimaryColumnClass}>
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
+      <div className="flex flex-col gap-6 w-full">
+        <div className="grid gap-6 lg:grid-cols-2 w-full">
+<section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
+          <div>
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              {t("mat_gradient_upload_title")}
+            </h3>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("mat_gradient_upload_desc")}
+            </p>
+          </div>
+          <div className={`${mutedSectionCardClass} flex flex-col gap-3 mt-auto`}>
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                {t("ext_single_stage_zip_label")}
+              </span>
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                {datasetFile?.name ?? t("mat_gradient_no_dataset_selected")}
+              </span>
+            </div>
+            <Button
+              label={t("mat_gradient_select_dataset_btn")}
+              variant="secondary"
+              onClick={() => datasetInputRef.current?.click()}
+              className="w-full"
+            />
+          </div>
+        </section>
+<section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
             <div>
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_upload_title")}
+                {isVerificationMode
+                  ? t("mat_gradient_verification_name_label")
+                  : t("mat_gradient_material_name_label")}
               </h3>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t("mat_gradient_upload_desc")}
+                {isVerificationMode
+                  ? tRuntime("mat_gradient_verification_name_desc", {
+                      count: verificationRunCount,
+                    })
+                  : t("mat_gradient_material_name_placeholder")}
               </p>
             </div>
-
-            <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t("ext_single_stage_zip_label")}
-                </span>
-                <span className="text-sm text-slate-500 dark:text-slate-400">
-                  {datasetFile?.name ?? t("mat_gradient_no_dataset_selected")}
-                </span>
-              </div>
-              <Button
-                label={t("mat_gradient_select_dataset_btn")}
-                variant="secondary"
-                onClick={() => datasetInputRef.current?.click()}
-                className="w-full"
+            <div className="flex flex-col gap-4 flex-1">
+              <input
+                value={materialName}
+                onChange={(event) => setMaterialName(event.target.value)}
+                placeholder={t("mat_gradient_material_name_placeholder")}
+                className={textInputClass}
+                disabled={isVerificationMode}
               />
+              {!isVerificationMode && (
+                <BrandSelect
+                  value={materialBrand}
+                  onChange={setMaterialBrand}
+                  options={brandOptions}
+                  isLoading={brandOptionsLoading}
+                />
+              )}
             </div>
+            <div className="mt-auto pt-2">
+              {isVerificationMode ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Button
+                    label={t("mat_gradient_save_merge_btn")}
+                    variant="primary"
+                    onClick={() => void submitSave("merge")}
+                    disabled={!sessionId || !materialName.trim() || isSaving}
+                    loading={isSaving}
+                    className="w-full"
+                  />
+                  <Button
+                    label={t("mat_gradient_save_override_btn")}
+                    variant="secondary"
+                    onClick={() => void submitSave("override")}
+                    disabled={!sessionId || !materialName.trim() || isSaving}
+                    loading={isSaving}
+                    className="w-full"
+                  />
+                  <Button
+                    label={t("mat_gradient_cancel_verification_btn")}
+                    variant="secondary"
+                    onClick={clearMaterialVerification}
+                    disabled={isSaving}
+                    className="w-full"
+                  />
+                </div>
+              ) : (
+                <Button
+                  label={saveButtonLabel}
+                  variant="primary"
+                  onClick={() => void submitSave()}
+                  disabled={!sessionId || !materialName.trim() || isSaving}
+                  loading={isSaving}
+                  className="w-full"
+                />
+              )}
+            </div>
+          </section>
+</div>
 
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+          <div className="flex flex-col gap-4">
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
               <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
                   {t("mat_gradient_white_image_label")}
                 </span>
-                <span className="text-sm text-slate-500 dark:text-slate-400">
+                <span className="text-sm text-slate-500 dark:text-slate-400 break-all">
                   {whiteImageFile?.name ?? t("mat_gradient_no_image_selected")}
                 </span>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <Button
+                label={t("mat_gradient_select_image_btn")}
+                variant="secondary"
+                onClick={() => whiteImageInputRef.current?.click()}
+                className="w-full"
+              />
+              <div className="grid gap-3 grid-cols-2">
                 <Button
-                  label={t("mat_gradient_select_image_btn")}
+                  label={t("mat_gradient_rotate_ccw_btn")}
                   variant="secondary"
-                  onClick={() => whiteImageInputRef.current?.click()}
-                  className="w-full"
-                />
-                <Button
-                  label={t("mat_gradient_rotate_image_btn")}
-                  variant="secondary"
-                  onClick={() => void rotateWhiteImage()}
+                  onClick={() => void rotateWhiteImage("ccw")}
                   disabled={!whiteImageFile || isRotatingWhite}
                   loading={isRotatingWhite}
                   className="w-full"
+                  data-testid="white-rotate-ccw-btn"
                 />
                 <Button
-                  label={t("mat_gradient_clear_points_btn")}
+                  label={t("mat_gradient_rotate_cw_btn")}
                   variant="secondary"
-                  onClick={clearWhiteCornerPoints}
-                  disabled={whiteCornerPoints.length === 0}
+                  onClick={() => void rotateWhiteImage("cw")}
+                  disabled={!whiteImageFile || isRotatingWhite}
+                  loading={isRotatingWhite}
                   className="w-full"
+                  data-testid="white-rotate-cw-btn"
                 />
               </div>
+              <Button
+                label={t("mat_gradient_clear_points_btn")}
+                variant="secondary"
+                onClick={clearWhiteCornerPoints}
+                disabled={whiteCornerPoints.length === 0}
+                className="w-full"
+              />
             </div>
-
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t("mat_gradient_black_image_label")}
-                </span>
-                <span className="text-sm text-slate-500 dark:text-slate-400">
-                  {blackImageFile?.name ?? t("mat_gradient_no_image_selected")}
-                </span>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Button
-                  label={t("mat_gradient_select_image_btn")}
-                  variant="secondary"
-                  onClick={() => blackImageInputRef.current?.click()}
-                  className="w-full"
-                />
-                <Button
-                  label={t("mat_gradient_rotate_image_btn")}
-                  variant="secondary"
-                  onClick={() => void rotateBlackImage()}
-                  disabled={!blackImageFile || isRotatingBlack}
-                  loading={isRotatingBlack}
-                  className="w-full"
-                />
-                <Button
-                  label={t("mat_gradient_clear_points_btn")}
-                  variant="secondary"
-                  onClick={clearBlackCornerPoints}
-                  disabled={blackCornerPoints.length === 0}
-                  className="w-full"
-                />
-              </div>
+              <AnchorCornerSelect
+                label={t("mat_gradient_white_anchor_label")}
+                value={manualWhiteAnchor}
+                onChange={setManualWhiteAnchor}
+                testId="manual-white-anchor-select"
+                tooltip={t("mat_gradient_anchor_section_desc")}
+              />
             </div>
-
-            <div
-              data-testid="orientation-control-card"
-              className={`${mutedSectionCardClass} flex flex-col gap-3`}
-            >
-              <div>
-                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                  {t("mat_gradient_manual_orientation_title")}
-                </h4>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {t("mat_gradient_manual_orientation_desc")}
-                </p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <OrientationSelect
-                  label={t("mat_gradient_manual_white_orientation_label")}
-                  value={manualWhiteOrientation}
-                  onChange={setManualWhiteOrientation}
-                  testId="manual-white-orientation-select"
-                />
-                <OrientationSelect
-                  label={t("mat_gradient_manual_black_orientation_label")}
-                  value={manualBlackOrientation}
-                  onChange={setManualBlackOrientation}
-                  testId="manual-black-orientation-select"
-                />
-              </div>
+            <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
+              <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {t("ext_nudge_section")}
+              </h4>
+              <CornerNudgeControl
+                 cornerPoints={whiteCornerPoints}
+                 activePointIndex={activeCanvas === "white" ? activeCornerIndex : null}
+                 onActivePointChange={(idx) => setActiveCanvasAndCorner("white", idx)}
+                 nudgeStep={nudgeStep}
+                 onNudgeStepChange={setNudgeStep}
+                 onNudge={nudgeActiveCorner}
+              />
             </div>
-          </section>
-        </div>
-
-        <div className={desktopSecondaryColumnClass}>
-          {datasetFile && (
-            <StatusBanner tone="info" title={t("mat_gradient_dataset_selected")}>
-              {datasetFile.name}
-            </StatusBanner>
-          )}
-
-          {extractError && (
-            <StatusBanner data-testid="extract-error" tone="error">
-              {extractError}
-            </StatusBanner>
-          )}
-
-          {saveError && (
-            <StatusBanner data-testid="save-error" tone="error">
-              {saveError}
-            </StatusBanner>
-          )}
-
-          {saveSuccess && (
-            <StatusBanner data-testid="save-success" tone="success">
-              {saveSuccess}
-            </StatusBanner>
-          )}
-
-          <div className="grid gap-4 xl:grid-cols-2">
+          </div>
+          <div className="min-w-0">
             <GradientCardCornerSelector
               title={t("mat_gradient_white_canvas_title")}
               hint={buildCornerHint(whiteCornerPoints.length)}
@@ -777,12 +867,85 @@ export default function GradientCardExtractPanel() {
               naturalWidth={whiteImageNaturalWidth}
               naturalHeight={whiteImageNaturalHeight}
               cornerPoints={whiteCornerPoints}
+              activePointIndex={activeCanvas === "white" ? activeCornerIndex : null}
               emptyText={t("mat_gradient_empty_white_canvas")}
               dataTestId="white-corner-selector-preview"
               emptyStateTestId="white-corner-selector-empty-state"
               onSelectPoint={addWhiteCornerPoint}
               onImageLoad={setWhiteImageNaturalSize}
             />
+          </div>
+        </section>
+
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+          <div className="flex flex-col gap-4">
+            <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {t("mat_gradient_black_image_label")}
+                </span>
+                <span className="text-sm text-slate-500 dark:text-slate-400 break-all">
+                  {blackImageFile?.name ?? t("mat_gradient_no_image_selected")}
+                </span>
+              </div>
+              <Button
+                label={t("mat_gradient_select_image_btn")}
+                variant="secondary"
+                onClick={() => blackImageInputRef.current?.click()}
+                className="w-full"
+              />
+              <div className="grid gap-3 grid-cols-2">
+                <Button
+                  label={t("mat_gradient_rotate_ccw_btn")}
+                  variant="secondary"
+                  onClick={() => void rotateBlackImage("ccw")}
+                  disabled={!blackImageFile || isRotatingBlack}
+                  loading={isRotatingBlack}
+                  className="w-full"
+                  data-testid="black-rotate-ccw-btn"
+                />
+                <Button
+                  label={t("mat_gradient_rotate_cw_btn")}
+                  variant="secondary"
+                  onClick={() => void rotateBlackImage("cw")}
+                  disabled={!blackImageFile || isRotatingBlack}
+                  loading={isRotatingBlack}
+                  className="w-full"
+                  data-testid="black-rotate-cw-btn"
+                />
+              </div>
+              <Button
+                label={t("mat_gradient_clear_points_btn")}
+                variant="secondary"
+                onClick={clearBlackCornerPoints}
+                disabled={blackCornerPoints.length === 0}
+                className="w-full"
+              />
+            </div>
+            <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
+              <AnchorCornerSelect
+                label={t("mat_gradient_black_anchor_label")}
+                value={manualBlackAnchor}
+                onChange={setManualBlackAnchor}
+                testId="manual-black-anchor-select"
+                tooltip={t("mat_gradient_anchor_section_desc")}
+              />
+            </div>
+            <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
+              <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {t("ext_nudge_section")}
+              </h4>
+              <CornerNudgeControl
+                 cornerPoints={blackCornerPoints}
+                 activePointIndex={activeCanvas === "black" ? activeCornerIndex : null}
+                 onActivePointChange={(idx) => setActiveCanvasAndCorner("black", idx)}
+                 nudgeStep={nudgeStep}
+                 onNudgeStepChange={setNudgeStep}
+                 onNudge={nudgeActiveCorner}
+              />
+            </div>
+          </div>
+          <div className="min-w-0">
             <GradientCardCornerSelector
               title={t("mat_gradient_black_canvas_title")}
               hint={buildCornerHint(blackCornerPoints.length)}
@@ -790,6 +953,7 @@ export default function GradientCardExtractPanel() {
               naturalWidth={blackImageNaturalWidth}
               naturalHeight={blackImageNaturalHeight}
               cornerPoints={blackCornerPoints}
+              activePointIndex={activeCanvas === "black" ? activeCornerIndex : null}
               emptyText={t("mat_gradient_empty_black_canvas")}
               dataTestId="black-corner-selector-preview"
               emptyStateTestId="black-corner-selector-empty-state"
@@ -797,15 +961,46 @@ export default function GradientCardExtractPanel() {
               onImageLoad={setBlackImageNaturalSize}
             />
           </div>
+        </section>
 
-          <div data-testid="extract-action-container" className="mt-4">
+        <div className="flex flex-col gap-5">
+          <AnimatePresence mode="popLayout">
+            {extractError && (
+              <InlineStatusMessage
+                key="extractError"
+                testId="extract-error"
+                tone="error"
+                message={extractError}
+                onDismiss={clearExtractError}
+              />
+            )}
+            {saveError && (
+              <InlineStatusMessage
+                key="saveError"
+                testId="save-error"
+                tone="error"
+                message={saveError}
+                onDismiss={clearSaveMessages}
+              />
+            )}
+            {saveSuccess && (
+              <InlineStatusMessage
+                key="saveSuccess"
+                testId="save-success"
+                tone="success"
+                message={saveSuccess}
+                onDismiss={clearSaveMessages}
+              />
+            )}
+          </AnimatePresence>
+          <div data-testid="extract-action-container">
             <Button
               label={t("mat_gradient_compute_btn")}
               variant="primary"
               onClick={() => void submitExtract()}
               disabled={!canExtract || isExtracting}
               loading={isExtracting}
-              className="w-full"
+              className="w-full !py-4 text-base"
             />
           </div>
 
@@ -1048,73 +1243,7 @@ export default function GradientCardExtractPanel() {
             </section>
           )}
 
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {isVerificationMode
-                  ? t("mat_gradient_verification_name_label")
-                  : t("mat_gradient_material_name_label")}
-              </h3>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {isVerificationMode
-                  ? tRuntime("mat_gradient_verification_name_desc", {
-                      count: verificationRunCount,
-                    })
-                  : t("mat_gradient_material_name_placeholder")}
-              </p>
-            </div>
-            <input
-              value={materialName}
-              onChange={(event) => setMaterialName(event.target.value)}
-              placeholder={t("mat_gradient_material_name_placeholder")}
-              className={textInputClass}
-              disabled={isVerificationMode}
-            />
-            {!isVerificationMode && (
-              <BrandSelect
-                value={materialBrand}
-                onChange={setMaterialBrand}
-                options={brandOptions}
-                isLoading={brandOptionsLoading}
-              />
-            )}
-            {isVerificationMode ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Button
-                  label={t("mat_gradient_save_merge_btn")}
-                  variant="primary"
-                  onClick={() => void submitSave("merge")}
-                  disabled={!sessionId || !materialName.trim() || isSaving}
-                  loading={isSaving}
-                  className="w-full"
-                />
-                <Button
-                  label={t("mat_gradient_save_override_btn")}
-                  variant="secondary"
-                  onClick={() => void submitSave("override")}
-                  disabled={!sessionId || !materialName.trim() || isSaving}
-                  loading={isSaving}
-                  className="w-full"
-                />
-                <Button
-                  label={t("mat_gradient_cancel_verification_btn")}
-                  variant="secondary"
-                  onClick={clearMaterialVerification}
-                  disabled={isSaving}
-                  className="w-full"
-                />
-              </div>
-            ) : (
-              <Button
-                label={saveButtonLabel}
-                variant="primary"
-                onClick={() => void submitSave()}
-                disabled={!sessionId || !materialName.trim() || isSaving}
-                loading={isSaving}
-                className="w-full"
-              />
-            )}
-          </section>
+          
 
           {detailsDialogOpen && hasDetailInfo ? (
             <div

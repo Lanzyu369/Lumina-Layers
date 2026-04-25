@@ -5235,17 +5235,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "提取详细信息",
     en: "Extraction Details",
   },
-  mat_gradient_details_dialog_desc: {
-    zh: "在这里查看拟合输出和完整 JSON 详情。",
-    en: "Review the fit output and full JSON details here.",
-  },
   mat_gradient_details_close_btn: {
     zh: "关闭",
     en: "Close",
-  },
-  mat_gradient_dataset_selected: {
-    zh: "已选数据集",
-    en: "Selected Dataset",
   },
   mat_gradient_select_dataset_btn: {
     zh: "选择数据集 ZIP",
@@ -5351,9 +5343,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "选择图片",
     en: "Choose Image",
   },
-  mat_gradient_rotate_image_btn: {
-    zh: "旋转 90°",
-    en: "Rotate 90°",
+  mat_gradient_rotate_cw_btn: {
+    zh: "顺时针 90°",
+    en: "Rotate 90° CW",
+  },
+  mat_gradient_rotate_ccw_btn: {
+    zh: "逆时针 90°",
+    en: "Rotate 90° CCW",
   },
   mat_gradient_clear_points_btn: {
     zh: "清除角点",
@@ -5487,57 +5483,45 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "ΔE 差距",
     en: "ΔE Gap",
   },
-  mat_gradient_manual_orientation_title: {
-    zh: "方向控制（高级）",
-    en: "Orientation Control (Advanced)",
+  mat_gradient_anchor_section_title: {
+    zh: "色块位置（决定读取顺序）",
+    en: "Pure Block Position (Drives Sampling Order)",
   },
-  mat_gradient_manual_orientation_desc: {
-    zh: "默认自动检测方向。若自动结果不理想（尤其是白色耗材打白底），可在此手动指定采样方向。",
-    en: "Defaults to automatic detection. If auto-detection is unreliable (especially for a white material on a white substrate), you can pin the sampling orientation here.",
+  mat_gradient_anchor_section_desc: {
+    zh: "请告诉系统照片上「露出底板的纯色块」位于哪个角。先按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角，再选这里。若不确定可保留「自动检测」。",
+    en: "Tell the system which screen corner holds the pure substrate block (the only patch where the bare board shows through). Pick the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order first, then choose here. Leave on \"Auto detect\" if unsure.",
   },
-  mat_gradient_manual_white_orientation_label: {
-    zh: "白底方向覆盖",
-    en: "White Orientation Override",
+  mat_gradient_white_anchor_label: {
+    zh: "纯白色块位置",
+    en: "Pure White Block Position",
   },
-  mat_gradient_manual_black_orientation_label: {
-    zh: "黑底方向覆盖",
-    en: "Black Orientation Override",
+  mat_gradient_black_anchor_label: {
+    zh: "纯黑色块位置",
+    en: "Pure Black Block Position",
   },
-  mat_gradient_orientation_option_auto: {
-    zh: "自动检测",
-    en: "Auto (recommended)",
+  mat_gradient_anchor_option_auto: {
+    zh: "自动检测（推荐）",
+    en: "Auto detect (recommended)",
   },
-  mat_gradient_orientation_option_identity: {
-    zh: "原样",
-    en: "Identity",
+  mat_gradient_anchor_option_tl: {
+    zh: "左上角",
+    en: "Top-left",
   },
-  mat_gradient_orientation_option_rotate_90_cw: {
-    zh: "顺时针 90°",
-    en: "Rotate 90° CW",
+  mat_gradient_anchor_option_tr: {
+    zh: "右上角",
+    en: "Top-right",
   },
-  mat_gradient_orientation_option_rotate_180: {
-    zh: "旋转 180°",
-    en: "Rotate 180°",
+  mat_gradient_anchor_option_br: {
+    zh: "右下角",
+    en: "Bottom-right",
   },
-  mat_gradient_orientation_option_rotate_90_ccw: {
-    zh: "逆时针 90°",
-    en: "Rotate 90° CCW",
+  mat_gradient_anchor_option_bl: {
+    zh: "左下角",
+    en: "Bottom-left",
   },
-  mat_gradient_orientation_option_flip_horizontal: {
-    zh: "水平翻转",
-    en: "Flip Horizontal",
-  },
-  mat_gradient_orientation_option_flip_vertical: {
-    zh: "垂直翻转",
-    en: "Flip Vertical",
-  },
-  mat_gradient_orientation_option_transpose: {
-    zh: "沿主对角线转置",
-    en: "Transpose",
-  },
-  mat_gradient_orientation_option_transverse: {
-    zh: "沿副对角线转置",
-    en: "Transverse",
+  mat_gradient_corner_pick_order_hint: {
+    zh: "请按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角。",
+    en: "Click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order.",
   },
   mat_gradient_white_signal_label: {
     zh: "白底信号",
@@ -5556,8 +5540,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Manual",
   },
   mat_gradient_signal_flat_hint: {
-    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在「方向控制」中手动指定方向。",
-    en: 'This substrate\'s gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — consider setting the orientation manually under "Orientation Control".',
+    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在上方手动选择「色块位置」对应的角。",
+    en: "This substrate's gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — pick the matching anchor in the \"Pure Block Position\" selector above.",
   },
   mat_gradient_saved_material_title: {
     zh: "已保存的耗材档案",
@@ -5818,6 +5802,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_save_override_btn: {
     zh: "覆盖结果",
     en: "Override",
+  },
+  mat_gradient_material_saved_success: {
+    zh: "耗材保存成功",
+    en: "Material saved successfully",
+  },
+  mat_gradient_verification_saved_success: {
+    zh: "耗材校验保存成功（已聚合 {count} 次校验结果）",
+    en: "Verification saved successfully ({count} runs aggregated)",
   },
   mat_gradient_cancel_verification_btn: {
     zh: "取消复验",

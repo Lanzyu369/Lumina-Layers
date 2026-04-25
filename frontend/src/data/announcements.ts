@@ -16,6 +16,35 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-26",
+    title: {
+      zh: "Lumina Layers — 今日更新",
+      en: "Lumina Layers — Today's update",
+    },
+    sections: [
+      {
+        category: {
+          zh: "提取器（校色卡）",
+          en: "Extractor (Calibration Card)",
+        },
+        items: [
+          {
+            zh: "梯度卡方向控制改成大白话：原来那个看不懂的“白底/黑底方向覆盖”下拉，现在变成“纯白/纯黑色块位置”——直接选色块在照片的哪个角（左上/右上/右下/左下），不用再猜“沿主对角线转置”是什么意思了。",
+            en: "Gradient-card orientation control speaks plain language now: the cryptic “White/Black Orientation Override” dropdown has been replaced by “Pure White/Black Block Position”, where you simply pick which screen corner holds the bare-board patch (top-left, top-right, bottom-right, or bottom-left).",
+          },
+          {
+            zh: "梯度卡图片栏的“旋转 90°”按钮拆成“顺时针 90°”和“逆时针 90°”两个，点哪个图就直接转哪个方向，不用再连点 3 下凑出顺时针。",
+            en: "The single “Rotate 90°” button on each gradient-card image card is now split into “Rotate 90° CW” and “Rotate 90° CCW”, so you can rotate either direction in one click instead of triple-tapping the counter-clockwise button.",
+          },
+          {
+            zh: "梯度卡四角点选会明确提示按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺时针顺序点，配合“色块位置”选项能稳定推导采样方向。",
+            en: "Gradient-card corner picking now clearly prompts you to click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left clockwise order, which combines with the new “block position” selector to determine sampling orientation reliably.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-25",
     title: {
       zh: "Lumina Layers — 近三天更新速览",

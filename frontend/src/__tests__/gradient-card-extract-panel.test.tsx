@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import GradientCardExtractPanel from "../components/GradientCardExtractPanel";
 import {
   extractGradientCardStageA,
   listGradientCardMaterials,
+  rotateExtractorImage,
   saveGradientCardMaterial,
 } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
@@ -69,8 +70,8 @@ beforeEach(() => {
     materialFileUrl: null,
     savedStageAParamsUrl: null,
     orientationRanking: null,
-    manualWhiteOrientation: null,
-    manualBlackOrientation: null,
+    manualWhiteAnchor: null,
+    manualBlackAnchor: null,
     savedMaterialSummary: null,
   });
 });
@@ -300,19 +301,49 @@ describe("GradientCardExtractPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("defaults the manual orientation dropdowns to auto-detection", () => {
+  it("defaults the anchor-corner dropdowns to auto-detection", () => {
     render(<GradientCardExtractPanel />);
 
-    const whiteSelect = screen.getByTestId(
-      "manual-white-orientation-select",
-    ) as HTMLSelectElement;
-    const blackSelect = screen.getByTestId(
-      "manual-black-orientation-select",
-    ) as HTMLSelectElement;
-    // "__auto__" is the sentinel value the component uses to represent
-    // "no manual override" — selecting it means the store holds null.
-    expect(whiteSelect.value).toBe("__auto__");
-    expect(blackSelect.value).toBe("__auto__");
+    const whiteWrapper = screen.getByTestId("manual-white-anchor-select");
+    const whiteCombobox = within(whiteWrapper).getByRole("combobox");
+    expect(whiteCombobox).toHaveTextContent("自动检测");
+
+    const blackWrapper = screen.getByTestId("manual-black-anchor-select");
+    const blackCombobox = within(blackWrapper).getByRole("combobox");
+    expect(blackCombobox).toHaveTextContent("自动检测");
+  });
+
+  it("forwards the chosen rotation direction to the extractor API for both substrates", async () => {
+    const rotateMock = vi.mocked(rotateExtractorImage);
+    rotateMock.mockResolvedValue({
+      preview_url: "/api/files/rotated.png",
+      width: 100,
+      height: 100,
+    });
+    // Stub fetch so the rotation flow can construct a File from the preview.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ blob: () => Promise.resolve(new Blob([""])) }) as unknown as typeof fetch;
+
+    useSingleStageStore.setState({
+      whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+      blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+    });
+
+    await act(async () => {
+      await useSingleStageStore.getState().rotateWhiteImage("cw");
+    });
+    await act(async () => {
+      await useSingleStageStore.getState().rotateBlackImage("ccw");
+    });
+
+    const cwCall = rotateMock.mock.calls.find((call) => call[2] === "cw");
+    const ccwCall = rotateMock.mock.calls.find((call) => call[2] === "ccw");
+    expect(cwCall?.[1]).toBe("white.png");
+    expect(ccwCall?.[1]).toBe("black.png");
+
+    globalThis.fetch = originalFetch;
   });
 
   it("lets you pick an existing saved brand from the brand selector", async () => {
@@ -430,11 +461,6 @@ describe("GradientCardExtractPanel", () => {
     expect(screen.getByTestId("extract-error")).toHaveTextContent(
       /ZIP 不是正确的梯度卡 Kit ZIP|uploaded ZIP is not a valid gradient card kit/i,
     );
-    expect(screen.getByTestId("gradient-card-floating-message")).toHaveTextContent(
-      /ZIP 不是正确的梯度卡 Kit ZIP|uploaded ZIP is not a valid gradient card kit/i,
-    );
-    fireEvent.click(screen.getByTestId("gradient-card-floating-message-close"));
-    expect(screen.queryByTestId("gradient-card-floating-message")).not.toBeInTheDocument();
   });
 
   it("shows a friendly error when an uploaded gradient card image cannot be decoded", async () => {
@@ -516,12 +542,9 @@ describe("GradientCardExtractPanel", () => {
     expect(screen.getByTestId("save-error")).toHaveTextContent(
       /提取结果已失效|extraction result has expired/i,
     );
-    expect(screen.getByTestId("gradient-card-floating-message")).toHaveTextContent(
-      /提取结果已失效|extraction result has expired/i,
-    );
   });
 
-  it("propagates the manual white orientation selection to the extractor API call", async () => {
+  it("propagates the manual white anchor-corner selection to the extractor API call", async () => {
     const extractMock = vi.mocked(extractGradientCardStageA);
     extractMock.mockResolvedValue({
       session_id: "sess-1",
@@ -576,10 +599,15 @@ describe("GradientCardExtractPanel", () => {
 
     render(<GradientCardExtractPanel />);
 
-    // User picks a manual orientation for the white capture.
-    fireEvent.change(screen.getByTestId("manual-white-orientation-select"), {
-      target: { value: "rotate_180" },
-    });
+    // User picks a manual anchor-corner for the white capture; bottom-right
+    // anchor maps to the backend orientation label "rotate_180".
+    const whiteWrapper = screen.getByTestId("manual-white-anchor-select");
+    const whiteCombobox = within(whiteWrapper).getByRole("combobox");
+    fireEvent.click(whiteCombobox);
+    
+    // The option uses the translated label
+    const option = await screen.findByRole("option", { name: /右下角|Bottom-right/i });
+    fireEvent.click(option);
 
     // Fire the extract action directly via the store to avoid pulling in
     // the image upload flow, then assert the API client received the
@@ -665,7 +693,7 @@ describe("GradientCardExtractPanel", () => {
 
   it("shows the manual badge and suppresses the flat hint once a manual override is in effect", () => {
     useSingleStageStore.setState({
-      manualWhiteOrientation: "rotate_90_cw",
+      manualWhiteAnchor: "tr",
       materialSummary: {
         sample_count: 36,
         per_substrate_sample_count: 18,
@@ -692,7 +720,7 @@ describe("GradientCardExtractPanel", () => {
         delta_e_gap: 0.0,
         top_candidates: [
           {
-            white_orientation: "rotate_90_cw",
+            white_orientation: "flip_horizontal",
             black_orientation: "identity",
             anchor_penalty: 0.01,
             mean_delta_e: 0.3,
@@ -705,8 +733,8 @@ describe("GradientCardExtractPanel", () => {
         white_orientation_info: {
           signal_strength: 0.005,
           flat: true,
-          manual_override: "rotate_90_cw",
-          locked_to: "rotate_90_cw",
+          manual_override: "flip_horizontal",
+          locked_to: "flip_horizontal",
         },
         black_orientation_info: {
           signal_strength: 0.12,

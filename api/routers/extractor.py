@@ -208,20 +208,40 @@ def _get_8color_temp_path(assets_dir: str, page_number: int, eight_color_full_ex
     return os.path.join(assets_dir, f"temp_8c_page_{page_number}.json")
 
 
+_ROTATE_DIRECTION_TO_LABEL: dict[str, str] = {
+    "ccw": "Rotate Left 90°",
+    "cw": "Rotate Right 90°",
+}
+
+
 @router.post("/rotate")
 async def extractor_rotate(
     image: UploadFile = File(..., description="待旋转的图片"),
+    direction: str = "ccw",
     registry: FileRegistry = Depends(get_file_registry),
 ):
-    """Rotate an image 90 degrees counter-clockwise and return the rotated PNG.
-    将图像逆时针旋转 90 度并返回旋转后的 PNG。
+    """Rotate an image 90 degrees and return the rotated PNG.
+    将图像旋转 90 度并返回旋转后的 PNG。
+
+    Args:
+        image: Uploaded image to rotate. (待旋转图片)
+        direction: ``"ccw"`` for counter-clockwise (default, backwards
+            compatible) or ``"cw"`` for clockwise. (``"ccw"`` 逆时针，默认；
+            ``"cw"`` 顺时针)
     """
+    direction_key = direction.strip().lower()
+    rotation_label = _ROTATE_DIRECTION_TO_LABEL.get(direction_key)
+    if rotation_label is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid rotation direction {direction!r}; expected 'cw' or 'ccw'.",
+        )
     try:
         img_arr = await upload_to_ndarray(image)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    rotated = rotate_image(img_arr, "Rotate Left 90°")
+    rotated = rotate_image(img_arr, rotation_label)
     if rotated is None:
         raise HTTPException(status_code=500, detail="Image rotation failed")
 
