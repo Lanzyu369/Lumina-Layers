@@ -50,8 +50,14 @@ export default function Button({
         className
       )}
     >
-      {loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-current/25 border-t-current" />}
-      {label}
+      <span
+        aria-hidden="true"
+        className={cx(
+          "h-4 w-4 rounded-full border-2 border-current/25 border-t-current",
+          loading ? "animate-spin opacity-100" : "opacity-0",
+        )}
+      />
+      <span translate="no">{label}</span>
     </motion.button>
   );
 }

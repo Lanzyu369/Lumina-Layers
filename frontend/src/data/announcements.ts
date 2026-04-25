@@ -152,6 +152,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "反推 LUT 会坚持使用自己带的调色板，就算设置里还残留着旧颜色模式，也不会拿错颜色去匹配。",
             en: "Inferred LUTs now keep using their own palettes even if settings still contain an older colour mode, avoiding mismatched colour picks.",
           },
+          {
+            zh: "生成 3D 时，加载按钮不会再被浏览器翻译或插件改乱后把操作栏弄崩，模型生成完成后能继续正常显示。",
+            en: "During 3D generation, loading buttons no longer let browser translation or extensions break the action panel, so the finished model can keep showing normally.",
+          },
         ],
       },
     ],

@@ -6,6 +6,7 @@ import ImageUpload from "../components/ui/ImageUpload";
 import Dropdown from "../components/ui/Dropdown";
 import RadioGroup from "../components/ui/RadioGroup";
 import Checkbox from "../components/ui/Checkbox";
+import Button from "../components/ui/Button";
 
 describe("Accordion", () => {
   it("hides children when defaultOpen is false", () => {
@@ -65,6 +66,32 @@ describe("Slider", () => {
     const input = screen.getByRole("textbox", { name: /width value/i });
     expect(input).toHaveValue("120");
     expect(input).toHaveStyle({ width: "7ch" });
+  });
+});
+
+describe("Button", () => {
+  it("toggles loading without crashing after external text-node mutation", () => {
+    const { rerender } = render(
+      <Button label="Generate 3D Model" onClick={() => {}} loading={false} />,
+    );
+    const button = screen.getByRole("button", { name: "Generate 3D Model" });
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+    let labelNode: Node | null = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.textContent === "Generate 3D Model") {
+        labelNode = walker.currentNode;
+        break;
+      }
+    }
+    expect(labelNode).toBeTruthy();
+
+    const translatedWrapper = document.createElement("font");
+    translatedWrapper.textContent = labelNode.textContent;
+    labelNode.parentNode!.replaceChild(translatedWrapper, labelNode);
+
+    expect(() => {
+      rerender(<Button label="Generate 3D Model" onClick={() => {}} loading />);
+    }).not.toThrow();
   });
 });
 
