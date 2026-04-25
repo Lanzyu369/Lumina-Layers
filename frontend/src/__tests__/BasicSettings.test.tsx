@@ -191,6 +191,11 @@ function makePredictiveBrand() {
   };
 }
 
+function isMultipleOfStep(value: number, step: number): boolean {
+  const ratio = value / step;
+  return Math.abs(ratio - Math.round(ratio)) < 1e-9;
+}
+
 describe("BasicSettings", () => {
   // Req 2.1: "批量模式" checkbox removed
   it("does NOT render the batch mode checkbox", () => {
@@ -516,6 +521,23 @@ describe("BasicSettings", () => {
     expect(screen.queryByRole("checkbox", { name: "仅模型匹配" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型阈值" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型边距" })).not.toBeInTheDocument();
+  });
+
+  it("anchors the thickness slider to the 0.08mm layer grid", () => {
+    render(<BasicSettings />);
+
+    const slider = screen.getByRole("slider", { name: "厚度" }) as HTMLInputElement;
+    const min = Number(slider.min);
+    const max = Number(slider.max);
+    const step = Number(slider.step);
+
+    expect(step).toBeCloseTo(0.08, 10);
+    expect(isMultipleOfStep(min, step)).toBe(true);
+    expect(isMultipleOfStep(max, step)).toBe(true);
+
+    for (let value = min; value <= max + 1e-9; value = Number((value + step).toFixed(10))) {
+      expect(isMultipleOfStep(value, step)).toBe(true);
+    }
   });
 
   it("disables structure and large-format controls while fridge mode is enabled", () => {

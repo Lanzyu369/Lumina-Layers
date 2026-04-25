@@ -48,6 +48,9 @@ const COLOR_MODE_DOTS: Record<string, string[]> = {
 };
 
 const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20";
+const THICKNESS_LAYER_STEP_MM = 0.08;
+const THICKNESS_SLIDER_MIN_MM = 0.24;
+const THICKNESS_SLIDER_MAX_MM = 3.44;
 
 const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
   BW: "basic_lut_color_mode_bw",
@@ -955,9 +958,9 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_thickness")}
         value={spacer_thick}
-        min={0.2}
-        max={3.5}
-        step={0.08}
+        min={THICKNESS_SLIDER_MIN_MM}
+        max={THICKNESS_SLIDER_MAX_MM}
+        step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
         onChange={setSpacerThick}
       />
