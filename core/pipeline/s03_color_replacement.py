@@ -109,6 +109,40 @@ def _extend_ctx_palette_with_virtuals(
             conf_slots[cache_index] = name
 
 
+def _resolve_recipe_native_palette_length(
+    ctx: dict,
+    lut_metadata: object | None,
+) -> int:
+    """Return the number of real source channels before virtual materials.
+
+    In normal LUT sessions this is ``len(lut_metadata.palette)``. In
+    material-archive sessions there is no LUT metadata in the generation
+    worker, so the selected material count is the native palette length and
+    user-declared virtual materials must start after it.
+
+    普通 LUT 会话用 ``lut_metadata.palette`` 的长度；耗材档案生成 worker
+    没有 LUT metadata，此时已选耗材数量就是原生通道数，虚拟耗材必须从
+    这个数量之后开始编号。
+    """
+    palette = getattr(lut_metadata, "palette", None) if lut_metadata is not None else None
+    if palette:
+        return len(palette)
+
+    material_params = ctx.get("_material_params")
+    if isinstance(material_params, (list, tuple)) and material_params:
+        return len(material_params)
+
+    selected_materials = ctx.get("selected_materials")
+    if isinstance(selected_materials, (list, tuple)) and selected_materials:
+        return len(selected_materials)
+
+    slot_names = ctx.get("slot_names")
+    if isinstance(slot_names, (list, tuple)):
+        return len(slot_names)
+
+    return 0
+
+
 def _apply_material_archive_color_replacements(
     matched_rgb: np.ndarray,
     material_matrix: np.ndarray,
@@ -702,9 +736,17 @@ def run(ctx: dict) -> dict:
             _log.warning("[S03] Failed to load recipe override masks: %s", exc)
             region_masks = {}
 
-        if isinstance(region_masks, dict) and lut_metadata is not None:
-            target_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
-            base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+        if isinstance(region_masks, dict):
+            target_order = (
+                getattr(lut_metadata, "layer_order", "Top2Bottom")
+                if lut_metadata is not None
+                else "Top2Bottom"
+            )
+            base_channel_idx = int(
+                getattr(lut_metadata, "base_channel_idx", 0)
+                if lut_metadata is not None
+                else 0
+            )
             target_layers = max(
                 int(material_matrix.shape[2]),
                 max((len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)), default=0),
@@ -736,7 +778,7 @@ def run(ctx: dict) -> dict:
             # ``lut_palette_length`` 开始给每条虚拟耗材分配稳定的全局通道索引；
             # 各 region 的本地虚拟索引再统一重映射到该全局表，保证
             # material_matrix 里的通道 id 跨 region 一致。
-            lut_palette_length = len(getattr(lut_metadata, "palette", []) or [])
+            lut_palette_length = _resolve_recipe_native_palette_length(ctx, lut_metadata)
             virtual_registry: list[dict[str, str]] = []
             virtual_lookup: dict[tuple[str, str], int] = {}
             per_region_virtual_maps: dict[str, dict[int, int]] = {}
@@ -825,7 +867,11 @@ def run(ctx: dict) -> dict:
                 recipe_has_virtual = any(
                     ch >= lut_palette_length for ch in recipe_raw
                 )
-                if predict_recipe_color is not None and not recipe_has_virtual:
+                if (
+                    lut_metadata is not None
+                    and predict_recipe_color is not None
+                    and not recipe_has_virtual
+                ):
                     try:
                         predicted = predict_recipe_color(
                             lut_metadata,

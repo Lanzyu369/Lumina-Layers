@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from api.app import app
 from api.dependencies import get_session_store
+from api.schemas.converter import ColorMode, ConvertGenerateRequest, ConvertPreviewRequest
 from api.session_store import SessionStore
 from config import LUTMetadata, PaletteEntry
 from core.native_reference import (
@@ -69,7 +70,7 @@ class TestLutInfoSuccess:
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "TestLUT"
-        assert data["color_mode"] == "8-Color"
+        assert data["color_mode"] == "8-Color Max"
         assert data["color_count"] == 2738
         assert data["schema_version"] == "2.0"
         assert data["supports_predictive_match"] is True
@@ -205,13 +206,23 @@ class TestSessionLutInfo:
             assert response.status_code == 200
             data = response.json()
             assert data["name"] == "Material Archive Session"
-            assert data["color_mode"] == "8-Color"
+            assert data["color_mode"] == "8-Color Max"
             # Channel palette should be returned in LUT order, not quantized order.
             assert [entry["color"] for entry in data["palette"]] == ["White", "Red"]
             assert data["palette"][0]["hex_color"] == "#FFFFFF"
             assert data["palette"][1]["hex_color"] == "#FF0000"
         finally:
             self._clear_override()
+
+    def test_generate_schema_accepts_legacy_8_color_alias(self) -> None:
+        request = ConvertGenerateRequest(lut_name="Legacy8", color_mode="8-Color")
+
+        assert request.color_mode is ColorMode.EIGHT_COLOR
+
+    def test_preview_schema_accepts_legacy_8_color_alias(self) -> None:
+        request = ConvertPreviewRequest(lut_name="Legacy8", color_mode="8-Color")
+
+        assert request.color_mode is ColorMode.EIGHT_COLOR
 
     @patch(
         "api.routers.lut.LUTManager.load_lut_with_metadata",
@@ -237,6 +248,78 @@ class TestSessionLutInfo:
             response = client.get(f"/api/lut/session/{session_id}/info")
             assert response.status_code == 200
             assert response.json()["name"] == "fallback_name"
+        finally:
+            self._clear_override()
+
+    def test_returns_material_archive_palette_for_session_without_lut_file(self) -> None:
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", "__material_archive__")
+        store.put(session_id, "lut_name", "__material_archive__")
+        store.put(session_id, "material_source", "material_archive")
+        store.put(session_id, "selected_materials", [
+            "brand/red-pla",
+            "brand/green-pla",
+            "brand/blue-pla",
+            "brand/yellow-pla",
+            "brand/cyan-pla",
+        ])
+        store.put(session_id, "material_layer_count", 7)
+        store.put(session_id, "material_layer_height_mm", 0.08)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "color_layers": 7,
+                "layer_height_mm": 0.08,
+                "slot_names": [
+                    "PLA Red",
+                    "PLA Green",
+                    "PLA Blue",
+                    "PLA Yellow",
+                    "PLA Cyan",
+                ],
+                "preview_colors": {
+                    0: [255, 0, 0, 255],
+                    1: [0, 255, 0, 255],
+                    2: [0, 0, 255, 255],
+                    3: [255, 255, 0, 255],
+                    4: [0, 255, 255, 255],
+                },
+            },
+        )
+
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["name"] == "__material_archive__"
+            assert data["color_mode"] == "Material Archive"
+            assert data["color_count"] == 5
+            assert data["max_color_layers"] == 7
+            assert data["layer_height_mm"] == 0.08
+            assert [entry["color"] for entry in data["palette"]] == [
+                "PLA Red",
+                "PLA Green",
+                "PLA Blue",
+                "PLA Yellow",
+                "PLA Cyan",
+            ]
+            assert [entry["material"] for entry in data["palette"]] == [
+                "brand/red-pla",
+                "brand/green-pla",
+                "brand/blue-pla",
+                "brand/yellow-pla",
+                "brand/cyan-pla",
+            ]
+            assert [entry["hex_color"] for entry in data["palette"]] == [
+                "#FF0000",
+                "#00FF00",
+                "#0000FF",
+                "#FFFF00",
+                "#00FFFF",
+            ]
         finally:
             self._clear_override()
 
@@ -379,6 +462,52 @@ class TestSourceCatalog:
         assert bambu_pla["supported_modes"]
         option_names = {option["name"] for option in bambu_pla["db_options"]}
         assert bambu_pla["default_db_names"][0] in option_names
+
+    @patch(
+        "api.routers.lut.LUTManager.get_source_catalog",
+        return_value={
+            "legacy_groups": [
+                {
+                    "group_name": "Preset",
+                    "items": [
+                        {
+                            "name": "Legacy8",
+                            "color_mode": "8-Color",
+                            "path": "/legacy8.npy",
+                            "fingerprint": "fp-legacy8",
+                        }
+                    ],
+                }
+            ],
+            "native_brand_groups": [
+                {
+                    "brand_key": "bambulab_pla",
+                    "material_type": "PLA",
+                    "vendor": "BambuLab",
+                    "display_name": "BambuLab PLA",
+                    "db_options": [
+                        {
+                            "name": "Eight.json",
+                            "path": "/Eight.json",
+                            "color_mode": "8-Color",
+                            "fingerprint": "fp-eight",
+                        }
+                    ],
+                    "default_db_names": ["Eight.json"],
+                    "package_name": None,
+                    "model_name": None,
+                    "supported_modes": [],
+                }
+            ],
+        },
+    )
+    def test_catalog_canonicalizes_legacy_8_color_aliases(self, mock_catalog) -> None:
+        response = client.get("/api/lut/catalog")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["legacy_groups"][0]["items"][0]["color_mode"] == "8-Color Max"
+        assert data["native_brand_groups"][0]["db_options"][0]["color_mode"] == "8-Color Max"
 
     def test_catalog_falls_back_to_bundled_native_assets_when_reference_repo_is_missing(self) -> None:
         from utils.lut_manager import LUTManager

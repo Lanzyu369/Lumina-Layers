@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import * as fc from "fast-check";
-import { computeAutoHeightMap } from "../utils/colorUtils";
+import {
+  computeAutoHeightMap,
+  toAbsoluteReliefHeightMap,
+} from "../utils/colorUtils";
 import { useConverterStore } from "../stores/converter";
 import type { PaletteEntry } from "../api/types";
 
@@ -249,5 +252,33 @@ describe("Relief Height Logic — Property-Based Tests", () => {
         { numRuns: 100 },
       );
     });
+  });
+});
+
+describe("toAbsoluteReliefHeightMap", () => {
+  it("adds spacer thickness to every relief height without mutating the input map", () => {
+    fc.assert(
+      fc.property(
+        fc.dictionary(
+          hexColor,
+          fc.float({ min: Math.fround(0), max: Math.fround(20), noNaN: true }),
+          { minKeys: 1, maxKeys: 20 },
+        ),
+        fc.float({ min: Math.fround(0), max: Math.fround(10), noNaN: true }),
+        (map, spacerThick) => {
+          const originalEntries = Object.entries(map);
+          const originalSnapshot = { ...map };
+
+          const result = toAbsoluteReliefHeightMap(map, spacerThick);
+
+          expect(result).not.toBe(map);
+          expect(map).toEqual(originalSnapshot);
+          for (const [hex, reliefExtra] of originalEntries) {
+            expect(result[hex]).toBeCloseTo(reliefExtra + spacerThick, 10);
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
   });
 });

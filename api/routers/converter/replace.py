@@ -2115,6 +2115,34 @@ def _canonical_apply_rgb(color_name: str | None) -> np.ndarray | None:
     return np.asarray(hit, dtype=np.uint8)
 
 
+def _recipe_apply_can_fallback_from_prediction_error(exc: ValueError) -> bool:
+    """Return whether apply can continue with a deterministic color fallback.
+
+    这些错误只代表“无法精确预测预览色”，不代表用户配方不能写入选区；
+    应用接口可以继续用纯色栈 / 缓存预览色 / 标准色兜底。
+    """
+    message = str(exc)
+    return (
+        "No predictive runtime" in message
+        or "not present in the runtime package" in message
+        or "exact prediction unavailable" in message
+    )
+
+
+def _recipe_apply_runtime_package_fallback_source(exc: ValueError) -> str:
+    """Classify fallback source for custom recipe apply telemetry.
+
+    区分“没有前向模型”和“runtime 包外配方”，方便前端/日志看出兜底原因。
+    """
+    message = str(exc)
+    if (
+        "not present in the runtime package" in message
+        or "exact prediction unavailable" in message
+    ):
+        return "runtime_package_fallback"
+    return "pure_stack_fallback"
+
+
 def _hex_to_rgb_triple(hex_value: str) -> tuple[int, int, int]:
     """Parse ``#RRGGBB`` into an ``(r, g, b)`` uint8 triple.
 
@@ -2434,7 +2462,9 @@ def apply_recipe_override(
                 runtime_mode_key = prediction.get("runtime_mode_key")
                 match_mode = "predictive"
             except ValueError as predict_exc:
-                if "No predictive runtime" not in str(predict_exc):
+                if not _recipe_apply_can_fallback_from_prediction_error(
+                    predict_exc
+                ):
                     raise
                 top_channel = top_channel_idx if top_channel_idx is not None else 0
                 # Multi-tier fallback so apply never 422s for lack of colour data:
@@ -2476,7 +2506,9 @@ def apply_recipe_override(
                 prediction_source = (
                     "material_archive_preview"
                     if is_material_archive
-                    else "pure_stack_fallback"
+                    else _recipe_apply_runtime_package_fallback_source(
+                        predict_exc
+                    )
                 )
                 runtime_mode_key = None
                 match_mode = prediction_source

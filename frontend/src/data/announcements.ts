@@ -18,47 +18,6 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
     version: "2026-04-26",
     title: {
-      zh: "Lumina Layers — 今日更新",
-      en: "Lumina Layers — Today's update",
-    },
-    sections: [
-      {
-        category: {
-          zh: "校准 & 材料",
-          en: "Calibration & Materials",
-        },
-        items: [
-          {
-            zh: "梯度卡生成界面重新排版并去除了中英夹杂：现在清晰分为“生成设置”与“使用须知”，在线模型链接和两张卡（白底/黑底）的打印说明一目了然，不用再到处找教程了。",
-            en: "The Gradient Generator panel has been redesigned with clean, plain-language sections: “Generation Settings” and “Instructions & Online Models” are clearly separated, and the requirement to print two cards (white base and black base) is prominently explained so you no longer have to hunt for tutorials.",
-          },
-        ],
-      },
-      {
-        category: {
-          zh: "提取器（校色卡）",
-          en: "Extractor (Calibration Card)",
-        },
-        items: [
-          {
-            zh: "梯度卡方向控制改成大白话：原来那个看不懂的“白底/黑底方向覆盖”下拉，现在变成“纯白/纯黑色块位置”——直接选色块在照片的哪个角（左上/右上/右下/左下），不用再猜“沿主对角线转置”是什么意思了。",
-            en: "Gradient-card orientation control speaks plain language now: the cryptic “White/Black Orientation Override” dropdown has been replaced by “Pure White/Black Block Position”, where you simply pick which screen corner holds the bare-board patch (top-left, top-right, bottom-right, or bottom-left).",
-          },
-          {
-            zh: "梯度卡图片栏的“旋转 90°”按钮拆成“顺时针 90°”和“逆时针 90°”两个，点哪个图就直接转哪个方向，不用再连点 3 下凑出顺时针。",
-            en: "The single “Rotate 90°” button on each gradient-card image card is now split into “Rotate 90° CW” and “Rotate 90° CCW”, so you can rotate either direction in one click instead of triple-tapping the counter-clockwise button.",
-          },
-          {
-            zh: "梯度卡四角点选会明确提示按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺时针顺序点，配合“色块位置”选项能稳定推导采样方向。",
-            en: "Gradient-card corner picking now clearly prompts you to click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left clockwise order, which combines with the new “block position” selector to determine sampling orientation reliably.",
-          },
-        ],
-      },
-    ],
-  },
-  {
-    version: "2026-04-25",
-    title: {
       zh: "Lumina Layers — 近三天更新速览",
       en: "Lumina Layers — What's new in the past three days",
     },
@@ -119,6 +78,38 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "颜色工作站的工具按钮会按面板宽度自动换行，窄屏下不会再裁掉“局部区域”等按钮，按钮文字也会保持在框内居中。",
             en: "Color Workstation toolbar buttons now wrap to the panel width, so narrow layouts no longer cut off controls such as Region and button labels stay centered inside their frames.",
           },
+          {
+            zh: "先打开浮雕再直接生成时，预览拿到颜色后会自动补好高度映射，不会再卡在“请先设置颜色高度映射”。",
+            en: "When relief is enabled before generating, the preview now builds the colour height map automatically so generation no longer stops at the height-mapping prompt.",
+          },
+          {
+            zh: "浮雕生成现在会把颜色高度正确叠加到底板厚度上，手动高度、自动高度和拼图生成都会按实际总高度输出。",
+            en: "Relief generation now correctly adds colour heights on top of the base spacer, so manual heights, automatic heights, and puzzle output use the intended total height.",
+          },
+          {
+            zh: "反推 LUT 下自定义配方不在预测包里时，现在也能应用并真实写进生成；预览会提示无法精确预测，但生成不会再丢掉刚应用的配方。",
+            en: "In inferred LUT mode, custom recipes outside the prediction package can now be applied and carried into real generation; preview warns when exact prediction is unavailable, but generation no longer drops the applied recipe.",
+          },
+          {
+            zh: "耗材档案模式下自定义配方会按已选耗材的真实通道顺序应用，选黑色、加层或生成时不会再被误当成第一个耗材。",
+            en: "In material-archive mode, custom recipes now apply against the real selected-material channel order, so choosing Black, adding layers, or generating no longer gets mistaken for the first material.",
+          },
+          {
+            zh: "耗材档案模式下自定义配方导出 3MF 时会同步注册新增耗材对象，不会再出现预览变了但文件里对应区域空掉。",
+            en: "In material-archive mode, custom recipe 3MF export now registers added material objects as well, so areas that changed in preview no longer become empty in the file.",
+          },
+          {
+            zh: "点历史配方时，每层颜色会稳定停在这条历史配方上，不会因为面板刷新或层数同步又跳回旧颜色。",
+            en: "When you click a recipe history entry, every layer now stays on that history recipe instead of jumping back to old colours after the panel refreshes or layer count syncs.",
+          },
+          {
+            zh: "自定义配方还没应用时，加到 10 层再调整窗口或刷新面板，层数会继续留在 10 层，不会又退回 5 层。",
+            en: "Before a custom recipe is applied, adding it to 10 layers now stays at 10 through window resizing or panel refreshes instead of falling back to 5.",
+          },
+          {
+            zh: "8 色 LUT 现在会统一按系统认识的“8-Color Max”去生成，不会再因为新旧名字不一致被 422 拦住。",
+            en: "8-colour LUTs now generate through the system-recognized “8-Color Max” mode, so old and new naming no longer trips a 422 before generation starts.",
+          },
         ],
       },
       {
@@ -134,6 +125,18 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "提取器面板把调试文件、拟合摘要和下载入口都收进“详情”里，保存成功或失败也改成右上角提示，主面板不会再被挤乱。",
             en: "The extractor panel now tucks debug files, fit summaries, and download links behind Details, while save success or failure appears as a top-right toast instead of pushing the panel around.",
+          },
+          {
+            zh: "梯度卡方向控制改成大白话：原来那个看不懂的"白底/黑底方向覆盖"下拉，现在变成"纯白/纯黑色块位置"——直接选色块在照片的哪个角（左上/右上/右下/左下），不用再猜"沿主对角线转置"是什么意思了。",
+            en: "Gradient-card orientation control speaks plain language now: the cryptic "White/Black Orientation Override" dropdown has been replaced by "Pure White/Black Block Position", where you simply pick which screen corner holds the bare-board patch (top-left, top-right, bottom-right, or bottom-left).",
+          },
+          {
+            zh: "梯度卡图片栏的"旋转 90°"按钮拆成"顺时针 90°"和"逆时针 90°"两个，点哪个图就直接转哪个方向，不用再连点 3 下凑出顺时针。",
+            en: "The single "Rotate 90°" button on each gradient-card image card is now split into "Rotate 90° CW" and "Rotate 90° CCW", so you can rotate either direction in one click instead of triple-tapping the counter-clockwise button.",
+          },
+          {
+            zh: "梯度卡四角点选会明确提示按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺时针顺序点，配合"色块位置"选项能稳定推导采样方向。",
+            en: "Gradient-card corner picking now clearly prompts you to click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left clockwise order, which combines with the new "block position" selector to determine sampling orientation reliably.",
           },
         ],
       },
@@ -158,6 +161,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "耗材预设里补进了无境新材，建档和选材时少一步手动录入。",
             en: "Wujing material presets have been added, reducing manual entry when building or selecting material archives.",
+          },
+          {
+            zh: "梯度卡生成界面重新排版并去除了中英夹杂：现在清晰分为"生成设置"与"使用须知"，在线模型链接和两张卡（白底/黑底）的打印说明一目了然，不用再到处找教程了。",
+            en: "The Gradient Generator panel has been redesigned with clean, plain-language sections: "Generation Settings" and "Instructions & Online Models" are clearly separated, and the requirement to print two cards (white base and black base) is prominently explained so you no longer have to hunt for tutorials.",
           },
         ],
       },

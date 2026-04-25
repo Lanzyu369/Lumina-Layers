@@ -151,7 +151,7 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
                 max_size=5,
             )
         ),
-        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=15.0, allow_nan=False)),
+        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=18.5, allow_nan=False)),
         enable_outline=draw(st.booleans()),
         outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
         enable_cloisonne=draw(st.booleans()),
@@ -325,7 +325,7 @@ CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ConvertGenerateRequest, "loop_width", 2, 10),
     (ConvertGenerateRequest, "loop_length", 4, 15),
     (ConvertGenerateRequest, "loop_hole", 1, 5),
-    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 15.0),
+    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 18.5),
     (ConvertGenerateRequest, "outline_width", 0.5, 10.0),
     (ConvertGenerateRequest, "wire_width_mm", 0.2, 1.2),
     (ConvertGenerateRequest, "wire_height_mm", 0.04, 1.0),
@@ -356,6 +356,19 @@ def _build_minimal_valid_data(model_cls: Type[BaseModel]) -> Dict[str, Any]:
     elif model_cls is CalibrationGenerateRequest:
         return {}
     return {}
+
+
+def test_convert_generate_request_accepts_total_relief_height_limit() -> None:
+    """ConvertGenerateRequest should allow the UI's max backing plus relief height."""
+    request = ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=18.5)
+
+    assert request.heightmap_max_height == 18.5
+
+
+def test_convert_generate_request_rejects_relief_height_above_total_limit() -> None:
+    """ConvertGenerateRequest should reject total relief heights above the UI maximum."""
+    with pytest.raises(ValidationError):
+        ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=18.51)
 
 
 # **Validates: Requirements 3.7, 5.3**

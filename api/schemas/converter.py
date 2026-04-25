@@ -12,9 +12,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.lut import LutSourceSelection
+
+MAX_BACKING_THICKNESS_MM = 3.5
+MAX_RELIEF_EXTRA_HEIGHT_MM = 15.0
+MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_MM
 
 # ========== Enums ==========
 
@@ -46,6 +50,12 @@ class ColorMode(str, Enum):
     SIX_COLOR_RYBW = "6-Color (RYBWGK 1296)"
     EIGHT_COLOR = "8-Color Max"
     MERGED = "Merged"
+
+
+def _normalize_color_mode_alias(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "8-Color":
+        return ColorMode.EIGHT_COLOR.value
+    return value
 
 
 class ModelingMode(str, Enum):
@@ -285,6 +295,11 @@ class ConvertPreviewRequest(LutSourceSelection):
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
 
+    @field_validator("color_mode", mode="before")
+    @classmethod
+    def normalize_color_mode_alias(cls, value: object) -> object:
+        return _normalize_color_mode_alias(value)
+
 
 class RecipeOverrideItem(BaseModel):
     """Region-level recipe override for predictive/custom recipe workflows."""
@@ -369,8 +384,8 @@ class ConvertGenerateRequest(LutSourceSelection):
             是否启用 2.5D 浮雕模式。
         color_height_map: Color-to-height mapping for relief mode.
             颜色高度映射 {hex: mm}。
-        heightmap_max_height: Maximum relief height in millimeters.
-            最大浮雕高度 (mm)。
+        heightmap_max_height: Maximum total relief model height in millimeters.
+            最大浮雕模型总高度 (mm)。
         enable_outline: Whether to enable outline stroke.
             是否启用描边。
         outline_width: Outline stroke width in millimeters.
@@ -392,7 +407,7 @@ class ConvertGenerateRequest(LutSourceSelection):
     """
 
     target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
-    spacer_thick: float = Field(1.2, ge=0.2, le=3.5, description="底板厚度 (mm)")
+    spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="底板厚度 (mm)")
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
     auto_bg: bool = Field(False, description="自动去背景")
     bg_tol: int = Field(40, ge=0, le=150, description="背景容差")
@@ -430,7 +445,12 @@ class ConvertGenerateRequest(LutSourceSelection):
         description="浮雕高度模式: 'color' (按颜色) 或 'heightmap' (按高度图)",
     )
     color_height_map: Optional[Dict[str, float]] = Field(None, description="颜色高度映射 {hex: mm}")
-    heightmap_max_height: float = Field(5.0, ge=0.08, le=15.0, description="最大浮雕高度 (mm)")
+    heightmap_max_height: float = Field(
+        5.0,
+        ge=0.08,
+        le=MAX_RELIEF_TOTAL_HEIGHT_MM,
+        description="最大浮雕模型总高度 (mm)",
+    )
     enable_outline: bool = Field(False, description="启用描边")
     outline_width: float = Field(2.0, ge=0.5, le=10.0, description="描边宽度 (mm)")
     enable_cloisonne: bool = Field(False, description="启用掐丝珐琅")
@@ -452,6 +472,11 @@ class ConvertGenerateRequest(LutSourceSelection):
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",
     )
+
+    @field_validator("color_mode", mode="before")
+    @classmethod
+    def normalize_color_mode_alias(cls, value: object) -> object:
+        return _normalize_color_mode_alias(value)
 
 
 class LargeFormatGenerateRequest(BaseModel):

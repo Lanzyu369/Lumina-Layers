@@ -10,6 +10,8 @@ and writes both ``matched_rgb`` and ``material_matrix`` atomically.
 
 from __future__ import annotations
 
+import os
+import pickle
 from unittest.mock import patch
 
 import numpy as np
@@ -219,6 +221,69 @@ class TestApplyMaterialArchiveColorReplacements:
 
 class TestS03RunMaterialArchiveBranch:
     """Integration checks: the S03 run() step dispatches to the helper."""
+
+    def test_recipe_override_virtual_material_extends_export_palette(self, tmp_path):
+        """Material-archive generation must register virtual recipe channels.
+
+        The apply endpoint can write a recipe such as ``[N, N, ...]`` where
+        ``N`` is the first virtual material after the selected archive
+        materials. During real generation, S03 receives that material matrix
+        from disk and must also extend ``slot_names`` / ``preview_colors`` so
+        S07 can emit a mesh for channel ``N`` instead of leaving the region as
+        unmapped air.
+        """
+        ctx = _make_material_archive_ctx(None)
+        native_count = len(_SMALL_PALETTE)
+        mask = np.zeros(ctx["mask_solid"].shape, dtype=bool)
+        mask[1:, 1:3] = True
+
+        override_matrix = ctx["material_matrix"].copy()
+        override_matrix[mask] = native_count
+        matrix_path = tmp_path / "material_matrix.npy"
+        np.save(matrix_path, override_matrix)
+
+        masks_path = tmp_path / "recipe_masks.pkl"
+        with open(masks_path, "wb") as f:
+            pickle.dump({"region-1": mask}, f)
+
+        ctx.update(
+            {
+                "slot_names": ["Red", "Blue", "White"],
+                "preview_colors": {
+                    0: [153, 13, 13, 255],
+                    1: [13, 26, 153, 255],
+                    2: [242, 242, 242, 255],
+                },
+                "color_conf": {
+                    "slots": ["Red", "Blue", "White"],
+                    "preview": {
+                        0: [153, 13, 13, 255],
+                        1: [13, 26, 153, 255],
+                        2: [242, 242, 242, 255],
+                    },
+                },
+                "material_matrix_path": os.fspath(matrix_path),
+                "recipe_override_masks_path": os.fspath(masks_path),
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [native_count] * ctx["material_matrix"].shape[2],
+                        "layer_order": "Top2Bottom",
+                        "virtual_materials": [
+                            {"name": "Black", "hex": "#111111"}
+                        ],
+                    }
+                ],
+            }
+        )
+
+        result = run(ctx)
+
+        assert result["slot_names"][native_count] == "Black"
+        assert result["preview_colors"][native_count] == [17, 17, 17, 255]
+        assert result["color_conf"]["slots"][native_count] == "Black"
+        assert result["color_conf"]["preview"][native_count] == [17, 17, 17, 255]
+        assert np.all(result["material_matrix"][mask] == native_count)
 
     def test_applies_replacement_without_processor(self):
         ctx = _make_material_archive_ctx({"#c86432": "#14c814"})

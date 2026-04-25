@@ -125,8 +125,8 @@ def test_apply_recipe_override_upgrades_cache(monkeypatch, tmp_path: Path) -> No
         },
     )
     monkeypatch.setattr(
-        "api.routers.converter.replace.generate_segmented_glb",
-        lambda cache: None,
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
     )
 
     response = client.post(

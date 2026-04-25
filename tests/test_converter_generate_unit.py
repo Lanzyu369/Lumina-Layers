@@ -31,6 +31,7 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
 from api.routers.converter.generate import _generate_large_format_raster
+from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
 from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
@@ -412,6 +413,33 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["replacement_regions"] is None
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
+
+    def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "enable_relief": True,
+                "height_mode": "heightmap",
+                "color_height_map": {"#ff0000": 2.88},
+                "heightmap_max_height": 2.88,
+            },
+        }
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": "/tmp/out.3mf",
+                "glb_path": "/tmp/out.glb",
+                "status_msg": "OK",
+            }
+        )
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 409
+        assert "heightmap" in response.json()["detail"].lower()
+        _mock_pool.submit.assert_not_called()
 
     def test_generate_passes_replacement_regions_from_request(self) -> None:
         """Verify replacement_regions from request body override session data."""
@@ -837,6 +865,39 @@ class TestLargeFormatDimensionsAndRouting:
             assert os.path.exists(kwargs["recipe_override_masks_path"])
         finally:
             _test_store.clear_all()
+
+    def test_large_format_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "enable_relief": True,
+                    "height_mode": "heightmap",
+                    "color_height_map": {"#ff0000": 2.88},
+                    "heightmap_max_height": 2.88,
+                },
+            },
+        }
+
+        try:
+            with patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper:
+                response = client.post("/api/convert/generate-large-format", json=payload)
+
+            assert response.status_code == 409
+            assert "heightmap" in response.json()["detail"].lower()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.clear_all()
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_svg_with_recipe_overrides_uses_raster_path_even_when_native_supported(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
@@ -1431,7 +1492,7 @@ def test_convert_generate_request_accepts_native_bundle_source() -> None:
     assert request.nozzle_size == "0.4"
 
 
-def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_value() -> None:
+def test_resolve_recipe_overrides_uses_session_when_request_array_is_empty() -> None:
     request = ConvertGenerateRequest(
         lut_name="test-lut",
         recipe_overrides=[],
@@ -1442,7 +1503,9 @@ def test_resolve_recipe_overrides_prefers_explicit_empty_request_over_session_va
         request,
     )
 
-    assert resolved is None
+    assert resolved == [
+        {"region_id": "region-1", "recipe": [1, 1, 1, 1, 1], "layer_order": "Top2Bottom"}
+    ]
 
 
 def test_resolve_recipe_overrides_backfills_session_virtual_materials_when_request_omits_them() -> None:
@@ -1490,6 +1553,264 @@ def test_resolve_recipe_overrides_backfills_session_virtual_materials_when_reque
     assert resolved[0]["virtual_materials"] == [
         {"name": "Black", "hex": "#111111"}
     ]
+
+
+def test_resolve_recipe_overrides_backfills_virtuals_from_preview_cache_when_session_item_lacks_them() -> None:
+    """A stale frontend may send virtual material indices without virtuals.
+
+    apply-recipe-override has already extended preview_cache slot_names and
+    preview_colors, so generate can reconstruct the missing virtual_materials
+    list from that cache instead of letting worker mesh generation see channel
+    ids that do not exist in its palette.
+
+    旧前端 / 陈旧状态可能只把虚拟通道索引发到 /generate，却漏掉
+    virtual_materials。apply 端点已经把虚拟材料写进 preview_cache，
+    generate 应从 cache 回补，避免 worker 只看到材料矩阵里的 N+1 通道，
+    却没有对应调色板，最终 3MF 生成 500。
+    """
+    session_data = {
+        "preview_cache": {
+            "lut_metadata": SimpleNamespace(palette=[object(), object(), object(), object()]),
+            "slot_names": ["White", "Cyan", "Magenta", "Yellow", "Black"],
+            "preview_colors": {
+                0: [245, 245, 245, 255],
+                1: [0, 183, 235, 255],
+                2: [230, 0, 126, 255],
+                3: [255, 212, 0, 255],
+                4: [17, 17, 17, 255],
+            },
+        },
+        "recipe_overrides": [
+            {
+                "region_id": "region-1",
+                "recipe": [4, 4, 4, 4, 4, 4, 4],
+                "layer_order": "Top2Bottom",
+                # Intentionally missing virtual_materials.
+            }
+        ],
+    }
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [4, 4, 4, 4, 4, 4, 4],
+                "layer_order": "Top2Bottom",
+            }
+        ],
+    )
+
+    resolved = _resolve_recipe_overrides(session_data, request)
+
+    assert resolved is not None
+    assert resolved[0]["virtual_materials"] == [
+        {"name": "Black", "hex": "#111111"}
+    ]
+
+
+def test_recover_virtual_materials_from_material_archive_preview_cache() -> None:
+    """Material-archive sessions have no LUT metadata during generation.
+
+    Recovery must use ``selected_materials`` as the native palette length so a
+    stale generate request carrying recipe indices can still rebuild virtual
+    material declarations from the preview cache.
+    """
+    session_data = {
+        "material_source": "material_archive",
+        "selected_materials": ["mat-red", "mat-blue", "mat-white"],
+        "preview_cache": {
+            "slot_names": ["Red", "Blue", "White", "Black"],
+            "preview_colors": {
+                0: [153, 13, 13, 255],
+                1: [13, 26, 153, 255],
+                2: [242, 242, 242, 255],
+                3: [17, 17, 17, 255],
+            },
+        },
+    }
+
+    recovered = _recover_virtual_materials_from_preview_cache(
+        session_data,
+        [3, 3, 3, 3, 3],
+    )
+
+    assert recovered == [{"name": "Black", "hex": "#111111"}]
+
+
+def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> None:
+    """The actual /generate route must pass recovered virtuals to the worker."""
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    lut_path = tmp_path / "source.msgpack"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", str(lut_path))
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "selected_region_masks", {"region-1": mask})
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "lut_metadata": SimpleNamespace(
+                layer_order="Top2Bottom",
+                base_channel_idx=0,
+                palette=[object(), object(), object(), object()],
+            ),
+            "slot_names": ["White", "Cyan", "Magenta", "Yellow", "Black"],
+            "preview_colors": {
+                0: [245, 245, 245, 255],
+                1: [0, 183, 235, 255],
+                2: [230, 0, 126, 255],
+                3: [255, 212, 0, 255],
+                4: [17, 17, 17, 255],
+            },
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "test_lut",
+                "color_layers": 7,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [4, 4, 4, 4, 4, 4, 4],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["recipe_overrides"] == [
+        {
+            "region_id": "region-1",
+            "recipe": [4, 4, 4, 4, 4, 4, 4],
+            "layer_order": "Top2Bottom",
+            "virtual_materials": [{"name": "Black", "hex": "#111111"}],
+        }
+    ]
+    assert submitted_params["material_matrix_path"] is not None
+    material_matrix = np.load(submitted_params["material_matrix_path"])
+    assert material_matrix.shape == (4, 4, 7)
+    assert np.all(material_matrix[mask] == np.array([4, 4, 4, 4, 4, 4, 4]))
+
+
+def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty(tmp_path) -> None:
+    """A stale empty request must not erase an already-applied recipe.
+
+    ``/apply-recipe-override`` persists the effective overrides in the
+    session before generation. The frontend can still send an empty local
+    array when that state is stale; generation must keep the session override
+    so the worker receives a material_matrix_path and exports the edited 3MF.
+
+    ``/apply-recipe-override`` 已经把生效配方写入 session；前端局部状态
+    陈旧时仍可能发空数组。生成端必须继续使用 session 里的覆盖，否则
+    3MF 会悄悄回到原始配方。
+    """
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    lut_path = tmp_path / "source.msgpack"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", str(lut_path))
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "selected_region_masks", {"region-1": mask})
+    _test_store.put(
+        session_id,
+        "recipe_overrides",
+        [
+            {
+                "region_id": "region-1",
+                "recipe": [1, 1, 1, 1, 1, 1, 1],
+                "layer_order": "Top2Bottom",
+            }
+        ],
+    )
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "lut_metadata": SimpleNamespace(
+                layer_order="Top2Bottom",
+                base_channel_idx=0,
+                palette=[object(), object(), object(), object()],
+            ),
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "test_lut",
+                "color_layers": 7,
+                "recipe_overrides": [],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["recipe_overrides"] == [
+        {
+            "region_id": "region-1",
+            "recipe": [1, 1, 1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+        }
+    ]
+    material_matrix = np.load(submitted_params["material_matrix_path"])
+    assert np.all(material_matrix[mask] == np.array([1, 1, 1, 1, 1, 1, 1]))
 
 
 def test_resolve_recipe_overrides_prefers_request_virtual_materials_when_provided() -> None:
