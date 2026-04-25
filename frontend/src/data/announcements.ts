@@ -78,6 +78,14 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "颜色工作站的工具按钮会按面板宽度自动换行，窄屏下不会再裁掉“局部区域”等按钮，按钮文字也会保持在框内居中。",
             en: "Color Workstation toolbar buttons now wrap to the panel width, so narrow layouts no longer cut off controls such as Region and button labels stay centered inside their frames.",
           },
+          {
+            zh: "先打开浮雕再直接生成时，预览拿到颜色后会自动补好高度映射，不会再卡在“请先设置颜色高度映射”。",
+            en: "When relief is enabled before generating, the preview now builds the colour height map automatically so generation no longer stops at the height-mapping prompt.",
+          },
+          {
+            zh: "浮雕生成现在会把颜色高度正确叠加到底板厚度上，手动高度、自动高度和拼图生成都会按实际总高度输出。",
+            en: "Relief generation now correctly adds colour heights on top of the base spacer, so manual heights, automatic heights, and puzzle output use the intended total height.",
+          },
         ],
       },
       {

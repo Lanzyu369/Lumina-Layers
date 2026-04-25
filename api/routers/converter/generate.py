@@ -423,6 +423,7 @@ async def convert_generate(
     # Resolve height_mode for relief branching
     # 解析 height_mode 用于浮雕分支选择
     height_mode = request.height_mode or "color"
+    _require_heightmap_for_relief(session_data, request)
 
     # If heightmap mode, save session heightmap to temp file for worker process
     # 高度图模式时，将 session 中的高度图保存为临时文件供工作进程使用
@@ -672,6 +673,22 @@ def _resolve_relief_global_max_height(session_data: dict, request) -> float | No
                 hm_max_cfg = request.heightmap_max_height if request.heightmap_max_height else 5.0
                 relief_global_max_height = float(hm_max_cfg)
     return relief_global_max_height
+
+
+def _require_heightmap_for_relief(session_data: dict, request) -> None:
+    """Reject heightmap relief generation when the session heightmap cache is gone.
+
+    拒绝缺少 session 高度图缓存的高度图浮雕生成，避免静默退回平面模型。
+    """
+    if not request.enable_relief:
+        return
+    if (request.height_mode or "color") != "heightmap":
+        return
+    if session_data.get("heightmap_grayscale") is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Heightmap missing. Upload heightmap before generating relief models.",
+        )
 
 
 def _resolve_large_format_shared_params(
@@ -1075,6 +1092,7 @@ async def convert_generate_large_format(
         raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
     if not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+    _require_heightmap_for_relief(session_data, request)
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)

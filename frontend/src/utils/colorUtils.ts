@@ -46,6 +46,25 @@ export function computeAutoHeightMap(
 }
 
 /**
+ * Convert UI relief-extra heights into backend absolute model heights.
+ * 将界面中的“额外浮雕高度”转换为后端需要的“底板 + 浮雕”总高度。
+ *
+ * @param map - UI/store relief-extra height map. (界面或 store 中的额外浮雕高度映射)
+ * @param spacerThick - Base spacer thickness in millimetres. (底板厚度，单位 mm)
+ * @returns New map with spacer thickness added to each value. (每个值都加上底板厚度的新映射)
+ */
+export function toAbsoluteReliefHeightMap(
+  map: Record<string, number>,
+  spacerThick: number,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [hex, reliefExtra] of Object.entries(map)) {
+    result[hex] = spacerThick + reliefExtra;
+  }
+  return result;
+}
+
+/**
  * 将前端 colorRemapMap 转换为后端 replacement_regions 格式。
  * @param remapMap - 前端颜色替换映射 { origHex: newHex }，origHex 是 matched_hex
  * @param palette - 调色板条目

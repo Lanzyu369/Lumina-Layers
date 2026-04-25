@@ -160,10 +160,12 @@ export async function fetchBedPreview(bedLabel: string): Promise<string> {
 export async function uploadHeightmap(
   heightmapFile: File,
   sessionId: string,
+  maxReliefHeight: number,
 ): Promise<HeightmapUploadResponse> {
   const fd = new FormData();
   fd.append("heightmap", heightmapFile);
   fd.append("session_id", sessionId);
+  fd.append("max_relief_height", String(maxReliefHeight));
 
   const response = await apiClient.post<HeightmapUploadResponse>(
     "/convert/upload-heightmap",

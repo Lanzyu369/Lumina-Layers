@@ -222,7 +222,7 @@ def st_convert_generate_request(draw: st.DrawFn) -> Dict[str, Any]:
         loop_length=draw(st.floats(min_value=4, max_value=15, allow_nan=False)),
         loop_hole=draw(st.floats(min_value=1, max_value=5, allow_nan=False)),
         enable_relief=draw(st.booleans()),
-        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=15.0, allow_nan=False)),
+        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=18.5, allow_nan=False)),
         enable_outline=draw(st.booleans()),
         outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
         enable_cloisonne=draw(st.booleans()),

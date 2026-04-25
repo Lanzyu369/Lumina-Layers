@@ -62,6 +62,7 @@ import {
 import {
   computeAutoHeightMap,
   colorRemapToReplacementRegions,
+  toAbsoluteReliefHeightMap,
 } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import {
@@ -1821,6 +1822,25 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     ...DEFAULT_LAYER_IMAGES_STATE,
     ...DEFAULT_PUZZLE_PREVIEW_STATE,
   };
+}
+
+function buildMissingAutoReliefHeightMap(
+  state: Pick<
+    ConverterState,
+    "enable_relief" | "autoHeightMode" | "color_height_map" | "heightmap_max_height" | "palette"
+  >,
+  paletteOverride?: PaletteEntry[],
+): Record<string, number> | null {
+  if (!state.enable_relief) return null;
+  if (state.autoHeightMode === "use-heightmap") return null;
+  if (Object.keys(state.color_height_map).length > 0) return null;
+  const palette = paletteOverride ?? state.palette;
+  if (palette.length === 0) return null;
+  return computeAutoHeightMap(
+    palette,
+    state.autoHeightMode,
+    state.heightmap_max_height,
+  );
 }
 
 function loadEnableCrop(): boolean {
@@ -4343,6 +4363,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const response = await apiUploadHeightmap(
           state.heightmapFile,
           state.sessionId,
+          state.heightmap_max_height,
         );
         const thumbnailUrl = `${response.thumbnail_url}`;
         set({
@@ -5082,6 +5103,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           quantized_hex: e.quantized_hex.replace(/^#/, ""),
           matched_hex: e.matched_hex.replace(/^#/, ""),
         }));
+        const autoReliefHeightMap = buildMissingAutoReliefHeightMap(
+          state,
+          normalizedPalette,
+        );
         const resolvedColorLayers = sourceSelection.isMaterial
           ? state.materialLayerCount
           : sourceSelection.source_kind === "native_bundle"
@@ -5116,6 +5141,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
+          ...(autoReliefHeightMap
+            ? { color_height_map: autoReliefHeightMap }
+            : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
           colorRemapMap: {},
@@ -5210,7 +5238,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     },
 
     submitGenerate: async () => {
-      const state = _get();
+      let state = _get();
       if (!state.sessionId) {
         set({ error: "请先预览图片" });
         return null;
@@ -5226,6 +5254,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
                 : "请先选择 LUT",
         });
         return null;
+      }
+      const autoReliefHeightMap = buildMissingAutoReliefHeightMap(state);
+      if (autoReliefHeightMap) {
+        set({ color_height_map: autoReliefHeightMap });
+        state = _get();
       }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
       if (
@@ -5289,6 +5322,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           });
           return null;
         }
+        const reliefHeightmapMaxHeight = state.enable_relief
+          ? state.spacer_thick + state.heightmap_max_height
+          : state.heightmap_max_height;
+        const reliefColorHeightMap =
+          state.enable_relief && state.autoHeightMode !== "use-heightmap"
+            ? toAbsoluteReliefHeightMap(
+                state.color_height_map,
+                state.spacer_thick,
+              )
+            : state.enable_relief
+              ? state.color_height_map
+              : undefined;
         const baseParams = {
           ...sourceParams,
           color_layers:
@@ -5326,10 +5371,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               ? "heightmap"
               : "color"
             : undefined,
-          color_height_map: state.enable_relief
-            ? state.color_height_map
-            : undefined,
-          heightmap_max_height: state.heightmap_max_height,
+          color_height_map: reliefColorHeightMap,
+          heightmap_max_height: reliefHeightmapMaxHeight,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
           enable_cloisonne: state.enable_cloisonne,

@@ -413,6 +413,33 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
+    def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "enable_relief": True,
+                "height_mode": "heightmap",
+                "color_height_map": {"#ff0000": 2.88},
+                "heightmap_max_height": 2.88,
+            },
+        }
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": "/tmp/out.3mf",
+                "glb_path": "/tmp/out.glb",
+                "status_msg": "OK",
+            }
+        )
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 409
+        assert "heightmap" in response.json()["detail"].lower()
+        _mock_pool.submit.assert_not_called()
+
     def test_generate_passes_replacement_regions_from_request(self) -> None:
         """Verify replacement_regions from request body override session data."""
         sid: str = _create_session_with_preview_and_files(_test_store)
@@ -837,6 +864,39 @@ class TestLargeFormatDimensionsAndRouting:
             assert os.path.exists(kwargs["recipe_override_masks_path"])
         finally:
             _test_store.clear_all()
+
+    def test_large_format_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "enable_relief": True,
+                    "height_mode": "heightmap",
+                    "color_height_map": {"#ff0000": 2.88},
+                    "heightmap_max_height": 2.88,
+                },
+            },
+        }
+
+        try:
+            with patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper:
+                response = client.post("/api/convert/generate-large-format", json=payload)
+
+            assert response.status_code == 409
+            assert "heightmap" in response.json()["detail"].lower()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.clear_all()
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_svg_with_recipe_overrides_uses_raster_path_even_when_native_supported(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
