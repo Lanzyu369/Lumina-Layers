@@ -5267,6 +5267,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "提取详细信息",
     en: "Extraction Details",
   },
+  mat_gradient_details_dialog_desc: {
+    zh: "拟合参数和材料摘要的原始数据，可用于排查问题或手动校准。",
+    en: "Raw fit parameters and material summary for troubleshooting or manual calibration.",
+  },
   mat_gradient_details_close_btn: {
     zh: "关闭",
     en: "Close",

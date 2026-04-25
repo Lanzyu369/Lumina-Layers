@@ -552,9 +552,9 @@ export const useSingleStageStore = create<
     );
 
     if (isWhite) {
-      set({ whiteCornerPoints: nextPoints });
+      set({ whiteCornerPoints: nextPoints, ...RESULT_RESET_STATE });
     } else {
-      set({ blackCornerPoints: nextPoints });
+      set({ blackCornerPoints: nextPoints, ...RESULT_RESET_STATE });
     }
   },
 
