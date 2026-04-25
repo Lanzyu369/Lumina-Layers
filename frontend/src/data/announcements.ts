@@ -156,6 +156,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "生成 3D 时，加载按钮不会再被浏览器翻译或插件改乱后把操作栏弄崩，模型生成完成后能继续正常显示。",
             en: "During 3D generation, loading buttons no longer let browser translation or extensions break the action panel, so the finished model can keep showing normally.",
           },
+          {
+            zh: "下载或复制 3MF 链接后再回来重新生成，不会再因为临时文件被清掉而报 409。",
+            en: "After downloading or copying a 3MF link, generating again no longer fails with 409 because required temp files were cleaned too aggressively.",
+          },
         ],
       },
     ],

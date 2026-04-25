@@ -215,6 +215,40 @@ def test_cleanup_session_files_route_preserves_session_and_kept_registry_file(
         os.unlink(keep_path)
 
 
+def test_cleanup_session_files_preserves_regeneration_input_paths(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """cleanup-session-files must not delete inputs needed for a later generate call."""
+    client, store, _ = client_with_stores
+    session_id = store.create()
+    image_path = _create_temp_file(b"image")
+    lut_path = _create_temp_file(b"lut")
+    intermediate_path = _create_temp_file(b"intermediate")
+    store.put(session_id, "image_path", image_path)
+    store.put(session_id, "lut_path", lut_path)
+    store.register_temp_file(session_id, image_path)
+    store.register_temp_file(session_id, lut_path)
+    store.register_temp_file(session_id, intermediate_path)
+
+    try:
+        response = client.post(
+            "/api/convert/cleanup-session-files",
+            json={"session_id": session_id, "keep_file_ids": []},
+        )
+
+        assert response.status_code == 200
+        assert store.exists(session_id) is True
+        assert os.path.exists(image_path) is True
+        assert os.path.exists(lut_path) is True
+        assert os.path.exists(intermediate_path) is False
+        assert image_path in store.get_temp_file_paths(session_id)
+        assert lut_path in store.get_temp_file_paths(session_id)
+    finally:
+        for path in (image_path, lut_path, intermediate_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+
 def test_serve_session_bound_file_returns_404_after_session_close_when_registry_cleanup_fails(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
 ) -> None:

@@ -17,6 +17,23 @@ from api.session_store import SessionStore
 router = APIRouter()
 
 
+def _collect_regeneration_input_paths(session_data: dict | None) -> set[str]:
+    """Return temp-file paths required for another generate call."""
+
+    if not session_data:
+        return set()
+    keep_paths: set[str] = set()
+    for key in ("image_path", "lut_path"):
+        path = session_data.get(key)
+        if not isinstance(path, str) or not path:
+            continue
+        if path == "__material_archive__":
+            continue
+        if os.path.exists(path):
+            keep_paths.add(path)
+    return keep_paths
+
+
 @router.post("/cleanup-session-files")
 def cleanup_session_files(
     body: CleanupSessionFilesRequest,
@@ -29,7 +46,9 @@ def cleanup_session_files(
     keep_file_ids = set(body.keep_file_ids) if body.keep_file_ids else set()
     session_entries = registry.get_session_entries(body.session_id)
     valid_keep_file_ids: set[str] = set()
-    keep_paths: set[str] = set()
+    keep_paths: set[str] = _collect_regeneration_input_paths(
+        store.get(body.session_id)
+    )
     for file_id in keep_file_ids:
         entry = session_entries.get(file_id)
         if entry is None:
