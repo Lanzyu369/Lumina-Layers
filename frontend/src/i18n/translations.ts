@@ -2759,9 +2759,53 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT",
     en: "LUT",
   },
+  basic_lut_manufacturer_label: {
+    zh: "品牌",
+    en: "Brand",
+  },
+  basic_lut_manufacturer_placeholder: {
+    zh: "选择品牌",
+    en: "Select a brand",
+  },
+  basic_lut_unlabeled_brand: {
+    zh: "个人",
+    en: "Personal",
+  },
   basic_lut_placeholder: {
     zh: "选择 LUT...",
     en: "Select LUT...",
+  },
+  basic_lut_lut_placeholder: {
+    zh: "选择 LUT",
+    en: "Select a LUT",
+  },
+  basic_lut_no_brand_hint: {
+    zh: "请先选择品牌",
+    en: "Pick a brand first",
+  },
+  basic_lut_color_mode_bw: {
+    zh: "黑白",
+    en: "BW",
+  },
+  basic_lut_color_mode_4color: {
+    zh: "4 色",
+    en: "4-Color",
+  },
+  basic_lut_color_mode_5color_ext: {
+    zh: "5 色扩展",
+    en: "5-Color Extended",
+  },
+  basic_lut_color_mode_6color: {
+    zh: "6 色",
+    en: "6-Color",
+  },
+  basic_lut_color_mode_8color: {
+    zh: "8 色",
+    en: "8-Color",
+  },
+  basic_lut_color_mode_merged: {
+    zh: "合并 LUT",
+    en: "Merged",
   },
   basic_lut_upload: {
     zh: "上传",

@@ -18,6 +18,7 @@ import type {
   PuzzleStyle,
   NativeBrandGroup,
   LutSupportedMode,
+  LutDetailsCatalogGroup,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -55,6 +56,7 @@ import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
   fetchLutCatalog as apiFetchLutCatalog,
+  fetchLutDetailsCatalog as apiFetchLutDetailsCatalog,
   fetchSessionLutInfo as apiFetchSessionLutInfo,
 } from "../../api/lut";
 import {
@@ -83,6 +85,10 @@ import type {
   GradientSelectionSource,
   MaterialColorSuggestionsResponse,
 } from "../../api/types";
+import {
+  buildLutCatalogIndex,
+  findLutLocationByPath,
+} from "./legacyLutSelection";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -1266,6 +1272,9 @@ export interface ConverterState {
   lutList: string[];
   lutListLoading: boolean;
   lutListFull: LutInfo[];
+  legacyCatalogGroups: LutDetailsCatalogGroup[];
+  legacyCatalogLoading: boolean;
+  selectedLegacyManufacturer: string;
 
   // LUT 全部颜色
   lutColors: LutColorEntry[];
@@ -1515,6 +1524,8 @@ export interface ConverterActions {
   uploadLut: (file: File) => Promise<void>;
   fetchLutList: () => Promise<void>;
   fetchLutCatalog: () => Promise<void>;
+  fetchLegacyCatalog: () => Promise<void>;
+  setLegacyManufacturer: (name: string) => void;
   fetchLutColors: (lutName: string) => Promise<void>;
 
   // 材料档案模式下按目标色请求建议
@@ -1954,6 +1965,9 @@ export const DEFAULT_STATE: ConverterState = {
   lutList: [],
   lutListLoading: false,
   lutListFull: [],
+  legacyCatalogGroups: [],
+  legacyCatalogLoading: false,
+  selectedLegacyManufacturer: "",
   lutColors: [],
   lutColorsLoading: false,
   lutColorsLutName: "",
@@ -2288,6 +2302,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setLutName: (name: string) => {
       const state = _get();
       const lutInfo = state.lutListFull.find((l) => l.name === name);
+      const lutLocation = lutInfo
+        ? findLutLocationByPath(
+            buildLutCatalogIndex(state.legacyCatalogGroups),
+            lutInfo.path,
+          )
+        : null;
       const updates: Partial<ConverterState> = {
         source_version: "legacy",
         lut_name: name,
@@ -2302,6 +2322,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         model_margin: null,
         ...buildPreviewSessionResetState(),
       };
+      if (lutLocation) {
+        updates.selectedLegacyManufacturer = lutLocation.manufacturer;
+      }
       if (lutInfo && lutInfo.color_mode) {
         updates.color_mode = lutInfo.color_mode as ColorMode;
       }
@@ -2358,6 +2381,43 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
             /* best effort */
           });
       }
+    },
+
+    setLegacyManufacturer: (name: string) => {
+      const state = _get();
+      const index = buildLutCatalogIndex(state.legacyCatalogGroups);
+      const currentLutInfo = state.lut_name
+        ? state.lutListFull.find((l) => l.name === state.lut_name)
+        : null;
+      const currentLocation = currentLutInfo
+        ? findLutLocationByPath(index, currentLutInfo.path)
+        : null;
+      const keepCurrentLut = currentLocation?.manufacturer === name;
+      const updates: Partial<ConverterState> = {
+        source_version: "legacy",
+        selectedLegacyManufacturer: name,
+        selectedNativeBrandKey: "",
+        selectedNativeDbNames: [],
+      };
+
+      if (!keepCurrentLut) {
+        updates.lut_name = "";
+        updates.selectedLutInfo = null;
+        updates.color_layers = null;
+        updates.layer_height_mm = null;
+        updates.model_enable = false;
+        updates.model_only = false;
+        updates.model_threshold = null;
+        updates.model_margin = null;
+        Object.assign(updates, buildPreviewSessionResetState());
+        try {
+          localStorage.removeItem("lumina_lastLut");
+        } catch {
+          /* noop */
+        }
+      }
+
+      set(updates);
     },
 
     setSourceVersion: (version: SourceVersion) =>
@@ -4340,7 +4400,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       try {
         const res = await apiUploadLut(file);
         // 上传成功后通过 catalog 刷新 legacy/native 共享状态，再选中新 LUT
-        await _get().fetchLutCatalog();
+        await Promise.all([
+          _get().fetchLutCatalog(),
+          _get().fetchLegacyCatalog(),
+        ]);
         _get().setLutName(res.name);
       } catch (err) {
         set({
@@ -4451,6 +4514,38 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           nativeBrandGroupsLoading: false,
           error: err instanceof Error ? err.message : "品牌目录加载失败",
         });
+      }
+    },
+
+    fetchLegacyCatalog: async () => {
+      set({ legacyCatalogLoading: true, error: null });
+      try {
+        const response = await apiFetchLutDetailsCatalog();
+        const groups = response.groups ?? [];
+        const currentState = _get();
+        const index = buildLutCatalogIndex(groups);
+        const currentLutInfo = currentState.lut_name
+          ? currentState.lutListFull.find((l) => l.name === currentState.lut_name)
+          : null;
+        const location = currentLutInfo
+          ? findLutLocationByPath(index, currentLutInfo.path)
+          : null;
+        const selectedManufacturer = location?.manufacturer ??
+          (currentState.selectedLegacyManufacturer &&
+          index.byManufacturer[currentState.selectedLegacyManufacturer]
+            ? currentState.selectedLegacyManufacturer
+            : "");
+
+        set({
+          legacyCatalogGroups: groups,
+          legacyCatalogLoading: false,
+          selectedLegacyManufacturer: selectedManufacturer,
+        });
+      } catch (err) {
+        set({ legacyCatalogLoading: false });
+        _get().setError(
+          err instanceof Error ? err.message : "LUT 详情目录加载失败",
+        );
       }
     },
 

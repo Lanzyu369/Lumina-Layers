@@ -2,10 +2,21 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
 
+interface DropdownOption {
+  label: string;
+  value: string;
+}
+
+interface DropdownOptionGroup {
+  label: string;
+  options: DropdownOption[];
+}
+
 interface DropdownProps {
   label: string;
   value: string;
-  options: { label: string; value: string }[];
+  options?: DropdownOption[];
+  groupedOptions?: DropdownOptionGroup[];
   onChange: (value: string) => void;
   disabled?: boolean;
   placeholder?: string;
@@ -16,6 +27,7 @@ export default function Dropdown({
   label,
   value,
   options,
+  groupedOptions,
   onChange,
   disabled = false,
   placeholder,
@@ -26,10 +38,28 @@ export default function Dropdown({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
+  const isGroupedMode = groupedOptions !== undefined;
+  const optionGroups = useMemo<DropdownOptionGroup[]>(() => {
+    if (groupedOptions !== undefined) {
+      return groupedOptions.filter((group) => group.options.length > 0);
+    }
+    return [{ label: "", options: options ?? [] }];
+  }, [groupedOptions, options]);
+  const flatOptions = useMemo(
+    () => optionGroups.flatMap((group) => group.options),
+    [optionGroups],
+  );
+  const visibleHeaderCount = isGroupedMode ? optionGroups.length : 0;
+
+  if (options !== undefined && groupedOptions !== undefined) {
+    console.warn(
+      "Dropdown received both options and groupedOptions; groupedOptions will be used.",
+    );
+  }
 
   const selectedOption = useMemo(
-    () => options.find((opt) => opt.value === value) ?? null,
-    [options, value],
+    () => flatOptions.find((opt) => opt.value === value) ?? null,
+    [flatOptions, value],
   );
 
   const updateMenuPos = useCallback(() => {
@@ -37,13 +67,16 @@ export default function Dropdown({
     const rect = triggerRef.current.getBoundingClientRect();
     const viewportPadding = 16;
     const maxMenuHeight = 288; // max-h-72 = 18rem = 288px
-    // 估算实际菜单高度：每项约 44px（py-2.5 + leading-6），外层 padding 约 16px。
+    // 估算实际菜单高度：每项约 44px（py-2.5 + leading-6），分组标题约 32px。
     // 选项少时远小于 maxMenuHeight，避免仅因未到 288px 就误判向上展开。
     const ITEM_HEIGHT = 44;
+    const GROUP_HEADER_HEIGHT = 32;
     const MENU_PADDING = 16;
     const estimatedMenuHeight = Math.min(
       maxMenuHeight,
-      options.length * ITEM_HEIGHT + MENU_PADDING,
+      flatOptions.length * ITEM_HEIGHT +
+        visibleHeaderCount * GROUP_HEADER_HEIGHT +
+        MENU_PADDING,
     );
     // 菜单宽度贴合触发器，避免在窄侧栏里被强制撑到最小宽度而溢出卡片边界。
     const maxWidth = window.innerWidth - viewportPadding * 2;
@@ -65,7 +98,7 @@ export default function Dropdown({
       left: nextLeft,
       width: nextWidth,
     });
-  }, [options.length]);
+  }, [flatOptions.length, visibleHeaderCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,26 +191,35 @@ export default function Dropdown({
             role="listbox"
             className="dock-scrollbar max-h-72 overflow-y-auto p-2"
           >
-            {options.map((opt) => {
-              const isSelected = opt.value === value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => handleSelect(opt.value)}
-                  className={cx(
-                    "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 transition-colors duration-150",
-                    isSelected
-                      ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
-                      : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
-                  )}
-                >
-                  <span className="min-w-0 flex-1 break-all">{opt.label}</span>
-                </button>
-              );
-            })}
+            {optionGroups.map((group) => (
+              <div key={group.label || "__flat__"} className="min-w-0">
+                {isGroupedMode && group.label && (
+                  <div className="mt-2 px-3 pb-1 text-xs font-medium text-slate-500 first:mt-0 dark:text-slate-400">
+                    {group.label}
+                  </div>
+                )}
+                {group.options.map((opt) => {
+                  const isSelected = opt.value === value;
+                  return (
+                    <button
+                      key={`${group.label}-${opt.value}`}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => handleSelect(opt.value)}
+                      className={cx(
+                        "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 transition-colors duration-150",
+                        isSelected
+                          ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
+                          : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 break-all">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>,
         document.body,

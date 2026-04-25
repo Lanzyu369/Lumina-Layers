@@ -13,20 +13,26 @@ import UnifiedUploader from "../ui/UnifiedUploader";
 import Checkbox from "../ui/Checkbox";
 import Dropdown from "../ui/Dropdown";
 import Slider from "../ui/Slider";
-import Button from "../ui/Button";
 import RadioGroup from "../ui/RadioGroup";
 import { CropModal } from "../ui/CropModal";
 import type { CropData } from "../ui/CropModal";
 import ImportConfirmDialog from "../ui/ImportConfirmDialog";
 import MaterialPickerDialog from "../ui/MaterialPickerDialog";
 import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
+import LegacyLutSelector from "./LegacyLutSelector";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
 import type { RecipeFileSource } from "../../recipe/importRecipe";
-import { StatusBanner, cx, workstationInputClass } from "../ui/panelPrimitives";
+import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
+import {
+  buildLutCatalogIndex,
+  listBucketsForManufacturer,
+  normalizeLutPath,
+  type ColorModeBucket,
+} from "../../stores/converter/legacyLutSelection";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -42,6 +48,15 @@ const COLOR_MODE_DOTS: Record<string, string[]> = {
 };
 
 const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20";
+
+const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
+  BW: "basic_lut_color_mode_bw",
+  "4-Color": "basic_lut_color_mode_4color",
+  "5-Color Extended": "basic_lut_color_mode_5color_ext",
+  "6-Color": "basic_lut_color_mode_6color",
+  "8-Color": "basic_lut_color_mode_8color",
+  Merged: "basic_lut_color_mode_merged",
+};
 
 function ColorModeDots({ mode }: { mode: string }) {
   if (mode === ColorMode.MERGED) {
@@ -91,7 +106,11 @@ export default function BasicSettings() {
     imagePreviewUrl,
     source_version,
     lut_name,
-    lutList,
+    lutListFull,
+    lutListLoading,
+    legacyCatalogGroups,
+    legacyCatalogLoading,
+    selectedLegacyManufacturer,
     nativeBrandGroups,
     nativeBrandGroupsLoading,
     selectedNativeBrandKey,
@@ -135,12 +154,19 @@ export default function BasicSettings() {
     setNativeBrandKey,
     setNativeSupportedMode,
     setNativeDbNames,
+    setLegacyManufacturer,
+    fetchLutList,
+    fetchLegacyCatalog,
   } = useConverterStore(useShallow((s) => ({
     imageFile: s.imageFile,
     imagePreviewUrl: s.imagePreviewUrl,
     source_version: s.source_version,
     lut_name: s.lut_name,
-    lutList: s.lutList,
+    lutListFull: s.lutListFull,
+    lutListLoading: s.lutListLoading,
+    legacyCatalogGroups: s.legacyCatalogGroups,
+    legacyCatalogLoading: s.legacyCatalogLoading,
+    selectedLegacyManufacturer: s.selectedLegacyManufacturer,
     nativeBrandGroups: s.nativeBrandGroups,
     nativeBrandGroupsLoading: s.nativeBrandGroupsLoading,
     selectedNativeBrandKey: s.selectedNativeBrandKey,
@@ -184,6 +210,9 @@ export default function BasicSettings() {
     setNativeBrandKey: s.setNativeBrandKey,
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
+    setLegacyManufacturer: s.setLegacyManufacturer,
+    fetchLutList: s.fetchLutList,
+    fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
 
   const sourceSelection = useMemo(
@@ -278,12 +307,86 @@ export default function BasicSettings() {
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
 
-  const lutOptions = lutList.map((name) => ({ label: name, value: name }));
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
     { label: t("basic_source_version_native"), value: "native" },
     { label: t("basic_source_version_material"), value: "material" },
   ];
+
+  useEffect(() => {
+    if (
+      source_version === "legacy" &&
+      legacyCatalogGroups.length === 0 &&
+      !legacyCatalogLoading
+    ) {
+      void fetchLegacyCatalog();
+    }
+  }, [
+    source_version,
+    legacyCatalogGroups.length,
+    legacyCatalogLoading,
+    fetchLegacyCatalog,
+  ]);
+
+  useEffect(() => {
+    if (
+      source_version === "legacy" &&
+      lutListFull.length === 0 &&
+      !lutListLoading
+    ) {
+      void fetchLutList();
+    }
+  }, [
+    source_version,
+    lutListFull.length,
+    lutListLoading,
+    fetchLutList,
+  ]);
+
+  const lutIndex = useMemo(
+    () => buildLutCatalogIndex(legacyCatalogGroups),
+    [legacyCatalogGroups],
+  );
+  const manufacturerOptions = useMemo(
+    () =>
+      Object.keys(lutIndex.byManufacturer)
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => ({
+          label: name === "Unlabeled" ? t("basic_lut_unlabeled_brand") : name,
+          value: name,
+        })),
+    [lutIndex, t],
+  );
+  const lutNameByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of lutListFull) {
+      map.set(normalizeLutPath(entry.path), entry.name);
+    }
+    return map;
+  }, [lutListFull]);
+  const groupedLutOptions = useMemo(() => {
+    if (!selectedLegacyManufacturer) {
+      return [];
+    }
+    return listBucketsForManufacturer(lutIndex, selectedLegacyManufacturer)
+      .map((bucket) => ({
+        label: t(LEGACY_BUCKET_I18N_KEY[bucket]),
+        options:
+          lutIndex.byManufacturerAndBucket[selectedLegacyManufacturer]?.[
+            bucket
+          ]?.map((item) => {
+            const legacyName = lutNameByPath.get(normalizeLutPath(item.path));
+            if (!legacyName) {
+              return null;
+            }
+            return {
+              label: item.name,
+              value: legacyName,
+            };
+          }).filter((option) => option !== null) ?? [],
+      }))
+      .filter((group) => group.options.length > 0);
+  }, [lutIndex, selectedLegacyManufacturer, t, lutNameByPath]);
 
   // --- Material library for material-archive mode ---
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
@@ -413,11 +516,11 @@ export default function BasicSettings() {
     if (isRefreshingLut) return;
     setIsRefreshingLut(true);
     try {
-      await fetchLutCatalog();
+      await Promise.all([fetchLutCatalog(), fetchLegacyCatalog()]);
     } finally {
       setIsRefreshingLut(false);
     }
-  }, [fetchLutCatalog, isRefreshingLut]);
+  }, [fetchLegacyCatalog, fetchLutCatalog, isRefreshingLut]);
 
   const handleCropConfirm = (data: CropData) => {
     void submitCrop(data.x, data.y, data.width, data.height);
@@ -598,42 +701,37 @@ export default function BasicSettings() {
         </div>
       ) : source_version === "legacy" ? (
         <>
-          <div className={`gap-2 ${workspace.isCompact ? "grid grid-cols-1" : "flex items-end"}`}>
-            <div className="min-w-0 flex-1">
-              <Dropdown
-                label={t("basic_lut_label")}
-                value={lut_name}
-                options={lutOptions}
-                onChange={setLutName}
-                placeholder={t("basic_lut_placeholder")}
-                labelAccessory={
-                  <button
-                    type="button"
-                    onClick={() => void handleRefreshLut()}
-                    disabled={isRefreshingLut}
-                    aria-label={t("basic_lut_refresh_tooltip")}
-                    title={t("basic_lut_refresh_tooltip")}
-                    className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
-                  >
-                    <span className={cx("text-[13px] leading-none", isRefreshingLut && "animate-spin")} aria-hidden="true">⟳</span>
-                  </button>
-                }
-              />
-            </div>
-            <input
-              ref={lutFileRef}
-              type="file"
-              accept=".npy,.json,.npz,.msgpack"
-              className="hidden"
-              onChange={(e) => void handleLutUpload(e)}
-            />
-            <Button
-              label={`+ ${t("basic_lut_upload")}`}
-              variant="secondary"
-              onClick={() => lutFileRef.current?.click()}
-              className={workspace.isCompact ? "w-full px-3" : "shrink-0 whitespace-nowrap px-3"}
-            />
-          </div>
+          <LegacyLutSelector
+            manufacturer={selectedLegacyManufacturer}
+            lutName={lut_name}
+            manufacturerOptions={manufacturerOptions}
+            groupedLutOptions={groupedLutOptions}
+            onManufacturerChange={setLegacyManufacturer}
+            onLutChange={setLutName}
+            onRefresh={() => void handleRefreshLut()}
+            onUploadClick={() => lutFileRef.current?.click()}
+            loading={legacyCatalogLoading}
+            lutLoading={lutListLoading}
+            refreshing={isRefreshingLut}
+            compact={workspace.isCompact}
+            labels={{
+              manufacturer: t("basic_lut_manufacturer_label"),
+              manufacturerPlaceholder: t("basic_lut_manufacturer_placeholder"),
+              lut: t("basic_lut_label"),
+              lutPlaceholder: t("basic_lut_lut_placeholder"),
+              refreshTooltip: t("basic_lut_refresh_tooltip"),
+              upload: `+ ${t("basic_lut_upload")}`,
+              loadingHint: t("basic_brand_loading"),
+              noBrandHint: t("basic_lut_no_brand_hint"),
+            }}
+          />
+          <input
+            ref={lutFileRef}
+            type="file"
+            accept=".npy,.json,.npz,.msgpack"
+            className="hidden"
+            onChange={(e) => void handleLutUpload(e)}
+          />
 
           {lut_name && (
             <div className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">

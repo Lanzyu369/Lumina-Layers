@@ -47,3 +47,9 @@ Replace beam-search pruning (which loses global optima) with:
 - frontend/src/stores/singleStageStore.ts (or separate) — cache state
 - frontend/src/components/MaterialCacheStatus.tsx — NEW component
 - frontend/src/i18n/translations.ts — i18n keys
+
+## LUT Catalog Contract Decision (2026-04-25)
+Legacy BasicSettings will read the two-level selector data from `GET /lut/details/catalog`, because that response already groups items by manufacturer and carries each item's `color_mode`.
+`/lut/catalog` remains the existing legacy/native source catalog for `lutList`, native brands, and upload refresh compatibility.
+`converterStore.fetchLegacyCatalog()` owns the new BasicSettings catalog request and cache; it must not call `useLutDetailsStore.fetchCatalog()` because the LUT details tab is lazy-mounted and BasicSettings must work independently.
+The store may reuse the shared `api/lut.ts` apiClient wrapper and the canonical `LutDetailsCatalogGroup` / `LutDetailsCatalogItem` types from `frontend/src/api/types.ts`.

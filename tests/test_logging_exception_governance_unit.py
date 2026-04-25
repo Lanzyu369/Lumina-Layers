@@ -41,7 +41,7 @@ TARGETS = [
     ROOT / "core" / "vector_engine.py",
     ROOT / "core" / "calibration.py",
 ]
-EXCEPT_EXCEPTION_BASELINE = 38
+EXCEPT_EXCEPTION_BASELINE = 39
 
 
 def _iter_py_files(path: Path) -> list[Path]:

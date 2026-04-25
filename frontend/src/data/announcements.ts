@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-25",
+    title: {
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
+    },
+    sections: [
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "传统 LUT 选择改为按品牌→颜色数二级菜单，更容易找到对应预设。",
+            en: "The legacy LUT selector now groups by brand and color count, making it easier to locate the right preset.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-24",
     title: {
       zh: "Lumina Layers — 近三天更新速览",

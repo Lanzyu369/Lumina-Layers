@@ -37,6 +37,7 @@ vi.mock("../../api/lut", async () => {
     ...actual,
     fetchLutInfo: vi.fn(),
     fetchLutCatalog: vi.fn(),
+    fetchLutDetailsCatalog: vi.fn(),
   };
 });
 
@@ -49,6 +50,9 @@ function resetStore(): void {
     nativeBrandGroupsLoading: false,
     selectedNativeBrandKey: "",
     selectedNativeDbNames: [],
+    legacyCatalogGroups: [],
+    legacyCatalogLoading: false,
+    selectedLegacyManufacturer: "",
   });
 }
 
@@ -86,6 +90,47 @@ function makeNonPredictiveBrand() {
     ],
     default_db_names: ["DB-B1"],
     supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
+  };
+}
+
+function makeLegacyDetailsCatalog() {
+  return {
+    groups: [
+      {
+        manufacturer: "Brand A",
+        items: [
+          {
+            name: "legacy-a",
+            path: "/legacy-a.npy",
+            fingerprint: "fp-a",
+            color_mode: ColorMode.FOUR_COLOR_RYBW,
+            source_kind: "legacy_lookup",
+            manufacturer: "Brand A",
+            material_type: "",
+            manufacturer_source: "metadata",
+            material_source: "metadata",
+            search_tokens: ["legacy", "a"],
+          },
+        ],
+      },
+      {
+        manufacturer: "Brand B",
+        items: [
+          {
+            name: "legacy-b",
+            path: "/legacy-b.npy",
+            fingerprint: "fp-b",
+            color_mode: ColorMode.EIGHT_COLOR,
+            source_kind: "legacy_lookup",
+            manufacturer: "Brand B",
+            material_type: "",
+            manufacturer_source: "metadata",
+            material_source: "metadata",
+            search_tokens: ["legacy", "b"],
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -475,6 +520,60 @@ describe("native bundle converter flow", () => {
 
     expect(useConverterStore.getState().lutList).toEqual(["legacy-a", "legacy-b"]);
     expect(useConverterStore.getState().lutListFull).toHaveLength(2);
+  });
+
+  it("fetches the legacy details catalog into converter state", async () => {
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValueOnce(
+      makeLegacyDetailsCatalog(),
+    );
+
+    await useConverterStore.getState().fetchLegacyCatalog();
+
+    expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledOnce();
+    expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(2);
+    expect(useConverterStore.getState().legacyCatalogLoading).toBe(false);
+  });
+
+  it("hydrates selectedLegacyManufacturer from a remembered lut_name", async () => {
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValueOnce(
+      makeLegacyDetailsCatalog(),
+    );
+    useConverterStore.setState({
+      lut_name: "legacy-b",
+      lutListFull: [
+        {
+          name: "legacy-b",
+          color_mode: ColorMode.EIGHT_COLOR,
+          path: "/legacy-b.npy",
+        },
+      ],
+    });
+
+    await useConverterStore.getState().fetchLegacyCatalog();
+
+    expect(useConverterStore.getState().selectedLegacyManufacturer)
+      .toBe("Brand B");
+  });
+
+  it("clears legacy lut_name when switching to a manufacturer that does not contain it", () => {
+    useConverterStore.setState({
+      legacyCatalogGroups: makeLegacyDetailsCatalog().groups,
+      selectedLegacyManufacturer: "Brand A",
+      lut_name: "legacy-a",
+      lutListFull: [
+        {
+          name: "legacy-a",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-a.npy",
+        },
+      ],
+    } as never);
+
+    useConverterStore.getState().setLegacyManufacturer("Brand B");
+
+    expect(useConverterStore.getState().selectedLegacyManufacturer)
+      .toBe("Brand B");
+    expect(useConverterStore.getState().lut_name).toBe("");
   });
 
   it("filters the native catalog down to the BambuLab PLA brand", async () => {

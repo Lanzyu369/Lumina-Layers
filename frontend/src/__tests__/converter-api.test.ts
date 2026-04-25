@@ -416,7 +416,7 @@ describe("convertPuzzleLayoutPreview", () => {
     const [url, body, config] = mockPost.mock.calls[0];
     expect(url).toBe("/convert/puzzle-layout-preview");
     expect(body).toEqual({ session_id: "sess-puzzle", params });
-    expect(config).toMatchObject({ timeout: 30_000 });
+    expect(config).toMatchObject({ timeout: 3_600_000 });
     expect(result).toEqual(fakeResponse);
   });
 });
@@ -505,7 +505,7 @@ describe("fetchLutList", () => {
 
     const result = await fetchLutList();
 
-    expect(mockGet).toHaveBeenCalledWith("/lut/list", { timeout: 5_000 });
+    expect(mockGet).toHaveBeenCalledWith("/lut/list", { timeout: 3_600_000 });
     expect(result).toEqual(mockData);
     expect(result.luts).toHaveLength(2);
     expect(result.luts[0].name).toBe("lut-a");

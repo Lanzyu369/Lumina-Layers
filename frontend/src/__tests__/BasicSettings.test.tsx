@@ -1,15 +1,109 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import { useConverterStore } from "../stores/converter";
+import * as lutApi from "../api/lut";
 import {
   ColorMode as ColorModeEnum,
   StructureMode as StructureModeEnum,
   ModelingMode as ModelingModeEnum,
 } from "../api/types";
+import type { LutDetailsCatalogGroup } from "../api/types";
+
+vi.mock("../api/lut", async () => {
+  const actual = await vi.importActual<typeof import("../api/lut")>(
+    "../api/lut",
+  );
+  return {
+    ...actual,
+    fetchLutInfo: vi.fn(),
+    fetchLutCatalog: vi.fn(),
+    fetchLutDetailsCatalog: vi.fn(),
+  };
+});
+
+function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
+  return [
+    {
+      manufacturer: "Brand A",
+      items: [
+        {
+          name: "A 4C",
+          path: "/a4.npy",
+          fingerprint: "fp-a4",
+          color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          source_kind: "legacy_lookup",
+          manufacturer: "Brand A",
+          material_type: "",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["brand", "a", "4c"],
+        },
+        {
+          name: "A 8C",
+          path: "/a8.npy",
+          fingerprint: "fp-a8",
+          color_mode: ColorModeEnum.EIGHT_COLOR,
+          source_kind: "legacy_lookup",
+          manufacturer: "Brand A",
+          material_type: "",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["brand", "a", "8c"],
+        },
+      ],
+    },
+    {
+      manufacturer: "Brand B",
+      items: [
+        {
+          name: "B BW",
+          path: "/bbw.npy",
+          fingerprint: "fp-bbw",
+          color_mode: ColorModeEnum.BW,
+          source_kind: "legacy_lookup",
+          manufacturer: "Brand B",
+          material_type: "",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["brand", "b", "bw"],
+        },
+      ],
+    },
+    {
+      manufacturer: "Unlabeled",
+      items: [
+        {
+          name: "Loose Merged",
+          path: "/loose.npy",
+          fingerprint: "fp-loose",
+          color_mode: ColorModeEnum.MERGED,
+          source_kind: "legacy_lookup",
+          manufacturer: "Unlabeled",
+          material_type: "",
+          manufacturer_source: "fallback",
+          material_source: "fallback",
+          search_tokens: ["loose", "merged"],
+        },
+      ],
+    },
+  ];
+}
 
 // Reset store to a clean state before each test
 beforeEach(() => {
+  vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValue({
+    groups: makeLegacyCatalogGroups(),
+  });
+  vi.mocked(lutApi.fetchLutCatalog).mockResolvedValue({
+    legacy_groups: [],
+    native_brand_groups: [],
+  });
+  vi.mocked(lutApi.fetchLutInfo).mockResolvedValue({
+    name: "A 4C",
+    color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+    color_count: 4,
+  });
   useConverterStore.setState({
     imageFile: null,
     imagePreviewUrl: null,
@@ -21,6 +115,36 @@ beforeEach(() => {
     isCropping: false,
     lut_name: "",
     lutList: [],
+    lutListFull: [
+      {
+        name: "Brand A - A4",
+        color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+        path: "/a4.npy",
+        fingerprint: "fp-a4",
+      },
+      {
+        name: "Brand A - A8",
+        color_mode: ColorModeEnum.EIGHT_COLOR,
+        path: "/a8.npy",
+        fingerprint: "fp-a8",
+      },
+      {
+        name: "Brand B - BW",
+        color_mode: ColorModeEnum.BW,
+        path: "/bbw.npy",
+        fingerprint: "fp-bbw",
+      },
+      {
+        name: "Loose Merged",
+        color_mode: ColorModeEnum.MERGED,
+        path: "/loose.npy",
+        fingerprint: "fp-loose",
+      },
+    ],
+    lutListLoading: false,
+    legacyCatalogGroups: makeLegacyCatalogGroups(),
+    legacyCatalogLoading: false,
+    selectedLegacyManufacturer: "",
     nativeBrandGroups: [],
     nativeBrandGroupsLoading: false,
     selectedNativeBrandKey: "",
@@ -137,8 +261,95 @@ describe("BasicSettings", () => {
     expect(screen.getByText("来源类型")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "LUT" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "品牌" })).not.toBeInTheDocument();
+  });
+
+  it("shows brand options from the loaded legacy details catalog", () => {
+    render(<BasicSettings />);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+
+    expect(screen.getByRole("option", { name: "Brand A" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Brand B" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "个人" })).toBeInTheDocument();
+  });
+
+  it("enables grouped LUT choices after selecting a legacy brand", async () => {
+    render(<BasicSettings />);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "品牌" }))
+        .toHaveTextContent("Brand A");
+      expect(screen.getByRole("combobox", { name: "LUT" }))
+        .not.toBeDisabled();
+    });
+    expect(useConverterStore.getState().selectedLegacyManufacturer)
+      .toBe("Brand A");
+    expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(3);
+
+    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
+    fireEvent.click(lutDropdown);
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+
+    await waitFor(() => {
+      expect(lutDropdown).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("4 色")).toBeInTheDocument();
+    });
+    expect(screen.getByText("8 色")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "A 4C" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "A 8C" })).toBeInTheDocument();
+  });
+
+  it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {
+    render(<BasicSettings />);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+    fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
+
+    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
+    await waitFor(() => expect(lutDropdown).not.toBeDisabled());
+    fireEvent.click(lutDropdown);
+    fireEvent.click(screen.getByRole("option", { name: "A 4C" }));
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
+    });
+    expect(lutDropdown).toHaveTextContent("A 4C");
+  });
+
+  it("keeps the LUT dropdown disabled until LUTManager names are mapped", () => {
+    useConverterStore.setState({
+      selectedLegacyManufacturer: "Brand A",
+      lutListFull: [],
+      lutListLoading: true,
+      lut_name: "",
+    } as never);
+
+    render(<BasicSettings />);
+
+    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
+    expect(lutDropdown).toBeDisabled();
+    expect(screen.queryByRole("option", { name: "A 4C" })).not.toBeInTheDocument();
+    expect(useConverterStore.getState().lut_name).toBe("");
+  });
+
+  it("syncs the legacy brand after a hydrated lut_name catalog fetch", async () => {
+    useConverterStore.setState({
+      legacyCatalogGroups: [],
+      selectedLegacyManufacturer: "",
+      lut_name: "Brand B - BW",
+    } as never);
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "品牌" }))
+        .toHaveTextContent("Brand B");
+    });
   });
 
   it("renders only the BambuLab native brand in native mode", async () => {
