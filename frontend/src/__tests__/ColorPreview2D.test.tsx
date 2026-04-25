@@ -5,6 +5,13 @@ import type { PaletteEntry } from '../api/types';
 import ColorPreview2D from '../components/sections/ColorPreview2D';
 import { buildLayerImagesSourceKey, DEFAULT_STATE, useConverterStore } from '../stores/converter';
 
+const sourceColorPickMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../api/converter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/converter')>()),
+  sourceColorPick: sourceColorPickMock,
+}));
+
 vi.mock('../i18n/context', () => ({
   useI18n: () => ({ t: (key: string) => key, lang: 'zh' as const }),
 }));
@@ -181,6 +188,8 @@ describe('ColorPreview2D hover inspector', () => {
     } as typeof Image;
 
     installCanvasContextMock();
+    sourceColorPickMock.mockReset();
+    sourceColorPickMock.mockRejectedValue(new Error('source color pick unavailable'));
 
     useConverterStore.setState({
       ...DEFAULT_STATE,
@@ -298,13 +307,200 @@ describe('ColorPreview2D hover inspector', () => {
 
     const initialCanvasCreateCount = canvasCreateCount;
 
-    act(() => {
+    await act(async () => {
       fireEvent.click(container, { clientX: 80, clientY: 60 });
     });
 
     expect(toggleColorInSelection).toHaveBeenCalledWith('ABCDEF');
     expect(setSelectedColor).toHaveBeenCalledWith('ABCDEF');
     expect(canvasCreateCount).toBe(initialCanvasCreateCount);
+  });
+
+  it('selects the original source palette color after the displayed preview has been replaced', async () => {
+    let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};
+    sourceColorPickMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+    const toggleColorInSelection = vi.fn((hex: string) => {
+      const previous = useConverterStore.getState().selectedColors;
+      const next = new Set(previous);
+      if (next.has(hex)) {
+        next.delete(hex);
+      } else {
+        next.add(hex);
+      }
+      useConverterStore.setState({ selectedColors: next });
+    });
+    const setSelectedColor = vi.fn((hex: string | null) => {
+      useConverterStore.setState({ selectedColor: hex });
+    });
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview-replaced.png',
+      previewImageUrl: '/preview-replaced.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      palette: [
+        {
+          quantized_hex: 'A80000',
+          matched_hex: 'AA0000',
+          pixel_count: 10,
+          percentage: 50,
+        } satisfies PaletteEntry,
+        {
+          quantized_hex: '0000F0',
+          matched_hex: '0000FF',
+          pixel_count: 10,
+          percentage: 50,
+        } satisfies PaletteEntry,
+      ],
+      selectedColors: new Set<string>(),
+      toggleColorInSelection,
+      setSelectedColor,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview-replaced.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const context = getVisiblePreviewContext();
+    const getImageDataMock = context?.getImageData as unknown as ReturnType<typeof vi.fn>;
+    getImageDataMock.mockReturnValue({ data: new Uint8ClampedArray([0, 0, 255, 255]) });
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+    expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 23, 50);
+
+    await act(async () => {
+      resolvePick({
+        source_matched_hex: '#aa0000',
+        quantized_hex: '#a80000',
+      });
+      await Promise.resolve();
+    });
+
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(['AA0000']));
+    expect(useConverterStore.getState().selectedColors.has('0000FF')).toBe(false);
+    expect(useConverterStore.getState().selectedColor).toBe('AA0000');
+  });
+
+  it('falls back to local preview sampling when source-color picking is unavailable', async () => {
+    sourceColorPickMock.mockRejectedValueOnce(new Error('old session'));
+    const toggleColorInSelection = vi.fn();
+    const setSelectedColor = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      palette: [{
+        quantized_hex: 'ABCDEF',
+        matched_hex: 'ABCDEF',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColors: new Set<string>(),
+      toggleColorInSelection,
+      setSelectedColor,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 80, clientY: 60 });
+    });
+
+    expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 10, 20);
+    expect(toggleColorInSelection).toHaveBeenCalledWith('ABCDEF');
+    expect(setSelectedColor).toHaveBeenCalledWith('ABCDEF');
+  });
+
+  it('ignores stale source-color picks after leaving select-all mode', async () => {
+    let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};
+    sourceColorPickMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      palette: [{
+        quantized_hex: 'A80000',
+        matched_hex: 'AA0000',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColors: new Set<string>(),
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+    expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 23, 50);
+
+    act(() => {
+      useConverterStore.getState().setSelectionMode('current');
+    });
+
+    await act(async () => {
+      resolvePick({
+        source_matched_hex: '#aa0000',
+        quantized_hex: '#a80000',
+      });
+    });
+
+    expect(useConverterStore.getState().selectionMode).toBe('current');
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
+    expect(useConverterStore.getState().selectedColor).toBeNull();
   });
 
   it('suppresses SVG contour overlay and shows backend cyan image when selection came from a gradient region', async () => {

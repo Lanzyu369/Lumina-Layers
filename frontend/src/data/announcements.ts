@@ -66,6 +66,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "换色、区域换色和去条纹的等待时间明显短了：2D 图先更新，重的 3D 重建放到后台跑，分层预览也会并发生成，来回调色不用一直干等。",
             en: "Colour swaps, region edits, and banding cleanup are much faster: the 2D result updates first, heavy 3D rebuilds run in the background, and layer previews are generated in parallel so colour tuning has much less waiting.",
           },
+          {
+            zh: "颜色替换后，在全选模式里点图上的色块会按原始源色选中，不会再误选成替换后的同色块。",
+            en: "After a colour replacement, clicking the image in Select all mode now selects the original source swatch instead of another swatch that shares the replacement colour.",
+          },
         ],
       },
       {

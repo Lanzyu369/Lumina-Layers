@@ -10,6 +10,7 @@
 
 import { useRef, useCallback, useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { sourceColorPick } from '../../api/converter';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
 import { useI18n } from '../../i18n/context';
 import CanvasPreviewSurface from '../ui/CanvasPreviewSurface';
@@ -45,15 +46,18 @@ function findClosestPaletteHex(
 ): string | null {
   if (palette.length === 0) return null;
 
-  const hexLower = hex.toLowerCase();
+  const targetHex = hex.replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(targetHex)) return null;
+
+  const hexLower = targetHex.toLowerCase();
   // Exact match first
-  const exact = palette.find((p) => p.matched_hex.toLowerCase() === hexLower);
+  const exact = palette.find((p) => p.matched_hex.replace(/^#/, '').toLowerCase() === hexLower);
   if (exact) return exact.matched_hex;
 
   // Color distance match
-  const tr = parseInt(hex.slice(0, 2), 16);
-  const tg = parseInt(hex.slice(2, 4), 16);
-  const tb = parseInt(hex.slice(4, 6), 16);
+  const tr = parseInt(targetHex.slice(0, 2), 16);
+  const tg = parseInt(targetHex.slice(2, 4), 16);
+  const tb = parseInt(targetHex.slice(4, 6), 16);
 
   let bestDist = Infinity;
   let bestHex: string | null = null;
@@ -71,6 +75,17 @@ function findClosestPaletteHex(
   }
 
   return bestHex;
+}
+
+function selectedColorAfterToggle(
+  selectedColors: Set<string>,
+  paletteHex: string,
+): string | null {
+  if (!selectedColors.has(paletteHex)) {
+    return paletteHex;
+  }
+  const remaining = Array.from(selectedColors).filter((color) => color !== paletteHex);
+  return remaining.length > 0 ? remaining[remaining.length - 1] : null;
 }
 
 // --------------- Zoom / Pan constants ---------------
@@ -176,7 +191,6 @@ export default function ColorPreview2D({
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
-  const palette = useConverterStore((s) => s.palette);
   const isLoading = useConverterStore((s) => s.isLoading);
   const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading);
   const colorContours = useConverterStore((s) => s.colorContours);
@@ -192,8 +206,6 @@ export default function ColorPreview2D({
   const layerImages = useConverterStore((s) => s.layerImages);
   const layerImagesSourceKey = useConverterStore((s) => s.layerImagesSourceKey);
 
-  const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
-  const toggleColorInSelection = useConverterStore((s) => s.toggleColorInSelection);
   const detectRegion = useConverterStore((s) => s.detectRegion);
   const detectAndAccumulateRegion = useConverterStore((s) => s.detectAndAccumulateRegion);
 
@@ -564,31 +576,56 @@ export default function ColorPreview2D({
     context.stroke();
   }, [hoverSample, previewCanvasBuffer, showMagnifier]);
 
+  const handleSelectAllClick = useCallback(
+    async (sample: CanvasPreviewHoverSample) => {
+      const sessionIdAtClick = sessionId;
+      const applyRawHexIfCurrent = (rawHex: string | null): void => {
+        if (!rawHex) return;
+        const state = useConverterStore.getState();
+        if (
+          state.selectionMode !== 'select-all'
+          || state.sessionId !== sessionIdAtClick
+          || state.replacePreviewLoading
+        ) {
+          return;
+        }
+        const paletteHex = findClosestPaletteHex(rawHex, state.palette);
+        if (!paletteHex) return;
+        state.toggleColorInSelection(paletteHex);
+        state.setSelectedColor(selectedColorAfterToggle(state.selectedColors, paletteHex));
+      };
+
+      if (sessionIdAtClick) {
+        try {
+          const pick = await sourceColorPick(sessionIdAtClick, sample.pixelX, sample.pixelY);
+          applyRawHexIfCurrent(pick.source_matched_hex);
+          return;
+        } catch {
+          // Fall back to the preview buffer for legacy sessions or transient API failures.
+        }
+      }
+
+      const rawHex = readPixelColor(previewCanvasBuffer, {
+        pixelX: sample.pixelX,
+        pixelY: sample.pixelY,
+        naturalWidth: sample.naturalWidth,
+        naturalHeight: sample.naturalHeight,
+      });
+      applyRawHexIfCurrent(rawHex);
+    },
+    [previewCanvasBuffer, sessionId],
+  );
+
   const handleClick = useCallback(
     (sample: CanvasPreviewHoverSample) => {
       if (replacePreviewLoading) return;
       if (!previewPixelWidth || !previewPixelHeight) return;
 
-      const { pixelX, pixelY, naturalWidth, naturalHeight } = sample;
+      const { pixelX, pixelY } = sample;
 
       switch (selectionMode) {
         case 'select-all': {
-          const rawHex = readPixelColor(previewCanvasBuffer, {
-            pixelX,
-            pixelY,
-            naturalWidth,
-            naturalHeight,
-          });
-          if (!rawHex) return;
-          const paletteHex = findClosestPaletteHex(rawHex, palette);
-          if (!paletteHex) return;
-          toggleColorInSelection(paletteHex);
-          if (selectedColors.has(paletteHex)) {
-            const remaining = Array.from(selectedColors).filter((c) => c !== paletteHex);
-            setSelectedColor(remaining.length > 0 ? remaining[remaining.length - 1] : null);
-          } else {
-            setSelectedColor(paletteHex);
-          }
+          void handleSelectAllClick(sample);
           break;
         }
         case 'current':
@@ -605,11 +642,7 @@ export default function ColorPreview2D({
       previewPixelWidth,
       previewPixelHeight,
       selectionMode,
-      previewCanvasBuffer,
-      palette,
-      selectedColors,
-      toggleColorInSelection,
-      setSelectedColor,
+      handleSelectAllClick,
       detectRegion,
       detectAndAccumulateRegion,
     ],

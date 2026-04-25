@@ -28,6 +28,8 @@ from api.schemas.converter import (
     RegionReplaceResponse,
     RegionRequantizeRequest,
     ResetReplacementsRequest,
+    SourceColorPickRequest,
+    SourceColorPickResponse,
     VirtualMaterial,
 )
 from api.schemas.responses import (
@@ -380,6 +382,14 @@ def _sync_material_matrix_after_rgb_change(
 REPLACE_HANDLED_ERRORS = ROUTER_HANDLED_ERRORS + (IndexError,)
 
 
+def _rgb_pixel_to_hex(pixel: np.ndarray) -> str:
+    rgb = np.asarray(pixel).reshape(-1)
+    if rgb.size < 3:
+        raise ValueError("RGB pixel must contain at least three channels.")
+    r, g, b = (int(np.clip(value, 0, 255)) for value in rgb[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 @router.post("/replace-color")
 def replace_color(
     request: ColorReplaceRequest,
@@ -587,6 +597,94 @@ def reset_replacements(
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
     )
+
+
+@router.post("/source-color-pick", response_model=SourceColorPickResponse)
+def source_color_pick(
+    request: SourceColorPickRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> SourceColorPickResponse:
+    """Resolve the original source colour at a preview pixel.
+    解析预览像素位置的原始源色。
+
+    Select all clicks must be based on the original matched colour, not the
+    currently displayed recoloured preview. ``original_matched_rgb`` is the
+    preferred source; legacy sessions fall back to the current
+    ``preview_cache["matched_rgb"]`` so old previews can still be clicked.
+    全选点图必须按原始匹配色选中，而不是按已经换色后的展示图。优先读取
+    ``original_matched_rgb``；旧 session 没有它时回退到当前
+    ``preview_cache["matched_rgb"]``，避免旧预览完全不可点。
+
+    Raises:
+        HTTPException(404): Session not found. (会话不存在)
+        HTTPException(409): Preview cache is incomplete or inconsistent.
+            (预览缓存缺失或尺寸不一致)
+        HTTPException(400): Coordinates are out of bounds or background.
+            (坐标越界或点在背景上)
+    """
+    session_data = _require_session(store, request.session_id)
+    cache = _require_preview_cache(session_data)
+
+    try:
+        source_rgb = session_data.get("original_matched_rgb")
+        if source_rgb is None:
+            source_rgb = cache.get("matched_rgb")
+
+        quantized_image = cache.get("quantized_image")
+        mask_solid = cache.get("mask_solid")
+        if source_rgb is None or quantized_image is None or mask_solid is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Preview cache missing original_matched_rgb/matched_rgb, "
+                    "quantized_image, or mask_solid."
+                ),
+            )
+
+        source_arr = np.asarray(source_rgb)
+        quantized_arr = np.asarray(quantized_image)
+        mask_arr = np.asarray(mask_solid, dtype=bool)
+        if source_arr.ndim != 3 or source_arr.shape[2] < 3:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview source matched RGB cache has invalid shape.",
+            )
+        if quantized_arr.ndim != 3 or quantized_arr.shape[2] < 3:
+            raise HTTPException(
+                status_code=409,
+                detail="Preview quantized image cache has invalid shape.",
+            )
+
+        height, width = source_arr.shape[:2]
+        if quantized_arr.shape[:2] != (height, width) or mask_arr.shape != (
+            height,
+            width,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Preview cache dimensions are inconsistent.",
+            )
+
+        x, y = request.x, request.y
+        if not (0 <= x < width and 0 <= y < height):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Coordinates ({x}, {y}) out of bounds for image {width}x{height}.",
+            )
+        if not bool(mask_arr[y, x]):
+            raise HTTPException(
+                status_code=400,
+                detail="Clicked on background area.",
+            )
+
+        return SourceColorPickResponse(
+            source_matched_hex=_rgb_pixel_to_hex(source_arr[y, x]),
+            quantized_hex=_rgb_pixel_to_hex(quantized_arr[y, x]),
+        )
+    except HTTPException:
+        raise
+    except REPLACE_HANDLED_ERRORS as exc:
+        _handle_core_error(exc, "Source color pick")
 
 
 @router.post("/color-highlight", response_model=ColorHighlightResponse)

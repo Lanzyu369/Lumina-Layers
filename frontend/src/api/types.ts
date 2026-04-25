@@ -1213,6 +1213,12 @@ export interface ColorReplaceResponse {
   replacement_count: number;
 }
 
+/** 全选点图时后端返回的原始源色拾取结果 */
+export interface SourceColorPickResponse {
+  source_matched_hex: string;
+  quantized_hex: string;
+}
+
 // ========== Color Highlight Models ==========
 
 /** 颜色高亮响应 */

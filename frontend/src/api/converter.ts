@@ -17,6 +17,7 @@ import type {
   BatchConvertParams,
   BatchResponse,
   ColorReplaceResponse,
+  SourceColorPickResponse,
   ColorHighlightResponse,
   GradientGroupsResponse,
   RegionDetectResponse,
@@ -280,6 +281,20 @@ export async function replaceColorsBatch(
         replacement_color: p.replacementColor,
       })),
     },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** 按预览像素坐标读取原始匹配源色，避免换色后的展示图影响全选点色。 */
+export async function sourceColorPick(
+  sessionId: string,
+  x: number,
+  y: number,
+): Promise<SourceColorPickResponse> {
+  const response = await apiClient.post<SourceColorPickResponse>(
+    "/convert/source-color-pick",
+    { session_id: sessionId, x, y },
     { timeout: 3_600_000 },
   );
   return response.data;

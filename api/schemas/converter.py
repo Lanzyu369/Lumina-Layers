@@ -844,6 +844,42 @@ class ColorHighlightResponse(BaseModel):
     preview_url: str = Field(..., description="高亮预览图 URL")
 
 
+class SourceColorPickRequest(BaseModel):
+    """Request model for resolving a preview pixel's original source color.
+    解析预览像素原始源色的请求模型。
+
+    Used by ``POST /api/convert/source-color-pick`` when Select all mode
+    needs to map a clicked preview coordinate back to the original matched
+    palette colour, even after the displayed preview has been recoloured.
+    用于 ``POST /api/convert/source-color-pick``：全选模式点图时，按点击
+    坐标回查原始匹配色，即使当前展示图已经被换色也不受影响。
+
+    Attributes:
+        session_id: Active session identifier. (Session ID)
+        x: Preview pixel X coordinate (0-indexed). (预览像素 X 坐标)
+        y: Preview pixel Y coordinate (0-indexed). (预览像素 Y 坐标)
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    x: int = Field(..., ge=0, description="预览像素 X 坐标")
+    y: int = Field(..., ge=0, description="预览像素 Y 坐标")
+
+
+class SourceColorPickResponse(BaseModel):
+    """Response model for a preview pixel's source and quantized colors.
+    预览像素对应源色和量化色的响应模型。
+
+    Attributes:
+        source_matched_hex: Original matched source colour as ``#rrggbb``.
+            原始匹配源色，格式为 ``#rrggbb``。
+        quantized_hex: Quantized source colour at the same pixel as ``#rrggbb``.
+            同一像素的量化原色，格式为 ``#rrggbb``。
+    """
+
+    source_matched_hex: str = Field(..., description="原始匹配源色 (#rrggbb)")
+    quantized_hex: str = Field(..., description="量化原色 (#rrggbb)")
+
+
 class RegionDetectRequest(BaseModel):
     """Request model for detecting a connected region at a click position.
     检测点击位置连通区域的请求模型。
