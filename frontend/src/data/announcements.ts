@@ -119,6 +119,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "The layer-mask viewer now has a follow-cursor magnifier, making fine-edge and layer-alignment checks easier without constant zooming.",
           },
           {
+            zh: "颜色工作站放大后会继续用精准点选光标，不再用小手挡住小色块；需要移动画面时仍可右键拖动。",
+            en: "The Color Workstation now keeps a precise picking cursor after zooming instead of covering tiny swatches with a hand cursor, while right-button panning still works when you need to move the view.",
+          },
+          {
             zh: "3D 预览模型变得小很多、加载快很多，远程打开也能更快看到模型，真正导出的 3MF 和打印精度不受影响。",
             en: "3D preview models are much smaller and load far faster, especially over remote sessions, while exported 3MF files and print accuracy stay unchanged.",
           },

@@ -828,7 +828,7 @@ export default function ColorPreview2D({
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
         className="h-full w-full bg-slate-200/60 dark:bg-slate-900/60"
-        surfaceClassName={zoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}
+        surfaceClassName="cursor-crosshair"
         renderingQuality="crisp"
         overlay={contourOverlay}
         floatingOverlay={floatingOverlay}

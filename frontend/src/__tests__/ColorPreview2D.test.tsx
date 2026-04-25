@@ -621,6 +621,91 @@ describe('ColorPreview2D hover inspector', () => {
     expect(detectRegion).toHaveBeenCalledWith(23, 50);
   });
 
+  it('keeps the color-picking cursor after zooming the workstation preview', () => {
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.wheel(container, { clientX: 120, clientY: 150, deltaY: -100 });
+    });
+
+    expect(screen.getByText('115%')).toBeInTheDocument();
+    expect(container).toHaveClass('cursor-crosshair');
+    expect(container).not.toHaveClass('cursor-grab');
+  });
+
+  it('keeps left-click color selection active after zooming', () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      detectRegion,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.wheel(container, { clientX: 120, clientY: 150, deltaY: -100 });
+      fireEvent.click(container, { clientX: 120, clientY: 150, button: 0 });
+    });
+
+    expect(detectRegion).toHaveBeenCalledWith(23, 50);
+  });
+
+  it('keeps right-button panning available after zooming', async () => {
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperty(container, 'setPointerCapture', {
+      configurable: true,
+      value: setPointerCapture,
+    });
+    Object.defineProperty(container, 'releasePointerCapture', {
+      configurable: true,
+      value: releasePointerCapture,
+    });
+
+    act(() => {
+      fireEvent.wheel(container, { clientX: 120, clientY: 150, deltaY: -100 });
+    });
+
+    act(() => {
+      fireEvent.pointerDown(container, { pointerId: 3, button: 2, clientX: 120, clientY: 150 });
+      fireEvent.pointerMove(container, { pointerId: 3, buttons: 2, clientX: 150, clientY: 170 });
+      fireEvent.pointerUp(container, { pointerId: 3, button: 2, clientX: 150, clientY: 170 });
+    });
+    await act(async () => {});
+
+    expect(setPointerCapture).toHaveBeenCalledWith(3);
+    expect(releasePointerCapture).toHaveBeenCalledWith(3);
+  });
+
   it('releases layer hover data after hover leaves and the release delay expires', async () => {
     useConverterStore.setState({
       ...DEFAULT_STATE,
