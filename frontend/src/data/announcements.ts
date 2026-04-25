@@ -106,6 +106,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "自定义配方还没应用时，加到 10 层再调整窗口或刷新面板，层数会继续留在 10 层，不会又退回 5 层。",
             en: "Before a custom recipe is applied, adding it to 10 layers now stays at 10 through window resizing or panel refreshes instead of falling back to 5.",
           },
+          {
+            zh: "8 色 LUT 现在会统一按系统认识的“8-Color Max”去生成，不会再因为新旧名字不一致被 422 拦住。",
+            en: "8-colour LUTs now generate through the system-recognized “8-Color Max” mode, so old and new naming no longer trips a 422 before generation starts.",
+          },
         ],
       },
       {

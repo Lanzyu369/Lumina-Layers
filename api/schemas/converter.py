@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.lut import LutSourceSelection
 
@@ -50,6 +50,12 @@ class ColorMode(str, Enum):
     SIX_COLOR_RYBW = "6-Color (RYBWGK 1296)"
     EIGHT_COLOR = "8-Color Max"
     MERGED = "Merged"
+
+
+def _normalize_color_mode_alias(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "8-Color":
+        return ColorMode.EIGHT_COLOR.value
+    return value
 
 
 class ModelingMode(str, Enum):
@@ -289,6 +295,11 @@ class ConvertPreviewRequest(LutSourceSelection):
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
 
+    @field_validator("color_mode", mode="before")
+    @classmethod
+    def normalize_color_mode_alias(cls, value: object) -> object:
+        return _normalize_color_mode_alias(value)
+
 
 class RecipeOverrideItem(BaseModel):
     """Region-level recipe override for predictive/custom recipe workflows."""
@@ -461,6 +472,11 @@ class ConvertGenerateRequest(LutSourceSelection):
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",
     )
+
+    @field_validator("color_mode", mode="before")
+    @classmethod
+    def normalize_color_mode_alias(cls, value: object) -> object:
+        return _normalize_color_mode_alias(value)
 
 
 class LargeFormatGenerateRequest(BaseModel):

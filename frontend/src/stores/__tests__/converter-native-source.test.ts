@@ -497,6 +497,78 @@ describe("native bundle converter flow", () => {
     expect(state.model_margin).toBeNull();
   });
 
+  it("normalizes legacy 8-Color LUT info before storing state and sending requests", async () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+      name: "legacy-eight",
+      color_mode: "8-Color",
+      color_count: 8,
+    } as never);
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-eight",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/eight-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+    mocks.convertGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "Model generated",
+      download_url: "/api/files/eight-model",
+      preview_3d_url: "/api/files/eight-model.glb",
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "legacy-eight.png", { type: "image/png" }),
+      source_version: "legacy",
+      lutListFull: [
+        {
+          name: "legacy-eight",
+          color_mode: "8-Color",
+          path: "/legacy-eight.npy",
+          fingerprint: "fp-eight",
+        },
+      ],
+      target_width_mm: 90,
+      auto_bg: true,
+      bg_tol: 20,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      spacer_thick: 1.2,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      separate_backing: false,
+      add_loop: false,
+      loop_width: 4,
+      loop_length: 8,
+      loop_hole: 2.5,
+      enable_relief: false,
+      heightmap_max_height: 5.0,
+      enable_outline: false,
+      outline_width: 2.0,
+      enable_cloisonne: false,
+      wire_width_mm: 0.4,
+      wire_height_mm: 0.4,
+      enable_coating: false,
+      coating_height_mm: 0.08,
+    } as never);
+
+    useConverterStore.getState().setLutName("legacy-eight");
+    await Promise.resolve();
+
+    expect(useConverterStore.getState().color_mode).toBe(ColorMode.EIGHT_COLOR);
+
+    await useConverterStore.getState().submitPreview();
+    const previewParams = mocks.convertPreview.mock.calls[0][1];
+    expect(previewParams.color_mode).toBe(ColorMode.EIGHT_COLOR);
+
+    await useConverterStore.getState().submitGenerate();
+    const generateParams = mocks.convertGenerate.mock.calls[0][1];
+    expect(generateParams.color_mode).toBe(ColorMode.EIGHT_COLOR);
+  });
+
   it("hydrates the legacy LUT list from the catalog response", async () => {
     vi.mocked(lutApi.fetchLutCatalog).mockResolvedValueOnce({
       legacy_groups: [
@@ -585,7 +657,10 @@ describe("native bundle converter flow", () => {
           material_type: "PLA",
           vendor: "Bambu Lab",
           display_name: "Bambu PLA",
-          db_options: [makeDbOption("B1"), makeDbOption("B2")],
+          db_options: [
+            { ...makeDbOption("B1"), color_mode: "8-Color" },
+            makeDbOption("B2"),
+          ],
           default_db_names: ["B1"],
           package_name: "bambu-pla-package",
           model_name: "bambu-pla-model",
@@ -601,6 +676,9 @@ describe("native bundle converter flow", () => {
     expect(useConverterStore.getState().nativeBrandGroups).toHaveLength(1);
     expect(useConverterStore.getState().nativeBrandGroups[0].brand_key).toBe("bambulab_pla");
     expect(useConverterStore.getState().nativeBrandGroups[0].display_name).toBe("Bambu PLA");
+    expect(useConverterStore.getState().nativeBrandGroups[0].db_options[0].color_mode).toBe(
+      ColorMode.EIGHT_COLOR,
+    );
   });
 
   it("submitPreview sends native bundle fields instead of lut_name", async () => {

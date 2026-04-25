@@ -28,7 +28,7 @@ def _write_alias_config(path: Path) -> None:
     )
 
 
-def _write_lut_json(path: Path) -> None:
+def _write_lut_json(path: Path, *, color_mode: str = "4-Color (RYBW)") -> None:
     payload = {
         "palette": {
             "White": {"material": "PLA Basic", "hex_color": "#FFFFFF", "color_name": "White"},
@@ -47,7 +47,7 @@ def _write_lut_json(path: Path) -> None:
         "base_layers": 10,
         "base_channel_idx": 0,
         "layer_order": "Top2Bottom",
-        "color_mode": "4-Color (RYBW)",
+        "color_mode": color_mode,
         "name": path.stem,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +109,43 @@ def test_lut_details_catalog_and_detail_endpoints(tmp_path: Path) -> None:
 
         missing_response = client.get("/api/lut/does-not-exist/details")
         assert missing_response.status_code == 404
+    finally:
+        lut_router_module._lut_details_service = original_service
+        lut_router_module.get_lut_details_service = original_factory
+
+
+def test_lut_details_endpoint_canonicalizes_raw_metadata_color_mode(tmp_path: Path) -> None:
+    alias_path = tmp_path / "assets" / "lut_details_aliases.json"
+    preset_dir = tmp_path / "lut-preset"
+    alias_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_alias_config(alias_path)
+
+    lut_path = preset_dir / "Bambulab" / "PLA" / "legacy_eight.json"
+    _write_lut_json(lut_path, color_mode="8-Color")
+
+    service = get_lut_details_service(preset_dir=preset_dir, alias_config_path=alias_path)
+
+    from api.routers import lut as lut_router_module
+
+    original_service = lut_router_module._lut_details_service
+    original_factory = lut_router_module.get_lut_details_service
+
+    def _service_factory():
+        return get_lut_details_service(
+            preset_dir=preset_dir,
+            alias_config_path=alias_path,
+        )
+
+    _service_factory.cache_clear = get_lut_details_service.cache_clear  # type: ignore[attr-defined]
+    lut_router_module.get_lut_details_service = _service_factory
+    lut_router_module._lut_details_service = service
+    try:
+        detail_response = client.get("/api/lut/Bambulab - PLA - legacy_eight/details")
+        assert detail_response.status_code == 200
+
+        detail = detail_response.json()
+        assert detail["color_mode"] == "8-Color Max"
+        assert detail["raw_metadata"]["color_mode"] == "8-Color Max"
     finally:
         lut_router_module._lut_details_service = original_service
         lut_router_module.get_lut_details_service = original_factory

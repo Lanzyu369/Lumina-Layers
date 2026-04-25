@@ -704,6 +704,37 @@ function normalizeStringArray(values: string[]): string[] {
   return normalized;
 }
 
+function normalizePublicColorMode(value: string): ColorMode {
+  return value === "8-Color" ? ColorModeEnum.EIGHT_COLOR : (value as ColorMode);
+}
+
+function normalizeLutColorMode<T extends { color_mode?: string }>(info: T): T {
+  if (!info.color_mode) {
+    return info;
+  }
+  const colorMode = normalizePublicColorMode(info.color_mode);
+  return colorMode === info.color_mode
+    ? info
+    : { ...info, color_mode: colorMode };
+}
+
+function normalizeLutGroups<
+  TGroup extends { items?: TItem[] },
+  TItem extends { color_mode?: string },
+>(groups: TGroup[]): TGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    items: (group.items ?? []).map(normalizeLutColorMode),
+  }));
+}
+
+function normalizeNativeBrandGroups(groups: NativeBrandGroup[]): NativeBrandGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    db_options: group.db_options.map(normalizeLutColorMode),
+  }));
+}
+
 function getNativeBrandGroupByKey(
   groups: NativeBrandGroup[],
   brandKey: string,
@@ -2360,7 +2391,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         updates.selectedLegacyManufacturer = lutLocation.manufacturer;
       }
       if (lutInfo && lutInfo.color_mode) {
-        updates.color_mode = lutInfo.color_mode as ColorMode;
+        updates.color_mode = normalizePublicColorMode(lutInfo.color_mode);
       }
       set(updates);
       try {
@@ -2375,35 +2406,45 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       if (name) {
         void apiFetchLutInfo(name)
           .then((info) => {
+            const normalizedInfo = normalizeLutColorMode(info);
             const nextUpdates: Partial<ConverterState> = {
-              selectedLutInfo: info,
+              selectedLutInfo: normalizedInfo,
             };
-            if (info.color_mode) {
-              nextUpdates.color_mode = info.color_mode as ColorMode;
+            if (normalizedInfo.color_mode) {
+              nextUpdates.color_mode = normalizePublicColorMode(
+                normalizedInfo.color_mode,
+              );
             }
             if (
-              info.supports_predictive_match ||
-              info.supports_dynamic_layer_count
+              normalizedInfo.supports_predictive_match ||
+              normalizedInfo.supports_dynamic_layer_count
             ) {
               if (
-                Array.isArray(info.supported_modes) &&
-                info.supported_modes.length > 0
+                Array.isArray(normalizedInfo.supported_modes) &&
+                normalizedInfo.supported_modes.length > 0
               ) {
                 const preferredMode =
-                  info.supported_modes.find(
+                  normalizedInfo.supported_modes.find(
                     (mode) => mode.color_layers === 5,
                   ) ??
-                  info.supported_modes.find(
-                    (mode) => mode.color_layers === info.max_color_layers,
+                  normalizedInfo.supported_modes.find(
+                    (mode) =>
+                      mode.color_layers === normalizedInfo.max_color_layers,
                   ) ??
-                  info.supported_modes[0];
+                  normalizedInfo.supported_modes[0];
                 nextUpdates.color_layers =
-                  preferredMode.color_layers ?? info.max_color_layers ?? null;
+                  preferredMode.color_layers ??
+                  normalizedInfo.max_color_layers ??
+                  null;
                 nextUpdates.layer_height_mm =
-                  preferredMode.layer_height_mm ?? info.layer_height_mm ?? null;
+                  preferredMode.layer_height_mm ??
+                  normalizedInfo.layer_height_mm ??
+                  null;
               } else {
-                nextUpdates.color_layers = info.max_color_layers ?? null;
-                nextUpdates.layer_height_mm = info.layer_height_mm ?? null;
+                nextUpdates.color_layers =
+                  normalizedInfo.max_color_layers ?? null;
+                nextUpdates.layer_height_mm =
+                  normalizedInfo.layer_height_mm ?? null;
               }
             } else {
               nextUpdates.color_layers = null;
@@ -4457,7 +4498,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ lutListLoading: true });
       try {
         const response = await apiFetchLutList();
-        const luts = response.luts;
+        const luts = response.luts.map(normalizeLutColorMode);
         const updates: Partial<ConverterState> = {
           lutList: luts.map((l) => l.name),
           lutListFull: luts,
@@ -4469,7 +4510,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         if (remembered) {
           const info = luts.find((l) => l.name === remembered);
           if (info && info.color_mode) {
-            updates.color_mode = info.color_mode as ColorMode;
+            updates.color_mode = normalizePublicColorMode(info.color_mode);
           } else if (!info) {
             // Remembered LUT no longer exists — clear it
             updates.lut_name = "";
@@ -4494,9 +4535,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ nativeBrandGroupsLoading: true });
       try {
         const response = await apiFetchLutCatalog();
-        const legacyGroups = response.legacy_groups ?? [];
+        const legacyGroups = normalizeLutGroups(response.legacy_groups ?? []);
         const groups = filterNativeBrandGroups(
-          response.native_brand_groups ?? [],
+          normalizeNativeBrandGroups(response.native_brand_groups ?? []),
         );
         const legacyLuts = legacyGroups.flatMap((group) => group.items ?? []);
         const currentState = _get();
@@ -4510,7 +4551,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         if (remembered) {
           const info = legacyLuts.find((lut) => lut.name === remembered);
           if (info && info.color_mode) {
-            updates.color_mode = info.color_mode as ColorMode;
+            updates.color_mode = normalizePublicColorMode(info.color_mode);
           } else if (!info) {
             updates.lut_name = "";
             try {
@@ -4560,7 +4601,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       set({ legacyCatalogLoading: true, error: null });
       try {
         const response = await apiFetchLutDetailsCatalog();
-        const groups = response.groups ?? [];
+        const groups = normalizeLutGroups(response.groups ?? []);
         const currentState = _get();
         const index = buildLutCatalogIndex(groups);
         const currentLutInfo = currentState.lut_name
@@ -5028,6 +5069,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       console.log("[DEBUG] submitPreview: cleared layerImages");
       try {
         const resolvedSourceSelection = resolveConverterSourceSelection(state);
+        const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
           state.source_version === "material"
             ? buildMaterialSourceParams(state)
@@ -5065,7 +5107,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           target_width_mm: state.target_width_mm,
           auto_bg: state.auto_bg,
           bg_tol: state.bg_tol,
-          color_mode: state.color_mode,
+          color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
           enable_cleanup: state.enable_cleanup,
@@ -5202,7 +5244,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           .then((info) => {
             // Only apply if the user hasn't moved on to another session.
             if (_get().sessionId === previewSessionId) {
-              set({ selectedLutInfo: info });
+              set({ selectedLutInfo: normalizeLutColorMode(info) });
             }
           })
           .catch(() => {
@@ -5309,6 +5351,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         }
 
         const resolvedSourceSelection = resolveConverterSourceSelection(state);
+        const colorMode = normalizePublicColorMode(state.color_mode);
         const sourceParams =
           state.source_version === "material"
             ? buildMaterialSourceParams(state)
@@ -5347,7 +5390,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           target_width_mm: state.target_width_mm,
           auto_bg: state.auto_bg,
           bg_tol: state.bg_tol,
-          color_mode: state.color_mode,
+          color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
           enable_cleanup: state.enable_cleanup,

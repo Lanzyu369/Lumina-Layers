@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -53,6 +54,66 @@ router = APIRouter(prefix="/api/lut", tags=["LUT"])
 
 _VALID_PRIMARY_MODES = {"6-Color", "8-Color", "8-Color Max"}
 _lut_details_service = None
+
+
+def _canonicalize_public_color_mode(color_mode: str | None) -> str | None:
+    """Normalize legacy/internal color mode labels for public API responses.
+    将旧版/内部颜色模式标签规范化为公开 API 使用的名称。
+    """
+    if not isinstance(color_mode, str):
+        return color_mode
+    if color_mode.strip() == "8-Color":
+        return "8-Color Max"
+    return color_mode
+
+
+def _canonicalize_source_catalog_color_modes(catalog: dict) -> dict:
+    legacy_groups = [
+        {
+            **group,
+            "items": [
+                {
+                    **item,
+                    "color_mode": _canonicalize_public_color_mode(item.get("color_mode")),
+                }
+                for item in group.get("items", [])
+            ],
+        }
+        for group in catalog.get("legacy_groups", [])
+    ]
+    native_brand_groups = [
+        {
+            **group,
+            "db_options": [
+                {
+                    **option,
+                    "color_mode": _canonicalize_public_color_mode(option.get("color_mode")),
+                }
+                for option in group.get("db_options", [])
+            ],
+        }
+        for group in catalog.get("native_brand_groups", [])
+    ]
+    return {
+        **catalog,
+        "legacy_groups": legacy_groups,
+        "native_brand_groups": native_brand_groups,
+    }
+
+
+def _canonicalize_public_color_mode_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                _canonicalize_public_color_mode(item)
+                if key == "color_mode"
+                else _canonicalize_public_color_mode_fields(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonicalize_public_color_mode_fields(item) for item in value]
+    return value
 
 
 def _resolve_lut_details_service():
@@ -130,7 +191,9 @@ def list_luts() -> LUTListResponse:
         lut_list.append(
             LutInfo(
                 name=display_name,
-                color_mode=LUTManager.infer_color_mode(display_name, file_path),
+                color_mode=_canonicalize_public_color_mode(
+                    LUTManager.infer_color_mode(display_name, file_path)
+                ),
                 path=file_path,
                 fingerprint=fingerprint,
             )
@@ -144,7 +207,8 @@ def get_source_catalog() -> LutSourceCatalogResponse:
     返回传统源与原生源的分组目录。
     """
 
-    return LutSourceCatalogResponse.model_validate(LUTManager.get_source_catalog())
+    catalog = _canonicalize_source_catalog_color_modes(LUTManager.get_source_catalog())
+    return LutSourceCatalogResponse.model_validate(catalog)
 
 
 @router.get("/details/catalog", response_model=LutDetailsCatalogResponse)
@@ -166,7 +230,7 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         name=item.name,
                         path=item.path,
                         fingerprint=item.fingerprint,
-                        color_mode=item.color_mode,
+                        color_mode=_canonicalize_public_color_mode(item.color_mode),
                         source_kind=item.source_kind,
                         manufacturer=item.manufacturer,
                         material_type=item.material_type,
@@ -734,6 +798,7 @@ def _build_lut_info_from_path(path: str, display_name: str) -> LutInfoResponseV2
     detected_mode, color_count = LUTMerger.detect_color_mode(path)
     inferred_mode = LUTManager.infer_color_mode(Path(path).name, path)
     color_mode = inferred_mode if detected_mode in {"4-Color", "6-Color"} else detected_mode
+    color_mode = _canonicalize_public_color_mode(color_mode)
 
     # 加载元数据（如果 load_lut_with_metadata 可用）
     metadata = LUTMetadata()
@@ -855,13 +920,13 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
         manufacturer_source=detail.manufacturer_source,
         material_type=detail.material_type,
         material_source=detail.material_source,
-        color_mode=detail.color_mode,
+        color_mode=_canonicalize_public_color_mode(detail.color_mode),
         color_count=detail.color_count,
         source_kind=detail.source_kind,
         schema_version=detail.schema_version,
         capabilities=list(detail.capabilities),
         supported_modes=list(detail.supported_modes),
-        raw_metadata=detail.raw_metadata,
+        raw_metadata=_canonicalize_public_color_mode_fields(detail.raw_metadata),
         palette=[
             PaletteEntrySchema(
                 color=str(entry["color"]),
