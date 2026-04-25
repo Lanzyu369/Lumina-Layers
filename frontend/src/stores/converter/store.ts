@@ -223,6 +223,20 @@ export function buildLayerImagesSourceKey(
   ].join("|");
 }
 
+function matchesColorHighlightSnapshot(
+  state: Pick<ConverterState, "sessionId" | "selectionMode" | "selectedColors">,
+  snapshot: {
+    sessionId: string;
+    selectionMode: SelectionMode;
+    selectedColors: string[];
+  },
+): boolean {
+  if (state.sessionId !== snapshot.sessionId) return false;
+  if (state.selectionMode !== snapshot.selectionMode) return false;
+  if (state.selectedColors.size !== snapshot.selectedColors.length) return false;
+  return snapshot.selectedColors.every((hex) => state.selectedColors.has(hex));
+}
+
 function getFallbackModelBounds(
   state: Pick<
     ConverterState,
@@ -3258,11 +3272,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         set({ previewImageUrl: getPreviewBaseUrl(state) });
       } else {
         const hexes = Array.from(next);
+        const snapshot = {
+          sessionId: sid,
+          selectionMode: state.selectionMode,
+          selectedColors: hexes,
+        };
         void apiColorHighlight(sid, hexes)
           .then((res) => {
-            if (_get().selectedColors.size > 0) {
-              set({ previewImageUrl: normalizeResourceUrl(res.preview_url) });
-            }
+            if (!matchesColorHighlightSnapshot(_get(), snapshot)) return;
+            set({ previewImageUrl: normalizeResourceUrl(res.preview_url) });
           })
           .catch(() => {
             // 静默忽略高亮失败（不影响核心流程）

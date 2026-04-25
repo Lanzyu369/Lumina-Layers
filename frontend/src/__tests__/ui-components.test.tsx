@@ -70,6 +70,27 @@ describe("Slider", () => {
 });
 
 describe("Button", () => {
+  it("does not reserve spinner space when it is not loading", () => {
+    render(<Button label="Current" onClick={() => {}} loading={false} size="sm" />);
+
+    const button = screen.getByRole("button", { name: "Current" });
+    expect(button.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByText("Current")).toHaveClass("whitespace-nowrap");
+    expect(screen.getByText("Current")).toHaveClass("leading-none");
+  });
+
+  it("shows an absolutely positioned spinner while keeping the label centered", () => {
+    render(<Button label="Current" onClick={() => {}} loading size="sm" />);
+
+    const button = screen.getByRole("button", { name: "Current" });
+    const spinner = button.querySelector('[aria-hidden="true"]');
+
+    expect(spinner).toHaveClass("absolute");
+    expect(spinner).toHaveClass("animate-spin");
+    expect(screen.getByText("Current")).toHaveClass("whitespace-nowrap");
+    expect(screen.getByText("Current")).toHaveClass("leading-none");
+  });
+
   it("toggles loading without crashing after external text-node mutation", () => {
     const { rerender } = render(
       <Button label="Generate 3D Model" onClick={() => {}} loading={false} />,

@@ -21,6 +21,15 @@ const PALETTE: PaletteEntry[] = [
   { quantized_hex: '0000ff', matched_hex: '0000ee', pixel_count: 200, percentage: 20.0 },
 ];
 
+const SIX_COLOR_PALETTE: PaletteEntry[] = [
+  { quantized_hex: '111111', matched_hex: '111111', pixel_count: 100, percentage: 16.7 },
+  { quantized_hex: '222222', matched_hex: '222222', pixel_count: 100, percentage: 16.7 },
+  { quantized_hex: '333333', matched_hex: '333333', pixel_count: 100, percentage: 16.7 },
+  { quantized_hex: '444444', matched_hex: '444444', pixel_count: 100, percentage: 16.7 },
+  { quantized_hex: '555555', matched_hex: '555555', pixel_count: 100, percentage: 16.7 },
+  { quantized_hex: '666666', matched_hex: '666666', pixel_count: 100, percentage: 16.5 },
+];
+
 const LUT_COLORS: LutColorEntry[] = [
   { hex: '#ee0000', rgb: [238, 0, 0] },
   { hex: '#00ee00', rgb: [0, 238, 0] },
@@ -279,6 +288,76 @@ describe('PalettePanel 双色显示', () => {
     fireEvent.click(firstItem);
 
     expect(useConverterStore.getState().selectedColor).toBe('ee0000');
+  });
+
+  it('全选模式连续选择 6 个源色时保持全部高亮且已选条不换行挤压列表', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: SIX_COLOR_PALETTE,
+      selectedColor: null,
+      selectedColors: new Set<string>(),
+      selectionMode: 'select-all',
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+      sessionId: null,
+    });
+
+    render(<PalettePanel />);
+
+    for (const entry of SIX_COLOR_PALETTE) {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`颜色 ${entry.matched_hex}`) }));
+    }
+
+    expect(useConverterStore.getState().selectedColors.size).toBe(6);
+    expect(screen.getByText(/已选 6 色/)).toBeInTheDocument();
+
+    for (const entry of SIX_COLOR_PALETTE) {
+      expect(screen.getByRole('button', { name: new RegExp(`颜色 ${entry.matched_hex}`) })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    }
+
+    const selectedStrip = screen.getByText(/已选 6 色/).parentElement;
+    expect(selectedStrip).toHaveClass('flex-nowrap');
+    expect(selectedStrip).not.toHaveClass('flex-wrap');
+    expect(selectedStrip).toHaveClass('overflow-hidden');
+    expect(selectedStrip?.lastElementChild).toHaveClass('overflow-x-auto');
+  });
+
+  it('选择模式工具组在窄宽度下允许按钮换行且文字保持单行居中', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: null,
+      selectionMode: 'select-all',
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+    });
+
+    render(<PalettePanel />);
+
+    const modeGroup = screen.getByRole('group', { name: '选择模式' });
+    const modeControls = modeGroup.lastElementChild;
+
+    expect(modeControls).toHaveClass('grid');
+    expect(modeControls).toHaveClass('min-h-9');
+    expect(modeControls).not.toHaveClass('h-9');
+
+    for (const label of ['全选', '当前', '多选', '局部区域']) {
+      const button = screen.getByRole('button', { name: label });
+      expect(button).toHaveClass('w-full');
+      expect(screen.getByText(label)).toHaveClass('whitespace-nowrap');
+      expect(screen.getByText(label)).toHaveClass('leading-none');
+    }
   });
 
   it('当前模式下点击调色板不响应', async () => {

@@ -44,20 +44,19 @@ export default function Button({
       disabled={isDisabled}
       title={title}
       className={cx(
-        "relative inline-flex flex-shrink-0 items-center justify-center gap-2 font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
+        "relative inline-flex min-w-0 items-center justify-center font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
         sizeClasses,
         variantClasses,
         className
       )}
     >
-      <span
-        aria-hidden="true"
-        className={cx(
-          "h-4 w-4 rounded-full border-2 border-current/25 border-t-current",
-          loading ? "animate-spin opacity-100" : "opacity-0",
-        )}
-      />
-      <span translate="no">{label}</span>
+      {loading && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-2.5 h-4 w-4 rounded-full border-2 border-current/25 border-t-current animate-spin"
+        />
+      )}
+      <span className="min-w-0 truncate whitespace-nowrap leading-none" translate="no">{label}</span>
     </motion.button>
   );
 }

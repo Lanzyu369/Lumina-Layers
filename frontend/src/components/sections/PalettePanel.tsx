@@ -38,6 +38,7 @@ interface ToolbarGroupProps {
   label: string;
   tint: ToolbarGroupTint;
   children: ReactNode;
+  contentClassName?: string;
 }
 
 /**
@@ -45,7 +46,7 @@ interface ToolbarGroupProps {
  * followed by a row of compact controls aligned to a shared baseline.
  * 工具栏分组：淡色背景 + 顶部小标题 + 同一基线的紧凑按钮行。
  */
-function ToolbarGroup({ label, tint, children }: ToolbarGroupProps) {
+function ToolbarGroup({ label, tint, children, contentClassName }: ToolbarGroupProps) {
   return (
     <div
       className={cx(
@@ -63,7 +64,7 @@ function ToolbarGroup({ label, tint, children }: ToolbarGroupProps) {
       >
         {label}
       </span>
-      <div className="flex h-9 items-center gap-1.5">{children}</div>
+      <div className={contentClassName ?? "flex min-h-9 flex-wrap items-center gap-1.5"}>{children}</div>
     </div>
   );
 }
@@ -382,30 +383,38 @@ export default function PalettePanel({
                 />
               </ToolbarGroup>
 
-              <ToolbarGroup label={t("palette_group_mode")} tint="sky">
+              <ToolbarGroup
+                label={t("palette_group_mode")}
+                tint="sky"
+                contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(4.75rem,1fr))] items-center gap-1.5"
+              >
                 <Button
                   label={t("palette_mode_select_all")}
                   variant={selectionMode === 'select-all' ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={() => setSelectionMode('select-all')}
+                  className="w-full"
                 />
                 <Button
                   label={t("palette_mode_current")}
                   variant={selectionMode === 'current' ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={() => setSelectionMode('current')}
+                  className="w-full"
                 />
                 <Button
                   label={t("palette_mode_multi_select")}
                   variant={selectionMode === 'multi-select' ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={() => setSelectionMode('multi-select')}
+                  className="w-full"
                 />
                 <Button
                   label={t("palette_mode_region")}
                   variant={selectionMode === 'region' ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={() => setSelectionMode('region')}
+                  className="w-full"
                 />
               </ToolbarGroup>
 
@@ -470,20 +479,23 @@ export default function PalettePanel({
             {selectionMode === 'select-all' &&
               selectedColors.size > 0 &&
               !isRegionScopedSelection && (
-            <div className={cx(workstationInsetCardClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
-              <span className="text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
+            <div className={cx(workstationInsetCardClass, "flex min-h-11 flex-nowrap items-center gap-2 overflow-hidden px-3 py-2.5")}>
+              <span className="shrink-0 whitespace-nowrap text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_count").replace("{count}", String(selectedColors.size))}
               </span>
-              {Array.from(selectedColors).map((hex) => (
-                <button
-                  key={hex}
-                  type="button"
-                  onClick={() => handleSelect(hex)}
-                  className="h-5 w-5 rounded-lg border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
-                  style={{ backgroundColor: `#${hex}` }}
-                  title={`#${hex} — ${t("palette_multi_select_click_remove")}`}
-                />
-              ))}
+              <div className="dock-scrollbar flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden py-0.5">
+                {Array.from(selectedColors).map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleSelect(hex)}
+                    className="h-5 w-5 shrink-0 rounded-lg border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
+                    style={{ backgroundColor: `#${hex}` }}
+                    title={`#${hex} — ${t("palette_multi_select_click_remove")}`}
+                  />
+                ))}
+              </div>
             </div>
           )}
 

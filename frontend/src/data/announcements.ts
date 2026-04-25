@@ -70,6 +70,14 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "颜色替换后，在全选模式里点图上的色块会按原始源色选中，不会再误选成替换后的同色块。",
             en: "After a colour replacement, clicking the image in Select all mode now selects the original source swatch instead of another swatch that shares the replacement colour.",
           },
+          {
+            zh: "全选模式可以继续一次选多个源色，选到第 6 个或更多颜色时，色块高亮和 2D 高亮预览都会稳定保持最新选择。",
+            en: "Select all mode can still pick multiple source colours at once, and choosing a sixth colour or more now keeps both swatch highlights and the 2D highlight preview on the latest selection.",
+          },
+          {
+            zh: "颜色工作站的工具按钮会按面板宽度自动换行，窄屏下不会再裁掉“局部区域”等按钮，按钮文字也会保持在框内居中。",
+            en: "Color Workstation toolbar buttons now wrap to the panel width, so narrow layouts no longer cut off controls such as Region and button labels stay centered inside their frames.",
+          },
         ],
       },
       {
