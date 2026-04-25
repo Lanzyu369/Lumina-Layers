@@ -23,11 +23,134 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     },
     sections: [
       {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "顶部材料管理新增 “LUT 详情” 入口：可以浏览所有 LUT、看调色板和颜色覆盖范围，还能用色相图和 Lab 点云确认它适不适合当前图。",
+            en: "The top Material Management menu now has a “LUT details” entry where you can browse every LUT, inspect its palette and coverage, and use hue charts plus a Lab point cloud to judge whether it fits the current artwork.",
+          },
+          {
+            zh: "自定义配方现在可以加入 LUT 里没有的颜色，导出的 3MF 会自动带上这些额外对象，切片时不用再手动补。",
+            en: "Custom recipes can now include colours that are not in the LUT, and exported 3MF files carry those extra objects automatically so you do not have to patch them in the slicer.",
+          },
+          {
+            zh: "设置里新增“渐变自动换色”开关，打开后预览成功会自动把每组渐变压成代表色，想省事去条纹时可以直接开。",
+            en: "Settings now include an “Auto replace gradient banding” switch that collapses each detected gradient group to its representative colour after preview, useful when you want the quickest banding cleanup.",
+          },
+        ],
+      },
+      {
         category: { zh: "颜色工作站", en: "Color Workstation" },
         items: [
           {
-            zh: "传统 LUT 选择改为按品牌→颜色数二级菜单，更容易找到对应预设。",
-            en: "The legacy LUT selector now groups by brand and color count, making it easier to locate the right preset.",
+            zh: "传统 LUT 选择改成“品牌 → 颜色数”的二级菜单，个人 LUT 会显示成“个人”，选中后也会用系统真正认识的 LUT 名称去预览，不会再因为详细名对不上而找不到预设。",
+            en: "The legacy LUT picker now uses a Brand → colour-count menu, shows personal LUTs as Personal, and submits the LUT name the app can actually preview so detailed catalog labels no longer lose the preset.",
+          },
+          {
+            zh: "耗材档案预览会把平滑渐变里被切开的颜色自动整理成分组，还能展开到脸、嘴巴、手这类小区域，点哪里就只处理哪里。",
+            en: "Material-archive previews now group the colours that came from one smooth gradient and can expand them into smaller regions such as face, mouth, or hands, so clicking a region edits only that spot.",
+          },
+          {
+            zh: "渐变分组和小区域都有一键“去海带纹”，多个小区域还能勾选后一起合并成同一个代表色，或者一起刷成从 LUT 里点到的颜色。",
+            en: "Gradient groups and sub-regions now have one-click flattening, and checked sub-regions can be merged to one representative colour or repainted together with a LUT colour pick.",
+          },
+          {
+            zh: "选中的小区域可以做“二次量化”：给每块区域单独选 12–256 个颜色重新匹配，脸部和皮肤这类低频渐变会比直接压平更自然。",
+            en: "Selected sub-regions can be re-quantized with their own 12–256 colour budget, keeping low-frequency gradients such as faces and skin more natural than a hard flatten.",
+          },
+          {
+            zh: "耗材档案做出来的模型现在也能改自定义配方，弹窗一打开就是当前真实配方和真实材料颜色，改一两层不会把其它层冲掉。",
+            en: "Models made from material archives can now use custom recipes too, with the dialog seeded from the real current recipe and real material colours so editing one or two layers no longer wipes the rest.",
+          },
+          {
+            zh: "换色、区域换色和去条纹的等待时间明显短了：2D 图先更新，重的 3D 重建放到后台跑，分层预览也会并发生成，来回调色不用一直干等。",
+            en: "Colour swaps, region edits, and banding cleanup are much faster: the 2D result updates first, heavy 3D rebuilds run in the background, and layer previews are generated in parallel so colour tuning has much less waiting.",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "提取器（校色卡）",
+          en: "Extractor (Calibration Card)",
+        },
+        items: [
+          {
+            zh: "耗材库里已经存好的条目可以直接改名字和品牌，品牌输入也变成了会记住旧品牌的下拉框，不用为了改个名字重新扫卡。",
+            en: "Saved material-library entries can now be renamed and rebranded in place, and the brand field is a dropdown that remembers previous brands so you do not need to rescan a card just to tidy names.",
+          },
+          {
+            zh: "提取器面板把调试文件、拟合摘要和下载入口都收进“详情”里，保存成功或失败也改成右上角提示，主面板不会再被挤乱。",
+            en: "The extractor panel now tucks debug files, fit summaries, and download links behind Details, while save success or failure appears as a top-right toast instead of pushing the panel around.",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "校准 & 材料",
+          en: "Calibration & Materials",
+        },
+        items: [
+          {
+            zh: "梯度卡校准默认层高改成 0.08 mm，更贴近日常打印；以前保存过的档案保持原样，不会被自动改。",
+            en: "Gradient-card calibration now defaults to 0.08 mm layer height, closer to everyday printing, while already-saved archives keep their original values.",
+          },
+          {
+            zh: "设置里新增“穷举数量”：默认低档更快更省内存，也可以切到中档或高档换更细的颜色缓存，不同档位会分开存。",
+            en: "Settings now include exhaustive density: the default low tier is faster and lighter, while medium and high build finer colour caches that are stored separately.",
+          },
+          {
+            zh: "耗材库的编辑弹窗可以直接改显示颜色，既能用颜色选择器也能填 #RRGGBB；下次重新实测时会用新的测量值覆盖回来。",
+            en: "The material-library edit dialog can override the display colour with a colour picker or #RRGGBB value, and a future verification run will replace it with the freshly measured colour.",
+          },
+          {
+            zh: "耗材预设里补进了无境新材，建档和选材时少一步手动录入。",
+            en: "Wujing material presets have been added, reducing manual entry when building or selecting material archives.",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "预览 & 交互",
+          en: "Preview & Interaction",
+        },
+        items: [
+          {
+            zh: "分层遮罩查看窗新增跟随鼠标的放大镜，检查细边和层间对齐时不用再来回缩放。",
+            en: "The layer-mask viewer now has a follow-cursor magnifier, making fine-edge and layer-alignment checks easier without constant zooming.",
+          },
+          {
+            zh: "3D 预览模型变得小很多、加载快很多，远程打开也能更快看到模型，真正导出的 3MF 和打印精度不受影响。",
+            en: "3D preview models are much smaller and load far faster, especially over remote sessions, while exported 3MF files and print accuracy stay unchanged.",
+          },
+          {
+            zh: "滑块拖动时不会再自己多跳半格，数值会乖乖停在你拖到的位置。",
+            en: "Sliders no longer bump themselves by half a step while dragging, so values stay where you actually placed them.",
+          },
+          {
+            zh: "导出的 3MF 会带一个切片器能正常读取的预览图，占位图不再卡住 Anycubic Slicer Next。",
+            en: "Exported 3MF files now include a preview image that slicers can read correctly, so placeholder thumbnails no longer hang Anycubic Slicer Next.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 导出 3MF 时会真正带上自定义配方和额外添加的颜色层，不会只在界面上看着改了、导出后又丢掉。",
+            en: "SVG-to-3MF export now carries custom recipes and extra colour layers through to the file instead of only showing them in the UI.",
+          },
+          {
+            zh: "带插画风细线的 SVG 不会再被悄悄加粗，复杂边缘处理失败时也会自动走兜底，不会整次生成断掉。",
+            en: "Illustrated SVGs with fine strokes are no longer silently widened, and complex edge-processing failures now fall back safely instead of breaking the whole generation.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "反推 LUT 会坚持使用自己带的调色板，就算设置里还残留着旧颜色模式，也不会拿错颜色去匹配。",
+            en: "Inferred LUTs now keep using their own palettes even if settings still contain an older colour mode, avoiding mismatched colour picks.",
           },
         ],
       },
