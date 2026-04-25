@@ -1785,7 +1785,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "High (256³)",
   },
   "settings.solver_cache_density_tip": {
-    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击“构建”时会产生对应分辨率的新缓存文件。",
+    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
   "settings.auto_replace_gradient_heading": {
@@ -3672,7 +3672,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed: {message}",
   },
   material_picker_no_material: {
-    zh: "请先在“耗材档案”下选择至少一个耗材。",
+    zh: "请先在「耗材档案」下选择至少一个耗材。",
     en: 'Select at least one material under "Material Archive" first.',
   },
   material_picker_suggestion_tooltip: {
@@ -3702,7 +3702,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Gradient groups (banding)",
   },
   gradient_groups_hint: {
-    zh: "发现 {count} 条平滑渐变被切成多个耗材色。点击“选中整组”可一次性选中组内所有颜色，再配合上方的拾色器换成同一个目标色。",
+    zh: "发现 {count} 条平滑渐变被切成多个耗材色。点击「选中整组」可一次性选中组内所有颜色，再配合上方的拾色器换成同一个目标色。",
     en: "Detected {count} smooth gradients split across multiple material colors. Click Select all to multi-select the whole group, then use the picker above to replace them with a single target color.",
   },
   gradient_groups_loading: {
@@ -4851,7 +4851,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Predicting…",
   },
   recipe_custom_predict_hint: {
-    zh: "点击“预测颜色”查看当前配方的预览颜色。",
+    zh: "点击「预测颜色」查看当前配方的预览颜色。",
     en: "Use Predict Color to preview the current recipe.",
   },
   recipe_custom_preview_color: {
@@ -5220,7 +5220,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续“提取梯度卡”步骤会用到它。",
+    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续「提取梯度卡」步骤会用到它。",
     en: "Note: Each test material requires printing two gradient cards (one on a white base, one on a black base). Whether you generate them locally or download the online models, you must generate and download the configuration package (ZIP) here, as it is required for the 'Extract Gradient Card' step later.",
   },
   mat_gradient_generate_notice_online_model: {
@@ -5624,7 +5624,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Selected {selected} / {total} materials",
   },
   mat_gradient_library_select_item_label: {
-    zh: "选择耗材“{materialName}”",
+    zh: "选择耗材「{materialName}」",
     en: 'Select material "{materialName}"',
   },
   mat_gradient_library_refresh_btn: {
@@ -5640,7 +5640,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to load material library",
   },
   mat_gradient_library_empty: {
-    zh: "还没有已保存的耗材档案。先在“梯度卡提取”里保存一个耗材。",
+    zh: "还没有已保存的耗材档案。先在「梯度卡提取」里保存一个耗材。",
     en: "No saved material archives yet. Save one from Gradient Card Extract first.",
   },
   mat_gradient_library_updated_at_label: {
@@ -5728,7 +5728,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Delete Material",
   },
   mat_gradient_library_delete_confirm: {
-    zh: "确认删除耗材“{materialName}”？此操作不可撤销。",
+    zh: "确认删除耗材「{materialName}」？此操作不可撤销。",
     en: 'Delete material "{materialName}"? This action cannot be undone.',
   },
   mat_gradient_library_delete_success: {
