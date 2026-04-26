@@ -101,6 +101,16 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - After any destructive op, immediately verify: tracked files via `git diff --stat`, untracked recovery via `git ls-files --others --exclude-standard`, and disk presence of any file you expected to keep; if anything is missing, stop and check `git fsck --unreachable` and IDE Local History (`%APPDATA%\Windsurf\User\History`) before further mutations
 - When a destructive op affects another agent's or the user's dirty work, ask first; do not assume `stash`/`pop` is round-trip safe across branch switches and cherry-picks
 
+## Branch Naming & Lifecycle
+
+- Default to `<owner>/<topic>` for in-flight work (e.g., `Lanz/frontend-and-agents-tweaks`, `Min/fix-relief-height-map-init`); this matches the dominant style on upstream and best supports composite multi-topic branches that stay open until PR
+- Conventional `<type>/<topic>` (e.g., `fix/material-archive-vector-preview`, `feat/gradient-card-ux-upstream-merge`) is acceptable **only** when the branch will stay single-topic until merge; if the work will accumulate mixed topics, prefer the `<owner>/<topic>` form so the name does not lie about its contents
+- Topic segment: kebab-case, name the intent rather than the touched files; avoid file extensions in branch names (no `-md`, `-tsx`, `-py`, etc.)
+- Long-lived branches (`dev-refactor`, `main`) are protected: never push directly, never force-push, always merge through PR
+- Once a topic branch has been merged into a long-lived branch (e.g., its tip becomes a `Merge pull request #N from .../<branch>` commit on `dev-refactor`), treat it as **retired**: do not stack new commits on it. Cut a fresh `<owner>/<topic>` branch from the current `origin/dev-refactor` for follow-up work, even if it would feel like "the same line of work"
+- For local safety snapshots and rollback pointers, use `backup/<YYYY-MM-DD>-<short-context>` (e.g., `backup/2026-04-26-pre-reorg`); these stay local-only and should be cleaned up once the snapshotted work is verified safe
+- When in doubt about an existing branch, run `git log --decorate -1 <branch>` and check whether its tip is already a merge commit on a protected branch before adding more commits to it
+
 ## Hygiene & Commits
 
 - Before implementing a feature request or bug fix, remind the user to register the planned change in the online tracking spreadsheet first — this ensures traceability and avoids duplicate or conflicting work
