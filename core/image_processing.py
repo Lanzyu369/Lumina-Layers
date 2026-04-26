@@ -212,16 +212,7 @@ class LuminaImageProcessor:
                  pixel_scale, mode_info, quantized_image, debug_data
         """
         started = time.perf_counter()
-        log.debug(
-            "Image processing started",
-            extra={
-                "event": "image_processor_started",
-                "mode": modeling_mode.get_display_name(),
-                "blur_kernel": blur_kernel,
-                "smooth_sigma": smooth_sigma,
-                "target_width_mm": target_width_mm,
-            },
-        )
+        self._log_processing_started(modeling_mode, blur_kernel, smooth_sigma, target_width_mm)
         img, target_w, target_h, px_scale, blur_kernel, smooth_sigma = self._load_and_resize_image(
             image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma
         )
@@ -231,9 +222,9 @@ class LuminaImageProcessor:
         )
         matched_rgb, material_matrix = self._apply_cleanup(modeling_mode, matched_rgb, material_matrix)
         mask_transparent = self._merge_auto_bg_mask(auto_bg, bg_ref, bg_tol, mask_transparent)
-        material_matrix[mask_transparent] = -1
-        # result keys contract: 'matched_rgb', 'material_matrix', 'mask_solid', 'dimensions', 'pixel_scale', 'mode_info', 'quantized_image'
-        result = self._build_process_result(
+        # Result contract keys: 'matched_rgb', 'material_matrix', 'mask_solid',
+        # 'dimensions', 'pixel_scale', 'mode_info', 'quantized_image'.
+        result = self._finalize_process_result(
             matched_rgb,
             material_matrix,
             mask_transparent,
@@ -244,6 +235,47 @@ class LuminaImageProcessor:
             rgb_arr,
             debug_data,
         )
+        self._log_processing_done(started, target_w, target_h, px_scale, modeling_mode)
+        return result
+
+    def _log_processing_started(self, modeling_mode, blur_kernel, smooth_sigma, target_width_mm):
+        log.debug(
+            "Image processing started",
+            extra={
+                "event": "image_processor_started",
+                "mode": modeling_mode.get_display_name(),
+                "blur_kernel": blur_kernel,
+                "smooth_sigma": smooth_sigma,
+                "target_width_mm": target_width_mm,
+            },
+        )
+
+    def _finalize_process_result(
+        self,
+        matched_rgb,
+        material_matrix,
+        mask_transparent,
+        target_w,
+        target_h,
+        px_scale,
+        modeling_mode,
+        rgb_arr,
+        debug_data,
+    ):
+        material_matrix[mask_transparent] = -1
+        return self._build_process_result(
+            matched_rgb,
+            material_matrix,
+            mask_transparent,
+            target_w,
+            target_h,
+            px_scale,
+            modeling_mode,
+            rgb_arr,
+            debug_data,
+        )
+
+    def _log_processing_done(self, started, target_w, target_h, px_scale, modeling_mode):
         log.info(
             "Image processing completed",
             extra={
@@ -257,7 +289,6 @@ class LuminaImageProcessor:
                 "match_mode": self.last_match_info.get("match_mode"),
             },
         )
-        return result
 
     def _extract_rgba_arrays(self, img):
         """Extract RGB data and transparent mask from RGBA image.
