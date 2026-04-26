@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { cx } from "./panelPrimitives";
 
@@ -7,9 +8,10 @@ interface ButtonProps {
   disabled?: boolean;
   loading?: boolean;
   variant?: "primary" | "secondary";
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "icon";
   className?: string;
   title?: string;
+  icon?: ReactNode;
 }
 
 export default function Button({
@@ -21,6 +23,7 @@ export default function Button({
   size = "md",
   className,
   title,
+  icon,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
 
@@ -32,6 +35,8 @@ export default function Button({
   const sizeClasses =
     size === "sm"
       ? "min-h-8 rounded-xl px-3 py-1.5 text-xs"
+      : size === "icon"
+      ? "h-9 w-9 shrink-0 rounded-full p-0 text-sm"
       : "min-h-11 rounded-2xl px-4 py-2.5 text-sm";
 
   return (
@@ -42,7 +47,8 @@ export default function Button({
       type="button"
       onClick={onClick}
       disabled={isDisabled}
-      title={title}
+      title={title ?? (icon ? label : undefined)}
+      aria-label={icon ? label : undefined}
       className={cx(
         "relative inline-flex min-w-0 items-center justify-center font-medium transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
         sizeClasses,
@@ -56,7 +62,13 @@ export default function Button({
           className="pointer-events-none absolute left-2.5 h-4 w-4 rounded-full border-2 border-current/25 border-t-current animate-spin"
         />
       )}
-      <span className="min-w-0 truncate whitespace-nowrap leading-none" translate="no">{label}</span>
+      {icon ? (
+        <span className="inline-flex items-center justify-center" aria-hidden="true">
+          {icon}
+        </span>
+      ) : (
+        <span className="min-w-0 truncate whitespace-nowrap leading-none" translate="no">{label}</span>
+      )}
     </motion.button>
   );
 }

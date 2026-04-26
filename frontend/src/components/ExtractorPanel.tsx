@@ -12,6 +12,7 @@ import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";
 import Checkbox from "./ui/Checkbox";
 import Button from "./ui/Button";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
@@ -440,65 +441,58 @@ export default function ExtractorPanel() {
                 </div>
               )}
 
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
-                <label className="flex flex-col gap-1 flex-1 min-w-0">
-                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                    {t("ext_nudge_step_label")}
-                  </span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={10}
-                    step={1}
-                    value={nudge_step}
-                    onChange={(e) => setNudgeStep(Number(e.target.value))}
-                    className="w-full accent-blue-500"
-                  />
-                </label>
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-300 tabular-nums w-8 text-right">
-                  {nudge_step}
-                </span>
-              </div>
+              <Slider
+                label={t("ext_nudge_step_label")}
+                value={nudge_step}
+                min={1}
+                max={10}
+                step={1}
+                onChange={setNudgeStep}
+              />
 
               <div
-                className="grid grid-cols-3 gap-2"
+                className="grid grid-cols-3 gap-2 justify-items-center"
                 data-testid="corner-nudge-buttons"
               >
                 <div />
                 <Button
-                  label={`↑`}
+                  label={t("ext_nudge_up")}
+                  icon={<ChevronUp />}
                   variant="secondary"
+                  size="icon"
                   onClick={() => nudgeActiveCorner(0, -1)}
                   disabled={!nudgeEnabled}
-                  className="w-full !p-1"
                 />
                 <div />
                 <Button
-                  label={`←`}
+                  label={t("ext_nudge_left")}
+                  icon={<ChevronLeft />}
                   variant="secondary"
+                  size="icon"
                   onClick={() => nudgeActiveCorner(-1, 0)}
                   disabled={!nudgeEnabled}
-                  className="w-full !p-1"
                 />
-                <div className="flex items-center justify-center text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+                <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
                   {activeCornerPoint
                     ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})`
                     : "—"}
                 </div>
                 <Button
-                  label={`→`}
+                  label={t("ext_nudge_right")}
+                  icon={<ChevronRight />}
                   variant="secondary"
+                  size="icon"
                   onClick={() => nudgeActiveCorner(1, 0)}
                   disabled={!nudgeEnabled}
-                  className="w-full !p-1"
                 />
                 <div />
                 <Button
-                  label={`↓`}
+                  label={t("ext_nudge_down")}
+                  icon={<ChevronDown />}
                   variant="secondary"
+                  size="icon"
                   onClick={() => nudgeActiveCorner(0, 1)}
                   disabled={!nudgeEnabled}
-                  className="w-full !p-1"
                 />
                 <div />
               </div>

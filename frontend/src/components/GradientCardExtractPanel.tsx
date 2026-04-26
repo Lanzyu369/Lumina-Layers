@@ -5,6 +5,8 @@ import { tRuntime } from "../i18n/runtime";
 import { listGradientCardMaterials } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import Button from "./ui/Button";
+import Slider from "./ui/Slider";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import Dropdown from "./ui/Dropdown";
@@ -360,24 +362,25 @@ const CornerNudgeControl = ({
           </div>
         </div>
       )}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 items-center">
-         <label className="flex flex-col gap-1 flex-1 min-w-0">
-           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{t("ext_nudge_step_label")}</span>
-           <input type="range" min={1} max={10} step={1} value={nudgeStep} onChange={(e) => onNudgeStepChange(Number(e.target.value))} className="w-full accent-blue-500" />
-         </label>
-         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 tabular-nums w-8 text-right">{nudgeStep}</span>
-      </div>
-      <div className="grid grid-cols-3 gap-2">
+      <Slider
+        label={t("ext_nudge_step_label")}
+        value={nudgeStep}
+        min={1}
+        max={10}
+        step={1}
+        onChange={onNudgeStepChange}
+      />
+      <div className="grid grid-cols-3 gap-2 justify-items-center">
         <div />
-        <Button label={`↑`} variant="secondary" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_up")} icon={<ChevronUp />} variant="secondary" size="icon" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={`←`} variant="secondary" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
-        <div className="flex items-center justify-center text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+        <Button label={t("ext_nudge_left")} icon={<ChevronLeft />} variant="secondary" size="icon" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} />
+        <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
           {activeCornerPoint ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})` : "—"}
         </div>
-        <Button label={`→`} variant="secondary" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_right")} icon={<ChevronRight />} variant="secondary" size="icon" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={`↓`} variant="secondary" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_down")} icon={<ChevronDown />} variant="secondary" size="icon" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} />
         <div />
       </div>
     </div>
