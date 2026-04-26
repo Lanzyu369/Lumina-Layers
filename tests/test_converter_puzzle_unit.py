@@ -902,8 +902,8 @@ def test_worker_generate_model_preserves_svg_puzzle_piece_dimensions_for_matched
         svg_path.write_text(
             (
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">'
-                '<path d="M10 10 L110 70" stroke="#ff0000" stroke-width="1" fill="none"/>'
-                '<path d="M10 70 L110 10" stroke="#0000ff" stroke-width="1" fill="none"/>'
+                '<path d="M9.5 10.9 L10.5 9.1 L110.5 69.1 L109.5 70.9 Z" fill="#ff0000"/>'
+                '<path d="M10.5 70.9 L9.5 69.1 L109.5 9.1 L110.5 10.9 Z" fill="#0000ff"/>'
                 '<circle cx="60" cy="40" r="6" fill="#00ff00"/>'
                 "</svg>"
             ),
