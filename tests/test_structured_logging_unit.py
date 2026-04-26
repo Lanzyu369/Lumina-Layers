@@ -144,6 +144,47 @@ def test_human_formatter_outputs_single_readable_line() -> None:
     assert not line.lstrip().startswith("{")
 
 
+def test_json_formatter_labels_uvicorn_records_without_noise() -> None:
+    formatter = _JsonFormatter()
+    record = logging.makeLogRecord(
+        {
+            "name": "uvicorn.error",
+            "levelno": logging.INFO,
+            "levelname": "INFO",
+            "msg": "Started server process [%d]",
+            "args": (26600,),
+            "color_message": "Started server process [\u001b[36m%d\u001b[0m]",
+        }
+    )
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["event"] == "uvicorn"
+    assert payload["module"] == "uvicorn.error"
+    assert payload["message"] == "Started server process [26600]"
+    assert "color_message" not in payload
+
+
+def test_human_formatter_labels_uvicorn_records_without_repeating_message() -> None:
+    formatter = _HumanFormatter()
+    record = logging.makeLogRecord(
+        {
+            "name": "uvicorn.error",
+            "levelno": logging.INFO,
+            "levelname": "INFO",
+            "msg": "Started server process [%d]",
+            "args": (26600,),
+            "color_message": "Started server process [\u001b[36m%d\u001b[0m]",
+        }
+    )
+
+    line = formatter.format(record)
+
+    assert "INFO uvicorn uvicorn.error Started server process [26600]" in line
+    assert line.count("Started server process [26600]") == 1
+    assert "color_message" not in line
+
+
 def test_configure_structured_logging_honors_explicit_json_format(monkeypatch) -> None:
     _reset_lumina_logging(monkeypatch)
     stream = _CaptureStream(tty=True)

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_LOG_INIT_BY_PARENT_ENV = "LUMINA_LOG_INIT_BY_PARENT"
 _logging_initialized = False
 
 
@@ -32,8 +33,17 @@ def setup_file_logging(log_path=None) -> Path | None:
     if _logging_initialized:
         return None
 
+    env_log_path = os.environ.get("LUMINA_LOG_PATH")
+    is_parent_configured = os.environ.get(_LOG_INIT_BY_PARENT_ENV) == "1"
+    explicit_path = Path(log_path) if log_path is not None else None
+    use_env_log_path = explicit_path is None and bool(env_log_path)
     selected_path: Path | None = None
-    for candidate_path in _resolve_log_candidates(Path(log_path) if log_path is not None else None):
+    candidates = (
+        [Path(env_log_path)]
+        if use_env_log_path and env_log_path is not None
+        else _resolve_log_candidates(explicit_path)
+    )
+    for candidate_path in candidates:
         try:
             _prepare_log_path(candidate_path)
             selected_path = candidate_path
@@ -46,17 +56,31 @@ def setup_file_logging(log_path=None) -> Path | None:
         return None
 
     resolved_path = selected_path.resolve()
+    suppress_configured_event = is_parent_configured and _matches_log_path(resolved_path, env_log_path)
     os.environ["LUMINA_LOG_PATH"] = str(resolved_path)
+    os.environ[_LOG_INIT_BY_PARENT_ENV] = "1"
     _logging_initialized = True
 
     from api.structured_logging import configure_structured_logging, get_logger
 
     configure_structured_logging()
-    get_logger(__name__).info(
-        "Log file configured",
-        extra={"event": "log_file_configured", "path": str(resolved_path)},
-    )
+    if not suppress_configured_event:
+        get_logger(__name__).info(
+            "Log file configured",
+            extra={"event": "log_file_configured", "path": str(resolved_path)},
+        )
     return selected_path
+
+
+def _matches_log_path(path: Path, raw_path: str | None) -> bool:
+    """Return whether a resolved path matches a raw environment path."""
+
+    if not raw_path:
+        return False
+    try:
+        return path == Path(raw_path).expanduser().resolve()
+    except OSError:
+        return str(path) == str(Path(raw_path))
 
 
 def _resolve_log_candidates(explicit_path: Path | None) -> list[Path]:

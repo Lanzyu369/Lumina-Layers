@@ -27,6 +27,8 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `python scripts/profile_stage3.py --also-write-latest`
 - `python scripts/check_perf_regression.py`
 - `python scripts/check_perf_regression.py --use-cold-start`
+- `python scripts/log_quality_check.py --mode fast`
+- `python scripts/log_quality_check.py --mode full`
 - `docker build -t lumina-layers . && docker run -p 7860:7860 lumina-layers`
 
 ## Engineering Rules
@@ -77,6 +79,20 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep broad `except Exception` only at explicit boundary guards; prefer typed/domain exceptions and centralized mapping via `api.errors.to_http_exception()`
 - In `core/*`, do not raise `HTTPException`; raise domain/core errors and map at API boundaries
 - Current supported workflows include calibration, extraction/manual correction, LUT merge/inspection, preview/generation, batch conversion, large-format tiled generation, printer/slicer integration, and BW/4-color/6-color/8-color/5-color-extended modes
+
+## Logging Governance
+
+- Always log via `from api.structured_logging import get_logger` and pass `extra={"event": "<snake_case>", ...}`; never use bare `print(...)` for business output, and never start a `message` with a `[TAG]` prefix
+- Event names must be specific (`image_processor_done`, `lut_colors_loaded`); avoid catch-all patterns matching `*_log` / `status_*` / `request_*`. The only allowlisted bucket events are `client_log` (frontend log relay) and `log_file_configured` (logger bootstrap)
+- WARNING/ERROR records must carry actionable fields (`error_type`, `error_message`, `path`, `dependency`, etc.); a level alone is not enough
+- External loggers (`uvicorn`, `fastapi`, `starlette`, `asyncio`, `httpx`, `watchfiles`) are normalized by `_resolve_event_label` in `api/structured_logging.py`; ANSI noise keys (`color_message`, `color_msg`) are filtered by `_EXTERNAL_NOISE_KEYS`. Update both sets together when onboarding a new external logger
+- Spawned workers and subprocess servers must inherit `LUMINA_LOG_PATH` and `LUMINA_LOG_INIT_BY_PARENT=1`; `setup_file_logging()` then attaches silently without re-emitting `log_file_configured`. Preserve this protocol when changing worker pool startup or any code that spawns child processes
+- File handler always writes JSON Lines; the console handler picks `human` (TTY) or `json` (pipe) automatically and respects `LUMINA_LOG_FORMAT=json|human|auto`
+- Per-workflow INFO budget: a single request-scoped endpoint (preview, generate, etc.) emits at most 8 INFO lines; a full preview + generate run stays at most 30. `request_completed` and other catch-all buckets must stay at 0
+- Pipeline events follow the `*_init` -> `*_done` (or `*_failed`) two-stage convention; demote intermediate progress traces to DEBUG instead of inflating INFO
+- After any logger-touching change, run `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v` (currently 20 passed) before opening a PR
+- Run `python scripts/log_quality_check.py --mode fast` as the smoke gate and `--mode full --workflow startup,lut_list,preview,generate` before release; exit codes are `0` = PASS, `1` = governance violation, `2` = script error. Do not weaken thresholds (`--max-info`, `--max-info-per-endpoint`) to "fix" failures — address the offending event instead
+- Reusable infrastructure: `api/structured_logging.py` (formatters + fallback), `api/logger.py` (file handler + parent marker protocol), `scripts/audit_logs.py` (read-only auditor), `scripts/log_quality_check.py` (workflow runner + governance scanner), `progress/log_audit_*.json` (baselines)
 
 ## Tests
 

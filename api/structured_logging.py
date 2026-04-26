@@ -15,6 +15,13 @@ _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("re
 _session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("session_id", default=None)
 _standard_record = logging.makeLogRecord({})
 _STANDARD_LOG_RECORD_KEYS = frozenset(_standard_record.__dict__.keys())
+_EXTERNAL_NOISE_KEYS = frozenset(
+    {
+        "color_message",  # uvicorn ANSI render template
+        "color_msg",  # uvicorn variant
+    }
+)
+_EXTERNAL_LOGGER_PREFIXES = ("uvicorn", "fastapi", "starlette", "asyncio", "httpx", "watchfiles")
 
 _configured = False
 _CONSOLE_HANDLER_ATTR = "_lumina_console_handler"
@@ -69,10 +76,25 @@ def _extra_fields(record: logging.LogRecord, existing_keys: set[str]) -> dict[st
     for key, value in record.__dict__.items():
         if key in _STANDARD_LOG_RECORD_KEYS or key in existing_keys or key.startswith("_"):
             continue
+        if key in _EXTERNAL_NOISE_KEYS:
+            continue
         if value is None:
             continue
         fields[key] = _coerce_jsonable(value)
     return fields
+
+
+def _resolve_event_label(record: logging.LogRecord) -> str:
+    """Return event label for record, using logger family for external records."""
+
+    explicit = getattr(record, "event", None)
+    if explicit:
+        return str(explicit)
+    name = record.name or "external"
+    for prefix in _EXTERNAL_LOGGER_PREFIXES:
+        if name == prefix or name.startswith(prefix + "."):
+            return prefix
+    return "external"
 
 
 class _JsonFormatter(logging.Formatter):
@@ -82,7 +104,7 @@ class _JsonFormatter(logging.Formatter):
         payload: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
-            "event": getattr(record, "event", record.getMessage()),
+            "event": _resolve_event_label(record),
             "module": record.name,
             "request_id": get_request_id(),
             "session_id": getattr(record, "session_id", get_session_id()),
@@ -119,7 +141,7 @@ class _HumanFormatter(logging.Formatter):
         payload.update(_extra_fields(record, set(payload) | {"event"}))
         fields = " ".join(f"{key}={_format_human_value(value)}" for key, value in payload.items())
         timestamp = datetime.now(timezone.utc).isoformat()
-        event = getattr(record, "event", record.getMessage())
+        event = _resolve_event_label(record)
         parts = [timestamp, record.levelname, str(event), record.name, _single_line(record.getMessage())]
         if fields:
             parts.append(fields)

@@ -295,7 +295,7 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         else:
             lut_grid = np.load(lut_path)
             measured_colors = lut_grid.reshape(-1, 3)
-        log.info(
+        log.debug(
             "Loading LUT colors",
             extra={
                 "event": "lut_colors_loading",
@@ -317,9 +317,9 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         colors.sort(key=lambda x: sum(x["color"]))
 
         log.info(
-            "Extracted LUT colors",
+            "LUT colors loaded",
             extra={
-                "event": "lut_colors_extracted",
+                "event": "lut_colors_loaded",
                 "lut_path": lut_path,
                 "color_count": len(colors),
                 "unique_count": len(unique_colors),
