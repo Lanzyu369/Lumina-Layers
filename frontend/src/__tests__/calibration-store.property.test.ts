@@ -4,8 +4,13 @@ import {
   calibrationGenerate,
   generateSingleStageKit,
 } from "../api/calibration";
-import { CalibrationColorMode, BackingColor } from "../api/types";
-import { useCalibrationStore } from "../stores/calibrationStore";
+import { CalibrationColorMode } from "../api/types";
+import {
+  BACKING_THICKNESS_DEFAULT_MM,
+  BACKING_THICKNESS_MAX_MM,
+  BACKING_THICKNESS_MIN_MM,
+  useCalibrationStore,
+} from "../stores/calibrationStore";
 import { clampValue } from "../stores/converter";
 import { useConverterStore } from "../stores/converter";
 
@@ -87,7 +92,7 @@ function snapshotCalibrationState() {
     color_mode: s.color_mode,
     block_size: s.block_size,
     gap: s.gap,
-    backing: s.backing,
+    backing_thickness: s.backing_thickness,
     eight_color_full_export: s.eight_color_full_export,
     isLoading: s.isLoading,
     error: s.error,
@@ -146,14 +151,12 @@ const arbCalibrationColorMode = fc.constantFrom(
   CalibrationColorMode.EIGHT_COLOR,
 );
 
-const arbBackingColor = fc.constantFrom(
-  BackingColor.WHITE,
-  BackingColor.CYAN,
-  BackingColor.MAGENTA,
-  BackingColor.YELLOW,
-  BackingColor.RED,
-  BackingColor.BLUE,
-);
+const arbBackingThickness = fc.double({
+  min: -5,
+  max: 10,
+  noNaN: true,
+  noDefaultInfinity: true,
+});
 
 const arbCalibrationMutation = fc.record({
   color_mode: arbCalibrationColorMode,
@@ -164,7 +167,7 @@ const arbCalibrationMutation = fc.record({
     noDefaultInfinity: true,
   }),
   gap: fc.double({ min: -10, max: 10, noNaN: true, noDefaultInfinity: true }),
-  backing: arbBackingColor,
+  backing_thickness: arbBackingThickness,
   eight_color_full_export: fc.boolean(),
 });
 
@@ -228,7 +231,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
         calStore.setColorMode(mutation.color_mode);
         calStore.setBlockSize(mutation.block_size);
         calStore.setGap(mutation.gap);
-        calStore.setBacking(mutation.backing);
+        calStore.setBackingThickness(mutation.backing_thickness);
         calStore.setEightColorFullExport(mutation.eight_color_full_export);
 
         // Snapshot ConverterStore after mutation
@@ -240,7 +243,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
           gap: 0.84,
-          backing: BackingColor.WHITE,
+          backing_thickness: BACKING_THICKNESS_DEFAULT_MM,
           eight_color_full_export: false,
           singleStageLayerHeightMm: 0.08,
           isLoading: false,
@@ -328,7 +331,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
       block_size: 5,
       gap: 0.84,
-      backing: BackingColor.WHITE,
+      backing_thickness: BACKING_THICKNESS_DEFAULT_MM,
       eight_color_full_export: false,
       substrateId: "white",
       substrateDisplayName: "White",
@@ -363,7 +366,12 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       noNaN: true,
       noDefaultInfinity: true,
     }),
-    backing: arbBackingColor,
+    backing_thickness: fc.double({
+      min: BACKING_THICKNESS_MIN_MM,
+      max: BACKING_THICKNESS_MAX_MM,
+      noNaN: true,
+      noDefaultInfinity: true,
+    }),
     eight_color_full_export: fc.boolean(),
   });
 
@@ -375,7 +383,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
         store.setColorMode(state.color_mode);
         store.setBlockSize(state.block_size);
         store.setGap(state.gap);
-        store.setBacking(state.backing);
+        store.setBackingThickness(state.backing_thickness);
         store.setEightColorFullExport(state.eight_color_full_export);
 
         // Mock API to return success
@@ -400,7 +408,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
           callArgs.color_mode === currentState.color_mode &&
           callArgs.block_size === currentState.block_size &&
           callArgs.gap === currentState.gap &&
-          callArgs.backing === currentState.backing &&
+          callArgs.backing_thickness === currentState.backing_thickness &&
           callArgs.eight_color_full_export ===
             currentState.eight_color_full_export
         );

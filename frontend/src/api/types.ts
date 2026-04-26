@@ -453,7 +453,7 @@ export interface CalibrationGenerateRequest {
   color_mode: CalibrationColorMode;
   block_size: number;
   gap: number;
-  backing: BackingColor;
+  backing_thickness: number;
   eight_color_full_export: boolean;
 }
 
@@ -464,6 +464,7 @@ export interface CalibrationResponse {
   message: string;
   download_url: string;
   preview_url: string | null;
+  layer_urls: string[] | null;
 }
 
 export interface SingleStageJobSummary {

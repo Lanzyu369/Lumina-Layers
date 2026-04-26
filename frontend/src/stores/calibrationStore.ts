@@ -1,9 +1,6 @@
 import { create } from "zustand";
-import type { CalibrationColorMode, BackingColor } from "../api/types";
-import {
-  CalibrationColorMode as CalibrationColorModeEnum,
-  BackingColor as BackingColorEnum,
-} from "../api/types";
+import type { CalibrationColorMode } from "../api/types";
+import { CalibrationColorMode as CalibrationColorModeEnum } from "../api/types";
 import {
   calibrationGenerate,
   generateSingleStageKit,
@@ -12,6 +9,13 @@ import { clampValue } from "./converter";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
 const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
+
+/** Backing thickness slider bounds (mm). Mirrors the backend
+ * `MIN_BACKING_THICKNESS_MM` / `MAX_BACKING_THICKNESS_MM` constants. */
+export const BACKING_THICKNESS_MIN_MM = 0.4;
+export const BACKING_THICKNESS_MAX_MM = 3.5;
+export const BACKING_THICKNESS_STEP_MM = 0.08;
+export const BACKING_THICKNESS_DEFAULT_MM = 1.6;
 
 function normalizeSingleStageLayerHeight(value: number): number {
   return SINGLE_STAGE_LAYER_HEIGHT_OPTIONS.includes(
@@ -38,7 +42,7 @@ export interface CalibrationState {
   color_mode: CalibrationColorMode;
   block_size: number;
   gap: number;
-  backing: BackingColor;
+  backing_thickness: number;
   eight_color_full_export: boolean;
   substrateId: string;
   substrateDisplayName: string;
@@ -48,6 +52,7 @@ export interface CalibrationState {
   error: string | null;
   downloadUrl: string | null;
   previewImageUrl: string | null;
+  layerImageUrls: string[] | null;
   modelUrl: string | null;
   statusMessage: string | null;
   manifestUrl: string | null;
@@ -66,7 +71,7 @@ export interface CalibrationActions {
   setColorMode: (mode: CalibrationColorMode) => void;
   setBlockSize: (size: number) => void;
   setGap: (gap: number) => void;
-  setBacking: (color: BackingColor) => void;
+  setBackingThickness: (thickness: number) => void;
   setEightColorFullExport: (enabled: boolean) => void;
   setSubstrateId: (value: string) => void;
   setSubstrateDisplayName: (value: string) => void;
@@ -85,7 +90,7 @@ const DEFAULT_STATE: CalibrationState = {
   color_mode: CalibrationColorModeEnum.FOUR_COLOR_RYBW,
   block_size: 5,
   gap: 0.84,
-  backing: BackingColorEnum.WHITE,
+  backing_thickness: BACKING_THICKNESS_DEFAULT_MM,
   eight_color_full_export: false,
   substrateId: "white",
   substrateDisplayName: "White",
@@ -95,6 +100,7 @@ const DEFAULT_STATE: CalibrationState = {
   error: null,
   downloadUrl: null,
   previewImageUrl: null,
+  layerImageUrls: null,
   modelUrl: null,
   statusMessage: null,
   manifestUrl: null,
@@ -111,6 +117,7 @@ export const useCalibrationStore = create<
       workflow,
       downloadUrl: null,
       previewImageUrl: null,
+  layerImageUrls: null,
       manifestUrl: null,
       singleStageJobs: [],
       statusMessage: null,
@@ -130,7 +137,14 @@ export const useCalibrationStore = create<
 
   setGap: (gap: number) => set({ gap: clampValue(gap, 0.4, 2.0) }),
 
-  setBacking: (color: BackingColor) => set({ backing: color }),
+  setBackingThickness: (thickness: number) =>
+    set({
+      backing_thickness: clampValue(
+        thickness,
+        BACKING_THICKNESS_MIN_MM,
+        BACKING_THICKNESS_MAX_MM,
+      ),
+    }),
 
   setEightColorFullExport: (enabled: boolean) =>
     set({ eight_color_full_export: enabled }),
@@ -152,12 +166,13 @@ export const useCalibrationStore = create<
         color_mode: state.color_mode,
         block_size: state.block_size,
         gap: state.gap,
-        backing: state.backing,
+        backing_thickness: state.backing_thickness,
         eight_color_full_export: state.eight_color_full_export,
       });
       set({
         downloadUrl: response.download_url,
         previewImageUrl: response.preview_url ?? null,
+        layerImageUrls: response.layer_urls ?? null,
         modelUrl: null,
         manifestUrl: null,
         singleStageJobs: [],

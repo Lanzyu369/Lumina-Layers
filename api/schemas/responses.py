@@ -19,6 +19,7 @@ class CalibrationResponse(BaseModel):
     message: str
     download_url: str
     preview_url: Optional[str] = None
+    layer_urls: Optional[list[str]] = None
 
 
 class SingleStageJobResponse(BaseModel):

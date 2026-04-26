@@ -89,6 +89,18 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Maintain governance tests (`tests/test_logging_exception_governance_unit.py`, URL/resource contract guards) when changing logging, exception boundaries, or URL semantics
 - Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>` (transparent to `vitest run ...`); the wrapper binds the run to a Windows Job Object so the worker tree dies with the wrapper, and sweeps orphan fork workers before each run. This prevents the multi-GB fork-worker pile-up seen when agents repeatedly spawn `npx vitest run` and abort it. Watch mode (`run_realtime_tests.py`, `npm run test:watch:core`) is unaffected. The fork pool is also capped via `LUMINA_VITEST_MAX_FORKS` in `frontend/vite.config.ts` (default `2`)
 
+## Destructive Git Operations & Data Safety
+
+- Treat any of the following as destructive and protect data **before** running them: `git reset --hard`, `git checkout -- .`, `git clean`, `git stash drop`/`pop` (after rebases), `git rebase`, `git cherry-pick` paired with branch resets, `git switch -f`, force-pushes, and `git restore --worktree` over dirty paths
+- Before any destructive op on a dirty working tree, snapshot the worktree to a path **outside** the repo (e.g. `Copy-Item -Recurse <repo> <repo>.bak-YYYYMMDD-HHMM`) or at least `tar`/`zip` it; do not rely on `git stash` alone as a backup
+- Never trust `git stash -u` to preserve untracked files on Windows: stash creation can silently emit an empty untracked tree (sentinel `4b825dc6`), losing those files when the working tree is later overwritten by `reset --hard`. Untracked content is never in the object store, so reflog/fsck cannot recover it
+- For any file you care about that is currently untracked, run `git add -N <path>` or `git add <path>` (even without committing) to admit it into the object store **before** any destructive op; for ad-hoc scripts that must stay untracked, copy them outside the repo first
+- Never compose multi-step destructive git workflows into a single shell pipeline. Run **one git command at a time**, capture and verify output (file count, branch hash, working tree state) before the next step. PowerShell pipelines and complex one-liners truncate, swallow, or reorder stdout and make failed steps invisible
+- For all git stdout that needs inspection, use `cmd /c "git ... > logs\out.txt 2>&1"` byte-level redirection then read the file; do not rely on PowerShell pipes (`|`), `Out-File`, `Set-Content`, or terminal rendering for git output (these double-encode UTF-8 and may discard lines)
+- Before `reset --hard`, always print the current `git status --short` count and the target ref hash; refuse to proceed if either is unexpected
+- After any destructive op, immediately verify: tracked files via `git diff --stat`, untracked recovery via `git ls-files --others --exclude-standard`, and disk presence of any file you expected to keep; if anything is missing, stop and check `git fsck --unreachable` and IDE Local History (`%APPDATA%\Windsurf\User\History`) before further mutations
+- When a destructive op affects another agent's or the user's dirty work, ask first; do not assume `stash`/`pop` is round-trip safe across branch switches and cherry-picks
+
 ## Hygiene & Commits
 
 - Before implementing a feature request or bug fix, remind the user to register the planned change in the online tracking spreadsheet first — this ensures traceability and avoids duplicate or conflicting work

@@ -10,7 +10,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 import * as fc from "fast-check";
 import CalibrationPanel from "../components/CalibrationPanel";
 import { useCalibrationStore } from "../stores/calibrationStore";
-import { CalibrationColorMode, BackingColor } from "../api/types";
+import { CalibrationColorMode } from "../api/types";
 
 vi.mock("../api/calibration", () => ({
   calibrationGenerate: vi.fn(),
@@ -23,7 +23,7 @@ beforeEach(() => {
     color_mode: CalibrationColorMode.FOUR_COLOR_CMYW,
     block_size: 5,
     gap: 0.84,
-    backing: BackingColor.WHITE,
+    backing_thickness: 1.6,
     eight_color_full_export: false,
     singleStageLayerHeightMm: 0.08,
     isLoading: false,

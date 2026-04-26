@@ -1,0 +1,1050 @@
+{
+  "schema_version": "1.1",
+  "kind": "lumina_stage_a_material",
+  "material_name": "爱丽兹 PETG Basic 柠檬绿",
+  "brand": "爱丽兹",
+  "created_at": "2026-04-25T10:12:43.625481+00:00",
+  "updated_at": "2026-04-25T10:12:43.626305+00:00",
+  "stage_a_params_file": "stage_A_parameters.json",
+  "fit_summary": {
+    "substrate_count": 2,
+    "channel_count": 1,
+    "substrates": [
+      "black",
+      "white"
+    ],
+    "colors": [
+      "爱丽兹 PETG Basic 柠檬绿"
+    ],
+    "overall_validation": {
+      "mean_delta_e": 3.1524327743895824,
+      "max_delta_e": 14.546200141454147,
+      "rmse_linear": 0.02774291910160726,
+      "channel_rmse": [
+        0.027760418265403205,
+        0.037650662664982654,
+        0.01099069876998382
+      ],
+      "best_run_mean_delta_e": 3.1524327743895824,
+      "verification_count": 1
+    },
+    "warnings": [
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
+    ],
+    "orientation_ranking": {
+      "orientation_reliable": true,
+      "delta_e_gap": 3.1955,
+      "top_candidates": [
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "flip_horizontal",
+          "anchor_penalty": 0.000135,
+          "mean_delta_e": 3.1524,
+          "rmse_linear": 0.027743,
+          "max_delta_e": 14.5462
+        },
+        {
+          "white_orientation": "rotate_90_cw",
+          "black_orientation": "flip_horizontal",
+          "anchor_penalty": 0.002185,
+          "mean_delta_e": 6.3479,
+          "rmse_linear": 0.08124,
+          "max_delta_e": 27.9982
+        },
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "rotate_90_cw",
+          "anchor_penalty": 0.002315,
+          "mean_delta_e": 9.3991,
+          "rmse_linear": 0.08496,
+          "max_delta_e": 36.6665
+        },
+        {
+          "white_orientation": "rotate_90_cw",
+          "black_orientation": "rotate_90_cw",
+          "anchor_penalty": 0.004365,
+          "mean_delta_e": 12.4881,
+          "rmse_linear": 0.115123,
+          "max_delta_e": 35.7552
+        },
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "transpose",
+          "anchor_penalty": 0.050091,
+          "mean_delta_e": 11.8259,
+          "rmse_linear": 0.100672,
+          "max_delta_e": 66.4431
+        }
+      ],
+      "white_signal_strength": 0.34472,
+      "black_signal_strength": 0.22939,
+      "white_orientation_info": {
+        "signal_strength": 0.34472,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      },
+      "black_orientation_info": {
+        "signal_strength": 0.22939,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      }
+    }
+  },
+  "material_summary": {
+    "sample_count": 36,
+    "per_substrate_sample_count": 18,
+    "grid_rows": 3,
+    "grid_cols": 6,
+    "layer_height_mm": 0.08,
+    "warp_width_px": 1340,
+    "warp_height_px": 680,
+    "thickness_layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      25
+    ],
+    "sample_boxes": [
+      {
+        "row": 0,
+        "col": 0,
+        "x": 56,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 0
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "x": 276,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 1
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "x": 496,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 2
+      },
+      {
+        "row": 0,
+        "col": 3,
+        "x": 716,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 3
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "x": 936,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 4
+      },
+      {
+        "row": 0,
+        "col": 5,
+        "x": 1156,
+        "y": 56,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 5
+      },
+      {
+        "row": 1,
+        "col": 0,
+        "x": 56,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 6
+      },
+      {
+        "row": 1,
+        "col": 1,
+        "x": 276,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 7
+      },
+      {
+        "row": 1,
+        "col": 2,
+        "x": 496,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 8
+      },
+      {
+        "row": 1,
+        "col": 3,
+        "x": 716,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 9
+      },
+      {
+        "row": 1,
+        "col": 4,
+        "x": 936,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 10
+      },
+      {
+        "row": 1,
+        "col": 5,
+        "x": 1156,
+        "y": 276,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 11
+      },
+      {
+        "row": 2,
+        "col": 0,
+        "x": 56,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 12
+      },
+      {
+        "row": 2,
+        "col": 1,
+        "x": 276,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 13
+      },
+      {
+        "row": 2,
+        "col": 2,
+        "x": 496,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 14
+      },
+      {
+        "row": 2,
+        "col": 3,
+        "x": 716,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 15
+      },
+      {
+        "row": 2,
+        "col": 4,
+        "x": 936,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 16
+      },
+      {
+        "row": 2,
+        "col": 5,
+        "x": 1156,
+        "y": 496,
+        "width": 128,
+        "height": 128,
+        "thickness_layers": 25
+      }
+    ],
+    "white_zero_rgb": [
+      255,
+      255,
+      255
+    ],
+    "black_zero_rgb": [
+      27,
+      28,
+      29
+    ],
+    "estimated_rgb": [
+      128,
+      229,
+      94
+    ],
+    "estimated_k": [
+      5.018585,
+      2.039329,
+      11.399396
+    ],
+    "verification_count": 1
+  },
+  "source": {
+    "kit_manifest": {
+      "schema_version": "1.0",
+      "workflow": "single-stage-kit",
+      "substrate_id": "white",
+      "substrate_display_name": "White",
+      "material_default": "PLA Basic",
+      "dataset_layout": "{substrate_id}/{color_name}/",
+      "spec": {
+        "grid_cols": 6,
+        "grid_rows": 3,
+        "block_mm": 10.0,
+        "gap_mm": 1.0,
+        "margin_mm": 1.0,
+        "pixel_mm": 1.0,
+        "layer_height_mm": 0.08,
+        "base_mm": 1.0,
+        "max_step_layers": 25,
+        "step_layers": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          25
+        ],
+        "shrink_xy_mm": 0.02
+      },
+      "labelme": {
+        "required_labels": [
+          "ColorChecker",
+          "stage"
+        ],
+        "dataset_layout": "{substrate_id}/{color_name}/",
+        "color_source": "folder_name"
+      },
+      "shared_model_filename": "single_stage_white_20260425_174735.3mf",
+      "jobs": []
+    },
+    "white_corner_points": [
+      [
+        242,
+        810
+      ],
+      [
+        891,
+        810
+      ],
+      [
+        891,
+        1127
+      ],
+      [
+        252,
+        1138
+      ]
+    ],
+    "black_corner_points": [
+      [
+        899,
+        816
+      ],
+      [
+        1543,
+        805
+      ],
+      [
+        1543,
+        1127
+      ],
+      [
+        909,
+        1138
+      ]
+    ],
+    "white_detected_orientation": "flip_horizontal",
+    "black_detected_orientation": "flip_horizontal",
+    "white_detected_corner_order": [
+      1,
+      0,
+      3,
+      2
+    ],
+    "black_detected_corner_order": [
+      1,
+      0,
+      3,
+      2
+    ],
+    "white_orientation_info": {
+      "signal_strength": 0.34472,
+      "flat": false,
+      "manual_override": null,
+      "locked_to": null
+    },
+    "black_orientation_info": {
+      "signal_strength": 0.22939,
+      "flat": false,
+      "manual_override": null,
+      "locked_to": null
+    },
+    "orientation_ranking": {
+      "orientation_reliable": true,
+      "delta_e_gap": 3.1955,
+      "top_candidates": [
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "flip_horizontal",
+          "anchor_penalty": 0.000135,
+          "mean_delta_e": 3.1524,
+          "rmse_linear": 0.027743,
+          "max_delta_e": 14.5462
+        },
+        {
+          "white_orientation": "rotate_90_cw",
+          "black_orientation": "flip_horizontal",
+          "anchor_penalty": 0.002185,
+          "mean_delta_e": 6.3479,
+          "rmse_linear": 0.08124,
+          "max_delta_e": 27.9982
+        },
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "rotate_90_cw",
+          "anchor_penalty": 0.002315,
+          "mean_delta_e": 9.3991,
+          "rmse_linear": 0.08496,
+          "max_delta_e": 36.6665
+        },
+        {
+          "white_orientation": "rotate_90_cw",
+          "black_orientation": "rotate_90_cw",
+          "anchor_penalty": 0.004365,
+          "mean_delta_e": 12.4881,
+          "rmse_linear": 0.115123,
+          "max_delta_e": 35.7552
+        },
+        {
+          "white_orientation": "flip_horizontal",
+          "black_orientation": "transpose",
+          "anchor_penalty": 0.050091,
+          "mean_delta_e": 11.8259,
+          "rmse_linear": 0.100672,
+          "max_delta_e": 66.4431
+        }
+      ],
+      "white_signal_strength": 0.34472,
+      "black_signal_strength": 0.22939,
+      "white_orientation_info": {
+        "signal_strength": 0.34472,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      },
+      "black_orientation_info": {
+        "signal_strength": 0.22939,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      }
+    },
+    "spec": {
+      "grid_cols": 6,
+      "grid_rows": 3,
+      "block_mm": 10.0,
+      "gap_mm": 1.0,
+      "margin_mm": 1.0,
+      "pixel_mm": 1.0,
+      "layer_height_mm": 0.08,
+      "base_mm": 1.0,
+      "max_step_layers": 25,
+      "step_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        25
+      ],
+      "shrink_xy_mm": 0.02
+    }
+  },
+  "verification_count": 1,
+  "verification_runs": [
+    {
+      "captured_at": "2026-04-25T10:12:43.625504+00:00",
+      "params": {
+        "E": [
+          0.216724,
+          0.782085,
+          0.112598
+        ],
+        "k": [
+          5.018585,
+          2.039329,
+          11.399396
+        ],
+        "white_C0": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "black_C0": [
+          0.01096,
+          0.011612,
+          0.012286
+        ]
+      },
+      "fit_summary": {
+        "substrate_count": 2,
+        "channel_count": 1,
+        "substrates": [
+          "black",
+          "white"
+        ],
+        "colors": [
+          "PLA Basic"
+        ],
+        "overall_validation": {
+          "mean_delta_e": 3.1524327743895824,
+          "max_delta_e": 14.546200141454147,
+          "rmse_linear": 0.02774291910160726,
+          "channel_rmse": [
+            0.027760418265403205,
+            0.037650662664982654,
+            0.01099069876998382
+          ]
+        },
+        "warnings": [
+          "Stage A 拟合误差较高，请检查图像方向和角点选择。"
+        ],
+        "orientation_ranking": {
+          "orientation_reliable": true,
+          "delta_e_gap": 3.1955,
+          "top_candidates": [
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "flip_horizontal",
+              "anchor_penalty": 0.000135,
+              "mean_delta_e": 3.1524,
+              "rmse_linear": 0.027743,
+              "max_delta_e": 14.5462
+            },
+            {
+              "white_orientation": "rotate_90_cw",
+              "black_orientation": "flip_horizontal",
+              "anchor_penalty": 0.002185,
+              "mean_delta_e": 6.3479,
+              "rmse_linear": 0.08124,
+              "max_delta_e": 27.9982
+            },
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "rotate_90_cw",
+              "anchor_penalty": 0.002315,
+              "mean_delta_e": 9.3991,
+              "rmse_linear": 0.08496,
+              "max_delta_e": 36.6665
+            },
+            {
+              "white_orientation": "rotate_90_cw",
+              "black_orientation": "rotate_90_cw",
+              "anchor_penalty": 0.004365,
+              "mean_delta_e": 12.4881,
+              "rmse_linear": 0.115123,
+              "max_delta_e": 35.7552
+            },
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "transpose",
+              "anchor_penalty": 0.050091,
+              "mean_delta_e": 11.8259,
+              "rmse_linear": 0.100672,
+              "max_delta_e": 66.4431
+            }
+          ],
+          "white_signal_strength": 0.34472,
+          "black_signal_strength": 0.22939,
+          "white_orientation_info": {
+            "signal_strength": 0.34472,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          },
+          "black_orientation_info": {
+            "signal_strength": 0.22939,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          }
+        }
+      },
+      "material_summary": {
+        "sample_count": 36,
+        "per_substrate_sample_count": 18,
+        "grid_rows": 3,
+        "grid_cols": 6,
+        "layer_height_mm": 0.08,
+        "warp_width_px": 1340,
+        "warp_height_px": 680,
+        "thickness_layers": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          25
+        ],
+        "sample_boxes": [
+          {
+            "row": 0,
+            "col": 0,
+            "x": 56,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 0
+          },
+          {
+            "row": 0,
+            "col": 1,
+            "x": 276,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 1
+          },
+          {
+            "row": 0,
+            "col": 2,
+            "x": 496,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 2
+          },
+          {
+            "row": 0,
+            "col": 3,
+            "x": 716,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 3
+          },
+          {
+            "row": 0,
+            "col": 4,
+            "x": 936,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 4
+          },
+          {
+            "row": 0,
+            "col": 5,
+            "x": 1156,
+            "y": 56,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 5
+          },
+          {
+            "row": 1,
+            "col": 0,
+            "x": 56,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 6
+          },
+          {
+            "row": 1,
+            "col": 1,
+            "x": 276,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 7
+          },
+          {
+            "row": 1,
+            "col": 2,
+            "x": 496,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 8
+          },
+          {
+            "row": 1,
+            "col": 3,
+            "x": 716,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 9
+          },
+          {
+            "row": 1,
+            "col": 4,
+            "x": 936,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 10
+          },
+          {
+            "row": 1,
+            "col": 5,
+            "x": 1156,
+            "y": 276,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 11
+          },
+          {
+            "row": 2,
+            "col": 0,
+            "x": 56,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 12
+          },
+          {
+            "row": 2,
+            "col": 1,
+            "x": 276,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 13
+          },
+          {
+            "row": 2,
+            "col": 2,
+            "x": 496,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 14
+          },
+          {
+            "row": 2,
+            "col": 3,
+            "x": 716,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 15
+          },
+          {
+            "row": 2,
+            "col": 4,
+            "x": 936,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 16
+          },
+          {
+            "row": 2,
+            "col": 5,
+            "x": 1156,
+            "y": 496,
+            "width": 128,
+            "height": 128,
+            "thickness_layers": 25
+          }
+        ],
+        "white_zero_rgb": [
+          255,
+          255,
+          255
+        ],
+        "black_zero_rgb": [
+          27,
+          28,
+          29
+        ],
+        "estimated_rgb": [
+          128,
+          229,
+          94
+        ],
+        "estimated_k": [
+          5.018585,
+          2.039329,
+          11.399396
+        ]
+      },
+      "source": {
+        "kit_manifest": {
+          "schema_version": "1.0",
+          "workflow": "single-stage-kit",
+          "substrate_id": "white",
+          "substrate_display_name": "White",
+          "material_default": "PLA Basic",
+          "dataset_layout": "{substrate_id}/{color_name}/",
+          "spec": {
+            "grid_cols": 6,
+            "grid_rows": 3,
+            "block_mm": 10.0,
+            "gap_mm": 1.0,
+            "margin_mm": 1.0,
+            "pixel_mm": 1.0,
+            "layer_height_mm": 0.08,
+            "base_mm": 1.0,
+            "max_step_layers": 25,
+            "step_layers": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              25
+            ],
+            "shrink_xy_mm": 0.02
+          },
+          "labelme": {
+            "required_labels": [
+              "ColorChecker",
+              "stage"
+            ],
+            "dataset_layout": "{substrate_id}/{color_name}/",
+            "color_source": "folder_name"
+          },
+          "shared_model_filename": "single_stage_white_20260425_174735.3mf",
+          "jobs": []
+        },
+        "white_corner_points": [
+          [
+            242,
+            810
+          ],
+          [
+            891,
+            810
+          ],
+          [
+            891,
+            1127
+          ],
+          [
+            252,
+            1138
+          ]
+        ],
+        "black_corner_points": [
+          [
+            899,
+            816
+          ],
+          [
+            1543,
+            805
+          ],
+          [
+            1543,
+            1127
+          ],
+          [
+            909,
+            1138
+          ]
+        ],
+        "white_detected_orientation": "flip_horizontal",
+        "black_detected_orientation": "flip_horizontal",
+        "white_detected_corner_order": [
+          1,
+          0,
+          3,
+          2
+        ],
+        "black_detected_corner_order": [
+          1,
+          0,
+          3,
+          2
+        ],
+        "white_orientation_info": {
+          "signal_strength": 0.34472,
+          "flat": false,
+          "manual_override": null,
+          "locked_to": null
+        },
+        "black_orientation_info": {
+          "signal_strength": 0.22939,
+          "flat": false,
+          "manual_override": null,
+          "locked_to": null
+        },
+        "orientation_ranking": {
+          "orientation_reliable": true,
+          "delta_e_gap": 3.1955,
+          "top_candidates": [
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "flip_horizontal",
+              "anchor_penalty": 0.000135,
+              "mean_delta_e": 3.1524,
+              "rmse_linear": 0.027743,
+              "max_delta_e": 14.5462
+            },
+            {
+              "white_orientation": "rotate_90_cw",
+              "black_orientation": "flip_horizontal",
+              "anchor_penalty": 0.002185,
+              "mean_delta_e": 6.3479,
+              "rmse_linear": 0.08124,
+              "max_delta_e": 27.9982
+            },
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "rotate_90_cw",
+              "anchor_penalty": 0.002315,
+              "mean_delta_e": 9.3991,
+              "rmse_linear": 0.08496,
+              "max_delta_e": 36.6665
+            },
+            {
+              "white_orientation": "rotate_90_cw",
+              "black_orientation": "rotate_90_cw",
+              "anchor_penalty": 0.004365,
+              "mean_delta_e": 12.4881,
+              "rmse_linear": 0.115123,
+              "max_delta_e": 35.7552
+            },
+            {
+              "white_orientation": "flip_horizontal",
+              "black_orientation": "transpose",
+              "anchor_penalty": 0.050091,
+              "mean_delta_e": 11.8259,
+              "rmse_linear": 0.100672,
+              "max_delta_e": 66.4431
+            }
+          ],
+          "white_signal_strength": 0.34472,
+          "black_signal_strength": 0.22939,
+          "white_orientation_info": {
+            "signal_strength": 0.34472,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          },
+          "black_orientation_info": {
+            "signal_strength": 0.22939,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          }
+        },
+        "spec": {
+          "grid_cols": 6,
+          "grid_rows": 3,
+          "block_mm": 10.0,
+          "gap_mm": 1.0,
+          "margin_mm": 1.0,
+          "pixel_mm": 1.0,
+          "layer_height_mm": 0.08,
+          "base_mm": 1.0,
+          "max_step_layers": 25,
+          "step_layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            25
+          ],
+          "shrink_xy_mm": 0.02
+        }
+      }
+    }
+  ],
+  "aggregation": {
+    "method": "mean",
+    "aggregated_at": "2026-04-25T10:12:43.626305+00:00"
+  }
+}

@@ -16,7 +16,6 @@ from pydantic import BaseModel, ValidationError
 
 from api.schemas import (
     # Enums
-    BackingColor,
     CalibrationColorMode,
     ColorMode,
     ExtractorPage,
@@ -46,7 +45,12 @@ st_structure_mode = st.sampled_from(list(StructureMode))
 st_auto_height_mode = st.sampled_from(list(AutoHeightMode))
 st_calibration_color_mode = st.sampled_from(list(CalibrationColorMode))
 st_extractor_page = st.sampled_from(list(ExtractorPage))
-st_backing_color = st.sampled_from(list(BackingColor))
+st_backing_thickness = st.floats(
+    min_value=0.4,
+    max_value=3.5,
+    allow_nan=False,
+    allow_infinity=False,
+)
 
 # ---------------------------------------------------------------------------
 # Hypothesis strategies for hex color strings
@@ -239,7 +243,7 @@ def st_calibration_generate_request(draw: st.DrawFn) -> CalibrationGenerateReque
         color_mode=draw(st_calibration_color_mode),
         block_size=draw(st.integers(min_value=3, max_value=10)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
-        backing=draw(st_backing_color),
+        backing_thickness=draw(st_backing_thickness),
         eight_color_full_export=draw(st.booleans()),
     )
 
@@ -338,6 +342,7 @@ CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ExtractorExtractRequest, "offset_y", -30, 30),
     (CalibrationGenerateRequest, "block_size", 3, 10),
     (CalibrationGenerateRequest, "gap", 0.4, 2.0),
+    (CalibrationGenerateRequest, "backing_thickness", 0.4, 3.5),
 ]
 
 
@@ -415,7 +420,7 @@ ENUM_FIELD_MAP: Dict[str, List[str]] = {
     "ConvertPreviewRequest": ["color_mode", "modeling_mode"],
     "ConvertGenerateRequest": ["color_mode", "modeling_mode", "structure_mode"],
     "ExtractorExtractRequest": ["color_mode", "page"],
-    "CalibrationGenerateRequest": ["color_mode", "backing"],
+    "CalibrationGenerateRequest": ["color_mode"],
 }
 
 # Strategies for models with enum fields

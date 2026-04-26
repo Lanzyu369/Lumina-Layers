@@ -582,7 +582,7 @@ class CalibrationGenerateRequest(BaseModel):
     color_mode: CalibrationColorMode = Field(CalibrationColorMode.FOUR_COLOR)
     block_size: int = Field(5, ge=3, le=10, description="色块尺寸 (mm)")
     gap: float = Field(0.84, ge=0.4, le=2.0, description="色块间距 (mm)")
-    backing: BackingColor = Field(BackingColor.WHITE, description="底板颜色")
+    backing_thickness: float = Field(1.6, ge=0.4, le=3.5, description="底板厚度 (mm)")
 
 
 # ========== Extractor ==========

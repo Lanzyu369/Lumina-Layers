@@ -786,7 +786,7 @@ export default function GradientCardExtractPanel() {
           </section>
 </div>
 
-        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
               <div className="flex flex-col gap-1">
@@ -854,7 +854,7 @@ export default function GradientCardExtractPanel() {
               />
             </div>
           </div>
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col xl:[&>section]:flex-1 xl:[&>section]:min-h-0 xl:[&>section>div:last-child]:flex-1">
             <GradientCardCornerSelector
               title={t("mat_gradient_white_canvas_title")}
               hint={buildCornerHint(whiteCornerPoints.length)}
@@ -872,7 +872,7 @@ export default function GradientCardExtractPanel() {
           </div>
         </section>
 
-        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
               <div className="flex flex-col gap-1">
@@ -940,7 +940,7 @@ export default function GradientCardExtractPanel() {
               />
             </div>
           </div>
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col xl:[&>section]:flex-1 xl:[&>section]:min-h-0 xl:[&>section>div:last-child]:flex-1">
             <GradientCardCornerSelector
               title={t("mat_gradient_black_canvas_title")}
               hint={buildCornerHint(blackCornerPoints.length)}

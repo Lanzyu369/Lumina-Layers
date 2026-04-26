@@ -66,7 +66,7 @@ describe("Widget Workspace Layout", () => {
     render(<App />);
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
-    expect(screen.getByTestId("subtab-calibration")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Calibration Board" })).toBeInTheDocument();
     expect(screen.getByTestId("subtab-extractor")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-manager")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-details")).toBeInTheDocument();

@@ -52,6 +52,34 @@ EIGHT_COLOR_PADDING = 1
 EIGHT_COLOR_TOTAL_DIM = 39
 
 
+
+
+def _resolve_backing_layers(backing_thickness_mm=None) -> int:
+    thickness = float(backing_thickness_mm) if backing_thickness_mm is not None else float(PrinterConfig.BACKING_MM)
+    return max(1, int(thickness / PrinterConfig.LAYER_HEIGHT))
+
+def _generate_layer_previews(full_matrix, preview_colors, h, w, color_layers=5):
+    from PIL import Image
+    import numpy as np
+    preview_imgs = []
+    # Base top preview (composite)
+    bottom_layer = full_matrix[0].astype(np.uint8)
+    preview_arr = np.zeros((h, w, 3), dtype=np.uint8)
+    for mat_id, rgba in preview_colors.items():
+        preview_arr[bottom_layer == mat_id] = rgba[:3]
+    preview_imgs.append(Image.fromarray(preview_arr))
+    
+    for z in range(color_layers):
+        layer_arr = np.zeros((h, w, 4), dtype=np.uint8)
+        layer = full_matrix[z].astype(np.uint8)
+        for mat_id, rgba in preview_colors.items():
+            mask = layer == mat_id
+            layer_arr[mask, :3] = rgba[:3]
+            layer_arr[mask, 3] = 255
+        preview_imgs.append(Image.fromarray(layer_arr))
+    return preview_imgs
+
+
 def _generate_voxel_mesh(
     voxel_matrix: np.ndarray, material_index: int, grid_h: int, grid_w: int
 ) -> Optional[_get_trimesh().Trimesh]:
@@ -130,7 +158,7 @@ def _generate_voxel_mesh(
     return mesh
 
 
-def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: float, backing_color: str):
+def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: float, backing_color: str, backing_thickness_mm: float = None):
     """
     Generate a 1024-color calibration board as 3MF.
 
@@ -159,7 +187,7 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
     voxel_w = total_w * (pixels_per_block + pixels_gap)
     voxel_h = total_h * (pixels_per_block + pixels_gap)
 
-    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    backing_layers = _resolve_backing_layers(backing_thickness_mm)
     total_layers = PrinterConfig.COLOR_LAYERS + backing_layers
 
     full_matrix = np.full((total_layers, voxel_h, voxel_w), backing_id, dtype=int)
@@ -233,17 +261,14 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
         color_mode=color_mode,
     )
 
-    # Generate preview
-    bottom_layer = full_matrix[0].astype(np.uint8)
-    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
-    for mat_id, rgba in preview_colors.items():
-        preview_arr[bottom_layer == mat_id] = rgba[:3]
+    # Generate preview images
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
 
     Stats.increment("calibrations")
 
     return (
         output_path,
-        Image.fromarray(preview_arr),
+        preview_imgs,
         f"[OK] 校准板已生成！已组合为一个对象 | 颜色: {', '.join(slot_names)}",
     )
 
@@ -402,7 +427,7 @@ def generate_smart_board(
 
     # Layer configuration
     color_layers = 5
-    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    backing_layers = _resolve_backing_layers(backing_thickness_mm)
     total_layers = color_layers + backing_layers
 
     # Initialize voxel matrix (filled with White Slot 0)
@@ -488,11 +513,8 @@ def generate_smart_board(
         color_mode=color_mode_label,
     )
 
-    # Generate preview image
-    bottom_layer = full_matrix[0].astype(np.uint8)
-    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
-    for mat_id, rgba in preview_colors.items():
-        preview_arr[bottom_layer == mat_id] = rgba[:3]
+    # Generate preview images
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
 
     Stats.increment("calibrations")
 
@@ -500,7 +522,7 @@ def generate_smart_board(
 
     return (
         output_path,
-        Image.fromarray(preview_arr),
+        preview_imgs,
         f"✅ Smart 1296 (38x38 边框版) 生成完毕 | 尺寸：{board_w:.1f}mm | 颜色：{', '.join(slot_names)}",
     )
 
@@ -542,6 +564,7 @@ def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8):
         gap_mm=gap_mm,
         color_conf=ColorSystem.SIX_COLOR_RYBW,
         corner_colors=(0, 1, 3, 2),
+        backing_thickness_mm=backing_thickness_mm
     )
 
 
@@ -600,7 +623,7 @@ def _save_8color_recipe_json(
         max_color_layers=PrinterConfig.COLOR_LAYERS,
         layer_height_mm=PrinterConfig.LAYER_HEIGHT,
         line_width_mm=PrinterConfig.NOZZLE_WIDTH,
-        base_layers=int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT),
+        base_layers=_resolve_backing_layers(backing_thickness_mm),
         base_channel_idx=0,
         layer_order="Top2Bottom",
     )
@@ -636,13 +659,14 @@ def _generate_8color_board_artifacts(
     total_pages: int,
     block_size_mm: float,
     gap_mm: float,
+    backing_thickness_mm: float,
     calibration_type: str,
     export_variant: str,
 ):
     px_blk = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
     px_gap = max(1, int(gap_mm / PrinterConfig.NOZZLE_WIDTH))
     v_w = EIGHT_COLOR_TOTAL_DIM * (px_blk + px_gap)
-    full_matrix = np.full((5 + int(PrinterConfig.BACKING_MM / 0.08), v_w, v_w), 0, dtype=int)
+    full_matrix = np.full((5 + _resolve_backing_layers(backing_thickness_mm), v_w, v_w), 0, dtype=int)
     for i, stack in enumerate(stacks):
         r = (i // EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
         c = (i % EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
@@ -689,9 +713,7 @@ def _generate_8color_board_artifacts(
         },
         color_mode="8-Color",
     )
-    prev = np.zeros((v_w, v_w, 3), dtype=np.uint8)
-    for mid, col in conf["preview"].items():
-        prev[full_matrix[0] == mid] = col[:3]
+    preview_imgs = _generate_layer_previews(full_matrix, conf["preview"], v_w, v_w)
     json_path = _save_8color_recipe_json(
         out_path=out_path,
         stacks=stacks,
@@ -702,10 +724,10 @@ def _generate_8color_board_artifacts(
         total_pages=total_pages,
         export_variant=export_variant,
     )
-    return out_path, json_path, Image.fromarray(prev)
+    return out_path, json_path, preview_imgs
 
 
-def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
+def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
     """Generate the exhaustive 8-color calibration set as a multi-page ZIP.
     将全量 8 色校准配方导出为多页 ZIP。
 
@@ -731,6 +753,7 @@ def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0
             total_pages=total_pages,
             block_size_mm=block_size_mm,
             gap_mm=gap_mm,
+            backing_thickness_mm=backing_thickness_mm,
             calibration_type=calibration_type,
             export_variant="full",
         )
@@ -745,7 +768,7 @@ def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0
     return zip_path, preview, f"[OK] 8-Color Full Kit ({total_pages} Pages + JSON) Generated!"
 
 
-def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8):
+def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
     """Generate 8-color calibration board page as 3MF.
     生成 8 色校准板单页 3MF 模型。
 
@@ -771,13 +794,14 @@ def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_m
         total_pages=2,
         block_size_mm=block_size_mm,
         gap_mm=gap_mm,
+        backing_thickness_mm=backing_thickness_mm,
         calibration_type=f"{page_index + 1}号",
         export_variant="selected",
     )
     return out_path, preview, "OK"
 
 
-def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
+def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
     """Generate both compact 8-color pages and zip them with recipe JSON files.
     生成两页精简 8 色校准板，并连同配方 JSON 一起打包为 ZIP。
 
@@ -788,8 +812,8 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
     Returns:
         tuple: (zip_path, preview_image, status_message). (ZIP 路径、预览图、状态信息)
     """
-    f1, prev, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm)
-    f2, _, _ = generate_8color_board(1, block_size_mm=block_size_mm, gap_mm=gap_mm)
+    f1, prev, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm, backing_thickness_mm=backing_thickness_mm)
+    f2, _, _ = generate_8color_board(1, block_size_mm=block_size_mm, gap_mm=gap_mm, backing_thickness_mm=backing_thickness_mm)
 
     if not f1 or not f2:
         return None, None, "[ERROR] Generation failed"
@@ -809,7 +833,7 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
     return zip_path, prev, "[OK] 8-Color Kit (Page 1 & 2 + JSON) Generated!"
 
 
-def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White"):
+def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White", backing_thickness_mm: float = None):
     """
     Generate Black & White (2-Color) calibration board with 8x8 border layout.
 
@@ -860,7 +884,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
 
     # Layer configuration
     color_layers = 5
-    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    backing_layers = _resolve_backing_layers(backing_thickness_mm)
     total_layers = color_layers + backing_layers
 
     # Initialize voxel matrix (filled with White Slot 0)
@@ -946,11 +970,8 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
         color_mode="BW",
     )
 
-    # Generate preview image
-    bottom_layer = full_matrix[0].astype(np.uint8)
-    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
-    for mat_id, rgba in preview_colors.items():
-        preview_arr[bottom_layer == mat_id] = rgba[:3]
+    # Generate preview images
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
 
     Stats.increment("calibrations")
 
@@ -958,7 +979,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
 
     return (
         output_path,
-        Image.fromarray(preview_arr),
+        preview_imgs,
         f"✅ BW (8x8 边框版) 生成完毕 | 尺寸：{board_w:.1f}mm | 颜色：{', '.join(slot_names)}",
     )
 
@@ -1296,7 +1317,7 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
 
     # 5 color layers + white backing (Face-Down mode, same as 4-color mode)
     color_layers = 5
-    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    backing_layers = _resolve_backing_layers(backing_thickness_mm)
     total_layers = color_layers + backing_layers
 
     full_matrix = np.full((total_layers, voxel_h, voxel_w), 0, dtype=int)  # 0 = White backing
@@ -1377,7 +1398,7 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
 
     return (
         output_path,
-        Image.fromarray(preview_arr),
+        preview_imgs,
         f"✅ 5-Color Extended Page 1 (1024 colors) 生成完毕 | 尺寸：{board_w:.1f}mm",
     )
 
@@ -1425,7 +1446,7 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
 
     # 6 color layers + white backing (Face-Down mode, viewing surface at Z=0)
     color_layers = 6
-    backing_layers = int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    backing_layers = _resolve_backing_layers(backing_thickness_mm)
     total_layers = color_layers + backing_layers
 
     full_matrix = np.full((total_layers, voxel_h, voxel_w), 0, dtype=int)  # 0 = White backing
@@ -1499,12 +1520,12 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
 
     return (
         output_path,
-        Image.fromarray(preview_arr),
+        preview_imgs,
         f"✅ 5-Color Extended Page 2 (1444 colors) 生成完毕 | 尺寸：{board_w:.1f}mm",
     )
 
 
-def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8):
+def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
     """Generate both 5-color extended pages and zip them.
     生成两页 5 色扩展校准板并打包为 ZIP。
 

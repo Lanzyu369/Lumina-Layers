@@ -7,7 +7,6 @@ import {
   ExtractorColorMode,
   ExtractorPage,
   CalibrationColorMode,
-  BackingColor,
 } from "../api/types";
 
 // ========== Mock browser APIs ==========
@@ -149,7 +148,7 @@ function snapshotCalibrationState() {
     color_mode: s.color_mode,
     block_size: s.block_size,
     gap: s.gap,
-    backing: s.backing,
+    backing_thickness: s.backing_thickness,
     isLoading: s.isLoading,
     error: s.error,
     downloadUrl: s.downloadUrl,
@@ -696,12 +695,12 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         noNaN: true,
         noDefaultInfinity: true,
       }),
-      backing: fc.constantFrom(
-        BackingColor.WHITE,
-        BackingColor.CYAN,
-        BackingColor.MAGENTA,
-        BackingColor.YELLOW,
-      ),
+      backing_thickness: fc.double({
+        min: -5,
+        max: 10,
+        noNaN: true,
+        noDefaultInfinity: true,
+      }),
     });
 
     fc.assert(
@@ -712,7 +711,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         calStore.setColorMode(mutation.color_mode);
         calStore.setBlockSize(mutation.block_size);
         calStore.setGap(mutation.gap);
-        calStore.setBacking(mutation.backing);
+        calStore.setBackingThickness(mutation.backing_thickness);
 
         const after = snapshotExtractorState();
 
@@ -721,7 +720,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
           gap: 0.84,
-          backing: BackingColor.WHITE,
+          backing_thickness: 1.6,
           eight_color_full_export: false,
           singleStageLayerHeightMm: 0.08,
         });

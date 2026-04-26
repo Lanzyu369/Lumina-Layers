@@ -19,7 +19,11 @@ from hypothesis import strategies as st
 from pydantic import BaseModel
 
 from api.app import create_app
-from api.schemas.calibration import BackingColor, CalibrationGenerateRequest
+from api.schemas.calibration import (
+    MAX_BACKING_THICKNESS_MM,
+    MIN_BACKING_THICKNESS_MM,
+    CalibrationGenerateRequest,
+)
 from api.schemas.converter import (
     ColorMergePreviewRequest,
     ColorMode,
@@ -184,7 +188,12 @@ st_modeling_mode = st.sampled_from(list(ModelingMode))
 st_structure_mode = st.sampled_from(list(StructureMode))
 st_calibration_color_mode = st.sampled_from(list(CalibrationColorMode))
 st_extractor_page = st.sampled_from(list(ExtractorPage))
-st_backing_color = st.sampled_from(list(BackingColor))
+st_backing_thickness = st.floats(
+    min_value=MIN_BACKING_THICKNESS_MM,
+    max_value=MAX_BACKING_THICKNESS_MM,
+    allow_nan=False,
+    allow_infinity=False,
+)
 
 
 @st.composite
@@ -303,7 +312,7 @@ def st_calibration_generate_request(draw: st.DrawFn) -> Dict[str, Any]:
         color_mode=draw(st_calibration_color_mode),
         block_size=draw(st.integers(min_value=3, max_value=10)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
-        backing=draw(st_backing_color),
+        backing_thickness=draw(st_backing_thickness),
         eight_color_full_export=draw(st.booleans()),
     ).model_dump(mode="json")
 

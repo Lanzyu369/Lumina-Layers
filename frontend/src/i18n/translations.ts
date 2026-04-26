@@ -467,10 +467,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "间隙 (mm)",
     en: "Gap (mm)",
   },
-  cal_backing: {
-    zh: "底板颜色",
-    en: "Backing Color",
-  },
   cal_generate_btn: {
     zh: "生成",
     en: "Generate",
@@ -1645,8 +1641,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Management",
   },
   "tab.calibration": {
-    zh: "LUT校准",
-    en: "LUT Calibration",
+    zh: "生成校准板",
+    en: "Calibration Board",
   },
   "tab.extractor": {
     zh: "LUT提取",
@@ -1857,8 +1853,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== App Header ====================
   app_header_title: {
-    zh: "Lumina Studio 2.0",
-    en: "Lumina Studio 2.0",
+    zh: "Lumina Studio 2",
+    en: "Lumina Studio 2",
   },
   app_checking_backend: {
     zh: "正在检查后端…",
@@ -2472,8 +2468,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== About View ====================
   about_title: {
-    zh: "Lumina Studio 2.0",
-    en: "Lumina Studio 2.0",
+    zh: "Lumina Studio 2",
+    en: "Lumina Studio 2",
   },
   about_desc: {
     zh: "更多信息即将推出",
@@ -2505,17 +2501,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "颜色模式",
     en: "Color Mode",
   },
+  cal_color_mode_hint: {
+    zh: "选择要生成的校准板颜色模式。",
+    en: "Select the color mode for the calibration board.",
+  },
   cal_block_size_label: {
     zh: "色块尺寸",
     en: "Block Size",
+  },
+  cal_block_size_hint: {
+    zh: "定义单个色块的边长（毫米）。推荐值: 5.00mm。",
+    en: "Define the edge length of a single block (in mm). Recommended: 5.00mm.",
   },
   cal_gap_label: {
     zh: "色块间距",
     en: "Block Gap",
   },
-  cal_backing_label: {
-    zh: "底板颜色",
-    en: "Backing Color",
+  cal_gap_hint: {
+    zh: "定义相邻色块之间的间隙（毫米）。推荐值: 0.84mm。",
+    en: "Define the gap between adjacent blocks (in mm). Recommended: 0.84mm.",
+  },
+  cal_backing_thickness_label: {
+    zh: "底板厚度",
+    en: "Backing Thickness",
+  },
+  cal_backing_thickness_hint: {
+    zh: "调整底板层的物理厚度（毫米）。每一格对应一层打印层（0.08 mm），推荐值: 1.60 mm。",
+    en: "Adjust the backing layer thickness in millimeters. Each tick equals one print layer (0.08 mm); recommended: 1.60 mm.",
   },
   cal_generate_btn_panel: {
     zh: "生成校准板",
@@ -2551,9 +2563,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "颜色模式",
     en: "Color Mode",
   },
+  ext_color_mode_hint: {
+    zh: "选择与您打印的校准板对应的颜色模式。不同的模式会决定提取颜色时使用的色块数量和布局。",
+    en: "Select the color mode corresponding to your printed calibration board. This determines the number and layout of color blocks extracted.",
+  },
   ext_page_label: {
-    zh: "页码",
-    en: "Page",
+    zh: "校准板页码",
+    en: "Board Page",
+  },
+  ext_page_hint: {
+    zh: "选择当前上传照片对应的校准板页码。部分颜色模式（如 8色 或 5色扩展）由多张校准板组成。",
+    en: "Select the page number for the current photo. Some color modes (like 8-Color or 5-Color Extended) span multiple boards.",
   },
   ext_page_number_prefix: {
     zh: "",

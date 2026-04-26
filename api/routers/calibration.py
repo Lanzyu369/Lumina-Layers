@@ -56,52 +56,61 @@ def calibration_generate(
     生成可打印的校准板。
     """
     mode = request.color_mode.value
+    backing_thickness_mm = float(request.backing_thickness)
     try:
         if mode == "BW (Black & White)":
-            path, preview_img, status = generate_bw_calibration_board(
+            path, preview_imgs, status = generate_bw_calibration_board(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
-                backing_color=request.backing.value,
+                backing_color="White",
+                backing_thickness_mm=backing_thickness_mm,
             )
         elif mode == "4-Color (RYBW)":
-            path, preview_img, status = generate_calibration_board(
+            path, preview_imgs, status = generate_calibration_board(
                 color_mode="RYBW",
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
-                backing_color=request.backing.value,
+                backing_color="White",
+                backing_thickness_mm=backing_thickness_mm,
             )
         elif mode == "4-Color (CMYW)":
-            path, preview_img, status = generate_calibration_board(
+            path, preview_imgs, status = generate_calibration_board(
                 color_mode="CMYW",
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
-                backing_color=request.backing.value,
+                backing_color="White",
+                backing_thickness_mm=backing_thickness_mm,
             )
         elif mode == "6-Color (CMYWGK 1296)":
-            path, preview_img, status = generate_smart_board(
+            path, preview_imgs, status = generate_smart_board(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
+                backing_thickness_mm=backing_thickness_mm,
             )
         elif mode == "6-Color (RYBWGK 1296)":
-            path, preview_img, status = generate_smart_board_rybw(
+            path, preview_imgs, status = generate_smart_board_rybw(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
+                backing_thickness_mm=backing_thickness_mm,
             )
         elif mode == "8-Color Max":
             if request.eight_color_full_export:
-                path, preview_img, status = generate_8color_full_batch_zip(
+                path, preview_imgs, status = generate_8color_full_batch_zip(
                     block_size_mm=float(request.block_size),
                     gap_mm=request.gap,
+                    backing_thickness_mm=backing_thickness_mm,
                 )
             else:
-                path, preview_img, status = generate_8color_batch_zip(
+                path, preview_imgs, status = generate_8color_batch_zip(
                     block_size_mm=float(request.block_size),
                     gap_mm=request.gap,
+                    backing_thickness_mm=backing_thickness_mm,
                 )
         elif mode == "5-Color Extended (1444)":
-            path, preview_img, status = generate_5color_extended_batch_zip(
+            path, preview_imgs, status = generate_5color_extended_batch_zip(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
+                backing_thickness_mm=backing_thickness_mm,
             )
         else:
             raise HTTPException(
@@ -119,19 +128,44 @@ def calibration_generate(
         path,
         ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
     )
-    preview_bytes = pil_to_png_bytes(preview_img)
-    preview_id = registry.register_bytes(
-        sid,
-        preview_bytes,
-        "preview.png",
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
+    
+    preview_url = None
+    layer_urls = []
+    
+    if isinstance(preview_imgs, list) and len(preview_imgs) > 0:
+        main_preview = preview_imgs[0]
+        preview_id = registry.register_bytes(
+            sid,
+            pil_to_png_bytes(main_preview),
+            "preview.png",
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
+        preview_url = f"/api/files/{preview_id}"
+        
+        for idx, layer_img in enumerate(preview_imgs[1:]):
+            layer_id = registry.register_bytes(
+                sid,
+                pil_to_png_bytes(layer_img),
+                f"layer_{idx+1}.png",
+                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+            )
+            layer_urls.append(f"/api/files/{layer_id}")
+    elif preview_imgs is not None:
+        # Fallback for single image
+        preview_id = registry.register_bytes(
+            sid,
+            pil_to_png_bytes(preview_imgs),
+            "preview.png",
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
+        preview_url = f"/api/files/{preview_id}"
 
     return CalibrationResponse(
         status="ok",
         message=status,
         download_url=f"/api/files/{download_id}",
-        preview_url=f"/api/files/{preview_id}",
+        preview_url=preview_url,
+        layer_urls=layer_urls if layer_urls else None,
     )
 
 
