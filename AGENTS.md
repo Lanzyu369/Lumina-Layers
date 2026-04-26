@@ -57,6 +57,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 ## Frontend Rules
 
+- Frontend design specification: follow `DESIGN.md` (referenced, not duplicated here) as the authoritative source for visual language, layout, components, and interaction patterns; when in doubt, defer to `DESIGN.md` over ad-hoc styling
 - All user-facing strings must come from `frontend/src/i18n/translations.ts`
 - Support both light and dark themes via tokens/Tailwind vars; no raw UI colors like `#fff`, `bg-white`, or `text-black`
 - Keep frontend resource/file URLs as relative paths in state/domain logic; only normalization-focused tests may use absolute localhost inputs
@@ -89,11 +90,20 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 ## Hygiene & Commits
 
+- Before implementing a feature request or bug fix, remind the user to register the planned change in the online tracking spreadsheet first — this ensures traceability and avoids duplicate or conflicting work
 - Do not commit secrets, machine-local config, IDE junk, generated caches, or transient artifacts
 - `user_settings.json` is optional runtime data; code must tolerate missing or partial values safely
 - Use Conventional Commits: `<type>(<scope>): <subject>`
 - When commit bodies or PR descriptions are needed, write English first and Chinese second
 - Summaries should explain why, not just touched files
+
+## Git Push Safety
+
+- **Never push directly to `dev-refactor` or `main`** — these are protected long-lived branches; all changes must land via pull request
+- Always create a new feature/fix branch (e.g. `feat/xxx`, `fix/xxx`), push that branch, and open a PR against `dev-refactor`
+- **Never force-push (`push -f` / `--force`) to `dev-refactor` or `main`** — force-pushing a shared branch can silently overwrite others' work and break CI
+- If a force-push to a non-protected branch is absolutely necessary (e.g. rebasing a personal PR branch), always use `--force-with-lease` so the push is rejected if the remote has moved on
+- Before pushing, verify the target branch name; a mistaken `git push origin dev-refactor` instead of a feature branch is a hard-to-undo error
 
 ## In-App Announcement Maintenance
 
