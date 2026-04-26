@@ -5,6 +5,9 @@ interface SliderProps {
   label: string;
   value: number;
   min: number;
+  /** Optional data-testid forwarded to the underlying range input. */
+  /** 可选的 data-testid，转发给底层 range 输入。 */
+  "data-testid"?: string;
   max: number;
   step: number;
   onChange: (value: number) => void;
@@ -15,7 +18,8 @@ interface SliderProps {
   minInputWidthCh?: number;
 }
 
-export default function Slider({
+export default function Slider(props: SliderProps) {
+  const {
   label,
   value,
   min,
@@ -27,7 +31,8 @@ export default function Slider({
   tooltip,
   displayDecimals,
   minInputWidthCh,
-}: SliderProps) {
+  } = props;
+  const testId = props["data-testid"];
   // 输入框的本地文本状态，编辑时不立即同步外部 value
   const [inputText, setInputText] = useState(() => formatValue(value, step, displayDecimals));
   const [isFocused, setIsFocused] = useState(false);
@@ -127,6 +132,7 @@ export default function Slider({
           value={value}
           disabled={disabled}
           aria-label={label}
+          data-testid={testId}
           onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
           className={cx(
             "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",

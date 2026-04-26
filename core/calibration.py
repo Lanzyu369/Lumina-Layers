@@ -54,7 +54,7 @@ EIGHT_COLOR_TOTAL_DIM = 39
 
 
 
-def _resolve_backing_layers(backing_thickness_mm=None) -> int:
+def _resolve_backing_layers(backing_thickness_mm: Optional[float] = None) -> int:
     thickness = float(backing_thickness_mm) if backing_thickness_mm is not None else float(PrinterConfig.BACKING_MM)
     return max(1, int(thickness / PrinterConfig.LAYER_HEIGHT))
 
@@ -158,7 +158,7 @@ def _generate_voxel_mesh(
     return mesh
 
 
-def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: float, backing_color: str, backing_thickness_mm: float = None):
+def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: float, backing_color: str, backing_thickness_mm: Optional[float] = None):
     """
     Generate a 1024-color calibration board as 3MF.
 
@@ -659,7 +659,7 @@ def _generate_8color_board_artifacts(
     total_pages: int,
     block_size_mm: float,
     gap_mm: float,
-    backing_thickness_mm: float,
+    backing_thickness_mm: Optional[float],
     calibration_type: str,
     export_variant: str,
 ):
@@ -727,7 +727,7 @@ def _generate_8color_board_artifacts(
     return out_path, json_path, preview_imgs
 
 
-def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
+def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
     """Generate the exhaustive 8-color calibration set as a multi-page ZIP.
     将全量 8 色校准配方导出为多页 ZIP。
 
@@ -768,7 +768,7 @@ def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0
     return zip_path, preview, f"[OK] 8-Color Full Kit ({total_pages} Pages + JSON) Generated!"
 
 
-def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
+def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
     """Generate 8-color calibration board page as 3MF.
     生成 8 色校准板单页 3MF 模型。
 
@@ -801,7 +801,7 @@ def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_m
     return out_path, preview, "OK"
 
 
-def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
+def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
     """Generate both compact 8-color pages and zip them with recipe JSON files.
     生成两页精简 8 色校准板，并连同配方 JSON 一起打包为 ZIP。
 
@@ -833,7 +833,7 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, b
     return zip_path, prev, "[OK] 8-Color Kit (Page 1 & 2 + JSON) Generated!"
 
 
-def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White", backing_thickness_mm: float = None):
+def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White", backing_thickness_mm: Optional[float] = None):
     """
     Generate Black & White (2-Color) calibration board with 8x8 border layout.
 
@@ -1257,7 +1257,7 @@ def merge_5color_extended(base_lut_path, extended_lut_path, output_path=None):
     return rgb_array, stacks_array, output_path
 
 
-def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0):
+def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0, backing_thickness_mm: Optional[float] = None):
     """
     Generate 5-Color Extended calibration board with dual-page support.
 
@@ -1271,6 +1271,9 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0):
         block_size_mm: Size of each color block in mm
         gap_mm: Gap between blocks in mm
         page_index: 0 for base 1024, 1 for extended 1444
+        backing_thickness_mm: Optional backing layer thickness in mm. Falls
+            back to ``PrinterConfig.BACKING_MM`` when ``None``.
+            可选底板厚度 (mm)，``None`` 时回落到 ``PrinterConfig.BACKING_MM``。
 
     Returns:
         Tuple of (output_path, preview_image, status_message)
@@ -1289,13 +1292,13 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0):
 
     if page_index == 0:
         # Page 1: Base 1024 colors (5-layer, similar to 4-color mode)
-        return _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names)
+        return _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm)
     else:
         # Page 2: Extended 1444 colors (6-layer)
-        return _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names)
+        return _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm)
 
 
-def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names):
+def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm: Optional[float] = None):
     """Generate Page 1: Base 1024 colors (5-layer RYBW combinations)."""
     _log.info("[5C_EXT] Generating Base Page (1024 colors, 5-layer)...")
 
@@ -1403,7 +1406,7 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
     )
 
 
-def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names):
+def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm: Optional[float] = None):
     """Generate Page 2: Extended 1444 colors (6-layer with Black).
 
     Features:
@@ -1525,7 +1528,7 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
     )
 
 
-def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: float = None):
+def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
     """Generate both 5-color extended pages and zip them.
     生成两页 5 色扩展校准板并打包为 ZIP。
 
@@ -1536,8 +1539,18 @@ def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float
     Returns:
         tuple: (zip_path, preview_image, status_message). (ZIP 路径、预览图、状态信息)
     """
-    f1, _, _ = generate_5color_extended_board(block_size_mm=block_size_mm, gap_mm=gap_mm, page_index=0)
-    f2, _, _ = generate_5color_extended_board(block_size_mm=block_size_mm, gap_mm=gap_mm, page_index=1)
+    f1, _, _ = generate_5color_extended_board(
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        page_index=0,
+        backing_thickness_mm=backing_thickness_mm,
+    )
+    f2, _, _ = generate_5color_extended_board(
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        page_index=1,
+        backing_thickness_mm=backing_thickness_mm,
+    )
 
     if not f1 or not f2:
         return None, None, "❌ Generation failed"
@@ -1548,6 +1561,9 @@ def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float
         zf.write(f2, os.path.basename(f2))
 
     _, prev, _ = generate_5color_extended_board(
-        block_size_mm=block_size_mm, gap_mm=gap_mm, page_index=0
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        page_index=0,
+        backing_thickness_mm=backing_thickness_mm,
     )  # Show Page 1 as preview
     return zip_path, prev, "✅ 5-Color Extended Kit (Page 1 & 2) Generated!"

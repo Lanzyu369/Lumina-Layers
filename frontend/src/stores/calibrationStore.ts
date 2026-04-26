@@ -117,7 +117,7 @@ export const useCalibrationStore = create<
       workflow,
       downloadUrl: null,
       previewImageUrl: null,
-  layerImageUrls: null,
+      layerImageUrls: null,
       manifestUrl: null,
       singleStageJobs: [],
       statusMessage: null,
