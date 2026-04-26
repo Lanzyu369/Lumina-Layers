@@ -152,7 +152,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 22
+        assert len(sig.parameters) == 23
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -175,6 +175,7 @@ class TestParameterAnnotations:
             "hue_weight", "chroma_gate",
             "material_source", "selected_materials",
             "material_layer_count", "material_layer_height_mm",
+            "material_grid_resolution",
         }
         assert set(sig.parameters.keys()) == expected
 
