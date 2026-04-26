@@ -33,9 +33,11 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
-from config import PrinterConfig, ColorSystem
+from api.structured_logging import get_logger
+from config import PrinterConfig, ColorSystem, VectorConfig
 
 _log = logging.getLogger(__name__)
+_structured_log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
@@ -618,6 +620,7 @@ class VectorProcessor:
         self.parse_warnings: list[str] = []
         self.enable_fridge_magnet = False
         self.fridge_magnets: list = []
+        self.expand_stroke_to_fill = False
 
         _log.info("[VECTOR] Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
 
@@ -661,6 +664,49 @@ class VectorProcessor:
                 polys.append(Polygon(p.exterior, kept))
             return MultiPolygon(polys)
         return geom
+
+    @staticmethod
+    def _filter_slits(geom, min_slit_width_mm=0.1):
+        """Filter sub-threshold slit-like features from polygonal geometry."""
+        if geom is None or geom.is_empty:
+            return geom
+
+        try:
+            distance = float(min_slit_width_mm) / 2.0 + 1e-9
+        except (TypeError, ValueError):
+            distance = 0.05 + 1e-9
+        if distance <= 0:
+            return geom
+
+        try:
+            expanded = geom.buffer(distance)
+            closed = expanded.buffer(-distance)
+            if closed.is_empty:
+                return geom
+
+            opened = geom.buffer(-distance).buffer(distance)
+            result = closed
+            if (
+                not opened.is_empty
+                and VectorProcessor._polygon_component_count(opened)
+                > VectorProcessor._polygon_component_count(closed)
+            ):
+                result = opened
+
+            result = VectorProcessor._extract_polygonal_geometry(make_valid(result))
+            return result if result is not None and not result.is_empty else geom
+        except VECTOR_HANDLED_ERRORS:
+            return geom
+
+    @staticmethod
+    def _polygon_component_count(geom) -> int:
+        if geom is None or geom.is_empty:
+            return 0
+        if geom.geom_type == "Polygon":
+            return 1
+        if geom.geom_type == "MultiPolygon":
+            return len(geom.geoms)
+        return 0
 
     @staticmethod
     def _centered_mm_to_vector_coords(center_x_mm, center_y_mm, bbox, scale_factor):
@@ -1181,6 +1227,7 @@ class VectorProcessor:
         """
         _log.info("[VECTOR] Analyzing: %s", svg_path)
         stage_timings = {}
+        expand_stroke_to_fill = bool(getattr(self, "expand_stroke_to_fill", False))
 
         # === Stage 1+2: Parse & Occlusion clip (with cache) ===
         cache_key = None
@@ -1192,6 +1239,7 @@ class VectorProcessor:
                 svg_abs,
                 round(float(target_width_mm), 4),
                 round(float(self.sampling_precision), 4),
+                expand_stroke_to_fill,
                 svg_mtime,
             )
             cached_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
@@ -1211,7 +1259,16 @@ class VectorProcessor:
             _log.info("[VECTOR] After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
         else:
             t0 = time.perf_counter()
-            shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
+            had_parse_policy = hasattr(self, "_parse_expand_stroke_to_fill")
+            previous_parse_policy = getattr(self, "_parse_expand_stroke_to_fill", None)
+            self._parse_expand_stroke_to_fill = expand_stroke_to_fill
+            try:
+                shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
+            finally:
+                if had_parse_policy:
+                    self._parse_expand_stroke_to_fill = previous_parse_policy
+                else:
+                    delattr(self, "_parse_expand_stroke_to_fill")
             if not shape_data:
                 raise ValueError("No valid filled shapes found in SVG.")
             stage_timings["parse_s"] = time.perf_counter() - t0
@@ -1333,8 +1390,36 @@ class VectorProcessor:
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
+        min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
+        for idx, item in enumerate(clipped_shapes):
+            filtered_geometry = VectorProcessor._filter_backing_holes(
+                item["geometry"],
+                min_hole_area_mm2=min_hole_area_mm2,
+            )
+            item["geometry"] = filtered_geometry
+            if idx < len(matched_shapes):
+                matched_shapes[idx]["geometry"] = filtered_geometry
         stage_timings["color_match_s"] = time.perf_counter() - t0
         _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
+        legacy_stroke_only_shapes = sum(
+            1 for item in shape_data if item.get("source_kind") == "stroke_only"
+        )
+        fill_eq_stroke_double_buffer = sum(
+            1 for item in shape_data if item.get("same_color_stroke_double_buffer")
+        )
+        stroke_policy_message = (
+            "Stroke policy: "
+            f"expand={expand_stroke_to_fill} "
+            f"legacy_stroke_only_shapes={legacy_stroke_only_shapes} "
+            f"fill_eq_stroke_double_buffer={fill_eq_stroke_double_buffer}"
+        )
+        stroke_policy_extra = {
+            "event": "vector_stroke_policy",
+            "expand": expand_stroke_to_fill,
+            "legacy_stroke_only_shapes": legacy_stroke_only_shapes,
+            "fill_eq_stroke_double_buffer": fill_eq_stroke_double_buffer,
+        }
+        _structured_log.info(stroke_policy_message, extra=stroke_policy_extra)
 
         return VectorAnalysis(
             shape_data=shape_data,
@@ -2188,6 +2273,7 @@ class VectorProcessor:
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
+        parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
 
         def _sample_path_to_polygon(path_obj):
             try:
@@ -2377,7 +2463,7 @@ class VectorProcessor:
                 except Exception:
                     stroke_width = 0.0
             if not has_fill:
-                if has_stroke:
+                if has_stroke and parse_expand_stroke_to_fill:
                     stroke_modeled = False
                     if isinstance(element, Shape) and not isinstance(element, Path):
                         try:
@@ -2535,7 +2621,12 @@ class VectorProcessor:
                 continue
 
             # --- Fix 3: morphological closing ---
-            if has_stroke and fill_hex is not None:
+            same_color_stroke_double_buffer = False
+            if (
+                parse_expand_stroke_to_fill
+                and has_stroke
+                and fill_hex is not None
+            ):
                 stroke_hex = _color_object_to_hex(getattr(element, "stroke", None))
                 try:
                     stroke_width = float(getattr(element, "stroke_width", 0.0) or 0.0)
@@ -2554,6 +2645,7 @@ class VectorProcessor:
                         expanded = VectorProcessor._extract_polygonal_geometry(make_valid(expanded))
                         if expanded is not None and not expanded.is_empty:
                             result_poly = expanded
+                            same_color_stroke_double_buffer = True
                     except Exception:
                         pass
 
@@ -2568,6 +2660,7 @@ class VectorProcessor:
                     "color": rgb,
                     "source_kind": "fill",
                     "same_color_stroke": bool(has_stroke and stroke_hex == fill_hex and stroke_width > 0.0),
+                    "same_color_stroke_double_buffer": same_color_stroke_double_buffer,
                     "stroke_width_svg": float(stroke_width) if has_stroke else 0.0,
                 }
             )
@@ -2652,7 +2745,16 @@ class VectorProcessor:
 
             if shifted.is_empty or shifted.area <= min_area_svg:
                 continue
-            final_shapes.append({"poly": shifted, "color": item["color"]})
+            final_item = {"poly": shifted, "color": item["color"]}
+            for key in (
+                "source_kind",
+                "same_color_stroke",
+                "same_color_stroke_double_buffer",
+                "stroke_width_svg",
+            ):
+                if key in item:
+                    final_item[key] = item[key]
+            final_shapes.append(final_item)
 
         return final_shapes, scale_factor, (gx0, gy0, real_w, real_h)
 

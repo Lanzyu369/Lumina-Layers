@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm" viewBox="0 0 50 50">
+  <path
+    d="M 25 10
+       A 15 15 0 1 0 25 40
+       A 15 15 0 1 0 25 10 Z
+       M 25 22.5
+       A 2.5 2.5 0 1 1 25 27.5
+       A 2.5 2.5 0 1 1 25 22.5 Z"
+    fill="#0080ff"
+    fill-rule="evenodd"
+  />
+</svg>
