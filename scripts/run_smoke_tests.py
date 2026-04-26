@@ -57,15 +57,14 @@ def main() -> int:
     started_at = datetime.now()
     t0 = time.perf_counter()
     print(f"Smoke gate start: {started_at:%Y-%m-%d %H:%M:%S}")
+    vitest_wrapper = ROOT / "scripts" / "run_vitest.py"
     steps: list[tuple[list[str], Path | None, str]] = [
         ([sys.executable, "-m", "pytest", "tests", "-m", "smoke", "-q"], None, "Backend smoke failed"),
         (
             [
-                "npm",
-                "exec",
-                "--",
-                "vitest",
-                "--run",
+                sys.executable,
+                str(vitest_wrapper),
+                "run",
                 "src/__tests__/api-client.property.test.ts",
                 "src/__tests__/PuzzleSettings.test.tsx",
                 "src/__tests__/converter-store-cleanup.test.ts",

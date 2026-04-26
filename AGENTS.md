@@ -20,7 +20,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `cd frontend && npm run dev|build|lint`
 - `python -m pytest tests/ -v`
 - `python -m pytest tests/ --hypothesis-show-statistics`
-- `cd frontend && npx vitest --run`
+- `python scripts/run_vitest.py run` (preferred over `cd frontend && npx vitest --run`; see Tests rules)
 - `python scripts/run_smoke_tests.py`
 - `python scripts/run_full_tests.py`
 - `python scripts/run_realtime_tests.py --no-lint`
@@ -87,6 +87,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep gate layering: `smoke` for fast pre-push checks, `full` for release-level regression, `watch` for local feedback loops
 - Keep performance checks reproducible via `profile_stage3` + `check_perf_regression`; default regression decisions should use warm runs (run2/run3)
 - Maintain governance tests (`tests/test_logging_exception_governance_unit.py`, URL/resource contract guards) when changing logging, exception boundaries, or URL semantics
+- Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>` (transparent to `vitest run ...`); the wrapper binds the run to a Windows Job Object so the worker tree dies with the wrapper, and sweeps orphan fork workers before each run. This prevents the multi-GB fork-worker pile-up seen when agents repeatedly spawn `npx vitest run` and abort it. Watch mode (`run_realtime_tests.py`, `npm run test:watch:core`) is unaffected. The fork pool is also capped via `LUMINA_VITEST_MAX_FORKS` in `frontend/vite.config.ts` (default `2`)
 
 ## Hygiene & Commits
 
@@ -115,7 +116,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Use the canonical category vocabulary (keep order stable): zh `新功能` / en `New`, zh `颜色工作站` / en `Color Workstation`, zh `提取器（校色卡）` / en `Extractor (Calibration Card)`, zh `校准 & 材料` / en `Calibration & Materials`, zh `预览 & 交互` / en `Preview & Interaction`, zh `矢量化` / en `Vectorisation`, zh `稳定性` / en `Stability`; add a new category only when no existing one fits, and when adding, introduce both zh and en at once
 - Writing style: plain language on both sides — Chinese is the product voice first, English mirrors it naturally (not a literal gloss); one sentence per item, explain the user-visible outcome rather than the code path; no emoji, no PR/issue numbers, no internal module names
 - Keep `title` stable within a release cycle; only bump it when the marketing framing actually changes (bump both zh and en together)
-- After editing, run `cd frontend && npx tsc --noEmit` plus `npx vitest run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
+- After editing, run `cd frontend && npx tsc --noEmit` plus `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
 - Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) distill each into one bilingual bullet under the right category (write zh first, then mirror in en), (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
 
 你的思考和回复，都用中文！！！

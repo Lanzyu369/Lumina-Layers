@@ -26,5 +26,16 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/setupTests.ts",
+    // Memory cap: bound fork pool to avoid runaway memory when multiple
+    // vitest invocations stack up (especially from concurrent agent calls).
+    // Default would be `maxForks = CPU count` (~10 workers * ~1GB each).
+    // Override via env LUMINA_VITEST_MAX_FORKS if a release sweep needs more.
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        maxForks: Number(process.env.LUMINA_VITEST_MAX_FORKS ?? 2),
+        minForks: 1,
+      },
+    },
   },
 })
