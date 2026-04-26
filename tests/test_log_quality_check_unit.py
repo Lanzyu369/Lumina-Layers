@@ -1,0 +1,130 @@
+"""Unit tests for the log quality check helper functions."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from scripts.audit_logs import event_from_line, parse_json_object
+from scripts.log_quality_check import (
+    CheckResult,
+    _scan_log_file_for_governance_metrics,
+)
+
+
+def _write_json_lines(path: Path, payloads: list[dict[str, object]]) -> None:
+    lines = [json.dumps(payload, ensure_ascii=False) for payload in payloads]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def test_scan_empty_file_returns_zero_metrics(tmp_path: Path) -> None:
+    log_path = tmp_path / "empty.log"
+    log_path.write_text("", encoding="utf-8")
+
+    metrics = _scan_log_file_for_governance_metrics(log_path)
+
+    assert metrics["info_lines"] == 0
+    assert metrics["warning_lines"] == 0
+    assert metrics["error_lines"] == 0
+    assert metrics["catch_all_event_count"] == 0
+    assert metrics["ansi_field_count"] == 0
+    assert metrics["bracket_tag_message_count"] == 0
+    assert metrics["log_file_configured_count"] == 0
+
+
+def test_scan_counts_catch_all_request_log_event(tmp_path: Path) -> None:
+    log_path = tmp_path / "catch-all.log"
+    _write_json_lines(
+        log_path,
+        [{"level": "INFO", "event": "request_log", "message": "legacy bucket"}],
+    )
+
+    metrics = _scan_log_file_for_governance_metrics(log_path)
+
+    assert metrics["info_lines"] == 1
+    assert metrics["catch_all_event_count"] == 1
+
+
+def test_scan_counts_bracket_tag_message_prefix(tmp_path: Path) -> None:
+    log_path = tmp_path / "bracket.log"
+    _write_json_lines(
+        log_path,
+        [
+            {
+                "level": "INFO",
+                "event": "isolated_pixels_cleaned",
+                "message": "[ISOLATED_CLEANUP] removed pixels",
+            }
+        ],
+    )
+
+    metrics = _scan_log_file_for_governance_metrics(log_path)
+
+    assert metrics["bracket_tag_message_count"] == 1
+
+
+def test_scan_counts_json_escaped_ansi_sequences(tmp_path: Path) -> None:
+    log_path = tmp_path / "ansi.log"
+    _write_json_lines(
+        log_path,
+        [
+            {
+                "level": "INFO",
+                "event": "uvicorn",
+                "message": "\u001b[36mGET /api/health\u001b[0m",
+            }
+        ],
+    )
+
+    metrics = _scan_log_file_for_governance_metrics(log_path)
+
+    assert metrics["ansi_field_count"] == 1
+
+
+def test_scan_allows_client_log_event(tmp_path: Path) -> None:
+    log_path = tmp_path / "client.log"
+    _write_json_lines(
+        log_path,
+        [{"level": "INFO", "event": "client_log", "message": "frontend timing"}],
+    )
+
+    metrics = _scan_log_file_for_governance_metrics(log_path)
+
+    assert metrics["catch_all_event_count"] == 0
+
+
+def test_check_result_evaluate_marks_passing_threshold() -> None:
+    result = CheckResult.evaluate(
+        name="info_lines_within_budget",
+        actual=18,
+        operator="<=",
+        threshold=30,
+    )
+
+    assert result.passed is True
+    assert result.actual == 18
+    assert result.threshold == 30
+
+
+def test_check_result_evaluate_marks_failing_threshold() -> None:
+    result = CheckResult.evaluate(
+        name="no_unstructured_lines",
+        actual=1,
+        operator="==",
+        threshold=0,
+    )
+
+    assert result.passed is False
+
+
+def test_parse_json_object_accepts_prefixed_json() -> None:
+    payload = parse_json_object('INFO {"event":"worker_pool_started","level":"INFO"}')
+
+    assert payload == {"event": "worker_pool_started", "level": "INFO"}
+
+
+def test_event_from_line_reports_unstructured_lines() -> None:
+    event, structured = event_from_line("not-json")
+
+    assert event == "unstructured"
+    assert structured is False
