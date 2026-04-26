@@ -21,7 +21,7 @@ from api.schemas.five_color import (
     RecipeSwatchRequest,
     RecipeSwatchResponse,
 )
-from api.structured_logging import get_request_id
+from api.structured_logging import get_logger, get_request_id
 from core.five_color_combination import (
     ColorCountDetector,
     ColorQueryEngine,
@@ -33,6 +33,7 @@ from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/five-color", tags=["Five-Color"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
+log = get_logger(__name__)
 
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
@@ -45,7 +46,7 @@ def clear_engine_cache():
     """
     with _engine_cache_lock:
         _engine_cache.clear()
-    print("[FIVE_COLOR] Engine cache cleared")
+    log.info("Five-color engine cache cleared", extra={"event": "five_color_engine_cache_cleared"})
 
 
 @router.post("/clear-cache")
@@ -187,11 +188,25 @@ def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) 
 
     combinations = engine.stack_lut.tolist() if engine.stack_lut is not None else None
     
-    # Debug logging
     if engine.stack_lut is not None:
-        print(f"[DEBUG] Returning {len(engine.stack_lut)} combinations for {lut_name}")
+        log.debug(
+            "Five-color base colors loaded",
+            extra={
+                "event": "five_color_base_colors_loaded",
+                "lut_name": lut_name,
+                "combination_count": len(engine.stack_lut),
+                "color_count": len(colors),
+            },
+        )
     else:
-        print(f"[DEBUG] WARNING: stack_lut is None for {lut_name}")
+        log.warning(
+            "Five-color stack LUT missing",
+            extra={
+                "event": "five_color_stack_lut_missing",
+                "lut_name": lut_name,
+                "color_count": len(colors),
+            },
+        )
 
     return BaseColorsResponse(
         lut_name=display_name,

@@ -12,6 +12,8 @@ import itertools
 import json
 import numpy as np
 
+from api.structured_logging import get_logger
+
 from colormath.color_objects import sRGBColor, LabColor
 from colormath.color_conversions import convert_color
 from colormath.color_diff import delta_e_cie2000
@@ -40,6 +42,8 @@ try:
 except ImportError:
     LUTMetadata = None
     PaletteEntry = None
+
+log = get_logger(__name__)
 
 
 # Color mode size mapping
@@ -534,8 +538,9 @@ class LUTMerger:
             if select_extended_1444_colors:
                 ext_stacks = select_extended_1444_colors(base_stacks)
             else:
-                print(
-                    "⚠️ [LUT_MERGER] Warning: select_extended_1444_colors not found. Using linear fallback for 5C-EXT."
+                log.warning(
+                    "Extended color selector unavailable; using linear fallback",
+                    extra={"event": "lut_extended_selector_unavailable", "color_mode": "5-Color Extended"},
                 )
                 ext_stacks = []
                 for ext_idx in range(1444):
@@ -1070,7 +1075,15 @@ class LUTMerger:
 
                 LUTManager.save_npz_with_metadata(output_path, merged_rgb, merged_stacks, merged_metadata)
             except Exception as e:
-                print(f"[WARNING] Failed to save merged LUT with metadata: {e}")
+                log.warning(
+                    "Failed to save merged LUT metadata",
+                    extra={
+                        "event": "merged_lut_metadata_save_failed",
+                        "output_path": output_path,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
 
         return (merged_rgb, merged_stacks, stats)
 

@@ -10,8 +10,8 @@ P01 — 预览输入验证与参数规范化。
 - Merged LUT palette 提取和 preview_colors 构建
 """
 
+from api.structured_logging import get_logger
 import time
-import logging
 
 from config import ModelingMode, ColorSystem
 from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
@@ -23,7 +23,7 @@ from core.material_lut_synthesis import (
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from utils.lut_manager import LUTManager
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -65,7 +65,7 @@ def run(ctx: dict) -> dict:
     # ---- modeling_mode 规范化 ----
     if modeling_mode is None or modeling_mode == "none":
         modeling_mode = ModelingMode.HIGH_FIDELITY
-        _log.warning("[CONVERTER] modeling_mode was None, using default HIGH_FIDELITY")
+        _log.warning("modeling_mode was None, using default HIGH_FIDELITY")
     else:
         modeling_mode = ModelingMode(modeling_mode)
 
@@ -117,7 +117,7 @@ def run(ctx: dict) -> dict:
                 resolved_grid = requested_grid_int
             else:
                 _log.warning(
-                    "[P01] material_archive mode: ignoring unsupported "
+                    "material_archive mode: ignoring unsupported "
                     "material_grid_resolution=%r, falling back to default=%d",
                     requested_grid, int(DEFAULT_GRID_RESOLUTION),
                 )
@@ -126,8 +126,15 @@ def run(ctx: dict) -> dict:
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
         _log.info(
-            "[P01] material_archive mode: %d materials, %d layers, %.2f mm/layer, grid=%d",
+            "material_archive mode: %d materials, %d layers, %.2f mm/layer, grid=%d",
             len(materials), material_layer_count, material_layer_height, resolved_grid,
+            extra={
+                "event": "p01_material_archive_validated",
+                "count": len(materials),
+                "layer_count": material_layer_count,
+                "layer_height_mm": material_layer_height,
+                "grid_resolution": resolved_grid,
+            },
         )
         return ctx
 
@@ -166,17 +173,44 @@ def run(ctx: dict) -> dict:
                 ctx["layer_height_mm"] = getattr(lut_metadata, "layer_height_mm", None)
             if lut_metadata.palette:
                 slot_names, preview_colors = build_palette_preview_colors(lut_metadata.palette, color_conf)
-                _log.info(f"[P01] LUT/source: Using palette order: {slot_names}")
+                _log.debug(
+                    "LUT/source: Using palette order: %s",
+                    slot_names,
+                    extra={
+                        "event": "p01_lut_palette_order_loaded",
+                        "count": len(slot_names),
+                    },
+                )
                 for idx, entry in enumerate(lut_metadata.palette):
                     rgba = preview_colors[idx]
                     if entry.hex_color:
-                        _log.info(f"[P01] Material '{entry.color}' -> RGB{rgba[:3]} ({entry.hex_color})")
+                        _log.debug(
+                            "Material '%s' -> RGB%s (%s)",
+                            entry.color,
+                            rgba[:3],
+                            entry.hex_color,
+                            extra={
+                                "event": "p01_lut_palette_entry_loaded",
+                                "material": entry.color,
+                                "rgb": list(rgba[:3]),
+                                "hex_color": entry.hex_color,
+                            },
+                        )
                     else:
-                        _log.info(f"[P01] Material '{entry.color}' -> RGB{rgba[:3]} (derived from color_conf)")
+                        _log.debug(
+                            "Material '%s' -> RGB%s (derived from color_conf)",
+                            entry.color,
+                            rgba[:3],
+                            extra={
+                                "event": "p01_lut_palette_entry_loaded",
+                                "material": entry.color,
+                                "rgb": list(rgba[:3]),
+                            },
+                        )
             else:
-                _log.warning("[P01] Merged LUT has no palette, using default color_conf")
+                _log.warning("Merged LUT has no palette, using default color_conf")
         except (OSError, ValueError, TypeError, KeyError) as e:
-            _log.warning(f"[P01] Failed to extract palette from Merged LUT: {e}")
+            _log.warning(f"Failed to extract palette from Merged LUT: {e}")
 
     # ---- 写入输出 ----
     ctx["actual_lut_path"] = actual_lut_path
@@ -186,5 +220,14 @@ def run(ctx: dict) -> dict:
     ctx["slot_names"] = slot_names
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
-    _log.info(f"[P01] validation done: {_elapsed:.3f}s")
+    _log.info(
+        "validation done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "p01_validation_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "mode": str(color_mode),
+            "quantize_colors": int(quantize_colors),
+        },
+    )
     return ctx

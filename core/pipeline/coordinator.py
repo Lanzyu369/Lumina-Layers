@@ -8,9 +8,9 @@ Provides:
     - _run_vector_branch(ctx) -> ctx: SVG 矢量分支（内部使用）
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 import inspect
 
 import cv2
@@ -40,7 +40,7 @@ from core.pipeline import (
 from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
 from core.pipeline.pipeline_utils import extract_color_palette
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 COORDINATOR_HANDLED_ERRORS = (
     ValueError,
     TypeError,
@@ -195,10 +195,30 @@ def run_raster_pipeline(ctx: dict) -> dict:
             ctx = module.run(ctx)
         except COORDINATOR_HANDLED_ERRORS as exc:
             if optional:
-                log.warning(f"[COORDINATOR] Optional step {label} failed: {exc}")
+                log.warning(
+                    "Optional step %s failed: %s",
+                    label,
+                    exc,
+                    extra={
+                        "event": "pipeline_optional_step_failed",
+                        "step": label,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
             else:
                 ctx["error"] = f"[{label}] {exc}"
-                log.error(f"[COORDINATOR] Pipeline aborted at {label}: {exc}")
+                log.error(
+                    "Pipeline aborted at %s: %s",
+                    label,
+                    exc,
+                    extra={
+                        "event": "pipeline_aborted",
+                        "step": label,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 return ctx
         step_timings[label] = time.perf_counter() - t0
         if ctx.get("error"):
@@ -206,12 +226,19 @@ def run_raster_pipeline(ctx: dict) -> dict:
         _report_progress(ctx, prog_after)
 
     total_s = time.perf_counter() - pipeline_t0
-    log.info(f"\n{'=' * 60}")
-    log.info(f"[PIPELINE] S01-S12 completed in {total_s:.2f}s")
-    for label, elapsed in step_timings.items():
-        pct = elapsed / total_s * 100 if total_s > 0 else 0
-        log.info(f"  {label}: {elapsed:.2f}s ({pct:.1f}%)")
-    log.info(f"{'=' * 60}")
+    log.info(
+        "S01-S12 completed in %.2fs",
+        total_s,
+        extra={
+            "event": "pipeline_completed",
+            "duration_ms": round(total_s * 1000, 3),
+            "step_timings_ms": {
+                label: round(elapsed * 1000, 3)
+                for label, elapsed in step_timings.items()
+            },
+            "count": len(step_timings),
+        },
+    )
     ctx["_pipeline_total_s"] = total_s
     ctx["_step_timings"] = step_timings
 
@@ -263,12 +290,20 @@ def run_preview_pipeline(ctx: dict) -> dict:
         if ctx.get("error"):
             return ctx
         total_s = time.perf_counter() - pipeline_t0
-        log.info("\n%s", "=" * 60)
-        log.info("[PREVIEW] P01 + VectorPreview completed in %.2fs", total_s)
-        for label, elapsed in step_timings.items():
-            pct = elapsed / total_s * 100 if total_s > 0 else 0
-            log.info("  %s: %.2fs (%.1f%%)", label, elapsed, pct)
-        log.info("%s", "=" * 60)
+        log.info(
+            "P01 + VectorPreview completed in %.2fs",
+            total_s,
+            extra={
+                "event": "preview_pipeline_completed",
+                "duration_ms": round(total_s * 1000, 3),
+                "mode": "vector",
+                "step_timings_ms": {
+                    label: round(elapsed * 1000, 3)
+                    for label, elapsed in step_timings.items()
+                },
+                "count": len(step_timings),
+            },
+        )
         ctx["_preview_total_s"] = total_s
         ctx["_preview_step_timings"] = step_timings
         return ctx
@@ -281,10 +316,30 @@ def run_preview_pipeline(ctx: dict) -> dict:
             ctx = module.run(ctx)
         except COORDINATOR_HANDLED_ERRORS as exc:
             if optional:
-                log.warning(f"[COORDINATOR] Optional step {label} failed: {exc}")
+                log.warning(
+                    "Optional step %s failed: %s",
+                    label,
+                    exc,
+                    extra={
+                        "event": "preview_optional_step_failed",
+                        "step": label,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
             else:
                 ctx["error"] = f"[{label}] {exc}"
-                log.error(f"[COORDINATOR] Preview pipeline aborted at {label}: {exc}")
+                log.error(
+                    "Preview pipeline aborted at %s: %s",
+                    label,
+                    exc,
+                    extra={
+                        "event": "preview_pipeline_aborted",
+                        "step": label,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 return ctx
         step_timings[label] = time.perf_counter() - t0
         if ctx.get("error"):
@@ -292,12 +347,20 @@ def run_preview_pipeline(ctx: dict) -> dict:
         _report_progress(ctx, prog_after)
 
     total_s = time.perf_counter() - pipeline_t0
-    log.info(f"\n{'=' * 60}")
-    log.info(f"[PREVIEW] P01-P06 completed in {total_s:.2f}s")
-    for label, elapsed in step_timings.items():
-        pct = elapsed / total_s * 100 if total_s > 0 else 0
-        log.info(f"  {label}: {elapsed:.2f}s ({pct:.1f}%)")
-    log.info(f"{'=' * 60}")
+    log.info(
+        "P01-P06 completed in %.2fs",
+        total_s,
+        extra={
+            "event": "preview_pipeline_completed",
+            "duration_ms": round(total_s * 1000, 3),
+            "mode": "raster",
+            "step_timings_ms": {
+                label: round(elapsed * 1000, 3)
+                for label, elapsed in step_timings.items()
+            },
+            "count": len(step_timings),
+        },
+    )
     ctx["_preview_total_s"] = total_s
     ctx["_preview_step_timings"] = step_timings
 
@@ -376,7 +439,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         return ctx
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
-        log.exception("[COORDINATOR] Vector preview branch failed: %s", exc)
+        log.exception("Vector preview branch failed: %s", exc)
         return ctx
 
 
@@ -420,7 +483,7 @@ def _run_vector_branch(ctx: dict) -> dict:
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
 
-    log.info("[COORDINATOR] Using Native Vector Engine (Shapely/Clipper)...")
+    log.info("Using Native Vector Engine (Shapely/Clipper)...")
     vector_timing = {}
     vector_total_t0 = time.perf_counter()
 
@@ -464,7 +527,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     vector_region_masks = _pickle.load(f)
             except (OSError, EOFError, ValueError, TypeError, _pickle.PickleError) as exc:
                 log.warning(
-                    "[COORDINATOR] Failed to load recipe override masks for vector: %s",
+                    "Failed to load recipe override masks for vector: %s",
                     exc,
                 )
                 vector_region_masks = None
@@ -481,7 +544,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     )
                 except COORDINATOR_HANDLED_ERRORS as exc:
                     log.warning(
-                        "[COORDINATOR] Vector recipe override application failed: %s",
+                        "Vector recipe override application failed: %s",
                         exc,
                     )
 
@@ -543,12 +606,12 @@ def _run_vector_branch(ctx: dict) -> dict:
                 merged.metadata["name"] = first_slot
                 scene.geometry[first_slot] = merged
                 del scene.geometry["Board"]
-                log.info(f"[COORDINATOR] Vector: merged Board into '{first_slot}' (separate_backing=false)")
+                log.info(f"Vector: merged Board into '{first_slot}' (separate_backing=false)")
             else:
-                log.info("[COORDINATOR] Vector: Board exists but first slot not found, keeping Board as-is")
+                log.info("Vector: Board exists but first slot not found, keeping Board as-is")
         elif board_geom is not None and separate_backing:
             vec_preview_colors["Board"] = vec_preview_colors.get(0, [255, 255, 255, 255])
-            log.info("[COORDINATOR] Vector: keeping Board as separate backing (separate_backing=true)")
+            log.info("Vector: keeping Board as separate backing (separate_backing=true)")
 
         # 2. Export 3MF
         _report_progress(ctx, 0.72, "导出 3MF 中... | Exporting 3MF...")
@@ -562,7 +625,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             v_count = len(vertices) if vertices is not None else 0
             f_count = len(faces) if faces is not None else 0
             if v_count == 0 or f_count == 0:
-                log.info(f"[COORDINATOR] Skipping empty vector geometry '{geom_name}' (v={v_count}, f={f_count})")
+                log.info(f"Skipping empty vector geometry '{geom_name}' (v={v_count}, f={f_count})")
                 continue
             vec_slot_names.append(geom_name)
 
@@ -604,7 +667,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
         )
-        log.info(f"[COORDINATOR] Vector 3MF exported with Bambu metadata: {out_path}")
+        log.info(f"Vector 3MF exported with Bambu metadata: {out_path}")
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
 
         # 3. GLB preview
@@ -614,9 +677,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         try:
             glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
             scene.export(glb_path)
-            log.info(f"[COORDINATOR] Preview GLB exported: {glb_path}")
+            log.info(f"Preview GLB exported: {glb_path}")
         except COORDINATOR_HANDLED_ERRORS as e:
-            log.warning(f"[COORDINATOR] Preview generation skipped: {e}")
+            log.warning(f"Preview generation skipped: {e}")
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0
 
         # 4. 2D preview from analyzed geometry (same data as 3MF)
@@ -627,13 +690,13 @@ def _run_vector_branch(ctx: dict) -> dict:
         skip_heavy_preview = os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         if skip_heavy_preview or not need_2d_preview:
             reason = "env flag" if skip_heavy_preview else "caller does not need it"
-            log.info("[COORDINATOR] Skipping SVG 2D preview (%s)", reason)
+            log.info("Skipping SVG 2D preview (%s)", reason)
         else:
             try:
                 preview_img = VectorProcessor.render_preview(analysis, pixels_per_mm=10.0)
-                log.info("[COORDINATOR] Generated 2D vector preview from analyzed geometry")
+                log.info("Generated 2D vector preview from analyzed geometry")
             except COORDINATOR_HANDLED_ERRORS as e:
-                log.warning("[COORDINATOR] Failed to render vector preview: %s", e)
+                log.warning("Failed to render vector preview: %s", e)
         vector_timing["preview_2d_s"] = time.perf_counter() - preview_t0
 
         # 5. Stats & timing
@@ -649,7 +712,7 @@ def _run_vector_branch(ctx: dict) -> dict:
 
     except ModuleNotFoundError as e:
         error_msg = f"Vector processing failed: {e}"
-        log.error(f"[COORDINATOR] {error_msg}")
+        log.error(f"{error_msg}")
         ctx["error"] = error_msg
         return ctx
 
@@ -662,7 +725,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             "- Convert text to paths (Path -> Object to Path)\n"
             "- Or switch to 'High-Fidelity' mode for rasterization"
         )
-        log.exception(f"[COORDINATOR] {error_msg}")
+        log.exception(f"{error_msg}")
         ctx["error"] = error_msg
         return ctx
 
@@ -677,7 +740,7 @@ def _log_vector_timings(timings: dict) -> None:
     if not timings:
         return
     log.info(
-        "[COORDINATOR] Vector timings (s): "
+        "Vector timings (s): "
         f"parse={timings.get('parse_s', 0.0):.3f}, "
         f"clip={timings.get('occlusion_s', 0.0):.3f}, "
         f"match={timings.get('color_match_s', 0.0):.3f}, "

@@ -11,8 +11,8 @@ S01 — 输入验证、LUT 路径解析与颜色系统配置。
 - separate_backing 处理
 """
 
+from api.structured_logging import get_logger
 import time
-import logging
 
 from config import ColorSystem, ModelingMode
 from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
@@ -24,7 +24,7 @@ from core.material_lut_synthesis import (
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from utils.lut_manager import LUTManager
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 S01_HANDLED_ERRORS = (
     ValueError,
     TypeError,
@@ -122,19 +122,26 @@ def run(ctx: dict) -> dict:
                 resolved_grid = requested_grid_int
             else:
                 _log.warning(
-                    "[S01] material_archive mode: ignoring unsupported "
+                    "material_archive mode: ignoring unsupported "
                     "material_grid_resolution=%r, falling back to default=%d",
                     requested_grid, int(DEFAULT_GRID_RESOLUTION),
                 )
                 resolved_grid = int(DEFAULT_GRID_RESOLUTION)
         ctx["grid_resolution"] = resolved_grid
         _log.info(
-            "[S01] material_archive mode: %d materials (%s), %d layers, %.2f mm/layer, grid=%d",
+            "material_archive mode: %d materials (%s), %d layers, %.2f mm/layer, grid=%d",
             len(materials),
             slot_names,
             material_layer_count,
             material_layer_height,
             resolved_grid,
+            extra={
+                "event": "s01_material_archive_validated",
+                "count": len(materials),
+                "layer_count": material_layer_count,
+                "layer_height_mm": material_layer_height,
+                "grid_resolution": resolved_grid,
+            },
         )
         # Fall through to common backing/vector checks below
         # Need to set some defaults first
@@ -168,16 +175,25 @@ def run(ctx: dict) -> dict:
     try:
         separate_backing = bool(separate_backing) if separate_backing is not None else False
     except S01_HANDLED_ERRORS as e:
-        _log.warning(f"[S01] Error reading separate_backing checkbox state: {e}, using default (False)")
+        _log.warning(f"Error reading separate_backing checkbox state: {e}, using default (False)")
         separate_backing = False
 
     backing_color_id = ctx.get("backing_color_id", 0)
     if separate_backing:
         backing_color_id = -2
-        _log.info(f"[S01] Backing separation enabled: backing will be a separate object (white)")
+        _log.debug(
+            "Backing separation enabled: backing will be a separate object (white)",
+            extra={"event": "s01_backing_separation_resolved", "separate_backing": True},
+        )
     else:
-        _log.info(
-            f"[S01] Backing separation disabled: backing merged with first layer (backing_color_id={backing_color_id})"
+        _log.debug(
+            "Backing separation disabled: backing merged with first layer (backing_color_id=%s)",
+            backing_color_id,
+            extra={
+                "event": "s01_backing_separation_resolved",
+                "separate_backing": False,
+                "backing_color_id": backing_color_id,
+            },
         )
 
     ctx["separate_backing"] = separate_backing
@@ -200,14 +216,25 @@ def run(ctx: dict) -> dict:
             )
             return ctx
 
-    _log.info(f"[S01] Starting conversion...")
-    _log.info(f"[S01] Mode: {modeling_mode.get_display_name()}, Quantize: {ctx.get('quantize_colors', 32)}")
-    _log.info(f"[S01] Filters: blur_kernel={ctx.get('blur_kernel', 0)}, smooth_sigma={ctx.get('smooth_sigma', 10)}")
+    _log.debug(
+        "conversion parameters resolved",
+        extra={
+            "event": "s01_conversion_parameters_resolved",
+            "mode": modeling_mode.get_display_name(),
+            "quantize_colors": int(ctx.get("quantize_colors", 32)),
+            "blur_kernel": int(ctx.get("blur_kernel", 0)),
+            "smooth_sigma": int(ctx.get("smooth_sigma", 10)),
+        },
+    )
 
     # ---- 颜色系统配置 (LUT branch only) ----
     if material_source != "material_archive":
         actual_lut_path = ctx["actual_lut_path"]
-        _log.info(f"[S01] LUT: {actual_lut_path}")
+        _log.debug(
+            "LUT: %s",
+            actual_lut_path,
+            extra={"event": "s01_lut_path_resolved", "path": str(actual_lut_path)},
+        )
         color_conf = ColorSystem.get(color_mode)
 
         # For Merged LUTs, extract slot_names and preview_colors from LUT metadata.
@@ -222,18 +249,42 @@ def run(ctx: dict) -> dict:
                     ctx["layer_height_mm"] = getattr(lut_metadata, "layer_height_mm", None)
                 if lut_metadata.palette:
                     slot_names, preview_colors = build_palette_preview_colors(lut_metadata.palette, color_conf)
-                    _log.info(f"[S01] Source palette order: {slot_names}")
+                    _log.debug(
+                        "Source palette order: %s",
+                        slot_names,
+                        extra={"event": "s01_lut_palette_order_loaded", "count": len(slot_names)},
+                    )
                     for idx, entry in enumerate(lut_metadata.palette):
                         rgba = preview_colors[idx]
                         if entry.hex_color:
-                            _log.info(f"[S01] Material '{entry.color}' -> RGB{rgba[:3]} ({entry.hex_color})")
+                            _log.debug(
+                                "Material '%s' -> RGB%s (%s)",
+                                entry.color,
+                                rgba[:3],
+                                entry.hex_color,
+                                extra={
+                                    "event": "s01_lut_palette_entry_loaded",
+                                    "material": entry.color,
+                                    "rgb": list(rgba[:3]),
+                                    "hex_color": entry.hex_color,
+                                },
+                            )
                         else:
-                            _log.info(f"[S01] Material '{entry.color}' -> RGB{rgba[:3]} (derived from color_conf)")
+                            _log.debug(
+                                "Material '%s' -> RGB%s (derived from color_conf)",
+                                entry.color,
+                                rgba[:3],
+                                extra={
+                                    "event": "s01_lut_palette_entry_loaded",
+                                    "material": entry.color,
+                                    "rgb": list(rgba[:3]),
+                                },
+                            )
                 else:
                     slot_names = color_conf["slots"]
                     preview_colors = color_conf["preview"]
             except S01_HANDLED_ERRORS as e:
-                _log.warning(f"[S01] Failed to extract palette from Merged LUT: {e}")
+                _log.warning(f"Failed to extract palette from Merged LUT: {e}")
                 slot_names = color_conf["slots"]
                 preview_colors = color_conf["preview"]
         else:
@@ -246,18 +297,33 @@ def run(ctx: dict) -> dict:
 
     slot_names = ctx["slot_names"]
     preview_colors = ctx["preview_colors"]
-    _log.info(f"[S01] Final slot_names: {slot_names}")
-    _log.info(f"[S01] Final preview_colors keys: {list(preview_colors.keys())}")
+    _log.debug(
+        "final palette resolved",
+        extra={
+            "event": "s01_palette_resolved",
+            "slot_count": len(slot_names),
+            "preview_color_count": len(preview_colors),
+        },
+    )
 
     # ---- backing_color_id 范围校验 ----
     num_materials = len(slot_names)
     if backing_color_id != -2 and (backing_color_id < 0 or backing_color_id >= num_materials):
-        _log.warning(f"[S01] Invalid backing_color_id={backing_color_id}, using default (0)")
+        _log.warning(f"Invalid backing_color_id={backing_color_id}, using default (0)")
         ctx["backing_color_id"] = 0
 
     _elapsed = time.perf_counter() - _t0
     _hifi_timings = ctx.get("_hifi_timings", {})
     _hifi_timings["input_val_s"] = _elapsed
     ctx["_hifi_timings"] = _hifi_timings
-    _log.info(f"[S01] done: {_elapsed:.3f}s")
+    _log.info(
+        "done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "s01_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "mode": modeling_mode.get_display_name(),
+            "slot_count": len(slot_names),
+        },
+    )
     return ctx

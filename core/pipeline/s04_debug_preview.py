@@ -6,16 +6,16 @@ S04 — 调试预览图保存（可选步骤）。
 此步骤为 optional，失败不终止管道。
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 import numpy as np
 import cv2
 from PIL import Image
 
 from config import OUTPUT_DIR, ModelingMode
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _save_debug_preview(debug_data, material_matrix, mask_solid, image_path, mode_name, num_materials=4):
@@ -36,8 +36,8 @@ def _save_debug_preview(debug_data, material_matrix, mask_solid, image_path, mod
     quantized_image = debug_data["quantized_image"]
     num_colors = debug_data["num_colors"]
 
-    _log.info(f"[DEBUG_PREVIEW] Saving {mode_name} debug preview...")
-    _log.info(f"[DEBUG_PREVIEW] Quantized to {num_colors} colors")
+    _log.debug(f"Saving {mode_name} debug preview...")
+    _log.debug(f"Quantized to {num_colors} colors")
 
     debug_img = quantized_image.copy()
 
@@ -60,10 +60,10 @@ def _save_debug_preview(debug_data, material_matrix, mask_solid, image_path, mod
             cv2.drawContours(contour_overlay, contours, -1, (0, 0, 0), 1)
 
         debug_img = contour_overlay
-        _log.info(f"[DEBUG_PREVIEW] Contours drawn on preview")
+        _log.debug(f"Contours drawn on preview")
 
     except (cv2.error, ValueError, TypeError) as e:
-        _log.warning(f"[DEBUG_PREVIEW] Could not draw contours: {e}")
+        _log.warning(f"Could not draw contours: {e}")
 
     base_name = os.path.splitext(os.path.basename(image_path))[0]
     debug_path = os.path.join(OUTPUT_DIR, f"{base_name}_{mode_name}_Debug.png")
@@ -71,8 +71,8 @@ def _save_debug_preview(debug_data, material_matrix, mask_solid, image_path, mod
     debug_pil = Image.fromarray(debug_img, mode="RGB")
     debug_pil.save(debug_path, "PNG")
 
-    _log.info(f"[DEBUG_PREVIEW] Saved: {debug_path}")
-    _log.info(f"[DEBUG_PREVIEW] This is the EXACT image the vectorizer sees before meshing")
+    _log.debug(f"Saved: {debug_path}")
+    _log.debug(f"This is the EXACT image the vectorizer sees before meshing")
 
 
 def run(ctx: dict) -> dict:
@@ -108,11 +108,11 @@ def run(ctx: dict) -> dict:
                 num_materials=num_materials,
             )
         except (OSError, ValueError, TypeError, cv2.error) as e:
-            _log.warning(f"[S04] Failed to save debug preview: {e}")
+            _log.warning(f"Failed to save debug preview: {e}")
 
     _elapsed = time.perf_counter() - _t0
     _hifi_timings = ctx.get("_hifi_timings", {})
     _hifi_timings["debug_preview_s"] = _elapsed
     ctx["_hifi_timings"] = _hifi_timings
-    _log.info(f"[S04] debug_preview done: {_elapsed:.3f}s")
+    _log.info(f"debug_preview done: {_elapsed:.3f}s")
     return ctx

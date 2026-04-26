@@ -9,7 +9,10 @@ P02 — LUT 元数据加载与颜色系统配置。
 
 import time
 
+from api.structured_logging import get_logger
 from config import ColorSystem
+
+_log = get_logger(__name__)
 
 # Try to import LUTManager for metadata loading
 try:
@@ -45,7 +48,15 @@ def run(ctx: dict) -> dict:
         ctx["lut_metadata"] = None
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault('_preview_timings', {})['p02_s'] = _elapsed
-        print(f"[P02] material_archive mode, skipping LUT metadata: {_elapsed:.3f}s")
+        _log.info(
+            "material_archive mode, skipping LUT metadata: %.3fs",
+            _elapsed,
+            extra={
+                "event": "p02_material_archive_lut_metadata_skipped",
+                "duration_ms": round(_elapsed * 1000, 3),
+                "mode": str(color_mode),
+            },
+        )
         return ctx
 
     # ---- 颜色系统配置 ----
@@ -57,12 +68,30 @@ def run(ctx: dict) -> dict:
         try:
             _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
         except Exception as e:
-            print(f"[CONVERTER] Warning: Failed to load LUT metadata: {e}")
+            _log.warning(
+                "Warning: Failed to load LUT metadata: %s",
+                e,
+                extra={
+                    "event": "p02_lut_metadata_load_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "path": str(actual_lut_path),
+                },
+            )
 
     # ---- 写入输出 ----
     ctx['color_conf'] = color_conf
     ctx['lut_metadata'] = lut_metadata
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p02_s'] = _elapsed
-    print(f"[P02] lut_metadata done: {_elapsed:.3f}s")
+    _log.info(
+        "lut_metadata done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "p02_lut_metadata_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "mode": str(color_mode),
+            "has_metadata": lut_metadata is not None,
+        },
+    )
     return ctx

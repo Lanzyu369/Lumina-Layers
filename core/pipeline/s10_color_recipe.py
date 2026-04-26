@@ -8,15 +8,15 @@ S10 — 颜色配方报告生成（可选步骤）。
 - ColorRecipeLogger 调用
 """
 
-import logging
 import os
 import time
 
 import numpy as np
 
+from api.structured_logging import get_logger
 from config import OUTPUT_DIR
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -42,7 +42,7 @@ def run(ctx: dict) -> dict:
     processor = ctx.get('processor')
     if processor is None:
         ctx['color_recipe_path'] = None
-        _log.info("[S10] color recipe report skipped (no LUT processor; material-archive mode)")
+        _log.info("color recipe report skipped (no LUT processor; material-archive mode)")
         return ctx
 
     matched_rgb = ctx['matched_rgb']
@@ -76,11 +76,27 @@ def run(ctx: dict) -> dict:
                 metadata=lut_metadata,
             )
         except Exception as e:
-            print(f"[S10] Warning: Failed to generate color recipe report: {e}")
+            _log.warning(
+                "Warning: Failed to generate color recipe report: %s",
+                e,
+                extra={
+                    "event": "s10_color_recipe_report_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
     else:
-        print(
-            f"[S10] Skipping color recipe report: policy={recipe_policy}, "
-            f"solid_pixels={solid_pixels}, auto_max={recipe_auto_max_pixels}"
+        _log.info(
+            "Skipping color recipe report: policy=%s, solid_pixels=%s, auto_max=%s",
+            recipe_policy,
+            solid_pixels,
+            recipe_auto_max_pixels,
+            extra={
+                "event": "s10_color_recipe_report_skipped",
+                "policy": recipe_policy,
+                "solid_pixels": solid_pixels,
+                "auto_max_pixels": recipe_auto_max_pixels,
+            },
         )
 
     ctx['color_recipe_path'] = color_recipe_path
@@ -89,5 +105,14 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get('_hifi_timings', {})
     _hifi_timings['color_recipe_s'] = _elapsed
     ctx['_hifi_timings'] = _hifi_timings
-    print(f"[S10] color_recipe done: {_elapsed:.3f}s")
+    _log.info(
+        "color_recipe done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "s10_color_recipe_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "recipe_enabled": bool(enable_recipe),
+            "has_recipe_path": color_recipe_path is not None,
+        },
+    )
     return ctx

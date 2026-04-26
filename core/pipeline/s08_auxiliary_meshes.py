@@ -12,9 +12,9 @@ S08 — 附加网格生成（底板、掐丝、自由颜色、挂件环、涂层
 - _generate_outline_mesh / _parse_outline_slot 辅助函数
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 
 import cv2
 import numpy as np
@@ -35,7 +35,7 @@ S08_HANDLED_ERRORS = (
     cv2.error,
 )
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 # ========== Helper Functions ==========
 
@@ -90,8 +90,8 @@ def _generate_outline_mesh(
     # Convert thickness from mm to layers
     outline_layers = max(1, int(round(outline_thickness_mm / PrinterConfig.LAYER_HEIGHT)))
 
-    _log.info(
-        f"[OUTLINE] Width: {outline_width_mm}mm = {outline_width_px}px, "
+    _log.debug(
+        f"Width: {outline_width_mm}mm = {outline_width_px}px, "
         f"Thickness: {outline_thickness_mm}mm = {outline_layers} layers"
     )
 
@@ -116,11 +116,11 @@ def _generate_outline_mesh(
     h_original = mask_solid.shape[0]
 
     if not np.any(ring_mask):
-        _log.info(f"[OUTLINE] Ring mask is empty, skipping")
+        _log.debug(f"Ring mask is empty, skipping")
         return None
 
     ring_pixel_count = np.sum(ring_mask)
-    _log.info(f"[OUTLINE] Ring mask: {ring_pixel_count} pixels")
+    _log.debug(f"Ring mask: {ring_pixel_count} pixels")
 
     # Use greedy rectangle merging to generate optimized mesh
     processed = np.zeros_like(ring_mask, dtype=bool)
@@ -199,7 +199,7 @@ def _generate_outline_mesh(
     mesh.merge_vertices()
     mesh.update_faces(mesh.unique_faces())
 
-    _log.info(f"[OUTLINE] Generated outline mesh: {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
+    _log.debug(f"Generated outline mesh: {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
     return mesh
 
 
@@ -305,17 +305,17 @@ def run(ctx: dict) -> dict:
     # ========== Separate Backing Mesh ==========
     if separate_backing:
         _s08_t_backing = time.perf_counter()
-        _log.info(f"[S08] Attempting to generate separate backing mesh (mat_id=-2)...")
+        _log.debug(f"Attempting to generate separate backing mesh (mat_id=-2)...")
         try:
             backing_mesh = mesher.generate_mesh(full_matrix, mat_id=-2, height_px=target_h)
 
-            _log.info(f"[S08] Backing mesh result: {backing_mesh}")
+            _log.debug(f"Backing mesh result: {backing_mesh}")
             if backing_mesh is not None:
-                _log.info(f"[S08] Backing mesh vertices: {len(backing_mesh.vertices)}")
+                _log.debug(f"Backing mesh vertices: {len(backing_mesh.vertices)}")
 
             if backing_mesh is None or len(backing_mesh.vertices) == 0:
-                _log.warning("[S08] Backing mesh is empty, skipping separate backing object")
-                _log.info(f"[S08] Continuing with other material meshes...")
+                _log.warning("Backing mesh is empty, skipping separate backing object")
+                _log.debug(f"Continuing with other material meshes...")
             else:
                 backing_mesh.apply_transform(transform)
 
@@ -327,20 +327,20 @@ def run(ctx: dict) -> dict:
                 backing_mesh.metadata["name"] = backing_name
                 scene.add_geometry(backing_mesh, node_name=backing_name, geom_name=backing_name)
                 valid_slot_names.append(backing_name)
-                _log.info(f"[S08] Added backing mesh as separate object (white)")
-                _log.info(f"[S08] Scene now has {len(scene.geometry)} geometries")
+                _log.debug(f"Added backing mesh as separate object (white)")
+                _log.debug(f"Scene now has {len(scene.geometry)} geometries")
         except S08_HANDLED_ERRORS as e:
-            _log.exception(f"[S08] Error generating backing mesh: {e}")
-            _log.info(f"[S08] Continuing with other material meshes...")
+            _log.exception(f"Error generating backing mesh: {e}")
+            _log.debug(f"Continuing with other material meshes...")
     else:
-        _log.info(f"[S08] Backing merged with first layer (original behavior)")
+        _log.debug(f"Backing merged with first layer (original behavior)")
     if separate_backing:
-        _log.info(f"[S08] backing: {time.perf_counter() - _s08_t_backing:.3f}s")
+        _log.debug(f"backing: {time.perf_counter() - _s08_t_backing:.3f}s")
 
     # ========== Cloisonné Wire Mesh ==========
     if enable_cloisonne and backing_metadata.get("is_cloisonne"):
         _s08_t_wire = time.perf_counter()
-        _log.info(f"[S08] Generating cloisonné wire mesh (mat_id=-3)...")
+        _log.debug(f"Generating cloisonné wire mesh (mat_id=-3)...")
         try:
             wire_mesh = mesher.generate_mesh(full_matrix, mat_id=-3, height_px=target_h)
             if wire_mesh is not None and len(wire_mesh.vertices) > 0:
@@ -350,19 +350,19 @@ def run(ctx: dict) -> dict:
                 wire_mesh.metadata["name"] = wire_name
                 scene.add_geometry(wire_mesh, node_name=wire_name, geom_name=wire_name)
                 valid_slot_names.append(wire_name)
-                _log.info(f"[S08] Added wire mesh as standalone object ({len(wire_mesh.vertices)} verts)")
+                _log.debug(f"Added wire mesh as standalone object ({len(wire_mesh.vertices)} verts)")
             else:
-                _log.warning("[S08] Wire mesh is empty, skipping")
+                _log.warning("Wire mesh is empty, skipping")
         except S08_HANDLED_ERRORS as e:
-            _log.exception(f"[S08] Error generating wire mesh: {e}")
-        _log.info(f"[S08] wire: {time.perf_counter() - _s08_t_wire:.3f}s")
+            _log.exception(f"Error generating wire mesh: {e}")
+        _log.debug(f"wire: {time.perf_counter() - _s08_t_wire:.3f}s")
 
     # ========== Free Color Mesh Extraction ==========
     if free_color_set:
         _s08_t_free = time.perf_counter()
         _free_set = {c.lower() for c in free_color_set if c}
         if _free_set:
-            _log.info(f"[S08] Free Color mode: {len(_free_set)} colors marked")
+            _log.debug(f"Free Color mode: {len(_free_set)} colors marked")
             for hex_c in sorted(_free_set):
                 try:
                     # Parse hex to RGB
@@ -377,7 +377,7 @@ def run(ctx: dict) -> dict:
                         & mask_solid
                     )
                     if not np.any(color_mask):
-                        _log.info(f"[S08]   {hex_c}: no pixels found, skipping")
+                        _log.debug(f"{hex_c}: no pixels found, skipping")
                         continue
                     # Build a sub-voxel matrix: keep only this color's voxels
                     fc_matrix = np.where(
@@ -393,12 +393,12 @@ def run(ctx: dict) -> dict:
                         fc_mesh.metadata["name"] = fc_name
                         scene.add_geometry(fc_mesh, node_name=fc_name, geom_name=fc_name)
                         valid_slot_names.append(fc_name)
-                        _log.info(f"[S08]   {hex_c} -> standalone object '{fc_name}' ({np.sum(color_mask)} px)")
+                        _log.debug(f"{hex_c} -> standalone object '{fc_name}' ({np.sum(color_mask)} px)")
                     else:
-                        _log.info(f"[S08]   {hex_c}: mesh empty, skipping")
+                        _log.debug(f"{hex_c}: mesh empty, skipping")
                 except S08_HANDLED_ERRORS as e:
-                    _log.exception(f"[S08] Error extracting free color {hex_c}: {e}")
-        _log.info(f"[S08] free_color: {time.perf_counter() - _s08_t_free:.3f}s")
+                    _log.exception(f"Error extracting free color {hex_c}: {e}")
+        _log.debug(f"free_color: {time.perf_counter() - _s08_t_free:.3f}s")
 
     # ========== Keychain Loop ==========
     if add_loop and loop_info is not None:
@@ -421,17 +421,17 @@ def run(ctx: dict) -> dict:
                 scene.add_geometry(loop_mesh, node_name="Keychain_Loop", geom_name="Keychain_Loop")
                 valid_slot_names.append("Keychain_Loop")
                 loop_added = True
-                _log.info(f"[S08] Loop added successfully")
+                _log.debug(f"Loop added successfully")
         except S08_HANDLED_ERRORS as e:
-            _log.warning(f"[S08] Loop creation failed: {e}")
-        _log.info(f"[S08] loop: {time.perf_counter() - _s08_t_loop:.3f}s")
+            _log.warning(f"Loop creation failed: {e}")
+        _log.debug(f"loop: {time.perf_counter() - _s08_t_loop:.3f}s")
 
     # ========== Coating Mesh ==========
     if enable_coating:
         _s08_t_coating = time.perf_counter()
         try:
             coating_layers = max(1, int(round(coating_height_mm / PrinterConfig.LAYER_HEIGHT)))
-            _log.info(f"[S08] Generating coating: height={coating_height_mm}mm ({coating_layers} layers), bottom side")
+            _log.debug(f"Generating coating: height={coating_height_mm}mm ({coating_layers} layers), bottom side")
             if boundary_geometry is not None:
                 coating_mesh = _generate_boundary_fill_mesh(
                     mesher=mesher,
@@ -446,7 +446,7 @@ def run(ctx: dict) -> dict:
 
                 # If outline is enabled, extend coating to cover outline area as well
                 if enable_outline:
-                    _log.info(f"[S08] Extending coating to cover outline area (width={outline_width}mm)")
+                    _log.debug(f"Extending coating to cover outline area (width={outline_width}mm)")
                     outline_width_px = max(1, int(round(outline_width / pixel_scale)))
                     kernel = np.ones((3, 3), np.uint8)
                     mask_uint8 = mask_solid.astype(np.uint8) * 255
@@ -473,12 +473,12 @@ def run(ctx: dict) -> dict:
                 coating_mesh.metadata["name"] = coating_name
                 scene.add_geometry(coating_mesh, node_name=coating_name, geom_name=coating_name)
                 valid_slot_names.append(coating_name)
-                _log.info(f"[S08] Coating added as standalone '{coating_name}' ({coating_layers} layers)")
+                _log.debug(f"Coating added as standalone '{coating_name}' ({coating_layers} layers)")
             else:
-                _log.warning("[S08] Coating mesh empty, skipping")
+                _log.warning("Coating mesh empty, skipping")
         except S08_HANDLED_ERRORS as e:
-            _log.exception(f"[S08] Coating generation failed: {e}")
-        _log.info(f"[S08] coating: {time.perf_counter() - _s08_t_coating:.3f}s")
+            _log.exception(f"Coating generation failed: {e}")
+        _log.debug(f"coating: {time.perf_counter() - _s08_t_coating:.3f}s")
 
     # ========== Outline Mesh ==========
     if enable_outline:
@@ -491,10 +491,10 @@ def run(ctx: dict) -> dict:
                 coating_mm = coating_layers * PrinterConfig.LAYER_HEIGHT
                 outline_thickness_mm += coating_mm
                 outline_z_offset = -coating_mm
-                _log.info(f"[S08] Outline extended to cover coating: total_thickness={outline_thickness_mm}mm")
+                _log.debug(f"Outline extended to cover coating: total_thickness={outline_thickness_mm}mm")
 
-            _log.info(
-                f"[S08] Generating outline: width={outline_width}mm, "
+            _log.debug(
+                f"Generating outline: width={outline_width}mm, "
                 f"thickness={outline_thickness_mm}mm (z_offset={outline_z_offset}mm)"
             )
             if boundary_geometry is not None:
@@ -534,13 +534,13 @@ def run(ctx: dict) -> dict:
                 outline_mesh.metadata["name"] = outline_name
                 scene.add_geometry(outline_mesh, node_name=outline_name, geom_name=outline_name)
                 valid_slot_names.append(outline_name)
-                _log.info(f"[S08] Outline added as standalone '{outline_name}' object")
+                _log.debug(f"Outline added as standalone '{outline_name}' object")
                 outline_added = True
             else:
-                _log.warning("[S08] Outline mesh is empty, skipping")
+                _log.warning("Outline mesh is empty, skipping")
         except S08_HANDLED_ERRORS as e:
-            _log.exception(f"[S08] Outline generation failed: {e}")
-        _log.info(f"[S08] outline: {time.perf_counter() - _s08_t_outline:.3f}s")
+            _log.exception(f"Outline generation failed: {e}")
+        _log.debug(f"outline: {time.perf_counter() - _s08_t_outline:.3f}s")
 
     ctx["scene"] = scene
     ctx["valid_slot_names"] = valid_slot_names
@@ -548,7 +548,7 @@ def run(ctx: dict) -> dict:
     ctx["outline_added"] = outline_added
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"[S08] aux_meshes done: {_elapsed:.3f}s")
+    _log.info(f"aux_meshes done: {_elapsed:.3f}s")
     ctx.setdefault("_hifi_timings", {})["aux_meshes_s"] = _elapsed
 
     return ctx

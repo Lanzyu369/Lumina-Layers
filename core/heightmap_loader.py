@@ -70,7 +70,7 @@ class HeightmapLoader:
         """
         orig_h, orig_w = grayscale.shape[:2]
         resized = cv2.resize(grayscale, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-        log.info(f"[HEIGHTMAP] 缩放灰度图: ({orig_w}x{orig_h}) → ({target_w}x{target_h})")
+        log.info(f"缩放灰度图: ({orig_w}x{orig_h}) → ({target_w}x{target_h})")
         return resized.astype(np.uint8)
 
     @staticmethod
@@ -176,7 +176,7 @@ class HeightmapLoader:
             }
 
         orig_h, orig_w = image.shape[:2]
-        log.info(f"[HEIGHTMAP] 加载图像: {heightmap_path} ({orig_w}x{orig_h})")
+        log.info(f"加载图像: {heightmap_path} ({orig_w}x{orig_h})")
 
         # 转换为灰度图
         grayscale = HeightmapLoader._to_grayscale(image)
@@ -273,7 +273,7 @@ class HeightmapLoader:
         }
 
         log.info(
-            f"[HEIGHTMAP] 高度图映射完成: "
+            f"高度图映射完成: "
             f"min={stats['min_mm']:.2f}mm, max={stats['max_mm']:.2f}mm, avg={stats['avg_mm']:.2f}mm"
         )
 

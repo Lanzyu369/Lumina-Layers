@@ -539,7 +539,7 @@ def apply_auto_white_balance(img: np.ndarray) -> np.ndarray:
 
     gains = 255.0 / white_ref
     log.info(
-        f"[AUTO_WB] white_ref=[{white_ref[0]:.1f}, {white_ref[1]:.1f}, {white_ref[2]:.1f}], "
+        f"white_ref=[{white_ref[0]:.1f}, {white_ref[1]:.1f}, {white_ref[2]:.1f}], "
         f"gains=[{gains[0]:.3f}, {gains[1]:.3f}, {gains[2]:.3f}], neutral_pixels={count}"
     )
     balanced = np.clip(img_f * gains, 0, 255).astype(np.uint8)
@@ -615,7 +615,7 @@ def run_extraction(
         total_cells = 1024
 
     log.info(
-        f"[EXTRACTOR] Mode: {color_mode}, Logic: {grid_size}x{grid_size} inside {physical_grid}x{physical_grid}, auto_wb={auto_wb}, bright={bright}, eight_color_full_export={eight_color_full_export}"
+        f"Mode: {color_mode}, Logic: {grid_size}x{grid_size} inside {physical_grid}x{physical_grid}, auto_wb={auto_wb}, bright={bright}, eight_color_full_export={eight_color_full_export}"
     )
 
     # Perspective transform
@@ -784,14 +784,14 @@ def manual_fix_cell(coord, color_input, lut_path=None):
 
     if not coord or not actual_path or not os.path.exists(actual_path):
         log.info(
-            f"[MANUAL_FIX] Error: coord={coord}, actual_path={actual_path}, exists={os.path.exists(actual_path) if actual_path else False}"
+            f"Error: coord={coord}, actual_path={actual_path}, exists={os.path.exists(actual_path) if actual_path else False}"
         )
         return None, "[WARNING] 错误"
 
     try:
-        log.info(f"[MANUAL_FIX] Loading LUT from: {actual_path}")
+        log.info(f"Loading LUT from: {actual_path}")
         rgb, stacks, metadata = LUTManager.load_lut_with_metadata(actual_path)
-        log.info(f"[MANUAL_FIX] RGB shape: {rgb.shape}")
+        log.info(f"RGB shape: {rgb.shape}")
         r, c = coord
 
         # 从 1D rgb 数组推断 2D 网格尺寸
@@ -805,7 +805,7 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         if idx >= n:
             return None, "[WARNING] 索引超出范围"
 
-        log.info(f"[MANUAL_FIX] Fixing cell ({r}, {c}), idx={idx}")
+        log.info(f"Fixing cell ({r}, {c}), idx={idx}")
         new_color = [0, 0, 0]
 
         color_str = str(color_input)
@@ -820,14 +820,14 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         else:
             new_color = [int(color_str[i : i + 2], 16) for i in (0, 2, 4)]
 
-        log.info(f"[MANUAL_FIX] Old color: {rgb[idx]}, New color: {new_color}")
+        log.info(f"Old color: {rgb[idx]}, New color: {new_color}")
         rgb[idx] = new_color
 
         # 通过 save_keyed_json 保存修改后的 LUT
         if stacks is None:
             stacks = np.zeros((n, 0), dtype=np.int32)
         LUTManager.save_keyed_json(actual_path, rgb, stacks, metadata)
-        log.info(f"[MANUAL_FIX] Saved to: {actual_path}")
+        log.info(f"Saved to: {actual_path}")
 
         # For 8-color mode: also ensure we save to the correct assets path
         # Check if the path is a temp_8c_page file
@@ -848,12 +848,12 @@ def manual_fix_cell(coord, color_input, lut_path=None):
 
                 if os.path.abspath(actual_path) != os.path.abspath(assets_path):
                     LUTManager.save_keyed_json(assets_path, rgb, stacks, metadata)
-                    log.info(f"[MANUAL_FIX] Also saved to assets: {assets_path}")
+                    log.info(f"Also saved to assets: {assets_path}")
 
         # 将 1D rgb reshape 回 2D grid 用于预览
         lut_2d = rgb[: side * side].reshape(side, side, 3) if n >= side * side else rgb.reshape(-1, 1, 3)
         preview = cv2.resize(lut_2d, (512, 512), interpolation=cv2.INTER_NEAREST)
-        log.info(f"[MANUAL_FIX] Preview shape: {preview.shape}")
+        log.info(f"Preview shape: {preview.shape}")
         return preview, "[OK] Cell updated"
     except (TypeError, ValueError) as exc:
         log.warning(

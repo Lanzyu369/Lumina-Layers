@@ -6,11 +6,12 @@ Handles image loading, preprocessing, color quantization and matching.
 """
 
 import os
-import logging
+import time
 import numpy as np
 import cv2
 from PIL import Image
 
+from api.structured_logging import get_logger
 from config import PrinterConfig, ModelingMode, ColorSystem
 
 # HEIC/HEIF support (optional dependency)
@@ -21,7 +22,7 @@ try:
 except ImportError:
     pass
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # ========== processing_ops 子模块导入 ==========
 from core.pipeline.processing_ops.lut_loader import load_lut
@@ -95,9 +96,18 @@ class LuminaImageProcessor:
         self.model_margin = float(model_margin) if model_margin is not None else None
         self.hue_matcher = None
         self.enable_cleanup = True
-        lut_data = load_lut(
-            lut_path,
-            color_mode,
+        self._last_unique_colors = 0
+        self._last_pixel_skip_count = 0
+        lut_data = self._load_lut_data()
+        self._apply_lut_data(lut_data)
+        self.last_match_info = self._build_initial_match_info()
+        self._init_hue_matcher()
+        self._log_init_summary()
+
+    def _load_lut_data(self):
+        return load_lut(
+            self.lut_path,
+            self.color_mode,
             color_layers=self.requested_color_layers,
             layer_height_mm=self.requested_layer_height_mm,
             model_enable=self.model_enable,
@@ -105,6 +115,8 @@ class LuminaImageProcessor:
             model_threshold=self.model_threshold,
             model_margin=self.model_margin,
         )
+
+    def _apply_lut_data(self, lut_data):
         self.lut_rgb = lut_data["lut_rgb"]
         self.lut_lab = lut_data["lut_lab"]
         self.ref_stacks = lut_data["ref_stacks"]
@@ -120,7 +132,9 @@ class LuminaImageProcessor:
         self.predictive_threshold = lut_data.get("predictive_threshold")
         self.predictive_margin = lut_data.get("predictive_margin")
         self.native_reference_source = bool(lut_data.get("native_reference_source", False))
-        self.last_match_info = {
+
+    def _build_initial_match_info(self):
+        return {
             "match_mode": (
                 "predictive"
                 if self.predictive_runtime is not None
@@ -139,7 +153,20 @@ class LuminaImageProcessor:
             "model_enable": self.model_enable,
             "model_only": self.model_only,
         }
-        self._init_hue_matcher()
+
+    def _log_init_summary(self):
+        log.info(
+            "Initialized LUT processor",
+            extra={
+                "event": "image_processor_init",
+                "color_mode": self.color_mode,
+                "layer_count": self.layer_count,
+                "source_kind": self.source_kind,
+                "match_mode": self.last_match_info.get("match_mode"),
+                "hue_weight": self.hue_weight,
+                "chroma_gate": self.chroma_gate,
+            },
+        )
 
     def _init_hue_matcher(self):
         """Initialize hue-aware color matcher if hue_weight > 0.
@@ -184,8 +211,16 @@ class LuminaImageProcessor:
             dict with matched_rgb, material_matrix, mask_solid, dimensions,
                  pixel_scale, mode_info, quantized_image, debug_data
         """
-        log.info(
-            f"[IMAGE_PROCESSOR] Mode: {modeling_mode.get_display_name()}, blur_kernel={blur_kernel}, smooth_sigma={smooth_sigma}"
+        started = time.perf_counter()
+        log.debug(
+            "Image processing started",
+            extra={
+                "event": "image_processor_started",
+                "mode": modeling_mode.get_display_name(),
+                "blur_kernel": blur_kernel,
+                "smooth_sigma": smooth_sigma,
+                "target_width_mm": target_width_mm,
+            },
         )
         img, target_w, target_h, px_scale, blur_kernel, smooth_sigma = self._load_and_resize_image(
             image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma
@@ -209,6 +244,19 @@ class LuminaImageProcessor:
             rgb_arr,
             debug_data,
         )
+        log.info(
+            "Image processing completed",
+            extra={
+                "event": "image_processor_done",
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "unique_colors": self._last_unique_colors,
+                "final_size": [target_w, target_h],
+                "pixel_skip_count": self._last_pixel_skip_count,
+                "mode": modeling_mode.get_display_name(),
+                "pixel_scale": px_scale,
+                "match_mode": self.last_match_info.get("match_mode"),
+            },
+        )
         return result
 
     def _extract_rgba_arrays(self, img):
@@ -218,7 +266,16 @@ class LuminaImageProcessor:
         img_arr = np.array(img)
         rgb_arr, alpha_arr = img_arr[:, :, :3], img_arr[:, :, 3]
         mask_transparent = alpha_arr < 10
-        log.info(f"[IMAGE_PROCESSOR] Found {np.sum(mask_transparent)} transparent pixels (alpha<10)")
+        transparent_count = int(np.sum(mask_transparent))
+        self._last_pixel_skip_count = transparent_count
+        log.debug(
+            "Transparent pixels detected",
+            extra={
+                "event": "image_transparency_detected",
+                "transparent_pixels": transparent_count,
+                "alpha_threshold": 10,
+            },
+        )
         return rgb_arr, mask_transparent
 
     def _run_mode_pipeline(
@@ -289,7 +346,10 @@ class LuminaImageProcessor:
 
                 return cleanup_isolated_pixels(material_matrix, matched_rgb, self.lut_rgb, self.ref_stacks)
             except ImportError:
-                log.info("[IMAGE_PROCESSOR] isolated_pixel_cleanup module not found, skipping")
+                log.debug(
+                    "Isolated pixel cleanup module unavailable",
+                    extra={"event": "isolated_pixel_cleanup_unavailable"},
+                )
         return matched_rgb, material_matrix
 
     def _load_and_resize_image(self, image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma):
@@ -299,16 +359,25 @@ class LuminaImageProcessor:
         SVG_PIXELS_PER_MM = 10.0
         is_svg = image_path.lower().endswith(".svg")
         if is_svg:
-            log.info("[IMAGE_PROCESSOR] SVG detected - Engaging Ultra-High-Fidelity Vector Mode")
+            log.debug(
+                "SVG input detected",
+                extra={"event": "svg_input_detected", "pixels_per_mm": SVG_PIXELS_PER_MM},
+            )
             img = Image.fromarray(self._load_svg(image_path, target_width_mm, pixels_per_mm=SVG_PIXELS_PER_MM))
             blur_kernel, smooth_sigma = 0, 0
-            log.info("[IMAGE_PROCESSOR] SVG Mode: Filters disabled (Vector source is clean)")
+            log.debug(
+                "SVG filters disabled",
+                extra={"event": "svg_filters_disabled", "blur_kernel": blur_kernel, "smooth_sigma": smooth_sigma},
+            )
             target_w, target_h, pixel_scale = img.size[0], img.size[1], 1.0 / SVG_PIXELS_PER_MM
         else:
             img = Image.open(image_path).convert("RGBA")
             self._log_image_info(img, image_path)
             target_w, target_h, pixel_scale = self._calc_dimensions(img, target_width_mm, modeling_mode)
-        log.info(f"[IMAGE_PROCESSOR] Using NEAREST interpolation (no anti-aliasing)")
+        log.debug(
+            "Image resize interpolation selected",
+            extra={"event": "image_resize_interpolation_selected", "interpolation": "nearest"},
+        )
         img = img.resize((target_w, target_h), Image.Resampling.NEAREST)
         return img, target_w, target_h, pixel_scale, blur_kernel, smooth_sigma
 
@@ -320,16 +389,24 @@ class LuminaImageProcessor:
             img (PIL.Image.Image): Already loaded RGBA image. (已加载的 RGBA 图像)
             image_path (str): Path for display only. (仅用于显示的路径)
         """
-        log.info(f"[IMAGE_PROCESSOR] Original image: {image_path}, mode: {img.mode}, size: {img.size}")
         has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
-        log.info(f"[IMAGE_PROCESSOR] Has alpha channel: {has_alpha}")
+        extra = {
+            "event": "source_image_loaded",
+            "image_path": image_path,
+            "image_mode": img.mode,
+            "image_size": list(img.size),
+            "has_alpha": has_alpha,
+        }
         if has_alpha:
             alpha_img = img if img.mode == "RGBA" else img.convert("RGBA")
             alpha_data = np.array(alpha_img)[:, :, 3]
-            log.info(
-                f"[IMAGE_PROCESSOR] Alpha stats: min={alpha_data.min()}, max={alpha_data.max()}, "
-                f"mean={alpha_data.mean():.1f}, transparent(alpha<10): {np.sum(alpha_data < 10)}"
-            )
+            extra.update({
+                "alpha_min": int(alpha_data.min()),
+                "alpha_max": int(alpha_data.max()),
+                "alpha_mean": round(float(alpha_data.mean()), 3),
+                "transparent_pixels": int(np.sum(alpha_data < 10)),
+            })
+        log.debug("Source image loaded", extra=extra)
 
     def _calc_dimensions(self, img, target_width_mm, modeling_mode):
         """计算目标尺寸和像素比例。 Calculate target dimensions and pixel scale."""
@@ -337,15 +414,25 @@ class LuminaImageProcessor:
             PIXELS_PER_MM = 10
             target_w = int(target_width_mm * PIXELS_PER_MM)
             pixel_scale = 1.0 / PIXELS_PER_MM
-            log.info(f"[IMAGE_PROCESSOR] High-res mode: {PIXELS_PER_MM} px/mm")
+            scale_mode = "high_fidelity"
+            pixels_per_mm = PIXELS_PER_MM
         else:
             target_w = int(target_width_mm / PrinterConfig.NOZZLE_WIDTH)
             pixel_scale = PrinterConfig.NOZZLE_WIDTH
-            log.info(f"[IMAGE_PROCESSOR] Pixel mode: {1.0/pixel_scale:.2f} px/mm")
+            scale_mode = "pixel"
+            pixels_per_mm = 1.0 / pixel_scale
         target_w = max(1, target_w)
         target_h = max(1, int(target_w * img.height / img.width))
-        log.info(
-            f"[IMAGE_PROCESSOR] Target: {target_w}x{target_h}px ({target_w*pixel_scale:.1f}x{target_h*pixel_scale:.1f}mm)"
+        log.debug(
+            "Image target dimensions resolved",
+            extra={
+                "event": "image_target_dimensions_resolved",
+                "scale_mode": scale_mode,
+                "pixels_per_mm": round(float(pixels_per_mm), 3),
+                "target_size": [target_w, target_h],
+                "target_width_mm": round(float(target_w * pixel_scale), 3),
+                "target_height_mm": round(float(target_h * pixel_scale), 3),
+            },
         )
         return target_w, target_h, pixel_scale
 
@@ -356,9 +443,6 @@ class LuminaImageProcessor:
         Returns:
             tuple: (matched_rgb, material_matrix, quantized_image, debug_data)
         """
-        import time
-
-        total_start = time.time()
         quantized_image, unique_colors, rgb_processed = self._prepare_high_fidelity_images(
             rgb_arr, quantize_colors, blur_kernel, smooth_sigma
         )
@@ -373,7 +457,6 @@ class LuminaImageProcessor:
             target_w,
             self.layer_count,
         )
-        log.info(f"[IMAGE_PROCESSOR] Total processing time: {time.time() - total_start:.2f}s")
         debug_data = self._build_high_fidelity_debug_data(
             quantized_image, unique_colors, rgb_processed, blur_kernel, smooth_sigma
         )
@@ -381,21 +464,41 @@ class LuminaImageProcessor:
 
     def _prepare_high_fidelity_images(self, rgb_arr, quantize_colors, blur_kernel, smooth_sigma):
         """Run filtering + quantization and compute unique colors."""
-        import time
-
-        log.info(f"[IMAGE_PROCESSOR] Starting edge-preserving processing...")
+        log.debug(
+            "Edge-preserving processing started",
+            extra={"event": "edge_preserving_processing_started"},
+        )
         rgb_processed = apply_bilateral_filter(rgb_arr, smooth_sigma)
         rgb_processed = apply_median_filter(rgb_processed, blur_kernel)
-        log.info(f"[IMAGE_PROCESSOR] Skipping sharpening to reduce noise...")
+        log.debug(
+            "Sharpening skipped",
+            extra={"event": "image_sharpening_skipped", "reason": "reduce_noise"},
+        )
         quantized_image = kmeans_quantize(rgb_processed, quantize_colors)
-        t0 = time.time()
+        t0 = time.perf_counter()
         unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
-        log.info(f"[IMAGE_PROCESSOR] Found {len(unique_colors)} unique colors ({time.time() - t0:.2f}s)")
+        self._last_unique_colors = int(len(unique_colors))
+        log.debug(
+            "Unique colors extracted",
+            extra={
+                "event": "unique_colors_extracted",
+                "unique_colors": self._last_unique_colors,
+                "duration_ms": round((time.perf_counter() - t0) * 1000, 3),
+            },
+        )
         return quantized_image, unique_colors, rgb_processed
 
     def _match_high_fidelity_unique_colors(self, unique_colors):
         """Match unique colors to LUT indices in high-fidelity mode."""
-        log.info(f"[IMAGE_PROCESSOR] hue_weight={self.hue_weight}, hue_matcher={'YES' if self.hue_matcher else 'NONE'}")
+        log.debug(
+            "High-fidelity colors matching",
+            extra={
+                "event": "high_fidelity_colors_matching",
+                "hue_weight": self.hue_weight,
+                "hue_matcher_enabled": self.hue_matcher is not None,
+                "unique_colors": int(len(unique_colors)),
+            },
+        )
         match_result = match_colors_to_lut(
             unique_colors,
             self.lut_rgb,
@@ -460,10 +563,26 @@ class LuminaImageProcessor:
         Returns:
             tuple: (matched_rgb, material_matrix, bg_reference)
         """
-        log.info(f"[IMAGE_PROCESSOR] Direct pixel-level matching (Pixel Art mode, CIELAB space)...")
+        self._log_pixel_mode_step("start")
         flat_rgb = rgb_arr.reshape(-1, 3)
-        unique_colors, inverse = np.unique(flat_rgb, axis=0, return_inverse=True)
-        log.info(f"[IMAGE_PROCESSOR] Pixel dedup: {len(flat_rgb)} pixels -> {len(unique_colors)} unique colors")
+        unique_colors, _inverse = np.unique(flat_rgb, axis=0, return_inverse=True)
+        self._last_unique_colors = int(len(unique_colors))
+        self._log_pixel_mode_step("dedup", pixel_count=len(flat_rgb), unique_count=len(unique_colors))
+        unique_match = self._match_pixel_unique_colors(unique_colors)
+        matched_rgb, material_matrix = map_pixels_to_lut(
+            rgb_arr,
+            unique_colors,
+            unique_match,
+            self.lut_rgb,
+            self.ref_stacks,
+            target_h,
+            target_w,
+            self.layer_count,
+        )
+        self._log_pixel_mode_step("complete")
+        return matched_rgb, material_matrix, rgb_arr
+
+    def _match_pixel_unique_colors(self, unique_colors):
         unique_match = match_colors_to_lut(
             unique_colors,
             self.lut_rgb,
@@ -477,6 +596,10 @@ class LuminaImageProcessor:
             model_only=self.model_only,
             ref_stacks=self.ref_stacks,
         )
+        self._update_pixel_match_info(unique_match)
+        return unique_match
+
+    def _update_pixel_match_info(self, unique_match):
         if isinstance(unique_match, dict):
             self.last_match_info = {
                 "match_mode": "predictive",
@@ -493,30 +616,16 @@ class LuminaImageProcessor:
                 "model_enable": self.model_enable,
                 "model_only": self.model_only,
             }
-        else:
-            self.last_match_info = {
-                "match_mode": "legacy",
-                "source_kind": self.source_kind,
-                "native_reference_source": self.native_reference_source,
-                "predictive_modes": list(self.predictive_modes),
-                "supported_modes": list(self.supported_modes),
-                "requested_color_layers": self.requested_color_layers,
-                "requested_layer_height_mm": self.requested_layer_height_mm,
-                "warnings": list(self.predictive_warnings),
-                "predictive_threshold": self.predictive_threshold,
-                "predictive_margin": self.predictive_margin,
-                "model_enable": self.model_enable,
-                "model_only": self.model_only,
-            }
-        matched_rgb, material_matrix = map_pixels_to_lut(
-            rgb_arr,
-            unique_colors,
-            unique_match,
-            self.lut_rgb,
-            self.ref_stacks,
-            target_h,
-            target_w,
-            self.layer_count,
-        )
-        log.info(f"[IMAGE_PROCESSOR] Direct matching complete!")
-        return matched_rgb, material_matrix, rgb_arr
+            return
+        self.last_match_info = self._build_initial_match_info()
+
+    def _log_pixel_mode_step(self, step, **fields):
+        messages = {
+            "start": "Direct pixel-level matching started",
+            "dedup": (
+                "Pixel colors deduplicated"
+            ),
+            "complete": "Direct pixel-level matching completed",
+        }
+        extra = {"event": f"image_processor_pixel_mode_{step}", **fields}
+        log.debug(messages[step], extra=extra)

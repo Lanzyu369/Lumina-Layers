@@ -9,7 +9,10 @@ P05 — 调色板提取。
 
 import time
 
+from api.structured_logging import get_logger
 from core.pipeline.pipeline_utils import extract_color_palette
+
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -37,5 +40,13 @@ def run(ctx: dict) -> dict:
     ctx['cache'] = cache
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p05_s'] = _elapsed
-    print(f"[P05] palette_extraction done: {_elapsed:.3f}s")
+    _log.info(
+        "palette_extraction done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "p05_palette_extraction_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "count": len(color_palette),
+        },
+    )
     return ctx

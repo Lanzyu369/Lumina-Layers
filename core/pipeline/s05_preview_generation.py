@@ -13,6 +13,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 from typing import Optional, Dict, Tuple
 
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
+
 
 def _calculate_loop_position(
     position_preset: str,
@@ -360,5 +364,16 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get('_hifi_timings', {})
     _hifi_timings['preview_gen_s'] = _elapsed
     ctx['_hifi_timings'] = _hifi_timings
-    print(f"[S05] preview_gen done: {_elapsed:.3f}s")
+    _log.info(
+        "preview_gen done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "s05_preview_gen_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "width": int(target_w),
+            "height": int(target_h),
+            "loop_enabled": bool(add_loop),
+            "loop_added": loop_info is not None,
+        },
+    )
     return ctx

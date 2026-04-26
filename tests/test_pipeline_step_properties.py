@@ -233,6 +233,12 @@ _REQUIRED_KEYS_MAP = {
     ],
 }
 
+# S10 支持 material-archive 模式：没有 LUT processor 时应 graceful skip，
+# 写入空配方路径并返回原 ctx，而不是强制要求 recipe 输入键。
+_EMPTY_CTX_GRACEFUL_SKIP_MODULES = {
+    "core.pipeline.s10_color_recipe",
+}
+
 
 class TestProperty3MissingKeyRaisesKeyError:
     """验证当 PipelineContext 缺少必需键时，步骤抛出 KeyError。
@@ -248,6 +254,13 @@ class TestProperty3MissingKeyRaisesKeyError:
 
         if not required_keys:
             pytest.skip(f"{module_path} 无已知必需键")
+
+        if module_path in _EMPTY_CTX_GRACEFUL_SKIP_MODULES:
+            ctx = {}
+            result = mod.run(ctx)
+            assert result is ctx
+            assert ctx["color_recipe_path"] is None
+            return
 
         with pytest.raises(KeyError):
             mod.run({})

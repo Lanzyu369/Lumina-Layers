@@ -6,6 +6,10 @@ Geometry utilities module - Pure functional geometry calculation tools
 import numpy as np
 import trimesh
 
+from api.structured_logging import get_logger
+
+log = get_logger(__name__)
+
 
 def create_keychain_loop(
     width_mm: float,
@@ -37,9 +41,19 @@ def create_keychain_loop(
     Returns:
         trimesh.Trimesh: Loop mesh object. (挂孔网格对象)
     """
-    print(f"[GEOMETRY] Creating keychain loop: w={width_mm}, l={length_mm}, "
-          f"hole={hole_dia_mm}, thick={thickness_mm}, pos=({attach_x_mm}, {attach_y_mm}), "
-          f"angle={angle_deg}°")
+    log.debug(
+        "Creating keychain loop mesh",
+        extra={
+            "event": "keychain_loop_mesh_started",
+            "width_mm": width_mm,
+            "length_mm": length_mm,
+            "hole_dia_mm": hole_dia_mm,
+            "thickness_mm": thickness_mm,
+            "attach_x_mm": attach_x_mm,
+            "attach_y_mm": attach_y_mm,
+            "angle_deg": angle_deg,
+        },
+    )
     
     # Calculate geometric parameters
     half_w = width_mm / 2
@@ -168,7 +182,14 @@ def create_keychain_loop(
     mesh = trimesh.Trimesh(vertices=vertices_arr, faces=np.array(faces))
     mesh.fix_normals()
     
-    print(f"[GEOMETRY] Loop mesh created: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+    log.debug(
+        "Keychain loop mesh created",
+        extra={
+            "event": "keychain_loop_mesh_created",
+            "vertex_count": len(mesh.vertices),
+            "face_count": len(mesh.faces),
+        },
+    )
     
     return mesh
 

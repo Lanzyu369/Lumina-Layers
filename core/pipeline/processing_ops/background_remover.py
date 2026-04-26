@@ -10,6 +10,10 @@ Extracted from process_image.
 
 import numpy as np
 
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
+
 
 def remove_background(alpha_arr: np.ndarray, rgb_arr: np.ndarray,
                       auto_bg: bool, bg_tol: int) -> np.ndarray:
@@ -28,7 +32,17 @@ def remove_background(alpha_arr: np.ndarray, rgb_arr: np.ndarray,
     # CRITICAL FIX: Identify transparent pixels BEFORE color processing
     # This prevents transparent areas from being matched to LUT colors
     mask_transparent = alpha_arr < 10
-    print(f"[IMAGE_PROCESSOR] Found {np.sum(mask_transparent)} transparent pixels (alpha<10)")
+    transparent_count = int(np.sum(mask_transparent))
+    _log.debug(
+        "Found %s transparent pixels (alpha<10)",
+        transparent_count,
+        extra={
+            "event": "background_alpha_transparency_detected",
+            "count": transparent_count,
+            "width": int(alpha_arr.shape[1]) if alpha_arr.ndim == 2 else None,
+            "height": int(alpha_arr.shape[0]) if alpha_arr.ndim == 2 else None,
+        },
+    )
 
     # Background removal - combine alpha transparency with optional auto-bg
     if auto_bg:

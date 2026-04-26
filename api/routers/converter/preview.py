@@ -410,7 +410,7 @@ async def convert_preview(
             }
 
         # 2. CPU computation offloaded to process pool (only paths and scalars)
-        log.info(
+        log.debug(
             "Submitting preview worker task",
             extra={
                 "event": "converter_preview_submit",
@@ -430,10 +430,14 @@ async def convert_preview(
         _selected_mats: list[str] | None = None
         if material_source == "material_archive" and selected_materials is not None:
             _selected_mats = _parse_selected_materials(selected_materials)
-            log.info(
+            log.debug(
                 "Material mode parsed: count=%d names=%s",
                 len(_selected_mats or []),
                 _selected_mats,
+                extra={
+                    "event": "converter_preview_material_mode_parsed",
+                    "selected_material_count": len(_selected_mats or []),
+                },
             )
 
         result = await pool.submit(
@@ -798,7 +802,7 @@ def get_layer_images(
                 }
             )
         if cached_entry is not None and layers_out:
-            log.info(
+            log.debug(
                 "layer-images cache hit",
                 extra={
                     "event": "converter_layer_images_cache_hit",
@@ -903,7 +907,7 @@ def get_layer_images(
         "layer_images_cache",
         {"key": cache_key, "layers": cached_layers},
     )
-    log.info(
+    log.debug(
         "layer-images cache miss",
         extra={
             "event": "converter_layer_images_cache_miss",

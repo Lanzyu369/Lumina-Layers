@@ -227,7 +227,14 @@ class ColorMerger:
 
         # If all colors are low usage, don't merge (prevent color loss)
         if len(low_usage_colors) >= len(palette):
-            log.warning("[COLOR_MERGER] All colors below threshold, merging disabled")
+            log.warning(
+                "All colors are below threshold; merging disabled",
+                extra={
+                    "event": "color_merging_disabled_all_low_usage",
+                    "palette_count": len(palette),
+                    "low_usage_count": len(low_usage_colors),
+                },
+            )
             return {}
 
         # If no low usage colors, nothing to merge
@@ -244,7 +251,13 @@ class ColorMerger:
             if target_hex is not None:
                 merge_map[source_hex] = target_hex
             else:
-                log.info(f"[COLOR_MERGER] No suitable target for {source_hex}, keeping original")
+                log.info(
+                    "No suitable merge target found; keeping original color",
+                    extra={
+                        "event": "color_merge_target_missing",
+                        "source_hex": source_hex,
+                    },
+                )
 
         return merge_map
 

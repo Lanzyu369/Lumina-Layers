@@ -8,9 +8,9 @@ S07 — 多材质 3D 网格生成（支持并行 ThreadPoolExecutor）。
 - scene 构建与 transform 应用
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,7 +21,7 @@ from shapely.geometry import Polygon
 from config import PrinterConfig
 from core.mesh_generators import get_mesher
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h):
@@ -92,18 +92,35 @@ def run(ctx: dict) -> dict:
     transform[1, 1] = pixel_scale
     transform[2, 2] = PrinterConfig.LAYER_HEIGHT
 
-    _log.info(f"[S07] Transform: XY={pixel_scale}mm/px, Z={PrinterConfig.LAYER_HEIGHT}mm/layer")
+    _log.debug(
+        "Transform: XY=%smm/px, Z=%smm/layer",
+        pixel_scale,
+        PrinterConfig.LAYER_HEIGHT,
+        extra={
+            "event": "s07_transform_resolved",
+            "pixel_scale": float(pixel_scale),
+            "layer_height_mm": float(PrinterConfig.LAYER_HEIGHT),
+        },
+    )
 
     mesher = get_mesher(
         modeling_mode,
         disable_material_dilation=disable_material_dilation,
         boundary_geometry=boundary_geometry,
     )
-    _log.info(f"[S07] Using mesher: {mesher.__class__.__name__}")
+    _log.debug(
+        "Using mesher: %s",
+        mesher.__class__.__name__,
+        extra={"event": "s07_mesher_resolved", "mesher": mesher.__class__.__name__},
+    )
 
     valid_slot_names = []
     num_materials = len(slot_names)
-    _log.info(f"[S07] Generating meshes for {num_materials} materials...")
+    _log.debug(
+        "Generating meshes for %s materials...",
+        num_materials,
+        extra={"event": "s07_mesh_generation_started", "count": num_materials},
+    )
 
     max_workers = min(4, num_materials)
     parallel_enabled = max_workers > 1 and os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") != "1"
@@ -138,8 +155,20 @@ def run(ctx: dict) -> dict:
     for mat_id in range(num_materials):
         if mat_id in mesh_errors:
             e = mesh_errors[mat_id]
-            _log.warning(f"[S07] Error generating mesh for material {mat_id} ({slot_names[mat_id]}): {e}")
-            _log.info("[S07] Continuing with other materials...")
+            _log.warning(
+                "Error generating mesh for material %s (%s): %s",
+                mat_id,
+                slot_names[mat_id],
+                e,
+                extra={
+                    "event": "s07_material_mesh_failed",
+                    "material_id": int(mat_id),
+                    "material": slot_names[mat_id],
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
+            _log.debug("Continuing with other materials...")
             continue
         mesh = mesh_results.get(mat_id)
         if mesh:
@@ -153,7 +182,21 @@ def run(ctx: dict) -> dict:
             valid_slot_names.append(name)
             _mt = mat_timings.get(mat_id, 0.0)
             if log_detail:
-                _log.info(f"[S07]   {name}: {len(mesh.vertices):,}v {len(mesh.faces):,}f  {_mt:.3f}s")
+                _log.debug(
+                    "%s: %sv %sf  %.3fs",
+                    name,
+                    len(mesh.vertices),
+                    len(mesh.faces),
+                    _mt,
+                    extra={
+                        "event": "s07_material_mesh_generated",
+                        "material_id": int(mat_id),
+                        "material": name,
+                        "vertex_count": int(len(mesh.vertices)),
+                        "face_count": int(len(mesh.faces)),
+                        "duration_ms": round(_mt * 1000, 3),
+                    },
+                )
 
     if _bench_enabled and _mesh_t0 is not None:
         _mesh_elapsed = time.perf_counter() - _mesh_t0
@@ -161,7 +204,18 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_gen_s"] = _mesh_elapsed
         _hifi_timings["mesh_compute_s"] = mesh_compute_elapsed
         _hifi_timings["mesh_apply_transform_s"] = mesh_apply_elapsed
-        _log.info(f"[S07] mesh_gen done: {_mesh_elapsed:.3f}s")
+        _log.info(
+            "mesh_gen done: %.3fs",
+            _mesh_elapsed,
+            extra={
+                "event": "s07_mesh_gen_done",
+                "duration_ms": round(_mesh_elapsed * 1000, 3),
+                "count": len(valid_slot_names),
+                "material_count": num_materials,
+                "error_count": len(mesh_errors),
+                "parallel_enabled": bool(parallel_enabled),
+            },
+        )
 
     ctx["scene"] = scene
     ctx["valid_slot_names"] = valid_slot_names

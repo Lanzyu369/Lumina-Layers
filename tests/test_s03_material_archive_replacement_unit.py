@@ -415,6 +415,7 @@ class TestS03NotWorseFallbackWiring:
         """If the fallback helper raises, S03 must log a warning and keep
         the baseline recipe/achieved color from the solver unchanged."""
         import logging
+        from api.structured_logging import get_logger
 
         matched = np.full((2, 2, 3), [200, 100, 50], dtype=np.uint8)
         mat = np.zeros((2, 2, 5), dtype=np.int32)
@@ -430,17 +431,28 @@ class TestS03NotWorseFallbackWiring:
                     np.full(n, 1.2, dtype=np.float32),
                 )
 
-        with patch(
-            "core.material_cache.load_material_solver_cache",
-            return_value=_StubCache(),
-        ), patch(
-            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
-            side_effect=RuntimeError("synthetic fallback failure"),
-        ), caplog.at_level(logging.WARNING, logger="core.pipeline.s03_color_replacement"):
-            out_rgb, out_mat, applied = _apply_material_archive_color_replacements(
-                matched, mat, mask, {"#c86432": "#14c814"},
-                _SMALL_PALETTE, 5, 0.08, "white",
-            )
+        target_logger = get_logger("core.pipeline.s03_color_replacement")
+        caplog.set_level(
+            logging.WARNING,
+            logger="lumina.core.pipeline.s03_color_replacement",
+        )
+        target_logger.addHandler(caplog.handler)
+        try:
+            with patch(
+                "core.material_cache.load_material_solver_cache",
+                return_value=_StubCache(),
+            ), patch(
+                "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+                side_effect=RuntimeError("synthetic fallback failure"),
+            ):
+                out_rgb, out_mat, applied = (
+                    _apply_material_archive_color_replacements(
+                        matched, mat, mask, {"#c86432": "#14c814"},
+                        _SMALL_PALETTE, 5, 0.08, "white",
+                    )
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
 
         assert applied == 1
         # Baseline achieved color still reached every matching pixel.

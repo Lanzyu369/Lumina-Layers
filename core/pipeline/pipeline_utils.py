@@ -10,15 +10,15 @@ Pipeline shared utility functions.
 - LUT HTML 网格生成函数
 """
 
+from api.structured_logging import get_logger
 import os
 import math
-import logging
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
 from config import PrinterConfig, ColorSystem, ModelingMode
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # ========== 颜色工具函数 (Color Utility Functions) ==========
 
@@ -198,7 +198,14 @@ def generate_auto_height_map(color_list, mode, base_thickness, max_relief_height
         # All colors get the same height (average of base and max)
         avg_height = (base_thickness + max_relief_height) / 2.0
         color_height_map = {color: round(avg_height, 1) for color, _ in color_luminance}
-        log.info(f"[AUTO HEIGHT] All colors have same luminance, using average height: {avg_height:.1f}mm")
+        log.info(
+            "Auto height map used average height",
+            extra={
+                "event": "auto_height_map_average_used",
+                "color_count": len(color_list),
+                "average_height_mm": round(avg_height, 3),
+            },
+        )
         return color_height_map
 
     # Step 3: Calculate available height range
@@ -226,14 +233,18 @@ def generate_auto_height_map(color_list, mode, base_thickness, max_relief_height
         # Round to 0.1mm precision
         color_height_map[color] = round(height, 1)
 
-    log.info(f"[AUTO HEIGHT] Generated normalized height map for {len(color_list)} colors")
-    log.info(f"[AUTO HEIGHT] Mode: {mode}")
-    log.info(f"[AUTO HEIGHT] Luminance range: {y_min:.1f} - {y_max:.1f}")
     log.info(
-        f"[AUTO HEIGHT] Height range: {min(color_height_map.values()):.1f}mm - {max(color_height_map.values()):.1f}mm"
-    )
-    log.info(
-        f"[AUTO HEIGHT] Total height span: {max(color_height_map.values()) - min(color_height_map.values()):.1f}mm"
+        "Auto height map generated",
+        extra={
+            "event": "auto_height_map_generated",
+            "color_count": len(color_list),
+            "mode": mode,
+            "luminance_min": round(float(y_min), 3),
+            "luminance_max": round(float(y_max), 3),
+            "height_min_mm": round(float(min(color_height_map.values())), 3),
+            "height_max_mm": round(float(max(color_height_map.values())), 3),
+            "height_span_mm": round(float(max(color_height_map.values()) - min(color_height_map.values())), 3),
+        },
     )
 
     return color_height_map
@@ -284,7 +295,14 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         else:
             lut_grid = np.load(lut_path)
             measured_colors = lut_grid.reshape(-1, 3)
-        log.info(f"[LUT_COLORS] Loading LUT with {len(measured_colors)} colors from {lut_path}")
+        log.info(
+            "Loading LUT colors",
+            extra={
+                "event": "lut_colors_loading",
+                "lut_path": lut_path,
+                "color_count": int(len(measured_colors)),
+            },
+        )
 
         # Get unique colors
         unique_colors = np.unique(measured_colors, axis=0)
@@ -298,11 +316,27 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         # Sort by brightness (dark to light) for better UX
         colors.sort(key=lambda x: sum(x["color"]))
 
-        log.info(f"[LUT_COLORS] Extracted {len(colors)} unique colors from LUT")
+        log.info(
+            "Extracted LUT colors",
+            extra={
+                "event": "lut_colors_extracted",
+                "lut_path": lut_path,
+                "color_count": len(colors),
+                "unique_count": len(unique_colors),
+            },
+        )
         return colors
 
     except (OSError, ValueError, TypeError, KeyError) as e:
-        log.warning(f"[LUT_COLORS] Error extracting colors from LUT: {e}")
+        log.warning(
+            "Failed to extract LUT colors",
+            extra={
+                "event": "lut_colors_extraction_failed",
+                "lut_path": lut_path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+        )
         return []
 
 
@@ -392,21 +426,39 @@ def detect_lut_color_mode(lut_path):
                     and layer_count == 6
                     and (max_mat is None or max_mat <= 4)
                 ):
-                    log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode from .npz ({total_colors} colors)")
+                    log.info(
+                        "Detected LUT color mode",
+                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
+                    )
                     return "5-Color Extended"
                 if total_colors >= 2600 and total_colors <= 2800:
-                    log.info(f"[AUTO_DETECT] Detected 8-Color mode from .npz ({total_colors} colors)")
+                    log.info(
+                        "Detected LUT color mode",
+                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "8-Color Max"},
+                    )
                     return "8-Color Max"
                 if total_colors >= 1200 and total_colors < 1400:
-                    log.info(f"[AUTO_DETECT] Detected 6-Color mode from .npz ({total_colors} colors)")
+                    log.info(
+                        "Detected LUT color mode",
+                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
+                    )
                     return "6-Color (CMYWGK 1296)"
                 if total_colors >= 900 and total_colors < 1200:
-                    log.info(f"[AUTO_DETECT] Detected 4-Color mode from .npz ({total_colors} colors)")
+                    log.info(
+                        "Detected LUT color mode",
+                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "4-Color"},
+                    )
                     return "4-Color"
                 if total_colors >= 30 and total_colors <= 35:
-                    log.info(f"[AUTO_DETECT] Detected 2-Color BW mode from .npz ({total_colors} colors)")
+                    log.info(
+                        "Detected LUT color mode",
+                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
+                    )
                     return "BW (Black & White)"
-            log.info(f"[AUTO_DETECT] Detected Merged LUT (.npz format)")
+            log.info(
+                "Detected merged LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npz", "color_mode": "Merged"},
+            )
             return "Merged"
 
         # .json (Keyed JSON) format
@@ -416,29 +468,58 @@ def detect_lut_color_mode(lut_path):
             rgb, stacks, _meta = LUTManager.load_lut_with_metadata(lut_path)
             # 优先使用存储的 color_mode
             if _meta and _meta.color_mode:
-                log.info(f"[AUTO_DETECT] Using stored color_mode from metadata: {_meta.color_mode}")
+                log.info(
+                    "Using LUT color mode metadata",
+                    extra={"event": "lut_color_mode_metadata_used", "source": "json", "color_mode": _meta.color_mode},
+                )
                 return _meta.color_mode
             # 回退到基于数量的推断
             total_colors = len(rgb) if rgb is not None else 0
             layer_count = int(stacks.shape[1]) if isinstance(stacks, np.ndarray) and stacks.ndim == 2 else None
             max_mat = int(np.max(stacks)) if isinstance(stacks, np.ndarray) and stacks.size > 0 else None
-            log.info(f"[AUTO_DETECT] JSON LUT: {total_colors} colors, layer_count={layer_count}, max_mat={max_mat}")
+            log.debug(
+                "JSON LUT mode inputs resolved",
+                extra={
+                    "event": "json_lut_mode_inputs_resolved",
+                    "color_count": int(total_colors),
+                    "layer_count": layer_count,
+                    "max_material": max_mat,
+                },
+            )
             if total_colors >= 2400 and total_colors < 2600 and layer_count == 6 and (max_mat is None or max_mat <= 4):
-                log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode from .json ({total_colors} colors)")
+                log.info(
+                    "Detected LUT color mode",
+                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
+                )
                 return "5-Color Extended"
             if total_colors >= 2600 and total_colors <= 2800:
-                log.info(f"[AUTO_DETECT] Detected 8-Color mode from .json ({total_colors} colors)")
+                log.info(
+                    "Detected LUT color mode",
+                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "8-Color Max"},
+                )
                 return "8-Color Max"
             if total_colors >= 1200 and total_colors < 1400:
-                log.info(f"[AUTO_DETECT] Detected 6-Color mode from .json ({total_colors} colors)")
+                log.info(
+                    "Detected LUT color mode",
+                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
+                )
                 return "6-Color (CMYWGK 1296)"
             if total_colors >= 900 and total_colors < 1200:
-                log.info(f"[AUTO_DETECT] Detected 4-Color mode from .json ({total_colors} colors)")
+                log.info(
+                    "Detected LUT color mode",
+                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "4-Color"},
+                )
                 return "4-Color"
             if total_colors >= 30 and total_colors <= 35:
-                log.info(f"[AUTO_DETECT] Detected 2-Color BW mode from .json ({total_colors} colors)")
+                log.info(
+                    "Detected LUT color mode",
+                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
+                )
                 return "BW (Black & White)"
-            log.info(f"[AUTO_DETECT] Non-standard JSON LUT size ({total_colors} colors), detected as Merged")
+            log.info(
+                "Detected merged LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "Merged"},
+            )
             return "Merged"
 
         # Standard .npy format
@@ -450,7 +531,10 @@ def detect_lut_color_mode(lut_path):
             if len(lut_data) % 3 == 0:
                 lut_data = lut_data.reshape(-1, 3)
             else:
-                log.info(f"[AUTO_DETECT] Invalid LUT format: cannot reshape to (N, 3)")
+                log.info(
+                    "Invalid LUT shape for mode detection",
+                    extra={"event": "lut_color_mode_detection_invalid_shape", "lut_path": lut_path},
+                )
                 return None
 
         # 计算颜色数量
@@ -459,40 +543,69 @@ def detect_lut_color_mode(lut_path):
         else:
             total_colors = lut_data.shape[0] * lut_data.shape[1]
 
-        log.info(f"[AUTO_DETECT] LUT shape: {lut_data.shape}, total colors: {total_colors}")
+        log.debug(
+            "LUT mode inputs resolved",
+            extra={"event": "lut_mode_inputs_resolved", "lut_shape": list(lut_data.shape), "color_count": int(total_colors)},
+        )
 
         # 2色模式：32色 (2^5 = 32)
         if total_colors >= 30 and total_colors <= 35:
-            log.info(f"[AUTO_DETECT] Detected 2-Color BW mode (32 colors)")
+            log.info(
+                "Detected LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
+            )
             return "BW (Black & White)"
 
         # 5-Color Extended模式：~2468色 (1024 base + 1444 extended)
         elif total_colors >= 2400 and total_colors < 2600:
-            log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode ({total_colors} colors)")
+            log.info(
+                "Detected LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
+            )
             return "5-Color Extended"
 
         # 8色模式：2600-2800色
         elif total_colors >= 2600 and total_colors <= 2800:
-            log.info(f"[AUTO_DETECT] Detected 8-Color mode ({total_colors} colors)")
+            log.info(
+                "Detected LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "8-Color Max"},
+            )
             return "8-Color Max"
 
         # 6色模式：1200-1400色
         elif total_colors >= 1200 and total_colors < 1400:
-            log.info(f"[AUTO_DETECT] Detected 6-Color mode ({total_colors} colors)")
+            log.info(
+                "Detected LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
+            )
             return "6-Color (CMYWGK 1296)"
 
         # 4色模式：900-1200色
         elif total_colors >= 900 and total_colors < 1200:
-            log.info(f"[AUTO_DETECT] Detected 4-Color mode ({total_colors} colors)")
+            log.info(
+                "Detected LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "4-Color"},
+            )
             return "4-Color"
 
         else:
             # 非标准尺寸：识别为合并色卡
-            log.info(f"[AUTO_DETECT] Non-standard LUT size ({total_colors} colors), detected as Merged")
+            log.info(
+                "Detected merged LUT color mode",
+                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "Merged"},
+            )
             return "Merged"
 
     except (OSError, ValueError, TypeError, KeyError) as e:
-        log.exception(f"[AUTO_DETECT] Error detecting LUT mode: {e}")
+        log.exception(
+            "Failed to detect LUT color mode",
+            extra={
+                "event": "lut_color_mode_detection_failed",
+                "lut_path": lut_path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+        )
         return None
 
 
@@ -517,14 +630,28 @@ def detect_image_type(image_path: str | None) -> str | None:
         ext = os.path.splitext(image_path)[1].lower()
 
         if ext == ".svg":
-            log.info(f"[AUTO_DETECT] SVG file detected, recommending SVG Mode")
+            log.info(
+                "Detected SVG image type",
+                extra={"event": "image_type_detected", "image_path": image_path, "extension": ext, "recommended_mode": str(ModelingMode.VECTOR)},
+            )
             return ModelingMode.VECTOR
         else:
-            log.info(f"[AUTO_DETECT] Raster image detected ({ext}), keeping current mode")
+            log.info(
+                "Detected raster image type",
+                extra={"event": "image_type_detected", "image_path": image_path, "extension": ext, "recommended_mode": None},
+            )
             return None
 
     except (OSError, ValueError, TypeError) as e:
-        log.warning(f"[AUTO_DETECT] Error detecting image type: {e}")
+        log.warning(
+            "Failed to detect image type",
+            extra={
+                "event": "image_type_detection_failed",
+                "image_path": image_path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+        )
         return None
 
 

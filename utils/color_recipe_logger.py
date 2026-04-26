@@ -14,6 +14,11 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
+from api.structured_logging import get_logger
+
+
+log = get_logger(__name__)
+
 
 class ColorRecipeLogger:
     """
@@ -270,7 +275,16 @@ class ColorRecipeLogger:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
         
-        print(f"[COLOR_RECIPE] ✅ Color recipe saved: {output_path}")
+        log.info(
+            "Color recipe saved",
+            extra={
+                "event": "color_recipe_saved",
+                "path": output_path,
+                "mapping_count": len(self.mappings),
+                "color_mode": self.color_mode,
+                "model_filename": model_filename,
+            },
+        )
     
     @staticmethod
     def create_from_processor(processor, output_dir: str, model_filename: str,

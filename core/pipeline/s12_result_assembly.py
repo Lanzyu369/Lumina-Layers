@@ -10,7 +10,10 @@ S12 — 最终结果组装。
 
 import time
 
+from api.structured_logging import get_logger
 from utils import Stats
+
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -65,17 +68,23 @@ def run(ctx: dict) -> dict:
             ('export_3mf_s',   'export_3mf'),
             ('glb_preview_s',  'glb_preview'),
         ]
-        label_w = max(len(label) for _, label in _keys_order)
-        lines = ["[S12] TIMING ----"]
         total_s = 0.0
+        timings_ms = {}
         for key, label in _keys_order:
             val = _hifi_timings.get(key, 0.0)
             if val > 0:
-                lines.append(f"[S12]   {label:<{label_w}} : {val:>8.3f}s")
+                timings_ms[label] = round(val * 1000, 3)
                 total_s += val
-        lines.append(f"[S12]   {'TOTAL':<{label_w}} : {total_s:>8.3f}s")
-        lines.append("[S12] ---------")
-        print("\n".join(lines))
+        _log.info(
+            "timing summary: %.3fs",
+            total_s,
+            extra={
+                "event": "s12_timing_summary",
+                "duration_ms": round(total_s * 1000, 3),
+                "step_timings_ms": timings_ms,
+                "count": len(timings_ms),
+            },
+        )
 
     mode_name = mode_info['mode'].get_display_name()
     msg = f"Conversion complete ({mode_name})! Resolution: {target_w}x{target_h}px"

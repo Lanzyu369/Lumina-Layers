@@ -14,7 +14,7 @@ from api.file_registry import FileRegistry
 from api.schemas.calibration import CalibrationGenerateRequest
 from api.schemas.responses import CalibrationResponse, SingleStageKitResponse
 from api.schemas.single_stage import SingleStageKitGenerateRequest
-from api.structured_logging import get_request_id
+from api.structured_logging import get_logger, get_request_id
 from config import PaletteEntry
 from core.calibration import (
     generate_5color_extended_batch_zip,
@@ -29,11 +29,20 @@ from core.single_stage import generate_single_stage_kit
 
 router = APIRouter(prefix="/api/calibration", tags=["Calibration"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
+log = get_logger(__name__)
 
 
 def _handle_core_error(e: Exception, context: str) -> None:
     """将 core 模块异常转换为 HTTP 500 错误。"""
-    print(f"[API] {context} error: {e}")
+    log.error(
+        "Calibration core operation failed",
+        extra={
+            "event": "calibration_core_operation_failed",
+            "context": context,
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        },
+    )
     raise HTTPException(status_code=500, detail=f"{context} failed: {str(e)}")
 
 

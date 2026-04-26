@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ast
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +42,16 @@ TARGETS = [
     ROOT / "core" / "vector_engine.py",
     ROOT / "core" / "calibration.py",
 ]
+PRINT_TARGETS = TARGETS + [
+    ROOT / "utils",
+]
+GOVERNANCE_SCAN_ROOTS = [
+    ROOT / "api",
+    ROOT / "core",
+    ROOT / "utils",
+]
 EXCEPT_EXCEPTION_BASELINE = 39
+LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 
 
 def _iter_py_files(path: Path) -> list[Path]:
@@ -50,17 +60,37 @@ def _iter_py_files(path: Path) -> list[Path]:
     return sorted(path.rglob("*.py"))
 
 
-def _collect_text() -> str:
+def _collect_text(targets: list[Path] | None = None) -> str:
     chunks: list[str] = []
-    for target in TARGETS:
+    for target in targets or TARGETS:
         for file_path in _iter_py_files(target):
             chunks.append(file_path.read_text(encoding="utf-8"))
     return "\n".join(chunks)
 
 
+def _iter_governance_py_files() -> list[Path]:
+    files: list[Path] = []
+    for root in GOVERNANCE_SCAN_ROOTS:
+        files.extend(_iter_py_files(root))
+    return sorted(files)
+
+
+def _parse_py_file(file_path: Path) -> ast.Module:
+    return ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+
+
+def _relative_location(file_path: Path, node: ast.AST) -> str:
+    return f"{file_path.relative_to(ROOT)}:{getattr(node, 'lineno', '?')}"
+
+
+def _is_logger_method_call(node: ast.Call) -> bool:
+    func = node.func
+    return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS
+
+
 def test_no_business_print_in_hot_paths() -> None:
     """Production hot paths should not use raw print()."""
-    combined = _collect_text()
+    combined = _collect_text(PRINT_TARGETS)
     assert "print(" not in combined
 
 
@@ -69,3 +99,67 @@ def test_except_exception_count_does_not_increase() -> None:
     combined = _collect_text()
     count = len(re.findall(r"\bexcept Exception\b", combined))
     assert count <= EXCEPT_EXCEPTION_BASELINE
+
+
+def test_no_default_event_logger_adapter_imports() -> None:
+    """Production modules should use structured get_logger directly."""
+    violations: list[str] = []
+    for file_path in _iter_governance_py_files():
+        tree = _parse_py_file(file_path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                names = {alias.name for alias in node.names}
+                if "DefaultEventLoggerAdapter" in names:
+                    violations.append(_relative_location(file_path, node))
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.endswith("pipeline_logging"):
+                        violations.append(_relative_location(file_path, node))
+
+    assert not violations, "DefaultEventLoggerAdapter imports found: " + ", ".join(violations)
+
+
+def test_no_bracket_tag_in_log_messages() -> None:
+    """Structured log messages should not use legacy bracket tag prefixes."""
+    violations: list[str] = []
+    for file_path in _iter_governance_py_files():
+        tree = _parse_py_file(file_path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not _is_logger_method_call(node):
+                continue
+            if not node.args:
+                continue
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                if first_arg.value.lstrip().startswith("["):
+                    violations.append(_relative_location(file_path, node))
+
+    assert not violations, "Bracket-prefixed log messages found: " + ", ".join(violations)
+
+
+def test_no_starlog_catchall_event_names() -> None:
+    """Structured event names should describe real events, not generic log buckets."""
+    violations: list[str] = []
+    for file_path in _iter_governance_py_files():
+        tree = _parse_py_file(file_path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                    continue
+                keys = keyword.value.keys
+                values = keyword.value.values
+                for key_node, value_node in zip(keys, values):
+                    if not (
+                        isinstance(key_node, ast.Constant)
+                        and key_node.value == "event"
+                        and isinstance(value_node, ast.Constant)
+                        and isinstance(value_node.value, str)
+                    ):
+                        continue
+                    event_name = value_node.value
+                    if event_name.endswith("_log"):
+                        violations.append(_relative_location(file_path, value_node))
+
+    assert not violations, "Catch-all *_log events found: " + ", ".join(violations)

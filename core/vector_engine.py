@@ -18,7 +18,6 @@ Key changes from v1:
 
 import os
 import re
-import logging
 import json
 import numpy as np
 import time
@@ -36,8 +35,7 @@ from shapely.validation import make_valid
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 
-_log = logging.getLogger(__name__)
-_structured_log = get_logger(__name__)
+_log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
@@ -379,7 +377,7 @@ def apply_recipe_overrides_to_analysis(
         arr = np.asarray(mask, dtype=bool)
         if arr.ndim != 2 or arr.shape != (h_px, w_px):
             _log.warning(
-                "[VECTOR] Region mask %s shape %s does not match preview grid %s; skipped",
+                "Region mask %s shape %s does not match preview grid %s; skipped",
                 rid,
                 arr.shape,
                 (h_px, w_px),
@@ -388,7 +386,7 @@ def apply_recipe_overrides_to_analysis(
         normalised_masks[str(rid)] = arr
 
     if not normalised_masks:
-        _log.warning("[VECTOR] No region masks matched preview grid; recipe overrides ignored")
+        _log.warning("No region masks matched preview grid; recipe overrides ignored")
         return
 
     # --- Build a global virtual-material registry (dedupe by name+hex) ---
@@ -584,8 +582,8 @@ def apply_recipe_overrides_to_analysis(
 
     analysis.num_layers = int(effective_target)
 
-    _log.info(
-        "[VECTOR] Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
+    _log.debug(
+        "Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
         "virtuals=%s, target_layers=%s",
         len(analysis.matched_shapes),
         overridden_count,
@@ -611,7 +609,7 @@ class VectorProcessor:
 
     def __init__(self, lut_path: str, color_mode: str):
         self.color_mode = color_mode
-        _log.info("[VECTOR] Initializing Native Vector Engine (%s)...", color_mode)
+        _log.debug("Initializing Native Vector Engine (%s)...", color_mode)
 
         ImageProcessor = _get_image_processor_class()
         self.img_processor = ImageProcessor(lut_path, color_mode)
@@ -622,7 +620,7 @@ class VectorProcessor:
         self.fridge_magnets: list = []
         self.expand_stroke_to_fill = False
 
-        _log.info("[VECTOR] Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
+        _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
 
     # ── Geometry pre-processing helpers ─────────────────────────────────
 
@@ -1225,7 +1223,7 @@ class VectorProcessor:
             A ``VectorAnalysis`` containing all intermediate data needed
             by ``build_mesh`` and ``render_preview``.
         """
-        _log.info("[VECTOR] Analyzing: %s", svg_path)
+        _log.debug("Analyzing: %s", svg_path)
         stage_timings = {}
         expand_stroke_to_fill = bool(getattr(self, "expand_stroke_to_fill", False))
 
@@ -1254,9 +1252,9 @@ class VectorProcessor:
             bbox = cached_entry["bbox"]
             stage_timings["parse_s"] = 0.0
             stage_timings["occlusion_s"] = 0.0
-            _log.info("[VECTOR] Parse/clip cache hit: %s", os.path.basename(svg_path))
-            _log.info("[VECTOR] Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
-            _log.info("[VECTOR] After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
+            _log.debug("Parse/clip cache hit: %s", os.path.basename(svg_path))
+            _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
+            _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
         else:
             t0 = time.perf_counter()
             had_parse_policy = hasattr(self, "_parse_expand_stroke_to_fill")
@@ -1272,14 +1270,14 @@ class VectorProcessor:
             if not shape_data:
                 raise ValueError("No valid filled shapes found in SVG.")
             stage_timings["parse_s"] = time.perf_counter() - t0
-            _log.info("[VECTOR] Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
+            _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
 
             t0 = time.perf_counter()
             _pre_area = sum(it["poly"].area for it in shape_data if it["poly"] is not None)
             clipped_shapes, silhouette = self._clip_occlusion(shape_data, return_silhouette=True)
             _clip_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] _clip_occlusion: %s -> %s shapes, area %.1f -> %.1f (%.1f%%)",
+            _log.debug(
+                "_clip_occlusion: %s -> %s shapes, area %.1f -> %.1f (%.1f%%)",
                 len(shape_data),
                 len(clipped_shapes),
                 _pre_area,
@@ -1295,8 +1293,8 @@ class VectorProcessor:
                     item["geometry"] = g
                     post_clip.append(item)
             _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
+            _log.debug(
+                "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
                 len(clipped_shapes),
                 len(post_clip),
                 _clip_area,
@@ -1310,8 +1308,8 @@ class VectorProcessor:
                 {"geometry": it["poly"], "color": it["color"], "draw_order": idx} for idx, it in enumerate(split_output)
             ]
             _split_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] split disconnected: %s -> %s shapes, area %.1f -> %.1f",
+            _log.debug(
+                "split disconnected: %s -> %s shapes, area %.1f -> %.1f",
                 len(post_clip),
                 len(clipped_shapes),
                 _norm_area,
@@ -1319,7 +1317,7 @@ class VectorProcessor:
             )
 
             stage_timings["occlusion_s"] = time.perf_counter() - t0
-            _log.info("[VECTOR] After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
+            _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
 
             if cache_key is not None:
                 _VECTOR_PARSE_CLIP_CACHE[cache_key] = {
@@ -1335,7 +1333,7 @@ class VectorProcessor:
         # === Stage 3: Resolve color system config ===
         is_six_color = len(self.img_processor.lut_rgb) == 1296
         if is_six_color:
-            _log.info("[VECTOR] Auto-detected 6-Color LUT. Forcing 6-Color mode.")
+            _log.debug("Auto-detected 6-Color LUT. Forcing 6-Color mode.")
             color_conf = ColorSystem.SIX_COLOR
             self.color_mode = "6-Color"
         else:
@@ -1374,9 +1372,9 @@ class VectorProcessor:
                     color_conf = dict(color_conf)
                     color_conf["slots"] = slot_names
                     color_conf["preview"] = preview_colors
-                    _log.info("[VECTOR] LUT palette override: %s", slot_names)
+                    _log.debug("LUT palette override: %s", slot_names)
             except Exception as e:
-                _log.warning("[VECTOR] Failed to extract LUT palette: %s", e)
+                _log.warning("Failed to extract LUT palette: %s", e)
 
         # === Stage 4: Match fill colors to LUT recipes ===
         replacement_manager = None
@@ -1386,7 +1384,7 @@ class VectorProcessor:
 
                 replacement_manager = ColorReplacementManager.from_dict(color_replacements)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("[VECTOR] Failed to load color replacements: %s", e)
+                _log.warning("Failed to load color replacements: %s", e)
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
@@ -1400,7 +1398,7 @@ class VectorProcessor:
             if idx < len(matched_shapes):
                 matched_shapes[idx]["geometry"] = filtered_geometry
         stage_timings["color_match_s"] = time.perf_counter() - t0
-        _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
+        _log.debug("Matched %s shapes to LUT recipes", len(matched_shapes))
         legacy_stroke_only_shapes = sum(
             1 for item in shape_data if item.get("source_kind") == "stroke_only"
         )
@@ -1419,7 +1417,7 @@ class VectorProcessor:
             "legacy_stroke_only_shapes": legacy_stroke_only_shapes,
             "fill_eq_stroke_double_buffer": fill_eq_stroke_double_buffer,
         }
-        _structured_log.info(stroke_policy_message, extra=stroke_policy_extra)
+        _log.info(stroke_policy_message, extra=stroke_policy_extra)
 
         return VectorAnalysis(
             shape_data=shape_data,
@@ -1455,7 +1453,7 @@ class VectorProcessor:
         Returns:
             A ``trimesh.Scene`` with one geometry per material slot.
         """
-        _log.info("[VECTOR] Building mesh: structure_mode=%s", structure_mode)
+        _log.debug("Building mesh: structure_mode=%s", structure_mode)
         stage_timings = dict(analysis.stage_timings)
         t_total_start = time.perf_counter()
 
@@ -1499,8 +1497,8 @@ class VectorProcessor:
                 face_up=True,
                 optical_z_base=backing_height,
             )
-            _log.info(
-                "[VECTOR] 5-Color face-up: %s optical layers above %.2fmm backing",
+            _log.debug(
+                "5-Color face-up: %s optical layers above %.2fmm backing",
                 num_layers,
                 backing_height,
             )
@@ -1530,7 +1528,7 @@ class VectorProcessor:
             backing_z_start = num_layers * layer_h
 
         if thickness_mm > 0 and silhouette is not None and not silhouette.is_empty:
-            _log.info("[VECTOR] Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
+            _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
             backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
             if backing_sil is None or backing_sil.is_empty:
                 backing_sil = silhouette
@@ -1580,7 +1578,7 @@ class VectorProcessor:
         t0 = time.perf_counter()
         is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
         if is_double_sided:
-            _log.info("[VECTOR] Adding mirrored color layers (double-sided mode)...")
+            _log.debug("Adding mirrored color layers (double-sided mode)...")
             top_z_start = backing_z_start + backing_layer_count * layer_h
             self._add_double_sided_layers(
                 matched_shapes,
@@ -1608,7 +1606,7 @@ class VectorProcessor:
             if not mesh_list:
                 continue
 
-            _log.info("[VECTOR] Merging %s parts for %s...", len(mesh_list), name)
+            _log.debug("Merging %s parts for %s...", len(mesh_list), name)
             combined = trimesh.util.concatenate(mesh_list) if len(mesh_list) > 1 else mesh_list[0]
             # Weld coincident border vertices produced by independent per-shape
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
@@ -1632,8 +1630,8 @@ class VectorProcessor:
         stage_timings["extrude_cache_entries"] = len(extrude_cache)
         self.last_stage_timings = stage_timings
 
-        _log.info(
-            "[VECTOR] Stage timings (s): parse=%.3f, clip=%.3f, match=%.3f, "
+        _log.debug(
+            "Stage timings (s): parse=%.3f, clip=%.3f, match=%.3f, "
             "extrude_bottom=%.3f, backing=%.3f, extrude_top=%.3f, assemble=%.3f, total=%.3f",
             stage_timings.get("parse_s", 0),
             stage_timings.get("occlusion_s", 0),
@@ -1644,8 +1642,8 @@ class VectorProcessor:
             stage_timings["assemble_s"],
             stage_timings["total_s"],
         )
-        _log.info("[VECTOR] Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
-        _log.info("[VECTOR] Scene complete: %s objects", len(scene.geometry))
+        _log.debug("Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
+        _log.debug("Scene complete: %s objects", len(scene.geometry))
         return scene
 
     def svg_to_mesh(
@@ -2073,7 +2071,7 @@ class VectorProcessor:
                 hex_c = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
                 matched_hex = f"#{matched_rgb[0]:02x}{matched_rgb[1]:02x}{matched_rgb[2]:02x}"
                 if recipe_log_mode == "full":
-                    _log.info("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
+                    _log.debug("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
                 elif recipe_log_mode == "summary" and len(sample_logs) < 8:
                     sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe}")
 
@@ -2088,13 +2086,13 @@ class VectorProcessor:
             )
 
         if recipe_log_mode == "summary":
-            _log.info(
-                "[VECTOR] Recipe cache summary: unique_colors=%s, shapes=%s",
+            _log.debug(
+                "Recipe cache summary: unique_colors=%s, shapes=%s",
                 len(color_cache),
                 len(clipped_shapes),
             )
             if sample_logs:
-                _log.info("[VECTOR] Recipe samples: %s", "; ".join(sample_logs))
+                _log.debug("Recipe samples: %s", "; ".join(sample_logs))
 
         return matched
 
@@ -2405,7 +2403,7 @@ class VectorProcessor:
         skipped_types = {}
         skipped_gradient_count = 0
         skipped_polygon_count = 0
-        _log.info("[VECTOR] Parsing SVG geometry...")
+        _log.debug("Parsing SVG geometry...")
 
         def _sample_stroke_geometry(path_obj, stroke_width_svg, cap_style_name="round", join_style_name="round"):
             try:
@@ -2666,12 +2664,12 @@ class VectorProcessor:
             )
 
         if skipped_types:
-            _log.info(f"[VECTOR] Skipped non-path elements: {skipped_types}")
+            _log.debug(f"Skipped non-path elements: {skipped_types}")
         if skipped_gradient_count > 0:
-            _log.info(f"[VECTOR] {skipped_gradient_count} gradient fills could not be fully resolved")
+            _log.debug(f"{skipped_gradient_count} gradient fills could not be fully resolved")
         if skipped_polygon_count > 0:
-            _log.info(f"[VECTOR] Skipped {skipped_polygon_count} elements (invalid polygon after sampling)")
-        _log.info(f"[VECTOR] Successfully parsed {len(raw_shapes)} shapes from SVG")
+            _log.debug(f"Skipped {skipped_polygon_count} elements (invalid polygon after sampling)")
+        _log.debug(f"Successfully parsed {len(raw_shapes)} shapes from SVG")
 
         parse_warnings = []
         if skipped_gradient_count > 0:
@@ -2707,14 +2705,14 @@ class VectorProcessor:
                     gy0 = min(gy0, vb_y)
                     gx1 = max(gx1, vb_x + vb_w)
                     gy1 = max(gy1, vb_y + vb_h)
-                    _log.info("[VECTOR] SVG viewBox: (%s, %s, %s, %s)", vb_x, vb_y, vb_w, vb_h)
+                    _log.debug("SVG viewBox: (%s, %s, %s, %s)", vb_x, vb_y, vb_w, vb_h)
         except VECTOR_HANDLED_ERRORS:
             pass
 
         real_w = gx1 - gx0
         real_h = gy1 - gy0
 
-        _log.info("[VECTOR] Global bounds: x=%.1f, y=%.1f, w=%.1f, h=%.1f", gx0, gy0, real_w, real_h)
+        _log.debug("Global bounds: x=%.1f, y=%.1f, w=%.1f, h=%.1f", gx0, gy0, real_w, real_h)
         if real_w == 0:
             raise ValueError("Invalid geometry width (0)")
 
@@ -2797,7 +2795,7 @@ class VectorProcessor:
                 m.apply_translation([0, 0, z_offset])
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("[VECTOR] Failed to extrude polygon: %s", e)
+                _log.warning("Failed to extrude polygon: %s", e)
                 continue
 
         return meshes

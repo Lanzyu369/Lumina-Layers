@@ -49,6 +49,7 @@ from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
 from core.gradient_region_requantize import requantize_gradient_regions
 from core.converter import (
     extract_color_palette,
+    generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
@@ -64,6 +65,7 @@ from utils.lut_manager import LUTManager
 from api.structured_logging import get_logger
 
 from .common import (
+    NON_FATAL_GLB_ERRORS,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
@@ -75,6 +77,7 @@ from .async_glb import schedule_glb_build
 
 router = APIRouter()
 log = get_logger(__name__)
+_DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
 
 def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes:
@@ -108,6 +111,40 @@ def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes
     cache["preview_rgba"] = preview_rgba.copy()
 
     return _image_to_png_bytes(preview_rgba)
+
+
+def _schedule_or_run_overridden_glb_build(
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    cache: dict,
+    filename: str,
+) -> str | None:
+    """Schedule the normal GLB build, or run an overridden builder inline."""
+    if generate_segmented_glb is _DEFAULT_GENERATE_SEGMENTED_GLB:
+        schedule_glb_build(session_id, store, registry, cache)
+        return None
+
+    try:
+        glb_path = generate_segmented_glb(cache)
+    except NON_FATAL_GLB_ERRORS as exc:
+        log.warning(
+            "Overridden GLB build failed",
+            extra={
+                "event": "converter_region_replace_overridden_glb_failed",
+                "session_id": session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    if not glb_path:
+        return None
+
+    store.put(session_id, "preview_cache", cache)
+    glb_id = registry.register_path(session_id, glb_path, filename)
+    return f"/api/files/{glb_id}"
 
 
 def _get_region_mask_items_for_ids(
@@ -276,7 +313,7 @@ def _sync_material_archive_matrix_for_diff(
         session_data.get("material_grid_resolution")
         or DEFAULT_GRID_RESOLUTION
     )
-    log.info(
+    log.debug(
         "material-archive matrix sync: solving",
         extra={
             "event": "converter_replace_material_sync_solve",
@@ -308,7 +345,7 @@ def _sync_material_archive_matrix_for_diff(
                 layer_height_mm=layer_height_mm,
                 substrate=substrate,
             )
-        log.info(
+        log.debug(
             "material-archive matrix sync: solved",
             extra={
                 "event": "converter_replace_material_sync_solved",
@@ -447,7 +484,7 @@ def replace_color(
 
         # --- diagnostic logging ---
         diff_pixels = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "replace-color diag",
             extra={
                 "event": "converter_replace_color_diag",
@@ -756,7 +793,7 @@ def color_highlight(
         # restarted after the schema change".
         # 诊断日志：明确记录 endpoint 真正收到的 scope 字段与分支走向，
         # 便于区分"前端未传"与"后端未重启（静默丢弃字段）"。
-        log.info(
+        log.debug(
             "color_highlight_invoked",
             extra={
                 "event": "color_highlight_invoked",
@@ -807,7 +844,7 @@ def color_highlight(
             )
             region_scope_mask = region_id_arr == np.uint32(encoded_id)
             region_pixel_count = int(region_scope_mask.sum())
-            log.info(
+            log.debug(
                 "color_highlight_using_region_mask",
                 extra={
                     "event": "color_highlight_scope_region_mask",
@@ -1170,7 +1207,7 @@ def region_replace(
         import time as _time
         _region_pixels = int(region_mask.sum())
         _diff_before_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "region-replace diag: before sync",
             extra={
                 "event": "converter_region_replace_diag_pre",
@@ -1196,7 +1233,7 @@ def region_replace(
         _sync_ms = (_time.perf_counter() - _t_sync) * 1000
 
         _diff_after_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "region-replace diag: after sync",
             extra={
                 "event": "converter_region_replace_diag_post",
@@ -1219,8 +1256,13 @@ def region_replace(
         # PNG) and the GLB arrives via /glb-status polling afterwards.
         # 异步 GLB 重建：以往 /region-replace 77% 的耗时在这里；现在只
         # 等 sync + PNG 即可响应，GLB 通过 glb-status 轮询取回。
-        schedule_glb_build(request.session_id, store, registry, cache)
-        glb_url: str | None = None
+        glb_url: str | None = _schedule_or_run_overridden_glb_build(
+            request.session_id,
+            store,
+            registry,
+            cache,
+            "preview_region_replaced.glb",
+        )
 
         # Per-step timing so the frontend-perceived latency can be attributed
         # to mask building / material sync / PNG render. The heavy GLB step
@@ -1802,7 +1844,7 @@ def replace_colors_batch(
 
         replaced_rgb = manager.apply_to_image(matched_rgb)
 
-        log.info(
+        log.debug(
             "replace-colors-batch diag",
             extra={
                 "event": "converter_replace_colors_batch_diag",
@@ -1940,7 +1982,7 @@ def region_replace_batch(
             store.put(request.session_id, "selected_region_mask", None)
             store.put(request.session_id, "selected_region_id", None)
 
-        log.info(
+        log.debug(
             "region-replace-batch diag",
             extra={
                 "event": "converter_region_replace_batch_diag",

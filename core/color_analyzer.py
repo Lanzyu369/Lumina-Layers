@@ -105,7 +105,7 @@ class ColorAnalyzer:
             pixel_count = w * h
 
             if verbose:
-                log.info(f"[ColorAnalysis] 分析尺寸: {w}x{h}, 像素数: {pixel_count:,}")
+                log.info(f"分析尺寸: {w}x{h}, 像素数: {pixel_count:,}")
 
             # 3. 计算各项指标
             unique_colors = cls._calc_unique_colors(img_rgb, verbose)
@@ -123,7 +123,7 @@ class ColorAnalyzer:
 
             if verbose:
                 log.info(
-                    f"[ColorAnalysis] 复杂度评分: {complexity_score} "
+                    f"复杂度评分: {complexity_score} "
                     f"(色系={hue_score}, 集中度={concentration_score}, "
                     f"颜色={color_score}, 边缘={edge_score})"
                 )
@@ -143,11 +143,11 @@ class ColorAnalyzer:
                 max_safe = recommended
 
             if verbose:
-                log.info(f"[ColorAnalysis] 宽度因子: {width_factor:.2f} (基于 {target_width_mm}mm)")
+                log.info(f"宽度因子: {width_factor:.2f} (基于 {target_width_mm}mm)")
                 total_time = time.time() - total_start
-                log.info(f"[ColorAnalysis] ✅ 完成! 总耗时: {total_time:.2f}s")
+                log.info(f"✅ 完成! 总耗时: {total_time:.2f}s")
                 log.info(
-                    f"[ColorAnalysis] 结果: 复杂度={complexity_score}, " f"推荐={recommended}, 最大安全={max_safe}"
+                    f"结果: 复杂度={complexity_score}, " f"推荐={recommended}, 最大安全={max_safe}"
                 )
 
             return ColorAnalysisResult(
@@ -163,7 +163,7 @@ class ColorAnalyzer:
             )
 
         except (OSError, ValueError, cv2.error) as e:
-            log.exception(f"[ColorAnalysis] 分析失败: {e}")
+            log.exception(f"分析失败: {e}")
             return default_result
 
     # ==================== 私有方法 ====================
@@ -189,7 +189,7 @@ class ColorAnalyzer:
         h, w = img_rgb.shape[:2]
 
         if verbose:
-            log.info(f"[ColorAnalysis] 加载图片: {time.time() - t0:.2f}s, 原始尺寸: {w}x{h}")
+            log.info(f"加载图片: {time.time() - t0:.2f}s, 原始尺寸: {w}x{h}")
 
         return img_rgb, w, h
 
@@ -207,7 +207,7 @@ class ColorAnalyzer:
             img_rgb = cv2.resize(img_rgb, (target_width_px, target_height_px), interpolation=cv2.INTER_AREA)
             if verbose:
                 log.info(
-                    f"[ColorAnalysis] 缩放到分析尺寸: {time.time() - t0:.2f}s, "
+                    f"缩放到分析尺寸: {time.time() - t0:.2f}s, "
                     f"新尺寸: {target_width_px}x{target_height_px}"
                 )
 
@@ -222,7 +222,7 @@ class ColorAnalyzer:
         unique_count = len(np.unique(pixels, axis=0))
 
         if verbose:
-            log.info(f"[ColorAnalysis] 独特颜色数（粗量化32级）: {unique_count}, " f"耗时: {time.time() - t0:.2f}s")
+            log.info(f"独特颜色数（粗量化32级）: {unique_count}, " f"耗时: {time.time() - t0:.2f}s")
 
         return unique_count
 
@@ -251,7 +251,7 @@ class ColorAnalyzer:
 
         if verbose:
             log.info(
-                f"[ColorAnalysis] 色系数量: {significant_hues}/12, "
+                f"色系数量: {significant_hues}/12, "
                 f"有色像素占比: {colored_ratio:.2%}, 耗时: {time.time() - t0:.2f}s"
             )
 
@@ -273,7 +273,7 @@ class ColorAnalyzer:
 
         if verbose:
             log.info(
-                f"[ColorAnalysis] 主色占比: top4={top4_ratio:.2%}, "
+                f"主色占比: top4={top4_ratio:.2%}, "
                 f"top8={top8_ratio:.2%}, top16={top16_ratio:.2%}, "
                 f"耗时: {time.time() - t0:.2f}s"
             )
@@ -289,7 +289,7 @@ class ColorAnalyzer:
         edge_ratio = np.sum(edges > 0) / pixel_count
 
         if verbose:
-            log.info(f"[ColorAnalysis] 边缘占比: {edge_ratio:.2%}, " f"耗时: {time.time() - t0:.2f}s")
+            log.info(f"边缘占比: {edge_ratio:.2%}, " f"耗时: {time.time() - t0:.2f}s")
 
         return edge_ratio
 

@@ -578,10 +578,15 @@ async def convert_generate(
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
     material_matrix_path: str | None = None
-    log.info(
-        "[GENERATE][DEBUG-COMPARE] use_cached_matched_rgb=%s, has_replacement_regions=%s",
+    log.debug(
+        "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
         bool(replacement_regions),
+        extra={
+            "event": "converter_generate_cached_input_state",
+            "use_cached_matched_rgb": request.use_cached_matched_rgb,
+            "has_replacement_regions": bool(replacement_regions),
+        },
     )
     if request.use_cached_matched_rgb:
         cached_matched_rgb = cache.get("matched_rgb")
@@ -591,10 +596,15 @@ async def convert_generate(
             np.save(mr_temp_path, cached_matched_rgb)
             matched_rgb_path = mr_temp_path
             store.register_temp_file(body.session_id, mr_temp_path)
-            log.info(
-                "[GENERATE][DEBUG-COMPARE] cached matched_rgb saved: shape=%s, dtype=%s",
+            log.debug(
+                "Cached matched RGB saved for worker: shape=%s, dtype=%s",
                 cached_matched_rgb.shape,
                 cached_matched_rgb.dtype,
+                extra={
+                    "event": "converter_generate_cached_matched_rgb_saved",
+                    "matched_rgb_shape": list(cached_matched_rgb.shape),
+                    "matched_rgb_dtype": str(cached_matched_rgb.dtype),
+                },
             )
 
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(

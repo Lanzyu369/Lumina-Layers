@@ -21,6 +21,11 @@ from typing import List, Dict, Optional
 import numpy as np
 from PIL import Image
 
+from api.structured_logging import get_logger
+
+
+log = get_logger(__name__)
+
 # Lazy imports: avoid >60s startup cost when imported via API.
 # Only loaded when export functions are actually called.
 _trimesh = None
@@ -188,9 +193,15 @@ def load_printer_template(
         with open(profile_path, "r", encoding="utf-8") as f:
             template = json.load(f)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
-        print(
-            f"[BAMBU_3MF] Loaded printer template: {profile_path} "
-            f"(slicer={slicer}, nozzle_size={normalized_nozzle_size})"
+        log.info(
+            "Loaded printer template",
+            extra={
+                "event": "bambu_printer_template_loaded",
+                "path": profile_path,
+                "printer_id": printer_id,
+                "slicer": slicer,
+                "nozzle_size": normalized_nozzle_size,
+            },
         )
         return copy.deepcopy(template)
 
@@ -200,13 +211,30 @@ def load_printer_template(
         with open(fallback_path, "r", encoding="utf-8") as f:
             template = json.load(f)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
-        print(
-            f"[BAMBU_3MF] Printer template not found for '{printer_id}' "
-            f"(slicer={slicer}, nozzle_size={normalized_nozzle_size}), using fallback: {fallback_path}"
+        log.warning(
+            "Printer template not found; using fallback",
+            extra={
+                "event": "bambu_printer_template_fallback_used",
+                "path": fallback_path,
+                "printer_id": printer_id,
+                "slicer": slicer,
+                "nozzle_size": normalized_nozzle_size,
+                "template_file": template_file,
+            },
         )
         return copy.deepcopy(template)
 
-    print(f"[WARNING] No printer template found for '{printer_id}', returning empty dict")
+    log.warning(
+        "No printer template found",
+        extra={
+            "event": "bambu_printer_template_missing",
+            "path": profile_path,
+            "printer_id": printer_id,
+            "slicer": slicer,
+            "nozzle_size": normalized_nozzle_size,
+            "template_file": template_file,
+        },
+    )
     return {}
 
 
@@ -397,7 +425,18 @@ class BambuStudio3MFWriter:
         if len(self.objects) == 0:
             raise ValueError("[BAMBU_3MF] Refusing to export 3MF: no mesh objects were added")
 
-        print(f"[BAMBU_3MF] Exporting {len(self.objects)} objects to {self.output_path}")
+        log.info(
+            "Exporting Bambu 3MF",
+            extra={
+                "event": "bambu_3mf_export_started",
+                "path": self.output_path,
+                "object_count": len(self.objects),
+                "color_mode": self.color_mode,
+                "printer_id": self.printer_id,
+                "slicer": self.slicer,
+                "nozzle_size": self.nozzle_size,
+            },
+        )
         _exp_t0 = time.perf_counter()
 
         n3mf = _get_n3mf()
@@ -446,14 +485,26 @@ class BambuStudio3MFWriter:
             opts.watermark = n3mf.WatermarkConfig(payload=self.watermark.encode("utf-8"))
         elif self.watermark:
             n3mf_version = getattr(n3mf, "__version__", "unknown")
-            print(
-                "[BAMBU_3MF] Watermark disabled: "
-                f"neroued_3mf {n3mf_version} does not provide WatermarkConfig"
+            log.warning(
+                "Watermark disabled because neroued_3mf does not provide WatermarkConfig",
+                extra={
+                    "event": "bambu_3mf_watermark_disabled",
+                    "path": self.output_path,
+                    "n3mf_version": n3mf_version,
+                },
             )
 
         n3mf.write_to_file(self.output_path, doc, opts)
 
-        print(f"[BAMBU_3MF] [OK] Export complete: {self.output_path} ({time.perf_counter() - _exp_t0:.3f}s total)")
+        log.info(
+            "Bambu 3MF export completed",
+            extra={
+                "event": "bambu_3mf_export_completed",
+                "path": self.output_path,
+                "object_count": len(self.objects),
+                "duration_ms": round((time.perf_counter() - _exp_t0) * 1000, 3),
+            },
+        )
         return self.output_path
 
     # ------------------------------------------------------------------
@@ -870,7 +921,15 @@ class BambuStudio3MFWriter:
                     _CONFIG_TEMPLATE_CACHE = json.load(f)
             return copy.deepcopy(_CONFIG_TEMPLATE_CACHE)
         else:
-            print("[WARNING] bambu_config_template.json not found, using minimal config")
+            log.warning(
+                "Bambu config template not found; using minimal config",
+                extra={
+                    "event": "bambu_config_template_missing",
+                    "path": template_path,
+                    "printer_id": self.printer_id,
+                    "slicer": self.slicer,
+                },
+            )
             return self._get_minimal_config_template()
 
     @staticmethod
@@ -979,8 +1038,15 @@ def export_scene_with_bambu_metadata(
     else:
         actual_color_mode = "8-Color"
 
-    print(
-        f"[BAMBU_3MF] LUT color_mode: {color_mode}, Palette colors: {palette_color_count} → 3MF mode: {actual_color_mode}"
+    log.info(
+        "Resolved Bambu 3MF color mode",
+        extra={
+            "event": "bambu_3mf_color_mode_resolved",
+            "path": output_path,
+            "input_color_mode": color_mode,
+            "palette_color_count": palette_color_count,
+            "actual_color_mode": actual_color_mode,
+        },
     )
 
     writer_kwargs = {
@@ -1005,7 +1071,7 @@ def export_scene_with_bambu_metadata(
 
     name_to_color: dict[str, tuple] = {}
     project_slot_indices = {name: idx for idx, name in enumerate(resolved_project_slot_names)}
-    print("[BAMBU_3MF] Building color mapping:")
+    color_sources: dict[str, int] = {}
     for idx, slot_name in enumerate(slot_names):
         resolved_slot_index = project_slot_indices.get(slot_name, idx)
         color_rgb, source = _resolve_preview_color_for_slot_name(
@@ -1014,25 +1080,63 @@ def export_scene_with_bambu_metadata(
             preview_colors=preview_colors,
         )
         name_to_color[slot_name] = color_rgb
-        print(f"[BAMBU_3MF]   {idx}: '{slot_name}' -> RGB{color_rgb} ({source})")
+        color_sources[source] = color_sources.get(source, 0) + 1
+        log.debug(
+            "Resolved Bambu 3MF slot color",
+            extra={
+                "event": "bambu_3mf_slot_color_resolved",
+                "path": output_path,
+                "slot_index": idx,
+                "slot_name": slot_name,
+                "color_rgb": color_rgb,
+                "source": source,
+            },
+        )
 
-    print(f"[BAMBU_3MF] Color mapping complete: {list(name_to_color.keys())}")
-
-    print("[BAMBU_3MF] Adding meshes to 3MF:")
     unmatched = []
+    added_count = 0
     for idx, slot_name in enumerate(slot_names):
         mesh = scene.geometry.get(slot_name)
         if mesh is None:
             unmatched.append(slot_name)
-            print(f"[BAMBU_3MF]   {idx}: '{slot_name}' - NOT FOUND in scene")
+            log.debug(
+                "Slot mesh not found in scene",
+                extra={
+                    "event": "bambu_3mf_slot_mesh_missing",
+                    "path": output_path,
+                    "slot_index": idx,
+                    "slot_name": slot_name,
+                },
+            )
             continue
 
         color_rgb = name_to_color.get(slot_name, (200, 200, 200))
         writer.add_mesh(mesh, slot_name, color_rgb)
-        print(f"[BAMBU_3MF]   {idx}: '{slot_name}' -> RGB{color_rgb} (added to 3MF)")
+        added_count += 1
+        log.debug(
+            "Added slot mesh to Bambu 3MF",
+            extra={
+                "event": "bambu_3mf_slot_mesh_added",
+                "path": output_path,
+                "slot_index": idx,
+                "slot_name": slot_name,
+                "color_rgb": color_rgb,
+            },
+        )
 
     if unmatched:
         raise ValueError("[BAMBU_3MF] Missing geometries for slot names: " + ", ".join(unmatched))
+
+    log.info(
+        "Prepared Bambu 3MF scene",
+        extra={
+            "event": "bambu_3mf_scene_prepared",
+            "path": output_path,
+            "slot_count": len(slot_names),
+            "added_count": added_count,
+            "color_source_counts": color_sources,
+        },
+    )
 
     return writer.export()
 

@@ -7,9 +7,9 @@ S09 — 坐标变换与 3MF 导出。
 - BambuStudio 3MF 导出（含嵌入打印设置）
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 
 import numpy as np
 
@@ -17,7 +17,7 @@ from config import MODELS_DIR, PrinterConfig
 from core.naming import generate_model_filename
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -71,7 +71,7 @@ def run(ctx: dict) -> dict:
     if _prog is not None:
         _prog(0.50, "导出 3MF 中... | Exporting 3MF...")
 
-    _log.info(f"[S09] export_3mf start")
+    _log.info(f"export_3mf start")
     _export_t0 = time.perf_counter() if _bench_enabled else None
 
     base_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -79,7 +79,7 @@ def run(ctx: dict) -> dict:
 
     # Check if scene has any geometry before exporting
     if len(scene.geometry) == 0:
-        _log.error("[S09] No meshes generated, cannot export 3MF")
+        _log.error("No meshes generated, cannot export 3MF")
         ctx["error"] = "[ERROR] Mesh generation failed: No valid meshes generated"
         return ctx
 
@@ -103,9 +103,9 @@ def run(ctx: dict) -> dict:
     }
 
     try:
-        _log.info(f"[S09] Exporting with BambuStudio metadata...")
+        _log.info(f"Exporting with BambuStudio metadata...")
         _log.debug(
-            "[S09] Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
+            "Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
             bool(ctx.get("enable_base_layer_height_modifier", True)),
             float(ctx.get("bambu_base_height_mm", 0.0)),
             float(ctx.get("bambu_color_height_mm", 0.0)),
@@ -131,10 +131,10 @@ def run(ctx: dict) -> dict:
             _export_elapsed = time.perf_counter() - _export_t0
             _hifi_timings["export_3mf_s"] = _export_elapsed
             ctx["_hifi_timings"] = _hifi_timings
-            _log.info(f"[S09] export_3mf done: {_export_elapsed:.3f}s")
-        _log.info(f"[S09] 3MF exported with embedded settings: {out_path}")
+            _log.info(f"export_3mf done: {_export_elapsed:.3f}s")
+        _log.info(f"3MF exported with embedded settings: {out_path}")
     except (ValueError, TypeError, RuntimeError, OSError) as e:
-        _log.exception(f"[S09] Error exporting 3MF: {e}")
+        _log.exception(f"Error exporting 3MF: {e}")
         ctx["error"] = f"[ERROR] 3MF export failed: {e}"
         return ctx
 
