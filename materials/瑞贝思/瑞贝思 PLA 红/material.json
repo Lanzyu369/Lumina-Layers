@@ -2,8 +2,9 @@
   "schema_version": "1.1",
   "kind": "lumina_stage_a_material",
   "material_name": "瑞贝思 PLA 红",
+  "brand": "瑞贝思",
   "created_at": "2026-04-16T10:57:32.780840+00:00",
-  "updated_at": "2026-04-16T10:57:32.782499+00:00",
+  "updated_at": "2026-04-26T04:27:02.933300+00:00",
   "stage_a_params_file": "stage_A_parameters.json",
   "fit_summary": {
     "substrate_count": 2,
@@ -16,65 +17,77 @@
       "瑞贝思 PLA 红"
     ],
     "overall_validation": {
-      "mean_delta_e": 3.2045546315541182,
-      "max_delta_e": 11.825520277775853,
-      "rmse_linear": 0.014358822728015926,
+      "mean_delta_e": 2.9788237986940653,
+      "max_delta_e": 12.590150704519626,
+      "rmse_linear": 0.01824130772933268,
       "channel_rmse": [
-        0.02347385989848262,
-        0.006142567689246255,
-        0.005456567973845584
+        0.029723410533804843,
+        0.008049041331530792,
+        0.007068785108549062
       ],
-      "best_run_mean_delta_e": 3.2045546315541182,
+      "best_run_mean_delta_e": 2.9788237986940653,
       "verification_count": 1
     },
-    "warnings": [
-      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
-    ],
+    "warnings": [],
     "orientation_ranking": {
       "orientation_reliable": true,
-      "delta_e_gap": 2.4602,
+      "delta_e_gap": 4.3364,
       "top_candidates": [
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "flip_horizontal",
-          "anchor_penalty": 0.160828,
-          "mean_delta_e": 3.2046,
-          "rmse_linear": 0.014359,
-          "max_delta_e": 11.8255
+          "anchor_penalty": 0.001682,
+          "mean_delta_e": 2.9788,
+          "rmse_linear": 0.018241,
+          "max_delta_e": 12.5902
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "rotate_90_cw",
-          "anchor_penalty": 0.161434,
-          "mean_delta_e": 5.6648,
-          "rmse_linear": 0.032034,
-          "max_delta_e": 20.1448
+          "anchor_penalty": 0.003816,
+          "mean_delta_e": 7.3152,
+          "rmse_linear": 0.049086,
+          "max_delta_e": 19.5959
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "transpose",
-          "anchor_penalty": 0.171859,
-          "mean_delta_e": 7.3223,
-          "rmse_linear": 0.041575,
-          "max_delta_e": 36.7315
+          "anchor_penalty": 0.029527,
+          "mean_delta_e": 8.1552,
+          "rmse_linear": 0.06188,
+          "max_delta_e": 38.732
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "identity",
-          "anchor_penalty": 0.177758,
-          "mean_delta_e": 6.6283,
-          "rmse_linear": 0.037476,
-          "max_delta_e": 44.0707
+          "anchor_penalty": 0.036783,
+          "mean_delta_e": 6.9658,
+          "rmse_linear": 0.05524,
+          "max_delta_e": 49.8519
         },
         {
           "white_orientation": "flip_horizontal",
-          "black_orientation": "transverse",
-          "anchor_penalty": 0.19425,
-          "mean_delta_e": 7.3903,
-          "rmse_linear": 0.041566,
-          "max_delta_e": 35.7935
+          "black_orientation": "rotate_180",
+          "anchor_penalty": 0.074519,
+          "mean_delta_e": 7.5426,
+          "rmse_linear": 0.055635,
+          "max_delta_e": 44.672
         }
-      ]
+      ],
+      "white_signal_strength": 0.357046,
+      "black_signal_strength": 0.173312,
+      "white_orientation_info": {
+        "signal_strength": 0.357046,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      },
+      "black_orientation_info": {
+        "signal_strength": 0.173312,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      }
     }
   },
   "material_summary": {
@@ -270,24 +283,24 @@
       }
     ],
     "white_zero_rgb": [
-      204,
-      209,
-      201
+      254,
+      254,
+      254
     ],
     "black_zero_rgb": [
-      27,
-      62,
-      58
+      57,
+      57,
+      55
     ],
     "estimated_rgb": [
-      171,
-      52,
-      53
+      202,
+      66,
+      65
     ],
     "estimated_k": [
-      2.5492,
-      33.445005,
-      54.109148
+      1.735651,
+      25.493524,
+      59.617605
     ],
     "verification_count": 1
   },
@@ -339,43 +352,43 @@
         "dataset_layout": "{substrate_id}/{color_name}/",
         "color_source": "folder_name"
       },
-      "shared_model_filename": "single_stage_white_20260416_091607.3mf",
+      "shared_model_filename": "single_stage_white_20260419_115707.3mf",
       "jobs": []
     },
     "white_corner_points": [
       [
-        1816,
-        726
+        625,
+        1095
       ],
       [
-        2847,
-        741
+        2343,
+        1124
       ],
       [
-        2790,
-        1225
+        2322,
+        1976
       ],
       [
-        1826,
-        1211
+        629,
+        1954
       ]
     ],
     "black_corner_points": [
       [
-        1943,
-        1024
+        738,
+        956
       ],
       [
-        2835,
-        1038
+        2417,
+        992
       ],
       [
-        2787,
-        1455
+        2381,
+        1819
       ],
       [
-        1938,
-        1446
+        728,
+        1787
       ]
     ],
     "white_detected_orientation": "flip_horizontal",
@@ -392,51 +405,77 @@
       3,
       2
     ],
+    "white_orientation_info": {
+      "signal_strength": 0.357046,
+      "flat": false,
+      "manual_override": null,
+      "locked_to": null
+    },
+    "black_orientation_info": {
+      "signal_strength": 0.173312,
+      "flat": false,
+      "manual_override": null,
+      "locked_to": null
+    },
     "orientation_ranking": {
       "orientation_reliable": true,
-      "delta_e_gap": 2.4602,
+      "delta_e_gap": 4.3364,
       "top_candidates": [
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "flip_horizontal",
-          "anchor_penalty": 0.160828,
-          "mean_delta_e": 3.2046,
-          "rmse_linear": 0.014359,
-          "max_delta_e": 11.8255
+          "anchor_penalty": 0.001682,
+          "mean_delta_e": 2.9788,
+          "rmse_linear": 0.018241,
+          "max_delta_e": 12.5902
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "rotate_90_cw",
-          "anchor_penalty": 0.161434,
-          "mean_delta_e": 5.6648,
-          "rmse_linear": 0.032034,
-          "max_delta_e": 20.1448
+          "anchor_penalty": 0.003816,
+          "mean_delta_e": 7.3152,
+          "rmse_linear": 0.049086,
+          "max_delta_e": 19.5959
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "transpose",
-          "anchor_penalty": 0.171859,
-          "mean_delta_e": 7.3223,
-          "rmse_linear": 0.041575,
-          "max_delta_e": 36.7315
+          "anchor_penalty": 0.029527,
+          "mean_delta_e": 8.1552,
+          "rmse_linear": 0.06188,
+          "max_delta_e": 38.732
         },
         {
           "white_orientation": "flip_horizontal",
           "black_orientation": "identity",
-          "anchor_penalty": 0.177758,
-          "mean_delta_e": 6.6283,
-          "rmse_linear": 0.037476,
-          "max_delta_e": 44.0707
+          "anchor_penalty": 0.036783,
+          "mean_delta_e": 6.9658,
+          "rmse_linear": 0.05524,
+          "max_delta_e": 49.8519
         },
         {
           "white_orientation": "flip_horizontal",
-          "black_orientation": "transverse",
-          "anchor_penalty": 0.19425,
-          "mean_delta_e": 7.3903,
-          "rmse_linear": 0.041566,
-          "max_delta_e": 35.7935
+          "black_orientation": "rotate_180",
+          "anchor_penalty": 0.074519,
+          "mean_delta_e": 7.5426,
+          "rmse_linear": 0.055635,
+          "max_delta_e": 44.672
         }
-      ]
+      ],
+      "white_signal_strength": 0.357046,
+      "black_signal_strength": 0.173312,
+      "white_orientation_info": {
+        "signal_strength": 0.357046,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      },
+      "black_orientation_info": {
+        "signal_strength": 0.173312,
+        "flat": false,
+        "manual_override": null,
+        "locked_to": null
+      }
     },
     "spec": {
       "grid_cols": 6,
@@ -474,27 +513,27 @@
   "verification_count": 1,
   "verification_runs": [
     {
-      "captured_at": "2026-04-16T10:57:32.780862+00:00",
+      "captured_at": "2026-04-26T04:27:02.931137+00:00",
       "params": {
         "E": [
-          0.405562,
-          0.034779,
-          0.035986
+          0.589602,
+          0.055114,
+          0.053046
         ],
         "k": [
-          2.5492,
-          33.445005,
-          54.109148
+          1.735651,
+          25.493524,
+          59.617605
         ],
         "white_C0": [
-          0.602314,
-          0.634187,
-          0.58348
+          0.991102,
+          0.991102,
+          0.991102
         ],
         "black_C0": [
-          0.01108,
-          0.04829,
-          0.042716
+          0.040915,
+          0.040915,
+          0.038204
         ]
       },
       "fit_summary": {
@@ -508,63 +547,75 @@
           "PLA Basic"
         ],
         "overall_validation": {
-          "mean_delta_e": 3.2045546315541182,
-          "max_delta_e": 11.825520277775853,
-          "rmse_linear": 0.014358822728015926,
+          "mean_delta_e": 2.9788237986940653,
+          "max_delta_e": 12.590150704519626,
+          "rmse_linear": 0.01824130772933268,
           "channel_rmse": [
-            0.02347385989848262,
-            0.006142567689246255,
-            0.005456567973845584
+            0.029723410533804843,
+            0.008049041331530792,
+            0.007068785108549062
           ]
         },
-        "warnings": [
-          "Stage A 拟合误差较高，请检查图像方向和角点选择。"
-        ],
+        "warnings": [],
         "orientation_ranking": {
           "orientation_reliable": true,
-          "delta_e_gap": 2.4602,
+          "delta_e_gap": 4.3364,
           "top_candidates": [
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "flip_horizontal",
-              "anchor_penalty": 0.160828,
-              "mean_delta_e": 3.2046,
-              "rmse_linear": 0.014359,
-              "max_delta_e": 11.8255
+              "anchor_penalty": 0.001682,
+              "mean_delta_e": 2.9788,
+              "rmse_linear": 0.018241,
+              "max_delta_e": 12.5902
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "rotate_90_cw",
-              "anchor_penalty": 0.161434,
-              "mean_delta_e": 5.6648,
-              "rmse_linear": 0.032034,
-              "max_delta_e": 20.1448
+              "anchor_penalty": 0.003816,
+              "mean_delta_e": 7.3152,
+              "rmse_linear": 0.049086,
+              "max_delta_e": 19.5959
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "transpose",
-              "anchor_penalty": 0.171859,
-              "mean_delta_e": 7.3223,
-              "rmse_linear": 0.041575,
-              "max_delta_e": 36.7315
+              "anchor_penalty": 0.029527,
+              "mean_delta_e": 8.1552,
+              "rmse_linear": 0.06188,
+              "max_delta_e": 38.732
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "identity",
-              "anchor_penalty": 0.177758,
-              "mean_delta_e": 6.6283,
-              "rmse_linear": 0.037476,
-              "max_delta_e": 44.0707
+              "anchor_penalty": 0.036783,
+              "mean_delta_e": 6.9658,
+              "rmse_linear": 0.05524,
+              "max_delta_e": 49.8519
             },
             {
               "white_orientation": "flip_horizontal",
-              "black_orientation": "transverse",
-              "anchor_penalty": 0.19425,
-              "mean_delta_e": 7.3903,
-              "rmse_linear": 0.041566,
-              "max_delta_e": 35.7935
+              "black_orientation": "rotate_180",
+              "anchor_penalty": 0.074519,
+              "mean_delta_e": 7.5426,
+              "rmse_linear": 0.055635,
+              "max_delta_e": 44.672
             }
-          ]
+          ],
+          "white_signal_strength": 0.357046,
+          "black_signal_strength": 0.173312,
+          "white_orientation_info": {
+            "signal_strength": 0.357046,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          },
+          "black_orientation_info": {
+            "signal_strength": 0.173312,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          }
         }
       },
       "material_summary": {
@@ -760,24 +811,24 @@
           }
         ],
         "white_zero_rgb": [
-          204,
-          209,
-          201
+          254,
+          254,
+          254
         ],
         "black_zero_rgb": [
-          27,
-          62,
-          58
+          57,
+          57,
+          55
         ],
         "estimated_rgb": [
-          171,
-          52,
-          53
+          202,
+          66,
+          65
         ],
         "estimated_k": [
-          2.5492,
-          33.445005,
-          54.109148
+          1.735651,
+          25.493524,
+          59.617605
         ]
       },
       "source": {
@@ -828,43 +879,43 @@
             "dataset_layout": "{substrate_id}/{color_name}/",
             "color_source": "folder_name"
           },
-          "shared_model_filename": "single_stage_white_20260416_091607.3mf",
+          "shared_model_filename": "single_stage_white_20260419_115707.3mf",
           "jobs": []
         },
         "white_corner_points": [
           [
-            1816,
-            726
+            625,
+            1095
           ],
           [
-            2847,
-            741
+            2343,
+            1124
           ],
           [
-            2790,
-            1225
+            2322,
+            1976
           ],
           [
-            1826,
-            1211
+            629,
+            1954
           ]
         ],
         "black_corner_points": [
           [
-            1943,
-            1024
+            738,
+            956
           ],
           [
-            2835,
-            1038
+            2417,
+            992
           ],
           [
-            2787,
-            1455
+            2381,
+            1819
           ],
           [
-            1938,
-            1446
+            728,
+            1787
           ]
         ],
         "white_detected_orientation": "flip_horizontal",
@@ -881,51 +932,77 @@
           3,
           2
         ],
+        "white_orientation_info": {
+          "signal_strength": 0.357046,
+          "flat": false,
+          "manual_override": null,
+          "locked_to": null
+        },
+        "black_orientation_info": {
+          "signal_strength": 0.173312,
+          "flat": false,
+          "manual_override": null,
+          "locked_to": null
+        },
         "orientation_ranking": {
           "orientation_reliable": true,
-          "delta_e_gap": 2.4602,
+          "delta_e_gap": 4.3364,
           "top_candidates": [
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "flip_horizontal",
-              "anchor_penalty": 0.160828,
-              "mean_delta_e": 3.2046,
-              "rmse_linear": 0.014359,
-              "max_delta_e": 11.8255
+              "anchor_penalty": 0.001682,
+              "mean_delta_e": 2.9788,
+              "rmse_linear": 0.018241,
+              "max_delta_e": 12.5902
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "rotate_90_cw",
-              "anchor_penalty": 0.161434,
-              "mean_delta_e": 5.6648,
-              "rmse_linear": 0.032034,
-              "max_delta_e": 20.1448
+              "anchor_penalty": 0.003816,
+              "mean_delta_e": 7.3152,
+              "rmse_linear": 0.049086,
+              "max_delta_e": 19.5959
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "transpose",
-              "anchor_penalty": 0.171859,
-              "mean_delta_e": 7.3223,
-              "rmse_linear": 0.041575,
-              "max_delta_e": 36.7315
+              "anchor_penalty": 0.029527,
+              "mean_delta_e": 8.1552,
+              "rmse_linear": 0.06188,
+              "max_delta_e": 38.732
             },
             {
               "white_orientation": "flip_horizontal",
               "black_orientation": "identity",
-              "anchor_penalty": 0.177758,
-              "mean_delta_e": 6.6283,
-              "rmse_linear": 0.037476,
-              "max_delta_e": 44.0707
+              "anchor_penalty": 0.036783,
+              "mean_delta_e": 6.9658,
+              "rmse_linear": 0.05524,
+              "max_delta_e": 49.8519
             },
             {
               "white_orientation": "flip_horizontal",
-              "black_orientation": "transverse",
-              "anchor_penalty": 0.19425,
-              "mean_delta_e": 7.3903,
-              "rmse_linear": 0.041566,
-              "max_delta_e": 35.7935
+              "black_orientation": "rotate_180",
+              "anchor_penalty": 0.074519,
+              "mean_delta_e": 7.5426,
+              "rmse_linear": 0.055635,
+              "max_delta_e": 44.672
             }
-          ]
+          ],
+          "white_signal_strength": 0.357046,
+          "black_signal_strength": 0.173312,
+          "white_orientation_info": {
+            "signal_strength": 0.357046,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          },
+          "black_orientation_info": {
+            "signal_strength": 0.173312,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+          }
         },
         "spec": {
           "grid_cols": 6,
@@ -964,6 +1041,6 @@
   ],
   "aggregation": {
     "method": "mean",
-    "aggregated_at": "2026-04-16T10:57:32.782499+00:00"
+    "aggregated_at": "2026-04-26T04:27:02.933300+00:00"
   }
 }
