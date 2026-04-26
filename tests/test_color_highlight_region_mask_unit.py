@@ -180,6 +180,9 @@ def test_region_mask_path_unknown_region_returns_404(
 ) -> None:
     """An identifier pair with no matching pixels yields 404.
     指定的 (group, region) 编号在 region_id_map 中无对应像素时返回 404。
+
+    This case targets a *truly* absent group (group=9 has no pixels at all),
+    which differs from the unmappable-region fallback covered below.
     """
     matched_rgb, mask_solid, region_id_map = two_red_stripes
     client, session_id = _make_client_with_session(
@@ -196,6 +199,46 @@ def test_region_mask_path_unknown_region_returns_404(
         },
     )
     assert response.status_code == 404, response.text
+
+
+def test_region_mask_path_unmapped_region_falls_back_to_group(
+    two_red_stripes: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> None:
+    """Region with zero stamped pixels but existing group falls back to group mask.
+    某个 region 在 region_id_map 中无像素（CC label 解析失败被静默跳过），
+    但其所在 group 有像素时，端点应回退到整组 mask，避免对 UI 暴露的
+    子区域眼睛按钮硬性 404，与分析器注释中"fall back to broader highlight
+    scopes (group-level or full preview) without raising"的契约保持一致。
+    """
+    matched_rgb, mask_solid, region_id_map = two_red_stripes
+    # group=1 contains regions 1 and 2 (both stamped). Region 3 inside the
+    # same group is *intentionally* not stamped — mimicking the analyser's
+    # silent skip when ``_resolve_region_cc_label_for_regions`` returns 0.
+    client, session_id = _make_client_with_session(
+        matched_rgb, mask_solid, region_id_map
+    )
+
+    response = client.post(
+        "/api/convert/color-highlight",
+        json={
+            "session_id": session_id,
+            "color_hexes": ["#ff0000"],
+            "gradient_group_index": 1,
+            "gradient_region_index": 3,  # unmapped; group 1 still has pixels
+        },
+    )
+    assert response.status_code == 200, response.text
+    img = _read_png(client, response.json()["preview_url"])
+
+    # Both stripes (the entire group 1) must be cyan-blended now —
+    # the fallback widened the scope to the whole group.
+    assert int(np.all(img[:, 10:40] == (255, 0, 0), axis=-1).sum()) == 0
+    assert int(np.all(img[:, 60:90] == (255, 0, 0), axis=-1).sum()) == 0
+    # Pixels outside any stamped region remain pure red (mask is zero there).
+    outside_cols = np.r_[0:10, 40:60, 90:100]
+    assert int(
+        np.all(img[:, outside_cols] == (255, 0, 0), axis=-1).sum()
+    ) == 100 * outside_cols.size
 
 
 def test_region_mask_path_takes_precedence_over_bbox(

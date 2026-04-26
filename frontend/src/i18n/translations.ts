@@ -5176,7 +5176,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Layer Height",
   },
   cal_generate_single_stage_btn: {
-    zh: "生成 Single-Stage Kit",
+    zh: "生成 梯度色卡",
     en: "Generate Single-Stage Kit",
   },
   cal_download_kit: {

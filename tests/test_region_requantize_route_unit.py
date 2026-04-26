@@ -377,6 +377,74 @@ def test_requantize_response_passes_through_none_when_recompute_degrades(
     assert payload.get("gradient_groups") is None
 
 
+def test_requantize_unmapped_region_falls_back_to_group_pixels(patched_dependencies):
+    """Targeting a region with no stamped pixels must still rewrite the group.
+    点击分析器静默跳过的 region（``region_id_map`` 中无该编码像素）时，
+    端点必须回退到整组像素并完成二次量化；否则 ``rewritten_pixels`` 始终
+    为 0，``matched_rgb`` 不变，前端表现为"点了开始量化什么都不变"。
+    """
+    client, session_id, store = patched_dependencies
+    pre_cache = store.get(session_id)["preview_cache"]
+    matched_before = np.asarray(pre_cache["matched_rgb"]).copy()
+    region_id_map = np.asarray(
+        store.get(session_id)["gradient_region_id_map"]
+    )
+    # Sanity: the fixture stamps (group=1, region=1). Region 7 inside the
+    # same group is intentionally absent — exactly the situation the
+    # gradient analyser produces when it cannot resolve a region's CC label.
+    # 前置条件：fixture 仅盖了 (1, 1)；(1, 7) 模拟分析器静默跳过的 region。
+    encoded_seven = (
+        1 * REGION_ID_ENCODING_MULTIPLIER + 7
+    )
+    assert not np.any(region_id_map == encoded_seven)
+
+    with patch(
+        "api.routers.converter.replace.load_multiple_materials",
+        return_value=[],
+    ), patch(
+        "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+        return_value=(_FakeSolverCache(), 64),
+    ), patch(
+        "api.routers.converter.replace._sync_material_matrix_after_rgb_change",
+    ), patch(
+        "api.routers.converter.replace.recompute_gradient_groups_into_session",
+        return_value=[],
+    ), patch(
+        "api.routers.converter.replace.schedule_glb_build",
+        return_value="fake-job-token",
+    ):
+        resp = client.post(
+            "/api/convert/region-requantize",
+            json={
+                "session_id": session_id,
+                "targets": [
+                    {"gradient_group_index": 1, "gradient_region_index": 7},
+                ],
+                "local_quantize_colors": 32,
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    cache = store.get(session_id)["preview_cache"]
+    matched_after = np.asarray(cache["matched_rgb"])
+    # The whole (group=1) region — i.e. the central rectangle from the
+    # fixture — must have been rewritten despite the request targeting an
+    # unmapped (1, 7) pair.
+    # 整组（中央矩形）的像素都应该被重写，证明端点正确走了 group 回退。
+    group_mask = region_id_map == (1 * REGION_ID_ENCODING_MULTIPLIER + 1)
+    assert int(np.any(matched_before[group_mask] != matched_after[group_mask])), (
+        "group fallback must rewrite the parent group's pixels even when "
+        "the targeted region itself has no stamped pixels"
+    )
+    # The on-disk session region_id_map must not be mutated — the route
+    # is supposed to operate on a working copy only.
+    # session 内的 region_id_map 不应被破坏，端点只在工作副本上盖章。
+    region_id_map_after = np.asarray(
+        store.get(session_id)["gradient_region_id_map"]
+    )
+    assert np.array_equal(region_id_map, region_id_map_after)
+
+
 def test_requantize_does_not_lower_existing_cap(patched_dependencies):
     """A pre-existing higher cap must survive the second requantize call.
     已有更高 cap 时不应被覆盖回较小值，防止连续量化退化。

@@ -821,13 +821,42 @@ def color_highlight(
                 },
             )
             if region_pixel_count == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail=(
-                        f"No pixels found for gradient group "
-                        f"{group_idx}, region {region_idx}."
-                    ),
+                # The analyser intentionally keeps regions in ``regions[]``
+                # whose CC label could not be resolved back to any pixel
+                # (centroid/bbox sampling missed all foreground samples,
+                # see core/gradient_group_analyzer.py:_resolve_region_cc_label_for_regions).
+                # Those regions still surface in the UI with a working
+                # eye-button, so the contract here is to fall back to the
+                # *group*-level mask when the group itself has any pixels,
+                # and only return 404 when the group is genuinely absent.
+                # 分析器对无法定位的 region 会保留在 regions[] 中（注释明确
+                # 说调用方应回退到整组/整图），因此这里只在整组也找不到
+                # 像素时才返回 404；否则回退到整组 mask，避免子区域眼睛
+                # 按钮硬性 404。
+                group_of_pixel = region_id_arr // np.uint32(
+                    REGION_ID_ENCODING_MULTIPLIER
                 )
+                group_scope_mask = group_of_pixel == np.uint32(int(group_idx))
+                group_pixel_count = int(group_scope_mask.sum())
+                if group_pixel_count == 0:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=(
+                            f"No pixels found for gradient group "
+                            f"{group_idx}, region {region_idx}."
+                        ),
+                    )
+                log.warning(
+                    "color_highlight_region_unmapped_group_fallback",
+                    extra={
+                        "event": "color_highlight_region_unmapped_group_fallback",
+                        "group_index": int(group_idx),
+                        "region_index": int(region_idx),
+                        "encoded_id": int(encoded_id),
+                        "group_pixel_count": group_pixel_count,
+                    },
+                )
+                region_scope_mask = group_scope_mask
         elif request.region_bbox is not None:
             x0, y0, x1, y1 = request.region_bbox
             if not (0 <= x0 < x1 <= img_w and 0 <= y0 < y1 <= img_h):
@@ -1405,12 +1434,73 @@ def region_requantize(
             for t in request.targets
         ]
 
+        # Group-level fallback for targets whose exact (group, region) mask
+        # is empty in region_id_map. This mirrors the analogous fallback
+        # in /color-highlight: the gradient analyser keeps unmappable
+        # regions in ``regions[]`` (their CC label could not be resolved),
+        # so the UI surfaces working buttons for them; without this
+        # widening, ``requantize_gradient_regions`` silently skips them
+        # and the user sees "click did nothing" because matched_rgb
+        # never changes. We stamp each unmappable target's encoding
+        # across its parent group's pixels in a *working copy* of
+        # region_id_map so the core function picks them up. The on-disk
+        # session map is left untouched.
+        # 整组回退：当 target 的精确 region mask 为空但所在 group 有像素
+        # 时，在工作副本里把整组像素盖章成该 target；解决用户点了一个
+        # 分析器静默跳过的 region 时"完全没变化"的失联感。
+        working_region_id_arr = region_id_arr.astype(np.uint32, copy=False)
+        group_of_pixel = working_region_id_arr // np.uint32(
+            REGION_ID_ENCODING_MULTIPLIER
+        )
+        fallback_targets: list[tuple[int, int]] = []
+        already_widened_groups: set[int] = set()
+        for g, r in target_pairs:
+            g_int = int(g)
+            r_int = int(r)
+            encoded = np.uint32(
+                g_int * REGION_ID_ENCODING_MULTIPLIER + r_int
+            )
+            if np.any(working_region_id_arr == encoded):
+                continue
+            group_mask = group_of_pixel == np.uint32(g_int)
+            if not np.any(group_mask):
+                continue
+            # Multiple unmappable targets inside the same group would
+            # otherwise overwrite each other; collapse to the first
+            # fallback target seen so semantics stay deterministic.
+            # 同一 group 内多个不可定位 target 时只保留首个回退编码，
+            # 避免互相覆盖造成结果依赖循环顺序。
+            if g_int in already_widened_groups:
+                continue
+            # Lazy materialise an actual copy only when we are about to
+            # mutate it.
+            if working_region_id_arr is region_id_arr:
+                working_region_id_arr = region_id_arr.astype(
+                    np.uint32, copy=True
+                )
+                group_of_pixel = working_region_id_arr // np.uint32(
+                    REGION_ID_ENCODING_MULTIPLIER
+                )
+                group_mask = group_of_pixel == np.uint32(g_int)
+            working_region_id_arr[group_mask] = encoded
+            fallback_targets.append((g_int, r_int))
+            already_widened_groups.add(g_int)
+        if fallback_targets:
+            log.warning(
+                "region_requantize_unmapped_target_group_fallback",
+                extra={
+                    "event": "region_requantize_unmapped_target_group_fallback",
+                    "fallback_targets": fallback_targets,
+                    "total_targets": len(target_pairs),
+                },
+            )
+
         _t_core = _time.perf_counter()
         try:
             new_matched_rgb, rewritten_px = requantize_gradient_regions(
                 matched_rgb=np.asarray(matched_rgb, dtype=np.uint8),
                 original_source_rgb=original_source_rgb,
-                region_id_map=region_id_arr.astype(np.uint32, copy=False),
+                region_id_map=working_region_id_arr,
                 targets=target_pairs,
                 materials=materials,
                 material_solver_cache=solver_cache,
