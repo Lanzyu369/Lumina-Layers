@@ -250,10 +250,22 @@ export async function previewAutoWb(
   return response.data;
 }
 
-/** 旋转图片 90°（后端处理） */
+export type ExtractorRotationDirection = "cw" | "ccw";
+
+/**
+ * 旋转图片 90°（后端处理）。
+ * Rotate the supplied image by 90 degrees on the backend.
+ *
+ * @param image    File or Blob to rotate. (待旋转图片)
+ * @param filename Display name for the upload payload. (上传时的文件名)
+ * @param direction "cw" for clockwise or "ccw" for counter-clockwise; defaults
+ *                  to "ccw" for backwards compatibility with existing callers.
+ *                  ("cw" 顺时针 / "ccw" 逆时针；缺省 "ccw" 保持兼容)
+ */
 export async function rotateExtractorImage(
   image: File | Blob,
   filename: string = "image.png",
+  direction: ExtractorRotationDirection = "ccw",
 ): Promise<{ preview_url: string; width: number; height: number }> {
   const fd = new FormData();
   fd.append("image", image, filename);
@@ -261,7 +273,10 @@ export async function rotateExtractorImage(
     preview_url: string;
     width: number;
     height: number;
-  }>("/extractor/rotate", fd, { timeout: 3_600_000 });
+  }>("/extractor/rotate", fd, {
+    timeout: 3_600_000,
+    params: { direction },
+  });
   return response.data;
 }
 

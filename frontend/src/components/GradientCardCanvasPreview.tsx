@@ -28,6 +28,7 @@ interface GradientCardCanvasPreviewProps {
   naturalWidth?: number | null;
   naturalHeight?: number | null;
   cornerPoints?: Array<[number, number]>;
+  activePointIndex?: number | null;
   sampleBoxes?: GradientCardSampleBox[];
   warpWidth?: number | null;
   warpHeight?: number | null;
@@ -47,6 +48,7 @@ export default function GradientCardCanvasPreview({
   naturalWidth,
   naturalHeight,
   cornerPoints = [],
+  activePointIndex = null,
   sampleBoxes = [],
   warpWidth,
   warpHeight,
@@ -259,7 +261,7 @@ export default function GradientCardCanvasPreview({
           >
             {cornerPoints.map(([x, y], index) => (
               <g key={`${dataTestId}-corner-${index}-${x}-${y}`} transform={`translate(${x} ${y})`}>
-                <circle r={16} fill="rgba(15, 23, 42, 0.96)" stroke="rgba(248, 250, 252, 0.95)" strokeWidth="2" />
+                <circle r={16} fill="rgba(15, 23, 42, 0.96)" stroke={index === activePointIndex ? "#3b82f6" : "rgba(248, 250, 252, 0.95)"} strokeWidth={index === activePointIndex ? "3" : "2"} />
                 <text
                   textAnchor="middle"
                   dominantBaseline="central"
@@ -336,6 +338,7 @@ export default function GradientCardCanvasPreview({
                 alt={alt}
                 dataTestId={dataTestId}
                 className={previewAspectRatio ? "h-full w-full" : "h-full min-h-64 w-full"}
+                surfaceClassName={onSelectPoint ? "cursor-crosshair active:cursor-crosshair" : "cursor-grab active:cursor-grabbing"}
                 imageClassName="object-contain"
                 overlay={overlay}
                 onSurfaceReady={handleSurfaceReady}

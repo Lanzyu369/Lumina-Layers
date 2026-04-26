@@ -1,0 +1,123 @@
+{
+  "param_type": "stage_A",
+  "meta": {
+    "schema_version": "1.0",
+    "generated_at": "2026-04-25T18:35:43.786867+00:00",
+    "source": "lumina_gradient_card_extract",
+    "workflow": "single-stage-kit",
+    "warnings": [],
+    "verification_count": 1,
+    "aggregation_method": "mean"
+  },
+  "parameters": {
+    "channels": [
+      {
+        "channel_index": 0,
+        "color_name": "爱丽兹 PETG 大红",
+        "E": [
+          0.824241,
+          0.000394,
+          0.006471
+        ],
+        "k": [
+          1.949672,
+          153.362446,
+          55.075079
+        ]
+      }
+    ],
+    "substrates": [
+      {
+        "substrate_idx": 0,
+        "substrate_id": "white",
+        "display_name": "White",
+        "C0": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "substrate_idx": 1,
+        "substrate_id": "black",
+        "display_name": "Black",
+        "C0": [
+          0.008568,
+          0.009134,
+          0.009721
+        ]
+      }
+    ]
+  },
+  "fitted_substrates": {
+    "white": {
+      "C0": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "black": {
+      "C0": [
+        0.008568,
+        0.009134,
+        0.009721
+      ]
+    }
+  },
+  "validation": {
+    "overall": {
+      "mean_delta_e": 2.4379340760887676,
+      "max_delta_e": 8.258385677168553,
+      "rmse_linear": 0.022606765168144173,
+      "channel_rmse": [
+        0.03907813867903301,
+        0.001831444381426051,
+        0.0016560141795459754
+      ],
+      "best_run_mean_delta_e": 2.4379340760887676,
+      "verification_count": 1
+    }
+  },
+  "source": {
+    "spec": {
+      "grid_cols": 6,
+      "grid_rows": 3,
+      "block_mm": 10.0,
+      "gap_mm": 1.0,
+      "margin_mm": 1.0,
+      "pixel_mm": 1.0,
+      "layer_height_mm": 0.08,
+      "base_mm": 1.0,
+      "max_step_layers": 25,
+      "step_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        25
+      ],
+      "shrink_xy_mm": 0.02
+    },
+    "manifest": {
+      "schema_version": "1.0",
+      "workflow": "single-stage-kit",
+      "material_default": "PLA Basic",
+      "substrate_id": "white",
+      "substrate_display_name": "White"
+    }
+  }
+}

@@ -1654,11 +1654,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   "tab.gradientCardGenerate": {
     zh: "梯度卡生成",
-    en: "Gradient Card Generate",
+    en: "Gradient Generator",
   },
   "tab.gradientCardExtract": {
     zh: "梯度卡提取",
-    en: "Gradient Card Extract",
+    en: "Gradient Extractor",
   },
   "tab.materialLibrary": {
     zh: "耗材库",
@@ -1785,7 +1785,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "High (256³)",
   },
   "settings.solver_cache_density_tip": {
-    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击“构建”时会产生对应分辨率的新缓存文件。",
+    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
   "settings.auto_replace_gradient_heading": {
@@ -3672,7 +3672,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed: {message}",
   },
   material_picker_no_material: {
-    zh: "请先在“耗材档案”下选择至少一个耗材。",
+    zh: "请先在「耗材档案」下选择至少一个耗材。",
     en: 'Select at least one material under "Material Archive" first.',
   },
   material_picker_suggestion_tooltip: {
@@ -3702,7 +3702,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Gradient groups (banding)",
   },
   gradient_groups_hint: {
-    zh: "发现 {count} 条平滑渐变被切成多个耗材色。点击“选中整组”可一次性选中组内所有颜色，再配合上方的拾色器换成同一个目标色。",
+    zh: "发现 {count} 条平滑渐变被切成多个耗材色。点击「选中整组」可一次性选中组内所有颜色，再配合上方的拾色器换成同一个目标色。",
     en: "Detected {count} smooth gradients split across multiple material colors. Click Select all to multi-select the whole group, then use the picker above to replace them with a single target color.",
   },
   gradient_groups_loading: {
@@ -4851,7 +4851,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Predicting…",
   },
   recipe_custom_predict_hint: {
-    zh: "点击“预测颜色”查看当前配方的预览颜色。",
+    zh: "点击「预测颜色」查看当前配方的预览颜色。",
     en: "Use Predict Color to preview the current recipe.",
   },
   recipe_custom_preview_color: {
@@ -5200,32 +5200,64 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Generate Gradient Card",
   },
   mat_gradient_generate_desc: {
-    zh: "生成用于耗材表征的共享梯度卡套件，并保留 manifest、层高等元数据。",
-    en: "Generate a shared gradient card kit for material characterization while preserving manifest metadata such as layer height.",
+    zh: "生成用于打印和提取的梯度卡文件包（包含不同层高的切片配置文件和参数信息）。",
+    en: "Generate gradient card print files (including slicer profiles and parameters) used for printing and color extraction.",
+  },
+  mat_gradient_generate_section_title: {
+    zh: "生成设置",
+    en: "Generation Settings",
+  },
+  mat_gradient_generate_section_desc: {
+    zh: "选择你的打印层高，生成包含 3MF 打印文件和提取所需的配置包。",
+    en: "Select your print layer height and generate the package containing 3MF print files and configuration needed for extraction.",
+  },
+  mat_gradient_generate_notice_title: {
+    zh: "使用须知与线上模型",
+    en: "Instructions & Online Models",
+  },
+  mat_gradient_generate_notice_desc: {
+    zh: "打印前请务必阅读此说明，以确保后续操作顺利进行。",
+    en: "Please read these instructions before printing to ensure smooth operation later.",
   },
   mat_gradient_generate_notice_dual_print: {
-    zh: "色卡一个颜色，需要打两张，一张白色底，一张黑色底。不管你使用生成还是在线模型，你都需要下载 Kit zip 包。因为提取的时候会用到。",
-    en: "Each color in the card needs two prints: one on a white base and one on a black base. Whether you use the generated model or the online model, you still need to download the Kit ZIP package because it is required during extraction.",
+    zh: "注意：每种测试耗材需要打印两张梯度卡（一张白底，一张黑底）。无论你使用本地生成还是下载线上模型，都必须在这里点击生成并下载配置文件包（ZIP），后续「提取梯度卡」步骤会用到它。",
+    en: "Note: Each test material requires printing two gradient cards (one on a white base, one on a black base). Whether you generate them locally or download the online models, you must generate and download the configuration package (ZIP) here, as it is required for the 'Extract Gradient Card' step later.",
   },
   mat_gradient_generate_notice_online_model: {
-    zh: "线上模型和你生成的模型是一样的，如果你愿意使用在线模型生成，会给 Lumina 提供 MW 积分，积分将用于抽奖。",
-    en: "The online models are the same as the ones generated here. If you choose to use the online versions, Lumina will receive MakerWorld points that will be used for giveaways.",
+    zh: "线上模型与本地生成的模型完全相同。如果你通过 MakerWorld 下载在线模型，可以为 Lumina 团队提供积分支持，积分将用于社区抽奖福利。",
+    en: "The online models are identical to the locally generated ones. Downloading via MakerWorld provides points to the Lumina team, which will be used for community giveaways.",
   },
   mat_gradient_generate_online_model_link: {
-    zh: "梯度色卡在线模型",
-    en: "Gradient card online model",
+    zh: "梯度卡在线模型",
+    en: "Gradient Card Online Model",
   },
   mat_gradient_generate_parametric_box_link: {
-    zh: "梯度色卡参数化盒子",
-    en: "Gradient card parametric box",
+    zh: "梯度卡收纳盒在线模型",
+    en: "Gradient Card Parametric Storage Box",
+  },
+  mat_gradient_generate_btn: {
+    zh: "生成配置文件包",
+    en: "Generate Configuration Package",
+  },
+  mat_gradient_download_title: {
+    zh: "下载结果",
+    en: "Download Result",
+  },
+  mat_gradient_download_desc: {
+    zh: "配置包已生成，请下载并妥善保存。在提取色彩时需要上传此 ZIP 文件。",
+    en: "Configuration package generated. Please download and save it. You will need to upload this ZIP file during color extraction.",
+  },
+  mat_gradient_download_btn: {
+    zh: "下载配置文件包 (.zip)",
+    en: "Download Configuration Package (.zip)",
   },
   mat_gradient_extract_title: {
     zh: "提取梯度卡数据",
     en: "Extract Gradient Card Data",
   },
   mat_gradient_extract_desc: {
-    zh: "上传梯度卡套件 ZIP、白底图和黑底图，分别点选四角并提取 Stage A 耗材参数。",
-    en: "Upload the gradient card kit ZIP plus white/black substrate images, mark four corners on each, and extract Stage A material parameters.",
+    zh: "首先导入下载好的梯度卡ZIP，然后分别上传白底与黑底照片，并框选出色块区域即可完成提取。",
+    en: "First import the downloaded gradient card ZIP, then upload the white and black background photos separately, and bound the color blocks area to complete extraction.",
   },
   mat_gradient_view_details_btn: {
     zh: "查看详细信息",
@@ -5236,16 +5268,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Extraction Details",
   },
   mat_gradient_details_dialog_desc: {
-    zh: "在这里查看拟合输出和完整 JSON 详情。",
-    en: "Review the fit output and full JSON details here.",
+    zh: "拟合参数和材料摘要的原始数据，可用于排查问题或手动校准。",
+    en: "Raw fit parameters and material summary for troubleshooting or manual calibration.",
   },
   mat_gradient_details_close_btn: {
     zh: "关闭",
     en: "Close",
-  },
-  mat_gradient_dataset_selected: {
-    zh: "已选数据集",
-    en: "Selected Dataset",
   },
   mat_gradient_select_dataset_btn: {
     zh: "选择数据集 ZIP",
@@ -5328,12 +5356,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Output",
   },
   mat_gradient_upload_title: {
-    zh: "上传与点角",
-    en: "Upload and Corner Marking",
+    zh: "导入生成的梯度卡ZIP",
+    en: "Import Generated Gradient Card ZIP",
   },
   mat_gradient_upload_desc: {
-    zh: "先上传套件 ZIP 与两张梯度卡照片，再分别在白底图和黑底图上点选四角。",
-    en: "Upload the kit ZIP and both gradient card photos, then mark four corners on the white and black images.",
+    zh: "导入您在梯度卡生成工具中下载的zip。",
+    en: "Import the ZIP you downloaded from the gradient card generation tool.",
   },
   mat_gradient_white_image_label: {
     zh: "白底梯度卡图片",
@@ -5351,9 +5379,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "选择图片",
     en: "Choose Image",
   },
-  mat_gradient_rotate_image_btn: {
-    zh: "旋转 90°",
-    en: "Rotate 90°",
+  mat_gradient_rotate_cw_btn: {
+    zh: "顺时针 90°",
+    en: "Rotate 90° CW",
+  },
+  mat_gradient_rotate_ccw_btn: {
+    zh: "逆时针 90°",
+    en: "Rotate 90° CCW",
   },
   mat_gradient_clear_points_btn: {
     zh: "清除角点",
@@ -5487,57 +5519,45 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "ΔE 差距",
     en: "ΔE Gap",
   },
-  mat_gradient_manual_orientation_title: {
-    zh: "方向控制（高级）",
-    en: "Orientation Control (Advanced)",
+  mat_gradient_anchor_section_title: {
+    zh: "色块位置（决定读取顺序）",
+    en: "Pure Block Position (Drives Sampling Order)",
   },
-  mat_gradient_manual_orientation_desc: {
-    zh: "默认自动检测方向。若自动结果不理想（尤其是白色耗材打白底），可在此手动指定采样方向。",
-    en: "Defaults to automatic detection. If auto-detection is unreliable (especially for a white material on a white substrate), you can pin the sampling orientation here.",
+  mat_gradient_anchor_section_desc: {
+    zh: "请告诉系统照片上「露出底板的纯色块」位于哪个角。先按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角，再选这里。若不确定可保留「自动检测」。",
+    en: "Tell the system which screen corner holds the pure substrate block (the only patch where the bare board shows through). Pick the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order first, then choose here. Leave on \"Auto detect\" if unsure.",
   },
-  mat_gradient_manual_white_orientation_label: {
-    zh: "白底方向覆盖",
-    en: "White Orientation Override",
+  mat_gradient_white_anchor_label: {
+    zh: "纯白色块位置",
+    en: "Pure White Block Position",
   },
-  mat_gradient_manual_black_orientation_label: {
-    zh: "黑底方向覆盖",
-    en: "Black Orientation Override",
+  mat_gradient_black_anchor_label: {
+    zh: "纯黑色块位置",
+    en: "Pure Black Block Position",
   },
-  mat_gradient_orientation_option_auto: {
-    zh: "自动检测",
-    en: "Auto (recommended)",
+  mat_gradient_anchor_option_auto: {
+    zh: "自动检测（推荐）",
+    en: "Auto detect (recommended)",
   },
-  mat_gradient_orientation_option_identity: {
-    zh: "原样",
-    en: "Identity",
+  mat_gradient_anchor_option_tl: {
+    zh: "左上角",
+    en: "Top-left",
   },
-  mat_gradient_orientation_option_rotate_90_cw: {
-    zh: "顺时针 90°",
-    en: "Rotate 90° CW",
+  mat_gradient_anchor_option_tr: {
+    zh: "右上角",
+    en: "Top-right",
   },
-  mat_gradient_orientation_option_rotate_180: {
-    zh: "旋转 180°",
-    en: "Rotate 180°",
+  mat_gradient_anchor_option_br: {
+    zh: "右下角",
+    en: "Bottom-right",
   },
-  mat_gradient_orientation_option_rotate_90_ccw: {
-    zh: "逆时针 90°",
-    en: "Rotate 90° CCW",
+  mat_gradient_anchor_option_bl: {
+    zh: "左下角",
+    en: "Bottom-left",
   },
-  mat_gradient_orientation_option_flip_horizontal: {
-    zh: "水平翻转",
-    en: "Flip Horizontal",
-  },
-  mat_gradient_orientation_option_flip_vertical: {
-    zh: "垂直翻转",
-    en: "Flip Vertical",
-  },
-  mat_gradient_orientation_option_transpose: {
-    zh: "沿主对角线转置",
-    en: "Transpose",
-  },
-  mat_gradient_orientation_option_transverse: {
-    zh: "沿副对角线转置",
-    en: "Transverse",
+  mat_gradient_corner_pick_order_hint: {
+    zh: "请按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角。",
+    en: "Click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order.",
   },
   mat_gradient_white_signal_label: {
     zh: "白底信号",
@@ -5556,16 +5576,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Manual",
   },
   mat_gradient_signal_flat_hint: {
-    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在「方向控制」中手动指定方向。",
-    en: 'This substrate\'s gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — consider setting the orientation manually under "Orientation Control".',
+    zh: "此基底梯度极弱（采样格颜色几乎一致），自动方向检测可能不可靠。建议在上方手动选择「色块位置」对应的角。",
+    en: "This substrate's gradient is very weak (sample cells are nearly identical). Auto orientation detection may be unreliable — pick the matching anchor in the \"Pure Block Position\" selector above.",
   },
   mat_gradient_saved_material_title: {
-    zh: "已保存的耗材档案",
-    en: "Saved Material Archive",
+    zh: "底层参数文件（可选导出）",
+    en: "Low-Level Parameter Files (Optional Export)",
+  },
+  mat_gradient_saved_material_desc: {
+    zh: "提取结果已自动保存至软件本地，普通用户无需下载。这些底层文件仅供跨设备备份或高级调试使用。",
+    en: "Extraction results are automatically saved locally; normal users do not need to download them. These low-level files are only for cross-device backup or advanced debugging.",
   },
   mat_gradient_download_material_btn: {
-    zh: "下载 material.json",
-    en: "Download material.json",
+    zh: "导出基础耗材信息 (material.json)",
+    en: "Export Basic Material Info (material.json)",
   },
   mat_gradient_library_title: {
     zh: "耗材库",
@@ -5600,7 +5624,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Selected {selected} / {total} materials",
   },
   mat_gradient_library_select_item_label: {
-    zh: "选择耗材“{materialName}”",
+    zh: "选择耗材「{materialName}」",
     en: 'Select material "{materialName}"',
   },
   mat_gradient_library_refresh_btn: {
@@ -5616,7 +5640,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to load material library",
   },
   mat_gradient_library_empty: {
-    zh: "还没有已保存的耗材档案。先在“梯度卡提取”里保存一个耗材。",
+    zh: "还没有已保存的耗材档案。先在「梯度卡提取」里保存一个耗材。",
     en: "No saved material archives yet. Save one from Gradient Card Extract first.",
   },
   mat_gradient_library_updated_at_label: {
@@ -5704,7 +5728,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Delete Material",
   },
   mat_gradient_library_delete_confirm: {
-    zh: "确认删除耗材“{materialName}”？此操作不可撤销。",
+    zh: "确认删除耗材「{materialName}」？此操作不可撤销。",
     en: 'Delete material "{materialName}"? This action cannot be undone.',
   },
   mat_gradient_library_delete_success: {
@@ -5819,6 +5843,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "覆盖结果",
     en: "Override",
   },
+  mat_gradient_material_saved_success: {
+    zh: "耗材保存成功",
+    en: "Material saved successfully",
+  },
+  mat_gradient_verification_saved_success: {
+    zh: "耗材校验保存成功（已聚合 {count} 次校验结果）",
+    en: "Verification saved successfully ({count} runs aggregated)",
+  },
   mat_gradient_cancel_verification_btn: {
     zh: "取消复验",
     en: "Cancel Re-Verification",
@@ -5852,8 +5884,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Stage A",
   },
   ext_single_stage_download_stage_a: {
-    zh: "下载 stage_A_parameters.json",
-    en: "Download stage_A_parameters.json",
+    zh: "导出预测模型参数 (stage_A_parameters.json)",
+    en: "Export Predictive Model Parameters (stage_A_parameters.json)",
   },
   ext_single_stage_summary_title: {
     zh: "数据集摘要",
