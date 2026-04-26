@@ -128,7 +128,7 @@ def run(ctx: dict) -> dict:
                 )
                 resolved_grid = int(DEFAULT_GRID_RESOLUTION)
         ctx["grid_resolution"] = resolved_grid
-        _log.info(
+        _log.debug(
             "material_archive mode: %d materials (%s), %d layers, %.2f mm/layer, grid=%d",
             len(materials),
             slot_names,
@@ -316,7 +316,7 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get("_hifi_timings", {})
     _hifi_timings["input_val_s"] = _elapsed
     ctx["_hifi_timings"] = _hifi_timings
-    _log.info(
+    _log.debug(
         "done: %.3fs",
         _elapsed,
         extra={

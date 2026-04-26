@@ -364,7 +364,7 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get('_hifi_timings', {})
     _hifi_timings['preview_gen_s'] = _elapsed
     ctx['_hifi_timings'] = _hifi_timings
-    _log.info(
+    _log.debug(
         "preview_gen done: %.3fs",
         _elapsed,
         extra={

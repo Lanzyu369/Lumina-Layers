@@ -75,7 +75,7 @@ def run(ctx: dict) -> dict:
             if val > 0:
                 timings_ms[label] = round(val * 1000, 3)
                 total_s += val
-        _log.info(
+        _log.debug(
             "timing summary: %.3fs",
             total_s,
             extra={

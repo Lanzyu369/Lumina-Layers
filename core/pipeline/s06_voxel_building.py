@@ -887,6 +887,6 @@ def run(ctx: dict) -> dict:
     )
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"voxel_build done: {_elapsed:.3f}s")
+    _log.debug(f"voxel_build done: {_elapsed:.3f}s")
     ctx.setdefault("_hifi_timings", {})["voxel_build_s"] = _elapsed
     return ctx

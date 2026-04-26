@@ -392,7 +392,7 @@ def run(ctx: dict) -> dict:
     ctx['status_msg'] = status_msg
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p06_s'] = _elapsed
-    _log.info(
+    _log.debug(
         "bed_rendering done: %.3fs",
         _elapsed,
         extra={

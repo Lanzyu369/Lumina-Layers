@@ -109,7 +109,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         rgb_processed, quantize_colors_n, skip_post_blur=True
     )
     unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
-    _log.info("%d unique colors after quantization", len(unique_colors))
+    _log.debug("%d unique colors after quantization", len(unique_colors))
 
     # ---- Resolve recipes: cache lookup or per-image B&B fallback ----
     solver_t0 = time.perf_counter()
@@ -147,7 +147,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         # 没有持久化缓存时，现场构建一个最低分辨率（64³）的临时缓存用于匹配。
         # 缓存构建器采用逐桶写入模式，内存可控，不会像 MITM 求解器那样 OOM。
         _MIN_FALLBACK_GRID = 64
-        _log.info(
+        _log.debug(
             "No cache found; building temporary grid=%d "
             "cache in-memory (M=%d, N=%d) …",
             _MIN_FALLBACK_GRID, len(materials), layer_count,
@@ -170,7 +170,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "Please build the solver cache for this palette first."
             )
             return ctx
-        _log.info(
+        _log.debug(
             "Temporary cache built: %d valid cells, "
             "mean_ΔE=%.2f, build=%.1fs",
             cache.valid_cell_count,
@@ -199,7 +199,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             "reason": "no_persisted_cache",
         }
     solver_elapsed = time.perf_counter() - solver_t0
-    _log.info(
+    _log.debug(
         "Solver path=%s colors=%d mean_ΔE=%.2f max_ΔE=%.2f elapsed=%.2fs",
         solver_path,
         int(unique_colors.shape[0]),
@@ -237,7 +237,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             "elapsed_seconds": float(fallback_elapsed),
         }
         if fallback_stats["applied"] and fallback_stats["improved_pixels"] > 0:
-            _log.info(
+            _log.debug(
                 "Not-worse fallback replaced %d/%d unique colours "
                 "(mean ΔE %.2f→%.2f, max ΔE %.2f→%.2f, elapsed=%.2fs)",
                 fallback_stats["improved_pixels"],
@@ -249,7 +249,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 fallback_elapsed,
             )
         elif not fallback_stats["applied"]:
-            _log.info(
+            _log.debug(
                 "Not-worse fallback skipped (no white material "
                 "detected in palette or N=%d already at the lower bound).",
                 layer_count,
@@ -308,7 +308,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     }
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault("_preview_timings", {})["p03_s"] = _elapsed
-    _log.info("material_archive core_processing done: %.3fs", _elapsed)
+    _log.debug("material_archive core_processing done: %.3fs", _elapsed)
     return ctx
 
 
@@ -410,5 +410,5 @@ def run(ctx: dict) -> dict:
     ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p03_s'] = _elapsed
-    _log.info("core_processing done: %.3fs", _elapsed)
+    _log.debug("core_processing done: %.3fs", _elapsed)
     return ctx

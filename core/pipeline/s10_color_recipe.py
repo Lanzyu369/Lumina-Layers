@@ -42,7 +42,7 @@ def run(ctx: dict) -> dict:
     processor = ctx.get('processor')
     if processor is None:
         ctx['color_recipe_path'] = None
-        _log.info("color recipe report skipped (no LUT processor; material-archive mode)")
+        _log.debug("color recipe report skipped (no LUT processor; material-archive mode)")
         return ctx
 
     matched_rgb = ctx['matched_rgb']
@@ -86,7 +86,7 @@ def run(ctx: dict) -> dict:
                 },
             )
     else:
-        _log.info(
+        _log.debug(
             "Skipping color recipe report: policy=%s, solid_pixels=%s, auto_max=%s",
             recipe_policy,
             solid_pixels,
@@ -105,7 +105,7 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get('_hifi_timings', {})
     _hifi_timings['color_recipe_s'] = _elapsed
     ctx['_hifi_timings'] = _hifi_timings
-    _log.info(
+    _log.debug(
         "color_recipe done: %.3fs",
         _elapsed,
         extra={

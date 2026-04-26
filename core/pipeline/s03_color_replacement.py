@@ -939,5 +939,5 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get("_hifi_timings", {})
     _hifi_timings["color_replace_s"] = _elapsed
     ctx["_hifi_timings"] = _hifi_timings
-    _log.info(f"color_replace done: {_elapsed:.3f}s")
+    _log.debug(f"color_replace done: {_elapsed:.3f}s")
     return ctx

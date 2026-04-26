@@ -48,7 +48,7 @@ def run(ctx: dict) -> dict:
         ctx["lut_metadata"] = None
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault('_preview_timings', {})['p02_s'] = _elapsed
-        _log.info(
+        _log.debug(
             "material_archive mode, skipping LUT metadata: %.3fs",
             _elapsed,
             extra={
@@ -84,7 +84,7 @@ def run(ctx: dict) -> dict:
     ctx['lut_metadata'] = lut_metadata
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p02_s'] = _elapsed
-    _log.info(
+    _log.debug(
         "lut_metadata done: %.3fs",
         _elapsed,
         extra={

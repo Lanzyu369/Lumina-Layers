@@ -122,7 +122,7 @@ def worker_generate_preview(
     mode_enum = ModelingMode(modeling_mode)
     _t_worker_start = _time.perf_counter()
 
-    log.info(
+    log.debug(
         "Worker preview started",
         extra={
             "event": "worker_preview_started",
@@ -190,7 +190,7 @@ def worker_generate_preview(
     else:
         preview_image_size = list(preview_img.size) if hasattr(preview_img, "size") else None
 
-    log.info(
+    log.debug(
         "Worker preview core conversion complete",
         extra={
             "event": "worker_preview_core_done",
@@ -246,7 +246,7 @@ def worker_generate_preview(
         result["cache_data_path"] = cache_path
     _t_pkl = _time.perf_counter() - _t
 
-    log.info(
+    log.debug(
         "Worker preview serialization complete",
         extra={
             "event": "worker_preview_serialization_done",
@@ -376,7 +376,7 @@ def worker_generate_model(
     log = get_logger(__name__)
     normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
     _t_worker_start = _time.perf_counter()
-    log.info(
+    log.debug(
         "Worker model generation started",
         extra={
             "event": "worker_model_started",
@@ -417,7 +417,7 @@ def worker_generate_model(
     # (3mf_path, glb_path, preview_image, status_message, recipe)
     threemf_path, glb_path, _preview, status_msg, _recipe = result_tuple
 
-    log.info(
+    log.debug(
         "Worker model generation complete",
         extra={
             "event": "worker_model_done",

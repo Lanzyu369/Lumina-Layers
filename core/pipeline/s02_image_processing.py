@@ -154,7 +154,7 @@ def run(ctx: dict) -> dict:
     ctx['processor'] = processor
     ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
 
-    _log.info(
+    _log.debug(
         "image_proc done: %.3fs, %sx%spx, scale=%smm/px",
         _elapsed,
         target_w,

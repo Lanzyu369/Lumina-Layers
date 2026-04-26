@@ -125,7 +125,7 @@ def run(ctx: dict) -> dict:
         ctx["grid_resolution"] = resolved_grid
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
-        _log.info(
+        _log.debug(
             "material_archive mode: %d materials, %d layers, %.2f mm/layer, grid=%d",
             len(materials), material_layer_count, material_layer_height, resolved_grid,
             extra={
@@ -220,7 +220,7 @@ def run(ctx: dict) -> dict:
     ctx["slot_names"] = slot_names
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
-    _log.info(
+    _log.debug(
         "validation done: %.3fs",
         _elapsed,
         extra={

@@ -40,7 +40,7 @@ def run(ctx: dict) -> dict:
     ctx['cache'] = cache
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p05_s'] = _elapsed
-    _log.info(
+    _log.debug(
         "palette_extraction done: %.3fs",
         _elapsed,
         extra={

@@ -275,7 +275,7 @@ class ColorRecipeLogger:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
         
-        log.info(
+        log.debug(
             "Color recipe saved",
             extra={
                 "event": "color_recipe_saved",

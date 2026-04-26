@@ -226,7 +226,7 @@ def run_raster_pipeline(ctx: dict) -> dict:
         _report_progress(ctx, prog_after)
 
     total_s = time.perf_counter() - pipeline_t0
-    log.info(
+    log.debug(
         "S01-S12 completed in %.2fs",
         total_s,
         extra={
@@ -290,7 +290,7 @@ def run_preview_pipeline(ctx: dict) -> dict:
         if ctx.get("error"):
             return ctx
         total_s = time.perf_counter() - pipeline_t0
-        log.info(
+        log.debug(
             "P01 + VectorPreview completed in %.2fs",
             total_s,
             extra={
@@ -347,7 +347,7 @@ def run_preview_pipeline(ctx: dict) -> dict:
         _report_progress(ctx, prog_after)
 
     total_s = time.perf_counter() - pipeline_t0
-    log.info(
+    log.debug(
         "P01-P06 completed in %.2fs",
         total_s,
         extra={

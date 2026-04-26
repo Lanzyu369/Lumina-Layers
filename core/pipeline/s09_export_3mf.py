@@ -71,7 +71,7 @@ def run(ctx: dict) -> dict:
     if _prog is not None:
         _prog(0.50, "导出 3MF 中... | Exporting 3MF...")
 
-    _log.info(f"export_3mf start")
+    _log.debug(f"export_3mf start")
     _export_t0 = time.perf_counter() if _bench_enabled else None
 
     base_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -103,7 +103,7 @@ def run(ctx: dict) -> dict:
     }
 
     try:
-        _log.info(f"Exporting with BambuStudio metadata...")
+        _log.debug(f"Exporting with BambuStudio metadata...")
         _log.debug(
             "Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
             bool(ctx.get("enable_base_layer_height_modifier", True)),
@@ -131,8 +131,8 @@ def run(ctx: dict) -> dict:
             _export_elapsed = time.perf_counter() - _export_t0
             _hifi_timings["export_3mf_s"] = _export_elapsed
             ctx["_hifi_timings"] = _hifi_timings
-            _log.info(f"export_3mf done: {_export_elapsed:.3f}s")
-        _log.info(f"3MF exported with embedded settings: {out_path}")
+            _log.debug(f"export_3mf done: {_export_elapsed:.3f}s")
+        _log.debug(f"3MF exported with embedded settings: {out_path}")
     except (ValueError, TypeError, RuntimeError, OSError) as e:
         _log.exception(f"Error exporting 3MF: {e}")
         ctx["error"] = f"[ERROR] 3MF export failed: {e}"

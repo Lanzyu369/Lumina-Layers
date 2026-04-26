@@ -193,7 +193,7 @@ def load_printer_template(
         with open(profile_path, "r", encoding="utf-8") as f:
             template = json.load(f)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
-        log.info(
+        log.debug(
             "Loaded printer template",
             extra={
                 "event": "bambu_printer_template_loaded",
@@ -425,7 +425,7 @@ class BambuStudio3MFWriter:
         if len(self.objects) == 0:
             raise ValueError("[BAMBU_3MF] Refusing to export 3MF: no mesh objects were added")
 
-        log.info(
+        log.debug(
             "Exporting Bambu 3MF",
             extra={
                 "event": "bambu_3mf_export_started",
@@ -496,7 +496,7 @@ class BambuStudio3MFWriter:
 
         n3mf.write_to_file(self.output_path, doc, opts)
 
-        log.info(
+        log.debug(
             "Bambu 3MF export completed",
             extra={
                 "event": "bambu_3mf_export_completed",
@@ -1038,7 +1038,7 @@ def export_scene_with_bambu_metadata(
     else:
         actual_color_mode = "8-Color"
 
-    log.info(
+    log.debug(
         "Resolved Bambu 3MF color mode",
         extra={
             "event": "bambu_3mf_color_mode_resolved",
@@ -1127,7 +1127,7 @@ def export_scene_with_bambu_metadata(
     if unmatched:
         raise ValueError("[BAMBU_3MF] Missing geometries for slot names: " + ", ".join(unmatched))
 
-    log.info(
+    log.debug(
         "Prepared Bambu 3MF scene",
         extra={
             "event": "bambu_3mf_scene_prepared",

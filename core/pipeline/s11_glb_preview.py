@@ -859,7 +859,7 @@ def run(ctx: dict) -> dict:
     ctx["glb_path"] = glb_path
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"glb_preview done: {_elapsed:.3f}s")
+    _log.debug(f"glb_preview done: {_elapsed:.3f}s")
     _hifi_timings = ctx.setdefault("_hifi_timings", {})
     _hifi_timings["glb_preview_s"] = _elapsed
     seg_timing = cache.get("_segmented_glb_timings")

@@ -548,7 +548,7 @@ def run(ctx: dict) -> dict:
     ctx["outline_added"] = outline_added
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"aux_meshes done: {_elapsed:.3f}s")
+    _log.debug(f"aux_meshes done: {_elapsed:.3f}s")
     ctx.setdefault("_hifi_timings", {})["aux_meshes_s"] = _elapsed
 
     return ctx

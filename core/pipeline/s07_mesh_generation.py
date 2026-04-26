@@ -204,7 +204,7 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_gen_s"] = _mesh_elapsed
         _hifi_timings["mesh_compute_s"] = mesh_compute_elapsed
         _hifi_timings["mesh_apply_transform_s"] = mesh_apply_elapsed
-        _log.info(
+        _log.debug(
             "mesh_gen done: %.3fs",
             _mesh_elapsed,
             extra={

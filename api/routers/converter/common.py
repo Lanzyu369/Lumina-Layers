@@ -154,7 +154,7 @@ def recompute_gradient_groups_into_session(
         "gradient_region_id_map",
         np.ascontiguousarray(analysis.region_id_map, dtype=np.uint32),
     )
-    log.info(
+    log.debug(
         "Gradient groups computed",
         extra={
             "event": "gradient_groups_computed",
