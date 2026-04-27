@@ -16,7 +16,7 @@ import { I18nProvider, useI18n } from "./i18n/context";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP } from "./stores/widgetStore";
+import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
 import TabNavBar from "./components/widget/TabNavBar";
 import CalibrationPanel from "./components/CalibrationPanel";
 import ExtractorPanel from "./components/ExtractorPanel";
@@ -92,13 +92,22 @@ function WidgetToggles() {
   const toggleVisible = useWidgetStore((s) => s.toggleVisible);
   const resetLayout = useWidgetStore((s) => s.resetLayout);
   const activeTab = useWidgetStore((s) => s.activeTab);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useOutsideClick(dropdownRef, () => setIsOpen(false));
 
-  // Filter to only show widgets belonging to the current TAB page
-  const activeWidgetIds = TAB_WIDGET_MAP[activeTab];
+  // Filter to only show widgets belonging to the current TAB page.
+  // For the converter, narrow further by the active sub-tab so users cannot
+  // toggle on a widget that the current sub-tab will not render — that was
+  // confusing ("why doesn't this panel appear after I enabled it?").
+  // 对于「图像转换」主 tab，再按当前二级 sub-tab 收窄；否则用户能开启一个
+  // 实际不会渲染的 widget，造成「我开了为什么看不到」的困惑。
+  const activeWidgetIds =
+    activeTab === "converter"
+      ? (CONVERTER_SUB_TAB_WIDGET_MAP[activeConverterSubTab] as readonly import("./types/widget").WidgetId[])
+      : TAB_WIDGET_MAP[activeTab];
   const visibleWidgetIds = useWidgetStore(
     useShallow((s) => activeWidgetIds.filter((id) => s.widgets[id].visible))
   );

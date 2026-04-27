@@ -1673,11 +1673,15 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Color Editor",
   },
   "tab.converterCore": {
-    zh: "核心",
-    en: "Core",
+    zh: "核心设置",
+    en: "Core Settings",
+  },
+  "tab.converterColor": {
+    zh: "颜色调整",
+    en: "Color Adjustment",
   },
   "tab.converterAdvanced": {
-    zh: "高级",
+    zh: "高级功能",
     en: "Advanced",
   },
 

@@ -19,9 +19,10 @@ export type TabId =
   | "settings";
 
 // ===== Converter 二级 sub-tab ID =====
-// Converter 主 tab 下的语义分组：核心 / 高级。颜色编辑入口仍是 action 按钮，
-// 不占用 sub-tab 状态（点击时直接打开 Color2DOverlay）。
-export type ConverterSubTabId = "core" | "advanced";
+// Converter 主 tab 下的语义分组：核心设置 / 颜色调整 / 高级功能。
+// 颜色调整 sub-tab 与 Color2DOverlay 双向同步：进入 'color' 即打开 overlay，
+// 离开 'color' 或关闭 overlay 都会回到上一个 sub-tab（默认 'core'）。
+export type ConverterSubTabId = "core" | "color" | "advanced";
 
 // ===== Widget ID =====
 export type WidgetId =

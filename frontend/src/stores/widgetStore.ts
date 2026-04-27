@@ -49,10 +49,12 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
 };
 
 // ===== Converter sub-tab → Widget 映射 =====
-// 「核心」仅包含最常用的两个面板；「高级」为全集（含核心面板）。
-// 颜色入口不在这里——它是 sub-tab 行里的 action 按钮。
+// 核心设置：只有基础设置、操作栏、高级设置 3 个面板，专注于 3MF 生成所需的主要参数。
+// 颜色调整：dock 中不显示任何 widget；改由 Color2DOverlay 全屏接管。
+// 高级功能：可访问全部 10 个 widget，承载所有进阶可选功能。
 export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly WidgetId[]> = {
-  core: ["basic-settings", "action-bar"],
+  core: ["basic-settings", "action-bar", "advanced-settings"],
+  color: [],
   advanced: [
     "basic-settings",
     "advanced-settings",
@@ -329,10 +331,19 @@ export const useWidgetStore = create<WidgetStore>()(
 
       /**
        * Set the active Converter sub-tab.
+       * Switching to 'color' opens the Color2DOverlay; leaving 'color' closes it.
+       * Sub-tab and overlay state stay in lockstep so the overlay behaves like a
+       * full-bleed page rather than a modal.
+       *
        * 设置 Converter 页面下的二级 sub-tab。
+       * 切到「颜色调整」即打开 2D 颜色覆盖层；离开「颜色调整」即关闭，
+       * 让覆盖层像普通子页面一样进入/退出，而不是模态弹层。
        */
       setActiveConverterSubTab: (subTab: ConverterSubTabId) => {
-        set({ activeConverterSubTab: subTab });
+        set({
+          activeConverterSubTab: subTab,
+          color2DOverlayOpen: subTab === "color",
+        });
       },
 
       /**
@@ -576,19 +587,29 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       /**
-       * Open the 2D color overlay.
-       * 打开 2D 颜色覆盖层。
+       * Open the 2D color overlay and switch the converter sub-tab to 'color'.
+       * 打开 2D 颜色覆盖层，并把 converter 二级 sub-tab 切到「颜色调整」。
        */
       openColor2DOverlay: () => {
-        set({ color2DOverlayOpen: true });
+        set({ color2DOverlayOpen: true, activeConverterSubTab: "color" });
       },
 
       /**
-       * Close the 2D color overlay.
-       * 关闭 2D 颜色覆盖层。
+       * Close the 2D color overlay. If the converter is currently sitting on
+       * the 'color' sub-tab, fall back to 'core' so the user lands on a real
+       * settings page rather than an empty dock.
+       *
+       * 关闭 2D 颜色覆盖层。如果 converter 当前位于「颜色调整」sub-tab，
+       * 则自动回退到「核心设置」，避免用户看到一个空的工作区。
        */
       closeColor2DOverlay: () => {
-        set({ color2DOverlayOpen: false });
+        set((state) => ({
+          color2DOverlayOpen: false,
+          activeConverterSubTab:
+            state.activeConverterSubTab === "color"
+              ? "core"
+              : state.activeConverterSubTab,
+        }));
       },
     }),
     {

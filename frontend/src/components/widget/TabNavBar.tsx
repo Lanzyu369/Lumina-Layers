@@ -52,29 +52,29 @@ const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   )
 };
 
-const COLOR_EDITOR_ACTION_ICON = (
-  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M4 21h4l11-11a2.828 2.828 0 10-4-4L4 17v4z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M14 7l3 3" />
-  </svg>
-);
-
-// Converter 二级 sub-tab 图标。
+// Converter 二级 sub-tab 图标。Icons for the three converter sub-tabs.
 const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
   core: (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  ),
+  color: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
     </svg>
   ),
   advanced: (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
     </svg>
   ),
 };
 
 const CONVERTER_SUB_TAB_LIST: { id: ConverterSubTabId; titleKey: string }[] = [
   { id: 'core', titleKey: 'tab.converterCore' },
+  { id: 'color', titleKey: 'tab.converterColor' },
   { id: 'advanced', titleKey: 'tab.converterAdvanced' },
 ];
 
@@ -172,7 +172,6 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
     : showMaterialSubTabs
       ? MATERIAL_SECONDARY_TAB_LIST
       : null;
-  const openColor2DOverlay = useWidgetStore((s) => s.openColor2DOverlay);
   const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveConverterSubTab = useWidgetStore((s) => s.setActiveConverterSubTab);
 
@@ -254,25 +253,6 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                 </button>
               );
             })}
-            {/* Color editor: action button, not a sub-tab. Opens the 2D color overlay
-                without changing activeConverterSubTab. 颜色编辑：动作按钮（非 sub-tab），
-                点击直接打开 2D 颜色覆盖层，不修改 activeConverterSubTab。 */}
-            <button
-              data-testid="subtab-color-editor"
-              onClick={openColor2DOverlay}
-              className={`
-                relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200
-              `}
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label={t('tab.colorEditor')}
-            >
-              <span className="relative z-10 flex items-center gap-2">
-                <span className="flex items-center justify-center">{COLOR_EDITOR_ACTION_ICON}</span>
-                <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t('tab.colorEditor')}</span>
-              </span>
-            </button>
           </div>
         </nav>
       )}
