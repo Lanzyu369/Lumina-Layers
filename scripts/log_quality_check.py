@@ -33,7 +33,7 @@ from scripts.audit_logs import audit_files, event_from_line, parse_json_object
 Mode = Literal["fast", "full"]
 
 DEFAULT_WORKFLOW = ["startup", "lut_list", "lut_colors", "preview", "generate"]
-WORKFLOW_ORDER = ["startup", "lut_list", "lut_colors", "preview", "generate"]
+WORKFLOW_ORDER = ["startup", "lut_list", "lut_colors", "preview", "generate", "vector"]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
 DEFAULT_MAX_INFO = 30
 DEFAULT_MAX_INFO_PER_ENDPOINT = 8
@@ -44,7 +44,9 @@ DEFAULT_LUT_STEM = "Aliz&PLA&4色RYBW&20260211"
 DEFAULT_LUT_NAME = f"Aliz - {DEFAULT_LUT_STEM}"
 DEFAULT_COLOR_MODE = "4-Color (RYBW)"
 DEFAULT_MODELING_MODE = "high-fidelity"
+VECTOR_MODELING_MODE = "vector"
 FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "frozen_assets" / "images" / "logo.png"
+VECTOR_FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "svg_alignment" / "ring_with_hole.svg"
 
 _CATCH_ALL_PATTERN = re.compile(r"^(.*_log|status_.*|request_.*)$")
 _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
@@ -249,6 +251,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                 created_paths,
                 np,
                 Image,
+                *args,
             )
         )
 
@@ -536,13 +539,24 @@ def _build_mock_worker_result(
     created_paths: list[Path],
     np_module: Any,
     image_cls: Any,
+    *worker_args: Any,
 ) -> dict[str, Any]:
     name = getattr(worker_fn, "__name__", "")
     if name == "worker_generate_preview":
+        if _is_vector_preview_worker_args(worker_args):
+            return _build_mock_vector_preview_result(created_paths, np_module, image_cls)
         return _build_mock_preview_result(created_paths, np_module, image_cls)
     if name == "worker_generate_model":
         return _build_mock_generate_result(created_paths)
     raise QualityCheckError(f"Unexpected worker submitted in fast mode: {name}")
+
+
+def _is_vector_preview_worker_args(worker_args: Sequence[Any]) -> bool:
+    if len(worker_args) < 7:
+        return False
+    image_path = str(worker_args[0])
+    modeling_mode = str(worker_args[6])
+    return image_path.lower().endswith(".svg") and modeling_mode == VECTOR_MODELING_MODE
 
 
 def _build_mock_preview_result(
@@ -580,6 +594,66 @@ def _build_mock_preview_result(
 
     return {
         "status_msg": "Preview OK",
+        "preview_png_path": str(png_path),
+        "cache_data_path": str(cache_path),
+    }
+
+
+def _build_mock_vector_preview_result(
+    created_paths: list[Path],
+    np_module: Any,
+    image_cls: Any,
+) -> dict[str, Any]:
+    import pickle
+
+    preview = np_module.zeros((10, 10, 3), dtype=np_module.uint8)
+    preview[:, :, :] = [0, 128, 255]
+    mask_solid = np_module.ones((10, 10), dtype=bool)
+    material_matrix = np_module.zeros((10, 10, 5), dtype=np_module.int16)
+    preview_rgba = np_module.zeros((10, 10, 4), dtype=np_module.uint8)
+    preview_rgba[:, :, :3] = preview
+    preview_rgba[:, :, 3] = 255
+
+    png_path = _make_temp_path(".png", created_paths)
+    image_cls.fromarray(preview).save(png_path)
+
+    cache = {
+        "target_w": 10,
+        "target_h": 10,
+        "target_width_mm": 60.0,
+        "color_palette": [
+            {"hex": "#0080ff", "color": (0, 128, 255), "count": 100, "percentage": 100.0},
+        ],
+        "matched_rgb": preview.copy(),
+        "mask_solid": mask_solid,
+        "quantized_image": preview.copy(),
+        "material_matrix": material_matrix,
+        "preview_rgba": preview_rgba,
+        "color_conf": {
+            "slots": ["White", "Red", "Yellow", "Blue"],
+            "preview": {
+                0: [255, 255, 255, 255],
+                1: [255, 0, 0, 255],
+                2: [255, 255, 0, 255],
+                3: [0, 128, 255, 255],
+            },
+        },
+        "preview_colors": {
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+            2: [255, 255, 0, 255],
+            3: [0, 128, 255, 255],
+        },
+        "slot_names": ["White", "Red", "Yellow", "Blue"],
+        "color_contours": {},
+        "lut_match_info": {"match_mode": "mock-vector"},
+    }
+    cache_path = _make_temp_path(".pkl", created_paths)
+    with cache_path.open("wb") as handle:
+        pickle.dump(cache, handle)
+
+    return {
+        "status_msg": "Vector Preview OK",
         "preview_png_path": str(png_path),
         "cache_data_path": str(cache_path),
     }
@@ -631,10 +705,17 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             if session_id is None:
                 raise QualityCheckError("Workflow step 'generate' requires 'preview'")
             _post_generate(client, session_id, lut_name)
+        elif step == "vector":
+            _execute_vector_workflow(client, lut_name)
+
+
+def _execute_vector_workflow(client: Any, lut_name: str) -> None:
+    session_id = _post_vector_preview(client, lut_name)
+    _post_vector_generate(client, session_id, lut_name)
 
 
 def _post_preview(client: Any, lut_name: str) -> str:
-    _require_fixture()
+    _require_fixture(FIXTURE_IMAGE)
     with FIXTURE_IMAGE.open("rb") as handle:
         response = client.post(
             "/api/convert/preview",
@@ -648,6 +729,21 @@ def _post_preview(client: Any, lut_name: str) -> str:
     return session_id
 
 
+def _post_vector_preview(client: Any, lut_name: str) -> str:
+    _require_fixture(VECTOR_FIXTURE_IMAGE)
+    with VECTOR_FIXTURE_IMAGE.open("rb") as handle:
+        response = client.post(
+            "/api/convert/preview",
+            files={"image": (VECTOR_FIXTURE_IMAGE.name, handle, "image/svg+xml")},
+            data=_preview_form_data(lut_name, modeling_mode=VECTOR_MODELING_MODE),
+        )
+    _raise_for_status(response.status_code, response.text, "vector preview")
+    session_id = response.json().get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise QualityCheckError("Vector preview response did not include session_id")
+    return session_id
+
+
 def _post_generate(client: Any, session_id: str, lut_name: str) -> None:
     response = client.post(
         "/api/convert/generate",
@@ -656,12 +752,29 @@ def _post_generate(client: Any, session_id: str, lut_name: str) -> None:
     _raise_for_status(response.status_code, response.text, "generate")
 
 
-def _preview_form_data(lut_name: str) -> dict[str, str]:
+def _post_vector_generate(client: Any, session_id: str, lut_name: str) -> None:
+    response = client.post(
+        "/api/convert/generate",
+        json=_generate_payload(
+            session_id,
+            lut_name,
+            modeling_mode=VECTOR_MODELING_MODE,
+            use_cached_matched_rgb=False,
+        ),
+    )
+    _raise_for_status(response.status_code, response.text, "vector generate")
+
+
+def _preview_form_data(
+    lut_name: str,
+    *,
+    modeling_mode: str = DEFAULT_MODELING_MODE,
+) -> dict[str, str]:
     return {
         "source_kind": "legacy_single",
         "lut_name": lut_name,
         "color_mode": DEFAULT_COLOR_MODE,
-        "modeling_mode": DEFAULT_MODELING_MODE,
+        "modeling_mode": modeling_mode,
         "target_width_mm": "60.0",
         "auto_bg": "false",
         "bg_tol": "40",
@@ -670,26 +783,33 @@ def _preview_form_data(lut_name: str) -> dict[str, str]:
     }
 
 
-def _generate_payload(session_id: str, lut_name: str) -> dict[str, Any]:
+def _generate_payload(
+    session_id: str,
+    lut_name: str,
+    *,
+    modeling_mode: str = DEFAULT_MODELING_MODE,
+    use_cached_matched_rgb: bool = False,
+) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "params": {
             "source_kind": "legacy_single",
             "lut_name": lut_name,
             "color_mode": DEFAULT_COLOR_MODE,
-            "modeling_mode": DEFAULT_MODELING_MODE,
+            "modeling_mode": modeling_mode,
             "target_width_mm": 60.0,
             "auto_bg": False,
             "bg_tol": 40,
             "quantize_colors": 48,
             "enable_cleanup": True,
+            "use_cached_matched_rgb": use_cached_matched_rgb,
         },
     }
 
 
-def _require_fixture() -> None:
-    if not FIXTURE_IMAGE.is_file():
-        raise QualityCheckError(f"Fixture image missing: {FIXTURE_IMAGE}")
+def _require_fixture(path: Path) -> None:
+    if not path.is_file():
+        raise QualityCheckError(f"Fixture image missing: {path}")
 
 
 def _raise_for_status(status_code: int, text: str, label: str) -> None:

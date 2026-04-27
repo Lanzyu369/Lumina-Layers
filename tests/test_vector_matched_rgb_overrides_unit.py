@@ -16,6 +16,7 @@ silently dropped from the generated 3MF.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import sys
 import types
@@ -48,6 +49,14 @@ VectorAnalysis = _ve.VectorAnalysis
 apply_matched_rgb_overrides_to_analysis = getattr(
     _ve, "apply_matched_rgb_overrides_to_analysis", None
 )
+
+
+def _attach_caplog(caplog: pytest.LogCaptureFixture, logger_name: str, level: int) -> logging.Logger:
+    """Attach pytest's capture handler to a non-propagating Lumina logger."""
+    logger = logging.getLogger(logger_name)
+    logger.addHandler(caplog.handler)
+    caplog.set_level(level, logger=logger_name)
+    return logger
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +246,36 @@ class TestApplyMatchedRgbOverrides:
         assert bot_shape["matched_rgb"] == (0, 255, 0)
         assert bot_shape["recipe"] == [2, 2, 2, 2, 2]
 
+    def test_region_replace_logs_structured_success_event(self, caplog):
+        """A successful helper rewrite must emit a structured INFO event."""
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, _ = _build_grid_arrays(analysis)
+        matched_rgb[: h_px // 2, :, :] = (0, 0, 255)
+
+        target_logger = _attach_caplog(caplog, "lumina.core.vector_engine", logging.INFO)
+        try:
+            changed = apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb,
+                mask_solid=mask_solid,
+                img_processor=img_processor,
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert changed == 1
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "vector_overrides_applied"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert getattr(record, "shape_count") == 2
+        assert getattr(record, "rewritten_count") == 1
+        assert not record.getMessage().lstrip().startswith("[")
+
     def test_no_change_returns_zero_and_keeps_recipes(self):
         """When ``matched_rgb`` matches the existing shape colours the
         helper must be a no-op.
@@ -305,13 +344,16 @@ class TestApplyMatchedRgbOverrides:
         bogus_rgb = np.zeros((11, 11, 3), dtype=np.uint8)
         bogus_mask = np.ones((11, 11), dtype=bool)
 
-        with caplog.at_level("WARNING"):
+        target_logger = _attach_caplog(caplog, "lumina.core.vector_engine", logging.WARNING)
+        try:
             changed = apply_matched_rgb_overrides_to_analysis(
                 analysis,
                 matched_rgb=bogus_rgb,
                 mask_solid=bogus_mask,
                 img_processor=img_processor,
             )
+        finally:
+            target_logger.removeHandler(caplog.handler)
 
         assert changed == 0
         assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
@@ -320,6 +362,17 @@ class TestApplyMatchedRgbOverrides:
         # 警告文案需要含失配尺寸，方便排查上游缓存序列化是否走样。
         joined = " ".join(rec.message for rec in caplog.records)
         assert "shape" in joined.lower() or "grid" in joined.lower()
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "vector_overrides_grid_mismatch"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert getattr(record, "matched_rgb_shape") == [11, 11]
+        assert getattr(record, "mask_solid_shape") == [11, 11]
+        assert getattr(record, "expected_shape") == [100, 100]
+        assert getattr(record, "error_type") == "ValueError"
 
 
 @pytest.mark.skipif(
@@ -359,7 +412,13 @@ class TestRunVectorBranchWiring:
     会调用我们的修复函数。
     """
 
-    def _patch_dependencies(self, captured: dict, helper_call_log: list[dict]):
+    def _patch_dependencies(
+        self,
+        captured: dict,
+        helper_call_log: list[dict],
+        *,
+        helper_result: int = 0,
+    ):
         """Build the patch context shared by both wiring tests.
 
         构造两个 wiring 测试共用的 patch 上下文，覆盖 VectorProcessor、
@@ -408,7 +467,7 @@ class TestRunVectorBranchWiring:
 
         def _fake_helper(*args, **kwargs):
             helper_call_log.append({"args": args, "kwargs": kwargs})
-            return 0
+            return helper_result
 
         def _fake_export_scene_with_bambu_metadata(**kwargs):
             captured.update(kwargs)
@@ -524,3 +583,62 @@ class TestRunVectorBranchWiring:
 
         assert "error" not in result
         assert helper_calls == []
+
+    def test_vector_branch_logs_structured_events(self, tmp_path, caplog):
+        """The coordinator vector branch must emit explicit structured events."""
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.pipeline import coordinator
+
+        matched_rgb_path = tmp_path / "matched.npy"
+        mask_solid_path = tmp_path / "mask.npy"
+        np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
+        np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+        cms = self._patch_dependencies(captured, helper_calls, helper_result=2)
+        target_logger = _attach_caplog(caplog, "lumina.core.pipeline.coordinator", logging.DEBUG)
+
+        try:
+            with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+                "config.MODELS_DIR", str(tmp_path)
+            ), patch("config.OUTPUT_DIR", str(tmp_path)):
+                ctx = {
+                    "image_path": str(tmp_path / "vector.svg"),
+                    "actual_lut_path": str(tmp_path / "fake.json"),
+                    "color_mode": "5-Color Extended",
+                    "modeling_mode": ModelingMode.VECTOR,
+                    "target_width_mm": 40.0,
+                    "spacer_thick": 1.6,
+                    "structure_mode": "单面",
+                    "need_2d_preview": False,
+                    "printer_id": "bambu-h2d",
+                    "slicer": "BambuStudio",
+                    "nozzle_size": "0.4",
+                    "matched_rgb_path": str(matched_rgb_path),
+                    "mask_solid_path": str(mask_solid_path),
+                }
+
+                result = coordinator._run_vector_branch(ctx)
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert "error" not in result
+        events = {getattr(record, "event", None) for record in caplog.records}
+        assert {
+            "vector_branch_init",
+            "vector_matched_rgb_overrides_applied",
+            "vector_3mf_exported",
+            "vector_glb_exported",
+            "vector_2d_preview_skipped",
+            "vector_timings",
+            "vector_branch_done",
+        }.issubset(events)
+        assert all(
+            getattr(record, "event", None)
+            for record in caplog.records
+            if record.levelno >= logging.INFO
+        )
+        assert all(not record.getMessage().lstrip().startswith("[") for record in caplog.records)

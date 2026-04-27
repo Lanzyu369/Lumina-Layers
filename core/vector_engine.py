@@ -376,17 +376,35 @@ def apply_recipe_overrides_to_analysis(
     for rid, mask in (region_masks or {}).items():
         arr = np.asarray(mask, dtype=bool)
         if arr.ndim != 2 or arr.shape != (h_px, w_px):
+            error_message = (
+                f"Region mask {rid} shape {arr.shape} does not match "
+                f"preview grid {(h_px, w_px)}"
+            )
             _log.warning(
-                "Region mask %s shape %s does not match preview grid %s; skipped",
-                rid,
-                arr.shape,
-                (h_px, w_px),
+                "Region mask does not match preview grid; skipped",
+                extra={
+                    "event": "vector_recipe_region_mask_skipped",
+                    "error_type": "ValueError",
+                    "error_message": error_message,
+                    "region_id": str(rid),
+                    "mask_shape": list(arr.shape),
+                    "expected_shape": [int(h_px), int(w_px)],
+                },
             )
             continue
         normalised_masks[str(rid)] = arr
 
     if not normalised_masks:
-        _log.warning("No region masks matched preview grid; recipe overrides ignored")
+        _log.warning(
+            "No region masks matched preview grid; recipe overrides ignored",
+            extra={
+                "event": "vector_recipe_region_masks_missing",
+                "error_type": "ValueError",
+                "error_message": "No recipe override region masks matched the preview grid",
+                "region_count": len(region_masks or {}),
+                "expected_shape": [int(h_px), int(w_px)],
+            },
+        )
         return
 
     # --- Build a global virtual-material registry (dedupe by name+hex) ---
@@ -683,18 +701,36 @@ def apply_matched_rgb_overrides_to_analysis(
     matched_arr = np.asarray(matched_rgb)
     mask_arr = np.asarray(mask_solid, dtype=bool)
     if matched_arr.ndim != 3 or matched_arr.shape[2] != 3 or matched_arr.dtype != np.uint8:
+        error_message = (
+            f"matched_rgb shape/dtype {matched_arr.shape}/{matched_arr.dtype} "
+            "is not (H,W,3) uint8"
+        )
         _log.warning(
-            "[VECTOR] matched_rgb shape/dtype %s/%s not (H,W,3) uint8; overrides skipped",
-            matched_arr.shape,
-            matched_arr.dtype,
+            "Vector matched RGB overrides skipped because input array is invalid",
+            extra={
+                "event": "vector_overrides_input_invalid",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "matched_rgb_shape": list(matched_arr.shape),
+                "matched_rgb_dtype": str(matched_arr.dtype),
+            },
         )
         return 0
     if matched_arr.shape[:2] != (h_px, w_px) or mask_arr.shape != (h_px, w_px):
+        error_message = (
+            f"matched_rgb/mask_solid shape {matched_arr.shape[:2]}/{mask_arr.shape} "
+            f"does not match preview grid {(h_px, w_px)}"
+        )
         _log.warning(
-            "[VECTOR] matched_rgb/mask_solid shape %s/%s does not match preview grid %s; overrides skipped",
-            matched_arr.shape[:2],
-            mask_arr.shape,
-            (h_px, w_px),
+            "Vector matched RGB overrides skipped because cache grid mismatched analysis",
+            extra={
+                "event": "vector_overrides_grid_mismatch",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "matched_rgb_shape": list(matched_arr.shape[:2]),
+                "mask_solid_shape": list(mask_arr.shape),
+                "expected_shape": [int(h_px), int(w_px)],
+            },
         )
         return 0
 
@@ -799,9 +835,12 @@ def apply_matched_rgb_overrides_to_analysis(
 
     if changed:
         _log.info(
-            "[VECTOR] matched_rgb overrides applied: shapes=%s, rewritten=%s",
-            len(analysis.matched_shapes),
-            changed,
+            "Vector matched RGB overrides applied",
+            extra={
+                "event": "vector_overrides_applied",
+                "shape_count": len(analysis.matched_shapes),
+                "rewritten_count": int(changed),
+            },
         )
     return changed
 
@@ -1587,7 +1626,15 @@ class VectorProcessor:
                     color_conf["preview"] = preview_colors
                     _log.debug("LUT palette override: %s", slot_names)
             except Exception as e:
-                _log.warning("Failed to extract LUT palette: %s", e)
+                _log.warning(
+                    "Failed to extract vector LUT palette",
+                    extra={
+                        "event": "vector_lut_palette_extract_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "path": str(lut_path),
+                    },
+                )
 
         # === Stage 4: Match fill colors to LUT recipes ===
         replacement_manager = None
@@ -1597,7 +1644,15 @@ class VectorProcessor:
 
                 replacement_manager = ColorReplacementManager.from_dict(color_replacements)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("Failed to load color replacements: %s", e)
+                _log.warning(
+                    "Failed to load vector color replacements",
+                    extra={
+                        "event": "vector_color_replacements_load_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "replacement_count": len(color_replacements or []),
+                    },
+                )
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
@@ -3008,7 +3063,15 @@ class VectorProcessor:
                 m.apply_translation([0, 0, z_offset])
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("Failed to extrude polygon: %s", e)
+                _log.warning(
+                    "Failed to extrude vector polygon",
+                    extra={
+                        "event": "vector_polygon_extrude_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "geometry_type": getattr(poly, "geom_type", None),
+                    },
+                )
                 continue
 
         return meshes

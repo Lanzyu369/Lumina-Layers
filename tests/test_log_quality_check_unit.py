@@ -8,6 +8,9 @@ from pathlib import Path
 from scripts.audit_logs import event_from_line, parse_json_object
 from scripts.log_quality_check import (
     CheckResult,
+    WORKFLOW_ORDER,
+    WORKFLOW_STEPS,
+    _parse_workflow,
     _scan_log_file_for_governance_metrics,
 )
 
@@ -91,6 +94,16 @@ def test_scan_allows_client_log_event(tmp_path: Path) -> None:
     metrics = _scan_log_file_for_governance_metrics(log_path)
 
     assert metrics["catch_all_event_count"] == 0
+
+
+def test_vector_workflow_step_is_first_class() -> None:
+    """The SVG-native vector workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("startup,lut_list,lut_colors,preview,generate,vector")
+
+    assert workflow == ["startup", "lut_list", "lut_colors", "preview", "generate", "vector"]
+    assert "vector" in WORKFLOW_ORDER
+    assert "vector" in WORKFLOW_STEPS
 
 
 def test_check_result_evaluate_marks_passing_threshold() -> None:

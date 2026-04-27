@@ -29,6 +29,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "修复矢量模式下，颜色工作站做区域替换或多选区域替换后，生成的 3MF 模型不反映替换的问题；现在 2D 预览改了什么，最终模型就改了什么。",
             en: "Fixed vector mode losing region or multi-region colour edits made in the Color Workstation; what you see in the 2D preview now matches the generated 3MF.",
           },
+          {
+            zh: "SVG 矢量生成现在纳入和光栅流程同一套日志治理检查，预览到生成之间的问题更容易在发布前被发现。",
+            en: "SVG vector generation is now covered by the same log-governance checks as raster, making preview-to-generate issues easier to catch before release.",
+          },
         ],
       },
     ],

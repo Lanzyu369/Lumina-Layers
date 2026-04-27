@@ -52,6 +52,34 @@ GOVERNANCE_SCAN_ROOTS = [
 ]
 EXCEPT_EXCEPTION_BASELINE = 39
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
+VECTOR_STRUCTURED_EVENTS = {
+    "vector_branch_init",
+    "vector_branch_done",
+    "vector_branch_failed",
+    "vector_matched_rgb_overrides_applied",
+    "vector_matched_rgb_overrides_failed",
+    "vector_overrides_input_invalid",
+    "vector_overrides_grid_mismatch",
+    "vector_overrides_applied",
+    "vector_recipe_overrides_load_failed",
+    "vector_recipe_overrides_apply_failed",
+    "vector_3mf_exported",
+    "vector_glb_exported",
+    "vector_glb_exported_skipped",
+    "vector_2d_preview_skipped",
+    "vector_2d_preview_done",
+    "vector_2d_preview_failed",
+    "vector_board_merged",
+    "vector_board_kept",
+    "vector_board_separate",
+    "vector_geometry_skipped",
+    "vector_timings",
+    "vector_lut_palette_extract_failed",
+    "vector_color_replacements_load_failed",
+    "vector_polygon_extrude_failed",
+    "vector_recipe_region_mask_skipped",
+    "vector_recipe_region_masks_missing",
+}
 
 
 def _iter_py_files(path: Path) -> list[Path]:
@@ -140,6 +168,7 @@ def test_no_bracket_tag_in_log_messages() -> None:
 def test_no_starlog_catchall_event_names() -> None:
     """Structured event names should describe real events, not generic log buckets."""
     violations: list[str] = []
+    literal_events: set[str] = set()
     for file_path in _iter_governance_py_files():
         tree = _parse_py_file(file_path)
         for node in ast.walk(tree):
@@ -159,7 +188,10 @@ def test_no_starlog_catchall_event_names() -> None:
                     ):
                         continue
                     event_name = value_node.value
+                    literal_events.add(event_name)
                     if event_name.endswith("_log"):
                         violations.append(_relative_location(file_path, value_node))
 
     assert not violations, "Catch-all *_log events found: " + ", ".join(violations)
+    missing = sorted(VECTOR_STRUCTURED_EVENTS - literal_events)
+    assert not missing, "Vector structured events missing: " + ", ".join(missing)

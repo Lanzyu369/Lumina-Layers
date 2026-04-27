@@ -490,9 +490,22 @@ def _run_vector_branch(ctx: dict) -> dict:
     matched_rgb_path = ctx.get("matched_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
 
-    log.info("Using Native Vector Engine (Shapely/Clipper)...")
     vector_timing = {}
     vector_total_t0 = time.perf_counter()
+    log.info(
+        "Vector branch started",
+        extra={
+            "event": "vector_branch_init",
+            "image_name": os.path.basename(str(image_path)),
+            "color_mode": str(color_mode),
+            "modeling_mode": str(modeling_mode),
+            "target_width_mm": float(target_width_mm),
+            "structure_mode": str(structure_mode),
+            "has_replacement_regions": bool(replacement_regions),
+            "has_color_replacements": bool(color_replacements),
+            "has_recipe_overrides": bool(recipe_overrides),
+        },
+    )
 
     # ---- Normalize color replacements ----
     vector_replacements = _normalize_color_replacements_input(replacement_regions)
@@ -539,13 +552,24 @@ def _run_vector_branch(ctx: dict) -> dict:
                 )
                 if rewritten:
                     log.info(
-                        "[COORDINATOR] Vector matched_rgb overrides applied: shapes_rewritten=%s",
-                        rewritten,
+                        "Vector matched RGB overrides applied",
+                        extra={
+                            "event": "vector_matched_rgb_overrides_applied",
+                            "shapes_rewritten": int(rewritten),
+                            "matched_rgb_path": str(matched_rgb_path),
+                            "mask_solid_path": str(mask_solid_path),
+                        },
                     )
             except COORDINATOR_HANDLED_ERRORS as exc:
                 log.warning(
-                    "[COORDINATOR] Failed to apply vector matched_rgb overrides: %s",
-                    exc,
+                    "Failed to apply vector matched RGB overrides",
+                    extra={
+                        "event": "vector_matched_rgb_overrides_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "matched_rgb_path": str(matched_rgb_path),
+                        "mask_solid_path": str(mask_solid_path),
+                    },
                 )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
@@ -567,8 +591,13 @@ def _run_vector_branch(ctx: dict) -> dict:
                     vector_region_masks = _pickle.load(f)
             except (OSError, EOFError, ValueError, TypeError, _pickle.PickleError) as exc:
                 log.warning(
-                    "Failed to load recipe override masks for vector: %s",
-                    exc,
+                    "Failed to load vector recipe override masks",
+                    extra={
+                        "event": "vector_recipe_overrides_load_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "path": str(recipe_override_masks_path),
+                    },
                 )
                 vector_region_masks = None
 
@@ -584,8 +613,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                     )
                 except COORDINATOR_HANDLED_ERRORS as exc:
                     log.warning(
-                        "Vector recipe override application failed: %s",
-                        exc,
+                        "Vector recipe override application failed",
+                        extra={
+                            "event": "vector_recipe_overrides_apply_failed",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "region_count": len(vector_region_masks),
+                            "override_count": len(recipe_overrides),
+                        },
                     )
 
         # 1b. Build 3D mesh from analysis
@@ -621,6 +656,15 @@ def _run_vector_branch(ctx: dict) -> dict:
 
         if len(scene.geometry) == 0:
             ctx["error"] = "[ERROR] Vector mesh generation failed: no valid geometry generated"
+            log.error(
+                "Vector branch failed",
+                extra={
+                    "event": "vector_branch_failed",
+                    "error_type": "ValueError",
+                    "error_message": ctx["error"],
+                    "stage": "build_mesh",
+                },
+            )
             return ctx
 
         # 1.5a Use color config from analysis (already resolved)
@@ -646,12 +690,31 @@ def _run_vector_branch(ctx: dict) -> dict:
                 merged.metadata["name"] = first_slot
                 scene.geometry[first_slot] = merged
                 del scene.geometry["Board"]
-                log.info(f"Vector: merged Board into '{first_slot}' (separate_backing=false)")
+                log.debug(
+                    "Vector board merged into first material slot",
+                    extra={
+                        "event": "vector_board_merged",
+                        "slot_name": str(first_slot),
+                        "separate_backing": False,
+                    },
+                )
             else:
-                log.info("Vector: Board exists but first slot not found, keeping Board as-is")
+                log.debug(
+                    "Vector board kept because first material slot was not found",
+                    extra={
+                        "event": "vector_board_kept",
+                        "separate_backing": False,
+                    },
+                )
         elif board_geom is not None and separate_backing:
             vec_preview_colors["Board"] = vec_preview_colors.get(0, [255, 255, 255, 255])
-            log.info("Vector: keeping Board as separate backing (separate_backing=true)")
+            log.debug(
+                "Vector board kept as separate backing",
+                extra={
+                    "event": "vector_board_separate",
+                    "separate_backing": True,
+                },
+            )
 
         # 2. Export 3MF
         _report_progress(ctx, 0.72, "导出 3MF 中... | Exporting 3MF...")
@@ -665,12 +728,30 @@ def _run_vector_branch(ctx: dict) -> dict:
             v_count = len(vertices) if vertices is not None else 0
             f_count = len(faces) if faces is not None else 0
             if v_count == 0 or f_count == 0:
-                log.info(f"Skipping empty vector geometry '{geom_name}' (v={v_count}, f={f_count})")
+                log.debug(
+                    "Skipping empty vector geometry",
+                    extra={
+                        "event": "vector_geometry_skipped",
+                        "geometry_name": str(geom_name),
+                        "vertex_count": int(v_count),
+                        "face_count": int(f_count),
+                    },
+                )
                 continue
             vec_slot_names.append(geom_name)
 
         if not vec_slot_names:
             ctx["error"] = "[ERROR] Vector export aborted: all generated geometries are empty"
+            log.error(
+                "Vector branch failed",
+                extra={
+                    "event": "vector_branch_failed",
+                    "error_type": "ValueError",
+                    "error_message": ctx["error"],
+                    "stage": "export_3mf",
+                    "geometry_count": len(scene.geometry),
+                },
+            )
             return ctx
 
         vec_print_settings = {
@@ -707,8 +788,17 @@ def _run_vector_branch(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
         )
-        log.info(f"Vector 3MF exported with Bambu metadata: {out_path}")
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
+        log.info(
+            "Vector 3MF exported with Bambu metadata",
+            extra={
+                "event": "vector_3mf_exported",
+                "path": str(out_path),
+                "slot_count": len(vec_slot_names),
+                "geometry_count": len(scene.geometry),
+                "duration_ms": round(vector_timing["export_3mf_s"] * 1000, 3),
+            },
+        )
 
         # 3. GLB preview
         _report_progress(ctx, 0.82, "生成 3D 预览中... | Generating 3D preview...")
@@ -717,9 +807,22 @@ def _run_vector_branch(ctx: dict) -> dict:
         try:
             glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
             scene.export(glb_path)
-            log.info(f"Preview GLB exported: {glb_path}")
+            log.debug(
+                "Vector preview GLB exported",
+                extra={
+                    "event": "vector_glb_exported",
+                    "path": str(glb_path),
+                },
+            )
         except COORDINATOR_HANDLED_ERRORS as e:
-            log.warning(f"Preview generation skipped: {e}")
+            log.debug(
+                "Vector preview GLB export skipped",
+                extra={
+                    "event": "vector_glb_exported_skipped",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0
 
         # 4. 2D preview from analyzed geometry (same data as 3MF)
@@ -730,13 +833,29 @@ def _run_vector_branch(ctx: dict) -> dict:
         skip_heavy_preview = os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         if skip_heavy_preview or not need_2d_preview:
             reason = "env flag" if skip_heavy_preview else "caller does not need it"
-            log.info("Skipping SVG 2D preview (%s)", reason)
+            log.debug(
+                "Skipping SVG 2D preview",
+                extra={
+                    "event": "vector_2d_preview_skipped",
+                    "reason": reason,
+                },
+            )
         else:
             try:
                 preview_img = VectorProcessor.render_preview(analysis, pixels_per_mm=10.0)
-                log.info("Generated 2D vector preview from analyzed geometry")
+                log.debug(
+                    "Generated 2D vector preview from analyzed geometry",
+                    extra={"event": "vector_2d_preview_done"},
+                )
             except COORDINATOR_HANDLED_ERRORS as e:
-                log.warning("Failed to render vector preview: %s", e)
+                log.warning(
+                    "Failed to render vector preview",
+                    extra={
+                        "event": "vector_2d_preview_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
         vector_timing["preview_2d_s"] = time.perf_counter() - preview_t0
 
         # 5. Stats & timing
@@ -748,11 +867,32 @@ def _run_vector_branch(ctx: dict) -> dict:
         if getattr(vec_processor, "parse_warnings", None):
             msg += " ⚠ " + "; ".join(vec_processor.parse_warnings)
         ctx["result_tuple"] = (out_path, glb_path, preview_img, msg, None)
+        log.info(
+            "Vector branch completed",
+            extra={
+                "event": "vector_branch_done",
+                "duration_ms": round(vector_timing["vector_branch_total_s"] * 1000, 3),
+                "path": str(out_path),
+                "glb_path": str(glb_path) if glb_path else None,
+                "slot_count": len(vec_slot_names),
+                "geometry_count": len(scene.geometry),
+                "preview_2d_generated": preview_img is not None,
+                "parse_warning_count": len(getattr(vec_processor, "parse_warnings", None) or []),
+            },
+        )
         return ctx
 
     except ModuleNotFoundError as e:
         error_msg = f"Vector processing failed: {e}"
-        log.error(f"{error_msg}")
+        log.exception(
+            "Vector branch failed",
+            extra={
+                "event": "vector_branch_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "dependency": getattr(e, "name", None),
+            },
+        )
         ctx["error"] = error_msg
         return ctx
 
@@ -765,7 +905,15 @@ def _run_vector_branch(ctx: dict) -> dict:
             "- Convert text to paths (Path -> Object to Path)\n"
             "- Or switch to 'High-Fidelity' mode for rasterization"
         )
-        log.exception(f"{error_msg}")
+        log.exception(
+            "Vector branch failed",
+            extra={
+                "event": "vector_branch_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "stage": "vector_processing",
+            },
+        )
         ctx["error"] = error_msg
         return ctx
 
@@ -779,7 +927,7 @@ def _log_vector_timings(timings: dict) -> None:
     """
     if not timings:
         return
-    log.info(
+    log.debug(
         "Vector timings (s): "
         f"parse={timings.get('parse_s', 0.0):.3f}, "
         f"clip={timings.get('occlusion_s', 0.0):.3f}, "
@@ -792,5 +940,9 @@ def _log_vector_timings(timings: dict) -> None:
         f"export_3mf={timings.get('export_3mf_s', 0.0):.3f}, "
         f"export_glb={timings.get('export_glb_s', 0.0):.3f}, "
         f"preview_2d={timings.get('preview_2d_s', 0.0):.3f}, "
-        f"total={timings.get('vector_branch_total_s', 0.0):.3f}"
+        f"total={timings.get('vector_branch_total_s', 0.0):.3f}",
+        extra={
+            "event": "vector_timings",
+            "timings": {str(key): float(value) for key, value in timings.items()},
+        },
     )
