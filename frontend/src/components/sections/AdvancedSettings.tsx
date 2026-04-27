@@ -24,16 +24,12 @@ export default function AdvancedSettings() {
       {hue_enable && (
         <Slider label={t("adv_chroma_gate")} value={chroma_gate} min={0} max={50} step={1} onChange={setChromaGate} />
       )}
-      <div className="flex flex-col gap-1">
-        <Checkbox
-          label={t("adv_unlock_quantize")}
-          checked={quantize_colors_unlocked}
-          onChange={setQuantizeColorsUnlocked}
-        />
-        <p className="ml-7 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {t("adv_unlock_quantize_hint")}
-        </p>
-      </div>
+      <Checkbox
+        label={t("adv_unlock_quantize")}
+        tooltip={t("adv_unlock_quantize_hint")}
+        checked={quantize_colors_unlocked}
+        onChange={setQuantizeColorsUnlocked}
+      />
     </div>
   );
 }

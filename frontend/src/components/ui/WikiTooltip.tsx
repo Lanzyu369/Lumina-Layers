@@ -28,6 +28,9 @@ interface WikiTooltipProps {
   placement?: Placement;
   /** Hover delay in ms before showing, default 600 */
   delay?: number;
+  /** Optional className for the trigger wrapper. Use this when the tooltip
+   *  must wrap a block-level / flex child without collapsing its width. */
+  className?: string;
 }
 
 export default function WikiTooltip({
@@ -37,6 +40,7 @@ export default function WikiTooltip({
   wikiUrl,
   placement = "top",
   delay = 600,
+  className,
 }: WikiTooltipProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -79,7 +83,8 @@ export default function WikiTooltip({
       <span
         ref={refs.setReference}
         {...getReferenceProps()}
-        style={{ display: "inline-block" }}
+        className={className}
+        style={className ? undefined : { display: "inline-block" }}
       >
         {children}
       </span>
@@ -103,9 +108,11 @@ export default function WikiTooltip({
                 <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   {title}
                 </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  {description}
-                </div>
+                {description && (
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    {description}
+                  </div>
+                )}
                 {wikiUrl && (
                   <a
                     href={wikiUrl}

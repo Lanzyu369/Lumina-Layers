@@ -4,13 +4,19 @@ import {
   workstationChoiceRowClass,
   workstationChoiceRowDisabledClass,
 } from "./panelPrimitives";
+import WikiTooltip from "./WikiTooltip";
 
 interface CheckboxProps {
   label: React.ReactNode;
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
+  /** Optional hover hint. Rendered via the canonical WikiTooltip popover
+   *  (NOT native `title`) so the visual style matches the rest of the app. */
   tooltip?: string;
+  /** Optional tooltip title override. Defaults to the string form of `label`
+   *  when `tooltip` is set; pass this when `label` is a non-string ReactNode. */
+  tooltipTitle?: string;
 }
 
 export default function Checkbox({
@@ -19,19 +25,19 @@ export default function Checkbox({
   onChange,
   disabled = false,
   tooltip,
+  tooltipTitle,
 }: CheckboxProps) {
-  return (
-    <label
-      title={tooltip}
-      className={cx(
-        "flex items-center gap-3 text-sm",
-        workstationChoiceRowClass,
-        checked && workstationChoiceRowActiveClass,
-        disabled
-          ? workstationChoiceRowDisabledClass
-          : "cursor-pointer hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
-      )}
-    >
+  const labelClass = cx(
+    "flex items-center gap-3 text-sm",
+    workstationChoiceRowClass,
+    checked && workstationChoiceRowActiveClass,
+    disabled
+      ? workstationChoiceRowDisabledClass
+      : "cursor-pointer hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75",
+  );
+
+  const inner = (
+    <label className={labelClass}>
       <input
         type="checkbox"
         checked={checked}
@@ -52,5 +58,17 @@ export default function Checkbox({
       </span>
       <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
     </label>
+  );
+
+  if (!tooltip) return inner;
+
+  return (
+    <WikiTooltip
+      title={tooltipTitle ?? (typeof label === "string" ? label : "")}
+      description={tooltip}
+      className="block"
+    >
+      {inner}
+    </WikiTooltip>
   );
 }

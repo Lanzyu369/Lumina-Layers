@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { cx } from "./panelPrimitives";
+import WikiTooltip from "./WikiTooltip";
 
 interface SliderProps {
   label: string;
@@ -120,7 +121,13 @@ export default function Slider(props: SliderProps) {
     <div className="flex flex-col gap-1.5">
       {label && (
         <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span title={tooltip}>{label}</span>
+          {tooltip ? (
+            <WikiTooltip title={label} description={tooltip}>
+              <span>{label}</span>
+            </WikiTooltip>
+          ) : (
+            <span>{label}</span>
+          )}
         </label>
       )}
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">

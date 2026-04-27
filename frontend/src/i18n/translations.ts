@@ -2850,11 +2850,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Hue Protection",
   },
   adv_unlock_quantize: {
-    zh: "解锁量化颜色数（最高 8192）",
-    en: "Unlock quantize ceiling (max 8192)",
+    zh: "解锁量化颜色数",
+    en: "Unlock quantize ceiling",
   },
   adv_unlock_quantize_hint: {
-    zh: "解锁后可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景",
+    zh: "解锁后最高可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景。",
     en: "Unlocking raises the ceiling to 8192. This significantly increases memory and processing time; use only for extreme cases.",
   },
   adv_chroma_gate: {

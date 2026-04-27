@@ -1004,7 +1004,14 @@ function QuantizeColorsControl() {
   const setQuantizeColors = useConverterStore((s) => s.setQuantizeColors);
   const autoDetectColors = useConverterStore((s) => s.autoDetectColors);
   const upperBound = quantize_colors_unlocked ? 8192 : 256;
-  const step = quantize_colors_unlocked && quantize_colors > 256 ? 32 : 8;
+  // Step must divide (upperBound - min=8) so the slider can reach the
+  // declared ceiling. (8192 - 8) is divisible by 8 but not by 32, hence
+  // step=8 even in unlocked mode to keep 8192 reachable; otherwise the
+  // slider would max out at 8168.
+  // 步长必须能整除 (upperBound - min=8)，否则滑条到不了声明的上限。
+  // (8192 - 8) 能被 8 整除但不能被 32 整除，所以解锁后仍用 step=8，
+  // 不然滑条只能停在 8168。
+  const step = 8;
 
   return (
     <div className="flex flex-col gap-1">

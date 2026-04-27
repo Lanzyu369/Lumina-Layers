@@ -1,4 +1,5 @@
 import Dropdown from "../ui/Dropdown";
+import WikiTooltip from "../ui/WikiTooltip";
 import { cx } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
@@ -59,21 +60,22 @@ export default function LegacyLutSelector({
       : "";
 
   const refreshButton = (
-    <button
-      type="button"
-      onClick={onRefresh}
-      disabled={refreshing}
-      aria-label={labels.refreshTooltip}
-      title={labels.refreshTooltip}
-      className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
-    >
-      <span
-        className={cx("text-[13px] leading-none", refreshing && "animate-spin")}
-        aria-hidden="true"
+    <WikiTooltip title={labels.refreshTooltip} description="">
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={refreshing}
+        aria-label={labels.refreshTooltip}
+        className="inline-flex size-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-200"
       >
-        ⟳
-      </span>
-    </button>
+        <span
+          className={cx("text-[13px] leading-none", refreshing && "animate-spin")}
+          aria-hidden="true"
+        >
+          ⟳
+        </span>
+      </button>
+    </WikiTooltip>
   );
 
   const uploadButton = (
