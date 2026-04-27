@@ -74,8 +74,6 @@ describe("recipe integration", () => {
         target_width_mm: 120,
         target_height_mm: 90,
         spacer_thick: 0.8,
-        auto_bg: true,
-        bg_tol: 35,
       });
 
       const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
@@ -84,8 +82,6 @@ describe("recipe integration", () => {
       expect(restored.target_width_mm).toBe(120);
       expect(restored.target_height_mm).toBe(90);
       expect(restored.spacer_thick).toBe(0.8);
-      expect(restored.auto_bg).toBe(true);
-      expect(restored.bg_tol).toBe(35);
       expect(warnings).toHaveLength(0); // fingerprint match, no warnings
     });
 

@@ -31,8 +31,6 @@ function createPreview(): ImportPreview {
             modeling_mode: "high-fidelity",
             target_width_mm: 10,
             target_height_mm: 10,
-            auto_bg: false,
-            bg_tol: 0,
             quantize_colors: 8,
             enable_cleanup: true,
             hue_enable: false,

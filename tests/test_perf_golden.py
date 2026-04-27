@@ -43,8 +43,6 @@ TARGET_WIDTH_MM = 80.0
 QUANTIZE_COLORS = 64
 HUE_WEIGHT = 0.5
 CHROMA_GATE = 15.0
-AUTO_BG = True
-BG_TOL = 30
 
 # Color replacement pairs for testing apply_to_image
 _REPLACEMENT_PAIRS = [
@@ -76,8 +74,6 @@ def _run_pipeline(mode: ModelingMode, image_path: str):
         target_width_mm=TARGET_WIDTH_MM,
         modeling_mode=mode,
         quantize_colors=QUANTIZE_COLORS,
-        auto_bg=AUTO_BG,
-        bg_tol=BG_TOL,
     )
     elapsed = time.perf_counter() - t0
 

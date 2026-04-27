@@ -53,8 +53,6 @@ function createTestRecipe(): LuminaRecipe {
           modeling_mode: "high-fidelity",
           target_width_mm: 80,
           target_height_mm: 60,
-          auto_bg: true,
-          bg_tol: 30,
           quantize_colors: 32,
           enable_cleanup: true,
           hue_enable: true,

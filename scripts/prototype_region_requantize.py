@@ -294,8 +294,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--layer-height-mm", type=float, default=0.08)
     p.add_argument("--quantize", type=int, default=256)
     p.add_argument("--material", action="append", default=None)
-    p.add_argument("--auto-bg", action="store_true")
-    p.add_argument("--bg-tol", type=int, default=40)
     # Re-quantisation parameters.
     p.add_argument(
         "--k",
@@ -451,8 +449,6 @@ def main() -> int:
         image_path=str(image_path),
         lut_path="__material_archive__",
         target_width_mm=args.width_mm,
-        auto_bg=args.auto_bg,
-        bg_tol=args.bg_tol,
         color_mode="Material",
         modeling_mode=ModelingMode.HIGH_FIDELITY,
         color_layers=args.layers,

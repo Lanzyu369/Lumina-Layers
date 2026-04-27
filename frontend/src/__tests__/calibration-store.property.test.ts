@@ -117,8 +117,6 @@ function snapshotConverterState() {
     structure_mode: s.structure_mode,
     color_mode: s.color_mode,
     modeling_mode: s.modeling_mode,
-    auto_bg: s.auto_bg,
-    bg_tol: s.bg_tol,
     quantize_colors: s.quantize_colors,
     enable_cleanup: s.enable_cleanup,
     separate_backing: s.separate_backing,
@@ -188,13 +186,6 @@ const arbConverterMutation = fc.record({
   spacer_thick: fc.double({
     min: -10,
     max: 10,
-    noNaN: true,
-    noDefaultInfinity: true,
-  }),
-  auto_bg: fc.boolean(),
-  bg_tol: fc.double({
-    min: -50,
-    max: 200,
     noNaN: true,
     noDefaultInfinity: true,
   }),
@@ -273,8 +264,6 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
         convStore.setTargetWidthMm(mutation.target_width_mm);
         convStore.setTargetHeightMm(mutation.target_height_mm);
         convStore.setSpacerThick(mutation.spacer_thick);
-        convStore.setAutoBg(mutation.auto_bg);
-        convStore.setBgTol(mutation.bg_tol);
         convStore.setQuantizeColors(mutation.quantize_colors);
         convStore.setEnableCleanup(mutation.enable_cleanup);
         convStore.setSeparateBacking(mutation.separate_backing);
@@ -293,8 +282,6 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
           target_width_mm: 60,
           target_height_mm: 60,
           spacer_thick: 1.2,
-          auto_bg: false,
-          bg_tol: 40,
           quantize_colors: 48,
           enable_cleanup: true,
           separate_backing: false,

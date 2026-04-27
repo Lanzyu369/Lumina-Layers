@@ -57,8 +57,6 @@ def _build_ctx(image_path: Path, lut_path: Path, target_width_mm: float) -> dict
         "target_width_mm": target_width_mm,
         "spacer_thick": 1.2,
         "structure_mode": "single-sided",
-        "auto_bg": True,
-        "bg_tol": 30,
         "color_mode": "4-Color",
         "add_loop": False,
         "loop_width": 4.0,

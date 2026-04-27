@@ -116,8 +116,6 @@ function snapshotConverterState() {
     structure_mode: s.structure_mode,
     color_mode: s.color_mode,
     modeling_mode: s.modeling_mode,
-    auto_bg: s.auto_bg,
-    bg_tol: s.bg_tol,
     quantize_colors: s.quantize_colors,
     enable_cleanup: s.enable_cleanup,
     separate_backing: s.separate_backing,
@@ -641,7 +639,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         noNaN: true,
         noDefaultInfinity: true,
       }),
-      auto_bg: fc.boolean(),
       enable_cleanup: fc.boolean(),
       enable_outline: fc.boolean(),
     });
@@ -653,7 +650,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         const convStore = useConverterStore.getState();
         convStore.setLutName(mutation.lut_name);
         convStore.setTargetWidthMm(mutation.target_width_mm);
-        convStore.setAutoBg(mutation.auto_bg);
         convStore.setEnableCleanup(mutation.enable_cleanup);
         convStore.setEnableOutline(mutation.enable_outline);
 
@@ -664,7 +660,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           lut_name: "",
           target_width_mm: 60,
           target_height_mm: 60,
-          auto_bg: false,
           enable_cleanup: true,
           enable_outline: false,
         });

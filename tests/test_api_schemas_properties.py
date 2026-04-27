@@ -71,8 +71,6 @@ def st_convert_preview_request(draw: st.DrawFn) -> ConvertPreviewRequest:
     return ConvertPreviewRequest(
         lut_name=draw(st_non_empty_str),
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
@@ -126,8 +124,6 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
         spacer_thick=draw(st.floats(min_value=0.2, max_value=3.5, allow_nan=False)),
         structure_mode=draw(st_structure_mode),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
@@ -323,8 +319,7 @@ def test_valid_data_passes_validation(instance: BaseModel) -> None:
 # Table of (Model, field_name, min_val, max_val) for constrained numeric fields
 CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ConvertPreviewRequest, "target_width_mm", 10, 9999),
-    (ConvertPreviewRequest, "bg_tol", 0, 150),
-    (ConvertPreviewRequest, "quantize_colors", 8, 256),
+    (ConvertPreviewRequest, "quantize_colors", 8, 8192),
     (ConvertGenerateRequest, "spacer_thick", 0.2, 3.5),
     (ConvertGenerateRequest, "loop_width", 2, 10),
     (ConvertGenerateRequest, "loop_length", 4, 15),
@@ -473,8 +468,6 @@ def test_enum_field_string_serialization(instance: BaseModel) -> None:
 OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     # ConvertPreviewRequest
     (ConvertPreviewRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
-    (ConvertPreviewRequest, {"lut_name": "x"}, "auto_bg", False),
-    (ConvertPreviewRequest, {"lut_name": "x"}, "bg_tol", 40),
     (ConvertPreviewRequest, {"lut_name": "x"}, "quantize_colors", 48),
     (ConvertPreviewRequest, {"lut_name": "x"}, "enable_cleanup", True),
     # ConvertGenerateRequest

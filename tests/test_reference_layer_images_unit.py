@@ -38,8 +38,6 @@ def test_reference_colordb_layer_images_are_available() -> None:
             image_path=image_path,
             lut_path=lut_path,
             target_width_mm=20,
-            auto_bg=False,
-            bg_tol=40,
             color_mode="4-Color (RYBW)",
             modeling_mode="high-fidelity",
             color_layers=5,

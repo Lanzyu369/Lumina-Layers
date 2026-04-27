@@ -514,8 +514,6 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Output directory (default: output/gradient_analysis_<timestamp>).",
     )
-    parser.add_argument("--auto-bg", action="store_true", help="Enable auto background removal")
-    parser.add_argument("--bg-tol", type=int, default=40)
     parser.add_argument(
         "--max-groups-rendered",
         type=int,
@@ -554,8 +552,6 @@ def main() -> int:
         image_path=str(image_path),
         lut_path="__material_archive__",
         target_width_mm=args.width_mm,
-        auto_bg=args.auto_bg,
-        bg_tol=args.bg_tol,
         color_mode="Material",
         modeling_mode=ModelingMode.HIGH_FIDELITY,
         color_layers=args.layers,
@@ -805,8 +801,6 @@ def main() -> int:
             "layers": args.layers,
             "layer_height_mm": args.layer_height_mm,
             "quantize": args.quantize,
-            "auto_bg": bool(args.auto_bg),
-            "bg_tol": args.bg_tol,
             "boundary_delta_e": args.boundary_delta_e,
             "min_boundary_pixels": args.min_boundary_pixels,
             "min_material_pixels": args.min_material_pixels,

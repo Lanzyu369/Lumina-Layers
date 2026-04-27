@@ -211,22 +211,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "⏳ 计算中...",
     en: "⏳ Calculating...",
   },
-  conv_auto_bg: {
-    zh: "🗑️ 移除背景",
-    en: "🗑️ Remove Background",
-  },
-  conv_auto_bg_info: {
-    zh: "自动移除图像背景色",
-    en: "Auto remove background",
-  },
-  conv_tolerance: {
-    zh: "容差",
-    en: "Tolerance",
-  },
-  conv_tolerance_info: {
-    zh: "背景容差值 (0-150)，值越大移除越多",
-    en: "Higher = Remove more",
-  },
   conv_width: {
     zh: "宽度 (mm)",
     en: "Width (mm)",
@@ -3211,14 +3195,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "量化颜色数",
     en: "Quantize Colors",
   },
-  adv_bg_tolerance: {
-    zh: "背景容差",
-    en: "Background Tolerance",
-  },
-  adv_auto_bg: {
-    zh: "自动背景",
-    en: "Auto Background",
-  },
   adv_enable_cleanup: {
     zh: "启用清理",
     en: "Enable Cleanup",
@@ -3228,12 +3204,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Separate Backing",
   },
   adv_hue_protection: {
-    zh: "🎨 色相保护",
-    en: "🎨 Hue Protection",
+    zh: "色相保护",
+    en: "Hue Protection",
+  },
+  adv_unlock_quantize: {
+    zh: "解锁量化颜色数（最高 8192）",
+    en: "Unlock quantize ceiling (max 8192)",
+  },
+  adv_unlock_quantize_hint: {
+    zh: "解锁后可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景",
+    en: "Unlocking raises the ceiling to 8192. This significantly increases memory and processing time; use only for extreme cases.",
   },
   adv_chroma_gate: {
-    zh: "🌈 暗色彩度门槛",
-    en: "🌈 Dark Chroma Gate",
+    zh: "暗色彩度门槛",
+    en: "Dark Chroma Gate",
   },
 
   // ==================== Relief Settings ====================

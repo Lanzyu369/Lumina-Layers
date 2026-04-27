@@ -92,8 +92,6 @@ export function exportConverterRecipe(
       modeling_mode: state.modeling_mode,
       target_width_mm: state.target_width_mm,
       target_height_mm: state.target_height_mm,
-      auto_bg: state.auto_bg,
-      bg_tol: state.bg_tol,
       quantize_colors: state.quantize_colors,
       enable_cleanup: state.enable_cleanup,
       hue_enable: state.hue_enable,

@@ -152,10 +152,8 @@ class TestProperty9ProcessingOpsIndependence:
         w = data.draw(st.integers(min_value=4, max_value=16))
         alpha = data.draw(arrays(dtype=np.uint8, shape=(h, w)))
         rgb = data.draw(arrays(dtype=np.uint8, shape=(h, w, 3)))
-        auto_bg = data.draw(st.booleans())
-        bg_tol = data.draw(st.integers(min_value=0, max_value=255))
 
-        result = remove_background(alpha, rgb, auto_bg, bg_tol)
+        result = remove_background(alpha, rgb)
         assert result.shape == (h, w), (
             f"remove_background 输出 shape {result.shape} != 期望 ({h}, {w})"
         )
@@ -242,7 +240,7 @@ class TestProperty10ProcessImageReturnFormat:
 
         required_params = [
             "self", "image_path", "target_width_mm", "modeling_mode",
-            "quantize_colors", "auto_bg", "bg_tol",
+            "quantize_colors",
         ]
         for param in required_params:
             assert param in param_names, (

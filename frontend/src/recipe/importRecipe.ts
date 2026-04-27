@@ -332,8 +332,6 @@ export function restoreConverterRecipe(
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
     target_width_mm: conv.base.target_width_mm,
     target_height_mm: conv.base.target_height_mm,
-    auto_bg: conv.base.auto_bg,
-    bg_tol: conv.base.bg_tol,
     quantize_colors: conv.base.quantize_colors,
     enable_cleanup: conv.base.enable_cleanup,
     hue_enable: conv.base.hue_enable,

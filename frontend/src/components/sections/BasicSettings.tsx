@@ -981,6 +981,8 @@ export default function BasicSettings() {
         onChange={(v) => setModelingMode(v as ModelingMode)}
       />
 
+      <QuantizeColorsControl />
+
       <ImportConfirmDialog
         open={importDialogOpen}
         preview={importPreview}
@@ -989,6 +991,39 @@ export default function BasicSettings() {
         onCancel={handleImportCancel}
         isLoading={importLoading}
       />
+    </div>
+  );
+}
+
+function QuantizeColorsControl() {
+  const { t } = useI18n();
+  const quantize_colors = useConverterStore((s) => s.quantize_colors);
+  const quantize_colors_unlocked = useConverterStore((s) => s.quantize_colors_unlocked);
+  const imageFile = useConverterStore((s) => s.imageFile);
+  const autoDetectLoading = useConverterStore((s) => s.autoDetectColorsLoading);
+  const setQuantizeColors = useConverterStore((s) => s.setQuantizeColors);
+  const autoDetectColors = useConverterStore((s) => s.autoDetectColors);
+  const upperBound = quantize_colors_unlocked ? 8192 : 256;
+  const step = quantize_colors_unlocked && quantize_colors > 256 ? 32 : 8;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Slider
+        label={t("adv_quantize_colors")}
+        value={quantize_colors}
+        min={8}
+        max={upperBound}
+        step={step}
+        onChange={setQuantizeColors}
+      />
+      <button
+        type="button"
+        disabled={!imageFile || autoDetectLoading}
+        onClick={autoDetectColors}
+        className="self-end px-3 py-1 text-xs rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        {autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
+      </button>
     </div>
   );
 }

@@ -74,8 +74,6 @@ def _make_ctx(image_path: Path, *, layer_count: int = 6) -> dict:
         "target_width_mm": 2.0,
         "modeling_mode": ModelingMode.PIXEL,
         "quantize_colors": 2,
-        "auto_bg": False,
-        "bg_tol": 10,
         "_material_params": PALETTE_WITH_WHITE,
         "color_layers": layer_count,
         "layer_height_mm": DEFAULT_LAYER_HEIGHT_MM,

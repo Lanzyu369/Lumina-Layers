@@ -80,8 +80,6 @@ describe("recipe round-trip properties", () => {
       target_width_mm: fc.integer({ min: 10, max: 400 }),
       target_height_mm: fc.integer({ min: 10, max: 400 }),
       spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
-      auto_bg: fc.boolean(),
-      bg_tol: fc.integer({ min: 0, max: 100 }),
       quantize_colors: fc.integer({ min: 2, max: 128 }),
       enable_cleanup: fc.boolean(),
       hue_enable: fc.boolean(),
@@ -214,8 +212,6 @@ describe("recipe round-trip properties", () => {
         expect(restored.lut_name).toBe(overrides.lut_name);
         expect(restored.target_width_mm).toBe(overrides.target_width_mm);
         expect(restored.target_height_mm).toBe(overrides.target_height_mm);
-        expect(restored.auto_bg).toBe(overrides.auto_bg);
-        expect(restored.bg_tol).toBe(overrides.bg_tol);
         expect(restored.quantize_colors).toBe(overrides.quantize_colors);
         expect(restored.enable_cleanup).toBe(overrides.enable_cleanup);
         expect(restored.hue_enable).toBe(overrides.hue_enable);

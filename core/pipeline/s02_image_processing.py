@@ -34,8 +34,6 @@ def run(ctx: dict) -> dict:
         - target_width_mm (float): 目标宽度 (mm)
         - modeling_mode (ModelingMode): 建模模式
         - quantize_colors (int): 量化颜色数
-        - auto_bg (bool): 自动背景移除
-        - bg_tol (int): 背景容差
         - blur_kernel (int): 中值滤波核大小
         - smooth_sigma (int): 双边滤波 sigma
         - enable_cleanup (bool): 启用孤立像素清理
@@ -69,8 +67,6 @@ def run(ctx: dict) -> dict:
     target_width_mm = ctx['target_width_mm']
     modeling_mode = ctx['modeling_mode']
     quantize_colors = ctx.get('quantize_colors', 32)
-    auto_bg = ctx.get('auto_bg', True)
-    bg_tol = ctx.get('bg_tol', 10)
     blur_kernel = ctx.get('blur_kernel', 0)
     smooth_sigma = ctx.get('smooth_sigma', 10)
     enable_cleanup = ctx.get('enable_cleanup', True)
@@ -113,8 +109,6 @@ def run(ctx: dict) -> dict:
             target_width_mm=target_width_mm,
             modeling_mode=modeling_mode,
             quantize_colors=quantize_colors,
-            auto_bg=auto_bg,
-            bg_tol=bg_tol,
             blur_kernel=blur_kernel,
             smooth_sigma=smooth_sigma
         )

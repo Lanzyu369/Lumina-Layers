@@ -57,8 +57,6 @@ def worker_generate_preview(
     image_path: str,
     lut_path: str,
     target_width_mm: float,
-    auto_bg: bool,
-    bg_tol: int,
     color_mode: str,
     modeling_mode: str,
     color_layers: int | None,
@@ -89,8 +87,6 @@ def worker_generate_preview(
         image_path (str): Path to the input image file. (输入图像文件路径)
         lut_path (str): Path to the LUT calibration file (.npy/.npz). (LUT 校准文件路径)
         target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
-        auto_bg (bool): Enable automatic background removal. (启用自动背景移除)
-        bg_tol (int): Background tolerance value. (背景容差值)
         color_mode (str): Color system mode, e.g. "CMYW". (色彩系统模式)
         modeling_mode (str): Modeling mode string value, e.g. "high-fidelity". (建模模式字符串)
         quantize_colors (int): Number of K-Means quantization colors. (K-Means 量化颜色数)
@@ -149,8 +145,6 @@ def worker_generate_preview(
             image_path=image_path,
             lut_path=lut_path,
             target_width_mm=target_width_mm,
-            auto_bg=auto_bg,
-            bg_tol=bg_tol,
             color_mode=color_mode,
             modeling_mode=mode_enum,
             color_layers=color_layers,
@@ -268,8 +262,6 @@ def worker_batch_convert_item(
     target_width_mm: float,
     spacer_thick: float,
     structure_mode: str,
-    auto_bg: bool,
-    bg_tol: int,
     color_mode: str,
     modeling_mode_value: str,
     color_layers: int | None,
@@ -292,8 +284,6 @@ def worker_batch_convert_item(
         target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
         spacer_thick (float): Backing plate thickness in mm. (底板厚度，毫米)
         structure_mode (str): Print structure mode, e.g. "Double-sided". (打印结构模式)
-        auto_bg (bool): Enable automatic background removal. (启用自动背景移除)
-        bg_tol (int): Background tolerance value. (背景容差值)
         color_mode (str): Color system mode, e.g. "4-Color". (色彩系统模式)
         modeling_mode_value (str): Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
         quantize_colors (int): Number of K-Means quantization colors. (K-Means 量化颜色数)
@@ -316,8 +306,6 @@ def worker_batch_convert_item(
         target_width_mm=target_width_mm,
         spacer_thick=spacer_thick,
         structure_mode=structure_mode,
-        auto_bg=auto_bg,
-        bg_tol=bg_tol,
         color_mode=color_mode,
         color_layers=color_layers,
         layer_height_mm=layer_height_mm,

@@ -41,8 +41,6 @@ def run_benchmark():
         target_width_mm=TARGET_WIDTH_MM,
         spacer_thick=1.2,
         structure_mode="单面",
-        auto_bg=True,
-        bg_tol=30,
         color_mode="4-Color",
         add_loop=False,
         loop_width=4.0,

@@ -202,8 +202,6 @@ def st_convert_preview_request(draw: st.DrawFn) -> Dict[str, Any]:
     return ConvertPreviewRequest(
         lut_name=draw(st_non_empty_str),
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
@@ -219,8 +217,6 @@ def st_convert_generate_request(draw: st.DrawFn) -> Dict[str, Any]:
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
         spacer_thick=draw(st.floats(min_value=0.2, max_value=3.5, allow_nan=False)),
         structure_mode=draw(st_structure_mode),
-        auto_bg=draw(st.booleans()),
-        bg_tol=draw(st.integers(min_value=0, max_value=150)),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),

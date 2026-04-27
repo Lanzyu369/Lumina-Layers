@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.schemas.lut import LutSourceSelection
 
@@ -265,10 +265,6 @@ class ConvertPreviewRequest(LutSourceSelection):
             原生 DB 选择列表。
         target_width_mm: Target output width in millimeters.
             目标宽度 (mm)。
-        auto_bg: Whether to automatically remove background.
-            是否自动去背景。
-        bg_tol: Background removal tolerance.
-            背景容差。
         color_mode: Color system mode.
             颜色模式。
         modeling_mode: 3D modeling strategy.
@@ -277,11 +273,15 @@ class ConvertPreviewRequest(LutSourceSelection):
             K-Means 色彩细节。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
+
+    Note:
+        Legacy clients that still send ``auto_bg``/``bg_tol`` are accepted
+        thanks to ``extra='ignore'``; the fields are silently dropped.
     """
 
+    model_config = ConfigDict(extra="ignore")
+
     target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
-    auto_bg: bool = Field(False, description="自动去背景")
-    bg_tol: int = Field(40, ge=0, le=150, description="背景容差")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
     color_layers: Optional[int] = Field(None, ge=1, le=20, description="叠色层数")
@@ -290,7 +290,7 @@ class ConvertPreviewRequest(LutSourceSelection):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
-    quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
@@ -344,10 +344,6 @@ class ConvertGenerateRequest(LutSourceSelection):
             底板厚度 (mm)。
         structure_mode: Print structure mode.
             打印结构模式。
-        auto_bg: Whether to automatically remove background.
-            是否自动去背景。
-        bg_tol: Background removal tolerance.
-            背景容差。
         color_mode: Color system mode.
             颜色模式。
         modeling_mode: 3D modeling strategy.
@@ -406,11 +402,11 @@ class ConvertGenerateRequest(LutSourceSelection):
             自由色集合 (hex)。
     """
 
+    model_config = ConfigDict(extra="ignore")
+
     target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
     spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="底板厚度 (mm)")
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
-    auto_bg: bool = Field(False, description="自动去背景")
-    bg_tol: int = Field(40, ge=0, le=150, description="背景容差")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
     color_layers: Optional[int] = Field(None, ge=1, le=20, description="叠色层数")
@@ -419,7 +415,7 @@ class ConvertGenerateRequest(LutSourceSelection):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
-    quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")

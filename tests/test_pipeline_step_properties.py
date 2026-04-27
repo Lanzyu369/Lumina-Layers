@@ -220,7 +220,7 @@ _REQUIRED_KEYS_MAP = {
     "core.pipeline.p02_lut_metadata": ["actual_lut_path", "color_mode"],
     "core.pipeline.p03_core_processing": [
         "actual_lut_path", "color_mode", "image_path", "target_width_mm",
-        "modeling_mode", "quantize_colors", "auto_bg", "bg_tol",
+        "modeling_mode", "quantize_colors",
     ],
     "core.pipeline.p04_cache_building": [
         "matched_rgb", "material_matrix", "mask_solid",

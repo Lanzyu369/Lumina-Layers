@@ -215,28 +215,6 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
     );
   });
 
-  it("setAutoBg invalidates threemfDiskPath for any boolean", () => {
-    fc.assert(
-      fc.property(fc.boolean(), (enabled) => {
-        seedThreemfPath();
-        useConverterStore.getState().setAutoBg(enabled);
-        return expectInvalidated();
-      }),
-      { numRuns: 100 }
-    );
-  });
-
-  it("setBgTol invalidates threemfDiskPath for any valid tolerance", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 0, max: 150 }), (tol) => {
-        seedThreemfPath();
-        useConverterStore.getState().setBgTol(tol);
-        return expectInvalidated();
-      }),
-      { numRuns: 100 }
-    );
-  });
-
   it("setEnableCleanup invalidates threemfDiskPath for any boolean", () => {
     fc.assert(
       fc.property(fc.boolean(), (enabled) => {

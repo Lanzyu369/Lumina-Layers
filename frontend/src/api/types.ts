@@ -74,8 +74,6 @@ export type ConvertSourceSelection =
 
 export type ConvertPreviewRequest = ConvertSourceSelection & {
   target_width_mm: number;
-  auto_bg: boolean;
-  bg_tol: number;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
   color_layers?: number;
@@ -1136,8 +1134,6 @@ export interface BatchConvertParams {
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;
-  auto_bg: boolean;
-  bg_tol: number;
   color_mode: string;
   modeling_mode: string;
   quantize_colors: number;
