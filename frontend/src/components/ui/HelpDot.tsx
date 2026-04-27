@@ -1,28 +1,30 @@
 /**
- * HelpDot - Inline question-mark trigger that opens a WikiTooltip popover.
- * 行内问号触发器，悬停后弹出统一风格的 WikiTooltip 解释气泡。
+ * HelpDot - Canonical inline "?" trigger that opens a WikiTooltip popover.
+ * 标签旁的标准问号触发器，悬停后弹出统一风格的 WikiTooltip 气泡。
  *
- * 该组件用来替代散落在表单标签旁的 `title="..."` 原生提示，
- * 以保持全局 tooltip 视觉一致：所有标签提示都走 WikiTooltip，
- * 而不是浏览器默认的 native tooltip 或自绘的 `bg-slate-100/85` 小方块。
+ * Visual contract (do not diverge): the small `?` chip used in
+ * `GradientCardExtractPanel.tsx` is the project-wide reference. Any new
+ * label hint must reuse this component instead of inventing its own
+ * shape, color, or background.
+ *
+ * 视觉契约（不要私自更改）：以 `GradientCardExtractPanel.tsx` 中的
+ * 小问号样式为全局基准；任何新增的标签提示都应使用本组件，不要
+ * 重新发明形状、颜色或底色。
  */
 import type { Placement } from "@floating-ui/react";
 import WikiTooltip from "./WikiTooltip";
-import { HelpCircleIcon } from "./icons";
 
 interface HelpDotProps {
-  /** Tooltip title text */
+  /** Tooltip title (also used as default aria-label). */
   title: string;
-  /** Tooltip description text */
+  /** Tooltip description body. */
   description: string;
-  /** Optional wiki URL for external link */
+  /** Optional wiki URL for the "Learn more" link. */
   wikiUrl?: string;
-  /** Preferred placement direction, default "top" */
+  /** Preferred placement direction, default "top". */
   placement?: Placement;
-  /** Optional aria-label override for the icon button */
+  /** Optional aria-label override for the trigger. */
   ariaLabel?: string;
-  /** Extra classes for the trigger element */
-  className?: string;
 }
 
 export default function HelpDot({
@@ -31,7 +33,6 @@ export default function HelpDot({
   wikiUrl,
   placement = "top",
   ariaLabel,
-  className,
 }: HelpDotProps) {
   return (
     <WikiTooltip
@@ -40,16 +41,14 @@ export default function HelpDot({
       wikiUrl={wikiUrl}
       placement={placement}
     >
-      <button
-        type="button"
+      <span
+        role="button"
+        tabIndex={0}
         aria-label={ariaLabel ?? title}
-        className={
-          "inline-flex h-4 w-4 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:text-slate-500 dark:hover:text-slate-300 " +
-          (className ?? "")
-        }
+        className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600"
       >
-        <HelpCircleIcon className="h-3.5 w-3.5" />
-      </button>
+        ?
+      </span>
     </WikiTooltip>
   );
 }

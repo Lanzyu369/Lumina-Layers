@@ -16,6 +16,7 @@ import Button from "./ui/Button";
 import Accordion from "./ui/Accordion";
 import ZoomViewport from "./ui/ZoomViewport";
 import { cx, resolveSectionCardClass } from "./ui/panelPrimitives";
+import HelpDot from "./ui/HelpDot";
 
 const ACCEPT_FORMATS = "image/png,image/jpeg,image/webp,image/bmp";
 const VECTORIZER_RESET_DELAY_MS = 0;
@@ -191,8 +192,9 @@ export default function VectorizerPanel() {
 
           {/* num_colors: Switch(Auto/Manual) + Slider */}
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-700 dark:text-gray-300 cursor-help border-b border-dashed border-gray-400 dark:border-gray-500" title={t("vec.hint_num_colors")}>
+            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
               {t("vec.num_colors")}
+              <HelpDot title={t("vec.num_colors")} description={t("vec.hint_num_colors")} />
             </span>
             <Switch
               checked={params.num_colors === 0}
@@ -224,8 +226,9 @@ export default function VectorizerPanel() {
 
           {/* detail_level: Switch(Enable/Disable) + Slider */}
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-700 dark:text-gray-300 cursor-help border-b border-dashed border-gray-400 dark:border-gray-500" title={t("vec.hint_detail_level")}>
+            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
               {t("vec.detail_level")}
+              <HelpDot title={t("vec.detail_level")} description={t("vec.hint_detail_level")} />
             </span>
             <Switch
               checked={isDetailEnabled}
