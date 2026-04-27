@@ -530,14 +530,39 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       /**
-       * Reset all widgets to default layout.
-       * 重置所有 Widget 到默认布局。
+       * Reset all widgets to default layout, preserving measured expandedHeight.
+       *
+       * `expandedHeight` is a ResizeObserver-derived runtime measurement, not a
+       * user-facing layout setting. If we reset it to the static default
+       * (EXPANDED_HEIGHT = 400) the wrapper instantly clips taller widgets
+       * (e.g. BasicSettings ≈ 650px) and the observer never re-fires until
+       * the user manually toggles collapse — visible as a one-frame "snap and
+       * shrink" right after Reset Layout.
+       *
+       * 重置 widget 布局，但保留已测得的 expandedHeight。
+       * expandedHeight 是 ResizeObserver 在运行时测量得到的派生值，并非
+       * 用户可配置的布局项；如果一并重置成静态默认 400，wrapper 会瞬间
+       * 把基础设置（~650px）等内容裁短，且 observer 不会再触发，必须
+       * 手动收起/展开才能恢复——用户可见的「按下重置就被裁短」即此。
        */
       resetLayout: () => {
-        set({
-          widgets: { ...DEFAULT_LAYOUT },
-          isDragging: false,
-          activeWidgetId: null,
+        set((state) => {
+          const widgets = {} as Record<WidgetId, WidgetLayoutState>;
+          (Object.keys(DEFAULT_LAYOUT) as WidgetId[]).forEach((id) => {
+            const measured = state.widgets[id]?.expandedHeight;
+            widgets[id] = {
+              ...DEFAULT_LAYOUT[id],
+              expandedHeight:
+                typeof measured === "number" && measured > 0
+                  ? measured
+                  : DEFAULT_LAYOUT[id].expandedHeight,
+            };
+          });
+          return {
+            widgets,
+            isDragging: false,
+            activeWidgetId: null,
+          };
         });
       },
 
