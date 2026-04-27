@@ -834,7 +834,7 @@ def apply_matched_rgb_overrides_to_analysis(
         changed += 1
 
     if changed:
-        _log.info(
+        _log.debug(
             "Vector matched RGB overrides applied",
             extra={
                 "event": "vector_overrides_applied",

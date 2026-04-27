@@ -247,13 +247,13 @@ class TestApplyMatchedRgbOverrides:
         assert bot_shape["recipe"] == [2, 2, 2, 2, 2]
 
     def test_region_replace_logs_structured_success_event(self, caplog):
-        """A successful helper rewrite must emit a structured INFO event."""
+        """A successful helper rewrite must emit a structured DEBUG event."""
         analysis = _make_two_shape_analysis()
         img_processor = _build_fake_img_processor()
         matched_rgb, mask_solid, h_px, _ = _build_grid_arrays(analysis)
         matched_rgb[: h_px // 2, :, :] = (0, 0, 255)
 
-        target_logger = _attach_caplog(caplog, "lumina.core.vector_engine", logging.INFO)
+        target_logger = _attach_caplog(caplog, "lumina.core.vector_engine", logging.DEBUG)
         try:
             changed = apply_matched_rgb_overrides_to_analysis(
                 analysis,
@@ -272,9 +272,35 @@ class TestApplyMatchedRgbOverrides:
         ]
         assert len(records) == 1
         record = records[0]
+        assert record.levelno == logging.DEBUG
         assert getattr(record, "shape_count") == 2
         assert getattr(record, "rewritten_count") == 1
         assert not record.getMessage().lstrip().startswith("[")
+
+    def test_engine_overrides_applied_emits_at_debug_not_info(self, caplog):
+        """INFO-only capture must not receive the engine override event."""
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, _ = _build_grid_arrays(analysis)
+        matched_rgb[: h_px // 2, :, :] = (0, 0, 255)
+
+        target_logger = _attach_caplog(caplog, "lumina.core.vector_engine", logging.INFO)
+        try:
+            changed = apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb,
+                mask_solid=mask_solid,
+                img_processor=img_processor,
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert changed == 1
+        assert all(
+            getattr(record, "event", None) != "vector_overrides_applied"
+            for record in caplog.records
+            if record.levelno >= logging.INFO
+        )
 
     def test_no_change_returns_zero_and_keeps_recipes(self):
         """When ``matched_rgb`` matches the existing shape colours the
@@ -636,6 +662,13 @@ class TestRunVectorBranchWiring:
             "vector_timings",
             "vector_branch_done",
         }.issubset(events)
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "vector_matched_rgb_overrides_applied"
+        ]
+        assert len(canary_records) == 1
+        assert canary_records[0].levelno == logging.INFO
         assert all(
             getattr(record, "event", None)
             for record in caplog.records

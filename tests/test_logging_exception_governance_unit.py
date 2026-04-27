@@ -60,6 +60,7 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_matched_rgb_overrides_failed",
     "vector_overrides_input_invalid",
     "vector_overrides_grid_mismatch",
+    # DEBUG-level structured event kept in the inventory.
     "vector_overrides_applied",
     "vector_recipe_overrides_load_failed",
     "vector_recipe_overrides_apply_failed",

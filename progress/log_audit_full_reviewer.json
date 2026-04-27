@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 26,
+      "actual": 25,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -13,7 +13,7 @@
       "threshold": 30
     },
     {
-      "actual": 8,
+      "actual": 7,
       "name": "info_per_endpoint_within_budget",
       "operator": "<=",
       "passed": true,
@@ -86,29 +86,28 @@
     "vector_branch_done": 1,
     "vector_branch_init": 1,
     "vector_matched_rgb_overrides_applied": 1,
-    "vector_overrides_applied": 1,
     "vector_stroke_policy": 2,
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 26,
+  "info_lines": 25,
   "info_lines_by_endpoint": {
-    "3549cd93344d4a3ba965322e88995d73": 3,
-    "742c71b4768a4527a04cbb677f3821fe": 4,
-    "9099ae858a5f41c4a130b4fe2cb50b8f": 1,
-    "92d0d7b1707a4b4ca5000238d941f4c9": 8,
-    "96a4dd84c343444d936f57493580eb18": 4,
-    "cf26564b4ade4392b0c77974c2262d88": 1,
-    "e1c6d253931242a5a31532fbe6f7dc3f": 1
+    "249e90cb82024ff3b6bb6d8d1e410c34": 3,
+    "37ccdfb0334b43398b36f13bab369201": 4,
+    "3fbbbfc97bdf4fd3ac333c8102239784": 1,
+    "4fde5544abe64c22b36054f66c858541": 4,
+    "6fbc598ccfe14217ab2fe06f5f772e03": 1,
+    "87a08fbab9e34ed3ba666ce1b0b07adc": 1,
+    "caa17bf5e8834d25b7c04204724655a4": 7
   },
   "log_file_configured_count": 1,
   "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_reviewer.log",
-  "max_info_per_endpoint": 8,
+  "max_info_per_endpoint": 7,
   "mode": "full",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 26,
-  "timestamp": "2026-04-27T12:31:39.154851+00:00",
+  "structured_lines": 25,
+  "timestamp": "2026-04-27T14:51:57.410865+00:00",
   "top_events": [
     {
       "count": 4,
@@ -156,15 +155,11 @@
     },
     {
       "count": 1,
-      "event": "converter_glb_completed"
-    },
-    {
-      "count": 1,
       "event": "vector_branch_init"
     },
     {
       "count": 1,
-      "event": "vector_overrides_applied"
+      "event": "converter_glb_completed"
     },
     {
       "count": 1,
@@ -183,8 +178,8 @@
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 9870,
-  "total_lines": 26,
+  "total_bytes": 9552,
+  "total_lines": 25,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
