@@ -5,10 +5,6 @@
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
   // ==================== Application Title and Header ====================
-  app_title: {
-    zh: "✨ Lumina Studio",
-    en: "✨ Lumina Studio",
-  },
   app_subtitle: {
     zh: "多材料3D打印色彩系统 | v1.6.3",
     en: "Multi-Material 3D Print Color System | v1.6.3",
@@ -17,20 +13,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "面板控件",
     en: "Panel Controls",
   },
-  lang_btn_zh: {
-    zh: "🌐 中文",
-    en: "🌐 中文",
-  },
-  lang_btn_en: {
-    zh: "🌐 English",
-    en: "🌐 English",
-  },
-
   // ==================== Stats Bar ====================
-  stats_total: {
-    zh: "📊 累计生成",
-    en: "📊 Total Generated",
-  },
   stats_calibrations: {
     zh: "校准板",
     en: "Calibrations",
@@ -45,18 +28,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Tab Titles ====================
-  tab_converter: {
-    zh: "💎 图像转换",
-    en: "💎 Image Converter",
-  },
-  tab_calibration: {
-    zh: "📐 校准板生成",
-    en: "📐 Calibration",
-  },
-  tab_extractor: {
-    zh: "🎨 颜色提取",
-    en: "🎨 Color Extractor",
-  },
   tab_about: {
     zh: "ℹ️ 关于",
     en: "ℹ️ About",
@@ -71,10 +42,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "**两种建模模式**：高保真（RLE无缝拼接）、像素艺术（方块风格）\n\n**流程**: 上传LUT和图像 → 选择建模模式 → 调整色彩细节 → 预览 → 生成",
     en: "**Two Modeling Modes**: High-Fidelity (RLE seamless) and Pixel Art (blocky style)\n\n**Workflow**: Upload LUT & Image → Select Mode → Adjust Color Detail → Preview → Generate",
   },
-  conv_input_section: {
-    zh: "#### 📁 输入",
-    en: "#### 📁 Input",
-  },
   conv_lut_title: {
     zh: "**校准数据**",
     en: "**Calibration Data**",
@@ -86,22 +53,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conv_lut_info: {
     zh: "从预设库中选择LUT",
     en: "Select from library",
-  },
-  conv_lut_status_default: {
-    zh: "💡 拖放 .npy / .json / .npz 文件自动添加",
-    en: "💡 Drop .npy / .json / .npz to add",
-  },
-  conv_lut_status_selected: {
-    zh: "✅ 已选择",
-    en: "✅ Selected",
-  },
-  conv_lut_status_saved: {
-    zh: "✅ LUT已保存",
-    en: "✅ LUT saved",
-  },
-  conv_lut_status_error: {
-    zh: "❌ 文件不存在",
-    en: "❌ File not found",
   },
   conv_image_label: {
     zh: "输入图像",
@@ -143,14 +94,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认裁剪",
     en: "Confirm crop",
   },
-  crop_auto_color: {
-    zh: "🎨 计算最佳色彩细节",
-    en: "🎨 Calculate optimal color detail",
-  },
-  conv_params_section: {
-    zh: "#### ⚙️ 参数",
-    en: "#### ⚙️ Parameters",
-  },
   conv_color_mode: {
     zh: "色彩模式",
     en: "Color Mode",
@@ -175,37 +118,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "单面",
     en: "Single-sided",
   },
-  conv_modeling_mode: {
-    zh: "🎨 建模模式",
-    en: "🎨 Modeling Mode",
-  },
   conv_modeling_mode_info: {
     zh: "高保真：RLE无缝拼接，水密模型 | 像素艺术：经典方块美学 | SVG模式：矢量直接转换",
     en: "High-Fidelity: RLE seamless, watertight | Pixel Art: Classic blocky aesthetic | SVG Mode: Direct vector conversion",
-  },
-  conv_modeling_mode_hifi: {
-    zh: "🎨 高保真",
-    en: "🎨 High-Fidelity",
-  },
-  conv_modeling_mode_pixel: {
-    zh: "🧱 像素艺术",
-    en: "🧱 Pixel Art",
-  },
-  conv_modeling_mode_vector: {
-    zh: "📐 SVG模式",
-    en: "📐 SVG Mode",
-  },
-  conv_quantize_colors: {
-    zh: "🎨 色彩细节",
-    en: "🎨 Color Detail",
   },
   conv_quantize_info: {
     zh: "颜色数量越多细节越丰富，但生成越慢",
     en: "Higher = More detail, Slower",
   },
   conv_auto_color_btn: {
-    zh: "🔍 自动计算",
-    en: "🔍 Auto Detect",
+    zh: "自动计算",
+    en: "Auto Detect",
   },
   conv_auto_color_calculating: {
     zh: "⏳ 计算中...",
@@ -227,21 +150,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "底板颜色",
     en: "Backing Color",
   },
-  conv_preview_btn: {
-    zh: "👁️ 生成预览",
-    en: "👁️ Generate Preview",
-  },
-  conv_preview_section: {
-    zh: "#### 🎨 2D预览",
-    en: "#### 🎨 2D Preview",
-  },
   converter_preview_2d_alt: {
     zh: "2D 预览图",
     en: "2D preview image",
-  },
-  conv_palette: {
-    zh: "🎨 颜色调色板",
-    en: "🎨 Color Palette",
   },
   conv_palette_step1: {
     zh: "### 1. 原图颜色（点击预览图）",
@@ -271,17 +182,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "已生效的替换",
     en: "Applied Replacements",
   },
-  conv_palette_apply_btn: {
-    zh: "✅ 确认替换",
-    en: "✅ Apply",
-  },
   conv_palette_undo_btn: {
     zh: "↩️ 撤销",
     en: "↩️ Undo",
-  },
-  conv_palette_clear_btn: {
-    zh: "🗑️ 清除所有",
-    en: "🗑️ Clear",
   },
   conv_palette_user_replacements_title: {
     zh: "用户替换",
@@ -295,10 +198,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除选中",
     en: "Delete Selected",
   },
-  conv_palette_delete_selected_empty: {
-    zh: "❌ 请先选中一项用户替换",
-    en: "❌ Select one user replacement first",
-  },
   conv_palette_user_empty: {
     zh: "暂无替换",
     en: "No replacements",
@@ -307,27 +206,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "暂无自动配准",
     en: "No auto pairs",
   },
-  lut_grid_invalid: {
-    zh: "⚠️ 请先选择一个有效的 LUT 文件",
-    en: "⚠️ Please select a valid LUT file",
-  },
-  lut_grid_header: {
-    zh: "🎨 当前 LUT 包含 <b>{count}</b> 种可打印颜色（点击选择）",
-    en: "🎨 Current LUT contains <b>{count}</b> printable colors (click to select)",
-  },
-
   // ==================== Loop / Outline / Cloisonne / Coating ====================
-  conv_loop_section: {
-    zh: "##### 🔗 挂孔设置",
-    en: "##### 🔗 Loop Settings",
-  },
   conv_loop_enable: {
     zh: "启用挂孔",
     en: "Enable Loop",
-  },
-  conv_loop_remove: {
-    zh: "🗑️ 移除挂孔",
-    en: "🗑️ Remove Loop",
   },
   conv_loop_width: {
     zh: "宽度(mm)",
@@ -382,16 +264,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Wire Color Slot",
   },
   conv_free_color_btn: {
-    zh: "🎯 标记为自由色",
-    en: "🎯 Mark as Free Color",
+    zh: "标记为自由色",
+    en: "Mark as Free Color",
   },
   conv_free_color_clear_btn: {
     zh: "清除自由色",
     en: "Clear Free Colors",
   },
   conv_free_color_label: {
-    zh: "🎯 自由色",
-    en: "🎯 Free Colors",
+    zh: "自由色",
+    en: "Free Colors",
   },
   conv_coating_section: {
     zh: "##### 透明镀层",
@@ -408,18 +290,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conv_status: {
     zh: "状态",
     en: "Status",
-  },
-  conv_generate_btn: {
-    zh: "🚀 生成3MF",
-    en: "🚀 Generate 3MF",
-  },
-  conv_3d_preview: {
-    zh: "#### 🎮 3D预览",
-    en: "#### 🎮 3D Preview",
-  },
-  conv_download_section: {
-    zh: "#### 📁 下载【务必合并对象后再切片】",
-    en: "#### 📁 Download [Merge objects before slicing]",
   },
   conv_download_file: {
     zh: "3MF文件",
@@ -477,14 +347,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "拍摄打印好的校准板照片，提取真实的色彩数据生成 LUT 文件。",
     en: "Take a photo of your printed calibration board to extract real color data.",
   },
-  ext_upload_section: {
-    zh: "#### 📸 上传照片",
-    en: "#### 📸 Upload Photo",
-  },
-  ext_color_mode: {
-    zh: "🎨 色彩模式",
-    en: "🎨 Color Mode",
-  },
   ext_photo: {
     zh: "校准板照片",
     en: "Calibration Photo",
@@ -492,10 +354,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_rotate_btn: {
     zh: "↺ 旋转",
     en: "↺ Rotate",
-  },
-  ext_reset_btn: {
-    zh: "🗑️ 重置",
-    en: "🗑️ Reset",
   },
   ext_correction_section: {
     zh: "校正参数",
@@ -568,37 +426,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "Y偏移",
     en: "Offset Y",
   },
-  ext_extract_btn: {
-    zh: "🚀 提取",
-    en: "🚀 Extract",
-  },
   ext_status: {
     zh: "状态",
     en: "Status",
   },
-  ext_hint_white: {
-    zh: "#### 👉 点击: **白色色块 (左上角)**",
-    en: "#### 👉 Click: **White Block (Top-Left)**",
-  },
   ext_marked: {
     zh: "标记图",
     en: "Marked",
-  },
-  ext_sampling: {
-    zh: "#### 📍 采样预览",
-    en: "#### 📍 Sampling",
-  },
-  ext_reference: {
-    zh: "#### 🎯 参考",
-    en: "#### 🎯 Reference",
-  },
-  ext_result: {
-    zh: "#### 📊 结果 (点击修正)",
-    en: "#### 📊 Result (Click to fix)",
-  },
-  ext_manual_fix: {
-    zh: "#### 🛠️ 手动修正",
-    en: "#### 🛠️ Manual Fix",
   },
   ext_click_cell: {
     zh: "点击左侧色块查看...",
@@ -607,10 +441,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_override: {
     zh: "替换颜色",
     en: "Override Color",
-  },
-  ext_apply_btn: {
-    zh: "🔧 应用",
-    en: "🔧 Apply",
   },
   ext_download_npy: {
     zh: "下载 .npy",
@@ -732,31 +562,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Footer ====================
-  footer_tip: {
-    zh: "💡 提示: 使用高质量的PLA/PETG basic材料可获得最佳效果",
-    en: "💡 Tip: Use high-quality translucent PLA/PETG basic for best results",
-  },
-
   // ==================== Status Messages ====================
-  msg_no_image: {
-    zh: "❌ 请上传图片",
-    en: "❌ Please upload an image",
-  },
-  msg_no_lut: {
-    zh: "⚠️ 请选择或上传校准文件！",
-    en: "⚠️ Please select or upload a calibration file!",
-  },
-  msg_preview_success: {
-    zh: "✅ 预览",
-    en: "✅ Preview",
-  },
   msg_click_to_place: {
     zh: "点击图片放置挂孔",
     en: "Click to place loop",
-  },
-  msg_conversion_complete: {
-    zh: "✅ 转换完成",
-    en: "✅ Conversion complete",
   },
   msg_resolution: {
     zh: "分辨率",
@@ -765,10 +574,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   msg_loop: {
     zh: "挂孔",
     en: "Loop",
-  },
-  msg_model_too_large: {
-    zh: "⚠️ 模型过大，已禁用3D预览",
-    en: "⚠️ Model too large, 3D preview disabled",
   },
   msg_preview_simplified: {
     zh: "ℹ️ 3D预览已简化",
@@ -799,30 +604,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   palette_click_to_select: {
     zh: "点击调色板选择颜色",
     en: "Click palette to select",
-  },
-  palette_need_preview: {
-    zh: "❌ 请先生成预览",
-    en: "❌ Please generate preview first",
-  },
-  palette_need_original: {
-    zh: "❌ 请先选择要替换的颜色",
-    en: "❌ Select a color to replace",
-  },
-  palette_need_replacement: {
-    zh: "❌ 请先选择替换颜色",
-    en: "❌ Select a replacement color",
-  },
-  palette_replaced: {
-    zh: "✅ 已替换 {src} → {dst}",
-    en: "✅ Replaced {src} → {dst}",
-  },
-  palette_cleared: {
-    zh: "✅ 已清除所有颜色替换",
-    en: "✅ Cleared all replacements",
-  },
-  palette_undo_empty: {
-    zh: "❌ 没有可撤销的操作",
-    en: "❌ Nothing to undo",
   },
   palette_undone: {
     zh: "↩️ 已撤销",
@@ -882,59 +663,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "只合并距离小于此值的颜色",
     en: "Only merge colors with distance below this value",
   },
-  merge_preview_btn: {
-    zh: "🔍 预览合并效果 Preview Merge",
-    en: "🔍 Preview Merge",
-  },
-  merge_apply_btn: {
-    zh: "✅ 应用合并 Apply Merge",
-    en: "✅ Apply Merge",
-  },
   merge_revert_btn: {
     zh: "↩️ 恢复原始 Revert",
     en: "↩️ Revert",
-  },
-  merge_status_empty: {
-    zh: "💡 调整参数后点击预览",
-    en: "💡 Adjust parameters and click preview",
-  },
-  merge_status_preview: {
-    zh: "🔍 预览: {merged} 种颜色被合并 (质量: {quality:.1f})",
-    en: "🔍 Preview: {merged} colors merged (quality: {quality:.1f})",
-  },
-  merge_status_applied: {
-    zh: "✅ 已应用: {merged} 种颜色被合并",
-    en: "✅ Applied: {merged} colors merged",
   },
   merge_status_reverted: {
     zh: "↩️ 已恢复到原始颜色",
     en: "↩️ Reverted to original colors",
   },
-  merge_error_empty_palette: {
-    zh: "❌ 调色板为空，无法执行颜色合并",
-    en: "❌ Empty palette, cannot perform color merging",
-  },
-  merge_error_single_color: {
-    zh: "❌ 图像只包含一种颜色，已禁用颜色合并",
-    en: "❌ Image contains only one color, merging disabled",
-  },
-  merge_error_all_below_threshold: {
-    zh: "⚠️ 所有颜色使用率都低于阈值，已禁用颜色合并以防止颜色丢失",
-    en: "⚠️ All colors below threshold, merging disabled to prevent color loss",
-  },
-  merge_warning_no_targets: {
-    zh: "⚠️ 部分颜色未找到合适的合并目标，保持原始颜色",
-    en: "⚠️ Some colors have no suitable merge targets, keeping original",
-  },
-  merge_info_low_usage: {
-    zh: "💡 检测到 {count} 种低使用率颜色 (<{threshold}%)",
-    en: "💡 Detected {count} low-usage colors (<{threshold}%)",
-  },
-  merge_accordion_title: {
-    zh: "🎨 颜色合并 Color Merging",
-    en: "🎨 Color Merging",
-  },
-
   // ==================== LUT Grid ====================
   lut_grid_load_hint: {
     zh: "加载 LUT 后显示可用颜色",
@@ -964,10 +700,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "点击选择: {hex}",
     en: "Click to select: {hex}",
   },
-  lut_grid_picker_label: {
-    zh: "🎯 以色找色",
-    en: "🎯 Find by Color",
-  },
   lut_grid_picker_hint: {
     zh: "选一个颜色，自动匹配 LUT 中最接近的物理色",
     en: "Pick a color to find the closest match in LUT",
@@ -975,10 +707,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lut_grid_picker_btn: {
     zh: "匹配最近色",
     en: "Find Nearest",
-  },
-  lut_grid_picker_result: {
-    zh: "✅ 最接近: {hex} (距离: {dist:.1f})",
-    en: "✅ Nearest: {hex} (distance: {dist:.1f})",
   },
   lut_grid_hue_all: {
     zh: "全部",
@@ -1026,71 +754,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Settings ====================
-  settings_title: {
-    zh: "## ⚙️ 设置",
-    en: "## ⚙️ Settings",
-  },
-  settings_clear_cache: {
-    zh: "🗑️ 清空缓存",
-    en: "🗑️ Clear Cache",
-  },
-  settings_clear_output: {
-    zh: "🗑️ 清空输出",
-    en: "🗑️ Clear Output",
-  },
-  settings_reset_counters: {
-    zh: "🔢 使用计数归零",
-    en: "🔢 Reset Counters",
-  },
-  settings_cache_cleared: {
-    zh: "✅ 缓存已清空，释放了 {} 空间",
-    en: "✅ Cache cleared, freed {} of space",
-  },
-  settings_output_cleared: {
-    zh: "✅ 输出已清空，释放了 {} 空间",
-    en: "✅ Output cleared, freed {} of space",
-  },
-  settings_counters_reset: {
-    zh: "✅ 计数器已归零：校准板: {} | 颜色提取: {} | 模型转换: {}",
-    en: "✅ Counters reset: Calibrations: {} | Extractions: {} | Conversions: {}",
-  },
-  settings_cache_size: {
-    zh: "📦 缓存大小: {}",
-    en: "📦 Cache size: {}",
-  },
-  settings_output_size: {
-    zh: "📦 输出大小: {}",
-    en: "📦 Output size: {}",
-  },
-  theme_toggle_night: {
-    zh: "🌙 夜间模式",
-    en: "🌙 Night Mode",
-  },
-  theme_toggle_day: {
-    zh: "☀️ 日间模式",
-    en: "☀️ Day Mode",
-  },
-
   // ==================== LUT Merge Tab ====================
-  tab_merge: {
-    zh: "🔀 色卡合并",
-    en: "🔀 LUT Merge",
-  },
-  merge_title: {
-    zh: "### 🔀 色卡合并",
-    en: "### 🔀 LUT Merge",
-  },
   merge_desc: {
     zh: "将不同色彩模式的LUT色卡合并为一个，获得更丰富的色彩。",
     en: "Merge LUT cards from different color modes into one for richer colors.",
-  },
-  merge_lut_primary_label: {
-    zh: "🎯 主色卡（6色或8色）",
-    en: "🎯 Primary LUT (6-Color or 8-Color)",
-  },
-  merge_lut_secondary_label: {
-    zh: "➕ 副色卡（可多选）",
-    en: "➕ Secondary LUTs (Multi-select)",
   },
   merge_lut_1_label: {
     zh: "选择LUT 1（主色卡）",
@@ -1108,18 +775,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "未选择副色卡",
     en: "No secondary LUTs selected",
   },
-  merge_primary_hint: {
-    zh: "💡 请先选择一个6色或8色的主色卡",
-    en: "💡 Please select a 6-Color or 8-Color primary LUT first",
-  },
-  merge_primary_not_high: {
-    zh: "❌ 主色卡必须是6色或8色模式",
-    en: "❌ Primary LUT must be 6-Color or 8-Color mode",
-  },
-  merge_error_no_secondary: {
-    zh: "❌ 请至少选择一个副色卡",
-    en: "❌ Please select at least one secondary LUT",
-  },
   merge_mode_label: {
     zh: "检测到的模式",
     en: "Detected Mode",
@@ -1136,39 +791,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "值越大去除的相近色越多，0=仅精确去重",
     en: "Higher = remove more similar colors, 0 = exact dedup only",
   },
-  merge_btn: {
-    zh: "🔀 执行合并",
-    en: "🔀 Merge",
-  },
-  merge_status_ready: {
-    zh: "💡 选择两个LUT后点击合并",
-    en: "💡 Select two LUTs then click Merge",
-  },
   merge_status_running: {
     zh: "⏳ 合并中...",
     en: "⏳ Merging...",
   },
-  merge_status_success: {
-    zh: "✅ 合并完成！合并前: {before} 色 → 合并后: {after} 色（精确去重: {exact}，相近色去除: {similar}）\n保存至: {path}",
-    en: "✅ Merge complete! Before: {before} → After: {after} (exact dupes: {exact}, similar removed: {similar})\nSaved to: {path}",
-  },
-  merge_error_no_lut: {
-    zh: "❌ 请选择至少两个LUT文件",
-    en: "❌ Please select at least two LUT files",
-  },
-  merge_error_same_lut: {
-    zh: "❌ 请选择不同的LUT文件",
-    en: "❌ Please select different LUT files",
-  },
-  merge_error_incompatible: {
-    zh: "❌ 不兼容的LUT组合: {msg}",
-    en: "❌ Incompatible LUT combination: {msg}",
-  },
-  merge_error_failed: {
-    zh: "❌ 合并失败: {msg}",
-    en: "❌ Merge failed: {msg}",
-  },
-
   // ==================== About Page Content ====================
   about_content: {
     zh: [
