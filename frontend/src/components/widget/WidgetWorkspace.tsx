@@ -22,7 +22,7 @@ import type {
   DragEndEvent,
 } from '@dnd-kit/core';
 import { AnimatePresence } from 'framer-motion';
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from '../../stores/widgetStore';
+import { useWidgetStore, WIDGET_REGISTRY, CONVERTER_SUB_TAB_WIDGET_MAP } from '../../stores/widgetStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
 import { WidgetPanel } from './WidgetPanel';
@@ -146,8 +146,13 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       return;
     }
 
-    const nextHeights = new Map<WidgetId, number>();
-    for (const id of TAB_WIDGET_MAP['converter']) {
+    // Only measure widgets currently in the DOM. Hidden widgets (e.g. those
+    // outside the active converter sub-tab) are skipped because their nodes
+    // simply do not exist; previously cached heights remain valid for them.
+    // 仅测量当前 DOM 中的 widget；sub-tab 隐藏的 widget 节点不存在，
+    // 沨用之前缓存的高度即可。
+    const nextHeights = new Map(measuredHeightsRef.current);
+    for (const id of converterWidgetIds) {
       const el = container.querySelector(`[data-widget-id="${id}"]`) as HTMLElement | null;
       if (el) {
         nextHeights.set(id, el.offsetHeight);
@@ -155,7 +160,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     }
 
     measuredHeightsRef.current = nextHeights;
-  }, []);
+  }, [converterWidgetIds]);
 
   // Responsive resize handler — clamp free widgets & recalculate stacks
   // Only processes widgets belonging to the current active tab to prevent
@@ -167,7 +172,12 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
 
     const { width } = container.getBoundingClientRect();
     const state = useWidgetStore.getState();
-    const currentTabIds = TAB_WIDGET_MAP['converter'];
+    // Only stack widgets that are actually rendered in the current sub-tab.
+    // Using the full converter set would let hidden widgets push visible ones
+    // off-screen via accumulated stackOrder offsets after a layout reset.
+    // 仅在当前 sub-tab 可见集合上计算 stack；否则重置后隐藏 widget 的
+    // stackOrder 会把可见 widget 顶到画面外。
+    const currentTabIds = converterWidgetIds;
     const tabWidgets = currentTabIds.map((id) => state.widgets[id]);
 
     // Force any free-floating widgets in current tab to snap to left edge
@@ -180,8 +190,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     // Measure actual DOM heights for expanded widgets
     const measuredHeights = measuredHeightsRef.current;
 
-    // Recalculate stack positions for snapped widgets in current tab only
-    // Re-read state after potential snapToEdge calls
+    // Recalculate stack positions for snapped widgets in the active sub-tab.
+    // Re-read state after potential snapToEdge calls.
     const updatedState = useWidgetStore.getState();
     const updatedTabWidgets = currentTabIds.map((id) => updatedState.widgets[id]);
     const batchedPositions: Partial<Record<WidgetId, { x: number; y: number }>> = {};
@@ -195,7 +205,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       }
     }
     setWidgetPositions(batchedPositions);
-  }, [setWidgetPositions, widgetWidth]);
+  }, [setWidgetPositions, widgetWidth, converterWidgetIds]);
 
   // ResizeObserver to detect widget content height changes (e.g. checkbox
   // toggling extra options) and recalculate stack positions automatically.
