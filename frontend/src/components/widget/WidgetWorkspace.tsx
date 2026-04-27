@@ -24,7 +24,7 @@ import type {
 import { AnimatePresence } from 'framer-motion';
 import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP } from '../../stores/widgetStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { computeSnap, computeStackPositions, computeDockBottomInset, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
+import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
 import { WidgetPanel } from './WidgetPanel';
 import { SnapGuides } from './SnapGuides';
 import BasicSettingsWidgetContent from './BasicSettingsWidgetContent';
@@ -41,7 +41,6 @@ import CalibrationWidgetContent from './CalibrationWidgetContent';
 import ExtractorWidgetContent from './ExtractorWidgetContent';
 import LutManagerWidgetContent from './LutManagerWidgetContent';
 import FiveColorWidgetContent from './FiveColorWidgetContent';
-import ColorWorkstation from './ColorWorkstation';
 import Color2DOverlay from './Color2DOverlay';
 import { useConverterDataInit } from '../../hooks/useConverterDataInit';
 import { useWorkspaceMode } from '../../hooks/useWorkspaceMode';
@@ -92,7 +91,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const isDragging = useWidgetStore((s) => s.isDragging);
   const activeWidgetId = useWidgetStore((s) => s.activeWidgetId);
   const activeTab = useWidgetStore((s) => s.activeTab);
-  const colorWorkstationCollapsed = useWidgetStore((s) => s.colorWorkstationCollapsed);
   const color2DOverlayOpen = useWidgetStore((s) => s.color2DOverlayOpen);
 
   // Always render converter widgets only; other tabs have their own
@@ -110,14 +108,12 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const leftDockRef = useRef<HTMLDivElement>(null);
   const rightDockRef = useRef<HTMLDivElement>(null);
-  const colorWorkstationRef = useRef<HTMLDivElement>(null);
   const measuredHeightsRef = useRef(new Map<WidgetId, number>());
   const dragPositionRef = useRef<{ x: number; y: number } | null>(null);
   const dragSourceRef = useRef<{ edge: 'left' | 'right'; scrollTop: number } | null>(null);
   const insertPreviewRef = useRef<InsertPreviewState | null>(null);
   const isDraggingRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
-  const [dockBottomInsets, setDockBottomInsets] = useState({ left: 0, right: 0 });
   const activeWidgetMap = useMemo(() => {
     const map = new Map(activeWidgets.map((widget) => [widget.id, widget]));
     return map;
@@ -286,53 +282,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     window.addEventListener('resize', updateWidth);
     return () => window.removeEventListener('resize', updateWidth);
   }, []);
-
-  // Only recompute dock avoidance on viewport or workstation size changes.
-  // This keeps the runtime cost low while still responding to real overlap.
-  useEffect(() => {
-    let frameId = 0;
-
-    const updateDockInsets = () => {
-      const workstationRect = colorWorkstationRef.current?.getBoundingClientRect();
-      const leftDockRect = leftDockRef.current?.getBoundingClientRect();
-      const rightDockRect = rightDockRef.current?.getBoundingClientRect();
-
-      const nextInsets = {
-        left: workstationRect && leftDockRect ? computeDockBottomInset(leftDockRect, workstationRect) : 0,
-        right: workstationRect && rightDockRect ? computeDockBottomInset(rightDockRect, workstationRect) : 0,
-      };
-
-      setDockBottomInsets((prev) =>
-        prev.left === nextInsets.left && prev.right === nextInsets.right ? prev : nextInsets
-      );
-    };
-
-    const scheduleDockInsetUpdate = () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(updateDockInsets);
-    };
-
-    scheduleDockInsetUpdate();
-    window.addEventListener('resize', scheduleDockInsetUpdate);
-    window.addEventListener('widget-animation-complete', scheduleDockInsetUpdate);
-    window.addEventListener('color-workstation-geometry-change', scheduleDockInsetUpdate);
-
-    const observer = new ResizeObserver(scheduleDockInsetUpdate);
-    if (containerRef.current) observer.observe(containerRef.current);
-    if (colorWorkstationRef.current) observer.observe(colorWorkstationRef.current);
-
-    return () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      window.removeEventListener('resize', scheduleDockInsetUpdate);
-      window.removeEventListener('widget-animation-complete', scheduleDockInsetUpdate);
-      window.removeEventListener('color-workstation-geometry-change', scheduleDockInsetUpdate);
-      observer.disconnect();
-    };
-  }, [activeTab, colorWorkstationCollapsed]);
 
   const leftRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge !== 'right');
   const rightRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge === 'right');
@@ -578,7 +527,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             data-testid="left-dock"
             style={{
               width: dockScrollWidth,
-              bottom: dockBottomInsets.left,
               pointerEvents: 'none',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
@@ -610,7 +558,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             data-testid="right-dock"
             style={{
               width: dockScrollWidth,
-              bottom: dockBottomInsets.right,
               pointerEvents: 'none',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
@@ -649,13 +596,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           </DragOverlay>
         </div>
       </DndContext>
-      {/* ColorWorkstation — fixed bottom center, outside DnD system (z-35) */}
-      <ColorWorkstation
-        ref={colorWorkstationRef}
-        workspaceWidth={containerWidth}
-        dockWidth={dockScrollWidth}
-        mode={workspace.mode}
-      />
     </>
   );
 }

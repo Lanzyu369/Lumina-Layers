@@ -4,6 +4,7 @@
  */
 import { useI18n } from '../../i18n/context';
 import type { TabId } from '../../types/widget';
+import { useWidgetStore } from '../../stores/widgetStore';
 import { motion } from 'framer-motion';
 
 interface TabNavBarProps {
@@ -50,6 +51,13 @@ const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
     </svg>
   )
 };
+
+const COLOR_EDITOR_ACTION_ICON = (
+  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 21h4l11-11a2.828 2.828 0 10-4-4L4 17v4z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M14 7l3 3" />
+  </svg>
+);
 
 const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNode> = {
   'calibration': (
@@ -139,11 +147,13 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
       : activeTab;
   const showLutSubTabs = activePrimaryTab === 'lut-management';
   const showMaterialSubTabs = activePrimaryTab === 'material-management';
+  const showConverterSecondary = activePrimaryTab === 'converter';
   const secondaryTabList = showLutSubTabs
     ? LUT_SECONDARY_TAB_LIST
     : showMaterialSubTabs
       ? MATERIAL_SECONDARY_TAB_LIST
       : null;
+  const openColor2DOverlay = useWidgetStore((s) => s.openColor2DOverlay);
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
@@ -190,6 +200,29 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
           })}
         </div>
       </nav>
+
+      {showConverterSecondary && (
+        <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
+          <div className="flex min-w-max items-center gap-1">
+            <button
+              data-testid="subtab-color-editor"
+              onClick={openColor2DOverlay}
+              className={`
+                relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
+                ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
+                text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200
+              `}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+              aria-label={t('tab.colorEditor')}
+            >
+              <span className="relative z-10 flex items-center gap-2">
+                <span className="flex items-center justify-center">{COLOR_EDITOR_ACTION_ICON}</span>
+                <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t('tab.colorEditor')}</span>
+              </span>
+            </button>
+          </div>
+        </nav>
+      )}
 
       {secondaryTabList && (
         <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>

@@ -296,7 +296,6 @@ export const useWidgetStore = create<WidgetStore>()(
       isDragging: false,
       activeWidgetId: null,
       activeTab: "converter" as TabId,
-      colorWorkstationCollapsed: true,
       color2DOverlayOpen: false,
 
       /**
@@ -548,16 +547,6 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       /**
-       * Toggle ColorWorkstation collapsed state.
-       * 切换 ColorWorkstation 展开/收起状态。
-       */
-      toggleColorWorkstation: () => {
-        set((state) => ({
-          colorWorkstationCollapsed: !state.colorWorkstationCollapsed,
-        }));
-      },
-
-      /**
        * Open the 2D color overlay.
        * 打开 2D 颜色覆盖层。
        */
@@ -575,7 +564,7 @@ export const useWidgetStore = create<WidgetStore>()(
     }),
     {
       name: "lumina-widget-layout",
-      version: 6,
+      version: 7,
       migrate: (persistedState, version) => {
         type PersistedWidgetState = {
           widgets?: Record<WidgetId, WidgetLayoutState>;
@@ -587,7 +576,7 @@ export const useWidgetStore = create<WidgetStore>()(
         if (version < 3) {
           return { widgets: { ...DEFAULT_LAYOUT }, activeTab: "converter" };
         }
-        if (version === 3 || version === 4 || version === 5) {
+        if (version === 3 || version === 4 || version === 5 || version === 6) {
           const state =
             typeof persistedState === "object" && persistedState !== null
               ? (persistedState as PersistedWidgetState)
@@ -630,10 +619,14 @@ export const useWidgetStore = create<WidgetStore>()(
 
           reorderConverterEdge("left");
           reorderConverterEdge("right");
+          // Drop the deprecated `colorWorkstationCollapsed` field if it lingers in
+          // the persisted payload; the entry has moved to a top-level secondary tab.
+          // 颜色入口已迁移至顶部二级 tab，丢弃过时的折叠状态字段。
+          const { colorWorkstationCollapsed: _drop, ...rest } = state;
+          void _drop;
           return {
-            ...state,
+            ...rest,
             widgets,
-            colorWorkstationCollapsed: true,
           };
         }
         return persistedState as WidgetStore;
@@ -641,7 +634,6 @@ export const useWidgetStore = create<WidgetStore>()(
       partialize: (state) => ({
         widgets: state.widgets,
         activeTab: state.activeTab,
-        colorWorkstationCollapsed: state.colorWorkstationCollapsed,
       }),
       onRehydrateStorage: () => () => {},
     },

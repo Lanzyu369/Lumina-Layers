@@ -1668,6 +1668,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "设置",
     en: "Settings",
   },
+  "tab.colorEditor": {
+    zh: "颜色编辑",
+    en: "Color Editor",
+  },
 
   // ==================== Settings Panel (Particle Loading) ====================
   "settings.title": {

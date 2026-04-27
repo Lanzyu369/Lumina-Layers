@@ -78,10 +78,6 @@ export interface WidgetStore {
     orderedIds: WidgetId[],
   ) => void;
 
-  // ColorWorkstation 展开/收起
-  colorWorkstationCollapsed: boolean;
-  toggleColorWorkstation: () => void;
-
   // 2D 颜色覆盖层
   color2DOverlayOpen: boolean;
   openColor2DOverlay: () => void;
