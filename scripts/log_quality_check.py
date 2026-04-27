@@ -32,7 +32,15 @@ from scripts.audit_logs import audit_files, event_from_line, parse_json_object
 
 Mode = Literal["fast", "full"]
 
-DEFAULT_WORKFLOW = ["startup", "lut_list", "lut_colors", "preview", "generate"]
+DEFAULT_WORKFLOW = [
+    "startup",
+    "lut_list",
+    "lut_colors",
+    "preview",
+    "generate",
+    "replace",
+    "extract",
+]
 WORKFLOW_ORDER = [
     "startup",
     "lut_list",
@@ -41,6 +49,7 @@ WORKFLOW_ORDER = [
     "generate",
     "vector",
     "replace",
+    "extract",
 ]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
 DEFAULT_MAX_INFO = 30
@@ -274,6 +283,9 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
         api_app_module.worker_pool = mock_pool
 
         try:
+            extract_lut_path = _make_temp_path(".json", created_paths)
+            extract_lut_path.write_text("{}", encoding="utf-8")
+            extract_image = np.zeros((8, 8, 3), dtype=np.uint8)
             with (
                 patch("api.routers.converter.preview.generate_segmented_glb", return_value=None),
                 patch(
@@ -283,6 +295,15 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                 patch(
                     "api.routers.converter.replace.schedule_glb_build",
                     return_value="mock-glb-token",
+                ),
+                patch(
+                    "api.routers.extractor.run_extraction",
+                    return_value=(
+                        extract_image,
+                        extract_image,
+                        str(extract_lut_path),
+                        "OK",
+                    ),
                 ),
                 TestClient(app) as client,
             ):
@@ -494,6 +515,8 @@ def _workflow_required_event_checks(
         required_events.append("converter_region_replace_timing")
         if mode == "full":
             required_events.append("vector_matched_rgb_overrides_applied")
+    if "extract" in workflow:
+        required_events.append("extractor_extract_done")
 
     return [
         CheckResult.evaluate(
@@ -755,6 +778,8 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_vector_workflow(client, lut_name)
         elif step == "replace":
             _execute_replace_workflow(client, lut_name)
+        elif step == "extract":
+            _execute_extract_workflow(client)
 
 
 def _execute_vector_workflow(client: Any, lut_name: str) -> None:
@@ -779,6 +804,45 @@ def _execute_replace_workflow(client: Any, lut_name: str) -> None:
         lut_name,
         use_cached_matched_rgb=True,
     )
+
+
+def _execute_extract_workflow(client: Any) -> None:
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    image[:50, :50] = [255, 255, 255]
+    image[:50, 50:] = [255, 0, 0]
+    image[50:, :50] = [255, 255, 0]
+    image[50:, 50:] = [0, 0, 255]
+    buffer = BytesIO()
+    Image.fromarray(image, mode="RGB").save(buffer, format="PNG")
+    buffer.seek(0)
+
+    response = client.post(
+        "/api/extractor/extract",
+        files={"image": ("extract.png", buffer, "image/png")},
+        data={
+            "corner_points": "[[5,5],[95,5],[95,95],[5,95]]",
+            "color_mode": DEFAULT_COLOR_MODE,
+            "page": "0",
+            "eight_color_full_export": "false",
+            "offset_x": "0",
+            "offset_y": "0",
+            "zoom": "1.0",
+            "distortion": "0",
+            "vignette_correction": "false",
+            "auto_wb": "false",
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "extract")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Extract response was not an object")
+    if not payload.get("lut_download_url"):
+        raise QualityCheckError("Extract response did not include lut_download_url")
 
 
 def _post_preview(client: Any, lut_name: str) -> str:

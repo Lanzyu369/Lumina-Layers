@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 10,
+      "actual": 11,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -75,21 +75,23 @@
     "converter_generate_timing": 2,
     "converter_preview_timing": 2,
     "converter_region_replace_timing": 1,
+    "extractor_extract_done": 1,
     "log_file_configured": 1,
     "lut_colors_loaded": 1,
     "lut_presets_discovered": 1,
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 10,
+  "info_lines": 11,
   "info_lines_by_endpoint": {
-    "481e5e7a455446b2860585ab9441b937": 1,
-    "514e29575ec24bca8686d34cbe74d4ab": 1,
-    "642f8270d65545ba86f58f1fe93ed362": 1,
-    "a9fe6ade06244e418c36076e2f855626": 1,
-    "b729c26bb93142edbe08c3870a4e736b": 1,
-    "ba726659c5b24e64826b8bfea18ca8ae": 1,
-    "c59390e120b9440592f1f5c75af92bd5": 1
+    "24fd78cf3b0f49bc868a2d47bdfce439": 1,
+    "5a053b47e3db49a8a02abf010a89fb8b": 1,
+    "68d35473582843c0b6c53b0199cbf9c9": 1,
+    "98435218e34c49fd9fdaaa8a58865f0a": 1,
+    "9c1934a0963942088d71670a52587582": 1,
+    "9c45ad28766049dda7b605058be41002": 1,
+    "c3433d26ecad43d7a15d4fd74b005583": 1,
+    "d891595ce00249daacd4ede1cd85bea9": 1
   },
   "log_file_configured_count": 1,
   "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_fast_reviewer.log",
@@ -97,8 +99,8 @@
   "mode": "fast",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 10,
-  "timestamp": "2026-04-27T12:31:22.452132+00:00",
+  "structured_lines": 11,
+  "timestamp": "2026-04-27T15:45:42.732630+00:00",
   "top_events": [
     {
       "count": 2,
@@ -130,11 +132,15 @@
     },
     {
       "count": 1,
+      "event": "extractor_extract_done"
+    },
+    {
+      "count": 1,
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 3096,
-  "total_lines": 10,
+  "total_bytes": 3483,
+  "total_lines": 11,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
@@ -143,12 +149,21 @@
     "lut_colors",
     "preview",
     "generate",
-    "replace"
+    "replace",
+    "extract"
   ],
   "workflow_checks": [
     {
       "actual": 1,
       "name": "workflow_event_converter_region_replace_timing",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_extract_done",
       "operator": ">=",
       "passed": true,
       "severity": "error",

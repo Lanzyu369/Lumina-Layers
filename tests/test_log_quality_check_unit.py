@@ -125,6 +125,26 @@ def test_replace_workflow_step_is_first_class() -> None:
     assert "replace" in WORKFLOW_STEPS
 
 
+def test_extract_workflow_step_is_first_class() -> None:
+    """The extractor workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow(
+        "startup,lut_list,lut_colors,preview,generate,replace,extract"
+    )
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+    ]
+    assert "extract" in WORKFLOW_ORDER
+    assert "extract" in WORKFLOW_STEPS
+
+
 def test_parse_workflow_rejects_vector_and_replace_together() -> None:
     try:
         _parse_workflow("startup,lut_list,lut_colors,preview,generate,vector,replace")
@@ -161,6 +181,69 @@ def test_fast_replace_workflow_does_not_require_worker_canary_event() -> None:
         "workflow_event_converter_region_replace_timing"
     }
     assert all(check.passed for check in checks)
+
+
+def test_full_extract_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="full",
+        workflow=workflow,
+        event_counts={
+            "converter_region_replace_timing": 1,
+            "vector_matched_rgb_overrides_applied": 1,
+            "extractor_extract_done": 1,
+        },
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="full",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_extract_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_extract_done"].passed is False
+
+
+def test_fast_extract_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={
+            "converter_region_replace_timing": 1,
+            "extractor_extract_done": 1,
+        },
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_extract_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_extract_done"].passed is False
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

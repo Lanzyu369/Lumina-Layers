@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -113,6 +115,60 @@ class TestSessionStatePersistence:
         assert session_data is not None
         assert session_data["lut_path"] == "/tmp/test.npy"
         assert session_data["color_mode"] == "4-Color"
+
+    def test_extract_endpoint_emits_canary_on_success(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: Path,
+    ) -> None:
+        """Successful extraction emits one structured INFO canary event."""
+        buf = _make_test_image_buf()
+        lut_path = tmp_path / "extract-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        vis_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        preview_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        target_logger = logging.getLogger("lumina.api.routers.extractor")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.INFO, logger=target_logger.name)
+
+        try:
+            with patch(
+                "api.routers.extractor.run_extraction",
+                return_value=(vis_img, preview_img, str(lut_path), "OK"),
+            ):
+                response = client.post(
+                    "/api/extractor/extract",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "corner_points": json.dumps(
+                            [[0, 0], [100, 0], [100, 100], [0, 100]]
+                        ),
+                        "color_mode": "4-Color",
+                        "page": "Page 2",
+                        "eight_color_full_export": "true",
+                        "distortion": "0.0",
+                        "vignette_correction": "false",
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "extractor_extract_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.color_mode == "4-Color"
+        assert record.page == "Page 2"
+        assert record.eight_color_full_export is True
+        assert record.lut_path == str(lut_path)
+        assert isinstance(record.extract_ms, float)
+        assert record.extract_ms >= 0.0
 
 
 # =========================================================================

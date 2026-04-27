@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from typing import List, Tuple
 
@@ -337,6 +338,7 @@ async def extractor_extract(
         raise HTTPException(status_code=422, detail=str(e))
 
     # Call core extraction (field name mapping: distortion->barrel, vignette_correction->bright)
+    extract_start = time.perf_counter()
     try:
         vis_img, preview_img, lut_path, status_msg = run_extraction(
             img=img_arr,
@@ -351,6 +353,7 @@ async def extractor_extract(
             auto_wb=auto_wb,
             eight_color_full_export=eight_color_full_export,
         )
+        extract_ms = (time.perf_counter() - extract_start) * 1000.0
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color extraction")
 
@@ -430,6 +433,18 @@ async def extractor_extract(
     if preview_img is not None:
         preview_bytes = _image_to_png_bytes(preview_img)
         lut_preview_id = registry.register_bytes(session_id, preview_bytes, "lut_preview.png")
+
+    log.info(
+        "Extractor extract completed",
+        extra={
+            "event": "extractor_extract_done",
+            "color_mode": effective_color_mode,
+            "page": page,
+            "eight_color_full_export": bool(eight_color_full_export),
+            "lut_path": str(lut_path),
+            "extract_ms": round(extract_ms, 1),
+        },
+    )
 
     return ExtractResponse(
         session_id=session_id,

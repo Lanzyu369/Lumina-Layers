@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 25,
+      "actual": 26,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -76,6 +76,7 @@
     "converter_glb_completed": 1,
     "converter_preview_timing": 2,
     "converter_region_replace_timing": 1,
+    "extractor_extract_done": 1,
     "image_processor_done": 2,
     "image_processor_init": 4,
     "isolated_pixels_cleaned": 2,
@@ -90,15 +91,16 @@
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 25,
+  "info_lines": 26,
   "info_lines_by_endpoint": {
-    "249e90cb82024ff3b6bb6d8d1e410c34": 3,
-    "37ccdfb0334b43398b36f13bab369201": 4,
-    "3fbbbfc97bdf4fd3ac333c8102239784": 1,
-    "4fde5544abe64c22b36054f66c858541": 4,
-    "6fbc598ccfe14217ab2fe06f5f772e03": 1,
-    "87a08fbab9e34ed3ba666ce1b0b07adc": 1,
-    "caa17bf5e8834d25b7c04204724655a4": 7
+    "1361568bd0a84da083fee0d59643467c": 1,
+    "13acc91ef6d84fa78cbfc0b67fe9e20c": 3,
+    "800acf27ada34e05964ce0ead667d141": 1,
+    "819fa2c238a74f78900f2b002f2b1a7f": 4,
+    "9b3a0bb5bd1443c4a4c488179d974848": 7,
+    "a4a4d74a462c42eb9c5c4603bb23bc03": 1,
+    "baebd4a7dce94b29afa225f6c8129174": 4,
+    "fbd6267cc3ee4c7db188e9d03e9ba116": 1
   },
   "log_file_configured_count": 1,
   "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_reviewer.log",
@@ -106,8 +108,8 @@
   "mode": "full",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 25,
-  "timestamp": "2026-04-27T14:51:57.410865+00:00",
+  "structured_lines": 26,
+  "timestamp": "2026-04-27T15:46:03.252685+00:00",
   "top_events": [
     {
       "count": 4,
@@ -159,10 +161,6 @@
     },
     {
       "count": 1,
-      "event": "converter_glb_completed"
-    },
-    {
-      "count": 1,
       "event": "vector_matched_rgb_overrides_applied"
     },
     {
@@ -175,11 +173,19 @@
     },
     {
       "count": 1,
+      "event": "converter_glb_completed"
+    },
+    {
+      "count": 1,
+      "event": "extractor_extract_done"
+    },
+    {
+      "count": 1,
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 9552,
-  "total_lines": 25,
+  "total_bytes": 9948,
+  "total_lines": 26,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
@@ -188,7 +194,8 @@
     "lut_colors",
     "preview",
     "generate",
-    "replace"
+    "replace",
+    "extract"
   ],
   "workflow_checks": [
     {
@@ -202,6 +209,14 @@
     {
       "actual": 1,
       "name": "workflow_event_vector_matched_rgb_overrides_applied",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_extract_done",
       "operator": ">=",
       "passed": true,
       "severity": "error",

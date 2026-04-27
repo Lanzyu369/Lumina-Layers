@@ -81,6 +81,10 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_recipe_region_mask_skipped",
     "vector_recipe_region_masks_missing",
 }
+EXTRACTOR_STRUCTURED_EVENTS = {
+    "extractor_extract_done",
+}
+REQUIRED_STRUCTURED_EVENTS = VECTOR_STRUCTURED_EVENTS | EXTRACTOR_STRUCTURED_EVENTS
 
 
 def _iter_py_files(path: Path) -> list[Path]:
@@ -194,5 +198,5 @@ def test_no_starlog_catchall_event_names() -> None:
                         violations.append(_relative_location(file_path, value_node))
 
     assert not violations, "Catch-all *_log events found: " + ", ".join(violations)
-    missing = sorted(VECTOR_STRUCTURED_EVENTS - literal_events)
-    assert not missing, "Vector structured events missing: " + ", ".join(missing)
+    missing = sorted(REQUIRED_STRUCTURED_EVENTS - literal_events)
+    assert not missing, "Required structured events missing: " + ", ".join(missing)
