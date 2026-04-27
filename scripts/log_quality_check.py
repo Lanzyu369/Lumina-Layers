@@ -49,6 +49,9 @@ WORKFLOW_ORDER = [
     "generate",
     "vector",
     "replace",
+    "replace_bw",
+    "replace_8color",
+    "replace_5color_ext",
     "extract",
 ]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
@@ -60,11 +63,52 @@ DEFAULT_SERVER_START_TIMEOUT_SECONDS = 30.0
 DEFAULT_LUT_STEM = "Aliz&PLA&4色RYBW&20260211"
 DEFAULT_LUT_NAME = f"Aliz - {DEFAULT_LUT_STEM}"
 DEFAULT_COLOR_MODE = "4-Color (RYBW)"
+BW_COLOR_MODE = "BW (Black & White)"
+BW_LUT_STEM = "Bambulab&PLA&BW&白-黑"
+BW_LUT_NAME = f"Custom - {BW_LUT_STEM}"
+EIGHT_COLOR_MODE = "8-Color Max"
+EIGHT_COLOR_LUT_STEM = "Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213"
+EIGHT_COLOR_LUT_NAME = f"Aliz - {EIGHT_COLOR_LUT_STEM}"
+FIVE_COLOR_EXT_MODE = "5-Color Extended"
+FIVE_COLOR_EXT_LUT_STEM = "Aliz&PETG&5color&红-黄-蓝-白-黑-20260304"
+FIVE_COLOR_EXT_LUT_NAME = f"Aliz - {FIVE_COLOR_EXT_LUT_STEM}"
 DEFAULT_MODELING_MODE = "high-fidelity"
 VECTOR_MODELING_MODE = "vector"
 FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "frozen_assets" / "images" / "logo.png"
 VECTOR_FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "svg_alignment" / "ring_with_hole.svg"
 REPLACE_COLOR_CANDIDATES = ("#ff0000", "#ffff00", "#ffffff", "#0000ff")
+REPLACE_FAMILY_STEPS = frozenset(
+    {"replace", "replace_bw", "replace_8color", "replace_5color_ext"}
+)
+ALTERNATE_REPLACE_CONFIG = {
+    "replace_bw": (BW_COLOR_MODE, BW_LUT_NAME),
+    "replace_8color": (EIGHT_COLOR_MODE, EIGHT_COLOR_LUT_NAME),
+    "replace_5color_ext": (FIVE_COLOR_EXT_MODE, FIVE_COLOR_EXT_LUT_NAME),
+}
+MOCK_COLOR_CONFIGS = {
+    DEFAULT_COLOR_MODE: (
+        ["White", "Red", "Yellow", "Blue"],
+        [(255, 255, 255), (255, 0, 0), (255, 255, 0), (0, 128, 255)],
+    ),
+    BW_COLOR_MODE: (["White", "Black"], [(255, 255, 255), (0, 0, 0)]),
+    EIGHT_COLOR_MODE: (
+        ["White", "Red", "Yellow", "Blue", "Magenta", "Cyan", "Green", "Black"],
+        [
+            (255, 255, 255),
+            (255, 0, 0),
+            (255, 255, 0),
+            (0, 128, 255),
+            (255, 0, 255),
+            (0, 255, 255),
+            (0, 255, 0),
+            (0, 0, 0),
+        ],
+    ),
+    FIVE_COLOR_EXT_MODE: (
+        ["White", "Red", "Yellow", "Blue", "Black"],
+        [(255, 255, 255), (255, 0, 0), (255, 255, 0), (0, 128, 255), (0, 0, 0)],
+    ),
+}
 
 _CATCH_ALL_PATTERN = re.compile(r"^(.*_log|status_.*|request_.*)$")
 _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
@@ -511,13 +555,12 @@ def _workflow_required_event_checks(
     event_counts: Mapping[str, int],
 ) -> list[CheckResult]:
     required_events: list[str] = []
-    if "replace" in workflow:
-        required_events.append("converter_region_replace_timing")
-        if mode == "full":
-            required_events.append("vector_matched_rgb_overrides_applied")
+    if any(step in workflow for step in REPLACE_FAMILY_STEPS):
+        required_events.extend(_replace_required_events_for_mode(mode))
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
 
+    required_events = list(dict.fromkeys(required_events))
     return [
         CheckResult.evaluate(
             name=f"workflow_event_{event}",
@@ -527,6 +570,15 @@ def _workflow_required_event_checks(
         )
         for event in required_events
     ]
+
+
+def _replace_required_events_for_mode(mode: Mode) -> tuple[str, ...]:
+    """Return replace-family canaries for the selected execution mode."""
+
+    events = ["converter_region_replace_timing"]
+    if mode == "full":
+        events.append("vector_matched_rgb_overrides_applied")
+    return tuple(events)
 
 
 def write_report(report: QualityReport, output_path: Path) -> None:
@@ -612,12 +664,35 @@ def _build_mock_worker_result(
 ) -> dict[str, Any]:
     name = getattr(worker_fn, "__name__", "")
     if name == "worker_generate_preview":
+        color_mode = _mock_preview_color_mode_from_worker_args(worker_args)
         if _is_vector_preview_worker_args(worker_args):
-            return _build_mock_vector_preview_result(created_paths, np_module, image_cls)
-        return _build_mock_preview_result(created_paths, np_module, image_cls)
+            return _build_mock_vector_preview_result(
+                created_paths,
+                np_module,
+                image_cls,
+                color_mode,
+            )
+        return _build_mock_preview_result(
+            created_paths,
+            np_module,
+            image_cls,
+            color_mode,
+        )
     if name == "worker_generate_model":
         return _build_mock_generate_result(created_paths)
     raise QualityCheckError(f"Unexpected worker submitted in fast mode: {name}")
+
+
+def _mock_preview_color_mode_from_worker_args(worker_args: Sequence[Any]) -> str:
+    if len(worker_args) <= 5:
+        return DEFAULT_COLOR_MODE
+    value = worker_args[5]
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
+    if isinstance(value, str) and value:
+        return value
+    return DEFAULT_COLOR_MODE
 
 
 def _is_vector_preview_worker_args(worker_args: Sequence[Any]) -> bool:
@@ -632,6 +707,7 @@ def _build_mock_preview_result(
     created_paths: list[Path],
     np_module: Any,
     image_cls: Any,
+    color_mode: str,
 ) -> dict[str, Any]:
     import pickle
 
@@ -639,7 +715,8 @@ def _build_mock_preview_result(
     preview[:4, :, :] = [255, 0, 0]
     preview[4:, :, :] = [255, 255, 255]
     mask_solid = np_module.ones((8, 8), dtype=bool)
-    material_matrix = np_module.zeros((8, 8, 5), dtype=np_module.int16)
+    slots, preview_colors = _mock_color_config_for_mode(color_mode)
+    material_matrix = _mock_material_matrix(np_module, 8, 8, len(slots))
 
     png_path = _make_temp_path(".png", created_paths)
     image_cls.fromarray(preview).save(png_path)
@@ -656,6 +733,12 @@ def _build_mock_preview_result(
         "mask_solid": mask_solid,
         "quantized_image": preview.copy(),
         "material_matrix": material_matrix,
+        "color_conf": {
+            "slots": slots,
+            "preview": preview_colors,
+        },
+        "preview_colors": preview_colors,
+        "slot_names": slots,
     }
     cache_path = _make_temp_path(".pkl", created_paths)
     with cache_path.open("wb") as handle:
@@ -672,13 +755,16 @@ def _build_mock_vector_preview_result(
     created_paths: list[Path],
     np_module: Any,
     image_cls: Any,
+    color_mode: str,
 ) -> dict[str, Any]:
     import pickle
 
     preview = np_module.zeros((10, 10, 3), dtype=np_module.uint8)
-    preview[:, :, :] = [0, 128, 255]
+    slots, preview_colors = _mock_color_config_for_mode(color_mode)
+    primary_rgba = preview_colors[min(len(preview_colors) - 1, 3)]
+    preview[:, :, :] = primary_rgba[:3]
     mask_solid = np_module.ones((10, 10), dtype=bool)
-    material_matrix = np_module.zeros((10, 10, 5), dtype=np_module.int16)
+    material_matrix = _mock_material_matrix(np_module, 10, 10, len(slots))
     preview_rgba = np_module.zeros((10, 10, 4), dtype=np_module.uint8)
     preview_rgba[:, :, :3] = preview
     preview_rgba[:, :, 3] = 255
@@ -699,21 +785,11 @@ def _build_mock_vector_preview_result(
         "material_matrix": material_matrix,
         "preview_rgba": preview_rgba,
         "color_conf": {
-            "slots": ["White", "Red", "Yellow", "Blue"],
-            "preview": {
-                0: [255, 255, 255, 255],
-                1: [255, 0, 0, 255],
-                2: [255, 255, 0, 255],
-                3: [0, 128, 255, 255],
-            },
+            "slots": slots,
+            "preview": preview_colors,
         },
-        "preview_colors": {
-            0: [255, 255, 255, 255],
-            1: [255, 0, 0, 255],
-            2: [255, 255, 0, 255],
-            3: [0, 128, 255, 255],
-        },
-        "slot_names": ["White", "Red", "Yellow", "Blue"],
+        "preview_colors": preview_colors,
+        "slot_names": slots,
         "color_contours": {},
         "lut_match_info": {"match_mode": "mock-vector"},
     }
@@ -726,6 +802,24 @@ def _build_mock_vector_preview_result(
         "preview_png_path": str(png_path),
         "cache_data_path": str(cache_path),
     }
+
+
+def _mock_color_config_for_mode(color_mode: str) -> tuple[list[str], dict[int, list[int]]]:
+    default_config = MOCK_COLOR_CONFIGS[DEFAULT_COLOR_MODE]
+    slots, rgb_values = MOCK_COLOR_CONFIGS.get(color_mode, default_config)
+    return list(slots), {index: [*rgb, 255] for index, rgb in enumerate(rgb_values)}
+
+
+def _mock_material_matrix(
+    np_module: Any,
+    height: int,
+    width: int,
+    slot_count: int,
+) -> Any:
+    y_indices, x_indices, layer_indices = np_module.indices((height, width, 5))
+    return ((y_indices + x_indices + layer_indices) % slot_count).astype(
+        np_module.int16
+    )
 
 
 def _build_mock_generate_result(created_paths: list[Path]) -> dict[str, Any]:
@@ -777,7 +871,9 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
         elif step == "vector":
             _execute_vector_workflow(client, lut_name)
         elif step == "replace":
-            _execute_replace_workflow(client, lut_name)
+            _execute_replace_workflow(client, lut_name=lut_name)
+        elif step in ALTERNATE_REPLACE_CONFIG:
+            _execute_alternate_replace_workflow(client, step)
         elif step == "extract":
             _execute_extract_workflow(client)
 
@@ -787,21 +883,57 @@ def _execute_vector_workflow(client: Any, lut_name: str) -> None:
     _post_vector_generate(client, session_id, lut_name)
 
 
-def _execute_replace_workflow(client: Any, lut_name: str) -> None:
+def _execute_replace_bw_workflow(client: Any) -> None:
+    _execute_alternate_replace_workflow(client, "replace_bw")
+
+
+def _execute_replace_8color_workflow(client: Any) -> None:
+    _execute_alternate_replace_workflow(client, "replace_8color")
+
+
+def _execute_replace_5color_ext_workflow(client: Any) -> None:
+    _execute_alternate_replace_workflow(client, "replace_5color_ext")
+
+
+def _execute_alternate_replace_workflow(client: Any, step: str) -> None:
+    color_mode, lut_name = ALTERNATE_REPLACE_CONFIG[step]
+    _execute_replace_workflow(
+        client,
+        mode=step,
+        color_mode=color_mode,
+        lut_name=lut_name,
+    )
+
+
+def _execute_replace_workflow(
+    client: Any,
+    *,
+    mode: str = "replace",
+    color_mode: str = DEFAULT_COLOR_MODE,
+    lut_name: str = DEFAULT_LUT_NAME,
+) -> None:
     """Exercise vector preview, click region replace, then cached vector generate."""
 
     # Use the same click-detect path as the frontend so the endpoint owns
     # selected_region_mask population before /region-replace mutates cache.
-    preview_payload = _post_vector_preview_payload(client, lut_name)
+    preview_payload = _post_vector_preview_payload(
+        client,
+        lut_name,
+        color_mode=color_mode,
+        label=f"{mode} vector preview",
+    )
     session_id = _extract_session_id(preview_payload, "Vector preview")
     click_x, click_y = _select_replace_click(preview_payload)
     detected_region = _post_region_detect(client, session_id, click_x, click_y)
     replacement_color = _choose_replacement_color(detected_region)
     _post_region_replace(client, session_id, replacement_color)
+    _wait_for_async_glb(client, session_id)
     _post_vector_generate(
         client,
         session_id,
         lut_name,
+        color_mode=color_mode,
+        label=f"{mode} vector generate",
         use_cached_matched_rgb=True,
     )
 
@@ -857,22 +989,37 @@ def _post_preview(client: Any, lut_name: str) -> str:
     return _extract_session_id(response.json(), "Preview")
 
 
-def _post_vector_preview(client: Any, lut_name: str) -> str:
+def _post_vector_preview(
+    client: Any,
+    lut_name: str,
+    *,
+    color_mode: str = DEFAULT_COLOR_MODE,
+) -> str:
     return _extract_session_id(
-        _post_vector_preview_payload(client, lut_name),
+        _post_vector_preview_payload(client, lut_name, color_mode=color_mode),
         "Vector preview",
     )
 
 
-def _post_vector_preview_payload(client: Any, lut_name: str) -> Mapping[str, Any]:
+def _post_vector_preview_payload(
+    client: Any,
+    lut_name: str,
+    *,
+    color_mode: str = DEFAULT_COLOR_MODE,
+    label: str = "vector preview",
+) -> Mapping[str, Any]:
     _require_fixture(VECTOR_FIXTURE_IMAGE)
     with VECTOR_FIXTURE_IMAGE.open("rb") as handle:
         response = client.post(
             "/api/convert/preview",
             files={"image": (VECTOR_FIXTURE_IMAGE.name, handle, "image/svg+xml")},
-            data=_preview_form_data(lut_name, modeling_mode=VECTOR_MODELING_MODE),
+            data=_preview_form_data(
+                lut_name,
+                color_mode=color_mode,
+                modeling_mode=VECTOR_MODELING_MODE,
+            ),
         )
-    _raise_for_status(response.status_code, response.text, "vector preview")
+    _raise_for_status(response.status_code, response.text, label)
     payload = response.json()
     if not isinstance(payload, Mapping):
         raise QualityCheckError("Vector preview response was not an object")
@@ -946,6 +1093,20 @@ def _post_region_replace(
     _raise_for_status(response.status_code, response.text, "region replace")
 
 
+def _wait_for_async_glb(client: Any, session_id: str) -> None:
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/convert/glb-status/{session_id}")
+        _raise_for_status(response.status_code, response.text, "glb status")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("GLB status response was not an object")
+        if payload.get("status") in {"idle", "ready", "error"}:
+            return
+        time.sleep(0.1)
+    raise QualityCheckError("Timed out waiting for async GLB build to settle")
+
+
 def _post_generate(client: Any, session_id: str, lut_name: str) -> None:
     response = client.post(
         "/api/convert/generate",
@@ -959,6 +1120,8 @@ def _post_vector_generate(
     session_id: str,
     lut_name: str,
     *,
+    color_mode: str = DEFAULT_COLOR_MODE,
+    label: str = "vector generate",
     use_cached_matched_rgb: bool = False,
 ) -> None:
     response = client.post(
@@ -966,22 +1129,24 @@ def _post_vector_generate(
         json=_generate_payload(
             session_id,
             lut_name,
+            color_mode=color_mode,
             modeling_mode=VECTOR_MODELING_MODE,
             use_cached_matched_rgb=use_cached_matched_rgb,
         ),
     )
-    _raise_for_status(response.status_code, response.text, "vector generate")
+    _raise_for_status(response.status_code, response.text, label)
 
 
 def _preview_form_data(
     lut_name: str,
     *,
+    color_mode: str = DEFAULT_COLOR_MODE,
     modeling_mode: str = DEFAULT_MODELING_MODE,
 ) -> dict[str, str]:
     return {
         "source_kind": "legacy_single",
         "lut_name": lut_name,
-        "color_mode": DEFAULT_COLOR_MODE,
+        "color_mode": color_mode,
         "modeling_mode": modeling_mode,
         "target_width_mm": "60.0",
         "auto_bg": "false",
@@ -995,6 +1160,7 @@ def _generate_payload(
     session_id: str,
     lut_name: str,
     *,
+    color_mode: str = DEFAULT_COLOR_MODE,
     modeling_mode: str = DEFAULT_MODELING_MODE,
     use_cached_matched_rgb: bool = False,
 ) -> dict[str, Any]:
@@ -1003,7 +1169,7 @@ def _generate_payload(
         "params": {
             "source_kind": "legacy_single",
             "lut_name": lut_name,
-            "color_mode": DEFAULT_COLOR_MODE,
+            "color_mode": color_mode,
             "modeling_mode": modeling_mode,
             "target_width_mm": 60.0,
             "auto_bg": False,
@@ -1240,10 +1406,21 @@ def _parse_workflow(raw_workflow: str) -> list[str]:
         raise QualityCheckError(f"Unknown workflow step(s): {', '.join(unknown)}")
     if "generate" in workflow and "preview" not in workflow:
         raise QualityCheckError("Workflow step 'generate' requires 'preview'")
-    if "vector" in workflow and "replace" in workflow:
+    selected_replace_steps = [
+        step for step in workflow if step in REPLACE_FAMILY_STEPS
+    ]
+    if len(selected_replace_steps) > 1:
+        conflict = ", ".join(selected_replace_steps)
         raise QualityCheckError(
-            "Workflow steps 'vector' and 'replace' should not be combined; "
-            "'replace' is the canonical vector region-replace superset."
+            f"Workflow replace family steps should not be combined: {conflict}. "
+            "Pick exactly one replace family step."
+        )
+    if "vector" in workflow and selected_replace_steps:
+        conflict = ", ".join(["vector", *selected_replace_steps])
+        raise QualityCheckError(
+            f"Workflow steps should not be combined: {conflict}; "
+            "replace family steps already exercise the vector region-replace path. "
+            "Pick exactly one replace family step or run 'vector' separately."
         )
     return workflow
 

@@ -93,6 +93,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - After any logger-touching change, run `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v` (currently 20 passed) before opening a PR
 - Run `python scripts/log_quality_check.py --mode fast --workflow startup,lut_list,lut_colors,preview,generate,replace,extract` as the smoke gate and `--mode full --workflow startup,lut_list,lut_colors,preview,generate,replace,extract` before release; exit codes are `0` = PASS, `1` = governance violation, `2` = script error. Do not weaken thresholds (`--max-info`, `--max-info-per-endpoint`) to "fix" failures — address the offending event instead
 - `vector` remains in `WORKFLOW_ORDER` for narrow vector debugging; `replace` is its strict superset and the canonical gate.
+- Alternate color-mode replace gates (`replace_bw`, `replace_8color`, `replace_5color_ext`) are available for ad-hoc per-mode regression testing. The default PR-time gate stays at `replace` (4-Color RYBW). The replace family is mutually exclusive within a single workflow run.
 - Reusable infrastructure: `api/structured_logging.py` (formatters + fallback), `api/logger.py` (file handler + parent marker protocol), `scripts/audit_logs.py` (read-only auditor), `scripts/log_quality_check.py` (workflow runner + governance scanner), `progress/log_audit_*.json` (baselines)
 
 ## Tests

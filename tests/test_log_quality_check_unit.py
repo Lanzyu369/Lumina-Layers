@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import scripts.log_quality_check as log_quality_check
 from scripts.audit_logs import event_from_line, parse_json_object
 from scripts.log_quality_check import (
     CheckResult,
@@ -125,6 +128,28 @@ def test_replace_workflow_step_is_first_class() -> None:
     assert "replace" in WORKFLOW_STEPS
 
 
+def _assert_replace_family_step_is_first_class(step: str) -> None:
+    workflow = _parse_workflow(
+        f"startup,lut_list,lut_colors,preview,generate,{step}"
+    )
+
+    assert workflow == ["startup", "lut_list", "lut_colors", "preview", "generate", step]
+    assert step in WORKFLOW_ORDER
+    assert step in WORKFLOW_STEPS
+
+
+def test_replace_bw_workflow_step_is_first_class() -> None:
+    _assert_replace_family_step_is_first_class("replace_bw")
+
+
+def test_replace_8color_workflow_step_is_first_class() -> None:
+    _assert_replace_family_step_is_first_class("replace_8color")
+
+
+def test_replace_5color_ext_workflow_step_is_first_class() -> None:
+    _assert_replace_family_step_is_first_class("replace_5color_ext")
+
+
 def test_extract_workflow_step_is_first_class() -> None:
     """The extractor workflow must be accepted by the quality gate."""
 
@@ -154,6 +179,80 @@ def test_parse_workflow_rejects_vector_and_replace_together() -> None:
         raise AssertionError("Expected vector + replace workflow to be rejected")
 
 
+def test_parse_workflow_rejects_replace_family_combinations() -> None:
+    workflow_prefix = "startup,lut_list,lut_colors,preview,generate"
+    conflicts = [
+        ("replace", "replace_bw"),
+        ("replace", "replace_8color"),
+        ("replace", "replace_5color_ext"),
+        ("replace_bw", "replace_8color"),
+        ("replace_bw", "replace_5color_ext"),
+        ("replace_8color", "replace_5color_ext"),
+    ]
+
+    for first, second in conflicts:
+        with pytest.raises(Exception) as exc_info:
+            _parse_workflow(f"{workflow_prefix},{first},{second}")
+
+        message = str(exc_info.value)
+        assert first in message
+        assert second in message
+        assert "replace family" in message
+        assert "Pick exactly one" in message
+
+    with pytest.raises(Exception) as exc_info:
+        _parse_workflow(f"{workflow_prefix},vector,replace_bw")
+
+    message = str(exc_info.value)
+    assert "vector" in message
+    assert "replace_bw" in message
+    assert "replace family" in message
+    assert "run 'vector' separately" in message or "Pick exactly one" in message
+
+
+def test_main_returns_script_error_for_replace_family_combination(capsys) -> None:
+    exit_code = log_quality_check.main(
+        ["--mode", "fast", "--workflow", "startup,lut_list,lut_colors,preview,generate,replace,replace_bw"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "replace family" in captured.err
+    assert "Pick exactly one" in captured.err
+
+
+def test_replace_family_member_dispatches_correct_color_mode(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_execute_replace_workflow(client, **kwargs):
+        captured.append({"client": client, **kwargs})
+
+    monkeypatch.setattr(
+        log_quality_check, "_execute_replace_workflow", fake_execute_replace_workflow
+    )
+
+    client = object()
+    wrappers = {
+        "replace_bw": log_quality_check._execute_replace_bw_workflow,
+        "replace_8color": log_quality_check._execute_replace_8color_workflow,
+        "replace_5color_ext": log_quality_check._execute_replace_5color_ext_workflow,
+    }
+    for step, execute_workflow in wrappers.items():
+        color_mode, lut_name = log_quality_check.ALTERNATE_REPLACE_CONFIG[step]
+        captured.clear()
+
+        execute_workflow(client)
+
+        assert captured == [
+            {
+                "client": client,
+                "mode": step,
+                "color_mode": color_mode,
+                "lut_name": lut_name,
+            }
+        ]
+
+
 def test_full_replace_workflow_requires_canary_events() -> None:
     checks = _workflow_required_event_checks(
         mode="full",
@@ -181,6 +280,39 @@ def test_fast_replace_workflow_does_not_require_worker_canary_event() -> None:
         "workflow_event_converter_region_replace_timing"
     }
     assert all(check.passed for check in checks)
+
+
+def test_replace_bw_fast_and_full_canary_requirements_differ() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace_bw",
+    ]
+
+    fast_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_region_replace_timing": 1},
+    )
+    full_checks = _workflow_required_event_checks(
+        mode="full",
+        workflow=workflow,
+        event_counts={"converter_region_replace_timing": 1},
+    )
+
+    fast_by_name = {check.name: check for check in fast_checks}
+    full_by_name = {check.name: check for check in full_checks}
+
+    assert set(fast_by_name) == {"workflow_event_converter_region_replace_timing"}
+    assert fast_by_name["workflow_event_converter_region_replace_timing"].passed is True
+    assert full_by_name["workflow_event_converter_region_replace_timing"].passed is True
+    assert (
+        full_by_name["workflow_event_vector_matched_rgb_overrides_applied"].passed
+        is False
+    )
 
 
 def test_full_extract_workflow_requires_canary_event() -> None:
