@@ -125,10 +125,11 @@ DESIGN.md 圆角分级：5 / 8-12 / 16-18 / 28-36 / 56-980 / 50%。
 
 | 编号 | 状态 | 提交 / 备注 |
 |---|---|---|
-| C1-C3（VectorizerPanel） | ⏳ 部分（HelpDot 已统一） | `096a29a` |
-| A 系列 gray→slate | ⏳ 待批量执行 | 跟随 C1 一起做 |
-| B1（顶层 tab + 段落标题装饰 emoji） | ⏳ 待 i18n owner 批准 | 涉及翻译复核 |
-| B2-B3（状态 / 色块 emoji） | ⏳ 长期 follow-up | 需新组件 |
+| C1-C3（VectorizerPanel） | ✅ | `096a29a` + `bf563a3` |
+| A 系列 gray→slate | ✅ | `bf563a3`（21 文件 / 218 处） |
+| B1+B2（清理装饰 emoji） | ✅ | `a694c5d`：删 92 个旧 i18n 死 key + 剥 3 个仍在用的 emoji 装饰前缀（`conv_free_color_*`、`conv_auto_color_btn`） |
+| B3（状态消息 emoji） | ⏳ 长期 follow-up | 保留 `✓ ✕` 作为图标用法；`✅ ⚠️ ❌ 💡 🔍` 未来另做 StatusBadge 一次性替换 |
+| B4（色块 emoji） | ⏳ 长期 follow-up | 需新 `<ColorChip>` 组件 |
 | D 单点 | ⏳ 低优 | 后续随机回收 |
 
 ## 4. 不会改的项（明确决定）
