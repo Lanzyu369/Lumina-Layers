@@ -22,7 +22,7 @@ import type {
   DragEndEvent,
 } from '@dnd-kit/core';
 import { AnimatePresence } from 'framer-motion';
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP } from '../../stores/widgetStore';
+import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from '../../stores/widgetStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
 import { WidgetPanel } from './WidgetPanel';
@@ -91,11 +91,19 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const isDragging = useWidgetStore((s) => s.isDragging);
   const activeWidgetId = useWidgetStore((s) => s.activeWidgetId);
   const activeTab = useWidgetStore((s) => s.activeTab);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const color2DOverlayOpen = useWidgetStore((s) => s.color2DOverlayOpen);
 
   // Always render converter widgets only; other tabs have their own
   // page-level rendering and do not use the widget dock system.
-  const converterWidgetIds = TAB_WIDGET_MAP['converter'];
+  // The Converter sub-tab (核心 / 高级) further narrows the visible widget set;
+  // hidden widgets keep their persisted state but do not occupy dock space.
+  // Converter 二级 sub-tab（核心 / 高级）进一步收窄可见 widget 集合；
+  // 被收起的 widget 保留持久化状态但不占用 dock 空间。
+  const converterWidgetIds = useMemo(
+    () => CONVERTER_SUB_TAB_WIDGET_MAP[activeConverterSubTab] as readonly WidgetId[],
+    [activeConverterSubTab],
+  );
   const activeWidgetIds = converterWidgetIds;
   const activeRegistry = WIDGET_REGISTRY.filter((c) => converterWidgetIds.includes(c.id));
   const activeWidgets = useWidgetStore(
@@ -326,7 +334,9 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const computeInsertion = useCallback(
     (draggedId: WidgetId, targetEdge: 'left' | 'right', contentDropY: number) => {
       const state = useWidgetStore.getState();
-      const currentTabIds = TAB_WIDGET_MAP['converter'];
+      // Only siblings currently visible in the active sub-tab participate in
+      // insertion ordering; widgets hidden by sub-tab are inert.
+      const currentTabIds = converterWidgetIds;
       const siblings = currentTabIds
         .map((wid) => state.widgets[wid])
         .filter((w) => w.snapEdge === targetEdge && w.visible && w.id !== draggedId)
@@ -366,7 +376,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
 
       return { orderedIds, lineY, upperId, lowerId };
     },
-    []
+    [converterWidgetIds]
   );
 
   const handleDragStart = useCallback(

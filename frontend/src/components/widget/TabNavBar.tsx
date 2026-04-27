@@ -3,7 +3,7 @@
  * 顶部导航栏，用于切换不同 TAB 页面。
  */
 import { useI18n } from '../../i18n/context';
-import type { TabId } from '../../types/widget';
+import type { TabId, ConverterSubTabId } from '../../types/widget';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { motion } from 'framer-motion';
 
@@ -58,6 +58,25 @@ const COLOR_EDITOR_ACTION_ICON = (
     <path strokeLinecap="round" strokeLinejoin="round" d="M14 7l3 3" />
   </svg>
 );
+
+// Converter 二级 sub-tab 图标。
+const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
+  core: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  ),
+  advanced: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
+    </svg>
+  ),
+};
+
+const CONVERTER_SUB_TAB_LIST: { id: ConverterSubTabId; titleKey: string }[] = [
+  { id: 'core', titleKey: 'tab.converterCore' },
+  { id: 'advanced', titleKey: 'tab.converterAdvanced' },
+];
 
 const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNode> = {
   'calibration': (
@@ -154,6 +173,8 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
       ? MATERIAL_SECONDARY_TAB_LIST
       : null;
   const openColor2DOverlay = useWidgetStore((s) => s.openColor2DOverlay);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
+  const setActiveConverterSubTab = useWidgetStore((s) => s.setActiveConverterSubTab);
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
@@ -204,6 +225,38 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
       {showConverterSecondary && (
         <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
           <div className="flex min-w-max items-center gap-1">
+            {CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => {
+              const isActive = id === activeConverterSubTab;
+              return (
+                <button
+                  key={id}
+                  data-testid={`subtab-converter-${id}`}
+                  onClick={() => setActiveConverterSubTab(id)}
+                  className={`
+                    relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
+                    ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
+                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}
+                  `}
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="active-converter-sub-tab-indicator"
+                      className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
+                      transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                      style={{ zIndex: -1 }}
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-2">
+                    <span className="flex items-center justify-center">{CONVERTER_SUB_TAB_ICONS[id]}</span>
+                    <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {/* Color editor: action button, not a sub-tab. Opens the 2D color overlay
+                without changing activeConverterSubTab. 颜色编辑：动作按钮（非 sub-tab），
+                点击直接打开 2D 颜色覆盖层，不修改 activeConverterSubTab。 */}
             <button
               data-testid="subtab-color-editor"
               onClick={openColor2DOverlay}

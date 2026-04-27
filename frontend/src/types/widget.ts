@@ -18,6 +18,11 @@ export type TabId =
   | "vectorizer"
   | "settings";
 
+// ===== Converter 二级 sub-tab ID =====
+// Converter 主 tab 下的语义分组：核心 / 高级。颜色编辑入口仍是 action 按钮，
+// 不占用 sub-tab 状态（点击时直接打开 Color2DOverlay）。
+export type ConverterSubTabId = "core" | "advanced";
+
 // ===== Widget ID =====
 export type WidgetId =
   | "basic-settings"
@@ -52,9 +57,11 @@ export interface WidgetStore {
   isDragging: boolean;
   activeWidgetId: WidgetId | null;
   activeTab: TabId;
+  activeConverterSubTab: ConverterSubTabId;
 
   // TAB 切换
   setActiveTab: (tab: TabId) => void;
+  setActiveConverterSubTab: (subTab: ConverterSubTabId) => void;
 
   // 布局操作
   moveWidget: (id: WidgetId, position: { x: number; y: number }) => void;

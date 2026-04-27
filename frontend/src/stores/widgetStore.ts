@@ -17,6 +17,7 @@ import type {
   WidgetStore,
   WidgetConfig,
   TabId,
+  ConverterSubTabId,
 } from "../types/widget";
 
 // ===== TAB → Widget 映射 =====
@@ -45,6 +46,25 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   "five-color": ["five-color"],
   vectorizer: [],
   settings: [],
+};
+
+// ===== Converter sub-tab → Widget 映射 =====
+// 「核心」仅包含最常用的两个面板；「高级」为全集（含核心面板）。
+// 颜色入口不在这里——它是 sub-tab 行里的 action 按钮。
+export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly WidgetId[]> = {
+  core: ["basic-settings", "action-bar"],
+  advanced: [
+    "basic-settings",
+    "advanced-settings",
+    "relief-settings",
+    "outline-settings",
+    "cloisonne-settings",
+    "coating-settings",
+    "keychain-loop",
+    "fridge-magnet-settings",
+    "puzzle-settings",
+    "action-bar",
+  ],
 };
 
 // ===== 默认布局 =====
@@ -296,6 +316,7 @@ export const useWidgetStore = create<WidgetStore>()(
       isDragging: false,
       activeWidgetId: null,
       activeTab: "converter" as TabId,
+      activeConverterSubTab: "core" as ConverterSubTabId,
       color2DOverlayOpen: false,
 
       /**
@@ -304,6 +325,14 @@ export const useWidgetStore = create<WidgetStore>()(
        */
       setActiveTab: (tab: TabId) => {
         set({ activeTab: tab });
+      },
+
+      /**
+       * Set the active Converter sub-tab.
+       * 设置 Converter 页面下的二级 sub-tab。
+       */
+      setActiveConverterSubTab: (subTab: ConverterSubTabId) => {
+        set({ activeConverterSubTab: subTab });
       },
 
       /**
@@ -634,6 +663,7 @@ export const useWidgetStore = create<WidgetStore>()(
       partialize: (state) => ({
         widgets: state.widgets,
         activeTab: state.activeTab,
+        activeConverterSubTab: state.activeConverterSubTab,
       }),
       onRehydrateStorage: () => () => {},
     },
