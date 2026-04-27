@@ -150,7 +150,6 @@ export default function LutManagerPanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
       >
       <PanelIntro
-        eyebrow={t("tab.lutManager")}
         title={t("lut_manager_title")}
         description={t("lut_manager_desc")}
       />

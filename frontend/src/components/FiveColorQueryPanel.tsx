@@ -103,7 +103,6 @@ export default function FiveColorQueryPanel() {
       <aside className={`${resolvePanelSurfaceClass(workspace.mode)} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}>
         <div className="flex flex-col gap-5">
           <PanelIntro
-            eyebrow={t("tab.fiveColor")}
             title={t("five_color_title")}
             description={t("five_color_desc")}
           />

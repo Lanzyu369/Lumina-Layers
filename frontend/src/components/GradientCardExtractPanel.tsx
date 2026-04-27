@@ -639,7 +639,6 @@ export default function GradientCardExtractPanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <PanelIntro
-        eyebrow={t("tab.materialManagement")}
         title={t("mat_gradient_extract_title")}
         description={t("mat_gradient_extract_desc")}
       />

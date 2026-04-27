@@ -1009,7 +1009,6 @@ export default function LutDetailsPanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <PanelIntro
-        eyebrow={t("tab.lutDetails")}
         title={t("lut_details_title")}
         description={t("lut_details_desc")}
       />

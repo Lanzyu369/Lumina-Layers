@@ -232,7 +232,6 @@ export default function ExtractorPanel() {
     >
       <div className="flex flex-col gap-2">
         <PanelIntro
-          eyebrow={t("tab.extractor")}
           title={t("ext_title")}
           description={t("ext_desc")}
         />

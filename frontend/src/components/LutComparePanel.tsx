@@ -268,7 +268,6 @@ export default function LutComparePanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <PanelIntro
-        eyebrow={t("tab.lutCompare")}
         title={t("lut_compare_title")}
         description={t("lut_compare_desc")}
       />

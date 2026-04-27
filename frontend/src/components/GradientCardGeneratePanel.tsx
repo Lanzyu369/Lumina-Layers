@@ -49,7 +49,6 @@ export default function GradientCardGeneratePanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <PanelIntro
-        eyebrow={t("tab.materialManagement")}
         title={t("mat_gradient_generate_title")}
         description={t("mat_gradient_generate_desc")}
       />

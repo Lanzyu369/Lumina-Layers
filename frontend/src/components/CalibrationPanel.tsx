@@ -72,7 +72,6 @@ export default function CalibrationPanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
       <PanelIntro
-        eyebrow={t("tab.calibration")}
         title={t("cal_title")}
         description={t("cal_desc")}
       />
