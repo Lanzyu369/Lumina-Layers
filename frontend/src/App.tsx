@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense, Component, lazy } from "react";
+import { useState, useEffect, Suspense, Component } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
@@ -17,7 +17,8 @@ import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
 import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
-import TabNavBar from "./components/widget/TabNavBar";
+import TabNavBar, { hasSubTabs } from "./components/widget/TabNavBar";
+import SubTabBar from "./components/widget/SubTabBar";
 import CalibrationPanel from "./components/CalibrationPanel";
 import ExtractorPanel from "./components/ExtractorPanel";
 import GradientCardGeneratePanel from "./components/GradientCardGeneratePanel";
@@ -33,7 +34,7 @@ import { useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 
-const LutDetailsPanel = lazy(() => import("./components/LutDetailsPanel"));
+import LutDetailsPanel from "./components/LutDetailsPanel";
 
 /* ---------- Error Boundary ---------- */
 
@@ -113,17 +114,14 @@ function WidgetToggles() {
   );
   const filteredRegistry = WIDGET_REGISTRY.filter((c) => activeWidgetIds.includes(c.id));
 
-  // If there are no widgets for this tab, don't show the button
-  if (filteredRegistry.length === 0) {
-    return null;
-  }
+  const hasWidgets = filteredRegistry.length > 0;
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className={`relative${hasWidgets ? '' : ' invisible pointer-events-none'}`} ref={dropdownRef}>
       <button
         data-testid="panel-controls-toggle"
-        className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold transition-all duration-300 rounded-xl outline-none
-          ${isOpen ? 'bg-blue-600 shadow-[var(--shadow-control-hover)] text-white' : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-800/80'}
+        className={`flex items-center gap-2 border px-4 py-2 text-sm font-semibold transition-colors duration-300 rounded-xl outline-none
+          ${isOpen ? 'border-transparent bg-blue-600 shadow-[var(--shadow-control-hover)] text-white' : 'border-slate-200/80 bg-slate-100 dark:border-slate-800/80 dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800'}
         `}
         style={{ WebkitTapHighlightColor: 'transparent' }}
         onClick={() => setIsOpen(!isOpen)}
@@ -141,58 +139,60 @@ function WidgetToggles() {
         </svg>
       </button>
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="absolute right-0 top-full mt-2 z-50 flex w-56 flex-col gap-1 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100/98 p-2 shadow-[var(--shadow-control-hover)] dark:border-slate-800/80 dark:bg-slate-900/98 origin-top-right"
-          >
-            {filteredRegistry.map((config) => {
-              const isActive = visibleWidgetIds.includes(config.id);
-              return (
-                <button
-                  key={config.id}
-                  data-testid={`widget-toggle-${config.id}`}
-                  className={`
-                    flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
-                    ${
-                      isActive
-                        ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
-                        : "bg-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
-                    }
-                  `}
-                  onClick={() => toggleVisible(config.id)}
-                >
-                  <span 
-                    className={`w-2 h-2 rounded-full transition-colors duration-300 ${isActive ? 'bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.6)]' : 'bg-slate-300 dark:bg-slate-600'}`}
-                  />
-                  {t(config.titleKey)}
-                </button>
-              );
-            })}
-            
-            <div className="h-px bg-slate-200 dark:bg-slate-700/80 my-1 mx-2" />
-
-            <button
-              data-testid="widget-reset-layout"
-              className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
-                bg-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
-              onClick={() => {
-                resetLayout();
-                setIsOpen(false);
-              }}
+      {hasWidgets && (
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="absolute right-0 top-full mt-2 z-50 flex w-56 flex-col gap-1 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-100/98 p-2 shadow-[var(--shadow-control-hover)] dark:border-slate-800/80 dark:bg-slate-900/98 origin-top-right"
             >
-              <svg className="w-4 h-4 ml-0.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              {t("app_reset_layout")}
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              {filteredRegistry.map((config) => {
+                const isActive = visibleWidgetIds.includes(config.id);
+                return (
+                  <button
+                    key={config.id}
+                    data-testid={`widget-toggle-${config.id}`}
+                    className={`
+                      flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
+                      ${
+                        isActive
+                          ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
+                          : "bg-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
+                      }
+                    `}
+                    onClick={() => toggleVisible(config.id)}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full transition-colors duration-300 ${isActive ? 'bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.6)]' : 'bg-slate-300 dark:bg-slate-600'}`}
+                    />
+                    {t(config.titleKey)}
+                  </button>
+                );
+              })}
+
+              <div className="h-px bg-slate-200 dark:bg-slate-700/80 my-1 mx-2" />
+
+              <button
+                data-testid="widget-reset-layout"
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 outline-none
+                  bg-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-700/50"
+                onClick={() => {
+                  resetLayout();
+                  setIsOpen(false);
+                }}
+              >
+                <svg className="w-4 h-4 ml-0.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {t("app_reset_layout")}
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
     </div>
   );
 }
@@ -255,7 +255,7 @@ function AppContent() {
         className={`relative z-50 border-b border-slate-200 dark:border-slate-800 ${
           workspace.isCompact
             ? "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 sm:px-4"
-            : "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:px-6 lg:py-4"
+            : "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] lg:px-6 lg:py-4"
         }`}
       >
         <div className="flex min-w-0 items-center gap-3">
@@ -266,8 +266,8 @@ function AppContent() {
         </div>
 
         {/* Right Side: Controls */}
-        <div className={`flex min-w-0 flex-wrap items-center justify-end gap-2 ${workspace.isCompact ? "" : "lg:col-start-3 lg:row-start-1"}`}>
-          {activeTab === 'converter' && <WidgetToggles />}
+        <div className={`flex min-w-0 items-center justify-end gap-2 ${workspace.isCompact ? "" : "lg:col-start-3 lg:row-start-1"}`}>
+          <WidgetToggles />
           <LanguageToggle />
           <ThemeToggle />
           {connected === null ? (
@@ -292,7 +292,7 @@ function AppContent() {
         </div>
 
         {/* Center: Tabs */}
-        <div className={`min-w-0 ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
+        <div className={`min-w-0 w-full ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
           <TabNavBar
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -301,7 +301,18 @@ function AppContent() {
         </div>
       </header>
 
-      <main className="relative flex-1 min-h-0 overflow-hidden bg-slate-50 dark:bg-slate-950">
+      <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+        {hasSubTabs(activeTab) && (
+          <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
+            <SubTabBar
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              compact={workspace.isCompact}
+            />
+          </div>
+        )}
+
+        <div className="relative min-h-0 flex-1">
         {/* Converter: WidgetWorkspace + Scene3D */}
         {activeTab === 'converter' && (
           <div className="h-full min-h-0">
@@ -336,11 +347,7 @@ function AppContent() {
         )}
 
         {activeTab === 'lut-manager' && <LutManagerPanel />}
-        {activeTab === 'lut-details' && (
-          <Suspense fallback={<LoadingSpinner />}>
-            <LutDetailsPanel />
-          </Suspense>
-        )}
+        {activeTab === 'lut-details' && <LutDetailsPanel />}
         {activeTab === 'lut-compare' && <LutComparePanel />}
         {activeTab === 'five-color' && (
           <div className="flex h-full min-h-0">
@@ -349,6 +356,7 @@ function AppContent() {
         )}
         {activeTab === 'vectorizer' && <VectorizerPanel />}
         {activeTab === 'settings' && <SettingsPanel />}
+        </div>
       </main>
       <AnnouncementDialog
         open={announcementReady && announcement.visible}
