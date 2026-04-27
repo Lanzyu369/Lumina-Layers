@@ -21,6 +21,7 @@ import {
   getThreePerfDebugConfig,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { ActivityIcon, MaximizeIcon, MinimizeIcon, CameraIcon } from "./ui/icons";
 
 declare global {
   interface Window {
@@ -336,41 +337,60 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       className="relative w-full h-full"
       data-testid="scene3d-container"
     >
-      {/* Toolbar buttons */}
-      <div className="absolute top-2 right-2 z-10 flex gap-1">
+      {/* Floating action buttons — bottom-right with right-dock avoidance.
+       * 浮动按钮组：右下角悬浮，依赖 WidgetWorkspace 注入的
+       * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
+       */}
+      <div
+        className="absolute z-10 flex gap-1.5"
+        style={{
+          bottom: "12px",
+          right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
+        }}
+      >
         <button
           onClick={toggleDiagnostics}
-          className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
+          aria-pressed={diagnosticsVisible}
           aria-label={t("viewer_diagnostics_toggle")}
           title={t("viewer_diagnostics_toggle")}
           data-testid="scene3d-diagnostics-toggle"
+          className={
+            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
+            (diagnosticsVisible
+              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
+              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
+          }
         >
-          {t("viewer_diagnostics_toggle")}
+          <ActivityIcon className="h-4 w-4" />
         </button>
         {fullscreenSupported && (
           <button
             onClick={toggleFullscreen}
-            className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
             aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
             title={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
           >
-            {isFullscreen ? "⛶" : "⛶"} {isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
           </button>
         )}
         <button
           onClick={takeScreenshot}
-          className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
           aria-label={t("viewer_screenshot")}
           title={t("viewer_screenshot")}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
         >
-          {t("viewer_screenshot")}
+          <CameraIcon className="h-4 w-4" />
         </button>
       </div>
 
       {diagnosticsVisible && (
         <div
-          className="absolute left-2 top-2 z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
+          role="dialog"
+          aria-label={t("viewer_diagnostics_title")}
+          className="absolute z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
           style={{
+            bottom: "56px",
+            right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
             borderColor: "var(--surface-outline)",
             background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
             color: "var(--surface-text-muted)",

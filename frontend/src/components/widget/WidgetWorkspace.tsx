@@ -319,6 +319,16 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const rightStackHeight = stackHeight('right');
   const rightDockOffset = Math.max(0, (containerWidth || window.innerWidth) - widgetWidth);
 
+  // Whether the right dock currently hosts at least one visible widget.
+  // Consumers (e.g. floating action buttons over the 3D scene) read this
+  // through the `--lumina-right-dock-width` CSS variable below to avoid being
+  // hidden behind dock widgets.
+  // 当前右侧坞是否承载可见 widget，用于让浮动按钮通过 CSS 变量避让。
+  const hasVisibleRightWidget = activeWidgets.some(
+    (w) => w.visible && w.snapEdge === 'right',
+  );
+  const rightDockWidthVar = hasVisibleRightWidget ? `${dockScrollWidth}px` : '0px';
+
   const getDockScrollTop = useCallback((edge: 'left' | 'right') => {
     return edge === 'left'
       ? (leftDockRef.current?.scrollTop ?? 0)
@@ -517,7 +527,10 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
         <div
           ref={containerRef}
           className="relative w-full h-full overflow-hidden"
-          style={{ pointerEvents: isDragging ? 'all' : undefined }}
+          style={{
+            pointerEvents: isDragging ? 'all' : undefined,
+            ['--lumina-right-dock-width' as string]: rightDockWidthVar,
+          }}
         >
           {/* Center Canvas (Three.js / Extractor) — z-10 */}
           <div className="absolute inset-0 z-10 flex flex-col" style={{ pointerEvents: 'auto' }}>
