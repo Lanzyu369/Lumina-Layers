@@ -201,7 +201,10 @@ def run(ctx: dict) -> dict:
 
     # ---- SVG 矢量模式检测 ----
     is_svg_vector = (
-        modeling_mode == ModelingMode.VECTOR and isinstance(image_path, str) and image_path.lower().endswith(".svg")
+        material_source != "material_archive"
+        and modeling_mode == ModelingMode.VECTOR
+        and isinstance(image_path, str)
+        and image_path.lower().endswith(".svg")
     )
     ctx["is_svg_vector"] = is_svg_vector
 

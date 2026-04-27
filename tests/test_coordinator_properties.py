@@ -188,6 +188,46 @@ class TestProperty7CoordinatorExceptionCapture:
         assert "error" in result
         assert error_msg in result["error"]
 
+    def test_preview_pipeline_material_archive_svg_vector_skips_native_vector_preview(self):
+        from config import ModelingMode
+        from core.pipeline.coordinator import run_preview_pipeline
+
+        def p01_material_archive(ctx):
+            ctx = dict(ctx)
+            ctx["modeling_mode"] = ModelingMode.VECTOR
+            ctx["material_source"] = "material_archive"
+            ctx["image_path"] = "/tmp/test.svg"
+            return ctx
+
+        def passthrough(ctx):
+            return ctx
+
+        with patch(
+            "core.pipeline.coordinator.p01_preview_validation.run",
+            side_effect=p01_material_archive,
+        ), patch(
+            "core.pipeline.coordinator._run_vector_preview_branch",
+            side_effect=AssertionError("native vector preview branch should not run"),
+        ), patch(
+            "core.pipeline.coordinator.p02_lut_metadata.run",
+            side_effect=passthrough,
+        ), patch(
+            "core.pipeline.coordinator.p03_core_processing.run",
+            side_effect=passthrough,
+        ), patch(
+            "core.pipeline.coordinator.p04_cache_building.run",
+            side_effect=passthrough,
+        ), patch(
+            "core.pipeline.coordinator.p05_palette_extraction.run",
+            side_effect=passthrough,
+        ), patch(
+            "core.pipeline.coordinator.p06_bed_rendering.run",
+            side_effect=passthrough,
+        ):
+            result = run_preview_pipeline({})
+
+        assert "error" not in result
+
 
 # ===========================================================================
 # Property 8: 进度回调调用

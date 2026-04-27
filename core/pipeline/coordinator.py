@@ -281,7 +281,12 @@ def run_preview_pipeline(ctx: dict) -> dict:
     modeling_mode = ctx.get("modeling_mode")
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
     image_path = str(ctx.get("image_path", "") or "")
-    is_svg_vector = modeling_mode_value == "vector" and image_path.lower().endswith(".svg")
+    material_source = str(ctx.get("material_source") or "lut")
+    is_svg_vector = (
+        material_source != "material_archive"
+        and modeling_mode_value == "vector"
+        and image_path.lower().endswith(".svg")
+    )
     if is_svg_vector:
         _report_progress(ctx, 0.10, "SVG 矢量预览分析中... | Building vector preview...")
         t0 = time.perf_counter()
@@ -482,6 +487,8 @@ def _run_vector_branch(ctx: dict) -> dict:
     recipe_override_masks_path = ctx.get("recipe_override_masks_path")
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
+    matched_rgb_path = ctx.get("matched_rgb_path")
+    mask_solid_path = ctx.get("mask_solid_path")
 
     log.info("Using Native Vector Engine (Shapely/Clipper)...")
     vector_timing = {}
@@ -493,7 +500,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         vector_replacements = _normalize_color_replacements_input(color_replacements)
 
     try:
-        from core.vector_engine import VectorProcessor, apply_recipe_overrides_to_analysis
+        from core.vector_engine import (
+            VectorProcessor,
+            apply_matched_rgb_overrides_to_analysis,
+            apply_recipe_overrides_to_analysis,
+        )
 
         vec_processor = VectorProcessor(actual_lut_path, color_mode)
         vec_processor.enable_fridge_magnet = bool(enable_fridge_magnet)
@@ -507,6 +518,35 @@ def _run_vector_branch(ctx: dict) -> dict:
             target_width_mm=target_width_mm,
             color_replacements=vector_replacements,
         )
+
+        # 1.1 Project ColorWorkstation region edits (``/region-replace``,
+        # ``/region-replace-batch``) back into ``analysis.matched_shapes``.
+        # The 2D preview / GLB previews route through ``cache.matched_rgb``,
+        # so without this step the SVG-native 3MF would silently drop every
+        # spatial colour edit the user made.
+        # 把 ColorWorkstation 的区域改色（/region-replace 等端点）回写到
+        # analysis.matched_shapes，否则矢量 3MF 会丢失所有空间替换，造成
+        # "2D 预览变了、最终模型没变" 的现象。
+        if matched_rgb_path and mask_solid_path:
+            try:
+                cached_matched_rgb = np.load(matched_rgb_path)
+                cached_mask_solid = np.load(mask_solid_path).astype(bool)
+                rewritten = apply_matched_rgb_overrides_to_analysis(
+                    analysis,
+                    matched_rgb=cached_matched_rgb,
+                    mask_solid=cached_mask_solid,
+                    img_processor=vec_processor.img_processor,
+                )
+                if rewritten:
+                    log.info(
+                        "[COORDINATOR] Vector matched_rgb overrides applied: shapes_rewritten=%s",
+                        rewritten,
+                    )
+            except COORDINATOR_HANDLED_ERRORS as exc:
+                log.warning(
+                    "[COORDINATOR] Failed to apply vector matched_rgb overrides: %s",
+                    exc,
+                )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
         # appended layers) before meshing. Without this the 3MF is built

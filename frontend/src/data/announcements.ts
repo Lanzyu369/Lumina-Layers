@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-27",
+    title: {
+      zh: "Lumina Layers — 今日修复",
+      en: "Lumina Layers — Today's fixes",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "修复矢量模式下，颜色工作站做区域替换或多选区域替换后，生成的 3MF 模型不反映替换的问题；现在 2D 预览改了什么，最终模型就改了什么。",
+            en: "Fixed vector mode losing region or multi-region colour edits made in the Color Workstation; what you see in the 2D preview now matches the generated 3MF.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-26",
     title: {
       zh: "Lumina Layers — 近三天更新速览",

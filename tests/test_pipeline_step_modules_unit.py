@@ -113,6 +113,29 @@ class TestS01InputValidation:
 
         assert result["is_svg_vector"] is True
 
+    def test_material_archive_svg_vector_mode_does_not_enter_native_vector_branch(self):
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = "/tmp/test.svg"
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["material_source"] = "material_archive"
+        ctx["selected_materials"] = ["fake/material"]
+
+        with patch(
+            "core.pipeline.s01_input_validation.load_multiple_materials",
+            return_value=[object()],
+        ), patch(
+            "core.pipeline.s01_input_validation.build_material_slot_names",
+            return_value=["Material A"],
+        ), patch(
+            "core.pipeline.s01_input_validation.build_material_preview_colors",
+            return_value={0: (255, 0, 0, 255)},
+        ):
+            result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""
         from core.pipeline.s01_input_validation import run

@@ -577,6 +577,7 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    mask_solid_path: str | None = None
     material_matrix_path: str | None = None
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
@@ -606,6 +607,21 @@ async def convert_generate(
                     "matched_rgb_dtype": str(cached_matched_rgb.dtype),
                 },
             )
+
+            # Forward mask_solid alongside matched_rgb so the SVG-native
+            # vector branch can intersect each shape mask with the solid
+            # area when projecting region edits back into matched_shapes.
+            # Without this the vector 3MF stays on the SVG fill colour and
+            # silently drops every /region-replace mutation.
+            # 把 mask_solid 与 matched_rgb 一起透传给 worker，让矢量分支
+            # 可以在求交后回写颜色；不传就会丢掉用户的区域替换。
+            cached_mask_solid = cache.get("mask_solid")
+            if cached_mask_solid is not None:
+                fd, ms_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+                os.close(fd)
+                np.save(ms_temp_path, cached_mask_solid)
+                mask_solid_path = ms_temp_path
+                store.register_temp_file(body.session_id, ms_temp_path)
 
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -689,6 +705,7 @@ async def convert_generate(
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
         "matched_rgb_path": matched_rgb_path,
+        "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,

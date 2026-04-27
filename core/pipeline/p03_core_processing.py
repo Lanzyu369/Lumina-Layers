@@ -69,7 +69,15 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     if is_svg:
         from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 
-        img = Image.fromarray(rasterize_svg(image_path, target_width_mm, pixels_per_mm=PIXELS_PER_MM))
+        try:
+            img = Image.fromarray(rasterize_svg(image_path, target_width_mm, pixels_per_mm=PIXELS_PER_MM))
+        except ImportError:
+            ctx["error"] = (
+                "[P03] SVG 光栅化需要 resvg-py，请执行 pip install resvg-py。"
+                " / SVG rasterization requires resvg-py. "
+                "Please run: pip install resvg-py"
+            )
+            return ctx
         target_w, target_h = img.size[0], img.size[1]
         pixel_scale = 1.0 / PIXELS_PER_MM
     else:
