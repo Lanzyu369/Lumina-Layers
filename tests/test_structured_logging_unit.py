@@ -185,6 +185,22 @@ def test_human_formatter_labels_uvicorn_records_without_repeating_message() -> N
     assert "color_message" not in line
 
 
+def test_configure_uvicorn_loggers_holds_error_logger_at_warning(_clean_lumina_logger) -> None:
+    lumina_handler = logging.NullHandler()
+    logging.getLogger("lumina").addHandler(lumina_handler)
+
+    structured_logging._configure_uvicorn_loggers(logging.INFO)
+
+    access_logger = logging.getLogger("uvicorn.access")
+    error_logger = logging.getLogger("uvicorn.error")
+
+    assert access_logger.level == logging.WARNING
+    assert error_logger.level == logging.WARNING
+    assert access_logger.propagate is False
+    assert error_logger.propagate is False
+    assert lumina_handler in error_logger.handlers
+
+
 def test_configure_structured_logging_honors_explicit_json_format(monkeypatch) -> None:
     _reset_lumina_logging(monkeypatch)
     stream = _CaptureStream(tty=True)

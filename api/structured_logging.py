@@ -285,7 +285,7 @@ def _configure_uvicorn_loggers(level: int) -> None:
 
     error_logger = logging.getLogger("uvicorn.error")
     error_logger.handlers.clear()
-    error_logger.setLevel(level)
+    error_logger.setLevel(logging.WARNING)
     for handler in _lumina_handlers():
         error_logger.addHandler(handler)
     error_logger.propagate = False

@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 30,
+      "actual": 22,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -69,7 +69,7 @@
       "threshold": 1
     }
   ],
-  "duplicate_event_count": 15,
+  "duplicate_event_count": 8,
   "error_lines": 0,
   "event_counts": {
     "converter_generate_timing": 2,
@@ -80,7 +80,6 @@
     "log_file_configured": 1,
     "lut_colors_loaded": 1,
     "lut_presets_discovered": 1,
-    "uvicorn": 8,
     "vector_3mf_exported": 1,
     "vector_branch_done": 1,
     "vector_branch_init": 1,
@@ -88,14 +87,14 @@
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 30,
+  "info_lines": 22,
   "info_lines_by_endpoint": {
-    "1e6bde6f08db4d699f2a975e4c68b489": 3,
-    "27a3e89f62504211bda996eb68973045": 6,
-    "51764f7079e843cd8f6022ccb26784bf": 1,
-    "6c00675a1e164fa9854d54efbf509944": 1,
-    "9721c2cbe21c46149172b297e38bdce4": 4,
-    "afb4e3987ad645cb860694c6e4955274": 4
+    "0d47e65b39ba470481ed2b8f954d7d88": 4,
+    "1683b476855d4800b59f32e7750078a0": 1,
+    "22e3edf65a0c4cc89b2e2cbc8887d409": 3,
+    "740d5abbdbec4a17a3e614a0d205920a": 6,
+    "c4bd4b6f3c0545a78bb256e9a860e99a": 1,
+    "c5dda127976349adba0338e453d1d7d8": 4
   },
   "log_file_configured_count": 1,
   "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_reviewer.log",
@@ -103,13 +102,9 @@
   "mode": "full",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 30,
-  "timestamp": "2026-04-27T10:04:13.117557+00:00",
+  "structured_lines": 22,
+  "timestamp": "2026-04-27T10:48:57.671828+00:00",
   "top_events": [
-    {
-      "count": 8,
-      "event": "uvicorn"
-    },
     {
       "count": 4,
       "event": "image_processor_init"
@@ -167,8 +162,8 @@
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 9548,
-  "total_lines": 30,
+  "total_bytes": 8314,
+  "total_lines": 22,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
