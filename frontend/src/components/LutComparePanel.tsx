@@ -7,7 +7,6 @@ import type { CompareResponse } from "../api/types";
 import Dropdown from "./ui/Dropdown";
 import Button from "./ui/Button";
 import {
-  PanelIntro,
   StatusBanner,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
@@ -267,11 +266,6 @@ export default function LutComparePanel() {
       data-testid="lut-compare-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        title={t("lut_compare_title")}
-        description={t("lut_compare_desc")}
-      />
-
       <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
         <div className={desktopPrimaryColumnClass}>
           <section

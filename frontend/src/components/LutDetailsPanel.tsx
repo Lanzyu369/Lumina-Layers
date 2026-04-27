@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Dropdown from "./ui/Dropdown";
-import { PanelIntro, StatusBanner, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, resolveSectionCardClass, mutedSectionCardClass } from "./ui/panelPrimitives";
+import { StatusBanner, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, resolveSectionCardClass, mutedSectionCardClass } from "./ui/panelPrimitives";
 import { useLutDetailsStore, filterLutDetailsCatalog } from "../stores/lutDetailsStore";
 import {
   LutScatterChart,
@@ -1008,11 +1008,6 @@ export default function LutDetailsPanel() {
       data-testid="lut-details-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        title={t("lut_details_title")}
-        description={t("lut_details_desc")}
-      />
-
       <div data-testid="lut-details-layout" className={resolveDesktopSplitLayoutClass(workspace.mode)}>
         <div data-testid="lut-details-primary-column" className={desktopPrimaryColumnClass}>
           <section data-testid="lut-details-selection-card" className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>

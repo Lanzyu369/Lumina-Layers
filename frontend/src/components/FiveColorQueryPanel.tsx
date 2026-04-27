@@ -9,7 +9,6 @@ import FiveColorCanvas from "./FiveColorCanvas"
 import Button from "./ui/Button"
 import { UI_COLOR_TOKENS } from "../theme/uiTokens"
 import {
-  PanelIntro,
   StatusBanner,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
@@ -102,11 +101,6 @@ export default function FiveColorQueryPanel() {
     >
       <aside className={`${resolvePanelSurfaceClass(workspace.mode)} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}>
         <div className="flex flex-col gap-5">
-          <PanelIntro
-            title={t("five_color_title")}
-            description={t("five_color_desc")}
-          />
-
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
             <div className="flex flex-col gap-3">
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("five_color_palette")}</h3>

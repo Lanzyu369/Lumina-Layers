@@ -7,7 +7,6 @@ import Button from "./ui/Button";
 import { motion } from "framer-motion";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
-  PanelIntro,
   StatusBanner,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
@@ -149,11 +148,6 @@ export default function LutManagerPanel() {
       data-testid="lut-manager-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
       >
-      <PanelIntro
-        title={t("lut_manager_title")}
-        description={t("lut_manager_desc")}
-      />
-
       <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
           <div className={desktopPrimaryColumnClass}>
            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`} data-testid="primary-dropdown">

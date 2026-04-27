@@ -18,7 +18,6 @@ import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import {
   cx,
-  PanelIntro,
   StatusBanner,
   panelSurfaceClass,
   sectionCardClass,
@@ -231,11 +230,6 @@ export default function ExtractorPanel() {
       className={`${panelSurfaceClass} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
     >
       <div className="flex flex-col gap-2">
-        <PanelIntro
-          title={t("ext_title")}
-          description={t("ext_desc")}
-        />
-
         <section className={`${sectionCardClass} flex flex-col gap-2`}>
           <div className="grid gap-2 lg:grid-cols-1 xl:grid-cols-1 2xl:grid-cols-1">
             <div data-testid="color-mode-select">

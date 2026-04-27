@@ -11,7 +11,6 @@ import Button from "./ui/Button";
 import Switch from "./ui/Switch";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
-  PanelIntro,
   StatusBanner,
   mutedSectionCardClass,
   desktopPrimaryColumnClass,
@@ -71,11 +70,6 @@ export default function CalibrationPanel() {
       data-testid="calibration-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        title={t("cal_title")}
-        description={t("cal_desc")}
-      />
-
       <div className="grid min-h-0 gap-5 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)] lg:items-stretch">
         <div className={desktopPrimaryColumnClass}>
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>

@@ -17,7 +17,6 @@ import {
   type GradientCardAnchorCorner,
 } from "../utils/gradientCardAnchor";
 import {
-  PanelIntro,
   StatusBanner,
   cx,
   mutedSectionCardClass,
@@ -638,11 +637,6 @@ export default function GradientCardExtractPanel() {
       data-testid="gradient-card-extract-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        title={t("mat_gradient_extract_title")}
-        description={t("mat_gradient_extract_desc")}
-      />
-
       {isVerificationMode ? (
         <StatusBanner
           data-testid="gradient-card-verification-mode-banner"
