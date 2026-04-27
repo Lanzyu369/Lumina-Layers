@@ -12,6 +12,8 @@ from scripts.log_quality_check import (
     WORKFLOW_STEPS,
     _parse_workflow,
     _scan_log_file_for_governance_metrics,
+    _select_replace_click,
+    _workflow_required_event_checks,
 )
 
 
@@ -104,6 +106,67 @@ def test_vector_workflow_step_is_first_class() -> None:
     assert workflow == ["startup", "lut_list", "lut_colors", "preview", "generate", "vector"]
     assert "vector" in WORKFLOW_ORDER
     assert "vector" in WORKFLOW_STEPS
+
+
+def test_replace_workflow_step_is_first_class() -> None:
+    """The replace workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("startup,lut_list,lut_colors,preview,generate,replace")
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+    ]
+    assert "replace" in WORKFLOW_ORDER
+    assert "replace" in WORKFLOW_STEPS
+
+
+def test_parse_workflow_rejects_vector_and_replace_together() -> None:
+    try:
+        _parse_workflow("startup,lut_list,lut_colors,preview,generate,vector,replace")
+    except Exception as exc:
+        assert "should not be combined" in str(exc)
+    else:
+        raise AssertionError("Expected vector + replace workflow to be rejected")
+
+
+def test_full_replace_workflow_requires_canary_events() -> None:
+    checks = _workflow_required_event_checks(
+        mode="full",
+        workflow=["startup", "lut_list", "lut_colors", "preview", "generate", "replace"],
+        event_counts={"converter_region_replace_timing": 1},
+    )
+
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["workflow_event_converter_region_replace_timing"].passed is True
+    assert (
+        by_name["workflow_event_vector_matched_rgb_overrides_applied"].passed
+        is False
+    )
+
+
+def test_fast_replace_workflow_does_not_require_worker_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["startup", "lut_list", "lut_colors", "preview", "generate", "replace"],
+        event_counts={"converter_region_replace_timing": 1},
+    )
+
+    assert {check.name for check in checks} == {
+        "workflow_event_converter_region_replace_timing"
+    }
+    assert all(check.passed for check in checks)
+
+
+def test_replace_click_targets_filled_band_for_ring_fixture() -> None:
+    payload = {"dimensions": {"width": 600, "height": 600}}
+
+    assert _select_replace_click(payload) == (200, 300)
 
 
 def test_check_result_evaluate_marks_passing_threshold() -> None:

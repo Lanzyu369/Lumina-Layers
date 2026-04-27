@@ -33,7 +33,15 @@ from scripts.audit_logs import audit_files, event_from_line, parse_json_object
 Mode = Literal["fast", "full"]
 
 DEFAULT_WORKFLOW = ["startup", "lut_list", "lut_colors", "preview", "generate"]
-WORKFLOW_ORDER = ["startup", "lut_list", "lut_colors", "preview", "generate", "vector"]
+WORKFLOW_ORDER = [
+    "startup",
+    "lut_list",
+    "lut_colors",
+    "preview",
+    "generate",
+    "vector",
+    "replace",
+]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
 DEFAULT_MAX_INFO = 30
 DEFAULT_MAX_INFO_PER_ENDPOINT = 8
@@ -47,6 +55,7 @@ DEFAULT_MODELING_MODE = "high-fidelity"
 VECTOR_MODELING_MODE = "vector"
 FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "frozen_assets" / "images" / "logo.png"
 VECTOR_FIXTURE_IMAGE = REPO_ROOT / "tests" / "fixtures" / "svg_alignment" / "ring_with_hole.svg"
+REPLACE_COLOR_CANDIDATES = ("#ff0000", "#ffff00", "#ffffff", "#0000ff")
 
 _CATCH_ALL_PATTERN = re.compile(r"^(.*_log|status_.*|request_.*)$")
 _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
@@ -99,6 +108,8 @@ class CheckResult:
 
         if operator == "<=":
             passed = actual <= threshold
+        elif operator == ">=":
+            passed = actual >= threshold
         elif operator == "==":
             passed = actual == threshold
         else:
@@ -141,6 +152,7 @@ class QualityReport:
     max_info_per_endpoint: int
     info_lines_by_endpoint: dict[str, int]
     checks: list[CheckResult]
+    workflow_checks: list[CheckResult]
     overall_passed: bool
     baseline_diff: dict[str, Any] | None = None
 
@@ -268,6 +280,10 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     "api.routers.converter.preview.recompute_gradient_groups_into_session",
                     return_value=None,
                 ),
+                patch(
+                    "api.routers.converter.replace.schedule_glb_build",
+                    return_value="mock-glb-token",
+                ),
                 TestClient(app) as client,
             ):
                 _execute_workflow(client, workflow)
@@ -373,6 +389,10 @@ def build_quality_report(
     metrics = _scan_log_file_for_governance_metrics(log_path)
     info_by_endpoint = _count_info_lines_by_request_id(log_path)
     max_endpoint_info = max(info_by_endpoint.values(), default=0)
+    event_counts = {
+        str(key): int(value)
+        for key, value in dict(audit_result.get("event_counts", {})).items()
+    }
     checks = [
         CheckResult.evaluate(
             name="info_lines_within_budget",
@@ -423,10 +443,11 @@ def build_quality_report(
             threshold=1,
         ),
     ]
-    event_counts = {
-        str(key): int(value)
-        for key, value in dict(audit_result.get("event_counts", {})).items()
-    }
+    workflow_checks = _workflow_required_event_checks(
+        mode=mode,
+        workflow=workflow,
+        event_counts=event_counts,
+    )
     report = QualityReport(
         mode=mode,
         workflow=workflow,
@@ -450,7 +471,9 @@ def build_quality_report(
         max_info_per_endpoint=max_endpoint_info,
         info_lines_by_endpoint=info_by_endpoint,
         checks=checks,
-        overall_passed=all(check.passed for check in checks),
+        workflow_checks=workflow_checks,
+        overall_passed=all(check.passed for check in checks)
+        and all(check.passed for check in workflow_checks),
         baseline_diff=(
             _build_baseline_diff(event_counts, report_total_lines=int(audit_result.get("total_lines", 0)), baseline_path=baseline_path)
             if baseline_path is not None
@@ -458,6 +481,29 @@ def build_quality_report(
         ),
     )
     return report
+
+
+def _workflow_required_event_checks(
+    *,
+    mode: Mode,
+    workflow: Sequence[str],
+    event_counts: Mapping[str, int],
+) -> list[CheckResult]:
+    required_events: list[str] = []
+    if "replace" in workflow:
+        required_events.append("converter_region_replace_timing")
+        if mode == "full":
+            required_events.append("vector_matched_rgb_overrides_applied")
+
+    return [
+        CheckResult.evaluate(
+            name=f"workflow_event_{event}",
+            actual=int(event_counts.get(event, 0)),
+            operator=">=",
+            threshold=1,
+        )
+        for event in required_events
+    ]
 
 
 def write_report(report: QualityReport, output_path: Path) -> None:
@@ -707,11 +753,32 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _post_generate(client, session_id, lut_name)
         elif step == "vector":
             _execute_vector_workflow(client, lut_name)
+        elif step == "replace":
+            _execute_replace_workflow(client, lut_name)
 
 
 def _execute_vector_workflow(client: Any, lut_name: str) -> None:
     session_id = _post_vector_preview(client, lut_name)
     _post_vector_generate(client, session_id, lut_name)
+
+
+def _execute_replace_workflow(client: Any, lut_name: str) -> None:
+    """Exercise vector preview, click region replace, then cached vector generate."""
+
+    # Use the same click-detect path as the frontend so the endpoint owns
+    # selected_region_mask population before /region-replace mutates cache.
+    preview_payload = _post_vector_preview_payload(client, lut_name)
+    session_id = _extract_session_id(preview_payload, "Vector preview")
+    click_x, click_y = _select_replace_click(preview_payload)
+    detected_region = _post_region_detect(client, session_id, click_x, click_y)
+    replacement_color = _choose_replacement_color(detected_region)
+    _post_region_replace(client, session_id, replacement_color)
+    _post_vector_generate(
+        client,
+        session_id,
+        lut_name,
+        use_cached_matched_rgb=True,
+    )
 
 
 def _post_preview(client: Any, lut_name: str) -> str:
@@ -723,13 +790,17 @@ def _post_preview(client: Any, lut_name: str) -> str:
             data=_preview_form_data(lut_name),
         )
     _raise_for_status(response.status_code, response.text, "preview")
-    session_id = response.json().get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        raise QualityCheckError("Preview response did not include session_id")
-    return session_id
+    return _extract_session_id(response.json(), "Preview")
 
 
 def _post_vector_preview(client: Any, lut_name: str) -> str:
+    return _extract_session_id(
+        _post_vector_preview_payload(client, lut_name),
+        "Vector preview",
+    )
+
+
+def _post_vector_preview_payload(client: Any, lut_name: str) -> Mapping[str, Any]:
     _require_fixture(VECTOR_FIXTURE_IMAGE)
     with VECTOR_FIXTURE_IMAGE.open("rb") as handle:
         response = client.post(
@@ -738,10 +809,77 @@ def _post_vector_preview(client: Any, lut_name: str) -> str:
             data=_preview_form_data(lut_name, modeling_mode=VECTOR_MODELING_MODE),
         )
     _raise_for_status(response.status_code, response.text, "vector preview")
-    session_id = response.json().get("session_id")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Vector preview response was not an object")
+    return payload
+
+
+def _extract_session_id(payload: Mapping[str, Any], label: str) -> str:
+    session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
-        raise QualityCheckError("Vector preview response did not include session_id")
+        raise QualityCheckError(f"{label} response did not include session_id")
     return session_id
+
+
+def _select_replace_click(preview_payload: Mapping[str, Any]) -> tuple[int, int]:
+    dimensions = preview_payload.get("dimensions")
+    width = (
+        int(dimensions.get("width", 10))
+        if isinstance(dimensions, Mapping)
+        else 10
+    )
+    height = (
+        int(dimensions.get("height", 10))
+        if isinstance(dimensions, Mapping)
+        else 10
+    )
+    if width <= 0 or height <= 0:
+        raise QualityCheckError("Vector preview did not include positive dimensions")
+
+    # For ring_with_hole.svg the one-quarter-width point can land just
+    # outside the rasterized fill after scaling; one-third width at
+    # mid-height lands in the filled band in the real 600x600 preview.
+    return max(0, width // 3), max(0, height // 2)
+
+
+def _post_region_detect(
+    client: Any,
+    session_id: str,
+    x: int,
+    y: int,
+) -> Mapping[str, Any]:
+    response = client.post(
+        "/api/convert/region-detect",
+        json={"session_id": session_id, "x": x, "y": y},
+    )
+    _raise_for_status(response.status_code, response.text, "region detect")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Region detect response was not an object")
+    if int(payload.get("pixel_count", 0)) <= 0:
+        raise QualityCheckError("Region detect returned no pixels")
+    return payload
+
+
+def _choose_replacement_color(region_payload: Mapping[str, Any]) -> str:
+    current_color = str(region_payload.get("color_hex") or "").lower()
+    for candidate in REPLACE_COLOR_CANDIDATES:
+        if candidate.lower() != current_color:
+            return candidate
+    raise QualityCheckError("No replacement color differed from detected region color")
+
+
+def _post_region_replace(
+    client: Any,
+    session_id: str,
+    replacement_color: str,
+) -> None:
+    response = client.post(
+        "/api/convert/region-replace",
+        json={"session_id": session_id, "replacement_color": replacement_color},
+    )
+    _raise_for_status(response.status_code, response.text, "region replace")
 
 
 def _post_generate(client: Any, session_id: str, lut_name: str) -> None:
@@ -752,14 +890,20 @@ def _post_generate(client: Any, session_id: str, lut_name: str) -> None:
     _raise_for_status(response.status_code, response.text, "generate")
 
 
-def _post_vector_generate(client: Any, session_id: str, lut_name: str) -> None:
+def _post_vector_generate(
+    client: Any,
+    session_id: str,
+    lut_name: str,
+    *,
+    use_cached_matched_rgb: bool = False,
+) -> None:
     response = client.post(
         "/api/convert/generate",
         json=_generate_payload(
             session_id,
             lut_name,
             modeling_mode=VECTOR_MODELING_MODE,
-            use_cached_matched_rgb=False,
+            use_cached_matched_rgb=use_cached_matched_rgb,
         ),
     )
     _raise_for_status(response.status_code, response.text, "vector generate")
@@ -1032,6 +1176,11 @@ def _parse_workflow(raw_workflow: str) -> list[str]:
         raise QualityCheckError(f"Unknown workflow step(s): {', '.join(unknown)}")
     if "generate" in workflow and "preview" not in workflow:
         raise QualityCheckError("Workflow step 'generate' requires 'preview'")
+    if "vector" in workflow and "replace" in workflow:
+        raise QualityCheckError(
+            "Workflow steps 'vector' and 'replace' should not be combined; "
+            "'replace' is the canonical vector region-replace superset."
+        )
     return workflow
 
 
@@ -1079,6 +1228,15 @@ def _format_stdout_summary(report: QualityReport, output_path: Path) -> str:
             f"  [{label}] {check.name:<34} "
             f"{check.actual} {check.operator} {check.threshold}"
         )
+
+    if report.workflow_checks:
+        lines.extend(["", "WORKFLOW CHECKS"])
+        for check in report.workflow_checks:
+            label = "PASS" if check.passed else "FAIL"
+            lines.append(
+                f"  [{label}] {check.name:<34} "
+                f"{check.actual} {check.operator} {check.threshold}"
+            )
 
     lines.append("")
     lines.append(f"RESULT: {'PASS' if report.overall_passed else 'FAIL'}")
