@@ -19,13 +19,13 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
   const failedItems = result.results.filter((r) => r.status === "failed");
 
   return (
-    <div className="flex flex-col gap-3 rounded-md bg-gray-800 p-3 text-sm">
+    <div className="flex flex-col gap-3 rounded-md bg-slate-800 p-3 text-sm">
       {/* Summary stats */}
-      <p className="text-gray-300">
+      <p className="text-slate-300">
         {t("batch_success")}{" "}
         <span className="font-medium text-green-400">{successCount}</span>
         {" / "}{t("batch_total")}{" "}
-        <span className="font-medium text-gray-200">{total}</span>
+        <span className="font-medium text-slate-200">{total}</span>
         {failedCount > 0 && (
           <>
             {"，"}{t("batch_failed")}{" "}
@@ -68,7 +68,7 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
             {failedItems.map((item, index) => (
               <li
                 key={`${item.filename}-${index}`}
-                className="rounded bg-red-900/20 px-2 py-1 text-xs text-gray-300"
+                className="rounded bg-red-900/20 px-2 py-1 text-xs text-slate-300"
               >
                 <span className="font-medium">{item.filename}</span>
                 {item.error && (

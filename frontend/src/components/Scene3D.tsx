@@ -576,7 +576,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                 </div>
               </div>
               {enableWittyLoading && (
-                <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
+                <div className="rounded-full border border-white/10 bg-slate-900/92 px-4 py-2">
                   <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
                     {wittyMsg}
                   </p>

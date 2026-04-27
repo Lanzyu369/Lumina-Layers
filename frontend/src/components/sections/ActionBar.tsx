@@ -757,7 +757,7 @@ export default function ActionBar() {
 
       {previewDisplayUrl && (
         <div
-          className={`w-full overflow-hidden rounded-[22px] border border-gray-300 dark:border-gray-700 ${previewSurfaceClassName}`}
+          className={`w-full overflow-hidden rounded-[22px] border border-slate-300 dark:border-slate-700 ${previewSurfaceClassName}`}
           style={previewAspectRatio ? { aspectRatio: previewAspectRatio } : undefined}
         >
           <CanvasPreviewSurface
@@ -785,8 +785,8 @@ export default function ActionBar() {
       />
 
       {activeLayerImages.length > 0 && (
-        <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-          <h4 className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-400">
+        <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <h4 className="mb-2 text-xs font-medium text-slate-600 dark:text-slate-400">
             {t("action_layers_title")}
           </h4>
           <div
@@ -798,7 +798,7 @@ export default function ActionBar() {
                 className="group flex cursor-pointer flex-col items-center gap-1"
                 onClick={() => setZoomedLayerIdx(idx)}
               >
-                <div className="relative w-full overflow-hidden rounded border border-gray-200 dark:border-gray-600">
+                <div className="relative w-full overflow-hidden rounded border border-slate-200 dark:border-slate-600">
                   <img
                     src={layer.url}
                     alt={`${t("action_layer_nth")}${idx + 1}${t("action_layer_unit")}`}
@@ -811,7 +811,7 @@ export default function ActionBar() {
                     </span>
                   </div>
                 </div>
-                <span className="text-[11px] text-gray-600 dark:text-gray-400">
+                <span className="text-[11px] text-slate-600 dark:text-slate-400">
                   {t("action_layer_nth")}{idx + 1}{t("action_layer_unit")}
                 </span>
               </div>

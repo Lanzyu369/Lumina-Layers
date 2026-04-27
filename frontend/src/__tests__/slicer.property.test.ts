@@ -576,8 +576,8 @@ describe("Property 6: 品牌配色映射完整性", () => {
         (unknownId) => {
           const style = getSlicerBrandStyle(unknownId);
           return (
-            style.bg === "bg-gray-600" &&
-            style.hover === "hover:bg-gray-700" &&
+            style.bg === "bg-slate-600" &&
+            style.hover === "hover:bg-slate-700" &&
             style.text === "text-white"
           );
         }

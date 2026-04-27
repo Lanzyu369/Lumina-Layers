@@ -52,7 +52,7 @@ export default function ZoomViewport({
   return (
     <div
       ref={containerRef}
-      className="relative w-full overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 cursor-grab active:cursor-grabbing select-none"
+      className="relative w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-grab active:cursor-grabbing select-none"
       style={{ height }}
       {...mouseHandlers}
     >

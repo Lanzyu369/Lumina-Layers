@@ -199,7 +199,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                 className={`
                   relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
                   ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                  ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}
+                  ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
                 `}
                 style={{ WebkitTapHighlightColor: 'transparent' }}
               >
@@ -234,7 +234,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                   className={`
                     relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
                     ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}
+                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
                   `}
                   style={{ WebkitTapHighlightColor: 'transparent' }}
                 >
@@ -270,7 +270,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
                   className={`
                     relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
                     ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}
+                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
                   `}
                   style={{ WebkitTapHighlightColor: 'transparent' }}
                 >
