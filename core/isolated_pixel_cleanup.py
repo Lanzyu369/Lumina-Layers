@@ -6,6 +6,7 @@
 
 import numpy as np
 from collections import Counter
+from typing import Any
 
 from api.structured_logging import get_logger
 
@@ -92,15 +93,14 @@ def cleanup_isolated_pixels(
                 encoded[i, j] = ne
                 rep1 += 1
     p1 = (rep1 / total_pixels * 100) if total_pixels > 0 else 0
-    _log.info(
-        "Isolated pixels cleaned",
-        extra={
-            "event": "isolated_pixels_cleaned",
-            "isolated_count": iso_count,
-            "merged_count": rep1,
-            "merge_ratio_percent": round(p1, 3),
-            "duration_ms": round((time.time() - t0) * 1000, 3),
-        },
-    )
+    extra: dict[str, Any] = {
+        "event": "isolated_pixels_cleaned",
+        "isolated_count": iso_count,
+        "merge_ratio_percent": round(p1, 3),
+        "duration_ms": round((time.time() - t0) * 1000, 3),
+    }
+    if rep1 != iso_count:
+        extra["merged_count"] = rep1
+    _log.info("Isolated pixels cleaned", extra=extra)
 
     return cleaned_rgb, cleaned_mat

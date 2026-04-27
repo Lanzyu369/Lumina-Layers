@@ -396,6 +396,13 @@ async def convert_preview(
         else:
             temp_native_bundle_path = resolved_lut_path
 
+    # Mint session_id at endpoint entry and bind to contextvar so worker-emitted
+    # log records (image_processor_init/done, isolated_pixels_cleaned, ...) carry
+    # the same id that will be returned in the preview response.
+    # 在端点入口生成 session_id 并写入 contextvar，使 worker 内日志事件能溯源到最终返回的会话。
+    preview_session_id = str(uuid.uuid4())
+    bind_session_id(preview_session_id)
+
     worker_completed = False
     try:
         # 1. File upload (I/O, main thread)
@@ -512,9 +519,12 @@ async def convert_preview(
 
     status_msg: str = result["status_msg"]
 
-    # Create session and store state
-    session_id = store.create()
-    bind_session_id(session_id)
+    # Reuse the session_id minted before worker submit so worker logs and the
+    # returned session use the same id; SessionStore.create() will fall back to
+    # a fresh UUID if the pre-minted id ever collides.
+    # 复用 worker submit 前生成的 session_id，确保 worker 日志与返回会话同 id；
+    # 若 id 与现有会话冲突，SessionStore.create() 会自动改用新 UUID。
+    session_id = store.create(session_id=preview_session_id)
     store.put(session_id, "preview_cache", cache_data)
     # Synchronously compute gradient-banding groups so the Color Workstation
     # can surface them (group-level multi-select + optional auto-replace)

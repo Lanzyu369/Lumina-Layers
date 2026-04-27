@@ -148,3 +148,55 @@ def test_extract_lut_available_colors_logs_single_info_event(tmp_path, caplog):
     assert info_events == ["lut_colors_loaded"]
 
 
+def test_lut_colors_loaded_omits_unique_count_when_no_duplicates(tmp_path, caplog):
+    """When LUT entries are all unique, lut_colors_loaded must not carry unique_count."""
+    lut_path = tmp_path / "no_dupes.npy"
+    rgb = np.array([[0, 0, 0], [128, 128, 128], [255, 255, 255]], dtype=np.uint8)
+    np.save(lut_path, rgb)
+
+    target_logger = pipeline_utils.log
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger=target_logger.name)
+    try:
+        pipeline_utils.extract_lut_available_colors(str(lut_path))
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    info_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "lut_colors_loaded"
+    ]
+    assert len(info_records) == 1
+    record = info_records[0]
+    assert getattr(record, "color_count") == 3
+    assert not hasattr(record, "unique_count")
+
+
+def test_lut_colors_loaded_includes_unique_count_when_duplicates_present(tmp_path, caplog):
+    """When the LUT contains duplicates, both color_count and unique_count must appear."""
+    lut_path = tmp_path / "with_dupes.npy"
+    rgb = np.array(
+        [[0, 0, 0], [0, 0, 0], [128, 128, 128], [255, 255, 255], [255, 255, 255]],
+        dtype=np.uint8,
+    )
+    np.save(lut_path, rgb)
+
+    target_logger = pipeline_utils.log
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger=target_logger.name)
+    try:
+        pipeline_utils.extract_lut_available_colors(str(lut_path))
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    info_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "lut_colors_loaded"
+    ]
+    assert len(info_records) == 1
+    record = info_records[0]
+    assert getattr(record, "color_count") == 5
+    assert getattr(record, "unique_count") == 3
+

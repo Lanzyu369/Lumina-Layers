@@ -1,7 +1,7 @@
+import os
 import threading
 import time
 import uuid
-import os
 from typing import Any, Dict, Optional
 
 
@@ -23,11 +23,33 @@ class SessionStore:
         self._lock: threading.Lock = threading.Lock()
         self._lease_seconds: int = ttl
 
-    def create(self) -> str:
-        """创建新 session，返回 session_id (UUID4)。"""
-        session_id = str(uuid.uuid4())
+    def create(self, session_id: str | None = None) -> str:
+        """Create a new session.
+
+        创建新 session。
+
+        Args:
+            session_id (str | None): Optional explicit session id. If None, a
+                fresh UUID4 is minted. If the supplied id collides with any
+                active / closing / retired session, a fresh UUID4 is minted
+                instead.
+                可选的显式 session id；若为 None 则随机生成 UUID4；若发生冲突
+                则改为新 UUID4。
+
+        Returns:
+            str: The session id actually registered (the supplied id, or a
+            freshly minted one).
+        """
+        if session_id is None:
+            session_id = str(uuid.uuid4())
         with self._lock:
             self._prune_retired_locked()
+            while (
+                session_id in self._store
+                or session_id in self._closing_sessions
+                or session_id in self._retired_sessions
+            ):
+                session_id = str(uuid.uuid4())
             self._store[session_id] = {}
             self._timestamps[session_id] = self._renew_lease_locked(session_id)
             self._temp_files[session_id] = []

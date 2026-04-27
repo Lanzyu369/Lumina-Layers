@@ -14,7 +14,7 @@ from api.structured_logging import get_logger
 import os
 import math
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+from typing import Any, List, Dict, Tuple, Optional
 
 from config import PrinterConfig, ColorSystem, ModelingMode
 
@@ -316,15 +316,16 @@ def extract_lut_available_colors(lut_path: str) -> List[dict]:
         # Sort by brightness (dark to light) for better UX
         colors.sort(key=lambda x: sum(x["color"]))
 
-        log.info(
-            "LUT colors loaded",
-            extra={
-                "event": "lut_colors_loaded",
-                "lut_path": lut_path,
-                "color_count": len(colors),
-                "unique_count": len(unique_colors),
-            },
-        )
+        measured_count = int(len(measured_colors))
+        unique_count = int(len(unique_colors))
+        extra: dict[str, Any] = {
+            "event": "lut_colors_loaded",
+            "lut_path": lut_path,
+            "color_count": measured_count,
+        }
+        if unique_count != measured_count:
+            extra["unique_count"] = unique_count
+        log.info("LUT colors loaded", extra=extra)
         return colors
 
     except (OSError, ValueError, TypeError, KeyError) as e:
