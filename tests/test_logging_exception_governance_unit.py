@@ -15,6 +15,8 @@ TARGETS = [
     ROOT / "api" / "routers" / "extractor.py",
     ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "lut.py",
+    ROOT / "api" / "routers" / "slicer.py",
+    ROOT / "api" / "routers" / "system.py",
     ROOT / "api" / "routers" / "vectorizer.py",
     ROOT / "api" / "workers" / "converter_workers.py",
     ROOT / "api" / "workers" / "vectorizer_workers.py",
@@ -145,6 +147,13 @@ LUT_STRUCTURED_EVENTS = {
     "lut_session_info_done",
     "lut_upload_done",
 }
+SYSTEM_STRUCTURED_EVENTS = {
+    "system_image_preview_done",
+    "system_save_settings_done",
+}
+SLICER_STRUCTURED_EVENTS = {
+    "slicer_launch_done",
+}
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
@@ -153,6 +162,8 @@ REQUIRED_STRUCTURED_EVENTS = (
     | FIVE_COLOR_STRUCTURED_EVENTS
     | VECTORIZER_STRUCTURED_EVENTS
     | LUT_STRUCTURED_EVENTS
+    | SYSTEM_STRUCTURED_EVENTS
+    | SLICER_STRUCTURED_EVENTS
 )
 
 

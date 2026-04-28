@@ -101,6 +101,9 @@ WORKFLOW_ORDER = [
     "lut_details",
     "lut_upload",
     "lut_session_info",
+    "system_image_preview",
+    "system_save_settings",
+    "slicer_launch",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -835,6 +838,12 @@ def _workflow_required_event_checks(
         required_events.append("lut_upload_done")
     if "lut_session_info" in workflow:
         required_events.append("lut_session_info_done")
+    if "system_image_preview" in workflow:
+        required_events.append("system_image_preview_done")
+    if "system_save_settings" in workflow:
+        required_events.append("system_save_settings_done")
+    if "slicer_launch" in workflow:
+        required_events.append("slicer_launch_done")
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
@@ -1997,6 +2006,12 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_lut_upload_workflow(client)
         elif step == "lut_session_info":
             _execute_lut_session_info_workflow(client)
+        elif step == "system_image_preview":
+            _execute_system_image_preview_workflow(client)
+        elif step == "system_save_settings":
+            _execute_system_save_settings_workflow(client)
+        elif step == "slicer_launch":
+            _execute_slicer_launch_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -3269,6 +3284,100 @@ def _execute_lut_session_info_workflow(client: Any) -> None:
         raise QualityCheckError("Session LUT info response missed colors")
     if not isinstance(payload.get("palette"), list):
         raise QualityCheckError("Session LUT info response missed palette")
+
+
+def _execute_system_image_preview_workflow(client: Any) -> None:
+    image_bytes = _synthesize_rgb_png_bytes(64, 64)
+    response = client.post(
+        "/api/system/image-preview",
+        files={"file": ("preview_input.png", image_bytes, "image/png")},
+    )
+    _raise_for_status(response.status_code, response.text, "system_image_preview")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Image preview response was not an object")
+    if not isinstance(payload.get("preview_url"), str):
+        raise QualityCheckError("Image preview response missed preview_url")
+    if int(payload.get("width", 0)) <= 0 or int(payload.get("height", 0)) <= 0:
+        raise QualityCheckError("Image preview response had invalid dimensions")
+
+
+def _execute_system_save_settings_workflow(client: Any) -> None:
+    get_response = client.get("/api/system/settings")
+    _raise_for_status(
+        get_response.status_code,
+        get_response.text,
+        "system_save_settings",
+    )
+    get_payload = get_response.json()
+    if not isinstance(get_payload, Mapping) or not isinstance(
+        get_payload.get("settings"),
+        Mapping,
+    ):
+        raise QualityCheckError("Settings GET response was not an object")
+    settings_payload = dict(get_payload["settings"])
+
+    settings_path = Path("user_settings.json")
+    backup = settings_path.read_text(encoding="utf-8") if settings_path.exists() else None
+    try:
+        post_response = client.post("/api/system/settings", json=settings_payload)
+        _raise_for_status(
+            post_response.status_code,
+            post_response.text,
+            "system_save_settings",
+        )
+        post_payload = post_response.json()
+        if not isinstance(post_payload, Mapping) or post_payload.get("status") != "success":
+            raise QualityCheckError("Settings POST did not return success")
+    finally:
+        if backup is not None:
+            settings_path.write_text(backup, encoding="utf-8")
+        elif settings_path.exists():
+            try:
+                settings_path.unlink()
+            except OSError:
+                pass
+
+
+def _execute_slicer_launch_workflow(client: Any) -> None:
+    from unittest.mock import patch
+
+    from config import TEMP_DIR
+    from core.slicer import DetectedSlicer
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".3mf",
+        dir=TEMP_DIR,
+        delete=False,
+    ) as src_handle:
+        src_handle.write(b"placeholder-3mf")
+        src_path = src_handle.name
+    try:
+        fake_slicer = DetectedSlicer(
+            id="bambu-studio",
+            display_name="Bambu Studio",
+            exe_path="C:/fake/BambuStudio.exe",
+        )
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            return_value=[fake_slicer],
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "launched"),
+        ):
+            response = client.post(
+                "/api/slicer/launch",
+                json={"slicer_id": "bambu-studio", "file_path": src_path},
+            )
+            _raise_for_status(response.status_code, response.text, "slicer_launch")
+            payload = response.json()
+            if not isinstance(payload, Mapping) or payload.get("status") != "success":
+                raise QualityCheckError("Slicer launch response was not success")
+    finally:
+        try:
+            os.unlink(src_path)
+        except OSError:
+            pass
 
 
 def _post_extract_gradient_card_stage_a_for_session(client: Any) -> Mapping[str, Any]:

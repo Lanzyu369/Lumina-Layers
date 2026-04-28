@@ -495,6 +495,105 @@ def test_lut_session_info_workflow_step_is_first_class() -> None:
     assert WORKFLOW_ORDER.index("lut_session_info") == WORKFLOW_ORDER.index("lut_upload") + 1
 
 
+def test_system_image_preview_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("system_image_preview")
+
+    assert workflow == ["system_image_preview"]
+    assert "system_image_preview" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "system_image_preview" in WORKFLOW_ORDER
+    assert "system_image_preview" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("system_image_preview")
+        == WORKFLOW_ORDER.index("lut_session_info") + 1
+    )
+
+
+def test_system_image_preview_workflow_requires_canary_event() -> None:
+    workflow = ["system_image_preview"]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"system_image_preview_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_system_image_preview_done"].passed is True
+    assert missing_by_name["workflow_event_system_image_preview_done"].passed is False
+
+
+def test_system_save_settings_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("system_save_settings")
+
+    assert workflow == ["system_save_settings"]
+    assert "system_save_settings" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "system_save_settings" in WORKFLOW_ORDER
+    assert "system_save_settings" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("system_save_settings")
+        == WORKFLOW_ORDER.index("system_image_preview") + 1
+    )
+
+
+def test_system_save_settings_workflow_requires_canary_event() -> None:
+    workflow = ["system_save_settings"]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"system_save_settings_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_system_save_settings_done"].passed is True
+    assert missing_by_name["workflow_event_system_save_settings_done"].passed is False
+
+
+def test_slicer_launch_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("slicer_launch")
+
+    assert workflow == ["slicer_launch"]
+    assert "slicer_launch" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "slicer_launch" in WORKFLOW_ORDER
+    assert "slicer_launch" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("slicer_launch")
+        == WORKFLOW_ORDER.index("system_save_settings") + 1
+    )
+
+
+def test_slicer_launch_workflow_requires_canary_event() -> None:
+    workflow = ["slicer_launch"]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"slicer_launch_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_slicer_launch_done"].passed is True
+    assert missing_by_name["workflow_event_slicer_launch_done"].passed is False
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 
