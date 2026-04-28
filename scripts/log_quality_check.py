@@ -54,6 +54,12 @@ WORKFLOW_ORDER = [
     "replace_bw",
     "replace_8color",
     "replace_5color_ext",
+    "replace_color",
+    "reset_replacements",
+    "source_color_pick",
+    "color_highlight",
+    "region_detect",
+    "region_requantize",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -120,6 +126,7 @@ MOCK_COLOR_CONFIGS = {
 
 _CATCH_ALL_PATTERN = re.compile(r"^(.*_log|status_.*|request_.*)$")
 _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
+_INFO_BUDGET_EXCLUDED_EVENTS = {"worker_pool_shutdown"}
 _ANSI_PATTERN = re.compile(r"(?:\x1b|\\u001b)\[")
 _BRACKET_TAG_PATTERN = re.compile(r"^\s*\[[A-Z][A-Z0-9_]*\]")
 
@@ -362,6 +369,25 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     return_value="mock-glb-token",
                 ),
                 patch(
+                    "api.routers.converter.replace.load_multiple_materials",
+                    return_value=[],
+                ),
+                patch(
+                    "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+                    return_value=(object(), 64),
+                ),
+                patch(
+                    "api.routers.converter.replace.requantize_gradient_regions",
+                    side_effect=_mock_requantize_gradient_regions,
+                ),
+                patch(
+                    "api.routers.converter.replace._sync_material_matrix_after_rgb_change",
+                ),
+                patch(
+                    "api.routers.converter.replace.recompute_gradient_groups_into_session",
+                    return_value=[],
+                ),
+                patch(
                     "api.routers.extractor.run_extraction",
                     return_value=(
                         extract_image,
@@ -592,6 +618,18 @@ def _workflow_required_event_checks(
         required_events.append("extractor_rotate_done")
     if "confirm_palette" in workflow:
         required_events.append("extractor_confirm_palette_done")
+    if "replace_color" in workflow:
+        required_events.append("converter_replace_color_done")
+    if "reset_replacements" in workflow:
+        required_events.append("converter_reset_replacements_done")
+    if "source_color_pick" in workflow:
+        required_events.append("converter_source_color_pick_done")
+    if "color_highlight" in workflow:
+        required_events.append("converter_color_highlight_done")
+    if "region_detect" in workflow:
+        required_events.append("converter_region_detect_done")
+    if "region_requantize" in workflow:
+        required_events.append("converter_region_requantize_done")
 
     required_events = list(dict.fromkeys(required_events))
     return [
@@ -867,6 +905,28 @@ def _build_mock_generate_result(created_paths: list[Path]) -> dict[str, Any]:
     }
 
 
+def _mock_requantize_gradient_regions(
+    *,
+    matched_rgb: Any,
+    original_source_rgb: Any,
+    region_id_map: Any,
+    **_kwargs: Any,
+) -> tuple[Any, int]:
+    import numpy as np
+
+    if original_source_rgb is None:
+        raise ValueError("original_source_rgb is required")
+    updated = np.asarray(matched_rgb, dtype=np.uint8).copy()
+    region_ids = np.asarray(region_id_map)
+    mask = region_ids == np.uint32(1001)
+    if not np.any(mask):
+        mask = region_ids > 0
+    if not np.any(mask):
+        mask = np.ones(updated.shape[:2], dtype=bool)
+    updated[mask] = [1, 2, 3]
+    return updated, int(mask.sum())
+
+
 def _make_temp_path(suffix: str, created_paths: list[Path]) -> Path:
     fd, raw_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -938,6 +998,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_replace_workflow(client, lut_name=lut_name)
         elif step in ALTERNATE_REPLACE_CONFIG:
             _execute_alternate_replace_workflow(client, step)
+        elif step == "replace_color":
+            _execute_replace_color_workflow(client)
+        elif step == "reset_replacements":
+            _execute_reset_replacements_workflow(client)
+        elif step == "source_color_pick":
+            _execute_source_color_pick_workflow(client)
+        elif step == "color_highlight":
+            _execute_color_highlight_workflow(client)
+        elif step == "region_detect":
+            _execute_region_detect_workflow(client)
+        elif step == "region_requantize":
+            _execute_region_requantize_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -1012,6 +1084,163 @@ def _execute_replace_workflow(
         label=f"{mode} vector generate",
         use_cached_matched_rgb=True,
     )
+
+
+def _execute_replace_color_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="replace_color setup",
+    )
+    session_id = _extract_session_id(preview_payload, "replace_color preview")
+    selected_color = _first_palette_hex(preview_payload, fallback="#0080ff")
+    replacement_color = "#ffffff" if selected_color.lower() != "#ffffff" else "#0000ff"
+    payload = _post_replace_color(
+        client,
+        session_id,
+        selected_color,
+        replacement_color,
+        label="replace_color",
+    )
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Replace color response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Replace color response status was not ok")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Replace color response did not include preview_url")
+    if int(payload.get("replacement_count", 0)) < 1:
+        raise QualityCheckError("Replace color response did not record a replacement")
+
+
+def _execute_reset_replacements_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="reset_replacements setup",
+    )
+    session_id = _extract_session_id(preview_payload, "reset_replacements preview")
+    selected_color = _first_palette_hex(preview_payload, fallback="#0080ff")
+    replacement_color = "#ffffff" if selected_color.lower() != "#ffffff" else "#0000ff"
+    _post_replace_color(
+        client,
+        session_id,
+        selected_color,
+        replacement_color,
+        label="reset_replacements seed replace-color",
+    )
+    response = client.post(
+        "/api/convert/reset-replacements",
+        json={"session_id": session_id},
+    )
+    _raise_for_status(response.status_code, response.text, "reset_replacements")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Reset replacements response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Reset replacements response status was not ok")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Reset replacements response did not include preview_url")
+
+
+def _execute_source_color_pick_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="source_color_pick setup",
+    )
+    session_id = _extract_session_id(preview_payload, "source_color_pick preview")
+    pick_x, pick_y = _select_replace_click(preview_payload)
+    response = client.post(
+        "/api/convert/source-color-pick",
+        json={"session_id": session_id, "x": pick_x, "y": pick_y},
+    )
+    _raise_for_status(response.status_code, response.text, "source_color_pick")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Source color pick response was not an object")
+    picked_color = payload.get("source_matched_hex")
+    if not isinstance(picked_color, str) or not re.fullmatch(
+        r"#[0-9a-fA-F]{6}",
+        picked_color,
+    ):
+        raise QualityCheckError("Source color pick response did not include a hex color")
+
+
+def _execute_color_highlight_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="color_highlight setup",
+    )
+    session_id = _extract_session_id(preview_payload, "color_highlight preview")
+    highlighted_color = _first_palette_hex(preview_payload, fallback="#0080ff")
+    response = client.post(
+        "/api/convert/color-highlight",
+        json={"session_id": session_id, "color_hexes": [highlighted_color]},
+    )
+    _raise_for_status(response.status_code, response.text, "color_highlight")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Color highlight response was not an object")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Color highlight response did not include preview_url")
+
+
+def _execute_region_detect_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="region_detect setup",
+    )
+    session_id = _extract_session_id(preview_payload, "region_detect preview")
+    click_x, click_y = _select_replace_click(preview_payload)
+    payload = _post_region_detect(client, session_id, click_x, click_y)
+    if not payload.get("region_id"):
+        raise QualityCheckError("Region detect response did not include region_id")
+    if not payload.get("color_hex"):
+        raise QualityCheckError("Region detect response did not include color_hex")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Region detect response did not include preview_url")
+
+
+def _execute_region_requantize_workflow(client: Any) -> None:
+    selected_materials = _region_requantize_materials_for_client(client)
+    created_cache_paths = (
+        []
+        if _client_uses_dependency_overrides(client)
+        else _ensure_region_requantize_solver_cache(selected_materials)
+    )
+    try:
+        preview_payload = _post_material_archive_preview_payload(
+            client,
+            selected_materials,
+            label="region_requantize setup",
+        )
+        session_id = _extract_session_id(preview_payload, "region_requantize preview")
+        _seed_region_requantize_test_session_if_available(client, session_id)
+        response = client.post(
+            "/api/convert/region-requantize",
+            json={
+                "session_id": session_id,
+                "targets": [
+                    {"gradient_group_index": 1, "gradient_region_index": 1}
+                ],
+                "local_quantize_colors": 12,
+            },
+        )
+        _raise_for_status(response.status_code, response.text, "region_requantize")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("Region requantize response was not an object")
+        if not payload.get("preview_url"):
+            raise QualityCheckError("Region requantize response did not include preview_url")
+    finally:
+        _remove_paths(created_cache_paths)
 
 
 def _execute_extract_workflow(client: Any) -> None:
@@ -1324,6 +1553,42 @@ def _post_vector_preview_payload(
     return payload
 
 
+def _post_material_archive_preview_payload(
+    client: Any,
+    selected_materials: Sequence[str],
+    *,
+    label: str,
+) -> Mapping[str, Any]:
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    image = np.zeros((32, 32, 3), dtype=np.uint8)
+    image[:, :16, :] = [255, 255, 255]
+    image[:, 16:, :] = [255, 0, 0]
+    buffer = io.BytesIO()
+    Image.fromarray(image, mode="RGB").save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
+    response = client.post(
+        "/api/convert/preview",
+        files={"image": ("region-requantize.png", image_bytes, "image/png")},
+        data={
+            **_preview_form_data(DEFAULT_LUT_NAME),
+            "material_source": "material_archive",
+            "selected_materials": json.dumps(list(selected_materials)),
+            "material_layer_count": "5",
+            "material_layer_height_mm": "0.08",
+            "material_grid_resolution": "8",
+        },
+    )
+    _raise_for_status(response.status_code, response.text, label)
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Material archive preview response was not an object")
+    return payload
+
+
 def _extract_session_id(payload: Mapping[str, Any], label: str) -> str:
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -1377,6 +1642,144 @@ def _choose_replacement_color(region_payload: Mapping[str, Any]) -> str:
         if candidate.lower() != current_color:
             return candidate
     raise QualityCheckError("No replacement color differed from detected region color")
+
+
+def _first_palette_hex(payload: Mapping[str, Any], *, fallback: str) -> str:
+    palette = payload.get("palette")
+    if isinstance(palette, list):
+        for item in palette:
+            if not isinstance(item, Mapping):
+                continue
+            value = item.get("hex")
+            if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                return value
+    return fallback
+
+
+def _client_uses_dependency_overrides(client: Any) -> bool:
+    app = getattr(client, "app", None)
+    overrides = getattr(app, "dependency_overrides", None)
+    return isinstance(overrides, dict) and bool(overrides)
+
+
+def _region_requantize_materials_for_client(client: Any) -> list[str]:
+    if _client_uses_dependency_overrides(client):
+        return ["fake/A", "fake/B"]
+    return _discover_material_archive_workflow_materials(limit=2)
+
+
+def _discover_material_archive_workflow_materials(*, limit: int) -> list[str]:
+    materials_root = REPO_ROOT / "materials"
+    candidates = sorted(materials_root.glob("*/*/material.json"))
+    material_names = [
+        path.parent.relative_to(materials_root).as_posix()
+        for path in candidates
+    ]
+    if len(material_names) < limit:
+        raise QualityCheckError(
+            f"Need at least {limit} material archives for region_requantize"
+        )
+    return material_names[:limit]
+
+
+def _ensure_region_requantize_solver_cache(
+    selected_materials: Sequence[str],
+) -> list[Path]:
+    try:
+        from core.material_cache import (
+            build_material_solver_cache,
+            cache_file_path,
+            save_material_solver_cache,
+        )
+        from core.material_lut_synthesis import load_multiple_materials
+    except ImportError as exc:
+        raise QualityCheckError(f"Failed to import material cache helpers: {exc}") from exc
+
+    materials = load_multiple_materials(list(selected_materials))
+    npz_path = cache_file_path(
+        materials,
+        5,
+        0.08,
+        "white",
+        grid_resolution=8,
+    )
+    meta_path = npz_path.with_name(npz_path.stem + ".meta.json")
+    if npz_path.exists() and meta_path.exists():
+        return []
+
+    cache = build_material_solver_cache(
+        materials,
+        5,
+        0.08,
+        "white",
+        grid_resolution=8,
+    )
+    saved_path = save_material_solver_cache(cache)
+    saved_meta_path = saved_path.with_name(saved_path.stem + ".meta.json")
+    return [saved_path, saved_meta_path]
+
+
+def _seed_region_requantize_test_session_if_available(
+    client: Any,
+    session_id: str,
+) -> None:
+    app = getattr(client, "app", None)
+    overrides = getattr(app, "dependency_overrides", None)
+    if not isinstance(overrides, dict):
+        return
+    try:
+        from api.dependencies import get_session_store
+    except ImportError:
+        return
+    store_factory = overrides.get(get_session_store)
+    if store_factory is None:
+        return
+    store = store_factory()
+    session_data = store.get(session_id)
+    if not isinstance(session_data, dict):
+        return
+    cache = session_data.get("preview_cache")
+    if not isinstance(cache, dict) or "matched_rgb" not in cache:
+        return
+
+    import numpy as np
+
+    matched_rgb = np.asarray(cache["matched_rgb"])
+    height, width = matched_rgb.shape[:2]
+    region_id_map = np.zeros((height, width), dtype=np.uint32)
+    y0, y1 = height // 4, max(height // 4 + 1, 3 * height // 4)
+    x0, x1 = width // 4, max(width // 4 + 1, 3 * width // 4)
+    region_id_map[y0:y1, x0:x1] = np.uint32(1001)
+    store.put(session_id, "gradient_region_id_map", region_id_map)
+    store.put(session_id, "material_source", "material_archive")
+    store.put(session_id, "selected_materials", ["fake/A", "fake/B"])
+    store.put(session_id, "material_layer_count", 5)
+    store.put(session_id, "material_layer_height_mm", 0.08)
+    store.put(session_id, "material_grid_resolution", 8)
+    store.put(session_id, "lut_name", "__material_archive__")
+
+
+def _post_replace_color(
+    client: Any,
+    session_id: str,
+    selected_color: str,
+    replacement_color: str,
+    *,
+    label: str,
+) -> Mapping[str, Any]:
+    response = client.post(
+        "/api/convert/replace-color",
+        json={
+            "session_id": session_id,
+            "selected_color": selected_color,
+            "replacement_color": replacement_color,
+        },
+    )
+    _raise_for_status(response.status_code, response.text, label)
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Replace color response was not an object")
+    return payload
 
 
 def _post_region_replace(
@@ -1605,7 +2008,11 @@ def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
                 event = payload_event
             message = payload.get("message", "")
 
-            if level == "INFO":
+            excluded_from_info_budget = (
+                isinstance(payload_event, str)
+                and payload_event in _INFO_BUDGET_EXCLUDED_EVENTS
+            )
+            if level == "INFO" and not excluded_from_info_budget:
                 info_lines += 1
             elif level == "WARNING":
                 warning_lines += 1

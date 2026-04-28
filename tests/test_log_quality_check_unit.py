@@ -150,6 +150,28 @@ def test_replace_5color_ext_workflow_step_is_first_class() -> None:
     _assert_replace_family_step_is_first_class("replace_5color_ext")
 
 
+def test_replace_color_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow(
+        "startup,lut_list,lut_colors,preview,generate,replace_color"
+    )
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace_color",
+    ]
+    assert "replace_color" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "replace_color" in WORKFLOW_ORDER
+    assert "replace_color" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("replace_color")
+        == WORKFLOW_ORDER.index("replace_5color_ext") + 1
+    )
+
+
 def test_extract_workflow_step_is_first_class() -> None:
     """The extractor workflow must be accepted by the quality gate."""
 
@@ -405,6 +427,177 @@ def test_replace_bw_fast_and_full_canary_requirements_differ() -> None:
     assert full_by_name["workflow_event_converter_region_replace_timing"].passed is True
     assert (
         full_by_name["workflow_event_vector_matched_rgb_overrides_applied"].passed
+        is False
+    )
+
+
+def test_replace_color_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace_color",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_replace_color_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_replace_color_done"].passed is True
+    assert missing_by_name["workflow_event_converter_replace_color_done"].passed is False
+
+
+def test_reset_replacements_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "reset_replacements",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_reset_replacements_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_reset_replacements_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_reset_replacements_done"].passed
+        is False
+    )
+
+
+def test_source_color_pick_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "source_color_pick",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_source_color_pick_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_source_color_pick_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_source_color_pick_done"].passed
+        is False
+    )
+
+
+def test_color_highlight_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "color_highlight",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_color_highlight_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_color_highlight_done"].passed is True
+    assert missing_by_name["workflow_event_converter_color_highlight_done"].passed is False
+
+
+def test_region_detect_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "region_detect",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_region_detect_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_region_detect_done"].passed is True
+    assert missing_by_name["workflow_event_converter_region_detect_done"].passed is False
+
+
+def test_region_requantize_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "region_requantize",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_region_requantize_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_region_requantize_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_region_requantize_done"].passed
         is False
     )
 

@@ -542,6 +542,17 @@ def replace_color(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color replacement")
 
+    log.info(
+        "replace-color completed",
+        extra={
+            "event": "converter_replace_color_done",
+            "session_id": request.session_id,
+            "selected_color": request.selected_color,
+            "replacement_color": request.replacement_color,
+            "replacement_count": len(current_regions),
+            "diff_pixel_count": diff_pixels,
+        },
+    )
     return ColorReplaceResponse(
         status="ok",
         message="Color replaced successfully",
@@ -582,9 +593,11 @@ def reset_replacements(
     cache = _require_preview_cache(session_data)
 
     try:
+        regions_cleared = len(session_data.get("replacement_regions", []))
         # Clear replacement state
         store.put(request.session_id, "replacement_regions", [])
         store.put(request.session_id, "replacement_history", [])
+        history_truncated = 0
         previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
         # Restore matched_rgb from the pristine original saved at preview time.
@@ -628,6 +641,15 @@ def reset_replacements(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Reset replacements")
 
+    log.info(
+        "reset-replacements completed",
+        extra={
+            "event": "converter_reset_replacements_done",
+            "session_id": request.session_id,
+            "regions_cleared": regions_cleared,
+            "history_truncated": history_truncated,
+        },
+    )
     return ResetReplacementsResponse(
         status="ok",
         message="All replacements cleared",
@@ -714,14 +736,27 @@ def source_color_pick(
                 detail="Clicked on background area.",
             )
 
-        return SourceColorPickResponse(
-            source_matched_hex=_rgb_pixel_to_hex(source_arr[y, x]),
-            quantized_hex=_rgb_pixel_to_hex(quantized_arr[y, x]),
-        )
+        picked_color = _rgb_pixel_to_hex(source_arr[y, x])
+        quantized_hex = _rgb_pixel_to_hex(quantized_arr[y, x])
     except HTTPException:
         raise
     except REPLACE_HANDLED_ERRORS as exc:
         _handle_core_error(exc, "Source color pick")
+
+    log.info(
+        "source-color-pick completed",
+        extra={
+            "event": "converter_source_color_pick_done",
+            "session_id": request.session_id,
+            "picked_color": picked_color,
+            "pick_x": request.x,
+            "pick_y": request.y,
+        },
+    )
+    return SourceColorPickResponse(
+        source_matched_hex=picked_color,
+        quantized_hex=quantized_hex,
+    )
 
 
 @router.post("/color-highlight", response_model=ColorHighlightResponse)
@@ -913,6 +948,8 @@ def color_highlight(
             combined_mask |= np.all(matched_rgb == rgb, axis=-1) & mask_solid
         if region_scope_mask is not None:
             combined_mask &= region_scope_mask
+        highlighted_pixel_count = int(np.count_nonzero(combined_mask))
+        highlighted_color = request.color_hexes[0]
 
         # Apply cyan highlight (same style as region-detect)
         highlight_color = np.array([0, 200, 255], dtype=np.uint8)
@@ -933,6 +970,15 @@ def color_highlight(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color highlight")
 
+    log.info(
+        "color-highlight completed",
+        extra={
+            "event": "converter_color_highlight_done",
+            "session_id": request.session_id,
+            "highlighted_color": highlighted_color,
+            "highlighted_pixel_count": highlighted_pixel_count,
+        },
+    )
     return ColorHighlightResponse(preview_url=f"/api/files/{preview_id}")
 
 
@@ -1063,6 +1109,17 @@ def region_detect(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Region detection")
 
+    log.info(
+        "region-detect completed",
+        extra={
+            "event": "converter_region_detect_done",
+            "session_id": request.session_id,
+            "click_x": request.x,
+            "click_y": request.y,
+            "detected_pixel_count": pixel_count,
+            "detected_dominant_color": color_hex,
+        },
+    )
     return RegionDetectResponse(
         region_id=region_id,
         color_hex=color_hex,
@@ -1634,6 +1691,10 @@ def region_requantize(
             "region-requantize done",
             extra={
                 "event": "converter_region_requantize_done",
+                "session_id": request.session_id,
+                "target_lut": str(session_data.get("lut_name") or "__material_archive__"),
+                "region_pixel_count": int(rewritten_px),
+                "output_color_count": unique_color_count,
                 "target_count": len(target_pairs),
                 "local_quantize_colors": int(request.local_quantize_colors),
                 "rewritten_pixels": int(rewritten_px),

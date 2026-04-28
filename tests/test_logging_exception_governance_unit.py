@@ -90,7 +90,20 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_rotate_done",
     "extractor_confirm_palette_done",
 }
-REQUIRED_STRUCTURED_EVENTS = VECTOR_STRUCTURED_EVENTS | EXTRACTOR_STRUCTURED_EVENTS
+CONVERTER_STRUCTURED_EVENTS = {
+    "converter_region_replace_timing",
+    "converter_replace_color_done",
+    "converter_reset_replacements_done",
+    "converter_source_color_pick_done",
+    "converter_color_highlight_done",
+    "converter_region_detect_done",
+    "converter_region_requantize_done",
+}
+REQUIRED_STRUCTURED_EVENTS = (
+    VECTOR_STRUCTURED_EVENTS
+    | EXTRACTOR_STRUCTURED_EVENTS
+    | CONVERTER_STRUCTURED_EVENTS
+)
 
 
 def _iter_py_files(path: Path) -> list[Path]:
