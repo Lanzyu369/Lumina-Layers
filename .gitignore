@@ -311,4 +311,5 @@ materials/_solver_cache/
 *.3mf
 .cursor/
 .windsurf/
+.trae/
 .worktrees/
