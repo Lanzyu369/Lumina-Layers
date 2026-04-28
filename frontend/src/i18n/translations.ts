@@ -488,6 +488,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "FPS",
     en: "FPS",
   },
+  viewer_diagnostics_frame_time: {
+    zh: "帧时间",
+    en: "Frame Time",
+  },
   viewer_diagnostics_js_heap: {
     zh: "JS 堆",
     en: "JS Heap",
@@ -2152,8 +2156,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Backing Thickness",
   },
   cal_backing_thickness_hint: {
-    zh: "调整底板层的物理厚度（毫米）。每一格对应一层打印层（0.08 mm），推荐值: 1.60 mm。",
-    en: "Adjust the backing layer thickness in millimeters. Each tick equals one print layer (0.08 mm); recommended: 1.60 mm.",
+    zh: "调整底板层的物理厚度（毫米）。每一格对应一层打印层（0.08 mm），推荐值: 1.20 mm。",
+    en: "Adjust the backing layer thickness in millimeters. Each tick equals one print layer (0.08 mm); recommended: 1.20 mm.",
   },
   cal_generate_btn_panel: {
     zh: "生成校准板",
@@ -2837,9 +2841,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "量化颜色数",
     en: "Quantize Colors",
   },
-  adv_enable_cleanup: {
-    zh: "启用清理",
-    en: "Enable Cleanup",
+  adv_isolated_pixel_cleanup: {
+    zh: "孤立像素清理",
+    en: "Isolated Pixel Cleanup",
+  },
+  adv_isolated_pixel_cleanup_hint: {
+    zh: "将 LUT 匹配后与周围8邻域颜色完全不同的孤立像素替换为邻域众数，使输出更干净。仅在高保真模式且非预测匹配时生效。",
+    en: "Replaces isolated pixels (whose color differs from all 8 neighbors) after LUT matching with the neighborhood mode for a cleaner output. Only active in High-Fidelity mode with non-predictive matching.",
   },
   adv_separate_backing: {
     zh: "分离底板",

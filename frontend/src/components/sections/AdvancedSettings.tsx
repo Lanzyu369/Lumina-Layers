@@ -18,7 +18,12 @@ export default function AdvancedSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Checkbox label={t("adv_enable_cleanup")} checked={enable_cleanup} onChange={setEnableCleanup} />
+      <Checkbox
+        label={t("adv_isolated_pixel_cleanup")}
+        tooltip={t("adv_isolated_pixel_cleanup_hint")}
+        checked={enable_cleanup}
+        onChange={setEnableCleanup}
+      />
       <Checkbox label={t("adv_separate_backing")} checked={separate_backing} onChange={setSeparateBacking} />
       <Checkbox label={t("adv_hue_protection")} checked={hue_enable} onChange={setHueEnable} />
       {hue_enable && (
