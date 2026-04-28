@@ -13,8 +13,10 @@ from api.schemas.converter import (
     CleanupSessionFilesResponse,
 )
 from api.session_store import SessionStore
+from api.structured_logging import get_logger
 
 router = APIRouter()
+log = get_logger(__name__)
 
 
 def _collect_regeneration_input_paths(session_data: dict | None) -> set[str]:
@@ -79,6 +81,17 @@ def cleanup_session_files(
         keep_file_ids=valid_keep_file_ids or None,
     )
     cleaned = sum(1 for path in existing_paths if not os.path.exists(path))
+    log.info(
+        "Session files cleaned",
+        extra={
+            "event": "converter_cleanup_session_files_done",
+            "session_id": body.session_id,
+            "cleaned": cleaned,
+            "keep_file_id_count": len(valid_keep_file_ids),
+            "keep_path_count": len(keep_paths),
+            "candidate_path_count": len(candidate_paths),
+        },
+    )
     return CleanupSessionFilesResponse(
         status="success",
         cleaned=cleaned,

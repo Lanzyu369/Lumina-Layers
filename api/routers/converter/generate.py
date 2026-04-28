@@ -1363,6 +1363,21 @@ async def convert_generate_large_format(
             warnings=warnings,
         )
 
+    log.info(
+        "Large-format conversion generated",
+        extra={
+            "event": "converter_generate_large_format_done",
+            "session_id": body.session_id,
+            "total_width_mm": total_w_mm,
+            "total_height_mm": total_h_mm,
+            "tile_width_mm": lf.tile_width_mm,
+            "tile_height_mm": lf.tile_height_mm,
+            "is_svg_vector": is_svg_vector,
+            "prefer_raster_svg": prefer_raster_svg,
+            "recipe_override_count": len(recipe_overrides or []),
+            "warning_count": len(result.get("warnings", [])),
+        },
+    )
     return LargeFormatGenerateResponse(**result)
 
 
@@ -1394,6 +1409,7 @@ async def convert_batch(
     每个批量项的 CPU 密集型转换逐个提交到工作进程池。
     """
     # Resolve LUT path (main thread)
+    image_count = len(images)
     lut_path = LUTManager.get_lut_path(lut_name)
     if lut_path is None:
         raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
@@ -1499,6 +1515,18 @@ async def convert_batch(
         success_count = sum(1 for r in results if r.status == "success")
         total_count = len(results)
 
+        log.info(
+            "Batch conversion completed",
+            extra={
+                "event": "converter_batch_done",
+                "image_count": image_count,
+                "success_count": success_count,
+                "total_count": total_count,
+                "lut_name": lut_name,
+                "color_mode": color_mode,
+                "modeling_mode": modeling_mode,
+            },
+        )
         return BatchResponse(
             status="ok" if success_count > 0 else "failed",
             message=f"Batch complete: {success_count}/{total_count} succeeded",

@@ -232,6 +232,18 @@ async def auto_detect_colors(
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
+    log.info(
+        "Auto-detected color count",
+        extra={
+            "event": "converter_auto_detect_colors_done",
+            "image_filename": image.filename or "",
+            "target_width_mm": target_width_mm,
+            "recommended": result.get("recommended", 48),
+            "max_safe": result.get("max_safe", 64),
+            "unique_colors": result.get("unique_colors", 0),
+            "complexity_score": result.get("complexity_score", 0),
+        },
+    )
     return AutoDetectColorsResponse(
         recommended=result.get("recommended", 48),
         max_safe=result.get("max_safe", 64),

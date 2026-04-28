@@ -66,6 +66,12 @@ WORKFLOW_ORDER = [
     "apply_recipe_override",
     "region_recipe",
     "merge_colors",
+    "generate_large_format",
+    "batch",
+    "puzzle_layout_preview",
+    "generate_puzzle",
+    "auto_detect_colors",
+    "cleanup_session_files",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -402,6 +408,10 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                         "OK",
                     ),
                 ),
+                patch(
+                    "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                    side_effect=_mock_assemble_puzzle_3mf,
+                ),
                 TestClient(app) as client,
             ):
                 _execute_workflow(client, workflow)
@@ -648,6 +658,18 @@ def _workflow_required_event_checks(
         required_events.append("converter_region_recipe_done")
     if "merge_colors" in workflow:
         required_events.append("converter_merge_colors_done")
+    if "generate_large_format" in workflow:
+        required_events.append("converter_generate_large_format_done")
+    if "batch" in workflow:
+        required_events.append("converter_batch_done")
+    if "puzzle_layout_preview" in workflow:
+        required_events.append("converter_puzzle_layout_preview_done")
+    if "generate_puzzle" in workflow:
+        required_events.append("converter_puzzle_generate_done")
+    if "auto_detect_colors" in workflow:
+        required_events.append("converter_auto_detect_colors_done")
+    if "cleanup_session_files" in workflow:
+        required_events.append("converter_cleanup_session_files_done")
 
     required_events = list(dict.fromkeys(required_events))
     return [
@@ -767,7 +789,11 @@ def _build_mock_worker_result(
             image_cls,
             color_mode,
         )
-    if name == "worker_generate_model":
+    if name in {
+        "worker_generate_model",
+        "worker_batch_convert_item",
+        "_submit_puzzle_worker",
+    }:
         return _build_mock_generate_result(created_paths)
     raise QualityCheckError(f"Unexpected worker submitted in fast mode: {name}")
 
@@ -923,6 +949,20 @@ def _build_mock_generate_result(created_paths: list[Path]) -> dict[str, Any]:
     }
 
 
+def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
+    """Fast-mode stub for ``core.puzzle_3mf.assemble_puzzle_3mf``.
+
+    Writes a placeholder byte payload to ``output_path`` so the puzzle endpoint
+    success path can complete. The endpoint emits its canary log and registers
+    the file via FileRegistry; downstream consumers (governance audit, INFO
+    counters) only inspect the response payload, never the file content.
+    """
+    from pathlib import Path as _Path
+
+    _Path(output_path).write_bytes(b"mock puzzle 3mf")
+    return output_path
+
+
 def _mock_requantize_gradient_regions(
     *,
     matched_rgb: Any,
@@ -1040,6 +1080,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_region_recipe_workflow(client)
         elif step == "merge_colors":
             _execute_merge_colors_workflow(client)
+        elif step == "generate_large_format":
+            _execute_generate_large_format_workflow(client)
+        elif step == "batch":
+            _execute_batch_workflow(client)
+        elif step == "puzzle_layout_preview":
+            _execute_puzzle_layout_preview_workflow(client)
+        elif step == "generate_puzzle":
+            _execute_generate_puzzle_workflow(client)
+        elif step == "auto_detect_colors":
+            _execute_auto_detect_colors_workflow(client)
+        elif step == "cleanup_session_files":
+            _execute_cleanup_session_files_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -1540,6 +1592,186 @@ def _execute_merge_colors_workflow(client: Any) -> None:
     quality_metric = payload.get("quality_metric")
     if not isinstance(quality_metric, (float, int)) or not 0 <= quality_metric <= 100:
         raise QualityCheckError("Merge colors response quality_metric was invalid")
+
+
+def _execute_generate_large_format_workflow(client: Any) -> None:
+    session_id = _post_preview(client, DEFAULT_LUT_NAME)
+    response = client.post(
+        "/api/convert/generate-large-format",
+        json={
+            "session_id": session_id,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 60.0,
+                "tile_height_mm": 60.0,
+                "params": {
+                    "lut_name": DEFAULT_LUT_NAME,
+                    "target_width_mm": 60.0,
+                    "color_mode": DEFAULT_COLOR_MODE,
+                    "modeling_mode": DEFAULT_MODELING_MODE,
+                    "enable_fridge_magnet": False,
+                    "add_loop": False,
+                },
+            },
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "generate_large_format")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Large-format response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Large-format response status was not ok")
+    if not payload.get("download_url"):
+        raise QualityCheckError("Large-format response did not include download_url")
+    if int(payload.get("tile_count", 0)) < 1:
+        raise QualityCheckError("Large-format response did not generate any tiles")
+
+
+def _execute_batch_workflow(client: Any) -> None:
+    image_bytes = _synthesize_rgb_png_bytes(32, 32)
+    response = client.post(
+        "/api/convert/batch",
+        files=[("images", ("batch.png", image_bytes, "image/png"))],
+        data={
+            "lut_name": DEFAULT_LUT_NAME,
+            "color_mode": DEFAULT_COLOR_MODE,
+            "modeling_mode": DEFAULT_MODELING_MODE,
+            "target_width_mm": "60.0",
+            "quantize_colors": "48",
+            "enable_cleanup": "true",
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "batch")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Batch response was not an object")
+    if not payload.get("download_url"):
+        raise QualityCheckError("Batch response did not include download_url")
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise QualityCheckError("Batch response did not include item results")
+    success_count = sum(
+        1
+        for item in results
+        if isinstance(item, Mapping) and item.get("status") == "success"
+    )
+    if success_count < 1:
+        raise QualityCheckError("Batch response did not include a successful item")
+
+
+def _execute_puzzle_layout_preview_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="puzzle_layout_preview setup",
+    )
+    session_id = _extract_session_id(preview_payload, "Puzzle layout preview setup")
+    response = client.post(
+        "/api/convert/puzzle-layout-preview",
+        json={
+            "session_id": session_id,
+            "params": {
+                "target_height_mm": 60.0,
+                "puzzle_style": "regular",
+                "sizing_mode": "grid",
+                "rows": 2,
+                "cols": 2,
+                "target_piece_count": 4,
+                "labels_enabled": False,
+            },
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "puzzle_layout_preview")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Puzzle layout preview response was not an object")
+    if not payload.get("overlay_url"):
+        raise QualityCheckError("Puzzle layout preview response did not include overlay_url")
+    if int(payload.get("piece_count", 0)) < 1:
+        raise QualityCheckError("Puzzle layout preview response did not include pieces")
+
+
+def _execute_generate_puzzle_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="generate_puzzle setup",
+    )
+    session_id = _extract_session_id(preview_payload, "Generate puzzle setup")
+    response = client.post(
+        "/api/convert/generate-puzzle",
+        json={
+            "session_id": session_id,
+            "params": {
+                "target_height_mm": 60.0,
+                "puzzle_style": "regular",
+                "sizing_mode": "grid",
+                "rows": 2,
+                "cols": 2,
+                "target_piece_count": 4,
+                "labels_enabled": False,
+                "engrave_back_labels": False,
+                "params": {
+                    "lut_name": DEFAULT_LUT_NAME,
+                    "target_width_mm": 60.0,
+                    "color_mode": DEFAULT_COLOR_MODE,
+                    "modeling_mode": DEFAULT_MODELING_MODE,
+                    "enable_fridge_magnet": False,
+                    "fridge_magnets": [],
+                    "add_loop": False,
+                },
+            },
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "generate_puzzle")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Generate puzzle response was not an object")
+    if not payload.get("download_url"):
+        raise QualityCheckError("Generate puzzle response did not include download_url")
+    if int(payload.get("piece_count", 0)) < 1:
+        raise QualityCheckError("Generate puzzle response did not include pieces")
+
+
+def _execute_auto_detect_colors_workflow(client: Any) -> None:
+    image_bytes = _synthesize_rgb_png_bytes(32, 32)
+    response = client.post(
+        "/api/convert/auto-detect-colors",
+        files={"image": ("auto-detect.png", image_bytes, "image/png")},
+        data={"target_width_mm": "60.0"},
+    )
+    _raise_for_status(response.status_code, response.text, "auto_detect_colors")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Auto-detect colors response was not an object")
+    if int(payload.get("recommended", 0)) < 1:
+        raise QualityCheckError("Auto-detect colors response recommendation was invalid")
+    if int(payload.get("unique_colors", 0)) < 1:
+        raise QualityCheckError("Auto-detect colors response did not report colors")
+
+
+def _execute_cleanup_session_files_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="cleanup_session_files setup",
+    )
+    session_id = _extract_session_id(preview_payload, "Cleanup session files setup")
+    response = client.post(
+        "/api/convert/cleanup-session-files",
+        json={"session_id": session_id, "keep_file_ids": []},
+    )
+    _raise_for_status(response.status_code, response.text, "cleanup_session_files")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Cleanup session files response was not an object")
+    if payload.get("status") != "success":
+        raise QualityCheckError("Cleanup session files response status was not success")
+    if int(payload.get("cleaned", -1)) < 0:
+        raise QualityCheckError("Cleanup session files response cleaned count was invalid")
 
 
 def _execute_extract_workflow(client: Any) -> None:

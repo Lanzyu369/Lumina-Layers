@@ -601,9 +601,15 @@ async def puzzle_layout_preview(
     log.info(
         "Puzzle layout preview generated",
         extra={
-            "event": "converter_puzzle_layout_preview",
+            "event": "converter_puzzle_layout_preview_done",
             "session_id": body.session_id,
             "piece_count": layout.actual_piece_count,
+            "grid_cols": layout.cols,
+            "grid_rows": layout.rows,
+            "derived_piece_width_mm": layout.derived_piece_width_mm,
+            "derived_piece_height_mm": layout.derived_piece_height_mm,
+            "warning_count": len(warnings),
+            "labels_enabled": body.params.labels_enabled,
         },
     )
     return PuzzleLayoutPreviewResponse(
@@ -890,6 +896,11 @@ async def generate_puzzle(
             "event": "converter_puzzle_generate_done",
             "session_id": sid,
             "piece_count": len(successful_entries),
+            "grid_cols": layout.cols,
+            "grid_rows": layout.rows,
+            "warning_count": len(warnings),
+            "skipped_transparent_count": len(skipped_transparent_labels),
+            "download_id": download_id,
         },
     )
     return PuzzleGenerateResponse(

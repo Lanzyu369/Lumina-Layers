@@ -784,6 +784,132 @@ def test_merge_colors_workflow_requires_canary_event() -> None:
     assert missing_by_name["workflow_event_converter_merge_colors_done"].passed is False
 
 
+def test_generate_large_format_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["generate_large_format"],
+        event_counts={"converter_generate_large_format_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["generate_large_format"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_generate_large_format_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_generate_large_format_done"].passed
+        is False
+    )
+
+
+def test_batch_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["batch"],
+        event_counts={"converter_batch_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["batch"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_batch_done"].passed is True
+    assert missing_by_name["workflow_event_converter_batch_done"].passed is False
+
+
+def test_puzzle_layout_preview_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["puzzle_layout_preview"],
+        event_counts={"converter_puzzle_layout_preview_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["puzzle_layout_preview"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_puzzle_layout_preview_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_puzzle_layout_preview_done"].passed
+        is False
+    )
+
+
+def test_generate_puzzle_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["generate_puzzle"],
+        event_counts={"converter_puzzle_generate_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["generate_puzzle"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_puzzle_generate_done"].passed is True
+    assert missing_by_name["workflow_event_converter_puzzle_generate_done"].passed is False
+
+
+def test_auto_detect_colors_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["auto_detect_colors"],
+        event_counts={"converter_auto_detect_colors_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["auto_detect_colors"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_auto_detect_colors_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_auto_detect_colors_done"].passed
+        is False
+    )
+
+
+def test_cleanup_session_files_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["cleanup_session_files"],
+        event_counts={"converter_cleanup_session_files_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["cleanup_session_files"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_cleanup_session_files_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_converter_cleanup_session_files_done"].passed
+        is False
+    )
+
+
 def test_full_extract_workflow_requires_canary_event() -> None:
     workflow = [
         "startup",
