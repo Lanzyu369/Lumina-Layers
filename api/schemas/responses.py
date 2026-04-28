@@ -677,6 +677,7 @@ class ExtractResponse(BaseModel):
         default_factory=list,
         description="默认调色板数组，每项含 color、material、hex_color、color_name",
     )
+    lut_layout: Optional["LutCardLayoutResponse"] = None
 
 
 class ManualFixResponse(BaseModel):
@@ -685,6 +686,7 @@ class ManualFixResponse(BaseModel):
     status: str
     message: str
     lut_preview_url: str
+    lut_layout: Optional["LutCardLayoutResponse"] = None
 
 
 class HeightmapUploadResponse(BaseModel):
@@ -705,12 +707,79 @@ class LutColorEntry(BaseModel):
     rgb: tuple[int, int, int]
 
 
+class LutCardPageResponse(BaseModel):
+    """Single LUT card/page layout descriptor."""
+
+    page_index: int
+    page_label: str
+    card_index: int
+    card_label: str
+    start_index: int
+    item_count: int
+    data_rows: int
+    data_cols: int
+    padding: int
+    physical_rows: int
+    physical_cols: int
+
+
+class LutCardLayoutResponse(BaseModel):
+    """Resolved LUT card layout."""
+
+    color_mode: str
+    total_count: int
+    pages: list[LutCardPageResponse]
+
+
+class LutCardCellCoordinateResponse(BaseModel):
+    """Resolved coordinate for one LUT row."""
+
+    card_index: int
+    card_label: str
+    page_index: int
+    page_label: str
+    grid_size: int
+    data_rows: int
+    data_cols: int
+    row: int
+    col: int
+    data_row: int
+    data_col: int
+    display_row: int
+    display_col: int
+    physical_row: int
+    physical_col: int
+    row_index: int
+
+
+class LutPreviewResolvedCell(BaseModel):
+    """Resolved LUT preview click target."""
+
+    cell: LutCardCellCoordinateResponse
+    rgb: tuple[int, int, int]
+    hex: str
+    overlay_bbox: dict[str, float]
+
+
+class LutColorsCardResponse(BaseModel):
+    """LUT colors grouped by backend-resolved card/page."""
+
+    page: LutCardPageResponse
+    colors: list[LutColorEntry]
+
+
 class LutColorsResponse(BaseModel):
     """LUT 颜色列表响应。"""
 
     lut_name: str
     total: int
     colors: list[LutColorEntry]
+    layout: Optional[LutCardLayoutResponse] = None
+    cards: list[LutColorsCardResponse] = Field(default_factory=list)
+
+
+ExtractResponse.model_rebuild()
+ManualFixResponse.model_rebuild()
 
 
 class CropResponse(BaseModel):

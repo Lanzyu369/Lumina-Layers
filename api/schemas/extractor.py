@@ -10,7 +10,7 @@ including calibration board scanning and manual LUT cell correction.
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -168,8 +168,18 @@ class ExtractorManualFixRequest(BaseModel):
 
     lut_path: str = Field("", description="LUT 文件路径 (可选，优先使用 session_id 查找)")
     session_id: str = Field("", description="Session ID (用于查找 LUT 路径)")
-    cell_coord: Tuple[int, int] = Field(..., description="单元格坐标 (row, col)")
+    cell_coord: Optional[Tuple[int, int]] = Field(None, description="单元格坐标 (row, col)")
+    row_index: Optional[int] = Field(None, ge=0, description="LUT 行索引；优先于 cell_coord")
     override_color: str = Field(..., description="覆盖颜色 (hex)")
+
+
+class ExtractorResolveCellRequest(BaseModel):
+    """Request model for resolving a LUT preview click to a backend layout cell."""
+
+    session_id: str = Field(..., description="Session ID (用于查找当前 LUT)")
+    x: float = Field(..., ge=0.0, le=1.0, description="预览图内容区归一化 X 坐标")
+    y: float = Field(..., ge=0.0, le=1.0, description="预览图内容区归一化 Y 坐标")
+    card_index: int = Field(0, ge=0, description="色卡索引，默认当前提取页")
 
 
 class ConfirmPaletteRequest(BaseModel):

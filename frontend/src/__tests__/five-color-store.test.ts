@@ -4,6 +4,7 @@ import {
   type CollectedRecipe,
 } from "../stores/fiveColorStore";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
+import type { FiveColorCardCoordinate } from "../api/types";
 
 vi.mock("../api/fiveColor", () => ({
   fetchBaseColors: vi.fn(),
@@ -27,6 +28,33 @@ const staleRecipe: CollectedRecipe = {
   baseColorHexes: ["#111111", "#222222", "#333333", "#444444", "#555555"],
   label: "Old 0 → Old 1 → Old 2 → Old 3 → Old 4",
 };
+
+function cardCoordinate(
+  overrides: Partial<FiveColorCardCoordinate> = {},
+): FiveColorCardCoordinate {
+  const gridSize = overrides.grid_size ?? 2;
+  const row = overrides.row ?? 0;
+  const col = overrides.col ?? 0;
+  return {
+    card_index: 0,
+    card_label: "1",
+    page_index: 0,
+    page_label: "1",
+    grid_size: gridSize,
+    data_rows: gridSize,
+    data_cols: gridSize,
+    row,
+    col,
+    data_row: row,
+    data_col: col,
+    display_row: row + 1,
+    display_col: col + 1,
+    physical_row: row,
+    physical_col: col,
+    row_index: row * gridSize + col,
+    ...overrides,
+  };
+}
 
 function resetStore() {
   useFiveColorStore.setState({
@@ -220,7 +248,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -228,7 +256,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
 
@@ -284,7 +312,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [170, 0, 0],
       matched_hex: "#AA0000",
       delta_e: 0,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 4,
@@ -292,7 +320,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 0,
         display_row: 4,
         display_col: 1,
-      },
+      }),
       neighborhood: [],
     });
     await staleRequest;
@@ -381,7 +409,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [170, 0, 0],
       matched_hex: "#AA0000",
       delta_e: 0,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 4,
@@ -389,7 +417,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 0,
         display_row: 4,
         display_col: 1,
-      },
+      }),
       neighborhood: [],
     });
     await pendingMatch;
@@ -434,7 +462,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -442,7 +470,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
     await useFiveColorStore.getState().matchColorByHex("#F20A00");
@@ -478,7 +506,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -486,7 +514,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
     mockMatchFiveColorByHex.mockResolvedValueOnce({
@@ -503,7 +531,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [220, 10, 30],
       matched_hex: "#DC0A1E",
       delta_e: 0,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 7,
@@ -511,7 +539,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 5,
         display_row: 5,
         display_col: 6,
-      },
+      }),
       neighborhood: [],
     });
 
@@ -549,7 +577,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -557,7 +585,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
     mockQueryFiveColor.mockRejectedValueOnce(new Error("query failed"));
@@ -594,7 +622,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -602,7 +630,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
     mockQueryFiveColor.mockResolvedValueOnce({
@@ -646,7 +674,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -654,7 +682,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
 
@@ -689,7 +717,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -697,7 +725,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
 
@@ -773,7 +801,7 @@ describe("fiveColorStore LUT switching", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -781,7 +809,7 @@ describe("fiveColorStore LUT switching", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [],
     });
     mockQueryFiveColor.mockResolvedValueOnce({

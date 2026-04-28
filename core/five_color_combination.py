@@ -7,13 +7,20 @@
 """
 
 from dataclasses import dataclass
-import math
 import re
 from typing import Tuple, List, Optional
 
 import cv2
 import numpy as np
 from scipy.spatial import KDTree
+
+from core.lut_card_layout import (
+    LutCardCellCoordinate,
+    LutCardNeighborhoodCell,
+    build_neighborhood as build_lut_card_neighborhood,
+    cell_for_row_index,
+    resolve_lut_layout,
+)
 
 
 _INT32_MIN = -(2**31)
@@ -54,34 +61,8 @@ class ColorQueryResult:
     source: str = ""  # 来源标识（例如 "Aliz-PETG-8色"）
 
 
-@dataclass(frozen=True)
-class ColorCardCoordinate:
-    """Matched color position in the rendered LUT card layout."""
-
-    card_index: int
-    card_label: str
-    grid_size: int
-    row: int
-    col: int
-    display_row: int
-    display_col: int
-
-
-@dataclass(frozen=True)
-class ColorCardCell:
-    """One cell in a virtual LUT card neighborhood."""
-
-    card_index: int | None
-    card_label: str | None
-    grid_size: int | None
-    row: int | None
-    col: int | None
-    display_row: int | None
-    display_col: int | None
-    row_index: int | None
-    rgb: Tuple[int, int, int] | None
-    hex: str | None
-    is_match: bool
+ColorCardCoordinate = LutCardCellCoordinate
+ColorCardCell = LutCardNeighborhoodCell
 
 
 @dataclass
@@ -100,15 +81,6 @@ class ColorMatchResult:
     coordinate: ColorCardCoordinate
     neighborhood: list[list[ColorCardCell]]
     reason: str = ""
-
-
-@dataclass(frozen=True)
-class _CardLayout:
-    card_index: int
-    card_label: str
-    grid_size: int
-    start_index: int
-    item_count: int
 
 
 class ColorCountDetector:
@@ -508,13 +480,15 @@ class ColorQueryEngine:
         row_index = int(np.asarray(row_idx).reshape(-1)[0])
         delta_e = float(np.asarray(distance).reshape(-1)[0])
         matched_rgb = tuple(int(v) for v in lut_rgb[row_index])
-        coordinate = _coordinate_for_index(row_index, int(lut_rgb.shape[0]))
+        layout = resolve_lut_layout("", int(lut_rgb.shape[0]))
+        coordinate = cell_for_row_index(layout, row_index)
         radius = max(0, int(neighborhood_radius))
-        neighborhood = _build_neighborhood(
+        neighborhood = build_lut_card_neighborhood(
+            layout,
             lut_rgb,
             coordinate,
-            row_index,
-            radius,
+            match_row_index=row_index,
+            radius=radius,
         )
 
         recipe = self._recipe_for_row_index(row_index)
@@ -736,103 +710,6 @@ def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab).reshape(-1, 3).astype(np.float64)
 
 
-def _card_layouts(total_count: int) -> list[_CardLayout]:
-    if total_count == 2738:
-        first_count = total_count // 2
-        second_count = total_count - first_count
-        grid_size = int(math.ceil(math.sqrt(first_count)))
-        return [
-            _CardLayout(0, "A", grid_size, 0, first_count),
-            _CardLayout(1, "B", int(math.ceil(math.sqrt(second_count))), first_count, second_count),
-        ]
-
-    grid_size = int(math.ceil(math.sqrt(max(total_count, 1))))
-    return [_CardLayout(0, "1", grid_size, 0, total_count)]
-
-
-def _coordinate_for_index(row_index: int, total_count: int) -> ColorCardCoordinate:
-    for layout in _card_layouts(total_count):
-        local_index = row_index - layout.start_index
-        if 0 <= local_index < layout.item_count:
-            row = int(local_index // layout.grid_size)
-            col = int(local_index % layout.grid_size)
-            return ColorCardCoordinate(
-                card_index=layout.card_index,
-                card_label=layout.card_label,
-                grid_size=layout.grid_size,
-                row=row,
-                col=col,
-                display_row=row + 1,
-                display_col=col + 1,
-            )
-    raise ValueError(f"Row index {row_index} is outside LUT card range")
-
-
-def _layout_for_coordinate(total_count: int, coordinate: ColorCardCoordinate) -> _CardLayout:
-    for layout in _card_layouts(total_count):
-        if layout.card_index == coordinate.card_index:
-            return layout
-    raise ValueError(f"Card index {coordinate.card_index} is outside LUT card range")
-
-
-def _build_neighborhood(
-    lut_rgb: np.ndarray,
-    coordinate: ColorCardCoordinate,
-    match_row_index: int,
-    radius: int,
-) -> list[list[ColorCardCell]]:
-    total_count = int(lut_rgb.shape[0])
-    layout = _layout_for_coordinate(total_count, coordinate)
-    rows: list[list[ColorCardCell]] = []
-    for row in range(coordinate.row - radius, coordinate.row + radius + 1):
-        cells: list[ColorCardCell] = []
-        for col in range(coordinate.col - radius, coordinate.col + radius + 1):
-            if row < 0 or col < 0 or row >= layout.grid_size or col >= layout.grid_size:
-                cells.append(_empty_card_cell(coordinate, row, col))
-                continue
-            local_index = row * layout.grid_size + col
-            if local_index >= layout.item_count:
-                cells.append(_empty_card_cell(coordinate, row, col))
-                continue
-            row_index = layout.start_index + local_index
-            rgb = tuple(int(v) for v in lut_rgb[row_index])
-            cells.append(
-                ColorCardCell(
-                    card_index=layout.card_index,
-                    card_label=layout.card_label,
-                    grid_size=layout.grid_size,
-                    row=row,
-                    col=col,
-                    display_row=row + 1,
-                    display_col=col + 1,
-                    row_index=row_index,
-                    rgb=rgb,
-                    hex=rgb_to_hex(rgb),
-                    is_match=row_index == match_row_index,
-                )
-            )
-        rows.append(cells)
-    return rows
-
-
-def _empty_card_cell(
-    coordinate: ColorCardCoordinate,
-    row: int,
-    col: int,
-) -> ColorCardCell:
-    return ColorCardCell(
-        card_index=None,
-        card_label=None,
-        grid_size=None,
-        row=None,
-        col=None,
-        display_row=None,
-        display_col=None,
-        row_index=None,
-        rgb=None,
-        hex=None,
-        is_match=False,
-    )
 
 
 def format_selection_sequence(selected_indices: List[int], color_names: Optional[List[str]] = None) -> str:

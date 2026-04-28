@@ -4,7 +4,7 @@ import FiveColorQueryPanel from "../components/FiveColorQueryPanel";
 import { useFiveColorStore } from "../stores/fiveColorStore";
 import { useConverterStore } from "../stores/converter";
 import { translations } from "../i18n/translations";
-import type { FiveColorNeighborhoodCell } from "../api/types";
+import type { FiveColorCardCoordinate, FiveColorNeighborhoodCell } from "../api/types";
 
 vi.mock("../components/FiveColorCanvas", () => ({
   default: () => <div data-testid="five-color-canvas" />,
@@ -21,6 +21,33 @@ import { matchFiveColorByHex } from "../api/fiveColor";
 
 const mockMatchFiveColorByHex = vi.mocked(matchFiveColorByHex);
 
+function cardCoordinate(
+  overrides: Partial<FiveColorCardCoordinate> = {},
+): FiveColorCardCoordinate {
+  const gridSize = overrides.grid_size ?? 2;
+  const row = overrides.row ?? 0;
+  const col = overrides.col ?? 0;
+  return {
+    card_index: 0,
+    card_label: "1",
+    page_index: 0,
+    page_label: "1",
+    grid_size: gridSize,
+    data_rows: gridSize,
+    data_cols: gridSize,
+    row,
+    col,
+    data_row: row,
+    data_col: col,
+    display_row: row + 1,
+    display_col: col + 1,
+    physical_row: row,
+    physical_col: col,
+    row_index: row * gridSize + col,
+    ...overrides,
+  };
+}
+
 function buildNeighborhood(size: number): FiveColorNeighborhoodCell[][] {
   return Array.from({ length: size }, (_, row) =>
     Array.from({ length: size }, (_, col) => {
@@ -32,11 +59,19 @@ function buildNeighborhood(size: number): FiveColorNeighborhoodCell[][] {
       return {
         card_index: 0,
         card_label: "1",
+        page_index: 0,
+        page_label: "1",
         grid_size: size,
+        data_rows: size,
+        data_cols: size,
         row,
         col,
+        data_row: row,
+        data_col: col,
         display_row: row + 1,
         display_col: col + 1,
+        physical_row: row,
+        physical_col: col,
         row_index: rowIndex,
         rgb,
         hex: isMatch ? "#F00A00" : `#${rowIndex.toString(16).padStart(2, "0").repeat(3).toUpperCase()}`,
@@ -99,7 +134,7 @@ describe("FiveColorQueryPanel target color match", () => {
       matched_rgb: [240, 10, 0],
       matched_hex: "#F00A00",
       delta_e: 1.25,
-      coordinate: {
+      coordinate: cardCoordinate({
         card_index: 0,
         card_label: "1",
         grid_size: 2,
@@ -107,7 +142,7 @@ describe("FiveColorQueryPanel target color match", () => {
         col: 1,
         display_row: 1,
         display_col: 2,
-      },
+      }),
       neighborhood: [
         ...buildNeighborhood(5),
       ],
@@ -173,7 +208,7 @@ describe("FiveColorQueryPanel target color match", () => {
         matched_rgb: [255, 0, 0],
         matched_hex: "#FF0000",
         delta_e: 0,
-        coordinate: {
+        coordinate: cardCoordinate({
           card_index: 0,
           card_label: "1",
           grid_size: 2,
@@ -181,7 +216,7 @@ describe("FiveColorQueryPanel target color match", () => {
           col: 0,
           display_row: 1,
           display_col: 1,
-        },
+        }),
         neighborhood: [],
       },
     });
@@ -210,7 +245,7 @@ describe("FiveColorQueryPanel target color match", () => {
         matched_rgb: [255, 0, 0],
         matched_hex: "#FF0000",
         delta_e: 0,
-        coordinate: {
+        coordinate: cardCoordinate({
           card_index: 0,
           card_label: "1",
           grid_size: 2,
@@ -218,7 +253,7 @@ describe("FiveColorQueryPanel target color match", () => {
           col: 0,
           display_row: 1,
           display_col: 1,
-        },
+        }),
         neighborhood: [],
       },
     });
@@ -267,7 +302,7 @@ describe("FiveColorQueryPanel target color match", () => {
         matched_rgb: [220, 10, 30],
         matched_hex: "#DC0A1E",
         delta_e: 0,
-        coordinate: {
+        coordinate: cardCoordinate({
           card_index: 0,
           card_label: "1",
           grid_size: 7,
@@ -275,7 +310,7 @@ describe("FiveColorQueryPanel target color match", () => {
           col: 5,
           display_row: 5,
           display_col: 6,
-        },
+        }),
         neighborhood: [],
       },
     });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
 import {
@@ -7,6 +7,7 @@ import {
   CORNER_COLOR_KEYS_5C_EXT_PAGE2,
 } from "../components/ExtractorCanvas";
 import { translations } from "../i18n/translations";
+import { manualFixCell, resolveLutPreviewCell } from "../api/extractor";
 
 // Lightweight `t` that mirrors the i18n context's zh fallback so tests remain
 // independent of React context while still validating translated output.
@@ -16,6 +17,20 @@ function tZh(key: string): string {
   return entry.zh ?? key;
 }
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
+
+vi.mock("../api/extractor", () => ({
+  confirmPalette: vi.fn(),
+  extractColors: vi.fn(),
+  manualFixCell: vi.fn(),
+  mergeEightColor: vi.fn(),
+  mergeFiveColorExtended: vi.fn(),
+  previewAutoWb: vi.fn(),
+  resolveLutPreviewCell: vi.fn(),
+  rotateExtractorImage: vi.fn(),
+}));
+
+const mockManualFixCell = vi.mocked(manualFixCell);
+const mockResolveLutPreviewCell = vi.mocked(resolveLutPreviewCell);
 
 // ========== Mock browser APIs ==========
 
@@ -85,6 +100,7 @@ function resetExtractorStore(): void {
     lut_download_url: null,
     warp_view_url: null,
     lut_preview_url: null,
+    lut_layout: null,
     manualFixLoading: false,
     manualFixError: null,
     page1Extracted: false,
@@ -112,6 +128,13 @@ const arbCornerCount = fc.integer({ min: 0, max: 3 });
 // ========== Tests ==========
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  mockManualFixCell.mockResolvedValue({
+    status: "success",
+    message: "updated",
+    lut_preview_url: "/api/files/fixed-lut",
+    lut_layout: null,
+  });
   resetExtractorStore();
   cleanup();
 });
@@ -380,6 +403,81 @@ describe("ExtractorCanvas 单元测试", () => {
     expect(screen.getByTestId("extractor-results")).toBeInTheDocument();
     expect(screen.getByTestId("warp-view-image")).toHaveAttribute("src", "/api/files/warp-123");
     expect(screen.getByTestId("lut-preview-image")).toHaveAttribute("src", "/api/files/lut-456");
+  });
+
+  it("resolves LUT preview clicks through the backend and submits row_index fixes", async () => {
+    const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
+    mockResolveLutPreviewCell.mockResolvedValueOnce({
+      cell: {
+        card_index: 0,
+        card_label: "1",
+        page_index: 0,
+        page_label: "1",
+        grid_size: 32,
+        data_rows: 32,
+        data_cols: 32,
+        row: 2,
+        col: 1,
+        data_row: 2,
+        data_col: 1,
+        display_row: 3,
+        display_col: 2,
+        physical_row: 3,
+        physical_col: 2,
+        row_index: 65,
+      },
+      rgb: [240, 10, 0],
+      hex: "#F00A00",
+      overlay_bbox: {
+        left: 1 / 32,
+        top: 2 / 32,
+        width: 1 / 32,
+        height: 1 / 32,
+      },
+    });
+
+    useExtractorStore.setState({
+      imagePreviewUrl: "blob:test-image",
+      session_id: "session-1",
+      warp_view_url: null,
+      lut_preview_url: "/api/files/lut-456",
+    });
+
+    render(<ExtractorCanvas />);
+    const preview = screen.getByTestId("lut-preview-image") as HTMLImageElement;
+    Object.defineProperty(preview, "naturalWidth", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(preview, "naturalHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    preview.getBoundingClientRect = vi.fn(() => ({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 210,
+      bottom: 120,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect));
+
+    fireEvent.click(preview, { clientX: 85, clientY: 45 });
+
+    await waitFor(() => {
+      expect(mockResolveLutPreviewCell).toHaveBeenCalledWith("session-1", 0.25, 0.25);
+    });
+    expect(await screen.findByTestId("manual-fix-popup")).toBeInTheDocument();
+    expect(screen.getByTestId("cell-highlight-overlay")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("fix-submit-button"));
+
+    await waitFor(() => {
+      expect(mockManualFixCell).toHaveBeenCalledWith("session-1", 65, "#F00A00");
+    });
   });
 
   it("renders only warp_view when lut_preview is null", async () => {

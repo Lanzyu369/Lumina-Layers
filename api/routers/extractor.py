@@ -27,8 +27,9 @@ from api.schemas.extractor import (
     ConfirmPaletteRequest,
     ExtractorManualFixRequest,
     ExtractorMergeEightColorRequest,
+    ExtractorResolveCellRequest,
 )
-from api.schemas.responses import ExtractResponse, ManualFixResponse
+from api.schemas.responses import ExtractResponse, LutPreviewResolvedCell, ManualFixResponse
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import ColorSystem, LUTMetadata, PaletteEntry
@@ -38,6 +39,16 @@ from core.extractor import (
     manual_fix_cell,
     rotate_image,
     run_extraction,
+)
+from core.lut_card_layout import (
+    LutCardLayout,
+    LutCardPage,
+    cell_from_normalized_point,
+    localize_page_layout,
+    overlay_bbox_for_cell,
+    resolve_extraction_page_layout,
+    resolve_lut_layout,
+    rgb_to_hex,
 )
 from utils.lut_manager import LUTManager
 
@@ -193,6 +204,41 @@ def _get_assets_dir() -> str:
     if getattr(sys, "frozen", False):
         return os.path.join(os.getcwd(), "assets")
     return "assets"
+
+
+def _resolve_session_lut_layout(
+    *,
+    color_mode: str,
+    total_count: int,
+    page: str = "Page 1",
+    eight_color_full_export: bool = False,
+    current_page: bool = False,
+) -> LutCardLayout:
+    if current_page:
+        page_layout = resolve_extraction_page_layout(
+            color_mode,
+            page=page,
+            eight_color_full_export=eight_color_full_export,
+        )
+        if total_count <= page_layout.capacity:
+            return localize_page_layout(page_layout, item_count=total_count)
+    return resolve_lut_layout(color_mode, total_count)
+
+
+def _resolve_session_page_layout(session_data: dict | None, rgb_count: int) -> LutCardPage | None:
+    if not session_data:
+        return None
+    color_mode = str(session_data.get("color_mode") or "")
+    if not color_mode:
+        return None
+    layout = _resolve_session_lut_layout(
+        color_mode=color_mode,
+        total_count=rgb_count,
+        page=str(session_data.get("page") or "Page 1"),
+        eight_color_full_export=bool(session_data.get("eight_color_full_export")),
+        current_page=True,
+    )
+    return layout.pages[0] if layout.pages else None
 
 
 def _parse_page_number(page: str, default: int = 1) -> int:
@@ -389,6 +435,8 @@ async def extractor_extract(
     session_id = store.create()
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "color_mode", effective_color_mode)
+    store.put(session_id, "page", page)
+    store.put(session_id, "eight_color_full_export", bool(eight_color_full_export))
 
     # For 8-Color mode: save page-specific temp file
     if "8-Color" in effective_color_mode and lut_path:
@@ -446,6 +494,17 @@ async def extractor_extract(
 
     # Register LUT file (already in Keyed JSON format from run_extraction)
     lut_download_id = registry.register_path(session_id, lut_path)
+    try:
+        layout_rgb, _layout_stacks, _layout_metadata = LUTManager.load_lut_with_metadata(lut_path)
+        lut_layout = _resolve_session_lut_layout(
+            color_mode=effective_color_mode,
+            total_count=len(layout_rgb),
+            page=page,
+            eight_color_full_export=bool(eight_color_full_export),
+            current_page=True,
+        )
+    except LUT_PERSIST_WARNING_ERRORS:
+        lut_layout = None
 
     # Register warp view (visualization)
     warp_view_id = ""
@@ -488,6 +547,7 @@ async def extractor_extract(
         # 保持自己的 RYBW 槽位名（白/红/黄/蓝/绿/黑），不会被显示成 CMYW
         # （白/青/品红/...）。
         default_palette=_build_default_palette(color_mode),
+        lut_layout=lut_layout.to_dict() if lut_layout is not None else None,
     )
 
 
@@ -502,6 +562,7 @@ def extractor_manual_fix(
     """
     # Resolve lut_path: prefer session lookup, fallback to direct path
     lut_path = request.lut_path
+    session_data = None
     if request.session_id:
         bind_session_id(request.session_id)
         session_data = store.get(request.session_id)
@@ -510,10 +571,16 @@ def extractor_manual_fix(
 
     manual_fix_start = time.perf_counter()
     try:
+        page_layout = None
+        if lut_path:
+            rgb_for_layout, _stacks_for_layout, _metadata_for_layout = LUTManager.load_lut_with_metadata(lut_path)
+            page_layout = _resolve_session_page_layout(session_data, len(rgb_for_layout))
         preview_result, status_msg = manual_fix_cell(
             coord=request.cell_coord,
+            row_index=request.row_index,
             color_input=request.override_color,
             lut_path=lut_path,
+            page_layout=page_layout,
         )
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "Manual fix")
@@ -549,6 +616,54 @@ def extractor_manual_fix(
         status="ok",
         message=status_msg or "Cell updated",
         lut_preview_url=f"/api/files/{preview_id}",
+        lut_layout=(
+            localize_page_layout(page_layout, len(rgb_for_layout)).to_dict()
+            if page_layout is not None
+            else None
+        ),
+    )
+
+
+@router.post("/resolve-cell", response_model=LutPreviewResolvedCell)
+def extractor_resolve_cell(
+    request: ExtractorResolveCellRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> LutPreviewResolvedCell:
+    """Resolve a LUT preview click using the backend LUT card layout."""
+    bind_session_id(request.session_id)
+    session_data = store.get(request.session_id)
+    if not session_data or "lut_path" not in session_data:
+        raise HTTPException(status_code=404, detail="Session LUT not found")
+
+    lut_path = session_data["lut_path"]
+    try:
+        rgb, _stacks, _metadata = LUTManager.load_lut_with_metadata(lut_path)
+    except EXTRACTOR_HANDLED_ERRORS as e:
+        _handle_core_error(e, "Resolve LUT preview cell")
+
+    color_mode = str(session_data.get("color_mode") or "")
+    layout = _resolve_session_lut_layout(
+        color_mode=color_mode,
+        total_count=len(rgb),
+        page=str(session_data.get("page") or "Page 1"),
+        eight_color_full_export=bool(session_data.get("eight_color_full_export")),
+        current_page=True,
+    )
+    cell = cell_from_normalized_point(
+        layout,
+        card_index=request.card_index,
+        x=request.x,
+        y=request.y,
+    )
+    if cell is None:
+        raise HTTPException(status_code=404, detail="Clicked cell is outside the valid LUT area")
+
+    cell_rgb = tuple(int(v) for v in rgb[cell.row_index])
+    return LutPreviewResolvedCell(
+        cell=cell.to_dict(),
+        rgb=cell_rgb,
+        hex=rgb_to_hex(cell_rgb),
+        overlay_bbox=overlay_bbox_for_cell(cell),
     )
 
 

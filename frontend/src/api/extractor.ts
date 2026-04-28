@@ -9,6 +9,7 @@ import type {
   GradientCardMaterialSaveResponse,
   GradientCardMaterialUpdateResponse,
   GradientCardStageAExtractResponse,
+  LutPreviewResolvedCell,
   ManualFixResponse,
   ManualOrientationLabel,
   SingleStageExtractResponse,
@@ -208,15 +209,33 @@ export async function importGradientCardMaterials(
 /** 手动修正 LUT 单元格 - JSON */
 export async function manualFixCell(
   sessionId: string,
-  cellCoord: [number, number],
+  rowIndex: number,
   overrideColor: string,
 ): Promise<ManualFixResponse> {
   const response = await apiClient.post<ManualFixResponse>(
     "/extractor/manual-fix",
     {
       session_id: sessionId,
-      cell_coord: cellCoord,
+      row_index: rowIndex,
       override_color: overrideColor,
+    },
+  );
+  return response.data;
+}
+
+export async function resolveLutPreviewCell(
+  sessionId: string,
+  x: number,
+  y: number,
+  cardIndex = 0,
+): Promise<LutPreviewResolvedCell> {
+  const response = await apiClient.post<LutPreviewResolvedCell>(
+    "/extractor/resolve-cell",
+    {
+      session_id: sessionId,
+      x,
+      y,
+      card_index: cardIndex,
     },
   );
   return response.data;

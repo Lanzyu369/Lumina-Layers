@@ -47,6 +47,7 @@ from api.schemas.responses import LUTListResponse, LutInfo, LutColorsResponse, L
 from api.structured_logging import get_logger
 from config import LUTMetadata, get_capabilities, get_schema_version, get_source_kind, get_supported_modes
 from core.lut_details.service import get_lut_details_service
+from core.lut_card_layout import resolve_lut_layout
 from core.lut_merger import LUTMerger
 from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, resolve_predictive_runtime
 from utils.lut_manager import LUTManager
@@ -627,7 +628,38 @@ def get_lut_colors(lut_name: str) -> LutColorsResponse:
 
     raw_colors: list[dict] = extract_lut_available_colors(path)
     entries: list[LutColorEntry] = [LutColorEntry(hex=c["hex"], rgb=c["color"]) for c in raw_colors]
-    return LutColorsResponse(lut_name=lut_name, total=len(entries), colors=entries)
+
+    layout = None
+    cards = []
+    try:
+        rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
+        mode = _canonicalize_public_color_mode(getattr(metadata, "color_mode", None)) or ""
+        layout = resolve_lut_layout(mode, int(len(rgb)))
+        row_entries = [
+            LutColorEntry(
+                hex=f"#{int(color[0]):02x}{int(color[1]):02x}{int(color[2]):02x}",
+                rgb=(int(color[0]), int(color[1]), int(color[2])),
+            )
+            for color in rgb.reshape(-1, 3)
+        ]
+        cards = [
+            {
+                "page": page.to_dict(),
+                "colors": row_entries[page.start_index : page.start_index + page.item_count],
+            }
+            for page in layout.pages
+        ]
+    except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+        layout = None
+        cards = []
+
+    return LutColorsResponse(
+        lut_name=lut_name,
+        total=len(entries),
+        colors=entries,
+        layout=layout.to_dict() if layout is not None else None,
+        cards=cards,
+    )
 
 
 # Canonical hex for the well-known primary / secondary channel names used by

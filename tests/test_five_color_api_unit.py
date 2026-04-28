@@ -1877,7 +1877,16 @@ def test_match_color_returns_nearest_recipe_coordinate_and_neighborhood():
     assert body["selected_indices"] == [0, 1, 2, 3, 4]
     assert body["result_hex"] == "#F00A00"
     assert body["row_index"] == 1
-    assert body["coordinate"] == {
+    coordinate = body["coordinate"]
+    assert {key: coordinate[key] for key in (
+        "card_index",
+        "card_label",
+        "grid_size",
+        "row",
+        "col",
+        "display_row",
+        "display_col",
+    )} == {
         "card_index": 0,
         "card_label": "1",
         "grid_size": 2,
@@ -1886,6 +1895,15 @@ def test_match_color_returns_nearest_recipe_coordinate_and_neighborhood():
         "display_row": 1,
         "display_col": 2,
     }
+    assert coordinate["page_index"] == 0
+    assert coordinate["page_label"] == "1"
+    assert coordinate["data_rows"] == 2
+    assert coordinate["data_cols"] == 2
+    assert coordinate["data_row"] == 0
+    assert coordinate["data_col"] == 1
+    assert coordinate["physical_row"] == 0
+    assert coordinate["physical_col"] == 1
+    assert coordinate["row_index"] == 1
     assert len(body["neighborhood"]) == 3
     assert [len(row) for row in body["neighborhood"]] == [3, 3, 3]
     center = body["neighborhood"][1][1]
@@ -1901,6 +1919,14 @@ def test_match_color_returns_nearest_recipe_coordinate_and_neighborhood():
     assert tail_empty["col"] is None
     assert tail_empty["display_row"] is None
     assert tail_empty["display_col"] is None
+    assert tail_empty["page_index"] is None
+    assert tail_empty["page_label"] is None
+    assert tail_empty["data_rows"] is None
+    assert tail_empty["data_cols"] is None
+    assert tail_empty["data_row"] is None
+    assert tail_empty["data_col"] is None
+    assert tail_empty["physical_row"] is None
+    assert tail_empty["physical_col"] is None
     assert tail_empty["row_index"] is None
 
 
@@ -1924,6 +1950,14 @@ def test_match_color_reports_second_2738_card_coordinates():
     assert body["coordinate"]["card_index"] == 1
     assert body["coordinate"]["card_label"] == "B"
     assert body["coordinate"]["grid_size"] == 37
+    assert body["coordinate"]["page_index"] == 1
+    assert body["coordinate"]["page_label"] == "B"
+    assert body["coordinate"]["data_rows"] == 37
+    assert body["coordinate"]["data_cols"] == 37
+    assert body["coordinate"]["data_row"] == 0
+    assert body["coordinate"]["data_col"] == 0
+    assert body["coordinate"]["physical_row"] == 1
+    assert body["coordinate"]["physical_col"] == 1
     assert body["coordinate"]["display_row"] == 1
     assert body["coordinate"]["display_col"] == 1
 

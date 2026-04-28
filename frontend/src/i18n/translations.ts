@@ -4039,6 +4039,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡 B",
     en: "Card B",
   },
+  lut_grid_card_label: {
+    zh: "色卡 {card}",
+    en: "Card {card}",
+  },
 
   // ==================== Replace Confirmation ====================
   replace_confirm_btn: {

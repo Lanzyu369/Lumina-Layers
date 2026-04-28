@@ -36,6 +36,7 @@ from api.schemas.extractor import (
     ExtractorExtractRequest,
     ExtractorMergeEightColorRequest,
     ExtractorManualFixRequest,
+    ExtractorResolveCellRequest,
     ExtractorPage,
 )
 from api.schemas.lut import (
@@ -102,6 +103,7 @@ __all__ = [
     "ExtractorExtractRequest",
     "ExtractorMergeEightColorRequest",
     "ExtractorManualFixRequest",
+    "ExtractorResolveCellRequest",
     # --- Calibration enums ---
     "BackingColor",
     # --- Calibration models ---
