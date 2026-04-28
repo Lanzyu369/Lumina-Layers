@@ -310,6 +310,9 @@ materials/_solver_cache/
 .windsurf/
 .worktrees/
 
+# Cascade browser tool traces and console captures
+.playwright-cli/
+
 # log_quality_check.py transient outputs
 # (only the *_reviewer.json baselines are kept under version control)
 progress/log_audit_fast_*.json
