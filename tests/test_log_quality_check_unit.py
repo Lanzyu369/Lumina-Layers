@@ -192,6 +192,97 @@ def test_extract_workflow_step_is_first_class() -> None:
     assert "extract" in WORKFLOW_STEPS
 
 
+def test_extract_single_stage_workflow_step_is_first_class() -> None:
+    """The single-stage extractor workflow must be part of the canonical gate."""
+
+    workflow = _parse_workflow(
+        "startup,lut_list,lut_colors,preview,generate,replace,extract_single_stage,extract"
+    )
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract_single_stage",
+        "extract",
+    ]
+    assert "extract_single_stage" in log_quality_check.DEFAULT_WORKFLOW
+    assert "extract_single_stage" in WORKFLOW_ORDER
+    assert "extract_single_stage" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("extract_single_stage")
+        == WORKFLOW_ORDER.index("cleanup_session_files") + 1
+    )
+
+
+def test_fit_stage_a_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("fit_stage_a")
+
+    assert workflow == ["fit_stage_a"]
+    assert "fit_stage_a" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "fit_stage_a" in WORKFLOW_ORDER
+    assert "fit_stage_a" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("fit_stage_a")
+        == WORKFLOW_ORDER.index("extract_single_stage") + 1
+    )
+
+
+def test_extract_gradient_card_stage_a_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("extract_gradient_card_stage_a")
+
+    assert workflow == ["extract_gradient_card_stage_a"]
+    assert "extract_gradient_card_stage_a" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "extract_gradient_card_stage_a" in WORKFLOW_ORDER
+    assert "extract_gradient_card_stage_a" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("extract_gradient_card_stage_a")
+        == WORKFLOW_ORDER.index("fit_stage_a") + 1
+    )
+
+
+def test_save_gradient_card_material_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("save_gradient_card_material")
+
+    assert workflow == ["save_gradient_card_material"]
+    assert "save_gradient_card_material" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "save_gradient_card_material" in WORKFLOW_ORDER
+    assert "save_gradient_card_material" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("save_gradient_card_material")
+        == WORKFLOW_ORDER.index("extract_gradient_card_stage_a") + 1
+    )
+
+
+def test_delete_gradient_card_material_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("delete_gradient_card_material")
+
+    assert workflow == ["delete_gradient_card_material"]
+    assert "delete_gradient_card_material" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "delete_gradient_card_material" in WORKFLOW_ORDER
+    assert "delete_gradient_card_material" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("delete_gradient_card_material")
+        == WORKFLOW_ORDER.index("save_gradient_card_material") + 1
+    )
+
+
+def test_update_gradient_card_material_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("update_gradient_card_material")
+
+    assert workflow == ["update_gradient_card_material"]
+    assert "update_gradient_card_material" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "update_gradient_card_material" in WORKFLOW_ORDER
+    assert "update_gradient_card_material" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("update_gradient_card_material")
+        == WORKFLOW_ORDER.index("delete_gradient_card_material") + 1
+    )
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 
@@ -971,6 +1062,172 @@ def test_fast_extract_workflow_requires_canary_event() -> None:
 
     assert by_name["workflow_event_extractor_extract_done"].passed is True
     assert missing_by_name["workflow_event_extractor_extract_done"].passed is False
+
+
+def test_extract_single_stage_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract_single_stage",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={
+            "converter_region_replace_timing": 1,
+            "extractor_extract_single_stage_done": 1,
+        },
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_extract_single_stage_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name["workflow_event_extractor_extract_single_stage_done"].passed
+        is False
+    )
+
+
+def test_fit_stage_a_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["fit_stage_a"],
+        event_counts={"extractor_fit_stage_a_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["fit_stage_a"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_fit_stage_a_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_fit_stage_a_done"].passed is False
+
+
+def test_extract_gradient_card_stage_a_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["extract_gradient_card_stage_a"],
+        event_counts={"extractor_extract_gradient_card_stage_a_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["extract_gradient_card_stage_a"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name[
+            "workflow_event_extractor_extract_gradient_card_stage_a_done"
+        ].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_extract_gradient_card_stage_a_done"
+        ].passed
+        is False
+    )
+
+
+def test_save_gradient_card_material_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["save_gradient_card_material"],
+        event_counts={"extractor_save_gradient_card_material_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["save_gradient_card_material"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_save_gradient_card_material_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_save_gradient_card_material_done"
+        ].passed
+        is False
+    )
+
+
+def test_delete_gradient_card_material_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["delete_gradient_card_material"],
+        event_counts={"extractor_delete_gradient_card_material_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["delete_gradient_card_material"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_delete_gradient_card_material_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_delete_gradient_card_material_done"
+        ].passed
+        is False
+    )
+
+
+def test_update_gradient_card_material_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["update_gradient_card_material"],
+        event_counts={"extractor_update_gradient_card_material_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["update_gradient_card_material"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_update_gradient_card_material_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_update_gradient_card_material_done"
+        ].passed
+        is False
+    )
 
 
 def test_merge_8color_workflow_requires_canary_event() -> None:

@@ -7,15 +7,19 @@ emits human-readable plus machine-readable governance reports.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
+import zipfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -39,6 +43,7 @@ DEFAULT_WORKFLOW = [
     "preview",
     "generate",
     "replace",
+    "extract_single_stage",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -72,6 +77,12 @@ WORKFLOW_ORDER = [
     "generate_puzzle",
     "auto_detect_colors",
     "cleanup_session_files",
+    "extract_single_stage",
+    "fit_stage_a",
+    "extract_gradient_card_stage_a",
+    "save_gradient_card_material",
+    "delete_gradient_card_material",
+    "update_gradient_card_material",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -409,6 +420,50 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     ),
                 ),
                 patch(
+                    "api.routers.single_stage.extract_single_stage_dataset",
+                    side_effect=lambda *args, **kwargs: _mock_extract_single_stage_dataset(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.fit_stage_a_from_stage_json",
+                    side_effect=lambda *args, **kwargs: _mock_fit_stage_a_from_stage_json(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+                    side_effect=lambda *args, **kwargs: _mock_extract_gradient_card_stage_a(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.save_stage_a_material_archive",
+                    side_effect=lambda *args, **kwargs: _mock_save_gradient_card_material(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.delete_saved_stage_a_material_archive",
+                    side_effect=_mock_delete_gradient_card_material,
+                ),
+                patch(
+                    "api.routers.single_stage.update_saved_stage_a_material_archive_metadata",
+                    side_effect=lambda *args, **kwargs: _mock_update_gradient_card_material(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
                     "api.routers.converter.puzzle.assemble_puzzle_3mf",
                     side_effect=_mock_assemble_puzzle_3mf,
                 ),
@@ -450,6 +505,11 @@ def run_full_mode(
     env["LUMINA_LOG_LEVEL"] = "INFO"
     env["LUMINA_LOG_FORMAT"] = "json"
     env.pop("LUMINA_LOG_INIT_BY_PARENT", None)
+    support_paths = (
+        _ensure_single_stage_colorchecker_assets()
+        if any(step in workflow for step in ("extract_single_stage", "fit_stage_a"))
+        else []
+    )
 
     creationflags = (
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -483,6 +543,7 @@ def run_full_mode(
     finally:
         _terminate_server_process(proc)
         time.sleep(1.0)
+        _remove_single_stage_colorchecker_assets(support_paths)
 
     if not temp_log_path.exists():
         raise QualityCheckError(f"Log file was not created: {temp_log_path}")
@@ -620,6 +681,18 @@ def _workflow_required_event_checks(
     required_events: list[str] = []
     if any(step in workflow for step in REPLACE_FAMILY_STEPS):
         required_events.extend(_replace_required_events_for_mode(mode))
+    if "extract_single_stage" in workflow:
+        required_events.append("extractor_extract_single_stage_done")
+    if "fit_stage_a" in workflow:
+        required_events.append("extractor_fit_stage_a_done")
+    if "extract_gradient_card_stage_a" in workflow:
+        required_events.append("extractor_extract_gradient_card_stage_a_done")
+    if "save_gradient_card_material" in workflow:
+        required_events.append("extractor_save_gradient_card_material_done")
+    if "delete_gradient_card_material" in workflow:
+        required_events.append("extractor_delete_gradient_card_material_done")
+    if "update_gradient_card_material" in workflow:
+        required_events.append("extractor_update_gradient_card_material_done")
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
@@ -985,6 +1058,190 @@ def _mock_requantize_gradient_regions(
     return updated, int(mask.sum())
 
 
+def _mock_extract_single_stage_dataset(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Any:
+    from core.single_stage import SingleStageExtractResult
+
+    stage_json_path = _make_temp_path(".json", created_paths)
+    stage_json_path.write_text(
+        json.dumps({"datasets": [], "meta": {"warnings": []}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return SingleStageExtractResult(
+        stage_json_path=str(stage_json_path),
+        dataset_summary={
+            "substrate_count": 1,
+            "color_count": 1,
+            "dataset_count": 1,
+            "image_count": 1,
+            "substrates": ["white"],
+            "coverage": [{"substrate_id": "white", "colors": ["White"]}],
+            "datasets": [],
+        },
+        warnings=[],
+        extracted_root=str(stage_json_path.parent),
+    )
+
+
+def _mock_fit_stage_a_from_stage_json(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Any:
+    from core.single_stage import StageAFitResult
+
+    params_path = _make_temp_path(".json", created_paths)
+    params_path.write_text(
+        json.dumps({"version": "stage_a/v1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return StageAFitResult(
+        params_path=str(params_path),
+        fit_summary={
+            "substrate_count": 1,
+            "channel_count": 6,
+            "substrates": ["white"],
+            "colors": ["White"],
+            "overall_validation": {"mean_delta_e": 0.001},
+            "warnings": [],
+        },
+    )
+
+
+def _mock_extract_gradient_card_stage_a(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Any:
+    import numpy as np
+    from core.single_stage import GradientCardStageAResult
+
+    params_path = _make_temp_path(".json", created_paths)
+    params_payload = {"version": "stage_a/v1"}
+    params_path.write_text(
+        json.dumps(params_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return GradientCardStageAResult(
+        params_path=str(params_path),
+        params_payload=params_payload,
+        fit_summary={
+            "substrate_count": 2,
+            "channel_count": 6,
+            "substrates": ["white", "black"],
+            "colors": ["stub"],
+            "overall_validation": {"mean_delta_e": 0.001},
+            "warnings": [],
+            "orientation_ranking": {
+                "orientation_reliable": True,
+                "delta_e_gap": 1.0,
+                "top_candidates": [],
+            },
+        },
+        material_summary={
+            "sample_count": 1,
+            "per_substrate_sample_count": 1,
+            "grid_rows": 1,
+            "grid_cols": 1,
+            "layer_height_mm": 0.04,
+            "warp_width_px": 8,
+            "warp_height_px": 8,
+            "thickness_layers": [0],
+            "sample_boxes": [],
+            "white_zero_rgb": [255, 255, 255],
+            "black_zero_rgb": [0, 0, 0],
+            "estimated_rgb": [128, 130, 132],
+            "estimated_k": [0.1, 0.1, 0.1],
+        },
+        source_summary={
+            "white_image_size": [16, 16],
+            "black_image_size": [16, 16],
+        },
+        warnings=[],
+        white_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+        black_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+
+def _mock_save_gradient_card_material(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Any:
+    from core.single_stage import MaterialArchiveSaveResult
+
+    archive_path = _make_temp_path(".json", created_paths)
+    params_path = _make_temp_path(".json", created_paths)
+    archive_path.write_text(
+        json.dumps({"material_name": "Stub PLA"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    params_path.write_text(
+        json.dumps({"version": "stage_a/v1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return MaterialArchiveSaveResult(
+        archive_path=str(archive_path),
+        stage_a_params_path=str(params_path),
+        material_summary={
+            "material_name": "Stub PLA",
+            "directory_name": "stub_material_v1",
+            "brand": "Lumina",
+            "archive_path": str(archive_path),
+            "stage_a_params_path": str(params_path),
+            "verification_count": 1,
+        },
+    )
+
+
+def _mock_delete_gradient_card_material(*_args: Any, **kwargs: Any) -> Any:
+    from core.single_stage import MaterialArchiveDeleteResult
+
+    directory_name = str(kwargs.get("directory_name") or "stub_material_v1")
+    return MaterialArchiveDeleteResult(
+        directory_name=directory_name,
+        material_name="Stub PLA",
+        deleted_path=str(REPO_ROOT / "materials" / directory_name),
+    )
+
+
+def _mock_update_gradient_card_material(
+    created_paths: list[Path],
+    *_args: Any,
+    **kwargs: Any,
+) -> Any:
+    from core.single_stage import MaterialArchiveUpdateResult
+
+    archive_path = _make_temp_path(".json", created_paths)
+    params_path = _make_temp_path(".json", created_paths)
+    material_name = str(kwargs.get("material_name") or "Stub PLA")
+    directory_name = str(kwargs.get("directory_name") or "stub_material_v1")
+    archive_path.write_text(
+        json.dumps({"material_name": material_name}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    params_path.write_text(
+        json.dumps({"version": "stage_a/v1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return MaterialArchiveUpdateResult(
+        archive_path=str(archive_path),
+        stage_a_params_path=str(params_path),
+        material_summary={
+            "material_name": material_name,
+            "directory_name": directory_name,
+            "brand": kwargs.get("brand"),
+            "archive_path": str(archive_path),
+            "stage_a_params_path": str(params_path),
+            "estimated_rgb": kwargs.get("estimated_rgb") or [128, 130, 132],
+            "verification_count": 1,
+        },
+    )
+
+
 def _make_temp_path(suffix: str, created_paths: list[Path]) -> Path:
     fd, raw_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -1022,6 +1279,182 @@ def _synthesize_rgb_png_bytes(width: int, height: int) -> bytes:
     buffer = BytesIO()
     Image.fromarray(image, mode="RGB").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _synthesize_single_stage_dataset_zip_bytes() -> bytes:
+    def _label_payload(color_name: str) -> dict[str, Any]:
+        return {
+            "version": "5.0.1",
+            "flags": {},
+            "imagePath": "sample.png",
+            "imageHeight": 64,
+            "imageWidth": 64,
+            "shapes": [
+                {
+                    "label": "ColorChecker",
+                    "points": [[4, 4], [28, 4], [28, 28], [4, 28]],
+                    "group_id": None,
+                    "shape_type": "polygon",
+                    "flags": {},
+                },
+                {
+                    "label": color_name,
+                    "points": [[32, 32], [60, 32], [60, 60], [32, 60]],
+                    "group_id": None,
+                    "shape_type": "polygon",
+                    "flags": {},
+                },
+            ],
+        }
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for substrate_id, color_name in (("white", "White"), ("black", "Black")):
+            archive.writestr(
+                f"{substrate_id}/{color_name}/sample.png",
+                _synthesize_rgb_png_bytes(64, 64),
+            )
+            archive.writestr(
+                f"{substrate_id}/{color_name}/sample.json",
+                json.dumps(_label_payload(color_name), ensure_ascii=False),
+            )
+    return buffer.getvalue()
+
+
+def _synthesize_gradient_card_kit_zip_bytes() -> bytes:
+    manifest = {
+        "schema_version": "1.0",
+        "workflow": "single-stage-kit",
+        "material_default": "Stub PLA",
+        "substrate_id": "white",
+        "substrate_display_name": "White",
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+    return buffer.getvalue()
+
+
+def _ensure_single_stage_colorchecker_assets() -> list[Path]:
+    asset_dir = REPO_ROOT / "assets" / "ColorChecker"
+    ref_json_path = asset_dir / "ColorCheckerjson.json"
+    desc_path = asset_dir / "desc.txt"
+    if ref_json_path.exists() and desc_path.exists():
+        return []
+
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    ref_payload = {
+        "version": "5.0.1",
+        "flags": {},
+        "imageHeight": 32,
+        "imageWidth": 32,
+        "shapes": [
+            {
+                "label": "ColorChecker",
+                "points": [[0, 0], [32, 0], [32, 32], [0, 32]],
+                "group_id": None,
+                "shape_type": "polygon",
+                "flags": {},
+            },
+            {
+                "label": "Patch1",
+                "points": [[4, 4], [10, 4], [10, 10], [4, 10]],
+                "group_id": None,
+                "shape_type": "polygon",
+                "flags": {},
+            },
+            {
+                "label": "Patch2",
+                "points": [[12, 4], [18, 4], [18, 10], [12, 10]],
+                "group_id": None,
+                "shape_type": "polygon",
+                "flags": {},
+            },
+            {
+                "label": "Patch3",
+                "points": [[20, 4], [26, 4], [26, 10], [20, 10]],
+                "group_id": None,
+                "shape_type": "polygon",
+                "flags": {},
+            },
+        ],
+    }
+    desc_text = "\n\n".join(
+        [
+            "1. Patch1:\nsRGB: [128, 130, 132]",
+            "2. Patch2:\nsRGB: [128, 130, 132]",
+            "3. Patch3:\nsRGB: [128, 130, 132]",
+        ]
+    )
+    ref_json_path.write_text(
+        json.dumps(ref_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    desc_path.write_text(desc_text + "\n", encoding="utf-8")
+    return [ref_json_path, desc_path, asset_dir]
+
+
+def _remove_single_stage_colorchecker_assets(paths: Sequence[Path]) -> None:
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                path.rmdir()
+        except OSError:
+            pass
+
+
+def _create_saved_gradient_card_material_fixture() -> str:
+    from config import MATERIALS_DIR
+
+    directory_name = f"pr113_stub_{uuid.uuid4().hex}"
+    material_dir = Path(MATERIALS_DIR) / directory_name
+    material_dir.mkdir(parents=True, exist_ok=False)
+    stage_a_params_path = material_dir / "stage_A_parameters.json"
+    stage_a_params_path.write_text(
+        json.dumps({"meta": {"material_name": "Stub PLA"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    archive_payload = {
+        "schema_version": "1.1",
+        "kind": "lumina_stage_a_material",
+        "material_name": "Stub PLA",
+        "brand": "Lumina",
+        "created_at": "2026-04-28T00:00:00+00:00",
+        "updated_at": "2026-04-28T00:00:00+00:00",
+        "stage_a_params_file": stage_a_params_path.name,
+        "fit_summary": {"overall_validation": {"mean_delta_e": 0.001}},
+        "material_summary": {"estimated_rgb": [128, 130, 132]},
+        "source": {},
+        "verification_count": 1,
+        "verification_runs": [],
+    }
+    (material_dir / "material.json").write_text(
+        json.dumps(archive_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return directory_name
+
+
+def _remove_saved_gradient_card_material_fixture(directory_name: str | None) -> None:
+    if not directory_name:
+        return
+    from config import MATERIALS_DIR
+
+    material_dir = Path(MATERIALS_DIR) / directory_name
+    try:
+        resolved = material_dir.resolve()
+        root = Path(MATERIALS_DIR).resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return
+    try:
+        shutil.rmtree(resolved)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
 
 def _execute_http_workflow(base_url: str, workflow: list[str], timeout: float) -> None:
@@ -1092,6 +1525,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_auto_detect_colors_workflow(client)
         elif step == "cleanup_session_files":
             _execute_cleanup_session_files_workflow(client)
+        elif step == "extract_single_stage":
+            _execute_extract_single_stage_workflow(client)
+        elif step == "fit_stage_a":
+            _execute_fit_stage_a_workflow(client)
+        elif step == "extract_gradient_card_stage_a":
+            _execute_extract_gradient_card_stage_a_workflow(client)
+        elif step == "save_gradient_card_material":
+            _execute_save_gradient_card_material_workflow(client)
+        elif step == "delete_gradient_card_material":
+            _execute_delete_gradient_card_material_workflow(client)
+        elif step == "update_gradient_card_material":
+            _execute_update_gradient_card_material_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -1778,6 +2223,196 @@ def _execute_extract_workflow(client: Any) -> None:
     payload = _post_extract_for_session(client)
     if not payload.get("lut_download_url"):
         raise QualityCheckError("Extract response did not include lut_download_url")
+
+
+def _execute_extract_single_stage_workflow(client: Any) -> None:
+    payload = _post_extract_single_stage_for_session(client)
+    if not payload.get("stage_json_url"):
+        raise QualityCheckError(
+            "Single-stage extract response did not include stage_json_url"
+        )
+
+
+def _execute_fit_stage_a_workflow(client: Any) -> None:
+    extract_payload = _post_extract_single_stage_for_session(client)
+    session_id = str(extract_payload["session_id"])
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        data={"session_id": session_id},
+    )
+    _raise_for_status(response.status_code, response.text, "fit_stage_a")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Stage A fit response was not an object")
+    if not payload.get("stage_a_params_url"):
+        raise QualityCheckError("Stage A fit response did not include params URL")
+
+
+def _execute_extract_gradient_card_stage_a_workflow(client: Any) -> None:
+    payload = _post_extract_gradient_card_stage_a_for_session(client)
+    if not payload.get("stage_a_params_url"):
+        raise QualityCheckError(
+            "Gradient card Stage A response did not include params URL"
+        )
+    if not payload.get("white_warp_preview_url"):
+        raise QualityCheckError(
+            "Gradient card Stage A response did not include white preview URL"
+        )
+    if not payload.get("black_warp_preview_url"):
+        raise QualityCheckError(
+            "Gradient card Stage A response did not include black preview URL"
+        )
+
+
+def _execute_save_gradient_card_material_workflow(client: Any) -> None:
+    extract_payload = _post_extract_gradient_card_stage_a_for_session(client)
+    session_id = str(extract_payload["session_id"])
+    saved_directory_name: str | None = None
+    try:
+        response = client.post(
+            "/api/extractor/save-gradient-card-material",
+            data={
+                "session_id": session_id,
+                "material_name": "Stub PLA",
+                "save_mode": "merge",
+                "brand": "Lumina",
+            },
+        )
+        _raise_for_status(
+            response.status_code,
+            response.text,
+            "save_gradient_card_material",
+        )
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError(
+                "Gradient card material save response was not an object"
+            )
+        if not payload.get("material_file_url"):
+            raise QualityCheckError(
+                "Gradient card material save response did not include material URL"
+            )
+        material_summary = payload.get("material_summary")
+        if isinstance(material_summary, Mapping):
+            raw_directory_name = material_summary.get("directory_name")
+            if isinstance(raw_directory_name, str):
+                saved_directory_name = raw_directory_name
+    finally:
+        _remove_saved_gradient_card_material_fixture(saved_directory_name)
+
+
+def _execute_delete_gradient_card_material_workflow(client: Any) -> None:
+    directory_name = _create_saved_gradient_card_material_fixture()
+    try:
+        response = client.delete(
+            f"/api/extractor/gradient-card-materials/{directory_name}",
+        )
+        _raise_for_status(
+            response.status_code,
+            response.text,
+            "delete_gradient_card_material",
+        )
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError(
+                "Gradient card material delete response was not an object"
+            )
+        if payload.get("directory_name") != directory_name:
+            raise QualityCheckError(
+                "Gradient card material delete response used an unexpected directory"
+            )
+    finally:
+        _remove_saved_gradient_card_material_fixture(directory_name)
+
+
+def _execute_update_gradient_card_material_workflow(client: Any) -> None:
+    directory_name = _create_saved_gradient_card_material_fixture()
+    try:
+        response = client.patch(
+            f"/api/extractor/gradient-card-materials/{directory_name}",
+            json={
+                "material_name": "Renamed Stub PLA",
+                "brand": "Lumina",
+                "estimated_rgb": [255, 0, 0],
+            },
+        )
+        _raise_for_status(
+            response.status_code,
+            response.text,
+            "update_gradient_card_material",
+        )
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError(
+                "Gradient card material update response was not an object"
+            )
+        material = payload.get("material")
+        if not isinstance(material, Mapping):
+            raise QualityCheckError(
+                "Gradient card material update response did not include material"
+            )
+        if material.get("directory_name") != directory_name:
+            raise QualityCheckError(
+                "Gradient card material update response used an unexpected directory"
+            )
+    finally:
+        _remove_saved_gradient_card_material_fixture(directory_name)
+
+
+def _post_extract_gradient_card_stage_a_for_session(client: Any) -> Mapping[str, Any]:
+    response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        files={
+            "white_image": ("white.png", _synthesize_rgb_png_bytes(16, 16), "image/png"),
+            "black_image": ("black.png", _synthesize_rgb_png_bytes(16, 16), "image/png"),
+            "dataset_zip": (
+                "kit.zip",
+                _synthesize_gradient_card_kit_zip_bytes(),
+                "application/zip",
+            ),
+        },
+        data={
+            "white_corner_points": "[[0,0],[15,0],[15,15],[0,15]]",
+            "black_corner_points": "[[0,0],[15,0],[15,15],[0,15]]",
+            "manual_white_orientation": "rotate_90_cw",
+            "manual_black_orientation": "auto",
+        },
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "extract_gradient_card_stage_a",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Gradient card Stage A response was not an object")
+    if not payload.get("session_id"):
+        raise QualityCheckError(
+            "Gradient card Stage A response did not include session_id"
+        )
+    return payload
+
+
+def _post_extract_single_stage_for_session(client: Any) -> Mapping[str, Any]:
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={
+            "dataset_zip": (
+                "single_stage_dataset.zip",
+                _synthesize_single_stage_dataset_zip_bytes(),
+                "application/zip",
+            )
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "extract_single_stage")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Single-stage extract response was not an object")
+    if not payload.get("session_id"):
+        raise QualityCheckError(
+            "Single-stage extract response did not include session_id"
+        )
+    return payload
 
 
 def _post_extract_for_session(client: Any) -> Mapping[str, Any]:

@@ -38,7 +38,7 @@ from api.schemas.responses import (
     StageAFitResponse,
 )
 from api.session_store import SessionStore
-from api.structured_logging import bind_session_id
+from api.structured_logging import bind_session_id, get_logger
 from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
@@ -74,6 +74,7 @@ from core.single_stage import (
 )
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
+log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 
@@ -173,6 +174,20 @@ async def extractor_extract_single_stage(
                 pass
 
     stage_json_id = registry.register_path(session_id, result.stage_json_path)
+    log.info(
+        "Single-stage dataset extracted",
+        extra={
+            "event": "extractor_extract_single_stage_done",
+            "session_id": session_id,
+            "dataset_summary_count": (
+                len(result.dataset_summary)
+                if isinstance(result.dataset_summary, dict)
+                else 0
+            ),
+            "warning_count": len(result.warnings),
+            "stage_json_id": stage_json_id,
+        },
+    )
     return SingleStageExtractResponse(
         session_id=session_id,
         status="ok",
@@ -193,6 +208,7 @@ async def extractor_fit_stage_a(
     """Fit Stage A parameters from single-stage JSON or session state."""
     stage_json_path: str | None = None
     sid_for_registry: str | None = None
+    source_mode: str
 
     if session_id:
         bind_session_id(session_id)
@@ -206,11 +222,13 @@ async def extractor_fit_stage_a(
                 detail="Session does not contain an extracted single-stage dataset",
             )
         sid_for_registry = session_id
+        source_mode = "session"
     elif stage_json is not None:
         stage_json_path = await upload_to_tempfile(stage_json, suffix=".json")
         sid_for_registry = store.create()
         store.register_temp_file(sid_for_registry, stage_json_path)
         store.put(sid_for_registry, "single_stage_stage_json_path", stage_json_path)
+        source_mode = "upload"
     else:
         raise HTTPException(
             status_code=422,
@@ -229,6 +247,20 @@ async def extractor_fit_stage_a(
     store.put(sid_for_registry, "stage_a_fit_summary", result.fit_summary)
 
     params_id = registry.register_path(sid_for_registry, result.params_path)
+    log.info(
+        "Stage A parameters fitted",
+        extra={
+            "event": "extractor_fit_stage_a_done",
+            "session_id": sid_for_registry,
+            "params_id": params_id,
+            "source_mode": source_mode,
+            "fit_summary_count": (
+                len(result.fit_summary)
+                if isinstance(result.fit_summary, dict)
+                else 0
+            ),
+        },
+    )
     return StageAFitResponse(
         status="ok",
         message="Stage A parameters fitted successfully",
@@ -314,6 +346,22 @@ async def extractor_extract_gradient_card_stage_a(
             except OSError:
                 pass
 
+    log.info(
+        "Gradient card Stage A material extracted",
+        extra={
+            "event": "extractor_extract_gradient_card_stage_a_done",
+            "session_id": session_id,
+            "warning_count": len(result.warnings),
+            "material_summary_count": (
+                len(result.material_summary)
+                if isinstance(result.material_summary, dict)
+                else 0
+            ),
+            "manual_white_orientation": manual_white,
+            "manual_black_orientation": manual_black,
+            "stage_a_id": stage_a_id,
+        },
+    )
     return GradientCardStageAExtractResponse(
         session_id=session_id,
         status="ok",
@@ -388,6 +436,24 @@ async def extractor_save_gradient_card_material(
         ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
     )
     verification_count = int(result.material_summary.get("verification_count") or 1)
+    directory_name = getattr(result, "directory_name", None)
+    if not isinstance(directory_name, str) or not directory_name:
+        directory_name = str(
+            result.material_summary.get("directory_name")
+            or os.path.splitext(os.path.basename(result.archive_path))[0]
+        )
+    log.info(
+        "Gradient card material saved",
+        extra={
+            "event": "extractor_save_gradient_card_material_done",
+            "session_id": session_id,
+            "material_name": cleaned_material_name,
+            "directory_name": directory_name,
+            "verification_count": verification_count,
+            "save_mode": validated_save_mode,
+            "material_id": material_id,
+        },
+    )
     return GradientCardMaterialSaveResponse(
         status="ok",
         message=(
@@ -415,6 +481,14 @@ async def extractor_delete_gradient_card_material(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    log.info(
+        "Gradient card material deleted",
+        extra={
+            "event": "extractor_delete_gradient_card_material_done",
+            "directory_name": result.directory_name,
+            "material_name": result.material_name,
+        },
+    )
     return GradientCardMaterialDeleteResponse(
         status="ok",
         message="Gradient card material deleted successfully",
@@ -457,6 +531,29 @@ async def extractor_update_gradient_card_material(
         result.stage_a_params_path,
         ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
     )}"
+    material_name = (
+        payload.material_name
+        if payload.material_name is not None
+        else str(
+            result.material_summary.get("material_name")
+            or result.material_summary.get("name")
+            or ""
+        )
+    )
+    metadata_keys_updated = sum(
+        1
+        for value in (payload.material_name, payload.brand, payload.estimated_rgb)
+        if value is not None
+    )
+    log.info(
+        "Gradient card material metadata updated",
+        extra={
+            "event": "extractor_update_gradient_card_material_done",
+            "directory_name": directory_name,
+            "material_name": material_name,
+            "metadata_keys_updated": metadata_keys_updated,
+        },
+    )
     return GradientCardMaterialUpdateResponse(
         status="ok",
         message="Gradient card material updated successfully",

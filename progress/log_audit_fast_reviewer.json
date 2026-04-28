@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 13,
+      "actual": 14,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
