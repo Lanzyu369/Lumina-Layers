@@ -13,11 +13,47 @@ import time
 
 import numpy as np
 
-from config import MODELS_DIR, PrinterConfig
+from config import MODELS_DIR, PrinterConfig, get_printer_profile
 from core.naming import generate_model_filename
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
 _log = get_logger(__name__)
+
+
+def _center_scene_on_printer_bed(scene, printer_id: str) -> None:
+    """Translate the export scene to the selected printer's bed center."""
+    bounds = np.asarray(scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        return
+
+    min_bounds, max_bounds = bounds
+    if np.any(max_bounds[:2] <= min_bounds[:2]):
+        return
+
+    profile = get_printer_profile(printer_id)
+    current_center = (min_bounds[:2] + max_bounds[:2]) / 2.0
+    bed_center = np.array([profile.bed_width / 2.0, profile.bed_depth / 2.0], dtype=np.float64)
+    delta_xy = bed_center - current_center
+    if np.allclose(delta_xy, 0.0):
+        return
+
+    transform = np.eye(4)
+    transform[0, 3] = float(delta_xy[0])
+    transform[1, 3] = float(delta_xy[1])
+    for geom_name in list(scene.geometry.keys()):
+        scene.geometry[geom_name].apply_transform(transform)
+
+    _log.debug(
+        "Centered export scene on printer bed",
+        extra={
+            "event": "s09_scene_centered_on_bed",
+            "printer_id": profile.id,
+            "bed_width_mm": int(profile.bed_width),
+            "bed_depth_mm": int(profile.bed_depth),
+            "delta_x_mm": round(float(delta_xy[0]), 6),
+            "delta_y_mm": round(float(delta_xy[1]), 6),
+        },
+    )
 
 
 def run(ctx: dict) -> dict:
@@ -66,6 +102,9 @@ def run(ctx: dict) -> dict:
         mirror_transform = np.array([[-1, 0, 0, model_width_mm], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
         for geom_name in list(scene.geometry.keys()):
             scene.geometry[geom_name].apply_transform(mirror_transform)
+
+    if bool(ctx.get("center_on_bed", True)):
+        _center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
 
     _prog = ctx.get("progress")
     if _prog is not None:

@@ -772,6 +772,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             "brim_type": "auto_brim",
         }
 
+        if bool(ctx.get("center_on_bed", True)):
+            s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
+
         export_t0 = time.perf_counter()
         export_scene_with_bambu_metadata(
             scene=scene,

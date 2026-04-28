@@ -78,7 +78,7 @@ def run(ctx: dict) -> dict:
     target_h = ctx["target_h"]
     pixel_scale = ctx["pixel_scale"]
     piece_boundary_geometry_path = ctx.get("piece_boundary_geometry_path")
-    disable_material_dilation = bool(ctx.get("disable_material_dilation", False))
+    disable_material_dilation = bool(ctx.get("disable_material_dilation", True))
     boundary_geometry = _load_boundary_geometry(piece_boundary_geometry_path)
 
     _bench_enabled = ctx.get("_bench_enabled", True)
