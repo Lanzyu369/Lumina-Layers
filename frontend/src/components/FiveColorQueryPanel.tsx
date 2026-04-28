@@ -96,7 +96,7 @@ export default function FiveColorQueryPanel() {
     <motion.div
       initial={{ opacity: 0, x: -30 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       className="flex h-full w-full min-h-0"
     >
       <aside className={`${resolvePanelSurfaceClass(workspace.mode)} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}>

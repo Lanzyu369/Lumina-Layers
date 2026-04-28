@@ -409,7 +409,7 @@ const InlineStatusMessage = ({
       initial={{ opacity: 0, y: -10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 10 }}
-      transition={{ duration: 0.2 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
     >
       <StatusBanner data-testid={testId} tone={tone}>
         {message}
@@ -633,7 +633,7 @@ export default function GradientCardExtractPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="gradient-card-extract-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >

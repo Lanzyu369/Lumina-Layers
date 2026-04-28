@@ -168,7 +168,7 @@ export default function VectorizerPanel() {
     <motion.div
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       className={`mx-auto h-full w-full overflow-y-auto ${workspace.isCompact ? "max-w-none p-4" : "max-w-4xl p-6"}`}
     >
       <div className={cx(resolvePanelSurfaceClass(workspace.mode), "flex flex-col gap-5")}>
@@ -486,7 +486,7 @@ export default function VectorizerPanel() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            transition={{ duration: 0.25, ease: "easeOut" }}
             className="flex flex-col gap-4"
           >
             <div className="flex items-center justify-between">

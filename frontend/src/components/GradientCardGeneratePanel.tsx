@@ -43,7 +43,7 @@ export default function GradientCardGeneratePanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="gradient-card-generate-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >

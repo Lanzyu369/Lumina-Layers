@@ -54,11 +54,6 @@ export default function CalibrationPanel() {
     url
   })) ?? [];
 
-  const backingDisabled =
-    color_mode === CalibrationColorMode.EIGHT_COLOR ||
-    color_mode === CalibrationColorMode.FIVE_COLOR_EXT ||
-    color_mode === CalibrationColorMode.SIX_COLOR ||
-    color_mode === CalibrationColorMode.SIX_COLOR_RYBW;
   const showEightColorFullExport =
     color_mode === CalibrationColorMode.EIGHT_COLOR;
 
@@ -66,7 +61,7 @@ export default function CalibrationPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="calibration-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
@@ -147,7 +142,6 @@ export default function CalibrationPanel() {
                 unit="mm"
                 onChange={setBackingThickness}
                 data-testid='backing-thickness-slider'
-                disabled={backingDisabled}
               />
             </div>
 
