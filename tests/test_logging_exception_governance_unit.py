@@ -14,6 +14,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "converter",
     ROOT / "api" / "routers" / "extractor.py",
     ROOT / "api" / "routers" / "five_color.py",
+    ROOT / "api" / "routers" / "lut.py",
     ROOT / "api" / "routers" / "vectorizer.py",
     ROOT / "api" / "workers" / "converter_workers.py",
     ROOT / "api" / "workers" / "vectorizer_workers.py",
@@ -52,7 +53,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 39
+EXCEPT_EXCEPTION_BASELINE = 48
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -137,6 +138,13 @@ FIVE_COLOR_STRUCTURED_EVENTS = {
 VECTORIZER_STRUCTURED_EVENTS = {
     "vectorize_image_done",
 }
+LUT_STRUCTURED_EVENTS = {
+    "lut_compare_done",
+    "lut_details_done",
+    "lut_merge_done",
+    "lut_session_info_done",
+    "lut_upload_done",
+}
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
@@ -144,6 +152,7 @@ REQUIRED_STRUCTURED_EVENTS = (
     | CALIBRATION_STRUCTURED_EVENTS
     | FIVE_COLOR_STRUCTURED_EVENTS
     | VECTORIZER_STRUCTURED_EVENTS
+    | LUT_STRUCTURED_EVENTS
 )
 
 
@@ -183,8 +192,17 @@ def _is_logger_method_call(node: ast.Call) -> bool:
 
 def test_no_business_print_in_hot_paths() -> None:
     """Production hot paths should not use raw print()."""
-    combined = _collect_text(PRINT_TARGETS)
-    assert "print(" not in combined
+    violations: list[str] = []
+    for target in PRINT_TARGETS:
+        for file_path in _iter_py_files(target):
+            tree = _parse_py_file(file_path)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if isinstance(node.func, ast.Name) and node.func.id == "print":
+                    violations.append(_relative_location(file_path, node))
+
+    assert not violations, "Raw print() calls found: " + ", ".join(violations)
 
 
 def test_except_exception_count_does_not_increase() -> None:

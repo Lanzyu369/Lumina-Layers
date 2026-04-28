@@ -44,6 +44,7 @@ from api.schemas.lut import (
     RecipeSearchResponse,
 )
 from api.schemas.responses import LUTListResponse, LutInfo, LutColorsResponse, LutColorEntry
+from api.structured_logging import get_logger
 from config import LUTMetadata, get_capabilities, get_schema_version, get_source_kind, get_supported_modes
 from core.lut_details.service import get_lut_details_service
 from core.lut_merger import LUTMerger
@@ -51,6 +52,7 @@ from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, r
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/lut", tags=["LUT"])
+log = get_logger(__name__)
 
 _VALID_PRIMARY_MODES = {"6-Color", "8-Color", "8-Color Max"}
 _lut_details_service = None
@@ -316,6 +318,19 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
 
         _invalidate_lut_details_service_cache()
         display_name = f"Custom - {Path(dest_path).stem}"
+        dest_filename = Path(dest_path).name
+        log.info(
+            "LUT upload complete",
+            extra={
+                "event": "lut_upload_done",
+                "original_filename": filename,
+                "file_extension": ext,
+                "dest_filename": dest_filename,
+                "display_name": display_name,
+                "file_size_bytes": int(total_read),
+                "was_converted": ext == ".npy",
+            },
+        )
         return {"status": "ok", "message": f"LUT 已保存: {display_name}", "name": display_name}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"上传失败: {exc}") from exc
@@ -419,9 +434,9 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
         os.makedirs(custom_dir, exist_ok=True)
         output_path: str = os.path.join(custom_dir, output_name)
 
+        merged_metadata = stats.get("merged_metadata")
         if all_json:
             # 输出 Keyed JSON 格式，保留 palette 和打印参数
-            merged_metadata = stats.get("merged_metadata")
             if merged_metadata is None:
                 # 回退：使用主 LUT 的 metadata
                 _, _, merged_metadata = LUTManager.load_lut_with_metadata(primary_path)
@@ -441,6 +456,21 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
             LUTMerger.save_merged_lut(merged_rgb, merged_stacks, output_path)
 
         _invalidate_lut_details_service_cache()
+        log.info(
+            "LUT merge complete",
+            extra={
+                "event": "lut_merge_done",
+                "primary_lut_name": request.primary_name,
+                "secondary_count": len(request.secondary_names),
+                "merged_filename": output_name,
+                "total_before": int(stats["total_before"]),
+                "total_after": int(stats["total_after"]),
+                "exact_dupes": int(stats["exact_dupes"]),
+                "similar_removed": int(stats["similar_removed"]),
+                "palette_size": len(merged_metadata.palette) if merged_metadata else 0,
+                "warning_count": len(stats.get("warnings") or []),
+            },
+        )
         # 10. Return response / 返回响应
         # 注意：validate_print_params() 和 merge_palettes() 尚未实现（任务 6），暂时使用空列表
         return MergeResponse(
@@ -545,6 +575,20 @@ def compare_luts_endpoint(request: CompareRequest) -> CompareResponse:
             warnings.append("No shared recipes found; comparison metrics are zeroed.")
 
         warnings = _dedupe_warnings(warnings)
+        log.info(
+            "LUT compare complete",
+            extra={
+                "event": "lut_compare_done",
+                "lut_a_name": request.lut_a_name,
+                "lut_b_name": request.lut_b_name,
+                "lut_a_mode": mode_a,
+                "lut_b_mode": mode_b,
+                "matched_recipe_count": int(stats_dict["matched_recipe_count"]),
+                "warning_count": len(warnings),
+                "top_n": int(request.top_n),
+                "worst_diffs_count": len(compare_result["worst_diffs"]),
+            },
+        )
         message = (
             f"Compared {stats_dict['matched_recipe_count']} shared recipes between "
             f"{request.lut_a_name} and {request.lut_b_name}"
@@ -887,16 +931,34 @@ def get_session_lut_info(
     session_data = store.get(session_id)
     if session_data is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
     if str(session_data.get("material_source") or "lut") == "material_archive":
-        return _build_material_archive_lut_info(session_data)
-    lut_path = session_data.get("lut_path")
-    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(
-            status_code=409,
-            detail="Session has no LUT bound yet. Run preview/generate first.",
-        )
-    display_name = session_data.get("lut_name") or Path(lut_path).stem
-    return _build_lut_info_from_path(lut_path, str(display_name))
+        info = _build_material_archive_lut_info(session_data)
+        source_kind = "material_archive"
+    else:
+        lut_path = session_data.get("lut_path")
+        if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+            raise HTTPException(
+                status_code=409,
+                detail="Session has no LUT bound yet. Run preview/generate first.",
+            )
+        display_name = session_data.get("lut_name") or Path(lut_path).stem
+        info = _build_lut_info_from_path(lut_path, str(display_name))
+        source_kind = info.source_kind
+
+    log.info(
+        "Session LUT info returned",
+        extra={
+            "event": "lut_session_info_done",
+            "session_id": session_id,
+            "lut_name": info.name,
+            "color_mode": info.color_mode,
+            "color_count": int(info.color_count),
+            "source_kind": source_kind,
+            "palette_size": len(info.palette),
+        },
+    )
+    return info
 
 
 @router.get("/{lut_name}/details", response_model=LutDetailsResponse)
@@ -912,6 +974,20 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"LUT details unavailable: {exc}") from exc
 
+    log.info(
+        "LUT details returned",
+        extra={
+            "event": "lut_details_done",
+            "lut_name": detail.name,
+            "color_mode": detail.color_mode,
+            "color_count": int(detail.color_count),
+            "entry_count": int(detail.coverage_stats.entry_count),
+            "lab_points_count": len(detail.lab_points),
+            "rgb_points_count": len(detail.rgb_points),
+            "manufacturer": detail.manufacturer or "",
+            "source_kind": detail.source_kind,
+        },
+    )
     return LutDetailsResponse(
         name=detail.name,
         path=detail.path,

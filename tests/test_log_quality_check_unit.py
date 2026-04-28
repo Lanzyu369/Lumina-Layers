@@ -445,6 +445,56 @@ def test_vectorize_image_workflow_step_is_first_class() -> None:
     )
 
 
+def test_lut_merge_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("lut_merge")
+
+    assert workflow == ["lut_merge"]
+    assert "lut_merge" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "lut_merge" in WORKFLOW_ORDER
+    assert "lut_merge" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("lut_merge") == WORKFLOW_ORDER.index("vectorize_image") + 1
+
+
+def test_lut_compare_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("lut_compare")
+
+    assert workflow == ["lut_compare"]
+    assert "lut_compare" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "lut_compare" in WORKFLOW_ORDER
+    assert "lut_compare" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("lut_compare") == WORKFLOW_ORDER.index("lut_merge") + 1
+
+
+def test_lut_details_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("lut_details")
+
+    assert workflow == ["lut_details"]
+    assert "lut_details" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "lut_details" in WORKFLOW_ORDER
+    assert "lut_details" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("lut_details") == WORKFLOW_ORDER.index("lut_compare") + 1
+
+
+def test_lut_upload_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("lut_upload")
+
+    assert workflow == ["lut_upload"]
+    assert "lut_upload" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "lut_upload" in WORKFLOW_ORDER
+    assert "lut_upload" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("lut_upload") == WORKFLOW_ORDER.index("lut_details") + 1
+
+
+def test_lut_session_info_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("lut_session_info")
+
+    assert workflow == ["lut_session_info"]
+    assert "lut_session_info" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "lut_session_info" in WORKFLOW_ORDER
+    assert "lut_session_info" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("lut_session_info") == WORKFLOW_ORDER.index("lut_upload") + 1
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 
@@ -1803,6 +1853,101 @@ def test_vectorize_image_workflow_requires_canary_event() -> None:
 
     assert by_name["workflow_event_vectorize_image_done"].passed is True
     assert missing_by_name["workflow_event_vectorize_image_done"].passed is False
+
+
+def test_lut_merge_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_merge"],
+        event_counts={"lut_merge_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_merge"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_lut_merge_done"].passed is True
+    assert missing_by_name["workflow_event_lut_merge_done"].passed is False
+
+
+def test_lut_compare_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_compare"],
+        event_counts={"lut_compare_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_compare"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_lut_compare_done"].passed is True
+    assert missing_by_name["workflow_event_lut_compare_done"].passed is False
+
+
+def test_lut_details_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_details"],
+        event_counts={"lut_details_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_details"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_lut_details_done"].passed is True
+    assert missing_by_name["workflow_event_lut_details_done"].passed is False
+
+
+def test_lut_upload_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_upload"],
+        event_counts={"lut_upload_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_upload"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_lut_upload_done"].passed is True
+    assert missing_by_name["workflow_event_lut_upload_done"].passed is False
+
+
+def test_lut_session_info_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_session_info"],
+        event_counts={"lut_session_info_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["lut_session_info"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_lut_session_info_done"].passed is True
+    assert missing_by_name["workflow_event_lut_session_info_done"].passed is False
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

@@ -96,6 +96,11 @@ WORKFLOW_ORDER = [
     "five_color_generate_swatch",
     "five_color_base_colors",
     "vectorize_image",
+    "lut_merge",
+    "lut_compare",
+    "lut_details",
+    "lut_upload",
+    "lut_session_info",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -820,6 +825,16 @@ def _workflow_required_event_checks(
         required_events.append("five_color_base_colors_done")
     if "vectorize_image" in workflow:
         required_events.append("vectorize_image_done")
+    if "lut_merge" in workflow:
+        required_events.append("lut_merge_done")
+    if "lut_compare" in workflow:
+        required_events.append("lut_compare_done")
+    if "lut_details" in workflow:
+        required_events.append("lut_details_done")
+    if "lut_upload" in workflow:
+        required_events.append("lut_upload_done")
+    if "lut_session_info" in workflow:
+        required_events.append("lut_session_info_done")
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
@@ -1634,6 +1649,52 @@ def _synthesize_lut_keyed_json(
     LUTManager.save_keyed_json(str(path_obj), rgb, stacks, metadata)
 
 
+def _synthesize_keyed_json_lut_bytes() -> bytes:
+    """Produce a tiny well-formed Keyed-JSON LUT for upload tests."""
+
+    payload = {
+        "schema_version": "keyed-v1",
+        "color_mode": DEFAULT_COLOR_MODE,
+        "palette": {
+            "White": {
+                "material": "PLA",
+                "hex_color": "#FFFFFF",
+                "color_name": "White",
+            },
+            "Red": {
+                "material": "PLA",
+                "hex_color": "#FF0000",
+                "color_name": "Red",
+            },
+            "Yellow": {
+                "material": "PLA",
+                "hex_color": "#FFFF00",
+                "color_name": "Yellow",
+            },
+            "Blue": {
+                "material": "PLA",
+                "hex_color": "#0000FF",
+                "color_name": "Blue",
+            },
+        },
+        "entries": [
+            {
+                "rgb": [255, 255, 255],
+                "hex": "#FFFFFF",
+                "lab": [100.0, 0.0, 0.0],
+                "recipe": ["White", "White", "White"],
+            },
+            {
+                "rgb": [255, 0, 0],
+                "hex": "#FF0000",
+                "lab": [53.2408, 80.0925, 67.2032],
+                "recipe": ["Red", "Red", "Red"],
+            },
+        ],
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
 def _synthesize_rgb_png_bytes(width: int, height: int) -> bytes:
     from io import BytesIO
 
@@ -1926,6 +1987,16 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_five_color_base_colors_workflow(client)
         elif step == "vectorize_image":
             _execute_vectorize_image_workflow(client)
+        elif step == "lut_merge":
+            _execute_lut_merge_workflow(client)
+        elif step == "lut_compare":
+            _execute_lut_compare_workflow(client)
+        elif step == "lut_details":
+            _execute_lut_details_workflow(client)
+        elif step == "lut_upload":
+            _execute_lut_upload_workflow(client)
+        elif step == "lut_session_info":
+            _execute_lut_session_info_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -3056,6 +3127,148 @@ def _execute_vectorize_image_workflow(client: Any) -> None:
     palette = payload.get("palette")
     if not isinstance(palette, list) or len(palette) < 1:
         raise QualityCheckError("Vectorize image response missed palette")
+
+
+def _execute_lut_merge_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/lut/merge",
+        json={
+            "primary_name": EIGHT_COLOR_LUT_NAME,
+            "secondary_names": [DEFAULT_LUT_NAME],
+            "dedup_threshold": 0.0,
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "lut_merge")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("LUT merge response was not an object")
+    if payload.get("status") != "success":
+        raise QualityCheckError("LUT merge response status was not success")
+    if not payload.get("filename"):
+        raise QualityCheckError("LUT merge response missed filename")
+
+    try:
+        from utils.lut_manager import LUTManager
+
+        merged_path = LUTManager.get_lut_path(str(payload["filename"]))
+        if isinstance(merged_path, str):
+            _remove_paths([Path(merged_path)])
+    except Exception:
+        pass
+
+
+def _execute_lut_compare_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/lut/compare",
+        json={
+            "lut_a_name": DEFAULT_LUT_NAME,
+            "lut_b_name": EIGHT_COLOR_LUT_NAME,
+            "top_n": 5,
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "lut_compare")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("LUT compare response was not an object")
+    if payload.get("status") != "success":
+        raise QualityCheckError("LUT compare response status was not success")
+    if not isinstance(payload.get("stats"), Mapping):
+        raise QualityCheckError("LUT compare response missed stats")
+
+
+def _resolve_lut_details_catalog_name(client: Any) -> str:
+    """Resolve a LUT catalog name accepted by the details service.
+
+    The details service catalog uses 'manufacturer - material_type - color_count - stem'
+    keys, distinct from LUTManager's 'manufacturer - stem' display names. Discover
+    a usable name by matching DEFAULT_LUT_STEM suffix; fall back to the first item.
+    """
+
+    response = client.get("/api/lut/details/catalog")
+    _raise_for_status(response.status_code, response.text, "lut_details")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("LUT details catalog response was not an object")
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        raise QualityCheckError("LUT details catalog response missed groups")
+    fallback: str | None = None
+    for group in groups:
+        if not isinstance(group, Mapping):
+            continue
+        items = group.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            if fallback is None:
+                fallback = name
+            if name.endswith(DEFAULT_LUT_STEM):
+                return name
+    if fallback is None:
+        raise QualityCheckError("LUT details catalog response had no items")
+    return fallback
+
+
+def _execute_lut_details_workflow(client: Any) -> None:
+    catalog_name = _resolve_lut_details_catalog_name(client)
+    response = client.get(f"/api/lut/{quote(catalog_name, safe='')}/details")
+    _raise_for_status(response.status_code, response.text, "lut_details")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("LUT details response was not an object")
+    if int(payload.get("color_count", 0)) < 1:
+        raise QualityCheckError("LUT details response missed colors")
+    if not isinstance(payload.get("coverage_stats"), Mapping):
+        raise QualityCheckError("LUT details response missed coverage stats")
+
+
+def _execute_lut_upload_workflow(client: Any) -> None:
+    payload_bytes = _synthesize_keyed_json_lut_bytes()
+    response = client.post(
+        "/api/lut/upload",
+        files={"file": ("synthetic_lut.json", payload_bytes, "application/json")},
+    )
+    _raise_for_status(response.status_code, response.text, "lut_upload")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("LUT upload response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("LUT upload response status was not ok")
+    if not payload.get("name"):
+        raise QualityCheckError("LUT upload response missed name")
+
+    try:
+        from utils.lut_manager import LUTManager
+
+        uploaded_path = LUTManager.get_lut_path(str(payload["name"]))
+        if isinstance(uploaded_path, str):
+            _remove_paths([Path(uploaded_path)])
+    except Exception:
+        pass
+
+
+def _execute_lut_session_info_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="lut_session_info setup",
+    )
+    session_id = _extract_session_id(preview_payload, "lut_session_info preview")
+    response = client.get(f"/api/lut/session/{session_id}/info")
+    _raise_for_status(response.status_code, response.text, "lut_session_info")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Session LUT info response was not an object")
+    if int(payload.get("color_count", 0)) < 1:
+        raise QualityCheckError("Session LUT info response missed colors")
+    if not isinstance(payload.get("palette"), list):
+        raise QualityCheckError("Session LUT info response missed palette")
 
 
 def _post_extract_gradient_card_stage_a_for_session(client: Any) -> Mapping[str, Any]:
