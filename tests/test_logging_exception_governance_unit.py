@@ -98,6 +98,12 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_color_highlight_done",
     "converter_region_detect_done",
     "converter_region_requantize_done",
+    "converter_replace_colors_batch_done",
+    "converter_region_replace_batch_done",
+    "converter_predict_recipe_done",
+    "converter_apply_recipe_override_done",
+    "converter_region_recipe_done",
+    "converter_merge_colors_done",
 }
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS

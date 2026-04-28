@@ -102,6 +102,45 @@ def _seed_region_requantize_session(store: SessionStore, tmp_path) -> str:
     return session_id
 
 
+def _seed_recipe_session(store: SessionStore) -> str:
+    session_id = store.create()
+    matched_rgb = np.full((4, 4, 3), [250, 250, 250], dtype=np.uint8)
+    mask_solid = np.ones((4, 4), dtype=bool)
+    material_matrix = np.zeros((4, 4, 3), dtype=np.int32)
+    material_matrix[:, :, :] = [0, 1, 0]
+    region_mask = np.zeros((4, 4), dtype=bool)
+    region_mask[:2, :2] = True
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": matched_rgb.copy(),
+            "quantized_image": matched_rgb.copy(),
+            "mask_solid": mask_solid,
+            "material_matrix": material_matrix,
+            "color_layers": 3,
+            "layer_height_mm": 0.08,
+            "preview_colors": {
+                0: [250, 250, 250, 255],
+                1: [220, 40, 80, 255],
+            },
+            "slot_names": ["fake/A", "fake/B"],
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+        },
+    )
+    store.put(session_id, "material_source", "material_archive")
+    store.put(session_id, "selected_materials", ["fake/A", "fake/B"])
+    store.put(session_id, "material_layer_count", 3)
+    store.put(session_id, "material_layer_height_mm", 0.08)
+    store.put(session_id, "lut_name", "__material_archive__")
+    store.put(session_id, "selected_region_masks", {"region-1": region_mask})
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_mask", region_mask)
+    return session_id
+
+
 class TestReplaceColorCanary:
     """Successful replace-color requests emit the structured done canary."""
 
@@ -398,3 +437,354 @@ class TestRegionRequantizeCanary:
         assert record.target_lut == "__material_archive__"
         assert record.region_pixel_count == 64
         assert record.output_color_count >= 1
+
+
+class TestReplaceColorsBatchCanary:
+    """Successful replace-colors-batch requests emit the structured done canary."""
+
+    def test_replace_colors_batch_emits_converter_replace_colors_batch_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            with patch(
+                "api.routers.converter.replace.schedule_glb_build",
+                return_value="mock-glb-token",
+            ):
+                response = client.post(
+                    "/api/convert/replace-colors-batch",
+                    json={
+                        "session_id": session_id,
+                        "replacements": [
+                            {
+                                "selected_color": "#ffffff",
+                                "replacement_color": "#0000ff",
+                            },
+                            {
+                                "selected_color": "#ff0000",
+                                "replacement_color": "#00ff00",
+                            },
+                        ],
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["preview_url"]
+        assert body["replacement_count"] == 2
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None)
+            == "converter_replace_colors_batch_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.pair_count == 2
+        assert record.diff_pixel_count == 16
+        assert record.replacement_count == 2
+
+
+class TestRegionReplaceBatchCanary:
+    """Successful region-replace-batch requests emit the structured done canary."""
+
+    def test_region_replace_batch_emits_converter_region_replace_batch_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            with patch(
+                "api.routers.converter.replace.schedule_glb_build",
+                return_value="mock-glb-token",
+            ):
+                response = client.post(
+                    "/api/convert/region-replace-batch",
+                    json={
+                        "session_id": session_id,
+                        "items": [
+                            {
+                                "replacement_color": "#0000ff",
+                                "click_x": 0,
+                                "click_y": 0,
+                            }
+                        ],
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["preview_url"]
+        assert "Batch replaced" in body["message"]
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None)
+            == "converter_region_replace_batch_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.item_count == 1
+        assert record.diff_pixel_count == 8
+        assert record.any_click_mask_used is True
+
+
+class TestPredictRecipeCanary:
+    """Material-archive predict-recipe fixtures avoid a real LUT file dependency."""
+
+    def test_predict_recipe_emits_converter_predict_recipe_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_recipe_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/predict-recipe",
+                json={
+                    "session_id": session_id,
+                    "recipe": [0, 1, 0],
+                    "layer_height_mm": 0.08,
+                    "color_layers": 3,
+                    "layer_order": "Top2Bottom",
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert len(body["rgb"]) == 3
+        assert body["source"] == "material_archive_preview"
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_predict_recipe_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.recipe_layer_count == 3
+        assert record.prediction_source == "material_archive_preview"
+        assert record.is_material_archive is True
+
+
+class TestApplyRecipeOverrideCanary:
+    """Successful apply-recipe-override requests emit the structured done canary."""
+
+    def test_apply_recipe_override_emits_converter_apply_recipe_override_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_recipe_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            with patch(
+                "api.routers.converter.replace.schedule_glb_build",
+                return_value="mock-glb-token",
+            ):
+                response = client.post(
+                    "/api/convert/apply-recipe-override",
+                    json={
+                        "session_id": session_id,
+                        "region_ids": ["region-1"],
+                        "recipe": [0, 1, 0],
+                        "layer_height_mm": 0.08,
+                        "color_layers": 3,
+                        "layer_order": "Top2Bottom",
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["preview_url"]
+        assert body["override_count"] == 1
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None)
+            == "converter_apply_recipe_override_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.region_count == 1
+        assert record.recipe_layer_count == 3
+        assert record.override_count == 1
+        assert record.prediction_source == "material_archive_preview"
+
+
+class TestRegionRecipeCanary:
+    """Successful region-recipe requests emit the structured done canary."""
+
+    def test_region_recipe_emits_converter_region_recipe_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_recipe_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/region-recipe",
+                json={
+                    "session_id": session_id,
+                    "region_ids": ["region-1"],
+                    "layer_order": "Top2Bottom",
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["recipes"]
+        assert body["recipes"][0]["recipe"] == [0, 1, 0]
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_region_recipe_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.requested_region_count == 1
+        assert record.resolved_region_count == 1
+        assert record.layer_order == "Top2Bottom"
+
+
+class TestMergeColorsCanary:
+    """Successful merge-colors requests emit the structured done canary."""
+
+    def test_merge_colors_emits_converter_merge_colors_done_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/merge-colors",
+                json={
+                    "session_id": session_id,
+                    "merge_enable": True,
+                    "merge_threshold": 5.0,
+                    "merge_max_distance": 20,
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["preview_url"]
+        assert isinstance(body["colors_before"], int)
+        assert isinstance(body["colors_after"], int)
+        assert 0 <= body["quality_metric"] <= 100
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_merge_colors_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.merge_enabled is True
+        assert record.colors_before == body["colors_before"]
+        assert record.colors_after == body["colors_after"]
+        assert record.merge_map_count == len(body["merge_map"])
+        assert record.quality_metric == body["quality_metric"]
+
+    def test_merge_colors_disabled_branch_preserves_payload_and_canary(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/merge-colors",
+                json={
+                    "session_id": session_id,
+                    "merge_enable": False,
+                    "merge_threshold": 5.0,
+                    "merge_max_distance": 20,
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["message"] == "Color merging disabled"
+        assert body["preview_url"]
+        assert body["merge_map"] == {}
+        assert body["quality_metric"] == 100.0
+        assert body["colors_before"] == body["colors_after"]
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_merge_colors_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.merge_enabled is False
+        assert record.merge_map_count == 0
+        assert record.quality_metric == 100.0

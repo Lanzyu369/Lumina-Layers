@@ -60,6 +60,12 @@ WORKFLOW_ORDER = [
     "color_highlight",
     "region_detect",
     "region_requantize",
+    "replace_colors_batch",
+    "region_replace_batch",
+    "predict_recipe",
+    "apply_recipe_override",
+    "region_recipe",
+    "merge_colors",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -630,6 +636,18 @@ def _workflow_required_event_checks(
         required_events.append("converter_region_detect_done")
     if "region_requantize" in workflow:
         required_events.append("converter_region_requantize_done")
+    if "replace_colors_batch" in workflow:
+        required_events.append("converter_replace_colors_batch_done")
+    if "region_replace_batch" in workflow:
+        required_events.append("converter_region_replace_batch_done")
+    if "predict_recipe" in workflow:
+        required_events.append("converter_predict_recipe_done")
+    if "apply_recipe_override" in workflow:
+        required_events.append("converter_apply_recipe_override_done")
+    if "region_recipe" in workflow:
+        required_events.append("converter_region_recipe_done")
+    if "merge_colors" in workflow:
+        required_events.append("converter_merge_colors_done")
 
     required_events = list(dict.fromkeys(required_events))
     return [
@@ -1010,6 +1028,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_region_detect_workflow(client)
         elif step == "region_requantize":
             _execute_region_requantize_workflow(client)
+        elif step == "replace_colors_batch":
+            _execute_replace_colors_batch_workflow(client)
+        elif step == "region_replace_batch":
+            _execute_region_replace_batch_workflow(client)
+        elif step == "predict_recipe":
+            _execute_predict_recipe_workflow(client)
+        elif step == "apply_recipe_override":
+            _execute_apply_recipe_override_workflow(client)
+        elif step == "region_recipe":
+            _execute_region_recipe_workflow(client)
+        elif step == "merge_colors":
+            _execute_merge_colors_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -1241,6 +1271,275 @@ def _execute_region_requantize_workflow(client: Any) -> None:
             raise QualityCheckError("Region requantize response did not include preview_url")
     finally:
         _remove_paths(created_cache_paths)
+
+
+def _execute_replace_colors_batch_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="replace_colors_batch setup",
+    )
+    session_id = _extract_session_id(
+        preview_payload,
+        "replace_colors_batch preview",
+    )
+    response = client.post(
+        "/api/convert/replace-colors-batch",
+        json={
+            "session_id": session_id,
+            "replacements": [
+                {
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+                {
+                    "selected_color": "#ffff00",
+                    "replacement_color": "#ff0000",
+                },
+            ],
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "replace_colors_batch")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Replace colors batch response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Replace colors batch response status was not ok")
+    if not payload.get("preview_url"):
+        raise QualityCheckError(
+            "Replace colors batch response did not include preview_url"
+        )
+    if int(payload.get("replacement_count", 0)) < 2:
+        raise QualityCheckError(
+            "Replace colors batch response did not record two replacements"
+        )
+
+
+def _execute_region_replace_batch_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="region_replace_batch setup",
+    )
+    session_id = _extract_session_id(
+        preview_payload,
+        "region_replace_batch preview",
+    )
+    click_x, click_y = _select_replace_click(preview_payload)
+    _post_region_detect(client, session_id, click_x, click_y)
+    response = client.post(
+        "/api/convert/region-replace-batch",
+        json={
+            "session_id": session_id,
+            "items": [
+                {
+                    "replacement_color": "#0000ff",
+                    "click_x": click_x,
+                    "click_y": click_y,
+                }
+            ],
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "region_replace_batch")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Region replace batch response was not an object")
+    if not payload.get("preview_url"):
+        raise QualityCheckError(
+            "Region replace batch response did not include preview_url"
+        )
+    message = str(payload.get("message") or "")
+    if "Batch replaced" not in message:
+        raise QualityCheckError(
+            "Region replace batch response did not report batch replacement"
+        )
+
+
+def _execute_predict_recipe_workflow(client: Any) -> None:
+    selected_materials = _region_requantize_materials_for_client(client)
+    created_cache_paths = (
+        []
+        if _client_uses_dependency_overrides(client)
+        else _ensure_region_requantize_solver_cache(selected_materials)
+    )
+    try:
+        preview_payload = _post_material_archive_preview_payload(
+            client,
+            selected_materials,
+            label="predict_recipe setup",
+        )
+        session_id = _extract_session_id(preview_payload, "predict_recipe preview")
+        response = client.post(
+            "/api/convert/predict-recipe",
+            json={
+                "session_id": session_id,
+                "recipe": [0, 0, 0, 0, 0],
+                "layer_height_mm": 0.08,
+                "color_layers": 5,
+                "layer_order": "Top2Bottom",
+            },
+        )
+        _raise_for_status(response.status_code, response.text, "predict_recipe")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("Predict recipe response was not an object")
+        if payload.get("status") != "ok":
+            raise QualityCheckError("Predict recipe response status was not ok")
+        rgb = payload.get("rgb")
+        if not isinstance(rgb, list) or len(rgb) != 3:
+            raise QualityCheckError("Predict recipe response did not include RGB triple")
+        lab = payload.get("lab")
+        if not isinstance(lab, list) or len(lab) != 3:
+            raise QualityCheckError("Predict recipe response did not include LAB triple")
+        if not payload.get("source"):
+            raise QualityCheckError("Predict recipe response source was empty")
+    finally:
+        _remove_paths(created_cache_paths)
+
+
+def _execute_apply_recipe_override_workflow(client: Any) -> None:
+    selected_materials = _region_requantize_materials_for_client(client)
+    created_cache_paths = (
+        []
+        if _client_uses_dependency_overrides(client)
+        else _ensure_region_requantize_solver_cache(selected_materials)
+    )
+    try:
+        preview_payload = _post_material_archive_preview_payload(
+            client,
+            selected_materials,
+            label="apply_recipe_override setup",
+        )
+        session_id = _extract_session_id(
+            preview_payload,
+            "apply_recipe_override preview",
+        )
+        click_x, click_y = _select_replace_click(preview_payload)
+        detected_region = _post_region_detect(client, session_id, click_x, click_y)
+        region_id = detected_region.get("region_id")
+        if not isinstance(region_id, str) or not region_id:
+            raise QualityCheckError(
+                "Region detect response did not include region_id"
+            )
+        response = client.post(
+            "/api/convert/apply-recipe-override",
+            json={
+                "session_id": session_id,
+                "region_ids": [region_id],
+                "recipe": [0, 0, 0, 0, 0],
+                "layer_height_mm": 0.08,
+                "color_layers": 5,
+                "layer_order": "Top2Bottom",
+            },
+        )
+        _raise_for_status(response.status_code, response.text, "apply_recipe_override")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError(
+                "Apply recipe override response was not an object"
+            )
+        if payload.get("status") != "ok":
+            raise QualityCheckError(
+                "Apply recipe override response status was not ok"
+            )
+        if not payload.get("preview_url"):
+            raise QualityCheckError(
+                "Apply recipe override response did not include preview_url"
+            )
+        if int(payload.get("override_count", 0)) < 1:
+            raise QualityCheckError(
+                "Apply recipe override response did not record an override"
+            )
+    finally:
+        _remove_paths(created_cache_paths)
+
+
+def _execute_region_recipe_workflow(client: Any) -> None:
+    selected_materials = _region_requantize_materials_for_client(client)
+    created_cache_paths = (
+        []
+        if _client_uses_dependency_overrides(client)
+        else _ensure_region_requantize_solver_cache(selected_materials)
+    )
+    try:
+        preview_payload = _post_material_archive_preview_payload(
+            client,
+            selected_materials,
+            label="region_recipe setup",
+        )
+        session_id = _extract_session_id(preview_payload, "region_recipe preview")
+        click_x, click_y = _select_replace_click(preview_payload)
+        detected_region = _post_region_detect(client, session_id, click_x, click_y)
+        region_id = detected_region.get("region_id")
+        if not isinstance(region_id, str) or not region_id:
+            raise QualityCheckError(
+                "Region detect response did not include region_id"
+            )
+        response = client.post(
+            "/api/convert/region-recipe",
+            json={
+                "session_id": session_id,
+                "region_ids": [region_id],
+                "layer_order": "Top2Bottom",
+            },
+        )
+        _raise_for_status(response.status_code, response.text, "region_recipe")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("Region recipe response was not an object")
+        if payload.get("status") != "ok":
+            raise QualityCheckError("Region recipe response status was not ok")
+        recipes = payload.get("recipes")
+        if not isinstance(recipes, list) or not recipes:
+            raise QualityCheckError("Region recipe response did not include recipes")
+        first_recipe = recipes[0]
+        if not isinstance(first_recipe, Mapping):
+            raise QualityCheckError("Region recipe entry was not an object")
+        if first_recipe.get("region_id") != region_id:
+            raise QualityCheckError("Region recipe response used an unexpected region")
+        recipe = first_recipe.get("recipe")
+        if not isinstance(recipe, list) or not recipe:
+            raise QualityCheckError("Region recipe response recipe was empty")
+        if first_recipe.get("layer_order") != "Top2Bottom":
+            raise QualityCheckError("Region recipe response layer_order was unexpected")
+    finally:
+        _remove_paths(created_cache_paths)
+
+
+def _execute_merge_colors_workflow(client: Any) -> None:
+    preview_payload = _post_vector_preview_payload(
+        client,
+        DEFAULT_LUT_NAME,
+        color_mode=DEFAULT_COLOR_MODE,
+        label="merge_colors setup",
+    )
+    session_id = _extract_session_id(preview_payload, "merge_colors preview")
+    response = client.post(
+        "/api/convert/merge-colors",
+        json={
+            "session_id": session_id,
+            "merge_enable": True,
+            "merge_threshold": 5.0,
+            "merge_max_distance": 20,
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "merge_colors")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Merge colors response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Merge colors response status was not ok")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Merge colors response did not include preview_url")
+    if not isinstance(payload.get("colors_before"), int):
+        raise QualityCheckError("Merge colors response colors_before was not an int")
+    if not isinstance(payload.get("colors_after"), int):
+        raise QualityCheckError("Merge colors response colors_after was not an int")
+    quality_metric = payload.get("quality_metric")
+    if not isinstance(quality_metric, (float, int)) or not 0 <= quality_metric <= 100:
+        raise QualityCheckError("Merge colors response quality_metric was invalid")
 
 
 def _execute_extract_workflow(client: Any) -> None:

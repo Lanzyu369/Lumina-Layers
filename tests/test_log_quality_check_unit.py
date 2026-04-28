@@ -602,6 +602,188 @@ def test_region_requantize_workflow_requires_canary_event() -> None:
     )
 
 
+def test_replace_colors_batch_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace_colors_batch",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_replace_colors_batch_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_converter_replace_colors_batch_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name["workflow_event_converter_replace_colors_batch_done"].passed
+        is False
+    )
+
+
+def test_region_replace_batch_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "region_replace_batch",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_region_replace_batch_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_converter_region_replace_batch_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name["workflow_event_converter_region_replace_batch_done"].passed
+        is False
+    )
+
+
+def test_predict_recipe_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "predict_recipe",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_predict_recipe_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_predict_recipe_done"].passed is True
+    assert missing_by_name["workflow_event_converter_predict_recipe_done"].passed is False
+
+
+def test_apply_recipe_override_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "apply_recipe_override",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_apply_recipe_override_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_converter_apply_recipe_override_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_converter_apply_recipe_override_done"
+        ].passed
+        is False
+    )
+
+
+def test_region_recipe_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "region_recipe",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_region_recipe_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_region_recipe_done"].passed is True
+    assert missing_by_name["workflow_event_converter_region_recipe_done"].passed is False
+
+
+def test_merge_colors_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "merge_colors",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"converter_merge_colors_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_converter_merge_colors_done"].passed is True
+    assert missing_by_name["workflow_event_converter_merge_colors_done"].passed is False
+
+
 def test_full_extract_workflow_requires_canary_event() -> None:
     workflow = [
         "startup",

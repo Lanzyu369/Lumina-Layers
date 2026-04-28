@@ -1904,15 +1904,14 @@ def replace_colors_batch(
             )
 
         replaced_rgb = manager.apply_to_image(matched_rgb)
+        diff_pixel_count = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
 
         log.debug(
             "replace-colors-batch diag",
             extra={
                 "event": "converter_replace_colors_batch_diag",
                 "pair_count": len(request.replacements),
-                "diff_pixel_count": int(
-                    np.any(previous_rgb != replaced_rgb, axis=-1).sum()
-                ),
+                "diff_pixel_count": diff_pixel_count,
                 "material_source": session_data.get("material_source"),
             },
         )
@@ -1958,6 +1957,16 @@ def replace_colors_batch(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch color replacement")
 
+    log.info(
+        "replace-colors-batch completed",
+        extra={
+            "event": "converter_replace_colors_batch_done",
+            "session_id": request.session_id,
+            "pair_count": len(request.replacements),
+            "diff_pixel_count": diff_pixel_count,
+            "replacement_count": len(current_regions),
+        },
+    )
     return ColorReplaceResponse(
         status="ok",
         message=f"Replaced {len(request.replacements)} colors in batch",
@@ -2043,14 +2052,13 @@ def region_replace_batch(
             store.put(request.session_id, "selected_region_mask", None)
             store.put(request.session_id, "selected_region_id", None)
 
+        diff_pixel_count = int(np.any(previous_rgb != working_rgb, axis=-1).sum())
         log.debug(
             "region-replace-batch diag",
             extra={
                 "event": "converter_region_replace_batch_diag",
                 "item_count": len(request.items),
-                "diff_pixel_count": int(
-                    np.any(previous_rgb != working_rgb, axis=-1).sum()
-                ),
+                "diff_pixel_count": diff_pixel_count,
                 "material_source": session_data.get("material_source"),
             },
         )
@@ -2060,6 +2068,16 @@ def region_replace_batch(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch region replacement")
 
+    log.info(
+        "region-replace-batch completed",
+        extra={
+            "event": "converter_region_replace_batch_done",
+            "session_id": request.session_id,
+            "item_count": len(request.items),
+            "diff_pixel_count": diff_pixel_count,
+            "any_click_mask_used": any_click_mask_used,
+        },
+    )
     return RegionReplaceResponse(
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
@@ -2255,12 +2273,23 @@ def predict_recipe(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    prediction_source = str(prediction.get("source", "unknown"))
+    log.info(
+        "predict-recipe completed",
+        extra={
+            "event": "converter_predict_recipe_done",
+            "session_id": request.session_id,
+            "recipe_layer_count": len(request.recipe),
+            "prediction_source": prediction_source,
+            "is_material_archive": is_material_archive,
+        },
+    )
     return RecipePredictResponse(
         status="ok",
         message="Recipe color predicted",
         rgb=[int(v) for v in prediction.get("rgb", [])],
         lab=[float(v) for v in prediction.get("lab", [])],
-        source=str(prediction.get("source", "unknown")),
+        source=prediction_source,
         runtime_mode_key=(
             str(prediction["runtime_mode_key"])
             if prediction.get("runtime_mode_key") is not None
@@ -2863,6 +2892,17 @@ def apply_recipe_override(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    log.info(
+        "apply-recipe-override completed",
+        extra={
+            "event": "converter_apply_recipe_override_done",
+            "session_id": request.session_id,
+            "region_count": len(region_mask_items),
+            "recipe_layer_count": len(request.recipe),
+            "override_count": len(existing_overrides),
+            "prediction_source": str(prediction_source or "unknown"),
+        },
+    )
     return RecipeOverrideApplyResponse(
         status="ok",
         message="Recipe override applied",
@@ -3001,6 +3041,16 @@ def region_recipe(
             )
         )
 
+    log.info(
+        "region-recipe completed",
+        extra={
+            "event": "converter_region_recipe_done",
+            "session_id": request.session_id,
+            "requested_region_count": len(request.region_ids),
+            "resolved_region_count": len(entries),
+            "layer_order": request.layer_order,
+        },
+    )
     return RegionRecipeResponse(
         status="ok",
         message="Region recipes resolved",
@@ -3065,43 +3115,35 @@ def merge_colors(
         # Extract palette from preview cache
         palette = extract_color_palette(cache)
         colors_before = len(palette)
+        matched_rgb: np.ndarray = cache["matched_rgb"]
+        merged_rgb = matched_rgb
+        merge_map = {}
+        quality = 100.0
+        colors_after = colors_before
+        message = "Color merging disabled"
 
-        # If merge disabled, return empty merge with perfect quality
-        if not request.merge_enable:
-            preview_bytes = _image_to_png_bytes(cache["matched_rgb"])
-            preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_merged.png")
-            store.put(request.session_id, "merge_map", {})
-            return MergePreviewResponse(
-                status="ok",
-                message="Color merging disabled",
-                preview_url=f"/api/files/{preview_id}",
-                merge_map={},
-                quality_metric=100.0,
-                colors_before=colors_before,
-                colors_after=colors_before,
+        if request.merge_enable:
+            # Build merge map using ColorMerger
+            merger = ColorMerger(rgb_to_lab_func=_rgb_to_lab)
+            merge_map = merger.build_merge_map(
+                palette,
+                threshold_percent=request.merge_threshold,
+                max_distance=float(request.merge_max_distance),
             )
 
-        # Build merge map using ColorMerger
-        merger = ColorMerger(rgb_to_lab_func=_rgb_to_lab)
-        merge_map = merger.build_merge_map(
-            palette,
-            threshold_percent=request.merge_threshold,
-            max_distance=float(request.merge_max_distance),
-        )
+            # Apply merging to matched_rgb
+            merged_rgb = merger.apply_color_merging(matched_rgb, merge_map)
 
-        # Apply merging to matched_rgb
-        matched_rgb: np.ndarray = cache["matched_rgb"]
-        merged_rgb = merger.apply_color_merging(matched_rgb, merge_map)
-
-        # Calculate quality metric
-        merged_palette = extract_color_palette(
-            {
-                "matched_rgb": merged_rgb,
-                "mask_solid": cache["mask_solid"],
-            }
-        )
-        quality = merger.calculate_quality_metric(palette, merged_palette, merge_map)
-        colors_after = len(merged_palette)
+            # Calculate quality metric
+            merged_palette = extract_color_palette(
+                {
+                    "matched_rgb": merged_rgb,
+                    "mask_solid": cache["mask_solid"],
+                }
+            )
+            quality = merger.calculate_quality_metric(palette, merged_palette, merge_map)
+            colors_after = len(merged_palette)
+            message = f"Merged {len(merge_map)} colors"
 
         # Generate preview PNG
         preview_bytes = _image_to_png_bytes(merged_rgb)
@@ -3115,12 +3157,25 @@ def merge_colors(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color merging")
 
+    quality_metric = round(quality, 2)
+    log.info(
+        "merge-colors completed",
+        extra={
+            "event": "converter_merge_colors_done",
+            "session_id": request.session_id,
+            "merge_enabled": request.merge_enable,
+            "colors_before": colors_before,
+            "colors_after": colors_after,
+            "merge_map_count": len(merge_map),
+            "quality_metric": quality_metric,
+        },
+    )
     return MergePreviewResponse(
         status="ok",
-        message=f"Merged {len(merge_map)} colors",
+        message=message,
         preview_url=f"/api/files/{preview_id}",
         merge_map=merge_map,
-        quality_metric=round(quality, 2),
+        quality_metric=quality_metric,
         colors_before=colors_before,
         colors_after=colors_after,
     )
