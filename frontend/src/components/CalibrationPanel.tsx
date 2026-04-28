@@ -5,6 +5,7 @@ import { CalibrationColorMode } from "../api/types";
 import { useState } from "react";
 import LayerMaskViewerDialog from "./ui/LayerMaskViewerDialog";
 import WikiTooltip from "./ui/WikiTooltip";
+import HelpDot from "./ui/HelpDot";
 import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";
 import Button from "./ui/Button";
@@ -101,6 +102,7 @@ export default function CalibrationPanel() {
 
             <Slider
               label={t("cal_block_size_label")}
+              tooltip={t("cal_block_size_hint")}
               value={block_size}
               min={3}
               max={10}
@@ -113,6 +115,7 @@ export default function CalibrationPanel() {
 
             <Slider
               label={t("cal_gap_label")}
+              tooltip={t("cal_gap_hint")}
               value={gap}
               min={0.4}
               max={2.0}
@@ -127,9 +130,10 @@ export default function CalibrationPanel() {
                 <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
                   {t("cal_backing_thickness_label")}
                 </span>
-                <WikiTooltip title={t("cal_backing_thickness_label")} description={t("cal_backing_thickness_hint")}>
-                  <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">?</span>
-                </WikiTooltip>
+                <HelpDot
+                  title={t("cal_backing_thickness_label")}
+                  description={t("cal_backing_thickness_hint")}
+                />
               </div>
               <Slider
                 label=""

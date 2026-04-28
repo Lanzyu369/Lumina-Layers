@@ -123,6 +123,55 @@ Typography is the stabilizer. SF Pro Display carries hero and merchandising hier
 - **Carousel Control Dots/Arrows:** circular control vocabulary in muted overlays for gallery progression.
 - **Environment Story Panels:** narrative chapters that blend editorial typography with cinematic product/environment visuals.
 
+### Inline Help Tooltips (功能提示)
+
+#### Placement Standard (放置标准)
+
+All hover tooltip hints across all tabs follow this single source of truth:
+
+| Trigger type | When used | Implementation |
+|---|---|---|
+| **Switch** (toggles with label + control on same row) | Label needs a hint | `<HelpDot title={...} description={...} />` placed inline after the label text, inside the label row |
+| **Slider** | Label or value meaning is not obvious | `Slider` component prop: `tooltip={t("...")}` |
+| **Checkbox** | The option's effect needs explanation | `Checkbox` component prop: `tooltip={t("...")}` |
+
+#### Reference Implementation (参考实现)
+
+Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
+
+```tsx
+// Switch: HelpDot inline after label text
+<span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+  {t("vec.num_colors")}
+  <HelpDot title={t("vec.num_colors")} description={t("vec.hint_num_colors")} />
+</span>
+<Switch checked={...} onChange={...} />
+
+// Slider: tooltip prop
+<Slider
+  label={t("vec.smoothness")}
+  tooltip={t("vec.hint_smoothness")}
+  value={params.smoothness}
+  min={0} max={1} step={0.01}
+  onChange={(v) => setParam("smoothness", v)}
+/>
+
+// Checkbox: tooltip prop
+<Checkbox
+  label={t("vec.svg_enable_stroke")}
+  tooltip={t("vec.hint_svg_enable_stroke")}
+  checked={params.svg_enable_stroke}
+  onChange={(v) => setParam("svg_enable_stroke", v)}
+/>
+```
+
+#### Key Rules (关键规则)
+
+- **Do not** use native `title` attribute or custom `?` spans; always use `HelpDot` or component `tooltip` prop
+- **Do not** add hint text as visible paragraph below the control; use the tooltip popover
+- Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
+- The `?` chip visual style is fixed in `HelpDot`; do not recreate it inline
+
 ## 5. Layout Principles
 
 ### Spacing System

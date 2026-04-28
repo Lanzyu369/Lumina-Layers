@@ -1017,6 +1017,7 @@ function QuantizeColorsControl() {
     <div className="flex flex-col gap-1">
       <Slider
         label={t("adv_quantize_colors")}
+        tooltip={t("adv_quantize_colors_hint")}
         value={quantize_colors}
         min={8}
         max={upperBound}

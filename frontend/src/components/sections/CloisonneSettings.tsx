@@ -31,8 +31,8 @@ export default function CloisonneSettings() {
       />
       {enable_cloisonne && (
         <>
-          <Slider label={t("cloisonne_wire_width")} value={wire_width_mm} min={0.2} max={1.2} step={0.1} unit="mm" onChange={setWireWidthMm} />
-          <Slider label={t("cloisonne_wire_height")} value={wire_height_mm} min={0.04} max={1.0} step={0.04} unit="mm" onChange={setWireHeightMm} />
+          <Slider label={t("cloisonne_wire_width")} tooltip={t("cloisonne_wire_width_hint")} value={wire_width_mm} min={0.2} max={1.2} step={0.1} unit="mm" onChange={setWireWidthMm} />
+          <Slider label={t("cloisonne_wire_height")} tooltip={t("cloisonne_wire_height_hint")} value={wire_height_mm} min={0.04} max={1.0} step={0.04} unit="mm" onChange={setWireHeightMm} />
         </>
       )}
     </div>

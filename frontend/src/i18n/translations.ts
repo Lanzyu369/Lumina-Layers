@@ -367,6 +367,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "微调步长 (像素)",
     en: "Step (px)",
   },
+  ext_nudge_step_hint: {
+    zh: "每次点击方向按钮时角点移动的像素数量。值越大移动越快，值越小移动越精细。",
+    en: "Number of pixels each directional button press moves the corner. Larger values move faster, smaller values allow finer adjustment.",
+  },
   ext_nudge_active_corner_label: {
     zh: "当前调整角点",
     en: "Active Corner",
@@ -2221,25 +2225,49 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "水平偏移 (offset_x)",
     en: "Horizontal Offset (offset_x)",
   },
+  ext_offset_x_hint: {
+    zh: "水平方向位移校正。向右偏移为正，向左为负，单位为像素。",
+    en: "Horizontal displacement correction. Positive moves right, negative moves left, in pixels.",
+  },
   ext_offset_y_label: {
     zh: "垂直偏移 (offset_y)",
     en: "Vertical Offset (offset_y)",
+  },
+  ext_offset_y_hint: {
+    zh: "垂直方向位移校正。向下偏移为正，向上为负，单位为像素。",
+    en: "Vertical displacement correction. Positive moves down, negative moves up, in pixels.",
   },
   ext_zoom_label: {
     zh: "缩放 (zoom)",
     en: "Zoom",
   },
+  ext_zoom_hint: {
+    zh: "对检测到的棋盘格进行缩放校正。1.0 表示原始尺寸，小于 1 则缩小，大于 1 则放大。",
+    en: "Scale correction for the detected checkerboard. 1.0 means original size; less than 1 shrinks, greater than 1 enlarges.",
+  },
   ext_distortion_label: {
     zh: "畸变校正 (distortion)",
     en: "Distortion Correction",
+  },
+  ext_distortion_hint: {
+    zh: "桶形/枕形畸变校正系数。正值矫正桶形畸变，负值矫正枕形畸变，0 表示不校正。",
+    en: "Barrel/pincushion distortion correction coefficient. Positive corrects barrel distortion, negative corrects pincushion, zero disables correction.",
   },
   ext_vignette_label: {
     zh: "暗角校正",
     en: "Vignette Correction",
   },
+  ext_vignette_hint: {
+    zh: "自动检测并补偿镜头暗角导致的边缘亮度下降，使颜色提取更均匀准确。",
+    en: "Automatically detects and compensates for edge brightness falloff caused by lens vignetting for more uniform and accurate color extraction.",
+  },
   ext_auto_wb_label: {
     zh: "自动白平衡",
     en: "Auto White Balance",
+  },
+  ext_auto_wb_hint: {
+    zh: "自动校正图像的白平衡，将白色参考块还原为标准白色，使整体色彩更准确。",
+    en: "Automatically corrects the image white balance, restoring the white reference patch to standard white for more accurate overall colors.",
   },
   ext_extract_btn_label: {
     zh: "提取颜色",
@@ -2841,6 +2869,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "量化颜色数",
     en: "Quantize Colors",
   },
+  adv_quantize_colors_hint: {
+    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。",
+    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering.",
+  },
   adv_isolated_pixel_cleanup: {
     zh: "孤立像素清理",
     en: "Isolated Pixel Cleanup",
@@ -2853,9 +2885,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "分离底板",
     en: "Separate Backing",
   },
+  adv_separate_backing_hint: {
+    zh: "将底板层（通常是白色或背景色）作为独立颜色层输出，适用于需要单独处理底板的打印机或后处理流程。",
+    en: "Outputs the backing layer as a separate color layer, useful for printers or post-processing workflows that handle the backing layer independently.",
+  },
   adv_hue_protection: {
     zh: "色相保护",
     en: "Hue Protection",
+  },
+  adv_hue_protection_hint: {
+    zh: "在色彩匹配时优先保护色相，减少色相漂移。适合色彩准确度要求高、颜色种类多的图像。",
+    en: "Prioritizes hue preservation during color matching to reduce hue shift. Suitable for images requiring high color accuracy and a wide variety of colors.",
   },
   adv_unlock_quantize: {
     zh: "解锁量化颜色数",
@@ -2868,6 +2908,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_chroma_gate: {
     zh: "暗色彩度门槛",
     en: "Dark Chroma Gate",
+  },
+  adv_chroma_gate_hint: {
+    zh: "仅对色度低于此值的暗色区域启用色相保护。设为 0 则对所有暗色生效，设为较高值则仅对非常暗的阴影生效。推荐值: 15。",
+    en: "Applies hue protection only to dark areas whose chroma is below this threshold. Set to 0 to apply to all dark colors; higher values restrict it to very dark shadows. Recommended: 15.",
   },
 
   // ==================== Relief Settings ====================
@@ -2882,6 +2926,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   relief_max_height: {
     zh: "最大高度",
     en: "Max Height",
+  },
+  relief_max_height_hint: {
+    zh: "浮雕模型最高点的高度（毫米）。值越大浮雕凸起越高，值越小浮雕越浅。",
+    en: "The height of the tallest point of the relief model (in mm). Larger values produce taller relief, smaller values produce shallower relief.",
   },
   relief_auto_height_mode: {
     zh: "自动高度模式",
@@ -2917,6 +2965,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "外轮廓厚度",
     en: "Outline Width",
   },
+  outline_width_hint: {
+    zh: "外描边线条的宽度（毫米）。值越大轮廓线越粗，值越小轮廓线越细。",
+    en: "Width of the outline stroke (in mm). Larger values produce thicker lines, smaller values produce thinner lines.",
+  },
 
   // ==================== Cloisonne Settings ====================
   cloisonne_enable: {
@@ -2927,9 +2979,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "金属丝宽度",
     en: "Wire Width",
   },
+  cloisonne_wire_width_hint: {
+    zh: "掐丝珐琅金属丝的水平宽度（毫米）。值越大金属丝越粗，掐丝效果越明显。",
+    en: "Horizontal width of the cloisonné wire (in mm). Larger values produce thicker wires with more pronounced cloisonné effect.",
+  },
   cloisonne_wire_height: {
     zh: "金属丝高度",
     en: "Wire Height",
+  },
+  cloisonne_wire_height_hint: {
+    zh: "掐丝珐琅金属丝的垂直高度（毫米）。值越大金属丝凸起越高，立体感越强。",
+    en: "Vertical height of the cloisonné wire (in mm). Larger values produce taller wire protrusion with stronger three-dimensional appearance.",
   },
   cloisonne_wip: {
     zh: "此功能正在施工中，部分效果可能不完整",
@@ -2944,6 +3004,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   coating_height: {
     zh: "涂层高度",
     en: "Coating Height",
+  },
+  coating_height_hint: {
+    zh: "透明涂层覆盖层的高度（毫米）。值越大涂层凸起越高，表面越光滑。",
+    en: "Height of the transparent coating layer (in mm). Larger values produce taller coating protrusion and a smoother surface.",
   },
 
   // ==================== Keychain Loop Settings ====================

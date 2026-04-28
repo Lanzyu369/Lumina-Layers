@@ -184,6 +184,7 @@ export default function LutManagerPanel() {
            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
             <Slider
               label={t("lut_manager_dedup_label")}
+              tooltip={t("lut_manager_dedup_hint")}
               value={dedupThreshold}
               min={0}
               max={20}
@@ -191,9 +192,6 @@ export default function LutManagerPanel() {
               onChange={setDedupThreshold}
               disabled={allDisabled}
             />
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {t("lut_manager_dedup_hint")}
-            </p>
           </section>
 
           <Button
