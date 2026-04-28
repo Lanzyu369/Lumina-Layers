@@ -265,9 +265,15 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   }, [recalculateStacks]);
 
   // Recalculate stack positions when any widget's collapsed state or
-  // expandedHeight changes. This prevents widgets from overlapping after
-  // expand/collapse or when content dynamically changes height.
-  // Uses a targeted selector to avoid subscribing to the entire widgets object.
+  // expandedHeight changes. Uses a one-frame debounce (16ms) so that
+  // sibling position shifts start in near-sync with the expand/collapse
+  // animation while still coalescing rapid layout changes.
+  // resolveWidgetHeight returns the cached expandedHeight (not the
+  // mid-animation DOM height) so the first recalculation is correct.
+  // 当任何 Widget 的 collapsed 状态或 expandedHeight 变化时重算堆叠位置。
+  // 使用一帧防抖（16ms），使同级组件位置避让与展开/折叠动画近同步开始，
+  // 同时合并快速布局变化。resolveWidgetHeight 返回缓存的 expandedHeight
+  // （而非动画中间态的 DOM 高度），确保首次重算位置正确。
   const layoutKey = useWidgetStore(
     useCallback(
       (s: { widgets: Record<WidgetId, { collapsed: boolean; expandedHeight: number }> }) =>
@@ -279,7 +285,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   );
 
   useEffect(() => {
-    recalculateStacks();
+    const timer = setTimeout(() => recalculateStacks(), 16);
+    return () => clearTimeout(timer);
   }, [layoutKey, activeTab, recalculateStacks]);
 
   // Auto-detect backdrop-filter support and disable blur if unsupported

@@ -64,8 +64,18 @@ export function computeDockBottomInset(
 }
 
 /**
- * Resolve the effective widget height using measured DOM height when available.
- * 使用可用的真实 DOM 高度解析 Widget 的有效高度。
+ * Resolve the effective widget height for stack position calculations.
+ * Always prefers the cached expandedHeight (target value set by the
+ * WidgetPanel content ResizeObserver) over the live DOM measurement
+ * from the Workspace ResizeObserver, because the DOM value reflects
+ * the mid-animation height and would produce incorrect sibling offsets.
+ * Falls back to measuredHeights only when expandedHeight has not been
+ * set yet (e.g. initial mount before first measurement).
+ * 解析 Widget 的有效高度，用于堆叠位置计算。
+ * 始终优先使用缓存的 expandedHeight（由 WidgetPanel 内容区 ResizeObserver
+ * 设置的目标值），而非 Workspace ResizeObserver 的实时 DOM 测量值，因为
+ * DOM 值反映的是动画中间态高度，会导致同级组件偏移量不正确。
+ * 仅在 expandedHeight 尚未设置时（如首次挂载未测量）回退到 measuredHeights。
  */
 export function resolveWidgetHeight(
   widget: Pick<WidgetLayoutState, 'id' | 'collapsed' | 'expandedHeight'>,
@@ -74,7 +84,10 @@ export function resolveWidgetHeight(
   if (widget.collapsed) {
     return COLLAPSED_HEIGHT;
   }
-  return measuredHeights?.get(widget.id) ?? widget.expandedHeight ?? EXPANDED_HEIGHT;
+  if (widget.expandedHeight) {
+    return widget.expandedHeight;
+  }
+  return measuredHeights?.get(widget.id) ?? EXPANDED_HEIGHT;
 }
 
 /**
