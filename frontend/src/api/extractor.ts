@@ -52,6 +52,11 @@ export async function extractColors(
   return response.data;
 }
 
+/** Capture-origin tag forwarded as the ``image_source`` form field.
+ * 上传给后端的输入图像来源标签。
+ */
+export type GradientCardImageSourceLabel = "raw" | "restored";
+
 export async function extractGradientCardStageA(params: {
   datasetZip: File;
   whiteImage: File;
@@ -60,6 +65,7 @@ export async function extractGradientCardStageA(params: {
   blackCornerPoints: Array<[number, number]>;
   manualWhiteOrientation?: ManualOrientationLabel | null;
   manualBlackOrientation?: ManualOrientationLabel | null;
+  imageSource?: GradientCardImageSourceLabel | null;
 }): Promise<GradientCardStageAExtractResponse> {
   const fd = new FormData();
   fd.append("dataset_zip", params.datasetZip);
@@ -72,6 +78,9 @@ export async function extractGradientCardStageA(params: {
   }
   if (params.manualBlackOrientation) {
     fd.append("manual_black_orientation", params.manualBlackOrientation);
+  }
+  if (params.imageSource) {
+    fd.append("image_source", params.imageSource);
   }
   const response = await apiClient.post<GradientCardStageAExtractResponse>(
     "/extractor/extract-gradient-card-stage-a",

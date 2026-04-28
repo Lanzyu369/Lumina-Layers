@@ -5643,6 +5643,127 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角。",
     en: "Click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order.",
   },
+  mat_gradient_image_source_section_title: {
+    zh: "图像来源",
+    en: "Image Source",
+  },
+  mat_gradient_image_source_section_desc: {
+    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「色卡还原图（已白平衡 / 几何归一化）」。还原图会让零厚度白底像素被推到接近纯白，导致拟合得到的 (E, k) 严重偏离真实物理值，打印效果会变差；强烈建议使用未经处理的原图。",
+    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or already-restored card renders (white-balanced / geometrically normalized). Restored inputs push zero-thickness white pixels toward 1.0, biasing the fitted (E, k) and degrading print results — strongly prefer raw photos.",
+  },
+  mat_gradient_image_source_option_raw: {
+    zh: "原图（相机/扫描仪直出，推荐）",
+    en: "Raw photo (camera/scanner direct, recommended)",
+  },
+  mat_gradient_image_source_option_restored: {
+    zh: "已还原图（白平衡 / 几何归一化处理过）",
+    en: "Restored image (white-balanced / normalized)",
+  },
+  mat_gradient_image_source_restored_warning: {
+    zh: "已选择「已还原图」。该模式仅供调试或与已有还原图档案合并验证；用于实际打印时拟合参数会有偏差，请尽量改用原图。",
+    en: "Restored mode selected. This is intended for debugging or merging with existing restored archives; fits will be physically biased and print quality may suffer. Prefer raw photos when possible.",
+  },
+  mat_gradient_image_source_mismatch_error: {
+    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
+    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or restored) or use override mode when saving to discard previous verification runs.",
+  },
+  // ----- Aggregation diagnostics ("merge diagnostics" section) -----
+  // Surfaced in the saved-material card after a successful save so the
+  // user can see which historical runs participated in the joint refit
+  // and why others were dropped.
+  mat_gradient_aggregation_section_title: {
+    zh: "合并诊断",
+    en: "Merge Diagnostics",
+  },
+  mat_gradient_aggregation_method_label: {
+    zh: "聚合方式",
+    en: "Aggregation Method",
+  },
+  mat_gradient_aggregation_method_refit_combined_samples: {
+    zh: "合并样本重拟合",
+    en: "Refit on combined samples",
+  },
+  mat_gradient_aggregation_method_mean: {
+    zh: "参数均值兜底",
+    en: "Parameter-mean fallback",
+  },
+  mat_gradient_aggregation_selection_strategy_label: {
+    zh: "选择策略",
+    en: "Selection Strategy",
+  },
+  mat_gradient_aggregation_strategy_bias_filter_v1: {
+    zh: "偏置硬过滤",
+    en: "Bias filter",
+  },
+  "mat_gradient_aggregation_strategy_bias_filter_v1+cross_val": {
+    zh: "偏置过滤 + 交叉验证",
+    en: "Bias filter + cross-val",
+  },
+  mat_gradient_aggregation_runs_used: {
+    zh: "{{used}} / {{total}} 次校准参与本次重拟合",
+    en: "{{used}} of {{total}} verification runs participated in this refit",
+  },
+  mat_gradient_aggregation_run_label: {
+    zh: "第 {{index}} 次校准",
+    en: "Run #{{index}}",
+  },
+  mat_gradient_aggregation_run_fresh_badge: {
+    zh: "本次新增",
+    en: "Fresh",
+  },
+  mat_gradient_aggregation_run_excluded_badge: {
+    zh: "已排除",
+    en: "Excluded",
+  },
+  mat_gradient_aggregation_run_included_badge: {
+    zh: "已采纳",
+    en: "Included",
+  },
+  mat_gradient_aggregation_no_excluded: {
+    zh: "本次合并未排除任何历史校准。",
+    en: "No historical runs were excluded by the bias filter for this merge.",
+  },
+  // Bias-flag labels (stable codes from backend → localised strings)
+  mat_gradient_bias_flag_c0_white_avg_gt_0_95: {
+    zh: "白底零厚度像素接近纯白（C0_white > 0.95，疑似白平衡）",
+    en: "Zero-thickness white near pure white (C0_white > 0.95, likely white-balanced)",
+  },
+  mat_gradient_bias_flag_image_source_restored: {
+    zh: "图像来源标记为「已还原图」",
+    en: "Image source tagged as restored",
+  },
+  mat_gradient_bias_flag_white_substrate_flat: {
+    zh: "白底信号过弱（朝向不可分辨）",
+    en: "White substrate signal too flat",
+  },
+  mat_gradient_bias_flag_black_substrate_flat: {
+    zh: "黑底信号过弱（朝向不可分辨）",
+    en: "Black substrate signal too flat",
+  },
+  mat_gradient_bias_flag_orientation_unreliable: {
+    zh: "朝向打分不可靠（提示性，不参与硬过滤）",
+    en: "Orientation ranking unreliable (advisory, not used for hard filter)",
+  },
+  mat_gradient_bias_flag_c0_white_avg_lt_0_60: {
+    zh: "白底零厚度像素过暗（C0_white < 0.60，曝光不足或角点选错）",
+    en: "Zero-thickness white too dark (C0_white < 0.60, underexposed or wrong anchor)",
+  },
+  mat_gradient_bias_flag_mean_de_gt_3: {
+    zh: "本次拟合平均 ΔE > 3（拟合本身已不可信，禁止其样本进入联合重拟）",
+    en: "Run's own mean ΔE > 3 (fit already unreliable; samples blocked from joint refit)",
+  },
+  mat_gradient_aggregation_excluded_reason_bias_filter: {
+    zh: "偏置硬过滤",
+    en: "Bias filter",
+  },
+  mat_gradient_aggregation_excluded_reason_cross_val: {
+    zh: "交叉验证排序",
+    en: "Cross-val ranking",
+  },
+  mat_gradient_aggregation_excluded_reason_c0_white_pairwise_mismatch: {
+    zh: "白底亮度与新捕获相差过大（>1.5×，光照环境不一致）",
+    en: "White-substrate brightness differs from fresh capture by more than 1.5x (inconsistent lighting)",
+  },
   mat_gradient_white_signal_label: {
     zh: "白底信号",
     en: "White Signal",

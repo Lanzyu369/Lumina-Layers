@@ -2,11 +2,11 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-26T02:17:47.389530+00:00",
+    "generated_at": "2026-04-17T05:35:07.784807+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [
-      "方向检测置信度较低，最优与次优方向的 ΔE 差距很小，请确认角点和图片方向。"
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
     ],
     "verification_count": 1,
     "aggregation_method": "mean"
@@ -17,14 +17,14 @@
         "channel_index": 0,
         "color_name": "瑞贝思 PLA 白",
         "E": [
-          0.852403,
-          0.879531,
-          0.861818
+          0.857911,
+          0.897006,
+          0.895714
         ],
         "k": [
-          2.727214,
-          3.394004,
-          5.08724
+          2.239545,
+          2.725836,
+          3.49947
         ]
       }
     ],
@@ -34,9 +34,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          0.938686,
-          0.930111,
-          0.887923
+          0.806952,
+          0.863157,
+          0.838799
         ]
       },
       {
@@ -44,9 +44,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.015996,
-          0.016807,
-          0.0185
+          0.056128,
+          0.066626,
+          0.068478
         ]
       }
     ]
@@ -54,30 +54,30 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        0.938686,
-        0.930111,
-        0.887923
+        0.806952,
+        0.863157,
+        0.838799
       ]
     },
     "black": {
       "C0": [
-        0.015996,
-        0.016807,
-        0.0185
+        0.056128,
+        0.066626,
+        0.068478
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 1.8030769803326858,
-      "max_delta_e": 4.281273417165157,
-      "rmse_linear": 0.034063920152519245,
+      "mean_delta_e": 3.6509071992412467,
+      "max_delta_e": 8.02069241329766,
+      "rmse_linear": 0.08248979486748328,
       "channel_rmse": [
-        0.033111459534951246,
-        0.031060014503135155,
-        0.037682339563805484
+        0.08367076200384035,
+        0.07984587678741732,
+        0.08389003705794683
       ],
-      "best_run_mean_delta_e": 1.8030769803326858,
+      "best_run_mean_delta_e": 3.6509071992412467,
       "verification_count": 1
     }
   },
@@ -89,7 +89,7 @@
       "gap_mm": 1.0,
       "margin_mm": 1.0,
       "pixel_mm": 1.0,
-      "layer_height_mm": 0.04,
+      "layer_height_mm": 0.08,
       "base_mm": 1.0,
       "max_step_layers": 25,
       "step_layers": [
