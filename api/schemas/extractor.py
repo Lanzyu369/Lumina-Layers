@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from api.schemas.lut import PaletteEntrySchema
 
@@ -171,6 +171,12 @@ class ExtractorManualFixRequest(BaseModel):
     cell_coord: Optional[Tuple[int, int]] = Field(None, description="单元格坐标 (row, col)")
     row_index: Optional[int] = Field(None, ge=0, description="LUT 行索引；优先于 cell_coord")
     override_color: str = Field(..., description="覆盖颜色 (hex)")
+
+    @model_validator(mode="after")
+    def require_cell_locator(self) -> "ExtractorManualFixRequest":
+        if self.row_index is None and self.cell_coord is None:
+            raise ValueError("row_index or cell_coord is required")
+        return self
 
 
 class ExtractorResolveCellRequest(BaseModel):

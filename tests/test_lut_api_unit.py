@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from api.app import app
@@ -25,6 +26,10 @@ from core.native_reference import (
 )
 
 client: TestClient = TestClient(app)
+
+
+def _raw_lut_colors(count: int) -> list[dict]:
+    return [{"hex": "#000000", "color": (0, 0, 0)} for _ in range(count)]
 
 
 # =========================================================================
@@ -322,6 +327,55 @@ class TestSessionLutInfo:
             ]
         finally:
             self._clear_override()
+
+
+class TestLutColorsLayout:
+    """Verify LUT colors card payloads use flattened LUT rows."""
+
+    def test_colors_flattens_grid_rgb_before_resolving_layout(self) -> None:
+        rgb = np.zeros((32, 32, 3), dtype=np.uint8)
+
+        with (
+            patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/four.npy"),
+            patch(
+                "api.routers.lut.LUTManager.load_lut_with_metadata",
+                return_value=(rgb, None, LUTMetadata(color_mode="4-Color (RYBW)")),
+            ),
+            patch(
+                "core.converter.extract_lut_available_colors",
+                return_value=_raw_lut_colors(1024),
+            ),
+        ):
+            response = client.get("/api/lut/FourGrid/colors")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["layout"]["total_count"] == 1024
+        assert data["layout"]["pages"][0]["data_cols"] == 32
+        assert len(data["cards"]) == 1
+        assert len(data["cards"][0]["colors"]) == 1024
+
+    def test_colors_splits_flattened_8color_grid_into_two_cards(self) -> None:
+        rgb = np.zeros((74, 37, 3), dtype=np.uint8)
+
+        with (
+            patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/eight.npy"),
+            patch(
+                "api.routers.lut.LUTManager.load_lut_with_metadata",
+                return_value=(rgb, None, LUTMetadata(color_mode="8-Color Max")),
+            ),
+            patch(
+                "core.converter.extract_lut_available_colors",
+                return_value=_raw_lut_colors(2738),
+            ),
+        ):
+            response = client.get("/api/lut/EightGrid/colors")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["layout"]["total_count"] == 2738
+        assert [card["page"]["card_label"] for card in data["cards"]] == ["A", "B"]
+        assert [len(card["colors"]) for card in data["cards"]] == [1369, 1369]
 
 
 class TestPredictRecipeColor:

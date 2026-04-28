@@ -649,12 +649,15 @@ def extractor_resolve_cell(
         eight_color_full_export=bool(session_data.get("eight_color_full_export")),
         current_page=True,
     )
-    cell = cell_from_normalized_point(
-        layout,
-        card_index=request.card_index,
-        x=request.x,
-        y=request.y,
-    )
+    try:
+        cell = cell_from_normalized_point(
+            layout,
+            card_index=request.card_index,
+            x=request.x,
+            y=request.y,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid card_index: {exc}") from exc
     if cell is None:
         raise HTTPException(status_code=404, detail="Clicked cell is outside the valid LUT area")
 

@@ -633,14 +633,15 @@ def get_lut_colors(lut_name: str) -> LutColorsResponse:
     cards = []
     try:
         rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
+        rgb_rows = np.asarray(rgb).reshape(-1, 3)
         mode = _canonicalize_public_color_mode(getattr(metadata, "color_mode", None)) or ""
-        layout = resolve_lut_layout(mode, int(len(rgb)))
+        layout = resolve_lut_layout(mode, int(rgb_rows.shape[0]))
         row_entries = [
             LutColorEntry(
                 hex=f"#{int(color[0]):02x}{int(color[1]):02x}{int(color[2]):02x}",
                 rgb=(int(color[0]), int(color[1]), int(color[2])),
             )
-            for color in rgb.reshape(-1, 3)
+            for color in rgb_rows
         ]
         cards = [
             {
