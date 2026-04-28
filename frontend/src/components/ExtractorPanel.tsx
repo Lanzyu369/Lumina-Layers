@@ -15,7 +15,7 @@ import Button from "./ui/Button";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
-import WikiTooltip from "./ui/WikiTooltip";
+import HelpDot from "./ui/HelpDot";
 import {
   cx,
   StatusBanner,
@@ -236,11 +236,7 @@ export default function ExtractorPanel() {
               <Dropdown
                 label={t("ext_color_mode_label")}
                 labelAccessory={
-                  <WikiTooltip title={t("ext_color_mode_label")} description={t("ext_color_mode_hint")}>
-                    <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">
-                      ?
-                    </span>
-                  </WikiTooltip>
+                  <HelpDot title={t("ext_color_mode_label")} description={t("ext_color_mode_hint")} />
                 }
                 value={color_mode}
                 options={colorModeOptions}
@@ -253,11 +249,7 @@ export default function ExtractorPanel() {
                 <Dropdown
                   label={t("ext_page_label")}
                   labelAccessory={
-                    <WikiTooltip title={t("ext_page_label")} description={t("ext_page_hint")}>
-                      <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">
-                        ?
-                      </span>
-                    </WikiTooltip>
+                    <HelpDot title={t("ext_page_label")} description={t("ext_page_hint")} />
                   }
                   value={page}
                   options={pageOptions}

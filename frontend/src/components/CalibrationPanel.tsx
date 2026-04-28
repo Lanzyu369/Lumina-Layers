@@ -4,7 +4,6 @@ import { useI18n } from "../i18n/context";
 import { CalibrationColorMode } from "../api/types";
 import { useState } from "react";
 import LayerMaskViewerDialog from "./ui/LayerMaskViewerDialog";
-import WikiTooltip from "./ui/WikiTooltip";
 import HelpDot from "./ui/HelpDot";
 import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";

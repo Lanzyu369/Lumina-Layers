@@ -23,7 +23,7 @@ import {
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
-import WikiTooltip from "./ui/WikiTooltip";
+import HelpDot from "./ui/HelpDot";
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
@@ -98,11 +98,7 @@ const AnchorCornerSelect = ({
         options={options}
         labelAccessory={
           tooltip ? (
-            <WikiTooltip title={label} description={tooltip}>
-              <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">
-                ?
-              </span>
-            </WikiTooltip>
+            <HelpDot title={label} description={tooltip} />
           ) : undefined
         }
       />

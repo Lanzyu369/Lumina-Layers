@@ -2545,6 +2545,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u53e0\u8272\u5c42\u6570",
     en: "Color Layers",
   },
+  basic_material_layer_count_hint: {
+    zh: "\u53c2\u4e0e\u53e0\u8272\u6df7\u5408\u7684\u8017\u6750\u79cd\u7c7b\u6570\u91cf\u3002\u5c42\u6570\u8d8a\u591a\u8272\u5f69\u8fc7\u6e21\u8d8a\u4e30\u5bcc\uff0c\u4f46\u6253\u5370\u65f6\u95f4\u8d8a\u957f\u3002",
+    en: "Number of material types involved in color blending. More layers produce richer color transitions but increase print time.",
+  },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
@@ -2753,9 +2757,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "叠色层数",
     en: "Color Layers",
   },
+  basic_color_layers_hint: {
+    zh: "叠色混合使用的层数。层数越多可表现的颜色越丰富，但打印耗时和耗材消耗也相应增加。",
+    en: "Number of layers used for color blending. More layers enable richer colors but increase print time and material consumption.",
+  },
   basic_layer_height_label: {
     zh: "叠色层高",
     en: "Layer Height",
+  },
+  basic_layer_height_hint: {
+    zh: "每层叠色的打印高度（毫米）。较小的层高可获得更细腻的色彩过渡，但打印时间更长。",
+    en: "Print height per color layer (in mm). Smaller layer heights produce smoother color transitions but increase print time.",
   },
   basic_supported_modes_label: {
     zh: "支持模式",
@@ -2793,13 +2805,25 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "宽度",
     en: "Width",
   },
+  basic_width_hint: {
+    zh: "打印成品的宽度（毫米）。需在打印机有效打印范围内。",
+    en: "Printed output width (in mm). Must be within the printer's effective print area.",
+  },
   basic_height: {
     zh: "高度",
     en: "Height",
   },
+  basic_height_hint: {
+    zh: "打印成品的高度（毫米）。需在打印机有效打印范围内。",
+    en: "Printed output height (in mm). Must be within the printer's effective print area.",
+  },
   basic_thickness: {
     zh: "厚度",
     en: "Thickness",
+  },
+  basic_thickness_hint: {
+    zh: "底板的厚度（毫米）。每一格对应一层打印层（0.08 mm），影响成品的整体厚度。",
+    en: "Base plate thickness (in mm). Each tick equals one print layer (0.08 mm), affecting the overall thickness of the output.",
   },
   basic_structure_mode: {
     zh: "结构模式",
@@ -2835,9 +2859,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "切片宽度",
     en: "Tile Width",
   },
+  basic_tile_width_hint: {
+    zh: "大画幅模式下每个切片的宽度（毫米）。切片越小，拼接数量越多。",
+    en: "Width of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
+  },
   basic_tile_height: {
     zh: "切片高度",
     en: "Tile Height",
+  },
+  basic_tile_height_hint: {
+    zh: "大画幅模式下每个切片的高度（毫米）。切片越小，拼接数量越多。",
+    en: "Height of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
   },
 
   // ==================== Structure Mode Options ====================
@@ -3019,17 +3051,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "环宽度",
     en: "Loop Width",
   },
+  loop_width_hint: {
+    zh: "挂件环的水平宽度（毫米）。值越大环越宽。",
+    en: "Horizontal width of the keychain loop (in mm). Larger values produce a wider loop.",
+  },
   loop_length: {
     zh: "环长度",
     en: "Loop Length",
+  },
+  loop_length_hint: {
+    zh: "挂件环的垂直长度（毫米）。值越大环越长。",
+    en: "Vertical length of the keychain loop (in mm). Larger values produce a longer loop.",
   },
   loop_hole_diameter: {
     zh: "环孔直径",
     en: "Loop Hole Diameter",
   },
+  loop_hole_diameter_hint: {
+    zh: "挂件环内孔的直径（毫米）。需确保钥匙扣或挂绳能穿过。",
+    en: "Diameter of the inner hole (in mm). Must be large enough for a keychain or lanyard to pass through.",
+  },
   loop_angle: {
     zh: "旋转角度",
     en: "Rotation Angle",
+  },
+  loop_angle_hint: {
+    zh: "挂件环相对于模型的旋转角度（度）。0° 为竖直向上，正值顺时针旋转。",
+    en: "Rotation angle of the loop relative to the model (in degrees). 0° is vertical upward; positive values rotate clockwise.",
   },
   loop_position_preset: {
     zh: "位置预设",
@@ -3039,9 +3087,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "X 偏移",
     en: "X Offset",
   },
+  loop_offset_x_hint: {
+    zh: "挂件环中心相对于模型中心的水平偏移（毫米）。正值向右，负值向左。",
+    en: "Horizontal offset of the loop center from the model center (in mm). Positive moves right, negative moves left.",
+  },
   loop_offset_y: {
     zh: "Y 偏移",
     en: "Y Offset",
+  },
+  loop_offset_y_hint: {
+    zh: "挂件环中心相对于模型中心的垂直偏移（毫米）。正值向上，负值向下。",
+    en: "Vertical offset of the loop center from the model center (in mm). Positive moves up, negative moves down.",
   },
   loop_preset_top_center: {
     zh: "上中",
