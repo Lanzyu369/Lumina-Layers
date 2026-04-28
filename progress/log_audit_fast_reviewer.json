@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 11,
+      "actual": 12,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -76,31 +76,33 @@
     "converter_preview_timing": 2,
     "converter_region_replace_timing": 1,
     "extractor_extract_done": 1,
+    "extractor_merge_8color_done": 1,
     "log_file_configured": 1,
     "lut_colors_loaded": 1,
     "lut_presets_discovered": 1,
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 11,
+  "info_lines": 12,
   "info_lines_by_endpoint": {
-    "24fd78cf3b0f49bc868a2d47bdfce439": 1,
-    "5a053b47e3db49a8a02abf010a89fb8b": 1,
-    "68d35473582843c0b6c53b0199cbf9c9": 1,
-    "98435218e34c49fd9fdaaa8a58865f0a": 1,
-    "9c1934a0963942088d71670a52587582": 1,
-    "9c45ad28766049dda7b605058be41002": 1,
-    "c3433d26ecad43d7a15d4fd74b005583": 1,
-    "d891595ce00249daacd4ede1cd85bea9": 1
+    "011ac743f29643068e53f834e3a796d2": 1,
+    "0a1672b02a2744518f7984054dcbbb7b": 1,
+    "107a0b1f11244d0cbdce7e3df624f35c": 1,
+    "5b64a6e4c59b410da0dd5bf50de8d14f": 1,
+    "820574ec03884aa5b0d74edaef45979d": 1,
+    "9fd21d987139437d8addf15f00ed9334": 1,
+    "b223c3e91c8d4d7fb6086cfa23163736": 1,
+    "f8413c64418d47678009465599b2c738": 1,
+    "fdc2a4afb9014183acc8edb7279f63b1": 1
   },
   "log_file_configured_count": 1,
-  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_fast_reviewer.log",
+  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_fast_20260427_195209.log",
   "max_info_per_endpoint": 1,
   "mode": "fast",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 11,
-  "timestamp": "2026-04-27T15:45:42.732630+00:00",
+  "structured_lines": 12,
+  "timestamp": "2026-04-27T19:52:10.755357+00:00",
   "top_events": [
     {
       "count": 2,
@@ -136,11 +138,15 @@
     },
     {
       "count": 1,
+      "event": "extractor_merge_8color_done"
+    },
+    {
+      "count": 1,
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 3483,
-  "total_lines": 11,
+  "total_bytes": 3838,
+  "total_lines": 12,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
@@ -150,7 +156,8 @@
     "preview",
     "generate",
     "replace",
-    "extract"
+    "extract",
+    "merge_8color"
   ],
   "workflow_checks": [
     {
@@ -164,6 +171,14 @@
     {
       "actual": 1,
       "name": "workflow_event_extractor_extract_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_merge_8color_done",
       "operator": ">=",
       "passed": true,
       "severity": "error",

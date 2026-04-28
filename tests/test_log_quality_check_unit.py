@@ -170,6 +170,28 @@ def test_extract_workflow_step_is_first_class() -> None:
     assert "extract" in WORKFLOW_STEPS
 
 
+def test_merge_8color_workflow_step_is_first_class() -> None:
+    """The 8-color merge workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow(
+        "startup,lut_list,lut_colors,preview,generate,replace,extract,merge_8color"
+    )
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+        "merge_8color",
+    ]
+    assert "merge_8color" in WORKFLOW_ORDER
+    assert "merge_8color" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("merge_8color") == WORKFLOW_ORDER.index("extract") + 1
+
+
 def test_parse_workflow_rejects_vector_and_replace_together() -> None:
     try:
         _parse_workflow("startup,lut_list,lut_colors,preview,generate,vector,replace")
@@ -376,6 +398,42 @@ def test_fast_extract_workflow_requires_canary_event() -> None:
 
     assert by_name["workflow_event_extractor_extract_done"].passed is True
     assert missing_by_name["workflow_event_extractor_extract_done"].passed is False
+
+
+def test_merge_8color_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+        "merge_8color",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={
+            "converter_region_replace_timing": 1,
+            "extractor_extract_done": 1,
+            "extractor_merge_8color_done": 1,
+        },
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_merge_8color_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_extractor_merge_8color_done"].passed
+        is False
+    )
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

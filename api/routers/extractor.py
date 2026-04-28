@@ -609,6 +609,7 @@ def extractor_merge_8color(
             ),
         )
 
+    merge_start = time.perf_counter()
     try:
         rgb_parts = []
         stack_parts = []
@@ -647,6 +648,7 @@ def extractor_merge_8color(
         LUTManager.save_keyed_json(LUT_FILE_PATH, merged_rgb, merged_stacks, metadata)
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "8-Color merge")
+    merge_ms = (time.perf_counter() - merge_start) * 1000.0
 
     # Create session for merged result
     session_id = store.create()
@@ -654,6 +656,18 @@ def extractor_merge_8color(
     store.put(session_id, "color_mode", "8-Color Max")
 
     lut_download_id = registry.register_path(session_id, LUT_FILE_PATH)
+
+    log.info(
+        "Extractor 8-Color merge completed",
+        extra={
+            "event": "extractor_merge_8color_done",
+            "eight_color_full_export": bool(eight_color_full_export),
+            "total_pages": int(total_pages),
+            "merged_rgb_count": int(merged_rgb.shape[0]),
+            "stacks_compatible": bool(stacks_compatible),
+            "merge_ms": round(merge_ms, 2),
+        },
+    )
 
     return ExtractResponse(
         session_id=session_id,

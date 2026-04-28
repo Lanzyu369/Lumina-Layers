@@ -40,6 +40,7 @@ DEFAULT_WORKFLOW = [
     "generate",
     "replace",
     "extract",
+    "merge_8color",
 ]
 WORKFLOW_ORDER = [
     "startup",
@@ -53,6 +54,7 @@ WORKFLOW_ORDER = [
     "replace_8color",
     "replace_5color_ext",
     "extract",
+    "merge_8color",
 ]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
 DEFAULT_MAX_INFO = 30
@@ -559,6 +561,8 @@ def _workflow_required_event_checks(
         required_events.extend(_replace_required_events_for_mode(mode))
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
+    if "merge_8color" in workflow:
+        required_events.append("extractor_merge_8color_done")
 
     required_events = list(dict.fromkeys(required_events))
     return [
@@ -876,6 +880,8 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_alternate_replace_workflow(client, step)
         elif step == "extract":
             _execute_extract_workflow(client)
+        elif step == "merge_8color":
+            _execute_merge_8color_workflow(client)
 
 
 def _execute_vector_workflow(client: Any, lut_name: str) -> None:
@@ -975,6 +981,61 @@ def _execute_extract_workflow(client: Any) -> None:
         raise QualityCheckError("Extract response was not an object")
     if not payload.get("lut_download_url"):
         raise QualityCheckError("Extract response did not include lut_download_url")
+
+
+def _execute_merge_8color_workflow(client: Any) -> None:
+    from api.routers.extractor import _get_8color_temp_path, _get_assets_dir
+    from utils.lut_manager import LUTManager
+
+    import numpy as np
+
+    assets_dir = _get_assets_dir()
+    Path(assets_dir).mkdir(parents=True, exist_ok=True)
+    page_paths = [
+        Path(_get_8color_temp_path(assets_dir, page_number, False))
+        for page_number in (1, 2)
+    ]
+    previous_contents = {path: path.read_bytes() for path in page_paths if path.exists()}
+    stacks = np.array(
+        [[0, 1, 2, 3, 4, 5, 6, 7], [7, 6, 5, 4, 3, 2, 1, 0]],
+        dtype=np.int32,
+    )
+
+    try:
+        for page_index, page_path in enumerate(page_paths):
+            rgb = np.array(
+                [
+                    [255, 255, 255],
+                    [255, 0, 0] if page_index == 0 else [0, 128, 255],
+                ],
+                dtype=np.uint8,
+            )
+            metadata = LUTManager.infer_default_metadata(
+                page_path.stem,
+                str(page_path),
+                len(rgb),
+                color_mode=EIGHT_COLOR_MODE,
+            )
+            LUTManager.save_keyed_json(str(page_path), rgb, stacks, metadata)
+
+        response = client.post(
+            "/api/extractor/merge-8color",
+            json={"eight_color_full_export": False},
+        )
+        _raise_for_status(response.status_code, response.text, "merge_8color")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("8-Color merge response was not an object")
+        if payload.get("status") != "ok":
+            raise QualityCheckError("8-Color merge response status was not ok")
+        if not payload.get("session_id"):
+            raise QualityCheckError("8-Color merge response did not include session_id")
+    finally:
+        for page_path in page_paths:
+            if page_path in previous_contents:
+                page_path.write_bytes(previous_contents[page_path])
+            else:
+                _remove_paths([page_path])
 
 
 def _post_preview(client: Any, lut_name: str) -> str:

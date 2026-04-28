@@ -23,6 +23,7 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from utils.lut_manager import LUTManager
 
 client: TestClient = TestClient(app)
 
@@ -169,6 +170,66 @@ class TestSessionStatePersistence:
         assert record.lut_path == str(lut_path)
         assert isinstance(record.extract_ms, float)
         assert record.extract_ms >= 0.0
+
+    def test_merge_8color_emits_extractor_merge_8color_done_canary(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Successful 8-color merge emits one structured INFO canary event."""
+        merged_lut_path = tmp_path / "merged-lut.json"
+        monkeypatch.setattr("api.routers.extractor._get_assets_dir", lambda: str(tmp_path))
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+        stacks = np.array(
+            [[0, 1, 2, 3, 4, 5, 6, 7], [7, 6, 5, 4, 3, 2, 1, 0]],
+            dtype=np.int32,
+        )
+        for page_index in (1, 2):
+            page_path = tmp_path / f"temp_8c_page_{page_index}.json"
+            rgb = np.array(
+                [[255, 255, 255], [255, 0, 0] if page_index == 1 else [0, 128, 255]],
+                dtype=np.uint8,
+            )
+            metadata = LUTManager.infer_default_metadata(
+                page_path.stem,
+                str(page_path),
+                len(rgb),
+                color_mode="8-Color Max",
+            )
+            LUTManager.save_keyed_json(str(page_path), rgb, stacks, metadata)
+
+        target_logger = logging.getLogger("lumina.api.routers.extractor")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.INFO, logger=target_logger.name)
+
+        try:
+            response = client.post(
+                "/api/extractor/merge-8color",
+                json={"eight_color_full_export": False},
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["session_id"]
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "extractor_merge_8color_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.eight_color_full_export is False
+        assert record.total_pages == 2 and isinstance(record.total_pages, int)
+        assert record.merged_rgb_count == 4 and isinstance(record.merged_rgb_count, int)
+        assert record.stacks_compatible is True and isinstance(record.stacks_compatible, bool)
+        assert isinstance(record.merge_ms, float)
+        assert record.merge_ms >= 0.0
 
 
 # =========================================================================

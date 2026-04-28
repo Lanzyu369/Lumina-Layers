@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 26,
+      "actual": 27,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -77,6 +77,7 @@
     "converter_preview_timing": 2,
     "converter_region_replace_timing": 1,
     "extractor_extract_done": 1,
+    "extractor_merge_8color_done": 1,
     "image_processor_done": 2,
     "image_processor_init": 4,
     "isolated_pixels_cleaned": 2,
@@ -91,25 +92,26 @@
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 26,
+  "info_lines": 27,
   "info_lines_by_endpoint": {
-    "1361568bd0a84da083fee0d59643467c": 1,
-    "13acc91ef6d84fa78cbfc0b67fe9e20c": 3,
-    "800acf27ada34e05964ce0ead667d141": 1,
-    "819fa2c238a74f78900f2b002f2b1a7f": 4,
-    "9b3a0bb5bd1443c4a4c488179d974848": 7,
-    "a4a4d74a462c42eb9c5c4603bb23bc03": 1,
-    "baebd4a7dce94b29afa225f6c8129174": 4,
-    "fbd6267cc3ee4c7db188e9d03e9ba116": 1
+    "1e7d9977b5b54f0996b943d008bedbd2": 1,
+    "4123661dee5c4033aac68c6f8c969cfa": 1,
+    "459d1e50017d46fc9e45cbb811c39f2c": 4,
+    "498d99a280e746ceb73f90a50ac39428": 1,
+    "aeb1ae3cd1ad484ab940507061639f91": 1,
+    "af142d0af5354a6ebe04e42e05bf7aa1": 3,
+    "b57fffb57df748b29fe33c0fa6336ea4": 7,
+    "be6e6d47771c484282040f13ea8461a4": 1,
+    "de6beacf4c1d42fbb3da95cbd459032e": 4
   },
   "log_file_configured_count": 1,
-  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_reviewer.log",
+  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_20260427_195216.log",
   "max_info_per_endpoint": 7,
   "mode": "full",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 26,
-  "timestamp": "2026-04-27T15:46:03.252685+00:00",
+  "structured_lines": 27,
+  "timestamp": "2026-04-27T19:52:33.152212+00:00",
   "top_events": [
     {
       "count": 4,
@@ -157,6 +159,10 @@
     },
     {
       "count": 1,
+      "event": "converter_glb_completed"
+    },
+    {
+      "count": 1,
       "event": "vector_branch_init"
     },
     {
@@ -173,19 +179,19 @@
     },
     {
       "count": 1,
-      "event": "converter_glb_completed"
+      "event": "extractor_extract_done"
     },
     {
       "count": 1,
-      "event": "extractor_extract_done"
+      "event": "extractor_merge_8color_done"
     },
     {
       "count": 1,
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 9948,
-  "total_lines": 26,
+  "total_bytes": 10302,
+  "total_lines": 27,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
@@ -195,7 +201,8 @@
     "preview",
     "generate",
     "replace",
-    "extract"
+    "extract",
+    "merge_8color"
   ],
   "workflow_checks": [
     {
@@ -217,6 +224,14 @@
     {
       "actual": 1,
       "name": "workflow_event_extractor_extract_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_merge_8color_done",
       "operator": ">=",
       "passed": true,
       "severity": "error",
