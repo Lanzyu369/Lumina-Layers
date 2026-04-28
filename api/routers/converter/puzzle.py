@@ -762,6 +762,7 @@ async def generate_puzzle(
             "matched_rgb_path": piece_matched_path,
             "piece_boundary_geometry_path": piece_boundary_path,
             "disable_material_dilation": True,
+            "center_on_bed": False,
             "printer_id": generate_params.printer_id,
             "slicer": generate_params.slicer,
             "nozzle_size": generate_params.nozzle_size,

@@ -9,6 +9,7 @@ import pytest
 from shapely.geometry import Polygon
 
 from config import ModelingMode
+from core.pipeline import s07_mesh_generation
 from core.mesh_generators import HighFidelityMesher, get_mesher
 
 
@@ -41,6 +42,32 @@ def test_high_fidelity_mesher_disable_material_dilation_keeps_shared_edge_exact(
     assert no_dilation_right.bounds[0, 0] == pytest.approx(3.0)
     assert default_left.bounds[1, 0] > 3.0
     assert default_right.bounds[0, 0] < 3.0
+
+
+def test_s07_defaults_to_exact_material_boundaries_for_color_exports() -> None:
+    """The export pipeline must not let one color mesh invade another color's voxel."""
+
+    voxel_matrix = _make_split_voxel_matrix()
+    ctx = {
+        "full_matrix": voxel_matrix,
+        "slot_names": ["Left", "Right"],
+        "preview_colors": {
+            0: (255, 0, 0, 255),
+            1: (0, 255, 0, 255),
+        },
+        "modeling_mode": ModelingMode.HIGH_FIDELITY,
+        "target_h": 5,
+        "pixel_scale": 1.0,
+        "_bench_enabled": False,
+    }
+
+    result = s07_mesh_generation.run(ctx)
+    left = result["scene"].geometry["Left"]
+    right = result["scene"].geometry["Right"]
+
+    assert result["disable_material_dilation"] is True
+    assert left.bounds[1, 0] == pytest.approx(3.0)
+    assert right.bounds[0, 0] == pytest.approx(3.0)
 
 
 def test_high_fidelity_mesher_preserves_enclosed_blind_cavity_during_dilation() -> None:

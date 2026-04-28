@@ -308,6 +308,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert len(submitted_params) == 6
     assert all(os.path.exists(params["piece_boundary_geometry_path"]) for params in submitted_params)
     assert all(params["disable_material_dilation"] is True for params in submitted_params)
+    assert all(params["center_on_bed"] is False for params in submitted_params)
     assert all(params["add_loop"] is False for params in submitted_params)
     assert all(params["enable_fridge_magnet"] is False for params in submitted_params)
     assert all(params["fridge_magnets"] == [] for params in submitted_params)
@@ -567,6 +568,7 @@ def test_submit_puzzle_worker_preserves_boundary_params() -> None:
             {
                 "piece_boundary_geometry_path": "boundary.json",
                 "disable_material_dilation": True,
+                "center_on_bed": False,
             },
         )
 
@@ -575,6 +577,7 @@ def test_submit_puzzle_worker_preserves_boundary_params() -> None:
     assert captured["lut_path"] == "lut.npy"
     assert captured["params"]["piece_boundary_geometry_path"] == "boundary.json"
     assert captured["params"]["disable_material_dilation"] is True
+    assert captured["params"]["center_on_bed"] is False
 
 
 def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
