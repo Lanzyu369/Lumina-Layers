@@ -1,6 +1,8 @@
 import apiClient from "./client";
 import type {
   BaseColorsResponse,
+  FiveColorMatchRequest,
+  FiveColorMatchResponse,
   FiveColorQueryResponse,
   FiveColorQueryRequest,
   RecipeSwatchRequest,
@@ -20,6 +22,15 @@ export async function fetchBaseColors(lutName: string): Promise<BaseColorsRespon
 export async function queryFiveColor(request: FiveColorQueryRequest): Promise<FiveColorQueryResponse> {
   const response = await apiClient.post<FiveColorQueryResponse>(
     "/five-color/query",
+    request
+  );
+  return response.data;
+}
+
+/** 按目标 Hex 色值匹配最近五色配方 */
+export async function matchFiveColorByHex(request: FiveColorMatchRequest): Promise<FiveColorMatchResponse> {
+  const response = await apiClient.post<FiveColorMatchResponse>(
+    "/five-color/match-color",
     request
   );
   return response.data;

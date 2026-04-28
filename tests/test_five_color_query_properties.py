@@ -120,6 +120,32 @@ def test_query_round_trip_known_stack_entry(data) -> None:
     )
 
 
+@given(data=synthetic_engine_and_row())
+@settings(max_examples=50)
+def test_match_color_exact_rgb_round_trips_to_stack_entry(data) -> None:
+    """Property: exact RGB input SHALL resolve to that LUT row's recipe."""
+    stack_lut, rgb_data, color_count, row_idx = data
+
+    # Avoid duplicate RGB rows so the nearest-row expectation is unambiguous.
+    for idx in range(rgb_data.shape[0]):
+        rgb_data[idx] = [(idx * 53) % 256, (idx * 97) % 256, (idx * 193) % 256]
+
+    engine = ColorQueryEngine(
+        stack_lut=stack_lut,
+        lut_rgb=rgb_data,
+        color_count=color_count,
+    )
+
+    result = engine.match_color(tuple(int(v) for v in rgb_data[row_idx]), neighborhood_radius=1)
+
+    assert result.found is True
+    assert result.row_index == row_idx
+    assert result.selected_indices == stack_lut[row_idx].astype(int).tolist()
+    assert result.matched_rgb == tuple(int(v) for v in rgb_data[row_idx])
+    assert result.coordinate.display_row >= 1
+    assert result.coordinate.display_col >= 1
+
+
 # ---------------------------------------------------------------------------
 # Property 3: 超范围索引拒绝
 # **Validates: Requirements 2.3**

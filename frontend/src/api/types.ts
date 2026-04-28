@@ -1222,6 +1222,47 @@ export interface FiveColorQueryResponse {
   row_index: number;
   message: string;
   source: string;
+  reason?: string | null;
+}
+
+export interface FiveColorCardCoordinate {
+  card_index: number;
+  card_label: string;
+  grid_size: number;
+  row: number;
+  col: number;
+  display_row: number;
+  display_col: number;
+}
+
+export interface FiveColorNeighborhoodCell {
+  card_index: number | null;
+  card_label: string | null;
+  grid_size: number | null;
+  row: number | null;
+  col: number | null;
+  display_row: number | null;
+  display_col: number | null;
+  row_index: number | null;
+  rgb: [number, number, number] | null;
+  hex: string | null;
+  is_match: boolean;
+}
+
+export interface FiveColorMatchRequest {
+  lut_name: string;
+  target_hex: string;
+  neighborhood_radius?: number;
+}
+
+export interface FiveColorMatchResponse extends FiveColorQueryResponse {
+  target_rgb: [number, number, number];
+  target_hex: string;
+  matched_rgb: [number, number, number] | null;
+  matched_hex: string | null;
+  delta_e: number | null;
+  coordinate: FiveColorCardCoordinate;
+  neighborhood: FiveColorNeighborhoodCell[][];
 }
 
 export interface RecipeSwatchItemRequest {

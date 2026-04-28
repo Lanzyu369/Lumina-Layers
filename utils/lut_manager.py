@@ -52,6 +52,8 @@ _LUT_PRESET_CACHE_TTL_SECONDS = 30.0
 _lut_preset_cache_lock = threading.Lock()
 _lut_preset_cache_at: float | None = None
 _lut_preset_cache_value: dict[str, str] | None = None
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
 
 
 def _resolve_native_base_channel_idx(
@@ -1336,51 +1338,20 @@ class LUTManager:
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
                 _log.debug(
-                    "Invalid LUT recipe payload skipped",
+                    "Invalid LUT recipe payload marked unavailable",
                     extra={
                         "event": "lut_recipe_payload_invalid",
                         "path": file_path,
                         "recipe_value": recipe_raw,
                     },
                 )
-                continue
-            recipe_indices: list[int] = []
-            for v in recipe_raw:
-                if isinstance(v, str):
-                    # 新格式: 颜色名 → 索引
-                    if v == "Air":
-                        recipe_indices.append(-1)
-                    elif v in name_to_idx:
-                        recipe_indices.append(name_to_idx[v])
-                    else:
-                        _log.debug(
-                            "Unknown LUT recipe color name",
-                            extra={
-                                "event": "lut_recipe_color_unknown",
-                                "path": file_path,
-                                "color_name": v,
-                            },
-                        )
-                        recipe_indices.append(0)
-                else:
-                    # 旧格式兼容: 直接是数字索引
-                    try:
-                        recipe_indices.append(int(v))
-                    except (TypeError, ValueError) as e:
-                        _log.debug(
-                            "Invalid LUT recipe member skipped",
-                            extra={
-                                "event": "lut_recipe_member_invalid",
-                                "path": file_path,
-                                "recipe_member": v,
-                                "error_type": type(e).__name__,
-                                "error_message": str(e),
-                            },
-                        )
-                        recipe_indices = []
-                        break
-            if len(recipe_indices) != len(recipe_raw):
-                continue
+                recipe_indices = [-1, -1, -1, -1, -1]
+            else:
+                recipe_indices = [
+                    cls._resolve_recipe_member(value, name_to_idx, file_path)
+                    for value in recipe_raw
+                ]
+            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
             rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
 
@@ -1400,6 +1371,107 @@ class LUTManager:
             stacks = None
 
         return rgb, stacks, metadata
+
+    @staticmethod
+    def _parse_integer_recipe_value(value: Any) -> int | None:
+        if isinstance(value, (bool, np.bool_)):
+            return None
+        if isinstance(value, str):
+            stripped_value = value.strip()
+            if not re.fullmatch(r"[+-]?\d+", stripped_value):
+                return None
+            try:
+                numeric_value = int(stripped_value)
+            except ValueError:
+                return None
+            if _INT32_MIN <= numeric_value <= _INT32_MAX:
+                return numeric_value
+            return None
+        if isinstance(value, (int, np.integer)):
+            numeric_value = int(value)
+            if _INT32_MIN <= numeric_value <= _INT32_MAX:
+                return numeric_value
+        return None
+
+    @staticmethod
+    def _is_numeric_recipe_literal(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            float(value)
+        except ValueError:
+            return False
+        return True
+
+    @classmethod
+    def _resolve_recipe_member(
+        cls,
+        value: Any,
+        name_to_idx: dict[str, int],
+        file_path: str,
+    ) -> int:
+        numeric_index = cls._parse_integer_recipe_value(value)
+        if numeric_index is not None:
+            return numeric_index
+
+        if isinstance(value, str):
+            if cls._is_numeric_recipe_literal(value):
+                _log.debug(
+                    "Invalid numeric LUT recipe string",
+                    extra={
+                        "event": "lut_recipe_numeric_string_invalid",
+                        "path": file_path,
+                        "recipe_member": value,
+                    },
+                )
+                return -1
+            if value == "Air":
+                return -1
+            if value in name_to_idx:
+                return name_to_idx[value]
+            _log.debug(
+                "Unknown LUT recipe color name",
+                extra={
+                    "event": "lut_recipe_color_unknown",
+                    "path": file_path,
+                    "color_name": value,
+                },
+            )
+            return -1
+
+        _log.debug(
+            "Invalid LUT recipe member skipped",
+            extra={
+                "event": "lut_recipe_member_invalid",
+                "path": file_path,
+                "recipe_member": value,
+                "error_type": type(value).__name__,
+                "error_message": "member is not an integer recipe index or color name",
+            },
+        )
+        return -1
+
+    @staticmethod
+    def _normalize_resolved_five_layer_recipe(recipe_indices: list[int]) -> list[int]:
+        if len(recipe_indices) == 5:
+            return recipe_indices
+        return [-1, -1, -1, -1, -1]
+
+    @staticmethod
+    def _infer_color_count_from_resolved_recipes(
+        stacks_list: list[list[int]],
+    ) -> int | None:
+        max_index = -1
+        for recipe in stacks_list:
+            if len(recipe) != 5 or any(index < 0 for index in recipe):
+                continue
+            if any(index >= 8 for index in recipe):
+                continue
+            max_index = max(max_index, max(recipe))
+        inferred_count = max_index + 1
+        if 1 <= inferred_count <= 8:
+            return inferred_count
+        return None
 
     @classmethod
     def load_native_bundle_exact_lookup(
@@ -1570,9 +1642,23 @@ class LUTManager:
             if isinstance(item, dict) and str(item.get("color", ""))
         ]
         entries = data.get("entries", [])
-        stacks = np.asarray(
-            [entry.get("recipe", []) for entry in entries if isinstance(entry, dict)],
-            dtype=np.int32,
+        stack_rows: list[list[int]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            recipe_raw = entry.get("recipe", [])
+            if not isinstance(recipe_raw, (list, tuple)):
+                recipe_indices = [-1, -1, -1, -1, -1]
+            else:
+                recipe_indices = [
+                    cls._resolve_recipe_member(value, {}, file_path)
+                    for value in recipe_raw
+                ]
+            stack_rows.append(cls._normalize_resolved_five_layer_recipe(recipe_indices))
+        stacks = (
+            np.asarray(stack_rows, dtype=np.int32)
+            if stack_rows
+            else np.zeros((0, 5), dtype=np.int32)
         )
         labs = np.asarray(
             [entry.get("lab", [0.0, 0.0, 0.0]) for entry in entries if isinstance(entry, dict)],
@@ -1805,16 +1891,43 @@ class LUTManager:
         """Load a flat-list JSON LUT: [{recipe, rgb, hex, source}, ...].
         加载顶层为数组的旧格式 JSON LUT 文件。
         """
-        # 1. 收集所有出现的颜色名，构建 palette
-        color_names_ordered: list[str] = []
-        color_name_set: set[str] = set()
+        numeric_recipe_rows: list[list[int]] = []
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            for v in entry.get("recipe", []):
-                if isinstance(v, str) and v != "Air" and v not in color_name_set:
-                    color_names_ordered.append(v)
-                    color_name_set.add(v)
+            recipe_raw = entry.get("recipe", [])
+            if not isinstance(recipe_raw, (list, tuple)) or len(recipe_raw) != 5:
+                continue
+            parsed_row = [cls._parse_integer_recipe_value(value) for value in recipe_raw]
+            if any(value is None for value in parsed_row):
+                continue
+            recipe_indices = [int(value) for value in parsed_row]
+            if any(index < 0 or index >= 8 for index in recipe_indices):
+                continue
+            numeric_recipe_rows.append(recipe_indices)
+        prefer_numeric_recipes = bool(
+            cls._infer_color_count_from_resolved_recipes(numeric_recipe_rows)
+        )
+
+        # 1. 收集所有出现的颜色名，构建 palette
+        color_names_ordered: list[str] = []
+        color_name_set: set[str] = set()
+        if not prefer_numeric_recipes:
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                recipe_raw = entry.get("recipe", [])
+                if not isinstance(recipe_raw, (list, tuple)):
+                    continue
+                for v in recipe_raw:
+                    if (
+                        isinstance(v, str)
+                        and v != "Air"
+                        and not cls._is_numeric_recipe_literal(v)
+                        and v not in color_name_set
+                    ):
+                        color_names_ordered.append(v)
+                        color_name_set.add(v)
 
         palette = [
             PaletteEntry(color=name, material="PLA Basic", hex_color=None)
@@ -1835,17 +1948,22 @@ class LUTManager:
                 rgb_list.append([0, 0, 0])
 
             recipe_raw = entry.get("recipe", [])
-            recipe_indices: list[int] = []
-            for v in recipe_raw:
-                if isinstance(v, str):
-                    if v == "Air":
-                        recipe_indices.append(-1)
-                    elif v in name_to_idx:
-                        recipe_indices.append(name_to_idx[v])
-                    else:
-                        recipe_indices.append(0)
-                else:
-                    recipe_indices.append(int(v))
+            if not isinstance(recipe_raw, (list, tuple)):
+                _log.debug(
+                    "Invalid LUT recipe payload marked unavailable",
+                    extra={
+                        "event": "lut_recipe_payload_invalid",
+                        "path": file_path,
+                        "recipe_value": recipe_raw,
+                    },
+                )
+                recipe_indices = [-1, -1, -1, -1, -1]
+            else:
+                recipe_indices = [
+                    cls._resolve_recipe_member(value, name_to_idx, file_path)
+                    for value in recipe_raw
+                ]
+            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
             stacks_list.append(recipe_indices)
 
         rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)
@@ -1860,6 +1978,10 @@ class LUTManager:
             base_channel_idx=0,
             layer_order="Top2Bottom",
         )
+        if not metadata.palette:
+            inferred_count = cls._infer_color_count_from_resolved_recipes(stacks_list)
+            if inferred_count is not None:
+                metadata.extensions["inferred_color_count"] = inferred_count
         _log.info(
             "Loaded flat-list JSON LUT",
             extra={
@@ -1913,7 +2035,14 @@ class LUTManager:
             return rgb, None, metadata
 
         rgb = npz.get("rgb", np.zeros((0, 3), dtype=np.uint8))
-        stacks = npz.get("stacks", None)
+        stacks = None
+        if "stacks" in npz:
+            try:
+                stacks = npz["stacks"]
+            except ValueError as exc:
+                if "Object arrays cannot be loaded" not in str(exc):
+                    raise
+                stacks = np.full((len(rgb), 5), -1, dtype=int)
 
         # Parse metadata_json if present
         metadata_json_str = None

@@ -8,7 +8,9 @@ performing five-color combination lookups.
 
 import threading
 import uuid
+from dataclasses import asdict
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.dependencies import get_file_registry
@@ -16,6 +18,8 @@ from api.file_registry import FileRegistry
 from api.schemas.five_color import (
     BaseColorEntry,
     BaseColorsResponse,
+    FiveColorMatchRequest,
+    FiveColorMatchResponse,
     FiveColorQueryRequest,
     FiveColorQueryResponse,
     RecipeSwatchRequest,
@@ -38,6 +42,21 @@ log = get_logger(__name__)
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
 _engine_cache_lock = threading.Lock()
+
+
+def _load_npz_color_count(path: str, rgb_data) -> int | None:
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            has_metadata = "metadata_json" in data.files
+    except (OSError, ValueError):
+        has_metadata = False
+
+    if has_metadata:
+        _, _, metadata = LUTManager.load_lut_with_metadata(path)
+        return len(metadata.palette) if metadata.palette else None
+
+    detected_count, _ = ColorCountDetector.detect_color_count(rgb_data)
+    return detected_count if detected_count > 0 else None
 
 
 def clear_engine_cache():
@@ -101,7 +120,12 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
             if not success:
                 raise HTTPException(status_code=500, detail=f"Failed to load LUT: {msg}")
             sources = StackLUTLoader.load_sources_from_json(path)
-            engine = ColorQueryEngine(stack_lut=stack_data, lut_rgb=rgb_data, sources=sources)
+            engine = ColorQueryEngine(
+                stack_lut=stack_data,
+                lut_rgb=rgb_data,
+                color_count=_load_npz_color_count(path, rgb_data),
+                sources=sources,
+            )
         elif path.endswith(".json"):
             # Keyed JSON format — use LUTManager unified loader
             rgb_data, stack_data, metadata = LUTManager.load_lut_with_metadata(path)
@@ -109,6 +133,10 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
                 raise HTTPException(status_code=500, detail="Failed to load JSON LUT: no RGB data")
             # Use palette names for color_count
             color_count = len(metadata.palette) if metadata.palette else None
+            if color_count is None:
+                inferred_color_count = metadata.extensions.get("inferred_color_count")
+                if isinstance(inferred_color_count, int):
+                    color_count = inferred_color_count
             # Extract per-entry sources from JSON
             sources = _extract_sources_from_keyed_json(path)
             engine = ColorQueryEngine(
@@ -167,6 +195,12 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
         ) from exc
 
 
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert a normalized #RRGGBB string to an RGB tuple."""
+    value = hex_color.lstrip("#")
+    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
 @router.get("/base-colors")
 def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) -> BaseColorsResponse:
     """Return the base colors of a LUT.
@@ -186,11 +220,21 @@ def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) 
         for i, rgb in enumerate(base_colors)
     ]
 
-    combinations = engine.stack_lut.tolist() if engine.stack_lut is not None else None
+    combinations = engine.get_combinations()
     stack_present = engine.stack_lut is not None
-    combination_count = len(engine.stack_lut) if stack_present else 0
+    combination_count = len(combinations) if combinations is not None else 0
 
-    if not stack_present:
+    if stack_present:
+        log.debug(
+            "Five-color base colors loaded",
+            extra={
+                "event": "five_color_base_colors_loaded",
+                "lut_name": lut_name,
+                "combination_count": combination_count,
+                "color_count": len(colors),
+            },
+        )
+    else:
         log.warning(
             "Five-color stack LUT missing",
             extra={
@@ -256,6 +300,36 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
         row_index=result.row_index,
         message=result.message,
         source=result.source,
+    )
+
+
+@router.post("/match-color")
+def match_color_by_hex(request: FiveColorMatchRequest) -> FiveColorMatchResponse:
+    """Match a target Hex color to the nearest LUT row and five-layer recipe.
+    按目标 Hex 色值匹配最近 LUT 行，并返回五层配方与色卡位置。
+    """
+    engine, _ = _load_engine(request.lut_name)
+    result = engine.match_color(
+        _hex_to_rgb(request.target_hex),
+        neighborhood_radius=request.neighborhood_radius,
+    )
+
+    return FiveColorMatchResponse(
+        found=result.found,
+        selected_indices=result.selected_indices,
+        result_rgb=result.result_rgb,
+        result_hex=rgb_to_hex(result.result_rgb) if result.result_rgb else None,
+        row_index=result.row_index,
+        message=result.message,
+        source=result.source,
+        reason=result.reason,
+        target_rgb=result.target_rgb,
+        target_hex=rgb_to_hex(result.target_rgb),
+        matched_rgb=result.matched_rgb,
+        matched_hex=rgb_to_hex(result.matched_rgb) if result.matched_rgb else None,
+        delta_e=round(result.delta_e, 6) if result.delta_e is not None else None,
+        coordinate=asdict(result.coordinate),
+        neighborhood=[[asdict(cell) for cell in row] for row in result.neighborhood],
     )
 
 
