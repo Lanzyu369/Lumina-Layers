@@ -22,7 +22,6 @@ import { useDraggable } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
 import { WidgetHeader } from './WidgetHeader';
 import { useWidgetStore } from '../../stores/widgetStore';
-import { useSettingsStore } from '../../stores/settingsStore';
 import { COLLAPSED_HEIGHT, WIDGET_PANEL_RADIUS, WIDGET_WIDTH } from '../../utils/widgetUtils';
 import type { WidgetId } from '../../types/widget';
 import { useI18n } from '../../i18n/context';
@@ -105,7 +104,6 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   const setExpandedHeight = useWidgetStore((s) => s.setExpandedHeight);
   const isActiveDragWidget = useWidgetStore((s) => s.activeWidgetId === widgetId);
   const canvasInteracting = useWidgetStore((s) => s.canvasInteracting);
-  const enableBlur = useSettingsStore((s) => s.enableBlur);
 
   // Content area ref — used by ResizeObserver to measure expanded height
   const contentRef = useRef<HTMLDivElement>(null);
@@ -212,11 +210,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
         animate={animateTarget}
         transition={transition}
         onAnimationComplete={handleAnimationComplete}
-        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform ${
-          enableBlur && !canvasInteracting
-            ? 'bg-slate-50/92 backdrop-blur-[2px] dark:bg-slate-950/92'
-            : 'bg-slate-50/98 dark:bg-slate-950/98'
-        }`}
+        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform bg-slate-50/80 dark:bg-slate-950/80`}
       >
         <WidgetHeader
           widgetId={widgetId}
