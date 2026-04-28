@@ -39,6 +39,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Code shall remain easy to read: descriptive names, small helpers, shallow nesting, and no overlong functions, god objects, or copy-pasted logic
 - Worker entry points must be top-level and picklable; pass only scalars and file paths across processes
 - Reuse canonical enums/config from `config.py`, API schemas, and frontend constants
+- New utilities, hooks, helpers, or shared modules must land with at least one adoption site (lighthouse user) in the same PR; pure infrastructure-only PRs require explicit justification in the PR body and a follow-up adoption tracking issue. Drop or fold utilities with zero adoption after 30 days to prevent dead code accumulating in shared module trees
 - New color modes, modeling modes, printer profiles, or slicer integrations must update validation, UI, translations, persisted settings, and tests together
 
 ## Encoding & Text Safety
