@@ -41,6 +41,7 @@ DEFAULT_WORKFLOW = [
     "replace",
     "extract",
     "merge_8color",
+    "merge_5color_ext",
 ]
 WORKFLOW_ORDER = [
     "startup",
@@ -55,6 +56,11 @@ WORKFLOW_ORDER = [
     "replace_5color_ext",
     "extract",
     "merge_8color",
+    "merge_5color_ext",
+    "manual_fix",
+    "preview_wb",
+    "rotate",
+    "confirm_palette",
 ]
 WORKFLOW_STEPS = set(WORKFLOW_ORDER)
 DEFAULT_MAX_INFO = 30
@@ -330,7 +336,20 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
 
         try:
             extract_lut_path = _make_temp_path(".json", created_paths)
-            extract_lut_path.write_text("{}", encoding="utf-8")
+            _synthesize_lut_keyed_json(
+                extract_lut_path,
+                rgb=np.array(
+                    [
+                        [255, 255, 255],
+                        [255, 0, 0],
+                        [255, 255, 0],
+                        [0, 128, 255],
+                    ],
+                    dtype=np.uint8,
+                ),
+                stacks=np.zeros((4, 0), dtype=np.int32),
+                color_mode=DEFAULT_COLOR_MODE,
+            )
             extract_image = np.zeros((8, 8, 3), dtype=np.uint8)
             with (
                 patch("api.routers.converter.preview.generate_segmented_glb", return_value=None),
@@ -563,6 +582,16 @@ def _workflow_required_event_checks(
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
         required_events.append("extractor_merge_8color_done")
+    if "merge_5color_ext" in workflow:
+        required_events.append("extractor_merge_5color_extended_done")
+    if "manual_fix" in workflow:
+        required_events.append("extractor_manual_fix_done")
+    if "preview_wb" in workflow:
+        required_events.append("extractor_preview_wb_done")
+    if "rotate" in workflow:
+        required_events.append("extractor_rotate_done")
+    if "confirm_palette" in workflow:
+        required_events.append("extractor_confirm_palette_done")
 
     required_events = list(dict.fromkeys(required_events))
     return [
@@ -846,6 +875,37 @@ def _make_temp_path(suffix: str, created_paths: list[Path]) -> Path:
     return path
 
 
+def _synthesize_lut_keyed_json(
+    path: Path | str,
+    *,
+    color_mode: str,
+    rgb: Any,
+    stacks: Any,
+) -> None:
+    from utils.lut_manager import LUTManager
+
+    path_obj = Path(str(path))
+    metadata = LUTManager.infer_default_metadata(
+        path_obj.stem,
+        str(path_obj),
+        len(rgb),
+        color_mode=color_mode,
+    )
+    LUTManager.save_keyed_json(str(path_obj), rgb, stacks, metadata)
+
+
+def _synthesize_rgb_png_bytes(width: int, height: int) -> bytes:
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    image = np.full((height, width, 3), [128, 130, 132], dtype=np.uint8)
+    buffer = BytesIO()
+    Image.fromarray(image, mode="RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _execute_http_workflow(base_url: str, workflow: list[str], timeout: float) -> None:
     import httpx
 
@@ -882,6 +942,16 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_extract_workflow(client)
         elif step == "merge_8color":
             _execute_merge_8color_workflow(client)
+        elif step == "merge_5color_ext":
+            _execute_merge_5color_ext_workflow(client)
+        elif step == "manual_fix":
+            _execute_manual_fix_workflow(client)
+        elif step == "preview_wb":
+            _execute_preview_wb_workflow(client)
+        elif step == "rotate":
+            _execute_rotate_workflow(client)
+        elif step == "confirm_palette":
+            _execute_confirm_palette_workflow(client)
 
 
 def _execute_vector_workflow(client: Any, lut_name: str) -> None:
@@ -945,6 +1015,12 @@ def _execute_replace_workflow(
 
 
 def _execute_extract_workflow(client: Any) -> None:
+    payload = _post_extract_for_session(client)
+    if not payload.get("lut_download_url"):
+        raise QualityCheckError("Extract response did not include lut_download_url")
+
+
+def _post_extract_for_session(client: Any) -> Mapping[str, Any]:
     from io import BytesIO
 
     import numpy as np
@@ -979,13 +1055,13 @@ def _execute_extract_workflow(client: Any) -> None:
     payload = response.json()
     if not isinstance(payload, Mapping):
         raise QualityCheckError("Extract response was not an object")
-    if not payload.get("lut_download_url"):
-        raise QualityCheckError("Extract response did not include lut_download_url")
+    if not payload.get("session_id"):
+        raise QualityCheckError("Extract response did not include session_id")
+    return payload
 
 
 def _execute_merge_8color_workflow(client: Any) -> None:
     from api.routers.extractor import _get_8color_temp_path, _get_assets_dir
-    from utils.lut_manager import LUTManager
 
     import numpy as np
 
@@ -1010,13 +1086,12 @@ def _execute_merge_8color_workflow(client: Any) -> None:
                 ],
                 dtype=np.uint8,
             )
-            metadata = LUTManager.infer_default_metadata(
-                page_path.stem,
-                str(page_path),
-                len(rgb),
+            _synthesize_lut_keyed_json(
+                page_path,
+                rgb=rgb,
+                stacks=stacks,
                 color_mode=EIGHT_COLOR_MODE,
             )
-            LUTManager.save_keyed_json(str(page_path), rgb, stacks, metadata)
 
         response = client.post(
             "/api/extractor/merge-8color",
@@ -1036,6 +1111,168 @@ def _execute_merge_8color_workflow(client: Any) -> None:
                 page_path.write_bytes(previous_contents[page_path])
             else:
                 _remove_paths([page_path])
+
+
+def _execute_merge_5color_ext_workflow(client: Any) -> None:
+    import numpy as np
+
+    if getattr(sys, "frozen", False):
+        assets_dir = Path(os.path.join(os.getcwd(), "assets"))
+    else:
+        assets_dir = Path("assets")
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    page_paths = [
+        assets_dir / "temp_5c_ext_page_1.json",
+        assets_dir / "temp_5c_ext_page_2.json",
+    ]
+    previous_contents = {path: path.read_bytes() for path in page_paths if path.exists()}
+    stacks = np.array(
+        [[0, 1, 2, 3, 4], [4, 3, 2, 1, 0]],
+        dtype=np.int32,
+    )
+
+    try:
+        for page_index, page_path in enumerate(page_paths):
+            rgb = np.array(
+                [
+                    [255, 255, 255],
+                    [255, 0, 0] if page_index == 0 else [0, 0, 0],
+                ],
+                dtype=np.uint8,
+            )
+            _synthesize_lut_keyed_json(
+                page_path,
+                rgb=rgb,
+                stacks=stacks,
+                color_mode=FIVE_COLOR_EXT_MODE,
+            )
+
+        response = client.post("/api/extractor/merge-5color-extended", json={})
+        _raise_for_status(response.status_code, response.text, "merge_5color_ext")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("5-Color Extended merge response was not an object")
+        if payload.get("status") != "ok":
+            raise QualityCheckError("5-Color Extended merge response status was not ok")
+        if not payload.get("session_id"):
+            raise QualityCheckError(
+                "5-Color Extended merge response did not include session_id"
+            )
+    finally:
+        for page_path in page_paths:
+            if page_path in previous_contents:
+                page_path.write_bytes(previous_contents[page_path])
+            else:
+                _remove_paths([page_path])
+
+
+def _execute_manual_fix_workflow(client: Any) -> None:
+    import numpy as np
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    temp_file.close()
+    lut_path = Path(temp_file.name)
+    rgb = np.array(
+        [
+            [255, 255, 255],
+            [255, 255, 0],
+            [0, 128, 255],
+            [0, 0, 0],
+        ],
+        dtype=np.uint8,
+    )
+    stacks = np.zeros((4, 0), dtype=np.int32)
+
+    try:
+        _synthesize_lut_keyed_json(
+            lut_path,
+            rgb=rgb,
+            stacks=stacks,
+            color_mode=DEFAULT_COLOR_MODE,
+        )
+        response = client.post(
+            "/api/extractor/manual-fix",
+            json={
+                "lut_path": str(lut_path),
+                "cell_coord": [0, 0],
+                "override_color": "#ff0000",
+            },
+        )
+        _raise_for_status(response.status_code, response.text, "manual_fix")
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise QualityCheckError("Manual fix response was not an object")
+        if payload.get("status") != "ok":
+            raise QualityCheckError("Manual fix response status was not ok")
+        if not payload.get("lut_preview_url"):
+            raise QualityCheckError("Manual fix response did not include lut_preview_url")
+    finally:
+        _remove_paths([lut_path])
+
+
+def _execute_preview_wb_workflow(client: Any) -> None:
+    image_bytes = _synthesize_rgb_png_bytes(32, 32)
+    response = client.post(
+        "/api/extractor/preview-wb",
+        files={"image": ("preview-wb.png", image_bytes, "image/png")},
+    )
+    _raise_for_status(response.status_code, response.text, "preview_wb")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("White-balance preview response was not an object")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("White-balance preview response did not include preview_url")
+    if int(payload.get("width", 0)) < 1 or int(payload.get("height", 0)) < 1:
+        raise QualityCheckError("White-balance preview response dimensions were invalid")
+
+
+def _execute_rotate_workflow(client: Any) -> None:
+    image_bytes = _synthesize_rgb_png_bytes(32, 16)
+    response = client.post(
+        "/api/extractor/rotate?direction=ccw",
+        files={"image": ("rotate.png", image_bytes, "image/png")},
+    )
+    _raise_for_status(response.status_code, response.text, "rotate")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Rotate response was not an object")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Rotate response did not include preview_url")
+    if int(payload.get("width", 0)) != 16 or int(payload.get("height", 0)) != 32:
+        raise QualityCheckError("Rotate response dimensions did not match 16x32")
+
+
+def _execute_confirm_palette_workflow(client: Any) -> None:
+    extract_payload = _post_extract_for_session(client)
+    session_id = _extract_session_id(extract_payload, "Extract")
+    response = client.post(
+        "/api/extractor/confirm-palette",
+        json={
+            "session_id": session_id,
+            "manufacturer": "TestMfg",
+            "type": "PLA",
+            "palette": [
+                {
+                    "color": "Red",
+                    "material": "PLA Basic",
+                    "hex_color": "#ff0000",
+                    "color_name": "Red",
+                },
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#ffffff",
+                    "color_name": "White",
+                },
+            ],
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "confirm_palette")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Palette confirmation response was not an object")
+    if payload.get("status") not in ("ok", "warning"):
+        raise QualityCheckError("Palette confirmation response status was not ok or warning")
 
 
 def _post_preview(client: Any, lut_name: str) -> str:

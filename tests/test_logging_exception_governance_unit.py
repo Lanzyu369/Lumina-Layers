@@ -84,6 +84,11 @@ VECTOR_STRUCTURED_EVENTS = {
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
     "extractor_merge_8color_done",
+    "extractor_merge_5color_extended_done",
+    "extractor_manual_fix_done",
+    "extractor_preview_wb_done",
+    "extractor_rotate_done",
+    "extractor_confirm_palette_done",
 }
 REQUIRED_STRUCTURED_EVENTS = VECTOR_STRUCTURED_EVENTS | EXTRACTOR_STRUCTURED_EVENTS
 

@@ -192,6 +192,78 @@ def test_merge_8color_workflow_step_is_first_class() -> None:
     assert WORKFLOW_ORDER.index("merge_8color") == WORKFLOW_ORDER.index("extract") + 1
 
 
+def test_merge_5color_ext_workflow_step_is_first_class() -> None:
+    """The 5-color extended merge workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow(
+        "startup,lut_list,lut_colors,preview,generate,replace,extract,merge_8color,merge_5color_ext"
+    )
+
+    assert workflow == [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+        "merge_8color",
+        "merge_5color_ext",
+    ]
+    assert "merge_5color_ext" in log_quality_check.DEFAULT_WORKFLOW
+    assert "merge_5color_ext" in WORKFLOW_ORDER
+    assert "merge_5color_ext" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("merge_5color_ext") == WORKFLOW_ORDER.index("merge_8color") + 1
+
+
+def test_manual_fix_workflow_step_is_first_class() -> None:
+    """The extractor manual-fix workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("manual_fix")
+
+    assert workflow == ["manual_fix"]
+    assert "manual_fix" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "manual_fix" in WORKFLOW_ORDER
+    assert "manual_fix" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("manual_fix") == WORKFLOW_ORDER.index("merge_5color_ext") + 1
+
+
+def test_preview_wb_workflow_step_is_first_class() -> None:
+    """The white-balance preview workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("preview_wb")
+
+    assert workflow == ["preview_wb"]
+    assert "preview_wb" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "preview_wb" in WORKFLOW_ORDER
+    assert "preview_wb" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("preview_wb") == WORKFLOW_ORDER.index("manual_fix") + 1
+
+
+def test_rotate_workflow_step_is_first_class() -> None:
+    """The extractor rotate workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("rotate")
+
+    assert workflow == ["rotate"]
+    assert "rotate" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "rotate" in WORKFLOW_ORDER
+    assert "rotate" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("rotate") == WORKFLOW_ORDER.index("preview_wb") + 1
+
+
+def test_confirm_palette_workflow_step_is_first_class() -> None:
+    """The palette confirmation workflow must be accepted by the quality gate."""
+
+    workflow = _parse_workflow("confirm_palette")
+
+    assert workflow == ["confirm_palette"]
+    assert "confirm_palette" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "confirm_palette" in WORKFLOW_ORDER
+    assert "confirm_palette" in WORKFLOW_STEPS
+    assert WORKFLOW_ORDER.index("confirm_palette") == WORKFLOW_ORDER.index("rotate") + 1
+
+
 def test_parse_workflow_rejects_vector_and_replace_together() -> None:
     try:
         _parse_workflow("startup,lut_list,lut_colors,preview,generate,vector,replace")
@@ -434,6 +506,120 @@ def test_merge_8color_workflow_requires_canary_event() -> None:
         missing_by_name["workflow_event_extractor_merge_8color_done"].passed
         is False
     )
+
+
+def test_merge_5color_ext_workflow_requires_canary_event() -> None:
+    workflow = [
+        "startup",
+        "lut_list",
+        "lut_colors",
+        "preview",
+        "generate",
+        "replace",
+        "extract",
+        "merge_8color",
+        "merge_5color_ext",
+    ]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={
+            "converter_region_replace_timing": 1,
+            "extractor_extract_done": 1,
+            "extractor_merge_8color_done": 1,
+            "extractor_merge_5color_extended_done": 1,
+        },
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_merge_5color_extended_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_extractor_merge_5color_extended_done"].passed
+        is False
+    )
+
+
+def test_manual_fix_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["manual_fix"],
+        event_counts={"extractor_manual_fix_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["manual_fix"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_manual_fix_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_manual_fix_done"].passed is False
+
+
+def test_preview_wb_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["preview_wb"],
+        event_counts={"extractor_preview_wb_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["preview_wb"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_preview_wb_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_preview_wb_done"].passed is False
+
+
+def test_rotate_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["rotate"],
+        event_counts={"extractor_rotate_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["rotate"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_rotate_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_rotate_done"].passed is False
+
+
+def test_confirm_palette_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["confirm_palette"],
+        event_counts={"extractor_confirm_palette_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["confirm_palette"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_extractor_confirm_palette_done"].passed is True
+    assert missing_by_name["workflow_event_extractor_confirm_palette_done"].passed is False
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

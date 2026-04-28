@@ -5,7 +5,7 @@
   "catch_all_event_count": 0,
   "checks": [
     {
-      "actual": 27,
+      "actual": 28,
       "name": "info_lines_within_budget",
       "operator": "<=",
       "passed": true,
@@ -77,6 +77,7 @@
     "converter_preview_timing": 2,
     "converter_region_replace_timing": 1,
     "extractor_extract_done": 1,
+    "extractor_merge_5color_extended_done": 1,
     "extractor_merge_8color_done": 1,
     "image_processor_done": 2,
     "image_processor_init": 4,
@@ -92,26 +93,27 @@
     "worker_pool_shutdown": 1,
     "worker_pool_started": 1
   },
-  "info_lines": 27,
+  "info_lines": 28,
   "info_lines_by_endpoint": {
-    "1e7d9977b5b54f0996b943d008bedbd2": 1,
-    "4123661dee5c4033aac68c6f8c969cfa": 1,
-    "459d1e50017d46fc9e45cbb811c39f2c": 4,
-    "498d99a280e746ceb73f90a50ac39428": 1,
-    "aeb1ae3cd1ad484ab940507061639f91": 1,
-    "af142d0af5354a6ebe04e42e05bf7aa1": 3,
-    "b57fffb57df748b29fe33c0fa6336ea4": 7,
-    "be6e6d47771c484282040f13ea8461a4": 1,
-    "de6beacf4c1d42fbb3da95cbd459032e": 4
+    "009f79e94b434365bb2f58ccb18c81d3": 3,
+    "4d7509cc487d4feebd2bb45515366ef1": 7,
+    "54471c3245d64e99843c8f36e8f87900": 1,
+    "616a0f55c3894ce5b916c09010cce798": 1,
+    "62ca1831890b40c395db52a5fbfa01cc": 4,
+    "69600f0229fa4b2d83ba7bafb0a27c66": 4,
+    "95f3d6829cec476da138020693a41ac3": 1,
+    "be3cbf7a4455499c842f7790dac6853b": 1,
+    "c42e2a796e0349369238e1624152d48d": 1,
+    "cbf1c5fde6a04ba1a4e03c2a16d0002a": 1
   },
   "log_file_configured_count": 1,
-  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_20260427_195216.log",
+  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_full_reviewer.log",
   "max_info_per_endpoint": 7,
   "mode": "full",
   "overall_passed": true,
   "request_completed_count": 0,
-  "structured_lines": 27,
-  "timestamp": "2026-04-27T19:52:33.152212+00:00",
+  "structured_lines": 28,
+  "timestamp": "2026-04-28T05:26:33.068695+00:00",
   "top_events": [
     {
       "count": 4,
@@ -187,11 +189,15 @@
     },
     {
       "count": 1,
+      "event": "extractor_merge_5color_extended_done"
+    },
+    {
+      "count": 1,
       "event": "worker_pool_shutdown"
     }
   ],
-  "total_bytes": 10302,
-  "total_lines": 27,
+  "total_bytes": 10612,
+  "total_lines": 28,
   "unstructured_lines": 0,
   "warning_lines": 0,
   "workflow": [
@@ -202,7 +208,8 @@
     "generate",
     "replace",
     "extract",
-    "merge_8color"
+    "merge_8color",
+    "merge_5color_ext"
   ],
   "workflow_checks": [
     {
@@ -232,6 +239,14 @@
     {
       "actual": 1,
       "name": "workflow_event_extractor_merge_8color_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_merge_5color_extended_done",
       "operator": ">=",
       "passed": true,
       "severity": "error",
