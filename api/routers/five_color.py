@@ -68,7 +68,7 @@ def _extract_sources_from_keyed_json(json_path: str) -> list[str]:
             data = _json.load(f)
         entries = data.get("entries", [])
         return [e.get("source", "") if isinstance(e, dict) else "" for e in entries]
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return []
 
 
@@ -161,7 +161,7 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to load LUT: {exc}"
         ) from exc
@@ -187,18 +187,10 @@ def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) 
     ]
 
     combinations = engine.stack_lut.tolist() if engine.stack_lut is not None else None
-    
-    if engine.stack_lut is not None:
-        log.debug(
-            "Five-color base colors loaded",
-            extra={
-                "event": "five_color_base_colors_loaded",
-                "lut_name": lut_name,
-                "combination_count": len(engine.stack_lut),
-                "color_count": len(colors),
-            },
-        )
-    else:
+    stack_present = engine.stack_lut is not None
+    combination_count = len(engine.stack_lut) if stack_present else 0
+
+    if not stack_present:
         log.warning(
             "Five-color stack LUT missing",
             extra={
@@ -207,6 +199,16 @@ def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) 
                 "color_count": len(colors),
             },
         )
+    log.info(
+        "Five-color base colors returned",
+        extra={
+            "event": "five_color_base_colors_done",
+            "lut_name": lut_name,
+            "color_count": len(colors),
+            "combination_count": combination_count,
+            "stack_present": stack_present,
+        },
+    )
 
     return BaseColorsResponse(
         lut_name=display_name,
@@ -232,12 +234,25 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
             )
 
     result = engine.query(request.selected_indices)
+    result_hex = rgb_to_hex(result.result_rgb) if result.result_rgb else None
+
+    log.info(
+        "Five-color query returned",
+        extra={
+            "event": "five_color_query_done",
+            "lut_name": request.lut_name,
+            "selected_indices_count": len(request.selected_indices),
+            "found": result.found,
+            "result_hex": result_hex,
+            "source": result.source,
+        },
+    )
 
     return FiveColorQueryResponse(
         found=result.found,
         selected_indices=result.selected_indices,
         result_rgb=result.result_rgb,
-        result_hex=rgb_to_hex(result.result_rgb) if result.result_rgb else None,
+        result_hex=result_hex,
         row_index=result.row_index,
         message=result.message,
         source=result.source,
@@ -310,6 +325,7 @@ def generate_swatch(
     )
 
     preview_url: str | None = None
+    preview_id: str | None = None
     if legend_img is not None:
         preview_bytes = pil_to_png_bytes(legend_img)
         preview_id = registry.register_bytes(
@@ -319,6 +335,21 @@ def generate_swatch(
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
         preview_url = f"/api/files/{preview_id}"
+    preview_id_for_log = preview_id if legend_img is not None else None
+
+    log.info(
+        "Five-color swatch generated",
+        extra={
+            "event": "five_color_generate_swatch_done",
+            "lut_name": request.lut_name,
+            "recipe_count": len(items),
+            "download_id": download_id,
+            "preview_id": preview_id_for_log,
+            "block_size_mm": request.block_size_mm,
+            "gap_mm": request.gap_mm,
+            "cols": request.cols,
+        },
+    )
 
     return RecipeSwatchResponse(
         status="ok",

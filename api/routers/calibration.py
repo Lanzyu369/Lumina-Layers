@@ -118,7 +118,7 @@ def calibration_generate(
             )
     except HTTPException:
         raise
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _handle_core_error(e, "Calibration generation")
 
     # Register files via FileRegistry
@@ -134,6 +134,24 @@ def calibration_generate(
         preview_bytes,
         "preview.png",
         ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+    )
+    backing_color_for_log = (
+        request.backing.value
+        if mode in {"BW (Black & White)", "4-Color (RYBW)", "4-Color (CMYW)"}
+        else "n/a"
+    )
+
+    log.info(
+        "Calibration board generated",
+        extra={
+            "event": "calibration_generate_done",
+            "color_mode": mode,
+            "download_id": download_id,
+            "preview_id": preview_id,
+            "block_size_mm": float(request.block_size),
+            "gap_mm": request.gap,
+            "backing_color": backing_color_for_log,
+        },
     )
 
     return CalibrationResponse(
@@ -167,7 +185,7 @@ def calibration_generate_single_stage_kit(
             material_default=request.material_default,
             layer_height_mm=request.layer_height_mm,
         )
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _handle_core_error(e, "Single-stage kit generation")
 
     sid = _new_stateless_export_sid("single-stage-kit")
@@ -186,6 +204,19 @@ def calibration_generate_single_stage_kit(
         pil_to_png_bytes(result.preview_image),
         "single_stage_preview.png",
         ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+    )
+    log.info(
+        "Single-stage calibration kit generated",
+        extra={
+            "event": "calibration_generate_single_stage_kit_done",
+            "kit_id": kit_id,
+            "manifest_id": manifest_id,
+            "preview_id": preview_id,
+            "palette_size": len(request.palette),
+            "substrate_id": request.substrate_id,
+            "layer_height_mm": request.layer_height_mm,
+            "jobs_count": len(result.jobs),
+        },
     )
     return SingleStageKitResponse(
         status="ok",

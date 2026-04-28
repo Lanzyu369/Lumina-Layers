@@ -364,6 +364,87 @@ def test_material_solver_cache_suggest_colors_workflow_step_is_first_class() -> 
     )
 
 
+def test_calibration_generate_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("calibration_generate")
+
+    assert workflow == ["calibration_generate"]
+    assert "calibration_generate" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "calibration_generate" in WORKFLOW_ORDER
+    assert "calibration_generate" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("calibration_generate")
+        == WORKFLOW_ORDER.index("material_solver_cache_suggest_colors") + 1
+    )
+
+
+def test_calibration_generate_single_stage_kit_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("calibration_generate_single_stage_kit")
+
+    assert workflow == ["calibration_generate_single_stage_kit"]
+    assert (
+        "calibration_generate_single_stage_kit"
+        not in log_quality_check.DEFAULT_WORKFLOW
+    )
+    assert "calibration_generate_single_stage_kit" in WORKFLOW_ORDER
+    assert "calibration_generate_single_stage_kit" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("calibration_generate_single_stage_kit")
+        == WORKFLOW_ORDER.index("calibration_generate") + 1
+    )
+
+
+def test_five_color_query_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("five_color_query")
+
+    assert workflow == ["five_color_query"]
+    assert "five_color_query" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "five_color_query" in WORKFLOW_ORDER
+    assert "five_color_query" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("five_color_query")
+        == WORKFLOW_ORDER.index("calibration_generate_single_stage_kit") + 1
+    )
+
+
+def test_five_color_generate_swatch_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("five_color_generate_swatch")
+
+    assert workflow == ["five_color_generate_swatch"]
+    assert "five_color_generate_swatch" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "five_color_generate_swatch" in WORKFLOW_ORDER
+    assert "five_color_generate_swatch" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("five_color_generate_swatch")
+        == WORKFLOW_ORDER.index("five_color_query") + 1
+    )
+
+
+def test_five_color_base_colors_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("five_color_base_colors")
+
+    assert workflow == ["five_color_base_colors"]
+    assert "five_color_base_colors" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "five_color_base_colors" in WORKFLOW_ORDER
+    assert "five_color_base_colors" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("five_color_base_colors")
+        == WORKFLOW_ORDER.index("five_color_generate_swatch") + 1
+    )
+
+
+def test_vectorize_image_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("vectorize_image")
+
+    assert workflow == ["vectorize_image"]
+    assert "vectorize_image" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "vectorize_image" in WORKFLOW_ORDER
+    assert "vectorize_image" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("vectorize_image")
+        == WORKFLOW_ORDER.index("five_color_base_colors") + 1
+    )
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 
@@ -1597,6 +1678,131 @@ def test_material_solver_cache_suggest_colors_workflow_requires_canary_event() -
         ].passed
         is False
     )
+
+
+def test_calibration_generate_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["calibration_generate"],
+        event_counts={"calibration_generate_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["calibration_generate"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_calibration_generate_done"].passed is True
+    assert missing_by_name["workflow_event_calibration_generate_done"].passed is False
+
+
+def test_calibration_generate_single_stage_kit_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["calibration_generate_single_stage_kit"],
+        event_counts={"calibration_generate_single_stage_kit_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["calibration_generate_single_stage_kit"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_calibration_generate_single_stage_kit_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_calibration_generate_single_stage_kit_done"
+        ].passed
+        is False
+    )
+
+
+def test_five_color_query_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_query"],
+        event_counts={"five_color_query_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_query"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_five_color_query_done"].passed is True
+    assert missing_by_name["workflow_event_five_color_query_done"].passed is False
+
+
+def test_five_color_generate_swatch_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_generate_swatch"],
+        event_counts={"five_color_generate_swatch_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_generate_swatch"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_five_color_generate_swatch_done"].passed is True
+    assert (
+        missing_by_name["workflow_event_five_color_generate_swatch_done"].passed
+        is False
+    )
+
+
+def test_five_color_base_colors_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_base_colors"],
+        event_counts={"five_color_base_colors_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["five_color_base_colors"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_five_color_base_colors_done"].passed is True
+    assert missing_by_name["workflow_event_five_color_base_colors_done"].passed is False
+
+
+def test_vectorize_image_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["vectorize_image"],
+        event_counts={"vectorize_image_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["vectorize_image"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_vectorize_image_done"].passed is True
+    assert missing_by_name["workflow_event_vectorize_image_done"].passed is False
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

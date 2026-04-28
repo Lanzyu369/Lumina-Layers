@@ -25,6 +25,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -89,6 +90,12 @@ WORKFLOW_ORDER = [
     "material_solver_cache_build",
     "material_solver_cache_delete",
     "material_solver_cache_suggest_colors",
+    "calibration_generate",
+    "calibration_generate_single_stage_kit",
+    "five_color_query",
+    "five_color_generate_swatch",
+    "five_color_base_colors",
+    "vectorize_image",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -529,6 +536,37 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     "api.routers.converter.puzzle.assemble_puzzle_3mf",
                     side_effect=_mock_assemble_puzzle_3mf,
                 ),
+                patch(
+                    "api.routers.calibration.generate_calibration_board",
+                    side_effect=lambda *args, **kwargs: _mock_calibration_board(
+                        created_paths,
+                        Image,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.calibration.generate_single_stage_kit",
+                    side_effect=lambda *args, **kwargs: _mock_single_stage_kit(
+                        created_paths,
+                        Image,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.five_color._load_engine",
+                    side_effect=_mock_load_five_color_engine,
+                ),
+                patch(
+                    "core.recipe_swatch.generate_recipe_swatch",
+                    side_effect=lambda *args, **kwargs: _mock_generate_recipe_swatch(
+                        created_paths,
+                        Image,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
             ]
             with ExitStack() as stack:
                 for patch_context in patch_contexts:
@@ -770,6 +808,18 @@ def _workflow_required_event_checks(
         required_events.append("material_solver_cache_delete_done")
     if "material_solver_cache_suggest_colors" in workflow:
         required_events.append("material_solver_cache_suggest_colors_done")
+    if "calibration_generate" in workflow:
+        required_events.append("calibration_generate_done")
+    if "calibration_generate_single_stage_kit" in workflow:
+        required_events.append("calibration_generate_single_stage_kit_done")
+    if "five_color_query" in workflow:
+        required_events.append("five_color_query_done")
+    if "five_color_generate_swatch" in workflow:
+        required_events.append("five_color_generate_swatch_done")
+    if "five_color_base_colors" in workflow:
+        required_events.append("five_color_base_colors_done")
+    if "vectorize_image" in workflow:
+        required_events.append("vectorize_image_done")
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
@@ -945,6 +995,17 @@ def _build_mock_worker_result(
         "_submit_puzzle_worker",
     }:
         return _build_mock_generate_result(created_paths)
+    if name == "worker_vectorize":
+        svg_path = _make_temp_path(".svg", created_paths)
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        return {
+            "svg_path": str(svg_path),
+            "num_shapes": 5,
+            "num_colors": 3,
+            "width": 64,
+            "height": 64,
+            "palette": [[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+        }
     raise QualityCheckError(f"Unexpected worker submitted in fast mode: {name}")
 
 
@@ -1457,6 +1518,95 @@ def _mock_cache_file_path(
     return cache_path
 
 
+def _mock_calibration_board(
+    created_paths: list[Path],
+    image_cls: Any,
+    *_args: Any,
+    **_kwargs: Any,
+) -> tuple[str, Any, str]:
+    output_path = _make_temp_path(".3mf", created_paths)
+    output_path.write_bytes(b"calibration board")
+    return str(output_path), image_cls.new("RGB", (4, 4), (0, 0, 0)), "ok"
+
+
+def _mock_single_stage_kit(
+    created_paths: list[Path],
+    image_cls: Any,
+    *_args: Any,
+    **_kwargs: Any,
+) -> SimpleNamespace:
+    zip_path = _make_temp_path(".zip", created_paths)
+    manifest_path = _make_temp_path(".json", created_paths)
+    zip_path.write_bytes(b"single-stage kit")
+    manifest_path.write_text("{}", encoding="utf-8")
+    return SimpleNamespace(
+        zip_path=str(zip_path),
+        manifest_path=str(manifest_path),
+        preview_image=image_cls.new("RGB", (4, 4), (0, 0, 0)),
+        jobs=[
+            {
+                "color": "White",
+                "color_name": "White",
+                "material": "PLA Basic",
+                "substrate_id": "white",
+                "substrate_display_name": "White",
+                "filename": "white.3mf",
+            }
+        ],
+        message="ok",
+    )
+
+
+class _MockStackLut:
+    def __len__(self) -> int:
+        return 1
+
+    def tolist(self) -> list[list[int]]:
+        return [[0, 1, 2, 3, 4]]
+
+
+class _MockFiveColorEngine:
+    color_count = 5
+    stack_lut = _MockStackLut()
+
+    def query(self, selected_indices: Sequence[int]) -> SimpleNamespace:
+        return SimpleNamespace(
+            found=True,
+            selected_indices=list(selected_indices),
+            result_rgb=(1, 2, 3),
+            row_index=0,
+            message="ok",
+            source="mock",
+        )
+
+    def get_base_colors(self) -> list[tuple[int, int, int]]:
+        return [
+            (255, 255, 255),
+            (255, 0, 0),
+            (255, 255, 0),
+            (0, 128, 255),
+            (0, 0, 0),
+        ]
+
+    def get_color_names(self) -> list[str]:
+        return ["White", "Red", "Yellow", "Blue", "Black"]
+
+
+def _mock_load_five_color_engine(lut_name: str) -> tuple[_MockFiveColorEngine, str]:
+    return _MockFiveColorEngine(), lut_name
+
+
+def _mock_generate_recipe_swatch(
+    created_paths: list[Path],
+    image_cls: Any,
+    *_args: Any,
+    **_kwargs: Any,
+) -> tuple[str, Any, str]:
+    output_path = _make_temp_path(".3mf", created_paths)
+    output_path.write_bytes(b"swatch")
+    return str(output_path), image_cls.new("RGB", (4, 4), (0, 0, 0)), "ok"
+
+
 def _make_temp_path(suffix: str, created_paths: list[Path]) -> Path:
     fd, raw_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -1764,6 +1914,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_material_solver_cache_delete_workflow(client)
         elif step == "material_solver_cache_suggest_colors":
             _execute_material_solver_cache_suggest_colors_workflow(client)
+        elif step == "calibration_generate":
+            _execute_calibration_generate_workflow(client)
+        elif step == "calibration_generate_single_stage_kit":
+            _execute_calibration_generate_single_stage_kit_workflow(client)
+        elif step == "five_color_query":
+            _execute_five_color_query_workflow(client)
+        elif step == "five_color_generate_swatch":
+            _execute_five_color_generate_swatch_workflow(client)
+        elif step == "five_color_base_colors":
+            _execute_five_color_base_colors_workflow(client)
+        elif step == "vectorize_image":
+            _execute_vectorize_image_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -2733,6 +2895,167 @@ def _execute_material_solver_cache_suggest_colors_workflow(client: Any) -> None:
         raise QualityCheckError(
             "Material solver cache suggest-colors response missed suggestions"
         )
+
+
+def _execute_calibration_generate_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/calibration/generate",
+        json={
+            "color_mode": DEFAULT_COLOR_MODE,
+            "block_size": 5,
+            "gap": 0.84,
+            "backing": "White",
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "calibration_generate")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Calibration generate response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Calibration generate response status was not ok")
+    if not payload.get("download_url"):
+        raise QualityCheckError("Calibration generate response missed download URL")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Calibration generate response missed preview URL")
+
+
+def _execute_calibration_generate_single_stage_kit_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+            "substrate_id": "white",
+            "substrate_display_name": "White",
+            "material_default": "PLA Basic",
+            "layer_height_mm": 0.04,
+        },
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "calibration_generate_single_stage_kit",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Single-stage kit response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Single-stage kit response status was not ok")
+    if not payload.get("kit_download_url"):
+        raise QualityCheckError("Single-stage kit response missed kit URL")
+    if not payload.get("manifest_url"):
+        raise QualityCheckError("Single-stage kit response missed manifest URL")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Single-stage kit response missed preview URL")
+    if int(len(payload.get("jobs") or [])) < 1:
+        raise QualityCheckError("Single-stage kit response missed jobs")
+
+
+def _execute_five_color_query_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/five-color/query",
+        json={
+            "lut_name": FIVE_COLOR_EXT_LUT_NAME,
+            "selected_indices": [0, 1, 2, 3, 4],
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "five_color_query")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Five-color query response was not an object")
+    if payload.get("found") is not True:
+        raise QualityCheckError("Five-color query response was not found")
+    result_hex = payload.get("result_hex")
+    if not isinstance(result_hex, str) or not re.fullmatch(
+        r"#[0-9a-fA-F]{6}",
+        result_hex,
+    ):
+        raise QualityCheckError("Five-color query response missed result hex")
+
+
+def _execute_five_color_generate_swatch_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/five-color/generate-swatch",
+        json={
+            "lut_name": FIVE_COLOR_EXT_LUT_NAME,
+            "recipes": [
+                {
+                    "selected_indices": [0, 1, 2, 3, 4],
+                    "result_hex": "#010203",
+                    "base_color_names": [],
+                    "base_color_hexes": [],
+                }
+            ],
+            "block_size_mm": 12.5,
+            "gap_mm": 1.5,
+            "cols": 2,
+        },
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "five_color_generate_swatch",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Five-color swatch response was not an object")
+    if payload.get("status") != "ok":
+        raise QualityCheckError("Five-color swatch response status was not ok")
+    if not payload.get("download_url"):
+        raise QualityCheckError("Five-color swatch response missed download URL")
+    if not payload.get("preview_url"):
+        raise QualityCheckError("Five-color swatch response missed preview URL")
+    if int(payload.get("recipe_count", 0)) < 1:
+        raise QualityCheckError("Five-color swatch response missed recipe count")
+
+
+def _execute_five_color_base_colors_workflow(client: Any) -> None:
+    response = client.get(
+        "/api/five-color/base-colors",
+        params={"lut_name": FIVE_COLOR_EXT_LUT_NAME},
+    )
+    _raise_for_status(response.status_code, response.text, "five_color_base_colors")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Five-color base-colors response was not an object")
+    if int(payload.get("color_count", 0)) < 1:
+        raise QualityCheckError("Five-color base-colors response missed colors")
+    combinations = payload.get("combinations")
+    if not isinstance(combinations, list) or not combinations:
+        raise QualityCheckError("Five-color base-colors response missed combinations")
+
+
+def _execute_vectorize_image_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/vectorize",
+        files={
+            "image": (
+                "vectorize.png",
+                _synthesize_rgb_png_bytes(4, 4),
+                "image/png",
+            )
+        },
+        data={"params": "{}"},
+    )
+    _raise_for_status(response.status_code, response.text, "vectorize_image")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Vectorize image response was not an object")
+    if not payload.get("svg_url"):
+        raise QualityCheckError("Vectorize image response missed SVG URL")
+    if int(payload.get("num_shapes", 0)) < 1:
+        raise QualityCheckError("Vectorize image response missed shapes")
+    if int(payload.get("num_colors", 0)) < 1:
+        raise QualityCheckError("Vectorize image response missed colors")
+    palette = payload.get("palette")
+    if not isinstance(palette, list) or len(palette) < 1:
+        raise QualityCheckError("Vectorize image response missed palette")
 
 
 def _post_extract_gradient_card_stage_a_for_session(client: Any) -> Mapping[str, Any]:

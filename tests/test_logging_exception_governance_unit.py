@@ -10,8 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGETS = [
     ROOT / "api" / "app.py",
     ROOT / "api" / "file_bridge.py",
+    ROOT / "api" / "routers" / "calibration.py",
     ROOT / "api" / "routers" / "converter",
     ROOT / "api" / "routers" / "extractor.py",
+    ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "vectorizer.py",
     ROOT / "api" / "workers" / "converter_workers.py",
     ROOT / "api" / "workers" / "vectorizer_workers.py",
@@ -123,10 +125,25 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_auto_detect_colors_done",
     "converter_cleanup_session_files_done",
 }
+CALIBRATION_STRUCTURED_EVENTS = {
+    "calibration_generate_done",
+    "calibration_generate_single_stage_kit_done",
+}
+FIVE_COLOR_STRUCTURED_EVENTS = {
+    "five_color_query_done",
+    "five_color_generate_swatch_done",
+    "five_color_base_colors_done",
+}
+VECTORIZER_STRUCTURED_EVENTS = {
+    "vectorize_image_done",
+}
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
     | CONVERTER_STRUCTURED_EVENTS
+    | CALIBRATION_STRUCTURED_EVENTS
+    | FIVE_COLOR_STRUCTURED_EVENTS
+    | VECTORIZER_STRUCTURED_EVENTS
 )
 
 

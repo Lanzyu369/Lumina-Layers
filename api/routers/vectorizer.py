@@ -31,6 +31,24 @@ VECTORIZER_OUTPUT_TTL_SECONDS = 1200
 log = get_logger(__name__)
 
 
+def _palette_for_response(palette: object) -> list[str]:
+    """Normalize worker palette entries to response hex strings."""
+
+    if not isinstance(palette, list):
+        return []
+    normalized: list[str] = []
+    for entry in palette:
+        if isinstance(entry, str):
+            normalized.append(entry)
+            continue
+        try:
+            r, g, b = entry
+            normalized.append(f"#{int(r):02x}{int(g):02x}{int(b):02x}")
+        except (TypeError, ValueError):
+            normalized.append(str(entry))
+    return normalized
+
+
 @router.get("/defaults")
 def vectorize_defaults() -> VectorizeDefaultsResponse:
     """Return default vectorization parameters.
@@ -98,6 +116,21 @@ async def vectorize_image(
         "output.svg",
         ttl_seconds=VECTORIZER_OUTPUT_TTL_SECONDS,
     )
+    palette = result["palette"]
+    palette_size = len(palette) if isinstance(palette, list) else 0
+
+    log.info(
+        "Image vectorized",
+        extra={
+            "event": "vectorize_image_done",
+            "svg_file_id": svg_file_id,
+            "num_shapes": result["num_shapes"],
+            "num_colors": result["num_colors"],
+            "width": result["width"],
+            "height": result["height"],
+            "palette_size": palette_size,
+        },
+    )
 
     return VectorizeResponse(
         status="ok",
@@ -107,5 +140,5 @@ async def vectorize_image(
         height=result["height"],
         num_shapes=result["num_shapes"],
         num_colors=result["num_colors"],
-        palette=result["palette"],
+        palette=_palette_for_response(palette),
     )
