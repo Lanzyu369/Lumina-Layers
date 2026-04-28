@@ -283,6 +283,87 @@ def test_update_gradient_card_material_workflow_step_is_first_class() -> None:
     )
 
 
+def test_export_gradient_card_materials_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("export_gradient_card_materials")
+
+    assert workflow == ["export_gradient_card_materials"]
+    assert "export_gradient_card_materials" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "export_gradient_card_materials" in WORKFLOW_ORDER
+    assert "export_gradient_card_materials" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("export_gradient_card_materials")
+        == WORKFLOW_ORDER.index("update_gradient_card_material") + 1
+    )
+
+
+def test_import_gradient_card_materials_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("import_gradient_card_materials")
+
+    assert workflow == ["import_gradient_card_materials"]
+    assert "import_gradient_card_materials" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "import_gradient_card_materials" in WORKFLOW_ORDER
+    assert "import_gradient_card_materials" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("import_gradient_card_materials")
+        == WORKFLOW_ORDER.index("export_gradient_card_materials") + 1
+    )
+
+
+def test_material_solver_cache_status_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("material_solver_cache_status")
+
+    assert workflow == ["material_solver_cache_status"]
+    assert "material_solver_cache_status" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "material_solver_cache_status" in WORKFLOW_ORDER
+    assert "material_solver_cache_status" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("material_solver_cache_status")
+        == WORKFLOW_ORDER.index("import_gradient_card_materials") + 1
+    )
+
+
+def test_material_solver_cache_build_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("material_solver_cache_build")
+
+    assert workflow == ["material_solver_cache_build"]
+    assert "material_solver_cache_build" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "material_solver_cache_build" in WORKFLOW_ORDER
+    assert "material_solver_cache_build" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("material_solver_cache_build")
+        == WORKFLOW_ORDER.index("material_solver_cache_status") + 1
+    )
+
+
+def test_material_solver_cache_delete_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("material_solver_cache_delete")
+
+    assert workflow == ["material_solver_cache_delete"]
+    assert "material_solver_cache_delete" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "material_solver_cache_delete" in WORKFLOW_ORDER
+    assert "material_solver_cache_delete" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("material_solver_cache_delete")
+        == WORKFLOW_ORDER.index("material_solver_cache_build") + 1
+    )
+
+
+def test_material_solver_cache_suggest_colors_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("material_solver_cache_suggest_colors")
+
+    assert workflow == ["material_solver_cache_suggest_colors"]
+    assert (
+        "material_solver_cache_suggest_colors"
+        not in log_quality_check.DEFAULT_WORKFLOW
+    )
+    assert "material_solver_cache_suggest_colors" in WORKFLOW_ORDER
+    assert "material_solver_cache_suggest_colors" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("material_solver_cache_suggest_colors")
+        == WORKFLOW_ORDER.index("material_solver_cache_delete") + 1
+    )
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 
@@ -1378,6 +1459,144 @@ def test_confirm_palette_workflow_requires_canary_event() -> None:
 
     assert by_name["workflow_event_extractor_confirm_palette_done"].passed is True
     assert missing_by_name["workflow_event_extractor_confirm_palette_done"].passed is False
+
+
+def test_export_gradient_card_materials_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["export_gradient_card_materials"],
+        event_counts={"extractor_export_gradient_card_materials_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["export_gradient_card_materials"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_export_gradient_card_materials_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_export_gradient_card_materials_done"
+        ].passed
+        is False
+    )
+
+
+def test_import_gradient_card_materials_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["import_gradient_card_materials"],
+        event_counts={"extractor_import_gradient_card_materials_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["import_gradient_card_materials"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_extractor_import_gradient_card_materials_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_extractor_import_gradient_card_materials_done"
+        ].passed
+        is False
+    )
+
+
+def test_material_solver_cache_status_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_status"],
+        event_counts={"material_solver_cache_status_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_status"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_material_solver_cache_status_done"].passed is True
+    assert missing_by_name["workflow_event_material_solver_cache_status_done"].passed is False
+
+
+def test_material_solver_cache_build_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_build"],
+        event_counts={"material_solver_cache_build_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_build"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_material_solver_cache_build_done"].passed is True
+    assert missing_by_name["workflow_event_material_solver_cache_build_done"].passed is False
+
+
+def test_material_solver_cache_delete_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_delete"],
+        event_counts={"material_solver_cache_delete_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_delete"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_material_solver_cache_delete_done"].passed is True
+    assert missing_by_name["workflow_event_material_solver_cache_delete_done"].passed is False
+
+
+def test_material_solver_cache_suggest_colors_workflow_requires_canary_event() -> None:
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_suggest_colors"],
+        event_counts={"material_solver_cache_suggest_colors_done": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=["material_solver_cache_suggest_colors"],
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert (
+        by_name["workflow_event_material_solver_cache_suggest_colors_done"].passed
+        is True
+    )
+    assert (
+        missing_by_name[
+            "workflow_event_material_solver_cache_suggest_colors_done"
+        ].passed
+        is False
+    )
 
 
 def test_replace_click_targets_filled_band_for_ring_fixture() -> None:

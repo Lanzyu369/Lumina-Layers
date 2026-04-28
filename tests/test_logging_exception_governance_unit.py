@@ -95,6 +95,12 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_save_gradient_card_material_done",
     "extractor_delete_gradient_card_material_done",
     "extractor_update_gradient_card_material_done",
+    "extractor_export_gradient_card_materials_done",
+    "extractor_import_gradient_card_materials_done",
+    "material_solver_cache_status_done",
+    "material_solver_cache_build_done",
+    "material_solver_cache_delete_done",
+    "material_solver_cache_suggest_colors_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",

@@ -589,6 +589,15 @@ async def extractor_export_gradient_card_materials(
         filename=result.download_filename,
         ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
     )
+    log.info(
+        "Gradient card materials exported",
+        extra={
+            "event": "extractor_export_gradient_card_materials_done",
+            "exported_count": len(result.exported_directory_names),
+            "download_id": download_id,
+            "download_filename": result.download_filename,
+        },
+    )
     return GradientCardMaterialBulkExportResponse(
         status="ok",
         message=f"Exported {len(result.exported_directory_names)} saved materials",
@@ -646,6 +655,15 @@ async def extractor_import_gradient_card_materials(
             except OSError:
                 pass
 
+    log.info(
+        "Gradient card materials imported",
+        extra={
+            "event": "extractor_import_gradient_card_materials_done",
+            "imported_count": len(imported_materials),
+            "imported_directory_names_count": len(imported_directory_names),
+            "archives_received": len(archives),
+        },
+    )
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",
@@ -868,6 +886,20 @@ async def material_solver_cache_status(
         materials, layer_count, layer_height_mm, substrate,
         grid_resolution=grid_resolution,
     )
+    cached_flag = cache is not None
+    log.info(
+        "Material solver cache status checked",
+        extra={
+            "event": "material_solver_cache_status_done",
+            "cached": cached_flag,
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "grid_resolution": grid_resolution,
+        },
+    )
     if cache is None:
         return MaterialSolverCacheStatusResponse(
             status="ok",
@@ -951,6 +983,21 @@ async def material_solver_cache_build(
         cache_file_size_bytes=file_size,
         cache_file_path=str(npz_path),
     )
+    log.info(
+        "Material solver cache built",
+        extra={
+            "event": "material_solver_cache_build_done",
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "grid_resolution": grid_resolution,
+            "valid_cell_count": entry.valid_cell_count,
+            "total_cell_count": entry.total_cell_count,
+            "mean_delta_e": entry.mean_delta_e,
+            "cache_file_size_bytes": file_size,
+        },
+    )
     return MaterialSolverCacheBuildResponse(
         status="ok",
         message=(
@@ -982,6 +1029,19 @@ async def material_solver_cache_delete(
     deleted = delete_cached_entry(
         materials, layer_count, layer_height_mm, substrate,
         grid_resolution=grid_resolution,
+    )
+    log.info(
+        "Material solver cache delete checked",
+        extra={
+            "event": "material_solver_cache_delete_done",
+            "deleted": bool(deleted),
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "grid_resolution": grid_resolution,
+        },
     )
     return MaterialSolverCacheDeleteResponse(
         status="ok",
@@ -1154,6 +1214,18 @@ async def material_solver_cache_suggest_colors(
             f"(via MITM fallback)."
         )
 
+    log.info(
+        "Material solver cache color suggestions returned",
+        extra={
+            "event": "material_solver_cache_suggest_colors_done",
+            "source": source,
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "target_hex": f"#{target_hex_clean.upper()}",
+            "suggestions_count": len(suggestions),
+            "top_k": top_k,
+        },
+    )
     return MaterialColorSuggestionsResponse(
         status="ok",
         message=message,

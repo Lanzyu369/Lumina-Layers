@@ -83,6 +83,12 @@ WORKFLOW_ORDER = [
     "save_gradient_card_material",
     "delete_gradient_card_material",
     "update_gradient_card_material",
+    "export_gradient_card_materials",
+    "import_gradient_card_materials",
+    "material_solver_cache_status",
+    "material_solver_cache_build",
+    "material_solver_cache_delete",
+    "material_solver_cache_suggest_colors",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -328,7 +334,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
 
     import io
     import numpy as np
-    from contextlib import redirect_stdout
+    from contextlib import ExitStack, redirect_stdout
     from fastapi.testclient import TestClient
     from PIL import Image
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -381,7 +387,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                 color_mode=DEFAULT_COLOR_MODE,
             )
             extract_image = np.zeros((8, 8, 3), dtype=np.uint8)
-            with (
+            patch_contexts = [
                 patch("api.routers.converter.preview.generate_segmented_glb", return_value=None),
                 patch(
                     "api.routers.converter.preview.recompute_gradient_groups_into_session",
@@ -464,12 +470,71 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     ),
                 ),
                 patch(
+                    "api.routers.single_stage.export_saved_stage_a_material_archives",
+                    side_effect=lambda *args, **kwargs: _mock_export_gradient_card_materials(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.import_saved_stage_a_material_archives",
+                    side_effect=lambda *args, **kwargs: _mock_import_gradient_card_materials(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.load_material_solver_cache",
+                    side_effect=_mock_load_material_solver_cache,
+                ),
+                patch(
+                    "api.routers.single_stage.build_material_solver_cache",
+                    side_effect=_mock_build_material_solver_cache,
+                ),
+                patch(
+                    "api.routers.single_stage.save_material_solver_cache",
+                    side_effect=lambda *args, **kwargs: _mock_save_material_solver_cache(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
+                    "api.routers.single_stage.delete_cached_entry",
+                    side_effect=_mock_delete_cached_entry,
+                ),
+                patch(
+                    "api.routers.single_stage.suggest_colors_for_target",
+                    side_effect=_mock_suggest_colors_for_target,
+                ),
+                patch(
+                    "api.routers.single_stage.load_multiple_materials",
+                    side_effect=_mock_load_multiple_materials,
+                ),
+                patch(
+                    "api.routers.single_stage.fingerprint_palette",
+                    side_effect=_mock_fingerprint_palette,
+                ),
+                patch(
+                    "api.routers.single_stage.cache_file_path",
+                    side_effect=lambda *args, **kwargs: _mock_cache_file_path(
+                        created_paths,
+                        *args,
+                        **kwargs,
+                    ),
+                ),
+                patch(
                     "api.routers.converter.puzzle.assemble_puzzle_3mf",
                     side_effect=_mock_assemble_puzzle_3mf,
                 ),
-                TestClient(app) as client,
-            ):
-                _execute_workflow(client, workflow)
+            ]
+            with ExitStack() as stack:
+                for patch_context in patch_contexts:
+                    stack.enter_context(patch_context)
+                with TestClient(app) as client:
+                    _execute_workflow(client, workflow)
             _flush_lumina_handlers()
         finally:
             app.dependency_overrides.clear()
@@ -693,6 +758,18 @@ def _workflow_required_event_checks(
         required_events.append("extractor_delete_gradient_card_material_done")
     if "update_gradient_card_material" in workflow:
         required_events.append("extractor_update_gradient_card_material_done")
+    if "export_gradient_card_materials" in workflow:
+        required_events.append("extractor_export_gradient_card_materials_done")
+    if "import_gradient_card_materials" in workflow:
+        required_events.append("extractor_import_gradient_card_materials_done")
+    if "material_solver_cache_status" in workflow:
+        required_events.append("material_solver_cache_status_done")
+    if "material_solver_cache_build" in workflow:
+        required_events.append("material_solver_cache_build_done")
+    if "material_solver_cache_delete" in workflow:
+        required_events.append("material_solver_cache_delete_done")
+    if "material_solver_cache_suggest_colors" in workflow:
+        required_events.append("material_solver_cache_suggest_colors_done")
     if "extract" in workflow:
         required_events.append("extractor_extract_done")
     if "merge_8color" in workflow:
@@ -1242,6 +1319,144 @@ def _mock_update_gradient_card_material(
     )
 
 
+def _mock_export_gradient_card_materials(
+    created_paths: list[Path],
+    *_args: Any,
+    **kwargs: Any,
+) -> Any:
+    from core.single_stage.materials import MaterialArchiveExportResult
+
+    archive_path = _make_temp_path(".zip", created_paths)
+    archive_path.write_bytes(b"stub material export")
+    directory_names = kwargs.get("directory_names") or ["stub_material_v1"]
+    return MaterialArchiveExportResult(
+        archive_path=str(archive_path),
+        download_filename="stub_materials.zip",
+        exported_directory_names=[str(name) for name in directory_names],
+    )
+
+
+def _mock_import_gradient_card_materials(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Any:
+    from core.single_stage.materials import MaterialArchiveImportResult
+
+    archive_path = _make_temp_path(".json", created_paths)
+    params_path = _make_temp_path(".json", created_paths)
+    archive_path.write_text(
+        json.dumps({"material_name": "Imported Stub PLA"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    params_path.write_text(
+        json.dumps({"version": "stage_a/v1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return MaterialArchiveImportResult(
+        imported_materials=[
+            {
+                "material_name": "Imported Stub PLA",
+                "directory_name": "imported_stub_material_v1",
+                "brand": "Lumina",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(params_path),
+                "verification_count": 1,
+            }
+        ]
+    )
+
+
+def _mock_solver_cache_metadata() -> dict[str, Any]:
+    return {
+        "palette_hash": "stub_hash",
+        "canonical_materials": [
+            {"directory_name": "stub_material_v1"},
+            {"directory_name": "stub_material_v2"},
+        ],
+        "layer_count": 8,
+        "layer_height_mm": 0.04,
+        "substrate": "white",
+        "grid_resolution": 64,
+        "total_combinations": 256,
+        "valid_cell_count": 200,
+        "total_cell_count": 256,
+        "mean_delta_e": 1.5,
+        "max_delta_e": 4.0,
+        "build_time_seconds": 1.0,
+        "built_at": "2024-01-01T00:00:00",
+    }
+
+
+class _MockMaterialSolverCache:
+    metadata = _mock_solver_cache_metadata()
+    valid_cell_count = 200
+
+    def lookup_top_k(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+        return _mock_color_suggestions()
+
+
+def _mock_load_material_solver_cache(*_args: Any, **_kwargs: Any) -> Any:
+    return _MockMaterialSolverCache()
+
+
+def _mock_build_material_solver_cache(*_args: Any, **_kwargs: Any) -> Any:
+    return _MockMaterialSolverCache()
+
+
+def _mock_save_material_solver_cache(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Path:
+    cache_path = _make_temp_path(".npz", created_paths)
+    cache_path.write_bytes(b"x" * 64)
+    return cache_path
+
+
+def _mock_delete_cached_entry(*_args: Any, **_kwargs: Any) -> bool:
+    return True
+
+
+class _MockColorSuggestion:
+    pass
+
+
+def _mock_color_suggestions() -> list[Any]:
+    import numpy as np
+
+    suggestion = _MockColorSuggestion()
+    suggestion.matched_rgb = np.array([255, 0, 0], dtype=np.uint8)
+    suggestion.delta_e = 1.5
+    suggestion.recipe = np.array([1, 0, 1], dtype=np.int32)
+    return [suggestion]
+
+
+def _mock_suggest_colors_for_target(*_args: Any, **_kwargs: Any) -> list[Any]:
+    return _mock_color_suggestions()
+
+
+def _mock_load_multiple_materials(directory_names: Sequence[str]) -> list[Any]:
+    return [
+        {"directory_name": str(directory_name)}
+        for directory_name in directory_names
+    ]
+
+
+def _mock_fingerprint_palette(_materials: Sequence[Any]) -> str:
+    return "stub_hash"
+
+
+def _mock_cache_file_path(
+    created_paths: list[Path],
+    *_args: Any,
+    **_kwargs: Any,
+) -> Path:
+    cache_path = _make_temp_path(".npz", created_paths)
+    cache_path.write_bytes(b"stub cache")
+    return cache_path
+
+
 def _make_temp_path(suffix: str, created_paths: list[Path]) -> Path:
     fd, raw_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -1537,6 +1752,18 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_delete_gradient_card_material_workflow(client)
         elif step == "update_gradient_card_material":
             _execute_update_gradient_card_material_workflow(client)
+        elif step == "export_gradient_card_materials":
+            _execute_export_gradient_card_materials_workflow(client)
+        elif step == "import_gradient_card_materials":
+            _execute_import_gradient_card_materials_workflow(client)
+        elif step == "material_solver_cache_status":
+            _execute_material_solver_cache_status_workflow(client)
+        elif step == "material_solver_cache_build":
+            _execute_material_solver_cache_build_workflow(client)
+        elif step == "material_solver_cache_delete":
+            _execute_material_solver_cache_delete_workflow(client)
+        elif step == "material_solver_cache_suggest_colors":
+            _execute_material_solver_cache_suggest_colors_workflow(client)
         elif step == "extract":
             _execute_extract_workflow(client)
         elif step == "merge_8color":
@@ -2357,6 +2584,155 @@ def _execute_update_gradient_card_material_workflow(client: Any) -> None:
             )
     finally:
         _remove_saved_gradient_card_material_fixture(directory_name)
+
+
+def _execute_export_gradient_card_materials_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/extractor/gradient-card-materials/export",
+        json={"directory_names": ["stub_material_v1", "stub_material_v2"]},
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "export_gradient_card_materials",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError(
+            "Gradient card material export response was not an object"
+        )
+    if not payload.get("download_url"):
+        raise QualityCheckError(
+            "Gradient card material export response did not include download URL"
+        )
+    if int(payload.get("exported_count", 0)) < 1:
+        raise QualityCheckError(
+            "Gradient card material export response did not report exports"
+        )
+
+
+def _execute_import_gradient_card_materials_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/extractor/gradient-card-materials/import",
+        files={"archives": ("materials.zip", b"stub zip", "application/zip")},
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "import_gradient_card_materials",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError(
+            "Gradient card material import response was not an object"
+        )
+    if int(payload.get("imported_count", 0)) < 1:
+        raise QualityCheckError(
+            "Gradient card material import response did not report imports"
+        )
+
+
+def _material_solver_cache_form_data() -> dict[str, str]:
+    return {
+        "material_directory_names": json.dumps(
+            ["stub_material_v1", "stub_material_v2"]
+        ),
+        "layer_count": "8",
+        "layer_height_mm": "0.04",
+        "substrate": "white",
+        "grid_resolution": "64",
+    }
+
+
+def _execute_material_solver_cache_status_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data=_material_solver_cache_form_data(),
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "material_solver_cache_status",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Material solver cache status response was not an object")
+    if payload.get("cached") is not True:
+        raise QualityCheckError("Material solver cache status response was not cached")
+
+
+def _execute_material_solver_cache_build_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/extractor/material-solver-cache/build",
+        data=_material_solver_cache_form_data(),
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "material_solver_cache_build",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Material solver cache build response was not an object")
+    entry = payload.get("entry")
+    if not isinstance(entry, Mapping):
+        raise QualityCheckError("Material solver cache build response missed entry")
+    if int(entry.get("valid_cell_count", 0)) < 1:
+        raise QualityCheckError(
+            "Material solver cache build response did not report valid cells"
+        )
+
+
+def _execute_material_solver_cache_delete_workflow(client: Any) -> None:
+    response = client.post(
+        "/api/extractor/material-solver-cache/delete",
+        data=_material_solver_cache_form_data(),
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "material_solver_cache_delete",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Material solver cache delete response was not an object")
+    if payload.get("deleted") is not True:
+        raise QualityCheckError("Material solver cache delete response was not deleted")
+
+
+def _execute_material_solver_cache_suggest_colors_workflow(client: Any) -> None:
+    data = _material_solver_cache_form_data()
+    data.update(
+        {
+            "target_hex": "#ff0000",
+            "top_k": "3",
+            "min_spacing": "1.0",
+            "max_combinations": "100000",
+        }
+    )
+    response = client.post(
+        "/api/extractor/material-solver-cache/suggest-colors",
+        data=data,
+    )
+    _raise_for_status(
+        response.status_code,
+        response.text,
+        "material_solver_cache_suggest_colors",
+    )
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError(
+            "Material solver cache suggest-colors response was not an object"
+        )
+    if payload.get("source") != "cache":
+        raise QualityCheckError(
+            "Material solver cache suggest-colors response did not use cache"
+        )
+    suggestions = payload.get("suggestions")
+    if not isinstance(suggestions, list) or not suggestions:
+        raise QualityCheckError(
+            "Material solver cache suggest-colors response missed suggestions"
+        )
 
 
 def _post_extract_gradient_card_stage_a_for_session(client: Any) -> Mapping[str, Any]:
