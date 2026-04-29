@@ -256,7 +256,7 @@ class TestCalibration5ColorExtended:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(block_size_mm=5.0, gap_mm=0.84, backing_thickness_mm=1.6)
+            mock_fn.assert_called_once_with(block_size_mm=5.0, gap_mm=0.84, backing_thickness_mm=1.2)
 
     def test_5color_extended_response_contains_download_and_preview_urls(self) -> None:
         """Response should contain download_url and preview_url."""

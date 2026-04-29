@@ -176,7 +176,7 @@ class TestParameterMapping:
             assert call_kwargs["backing_color"] == "White"
 
     def test_backing_thickness_defaults_when_omitted(self) -> None:
-        """Omitting backing_thickness in the payload should fall back to the schema default (1.6 mm)."""
+        """Omitting backing_thickness in the payload should fall back to the schema default (1.2 mm)."""
         with patch(
             "api.routers.calibration.generate_calibration_board",
             return_value=_mock_return,
@@ -195,8 +195,9 @@ class TestParameterMapping:
                 block_size_mm=5.0,
                 gap_mm=0.84,
                 backing_color="White",
-                backing_thickness_mm=1.6,
+                backing_thickness_mm=1.2,
             )
+
 
 
 # =========================================================================

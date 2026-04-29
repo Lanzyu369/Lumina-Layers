@@ -23,7 +23,7 @@ from api.schemas.extractor import CalibrationColorMode
 
 #: Default backing thickness in mm (matches ``PrinterConfig.BACKING_MM``).
 #: 默认底板厚度（毫米），与 ``PrinterConfig.BACKING_MM`` 保持一致。
-DEFAULT_BACKING_THICKNESS_MM: float = 1.6
+DEFAULT_BACKING_THICKNESS_MM: float = 1.2
 
 #: Minimum backing thickness exposed to the calibration UI (mm).
 #: 校准 UI 暴露的底板最小厚度（毫米）。

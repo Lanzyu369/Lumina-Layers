@@ -15,7 +15,7 @@ const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
 export const BACKING_THICKNESS_MIN_MM = 0.4;
 export const BACKING_THICKNESS_MAX_MM = 3.5;
 export const BACKING_THICKNESS_STEP_MM = 0.08;
-export const BACKING_THICKNESS_DEFAULT_MM = 1.6;
+export const BACKING_THICKNESS_DEFAULT_MM = 1.2;
 
 function normalizeSingleStageLayerHeight(value: number): number {
   return SINGLE_STAGE_LAYER_HEIGHT_OPTIONS.includes(

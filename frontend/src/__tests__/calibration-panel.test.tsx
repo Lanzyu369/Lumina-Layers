@@ -17,7 +17,7 @@ beforeEach(() => {
     color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
     block_size: 5,
     gap: 0.84,
-    backing_thickness: 1.6,
+    backing_thickness: 1.2,
     eight_color_full_export: false,
     substrateId: "white",
     substrateDisplayName: "White",
@@ -64,7 +64,7 @@ describe("CalibrationPanel", () => {
     expect(screen.getByText("导出全部 8 色配方")).toBeInTheDocument();
   });
 
-  it("disables backing thickness slider in 6-Color mode", () => {
+  it("enables all controls in 6-Color mode", () => {
     useCalibrationStore.setState({ color_mode: CalibrationColorMode.SIX_COLOR });
     render(<CalibrationPanel />);
 
@@ -72,9 +72,7 @@ describe("CalibrationPanel", () => {
     const selects = screen.getAllByRole("combobox");
 
     expect(sliders).toHaveLength(3);
-    expect(sliders[0]).not.toBeDisabled();
-    expect(sliders[1]).not.toBeDisabled();
-    expect(sliders[2]).toBeDisabled();
+    sliders.forEach((slider) => expect(slider).not.toBeDisabled());
     expect(selects).toHaveLength(1);
     expect(selects[0]).not.toBeDisabled();
   });
