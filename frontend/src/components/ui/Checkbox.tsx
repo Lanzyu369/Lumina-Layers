@@ -4,7 +4,7 @@ import {
   workstationChoiceRowClass,
   workstationChoiceRowDisabledClass,
 } from "./panelPrimitives";
-import WikiTooltip from "./WikiTooltip";
+import HelpDot from "./HelpDot";
 
 interface CheckboxProps {
   label: React.ReactNode;
@@ -57,18 +57,14 @@ export default function Checkbox({
         <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
       </span>
       <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
+      {tooltip && (
+        <HelpDot
+          title={tooltipTitle ?? (typeof label === "string" ? label : "")}
+          description={tooltip}
+        />
+      )}
     </label>
   );
 
-  if (!tooltip) return inner;
-
-  return (
-    <WikiTooltip
-      title={tooltipTitle ?? (typeof label === "string" ? label : "")}
-      description={tooltip}
-      className="block"
-    >
-      {inner}
-    </WikiTooltip>
-  );
+  return inner;
 }
