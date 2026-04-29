@@ -21,7 +21,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,6 +104,7 @@ WORKFLOW_ORDER = [
     "system_image_preview",
     "system_save_settings",
     "slicer_launch",
+    "feedback_submit",
     "extract",
     "merge_8color",
     "merge_5color_ext",
@@ -346,6 +347,8 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
     """
 
     _prepare_log_environment(temp_log_path)
+    if "feedback_submit" in workflow:
+        _clear_feedback_email_env(os.environ)
 
     import io
     import numpy as np
@@ -616,6 +619,8 @@ def run_full_mode(
     env["LUMINA_LOG_LEVEL"] = "INFO"
     env["LUMINA_LOG_FORMAT"] = "json"
     env.pop("LUMINA_LOG_INIT_BY_PARENT", None)
+    if "feedback_submit" in workflow:
+        _clear_feedback_email_env(env)
     support_paths = (
         _ensure_single_stage_colorchecker_assets()
         if any(step in workflow for step in ("extract_single_stage", "fit_stage_a"))
@@ -842,6 +847,8 @@ def _workflow_required_event_checks(
         required_events.append("system_image_preview_done")
     if "system_save_settings" in workflow:
         required_events.append("system_save_settings_done")
+    if "feedback_submit" in workflow:
+        required_events.append("feedback_bug_report_submitted")
     if "slicer_launch" in workflow:
         required_events.append("slicer_launch_done")
     if "extract" in workflow:
@@ -896,7 +903,7 @@ def _workflow_required_event_checks(
         required_events.append("converter_cleanup_session_files_done")
 
     required_events = list(dict.fromkeys(required_events))
-    return [
+    checks = [
         CheckResult.evaluate(
             name=f"workflow_event_{event}",
             actual=int(event_counts.get(event, 0)),
@@ -905,6 +912,16 @@ def _workflow_required_event_checks(
         )
         for event in required_events
     ]
+    if "feedback_submit" in workflow:
+        checks.append(
+            CheckResult.evaluate(
+                name="workflow_event_feedback_bug_report_submitted_exact",
+                actual=int(event_counts.get("feedback_bug_report_submitted", 0)),
+                operator="==",
+                threshold=1,
+            )
+        )
+    return checks
 
 
 def _replace_required_events_for_mode(mode: Mode) -> tuple[str, ...]:
@@ -988,6 +1005,20 @@ def _prepare_log_environment(log_path: Path) -> None:
     os.environ["LUMINA_LOG_LEVEL"] = "INFO"
     os.environ["LUMINA_LOG_FORMAT"] = "json"
     os.environ.pop("LUMINA_LOG_INIT_BY_PARENT", None)
+
+
+def _clear_feedback_email_env(env: MutableMapping[str, str]) -> None:
+    for key in (
+        "LUMINA_FEEDBACK_SMTP_HOST",
+        "LUMINA_FEEDBACK_SMTP_PORT",
+        "LUMINA_FEEDBACK_SMTP_USER",
+        "LUMINA_FEEDBACK_SMTP_PASSWORD",
+        "LUMINA_FEEDBACK_SMTP_FROM",
+        "LUMINA_FEEDBACK_TO",
+        "LUMINA_FEEDBACK_SMTP_USE_TLS",
+        "LUMINA_FEEDBACK_SMTP_TIMEOUT_S",
+    ):
+        env.pop(key, None)
 
 
 def _build_mock_worker_result(
@@ -2010,6 +2041,8 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_system_image_preview_workflow(client)
         elif step == "system_save_settings":
             _execute_system_save_settings_workflow(client)
+        elif step == "feedback_submit":
+            _execute_feedback_submit_workflow(client)
         elif step == "slicer_launch":
             _execute_slicer_launch_workflow(client)
         elif step == "extract":
@@ -3337,6 +3370,38 @@ def _execute_system_save_settings_workflow(client: Any) -> None:
                 settings_path.unlink()
             except OSError:
                 pass
+
+
+def _execute_feedback_submit_workflow(client: Any) -> None:
+    payload = {
+        "description": "log_quality_check synthetic report",
+        "user_email": None,
+        "context": {
+            "url": "http://localhost:5174/",
+            "user_agent": "log-quality-check",
+            "screen_width": 1920,
+            "screen_height": 1080,
+            "device_pixel_ratio": 1.0,
+            "app_version": "test",
+            "language": "en",
+            "theme": "light",
+            "active_tab": "converter",
+            "active_session_ids": {"converter": None, "single_stage": None},
+            "color_mode": None,
+            "lut_name": None,
+            "recent_client_logs": [],
+        },
+        "screenshot_data_url": None,
+    }
+    response = client.post("/api/feedback/bug-report", json=payload)
+    _raise_for_status(response.status_code, response.text, "feedback_submit")
+    response_payload = response.json()
+    if not isinstance(response_payload, Mapping):
+        raise QualityCheckError("feedback_submit response was not an object")
+    if not response_payload.get("ticket_id"):
+        raise QualityCheckError("feedback_submit response missed ticket_id")
+    if response_payload.get("emailed") is not False:
+        raise QualityCheckError("feedback_submit response expected emailed=false")
 
 
 def _execute_slicer_launch_workflow(client: Any) -> None:

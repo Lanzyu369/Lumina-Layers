@@ -594,6 +594,39 @@ def test_slicer_launch_workflow_requires_canary_event() -> None:
     assert missing_by_name["workflow_event_slicer_launch_done"].passed is False
 
 
+def test_feedback_submit_workflow_step_is_first_class() -> None:
+    workflow = _parse_workflow("feedback_submit")
+
+    assert workflow == ["feedback_submit"]
+    assert "feedback_submit" not in log_quality_check.DEFAULT_WORKFLOW
+    assert "feedback_submit" in WORKFLOW_ORDER
+    assert "feedback_submit" in WORKFLOW_STEPS
+    assert (
+        WORKFLOW_ORDER.index("feedback_submit")
+        == WORKFLOW_ORDER.index("slicer_launch") + 1
+    )
+
+
+def test_feedback_submit_workflow_requires_canary_event() -> None:
+    workflow = ["feedback_submit"]
+    checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={"feedback_bug_report_submitted": 1},
+    )
+    missing_checks = _workflow_required_event_checks(
+        mode="fast",
+        workflow=workflow,
+        event_counts={},
+    )
+
+    by_name = {check.name: check for check in checks}
+    missing_by_name = {check.name: check for check in missing_checks}
+
+    assert by_name["workflow_event_feedback_bug_report_submitted"].passed is True
+    assert missing_by_name["workflow_event_feedback_bug_report_submitted"].passed is False
+
+
 def test_merge_8color_workflow_step_is_first_class() -> None:
     """The 8-color merge workflow must be accepted by the quality gate."""
 

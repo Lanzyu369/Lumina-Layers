@@ -11,6 +11,7 @@ individual domain modules.
 from api.routers.calibration import router as calibration_router
 from api.routers.converter import router as converter_router
 from api.routers.extractor import router as extractor_router
+from api.routers.feedback import router as feedback_router
 from api.routers.five_color import router as five_color_router
 from api.routers.health import router as health_router
 from api.routers.lut import router as lut_router
@@ -23,6 +24,7 @@ from api.routers.vectorizer import router as vectorizer_router
 __all__ = [
     "converter_router",
     "extractor_router",
+    "feedback_router",
     "calibration_router",
     "five_color_router",
     "health_router",

@@ -157,6 +157,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
 .envrc
 .venv
 env/
@@ -319,6 +320,9 @@ progress/log_audit_fast_*.json
 progress/log_audit_full_*.json
 !progress/log_audit_fast_reviewer.json
 !progress/log_audit_full_reviewer.json
+
+# Bug-report payload dumps
+feedback/
 
 # Ad-hoc gate side-effects in lut-preset/Custom (lut_merge, lut_upload runners)
 lut-preset/Custom/Merged_*.npz

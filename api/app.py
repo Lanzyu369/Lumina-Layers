@@ -22,6 +22,24 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
+from api.env_loader import load_env_local
+
+# Populate process env from <repo>/.env.local before any module reads
+# os.environ. This must happen before logging setup (which reads
+# LUMINA_LOG_*) and before feedback_email's lru_cached
+# is_email_configured() is first invoked by a request handler. Putting
+# the call at api.app module scope (rather than only in api_server.py)
+# ensures coverage for every entry point that imports the FastAPI app:
+# api_server.py, ``python -m uvicorn api.app:app``, debugpy launches,
+# start_dev.py spawns, and Docker / CI runners.
+# 在任何模块读取 os.environ 之前，从 <repo>/.env.local 把值填入进程
+# 环境。必须早于日志初始化（它会读 LUMINA_LOG_*）以及第一次请求触发
+# feedback_email 的 lru_cached is_email_configured()。把调用放在
+# api.app 模块作用域而不是仅限 api_server.py，可以覆盖所有导入 FastAPI
+# 应用的入口：api_server.py、``python -m uvicorn api.app:app``、
+# debugpy 启动、start_dev.py 子进程、Docker / CI 等。
+load_env_local()
+
 from api.logger import setup_file_logging
 from api.structured_logging import (
     configure_structured_logging,
@@ -48,6 +66,7 @@ from api.routers import (
     calibration_router,
     converter_router,
     extractor_router,
+    feedback_router,
     five_color_router,
     health_router,
     lut_router,
@@ -272,6 +291,7 @@ def create_app() -> FastAPI:
 
     app.include_router(converter_router)
     app.include_router(extractor_router)
+    app.include_router(feedback_router)
     app.include_router(calibration_router)
     app.include_router(five_color_router)
     app.include_router(health_router)

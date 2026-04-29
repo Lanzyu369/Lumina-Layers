@@ -13,6 +13,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "calibration.py",
     ROOT / "api" / "routers" / "converter",
     ROOT / "api" / "routers" / "extractor.py",
+    ROOT / "api" / "routers" / "feedback.py",
     ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "lut.py",
     ROOT / "api" / "routers" / "slicer.py",
@@ -151,6 +152,9 @@ SYSTEM_STRUCTURED_EVENTS = {
     "system_image_preview_done",
     "system_save_settings_done",
 }
+FEEDBACK_STRUCTURED_EVENTS = {
+    "feedback_bug_report_submitted",
+}
 SLICER_STRUCTURED_EVENTS = {
     "slicer_launch_done",
 }
@@ -163,6 +167,7 @@ REQUIRED_STRUCTURED_EVENTS = (
     | VECTORIZER_STRUCTURED_EVENTS
     | LUT_STRUCTURED_EVENTS
     | SYSTEM_STRUCTURED_EVENTS
+    | FEEDBACK_STRUCTURED_EVENTS
     | SLICER_STRUCTURED_EVENTS
 )
 

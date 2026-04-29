@@ -16,12 +16,33 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-04-27",
+    version: "2026-04-30",
     title: {
-      zh: "Lumina Layers — 今日修复",
-      en: "Lumina Layers — Today's fixes",
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
     },
     sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "应用右上角新增「反馈问题」入口：遇到问题写一句描述就能直接提交给开发者，不用再先截图发微信再讲半天环境。",
+            en: "A new 「Report a bug」 entry sits in the top-right corner: type a one-liner and submit it straight to the developer — no more screenshot-first-then-explain workflow.",
+          },
+          {
+            zh: "反馈会自动带上你当前的工作流（converter / single stage 等）、color mode、LUT 名字、session ID 和浏览器信息，不用自己回忆环境；同一个工单号也会出现在邮件主题里，开发者一眼对得上。",
+            en: "Each report auto-collects your active workstream (converter / single stage), color mode, LUT name, session id, and browser info — no need to recall the environment yourself; the same ticket id is in the email subject so the developer can match it instantly.",
+          },
+          {
+            zh: "提交成功后弹窗会留住工单号方便你复制，关闭按钮在你手上——不会再 1 秒自动消失来不及抄。",
+            en: "The success view keeps the ticket id on screen so you have time to copy it — closing is up to you, no more 1-second auto-dismiss.",
+          },
+          {
+            zh: "即使本地没配邮件服务，反馈也会落盘到 feedback/ 目录兜底，开发者可以直接拷走那份 JSON；网络断了也丢不了反馈。",
+            en: "Even when SMTP isn't configured locally, reports still land in the feedback/ directory as a JSON dump that the developer can pull directly — flaky networks no longer lose reports.",
+          },
+        ],
+      },
       {
         category: { zh: "稳定性", en: "Stability" },
         items: [

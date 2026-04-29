@@ -17,6 +17,90 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "面板控件",
     en: "Panel Controls",
   },
+  bug_report_button_label: {
+    zh: "反馈问题",
+    en: "Report a bug",
+  },
+  bug_report_button_tooltip: {
+    zh: "向开发者发送 bug 反馈",
+    en: "Send a bug report to the developer",
+  },
+  bug_report_modal_title: {
+    zh: "反馈问题",
+    en: "Report a bug",
+  },
+  bug_report_modal_description_label: {
+    zh: "问题描述",
+    en: "Describe the problem",
+  },
+  bug_report_modal_description_placeholder: {
+    zh: "请详细描述发生了什么、你期望发生什么、复现步骤……",
+    en: "What happened, what did you expect, and how can we reproduce it?",
+  },
+  bug_report_modal_email_label: {
+    zh: "你的邮箱（可选，方便我们回复你）",
+    en: "Your email (optional, so we can follow up)",
+  },
+  bug_report_modal_context_disclosure: {
+    zh: "已自动收集的信息（点击展开）",
+    en: "Automatically collected info (click to expand)",
+  },
+  bug_report_modal_privacy_note: {
+    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，不经过任何第三方服务。",
+    en: "This report is sent only to the Lumina Studio developer mailbox. No third-party services are involved.",
+  },
+  bug_report_modal_submit: {
+    zh: "发送",
+    en: "Send",
+  },
+  bug_report_modal_cancel: {
+    zh: "取消",
+    en: "Cancel",
+  },
+  bug_report_toast_success: {
+    zh: "已收到，谢谢。工单号：{{ticket}}",
+    en: "Thanks, we got it. Ticket: {{ticket}}",
+  },
+  bug_report_toast_error: {
+    zh: "提交失败，请稍后再试。",
+    en: "Submission failed, please retry.",
+  },
+  bug_report_success_ticket_label: {
+    zh: "工单号",
+    en: "Ticket ID",
+  },
+  bug_report_success_copy: {
+    zh: "复制",
+    en: "Copy",
+  },
+  bug_report_success_copied: {
+    zh: "已复制",
+    en: "Copied",
+  },
+  bug_report_success_emailed_yes: {
+    zh: "报告已通过邮件发送给开发者。",
+    en: "Report has been emailed to the developer.",
+  },
+  bug_report_success_emailed_no: {
+    zh: "邮件未配置，报告已保存到本地。请把工单号告知开发者，便于查找原始记录。",
+    en: "Email is not configured; the report was saved locally. Share the ticket id with the developer so the original record can be located.",
+  },
+  bug_report_success_dump_path_label: {
+    zh: "本地路径",
+    en: "Local path",
+  },
+  bug_report_success_close: {
+    zh: "完成",
+    en: "Done",
+  },
+  bug_report_validation_description_required: {
+    zh: "请填写问题描述",
+    en: "Please describe the problem",
+  },
+  bug_report_validation_description_truncated: {
+    zh: "问题描述已截断到 10000 个字符。",
+    en: "The description was truncated to 10,000 characters.",
+  },
   lang_btn_zh: {
     zh: "🌐 中文",
     en: "🌐 中文",

@@ -13,6 +13,8 @@ import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
+import { BugReportButton } from "./components/BugReportButton";
+import { BugReportModal } from "./components/BugReportModal";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
@@ -207,6 +209,7 @@ function AppContent() {
 
   const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
 
@@ -261,6 +264,7 @@ function AppContent() {
           {activeTab === 'converter' && <WidgetToggles />}
           <LanguageToggle />
           <ThemeToggle />
+          <BugReportButton onClick={() => setBugReportOpen(true)} />
           {connected === null ? (
             <span className="text-sm text-gray-500 dark:text-gray-400">{t("app_checking_backend")}</span>
           ) : connected ? (
@@ -346,6 +350,10 @@ function AppContent() {
         entry={announcement.entry}
         onClose={announcement.close}
         onDismissVersion={announcement.dismissThisVersion}
+      />
+      <BugReportModal
+        open={bugReportOpen}
+        onClose={() => setBugReportOpen(false)}
       />
     </div>
   );
