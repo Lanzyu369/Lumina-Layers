@@ -14,18 +14,7 @@ Lumina Studio 所有重要变更记录。
 - **Single-Stage 工作流** - 增加 single-stage 数据集提取、Stage A 拟合端点、前端 store 接线，以及对应 UI / 测试覆盖
 - **预测式配方工作流** - 增加预测式配方颜色查询/应用、native 自定义配方编辑，以及预测式 / 原生 LUT 所需的运行时元数据支持
 
-### 改进
-- **转换器子标签架构** - 将转换器主标签拆分为核心/颜色/高级三个子标签；用顶部二级标签入口替代底部 ColorWorkstation 抽屉；dock 堆栈计算限定在当前活动子标签的 Widget 范围内
-- **3D 查看器诊断** - 图标式浮动 Dock，自动避让右侧停靠区；FPS 状态色点（绿/黄/红）、帧耗时行，移除冗余指标；Canvas 交互桥接追踪 OrbitControls 状态
-- **Color2D 叠层** - 入场动画由滑入改为纯透明度淡入，更流畅；延迟自动预览以避免布局闪烁
-- **Widget 动画** - 移除 backdrop-blur 提升性能；展开/折叠动画与兄弟元素位移同步；resetLayout 后保留实测 expandedHeight
-- **提示与主题** - 全标签统一 WikiTooltip / HelpDot 悬浮提示风格；gray-* 令牌迁移至 slate-*（与 DESIGN.md 中性色对齐）；移除子页面冗余 PanelIntro 顶部小标题
-- **校准默认值** - 底板默认厚度从 1.6 mm 改为 1.2 mm；所有颜色模式（含 6 色）均启用底板厚度滑块
-- **清理** - 移除转换器管线中的 auto_bg / bg_tol；删除 92 条带 emoji 的废弃 i18n 键；移除 LUT 详情的 React.lazy 以消除标签切换时的黑屏闪烁
-
 ### 修复
-- **校准板生成** - 修复校准板生成中的 3 个 NameError；5 色扩展路径补齐 backing_thickness 透传；修复已移除的 `backing` 字段读取导致默认校准路径 AttributeError；修复 5 色扩展 Page 2 层预览辅助函数硬编码 5 层而非实际 6 层的问题
-- **Widget 交互** - 修复 Widget 面板阻塞 3D 轨道交互的问题
 - **拼图预览可靠性** - 修复旧失败请求覆盖新成功叠线的问题，并允许同参数在临时失败后继续重试拼图叠线预览
 - **拼图配方导入归一化** - 导入 recipe 时会自动消解“拼图 vs 大画幅”“拼图 vs 挂件环”的互斥冲突，并清除作为预留能力的背面刻号标记
 - **组合拼图 3MF 元数据** - 组合导出现在会重建 slice metadata、filament-sequence metadata 和包内预览图，不再继承首块 3MF 的过期元数据
