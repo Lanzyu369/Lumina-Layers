@@ -1670,7 +1670,7 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
     )
 
     # Generate preview images
-    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w, color_layers=color_layers)
 
     Stats.increment("calibrations")
 

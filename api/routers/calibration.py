@@ -170,7 +170,7 @@ def calibration_generate(
         preview_url = f"/api/files/{preview_id}"
 
     backing_color_for_log = (
-        request.backing.value
+        "White"
         if mode in {"BW (Black & White)", "4-Color (RYBW)", "4-Color (CMYW)"}
         else "n/a"
     )
