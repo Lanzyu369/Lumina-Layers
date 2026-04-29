@@ -125,7 +125,7 @@ def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
                 base_mesh = trimesh.creation.extrude_polygon(poly, height=1.0)
             except (ValueError, TypeError, RuntimeError, AttributeError, OSError) as exc:
                 log.warning(
-                    "[HIGH_FIDELITY] Failed to extrude polygon: %s",
+                    "Failed to extrude polygon: %s",
                     exc,
                     extra={"event": "polygon_extrusion_failed", "error_type": type(exc).__name__},
                 )
@@ -473,7 +473,18 @@ class VoxelMesher(BaseMesher):
             return None
 
         mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
-        log.info(f"[VOXEL_MESHER] {mesh_type}: Merged {voxel_matrix.shape[0]} Z-layers -> {len(layer_groups)} groups")
+        log.info(
+            "%s: merged %s Z-layers into %s groups",
+            mesh_type,
+            voxel_matrix.shape[0],
+            len(layer_groups),
+            extra={
+                "event": "voxel_mesher_layers_merged",
+                "mesh_type": mesh_type,
+                "layer_count": int(voxel_matrix.shape[0]),
+                "group_count": len(layer_groups),
+            },
+        )
 
         layer_rects = []
         for start_z, end_z, mask in layer_groups:
@@ -485,8 +496,16 @@ class VoxelMesher(BaseMesher):
         if mesh is not None:
             total_rects = sum(r.shape[0] for _, _, r in layer_rects)
             log.info(
-                f"[VOXEL_MESHER] {mesh_type}: {total_rects} rects -> "
-                f"{len(mesh.vertices):,} verts, {len(mesh.faces):,} faces"
+                "%s: built mesh from %s rects",
+                mesh_type,
+                total_rects,
+                extra={
+                    "event": "voxel_mesher_mesh_built",
+                    "mesh_type": mesh_type,
+                    "rect_count": total_rects,
+                    "vertex_count": len(mesh.vertices),
+                    "face_count": len(mesh.faces),
+                },
             )
         return mesh
 
@@ -538,14 +557,19 @@ class HighFidelityMesher(BaseMesher):
         """
         x0, y0, x1, y1 = (float(value) for value in rect)
         log.warning(
-            "[HIGH_FIDELITY] Boundary clip fallback for material %s rect=(%.3f, %.3f, %.3f, %.3f): %s",
+            "Boundary clip fallback for material %s rect=(%.3f, %.3f, %.3f, %.3f): %s",
             mat_id,
             x0,
             y0,
             x1,
             y1,
             exc,
-            extra={"event": "boundary_polygon_clip_fallback", "error_type": type(exc).__name__},
+            extra={
+                "event": "boundary_polygon_clip_fallback",
+                "material_id": mat_id,
+                "rect": [x0, y0, x1, y1],
+                "error_type": type(exc).__name__,
+            },
         )
 
     def generate_mesh(
@@ -580,12 +604,20 @@ class HighFidelityMesher(BaseMesher):
         mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
         boundary_enabled = boundary_geometry is not None
         log.info(
-            "[HIGH_FIDELITY] %s: Merged %s layers -> %s groups%s%s",
+            "%s: merged %s layers into %s groups%s%s",
             mesh_type,
             voxel_matrix.shape[0],
             len(layer_groups),
             " [no-dilation]" if use_no_dilation else "",
             " [boundary-aware]" if boundary_enabled else "",
+            extra={
+                "event": "mesh_layers_merged",
+                "mesh_type": mesh_type,
+                "layer_count": int(voxel_matrix.shape[0]),
+                "group_count": len(layer_groups),
+                "no_dilation": use_no_dilation,
+                "boundary_enabled": boundary_enabled,
+            },
         )
 
         layer_rects = []
@@ -628,8 +660,16 @@ class HighFidelityMesher(BaseMesher):
         if mesh is not None:
             total_rects = sum(r.shape[0] for _, _, r in layer_rects)
             log.info(
-                f"[HIGH_FIDELITY] {mesh_type}: {total_rects} rects -> "
-                f"{len(mesh.vertices):,} verts, {len(mesh.faces):,} faces"
+                "%s: built high-fidelity mesh from %s rects",
+                mesh_type,
+                total_rects,
+                extra={
+                    "event": "high_fidelity_mesh_built",
+                    "mesh_type": mesh_type,
+                    "rect_count": total_rects,
+                    "vertex_count": len(mesh.vertices),
+                    "face_count": len(mesh.faces),
+                },
             )
         return mesh
 
@@ -694,7 +734,10 @@ def get_mesher(mode_name: ModelingMode, disable_material_dilation: bool = False,
     """
     # High-Fidelity mode (replaces Vector and Woodblock)
     if mode_name == ModelingMode.HIGH_FIDELITY:
-        log.info("[MESHER_FACTORY] Selected: HighFidelityMesher (RLE-based with Dilation)")
+        log.info(
+            "Selected HighFidelityMesher",
+            extra={"event": "mesher_selected", "mode": str(mode_name), "mesher": "HighFidelityMesher"},
+        )
         return HighFidelityMesher(
             disable_material_dilation=disable_material_dilation,
             boundary_geometry=boundary_geometry,
@@ -702,7 +745,10 @@ def get_mesher(mode_name: ModelingMode, disable_material_dilation: bool = False,
 
     # Vector mode uses same algorithm as High-Fidelity
     if mode_name == ModelingMode.VECTOR:
-        log.info("[MESHER_FACTORY] Selected: HighFidelityMesher (Vector mode)")
+        log.info(
+            "Selected HighFidelityMesher for vector mode",
+            extra={"event": "mesher_selected", "mode": str(mode_name), "mesher": "HighFidelityMesher"},
+        )
         return HighFidelityMesher(
             disable_material_dilation=disable_material_dilation,
             boundary_geometry=boundary_geometry,
@@ -710,11 +756,17 @@ def get_mesher(mode_name: ModelingMode, disable_material_dilation: bool = False,
 
     # Pixel Art mode (legacy voxel)
     if mode_name == ModelingMode.PIXEL:
-        log.info("[MESHER_FACTORY] Selected: VoxelMesher (Blocky)")
+        log.info(
+            "Selected VoxelMesher",
+            extra={"event": "mesher_selected", "mode": str(mode_name), "mesher": "VoxelMesher"},
+        )
         return VoxelMesher()
 
     # Default fallback to High-Fidelity
-    log.info(f"[MESHER_FACTORY] Unknown mode '{mode_name}', defaulting to HighFidelityMesher")
+    log.info(
+        "Unknown mode; defaulting to HighFidelityMesher",
+        extra={"event": "mesher_defaulted", "mode": str(mode_name), "mesher": "HighFidelityMesher"},
+    )
     return HighFidelityMesher(
         disable_material_dilation=disable_material_dilation,
         boundary_geometry=boundary_geometry,

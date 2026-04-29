@@ -811,7 +811,7 @@ def build_material_solver_cache(
     }
 
     _log.info(
-        "[MaterialCache] Built cache: palette=%s N=%d t=%.2f substrate=%s "
+        "Built material solver cache: palette=%s N=%d t=%.2f substrate=%s "
         "valid_cells=%d/%d mean_ΔE=%.2f build=%.1fs",
         palette_hash,
         layer_count,
@@ -821,6 +821,17 @@ def build_material_solver_cache(
         total_buckets,
         metadata["mean_delta_e"],
         build_time,
+        extra={
+            "event": "material_solver_cache_built",
+            "palette_hash": palette_hash,
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "valid_cell_count": valid_count,
+            "total_cell_count": total_buckets,
+            "mean_delta_e": metadata["mean_delta_e"],
+            "build_time_seconds": build_time,
+        },
     )
 
     return MaterialSolverCache(
@@ -875,8 +886,17 @@ def save_material_solver_cache(
         json.dumps(cache.metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    _log.info("[MaterialCache] Saved cache %s (%.2f MB)",
-              npz_path.name, npz_path.stat().st_size / (1024 * 1024))
+    cache_size_mb = npz_path.stat().st_size / (1024 * 1024)
+    _log.info(
+        "Saved material solver cache %s (%.2f MB)",
+        npz_path.name,
+        cache_size_mb,
+        extra={
+            "event": "material_solver_cache_saved",
+            "cache_file": npz_path.name,
+            "cache_size_mb": round(cache_size_mb, 3),
+        },
+    )
     return npz_path
 
 
@@ -941,9 +961,15 @@ def load_material_solver_cache(
         legacy_grid = int(legacy_metadata.get("grid_resolution", 0))
         if legacy_grid != int(grid_resolution):
             _log.info(
-                "[MaterialCache] Legacy cache %s reports grid_resolution=%d but "
+                "Legacy material solver cache %s reports grid_resolution=%d but "
                 "caller requested %d; skipping legacy fallback.",
                 legacy_npz.name, legacy_grid, int(grid_resolution),
+                extra={
+                    "event": "material_solver_legacy_cache_skipped",
+                    "cache_file": legacy_npz.name,
+                    "legacy_grid_resolution": legacy_grid,
+                    "requested_grid_resolution": int(grid_resolution),
+                },
             )
             return None
         npz_path, meta_path = legacy_npz, legacy_meta
@@ -957,8 +983,13 @@ def load_material_solver_cache(
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         _log.warning(
-            "[MaterialCache] Failed to load cache %s: %s",
+            "Failed to load material solver cache %s: %s",
             npz_path.name, exc,
+            extra={
+                "event": "material_solver_cache_load_failed",
+                "cache_file": npz_path.name,
+                "error_type": type(exc).__name__,
+            },
         )
         return None
 
@@ -968,21 +999,36 @@ def load_material_solver_cache(
         recipes.shape[0] != lab_centers.shape[0]
         or recipes.shape[1] != int(metadata.get("layer_count", -1))
     ):
-        _log.warning("[MaterialCache] Cache %s has inconsistent shapes", npz_path.name)
+        _log.warning(
+            "Material solver cache has inconsistent shapes",
+            extra={"event": "material_solver_cache_shape_mismatch", "cache_file": npz_path.name},
+        )
         return None
     expected_hash = fingerprint_palette(materials)
     if metadata.get("palette_hash") != expected_hash:
         _log.warning(
-            "[MaterialCache] Cache %s palette_hash mismatch (expected %s got %s)",
+            "Material solver cache %s palette_hash mismatch (expected %s got %s)",
             npz_path.name, expected_hash, metadata.get("palette_hash"),
+            extra={
+                "event": "material_solver_cache_palette_mismatch",
+                "cache_file": npz_path.name,
+                "expected_palette_hash": expected_hash,
+                "actual_palette_hash": metadata.get("palette_hash"),
+            },
         )
         return None
     stored_grid = int(metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION))
     if stored_grid != int(grid_resolution):
         _log.info(
-            "[MaterialCache] Cache %s grid_resolution=%d does not match caller's "
+            "Material solver cache %s grid_resolution=%d does not match caller's "
             "expected %d; treating as missing.",
             npz_path.name, stored_grid, int(grid_resolution),
+            extra={
+                "event": "material_solver_cache_grid_mismatch",
+                "cache_file": npz_path.name,
+                "stored_grid_resolution": stored_grid,
+                "requested_grid_resolution": int(grid_resolution),
+            },
         )
         return None
 
@@ -1141,9 +1187,14 @@ def load_material_solver_cache_with_fallback(
         )
         if fallback is not None:
             _log.info(
-                "[MaterialCache] Requested grid=%d has no usable cache; "
+                "Requested grid=%d has no usable material solver cache; "
                 "falling back to grid=%d found on disk.",
                 int(grid_resolution), int(candidate_grid),
+                extra={
+                    "event": "material_solver_cache_fallback_used",
+                    "requested_grid_resolution": int(grid_resolution),
+                    "fallback_grid_resolution": int(candidate_grid),
+                },
             )
             return fallback, int(candidate_grid)
 
@@ -1242,6 +1293,13 @@ def delete_cached_entry(
                 removed_any = True
             except OSError as exc:
                 _log.warning(
-                    "[MaterialCache] Failed to remove %s: %s", path, exc
+                    "Failed to remove material solver cache file %s: %s",
+                    path,
+                    exc,
+                    extra={
+                        "event": "material_solver_cache_remove_failed",
+                        "path": str(path),
+                        "error_type": type(exc).__name__,
+                    },
                 )
     return removed_any

@@ -11,7 +11,6 @@ background tasks lifecycle.
 """
 
 import asyncio
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -25,6 +24,7 @@ from starlette.responses import JSONResponse, Response
 
 from api.logger import setup_file_logging
 from api.structured_logging import (
+    configure_structured_logging,
     get_logger,
     reset_request_id,
     reset_session_id,
@@ -32,10 +32,9 @@ from api.structured_logging import (
     set_session_id,
 )
 
-# Install file logging as early as possible so all startup prints are captured.
-_log_path = setup_file_logging()
-if _log_path is not None:
-    os.environ["LUMINA_LOG_PATH"] = str(_log_path.resolve())
+# Select file logging as early as possible, then ensure structured handlers are active.
+setup_file_logging()
+configure_structured_logging()
 
 from api.dependencies import (
     file_registry,
@@ -60,6 +59,25 @@ from api.routers import (
 )
 
 log = get_logger(__name__)
+
+_REQUEST_COMPLETED_SLOW_MS = 1000.0
+_VALIDATION_LOG_MESSAGE_LIMIT = 1200
+
+
+def _compact_log_extra(extra: dict) -> dict:
+    """Drop null structured-log fields while preserving explicit false/zero values.
+    删除结构化日志中的空字段，同时保留 false / 0 等有效值。
+    """
+    return {key: value for key, value in extra.items() if value is not None}
+
+
+def _truncate_log_message(message: str, limit: int) -> str:
+    """Return a bounded log message without changing the HTTP response body.
+    限制日志消息长度，但不改变 HTTP 响应内容。
+    """
+    if len(message) <= limit:
+        return message
+    return f"{message[:limit]}...<truncated>"
 
 
 def _run_cleanup_pass(
@@ -165,6 +183,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_context_middleware(request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        request.state.request_id = request_id
         request_token = set_request_id(request_id)
         session_token = set_session_id(None)
         started = time.perf_counter()
@@ -176,6 +195,7 @@ def create_app() -> FastAPI:
                 "Request failed",
                 extra={
                     "event": "request_failed",
+                    "request_id": request_id,
                     "path": request.url.path,
                     "method": request.method,
                     "status_code": 500,
@@ -191,16 +211,20 @@ def create_app() -> FastAPI:
         if isinstance(response, Response):
             response.headers["X-Request-ID"] = request_id
         duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        log.info(
-            "Request completed",
-            extra={
+        request_completed_extra = {
                 "event": "request_completed",
+                "request_id": request_id,
                 "path": request.url.path,
                 "method": request.method,
                 "status_code": response.status_code,
                 "duration_ms": duration_ms,
-            },
-        )
+        }
+        if response.status_code >= 500:
+            log.warning("Request completed", extra=request_completed_extra)
+        elif response.status_code >= 400:
+            log.info("Request completed", extra=request_completed_extra)
+        else:
+            log.debug("Request completed", extra=request_completed_extra)
         reset_request_id(request_token)
         reset_session_id(session_token)
         return response
@@ -224,16 +248,22 @@ def create_app() -> FastAPI:
         # jsonable_encoder 统一序列化，否则 handler 本身会抛 TypeError
         # 导致前端拿不到 422，错误文案映射随之失效。)
         encoded_errors = jsonable_encoder(exc.errors())
+        request_id = getattr(request.state, "request_id", request.headers.get("X-Request-ID"))
         log.warning(
             "Request validation failed",
-            extra={
+            extra=_compact_log_extra({
                 "event": "request_validation_failed",
+                "request_id": request_id,
                 "path": request.url.path,
                 "method": request.method,
                 "status_code": 422,
                 "error_type": "RequestValidationError",
-                "error_message": str(encoded_errors),
-            },
+                "error_message": _truncate_log_message(
+                    str(encoded_errors),
+                    _VALIDATION_LOG_MESSAGE_LIMIT,
+                ),
+                "validation_error_count": len(encoded_errors),
+            }),
         )
         return JSONResponse(
             status_code=422,
@@ -283,16 +313,16 @@ def create_app() -> FastAPI:
         scope = payload.get("scope", None)
         phase = payload.get("phase", None)
         details = payload.get("details", None)
-        log.info(
+        log.debug(
             "Client log received",
-            extra={
+            extra=_compact_log_extra({
                 "event": "client_log",
                 "client_label": label,
                 "client_scope": scope,
                 "client_phase": phase,
                 "client_details": details,
                 "duration_ms": elapsed,
-            },
+            }),
         )
         return {"ok": True}
 

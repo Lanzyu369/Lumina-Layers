@@ -108,7 +108,7 @@ def schedule_glb_build(
     _GLB_EXECUTOR.submit(
         _run_glb_build_job, session_id, job_token, store, registry
     )
-    log.info(
+    log.debug(
         "GLB build scheduled",
         extra={
             "event": "converter_glb_scheduled",
@@ -141,7 +141,7 @@ def _run_glb_build_job(
     try:
         session_data = store.get(session_id)
         if session_data is None:
-            log.info(
+            log.debug(
                 "GLB build aborted: session vanished",
                 extra={
                     "event": "converter_glb_aborted_no_session",
@@ -152,7 +152,7 @@ def _run_glb_build_job(
             return
         latest_cache = session_data.get("preview_cache")
         if latest_cache is None:
-            log.info(
+            log.debug(
                 "GLB build aborted: preview cache cleared",
                 extra={
                     "event": "converter_glb_aborted_no_cache",
@@ -162,7 +162,7 @@ def _run_glb_build_job(
             )
             return
         if latest_cache.get("glb_job_token") != job_token:
-            log.info(
+            log.debug(
                 "GLB build aborted: superseded by newer job",
                 extra={
                     "event": "converter_glb_aborted_superseded",
@@ -185,7 +185,7 @@ def _run_glb_build_job(
         if latest_cache is None:
             return
         if latest_cache.get("glb_job_token") != job_token:
-            log.info(
+            log.debug(
                 "GLB build result discarded: superseded after completion",
                 extra={
                     "event": "converter_glb_discarded_after_build",

@@ -11,9 +11,9 @@ S11 — GLB 3D 预览导出。
 - generate_empty_bed_glb: 空热床 GLB
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 from typing import Optional
 
 import cv2
@@ -23,7 +23,7 @@ import trimesh
 from config import PrinterConfig, OUTPUT_DIR, BedManager
 from core.naming import generate_preview_filename
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _iter_valid_polygons(geometry_obj, min_area: float = 1e-4):
@@ -95,7 +95,7 @@ def _create_preview_mesh(
         scale_factor = int(np.sqrt(total_pixels / TARGET_PIXELS))
         scale_factor = max(2, min(scale_factor, 16))
 
-        _log.info(f"[PREVIEW] Downsampling by {scale_factor}x ({total_pixels:,} -> ~{TARGET_PIXELS:,} pixels)")
+        _log.debug(f"Downsampling by {scale_factor}x ({total_pixels:,} -> ~{TARGET_PIXELS:,} pixels)")
 
         new_height = height // scale_factor
         new_width = width // scale_factor
@@ -221,7 +221,7 @@ def _create_preview_mesh(
 
     mesh = trimesh.Trimesh(vertices=vertices_np, faces=faces_np, process=False)
     mesh.visual.face_colors = face_colors_np
-    _log.info(f"[PREVIEW] Generated: {len(mesh.vertices):,} vertices, {len(mesh.faces):,} faces")
+    _log.debug(f"Generated: {len(mesh.vertices):,} vertices, {len(mesh.faces):,} faces")
     return mesh
 
 
@@ -341,7 +341,7 @@ def _build_color_extruded_mesh(
     try:
         region = unary_union(boxes)
     except (ValueError, TypeError, RuntimeError) as exc:
-        _log.warning(f"[SEGMENTED_GLB] unary_union failed: {exc}")
+        _log.warning(f"unary_union failed: {exc}")
         return None
 
     if region.is_empty:
@@ -364,7 +364,7 @@ def _build_color_extruded_mesh(
 
     if not meshes:
         _log.warning(
-            f"[SEGMENTED_GLB] Color mesh extrusion failed for all components: "
+            f"Color mesh extrusion failed for all components: "
             f"components={len(valid_polygons)}, extrude_fail={extrude_fail}"
         )
         return None
@@ -438,15 +438,15 @@ def _build_backing_plate_mesh(
 
     if not meshes:
         _log.warning(
-            f"[SEGMENTED_GLB] Backing plate skipped: short={skipped_short}, invalid={skipped_invalid}, "
+            f"Backing plate skipped: short={skipped_short}, invalid={skipped_invalid}, "
             f"tiny={skipped_tiny}, extrude_fail={extrude_fail}"
         )
         return None
 
     result = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
     result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
-    _log.info(
-        f"[SEGMENTED_GLB] Backing plate contour stats: short={skipped_short}, invalid={skipped_invalid}, "
+    _log.debug(
+        f"Backing plate contour stats: short={skipped_short}, invalid={skipped_invalid}, "
         f"tiny={skipped_tiny}, extrude_fail={extrude_fail}, kept={len(meshes)}"
     )
     return result
@@ -483,7 +483,7 @@ def generate_empty_bed_glb(
         glb_scene.export(glb_path)
         return glb_path
     except (OSError, ImportError, ValueError, TypeError, RuntimeError) as e:
-        _log.warning(f"[EMPTY_BED] Failed: {e}")
+        _log.warning(f"Failed: {e}")
         return None
 
 
@@ -546,7 +546,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         if total_pixels > SIMPLIFY_THRESHOLD:
             scale_factor = int(np.sqrt(total_pixels / TARGET_PIXELS))
             scale_factor = max(2, min(scale_factor, 16))
-            _log.info(f"[SEGMENTED_GLB] Downsampling by {scale_factor}x")
+            _log.debug(f"Downsampling by {scale_factor}x")
 
             new_h = height // scale_factor
             new_w = width // scale_factor
@@ -569,7 +569,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         flat_rgb = matched_rgb.reshape(-1, 3).astype(np.uint32, copy=False)
         solid_pixels = flat_rgb[solid_idx]  # (N, 3)
         if len(solid_pixels) == 0:
-            _log.warning("[SEGMENTED_GLB] No solid pixels, returning None")
+            _log.warning("No solid pixels, returning None")
             return None
 
         solid_codes = (solid_pixels[:, 0] << 16) | (solid_pixels[:, 1] << 8) | solid_pixels[:, 2]
@@ -579,8 +579,8 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
             return_counts=True,
         )
         n_unique = len(unique_codes)
-        _log.info(
-            "[SEGMENTED_GLB] unique-colour scan",
+        _log.debug(
+            "unique-colour scan",
             extra={
                 "event": "segmented_glb_unique_scan",
                 "n_unique": int(n_unique),
@@ -594,8 +594,8 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         # 3. Merge low-frequency colors if exceeding max_meshes
         _t = time.perf_counter()
         if n_unique > max_meshes:
-            _log.info(
-                "[SEGMENTED_GLB] merging low-frequency colours",
+            _log.debug(
+                "merging low-frequency colours",
                 extra={
                     "event": "segmented_glb_merge_low_freq",
                     "n_unique_before": int(n_unique),
@@ -628,7 +628,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
                 return_inverse=True,
                 return_counts=True,
             )
-            _log.info(f"[SEGMENTED_GLB] After merge: {len(unique_codes)} colors")
+            _log.debug(f"After merge: {len(unique_codes)} colors")
         color_indices: dict[int, np.ndarray] = {}
         for code_idx in range(len(unique_codes)):
             color_indices[code_idx] = solid_idx[inverse == code_idx]
@@ -695,7 +695,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         _t_mesh_loop = time.perf_counter() - _t
 
         if len(scene.geometry) == 0:
-            _log.warning("[SEGMENTED_GLB] No meshes generated")
+            _log.warning("No meshes generated")
             return None
 
         # 4.5 Build backing plate mesh (contour extrusion)
@@ -708,11 +708,11 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         )
         if backing_mesh is not None:
             scene.add_geometry(backing_mesh, node_name="backing_plate")
-            _log.info(f"[SEGMENTED_GLB] Backing plate added ({backing_mesh.vertices.shape[0]} vertices)")
+            _log.debug(f"Backing plate added ({backing_mesh.vertices.shape[0]} vertices)")
         _t_backing = time.perf_counter() - _t
 
         cache["color_contours"] = contours_data
-        _log.info(f"[SEGMENTED_GLB] Extracted contours for {len(contours_data)} colors")
+        _log.debug(f"Extracted contours for {len(contours_data)} colors")
 
         # 6. Export GLB
         _t = time.perf_counter()
@@ -731,9 +731,9 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
             "export_s": _t_export,
             "total_s": _t_glb_total,
         }
-        _log.info(f"[SEGMENTED_GLB] Exported {len(scene.geometry)} meshes -> {glb_path}")
-        _log.info(
-            f"[SEGMENTED_GLB] Timing: downsample={_t_downsample:.2f}s, "
+        _log.debug(f"Exported {len(scene.geometry)} meshes -> {glb_path}")
+        _log.debug(
+            f"Timing: downsample={_t_downsample:.2f}s, "
             f"unique={_t_unique:.2f}s, merge={_t_merge:.2f}s, mask_build={_t_mask_build:.2f}s, "
             f"mesh_loop={_t_mesh_loop:.2f}s, backing={_t_backing:.2f}s, "
             f"export={_t_export:.2f}s, total={_t_glb_total:.2f}s"
@@ -741,7 +741,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         return glb_path
 
     except (OSError, ValueError, TypeError, RuntimeError) as e:
-        _log.exception(f"[SEGMENTED_GLB] Failed: {e}")
+        _log.exception(f"Failed: {e}")
         return None
 
 
@@ -784,7 +784,7 @@ def generate_realtime_glb(cache: dict) -> Optional[str]:
         )
 
         if preview_mesh is None:
-            _log.warning("[REALTIME_GLB] Preview mesh is None (model too large?)")
+            _log.warning("Preview mesh is None (model too large?)")
             return None
 
         # Scale from pixel/voxel coords to mm
@@ -798,11 +798,11 @@ def generate_realtime_glb(cache: dict) -> Optional[str]:
 
         glb_path = os.path.join(OUTPUT_DIR, "realtime_preview.glb")
         preview_mesh.export(glb_path)
-        _log.info(f"[REALTIME_GLB] Exported: {glb_path}")
+        _log.debug(f"Exported: {glb_path}")
         return glb_path
 
     except (OSError, ValueError, TypeError, RuntimeError) as e:
-        _log.warning(f"[REALTIME_GLB] Failed: {e}")
+        _log.warning(f"Failed: {e}")
         return None
 
 
@@ -859,7 +859,7 @@ def run(ctx: dict) -> dict:
     ctx["glb_path"] = glb_path
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"[S11] glb_preview done: {_elapsed:.3f}s")
+    _log.debug(f"glb_preview done: {_elapsed:.3f}s")
     _hifi_timings = ctx.setdefault("_hifi_timings", {})
     _hifi_timings["glb_preview_s"] = _elapsed
     seg_timing = cache.get("_segmented_glb_timings")

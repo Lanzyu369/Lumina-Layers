@@ -8,14 +8,14 @@ K-Means color quantization with pre-scaling optimization.
 Extracted from _process_high_fidelity_mode Step 4.
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 import numpy as np
 import cv2
 from scipy.spatial import KDTree
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _skip_post_quantize_blur() -> bool:
@@ -94,8 +94,8 @@ def quantize_colors(
 
     effective_n_colors = _resolve_cluster_count(n_colors, total_pixels)
     if effective_n_colors != n_colors:
-        _log.info(
-            "[IMAGE_PROCESSOR] Clamping K-Means colors from %s to %s for %s pixels",
+        _log.debug(
+            "Clamping K-Means colors from %s to %s for %s pixels",
             n_colors,
             effective_n_colors,
             total_pixels,
@@ -115,7 +115,7 @@ def quantize_colors(
         f"{effective_n_colors}_{seed}_blur{int(not effective_skip)}"
     )
     if _cache_key in _kmeans_cache:
-        _log.info(f"[IMAGE_PROCESSOR] K-Means cache hit: {_cache_key}")
+        _log.debug(f"K-Means cache hit: {_cache_key}")
         return _kmeans_cache[_cache_key].copy()
 
     # 方案 3：预缩放优化
@@ -129,8 +129,8 @@ def quantize_colors(
         small_h = int(h / scale_factor)
         small_w = int(w / scale_factor)
 
-        _log.info(
-            f"[IMAGE_PROCESSOR] 🚀 Pre-scaling optimization: {w}×{h} → {small_w}×{small_h} ({total_pixels:,} → {small_w*small_h:,} pixels)"
+        _log.debug(
+            f"🚀 Pre-scaling optimization: {w}×{h} → {small_w}×{small_h} ({total_pixels:,} → {small_w*small_h:,} pixels)"
         )
 
         # 缩小图片
@@ -142,14 +142,14 @@ def quantize_colors(
         flags = cv2.KMEANS_PP_CENTERS  # K-Means++ 初始化
 
         t_kmeans = time.time()
-        _log.info(f"[IMAGE_PROCESSOR] K-Means++ on downscaled image ({effective_n_colors} colors)...")
+        _log.debug(f"K-Means++ on downscaled image ({effective_n_colors} colors)...")
         cv2.setRNGSeed(seed)  # 固定随机种子，确保 K-Means 结果可复现
         _, _, centers = cv2.kmeans(pixels_small, effective_n_colors, None, criteria, 5, flags)
-        _log.info(f"[IMAGE_PROCESSOR] ⏱️ K-Means: {time.time() - t_kmeans:.2f}s")
+        _log.debug(f"⏱️ K-Means: {time.time() - t_kmeans:.2f}s")
 
         # 用得到的 centers 直接映射原图（不再迭代，只做最近邻查找）
         t_map = time.time()
-        _log.info(f"[IMAGE_PROCESSOR] Mapping centers to full image...")
+        _log.debug(f"Mapping centers to full image...")
         centers = centers.astype(np.float32)
         pixels_full = rgb.reshape(-1, 3).astype(np.float32)
 
@@ -157,16 +157,16 @@ def quantize_colors(
         # 使用 KDTree 加速
         centers_tree = KDTree(centers)
         _, labels = centers_tree.query(pixels_full)
-        _log.info(f"[IMAGE_PROCESSOR] ⏱️ KDTree query: {time.time() - t_map:.2f}s")
+        _log.debug(f"⏱️ KDTree query: {time.time() - t_map:.2f}s")
 
         centers = centers.astype(np.uint8)
         quantized_pixels = centers[labels]
         quantized_image = quantized_pixels.reshape(h, w, 3)
 
-        _log.info(f"[IMAGE_PROCESSOR] ✅ Pre-scaling optimization complete!")
+        _log.debug(f"✅ Pre-scaling optimization complete!")
     else:
         # 小图直接做 K-Means
-        _log.info(f"[IMAGE_PROCESSOR] K-Means++ quantization to {effective_n_colors} colors...")
+        _log.debug(f"K-Means++ quantization to {effective_n_colors} colors...")
         pixels = rgb.reshape(-1, 3).astype(np.float32)
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
         flags = cv2.KMEANS_PP_CENTERS
@@ -177,7 +177,7 @@ def quantize_colors(
         centers = centers.astype(np.uint8)
         quantized_pixels = centers[labels.flatten()]
         quantized_image = quantized_pixels.reshape(h, w, 3)
-    _log.info(f"[IMAGE_PROCESSOR] ⏱️ Total quantization: {time.time() - t0:.2f}s")
+    _log.debug(f"⏱️ Total quantization: {time.time() - t0:.2f}s")
 
     # [CRITICAL FIX] Post-Quantization Cleanup
     # Removes isolated "salt-and-pepper" noise pixels that survive quantization.
@@ -192,14 +192,14 @@ def quantize_colors(
     # env var ``LUMINA_SKIP_POST_QUANTIZE_BLUR=1`` 作为全局覆盖。)
     if effective_skip:
         trigger = "env=LUMINA_SKIP_POST_QUANTIZE_BLUR" if env_skip_blur else "param=skip_post_blur"
-        _log.info("[IMAGE_PROCESSOR] Post-quantization blur skipped (%s)", trigger)
+        _log.debug("Post-quantization blur skipped (%s)", trigger)
     else:
         t0 = time.time()
-        _log.info("[IMAGE_PROCESSOR] Applying post-quantization cleanup (Denoising)...")
+        _log.debug("Applying post-quantization cleanup (Denoising)...")
         quantized_image = cv2.medianBlur(quantized_image, 3)
-        _log.info(f"[IMAGE_PROCESSOR] ⏱️ Post-quantization cleanup: {time.time() - t0:.2f}s")
+        _log.debug(f"⏱️ Post-quantization cleanup: {time.time() - t0:.2f}s")
 
-    _log.info(f"[IMAGE_PROCESSOR] Quantization complete!")
+    _log.debug(f"Quantization complete!")
     # 写入缓存（LRU 简化：超限时清空最旧条目）
     if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
         oldest = next(iter(_kmeans_cache))

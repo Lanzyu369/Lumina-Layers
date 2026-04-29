@@ -313,3 +313,25 @@ materials/_solver_cache/
 .windsurf/
 .trae/
 .worktrees/
+
+# Cascade browser tool traces and console captures
+.playwright-cli/
+
+# log_quality_check.py transient outputs
+# (only the *_reviewer.json baselines are kept under version control)
+progress/log_audit_fast_*.json
+progress/log_audit_full_*.json
+!progress/log_audit_fast_reviewer.json
+!progress/log_audit_full_reviewer.json
+
+# Ad-hoc gate side-effects in lut-preset/Custom (lut_merge, lut_upload runners)
+lut-preset/Custom/Merged_*.npz
+lut-preset/Custom/synthetic_lut*.json
+
+# Cascade per-round working files (historical prompts / PR bodies / patches)
+# Tracked: progress/governance-roadmap.md, progress/round-17-onwards-master-plan.md
+# Ignored: per-round drafting artifacts, archive directory
+progress/round-*-prompt.md
+progress/round-*-pr-body.md
+progress/round-*-patches/
+progress/archive/

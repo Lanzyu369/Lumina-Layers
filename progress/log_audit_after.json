@@ -1,0 +1,29 @@
+{
+  "duplicate_event_count": 0,
+  "duplicate_event_ratio": 0.0,
+  "event_counts": {
+    "optional_dependency_missing": 1,
+    "unstructured": 1
+  },
+  "generated_at": "2026-04-26T07:41:20.597487+00:00",
+  "input_files": [
+    "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\logs\\lumina_20260426_135251.log"
+  ],
+  "label": "after",
+  "request_completed_count": 0,
+  "request_completed_ratio": 0.0,
+  "structured_lines": 1,
+  "top_events": [
+    {
+      "count": 1,
+      "event": "unstructured"
+    },
+    {
+      "count": 1,
+      "event": "optional_dependency_missing"
+    }
+  ],
+  "total_bytes": 470,
+  "total_lines": 2,
+  "unstructured_lines": 1
+}

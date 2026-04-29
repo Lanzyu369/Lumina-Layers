@@ -1,168 +1,86 @@
 """Lumina Studio file logger.
 Lumina Studio 文件日志模块。
 
-Wraps sys.stdout with a _Tee so every print() call is:
-  1. Forwarded to the original console stream (unchanged).
-  2. Written to logs/lumina_YYYYMMDD_HHMMSS.log with a [HH:MM:SS.mmm] prefix.
-
-Usage (call once at startup):
-    from api.logger import setup_file_logging
-    setup_file_logging()
-
-Performance notes:
-- Timestamp formatting occurs only when a line is actually written.
-- File is opened with line-buffering (buffering=1); no explicit flush needed per-line.
-- ANSI escape codes are stripped before writing to the log file.
+Selects the shared JSON Lines log file path for API and worker processes.
+为 API 与 worker 进程选择共享的 JSON Lines 日志文件路径。
 """
 
-import io
 import os
-import re
 import sys
 import tempfile
 import time
-import threading
-from datetime import datetime
 from pathlib import Path
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHF]")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_LOG_INIT_BY_PARENT_ENV = "LUMINA_LOG_INIT_BY_PARENT"
 _logging_initialized = False
-_tee_instance: "_Tee | None" = None
-
-
-class _Tee(io.TextIOBase):
-    """Tee stdout to both the original console stream and a timestamped log file.
-
-    Each line written to the log file is prefixed with [HH:MM:SS.mmm].
-    ANSI colour codes are stripped from log file output.
-    Thread-safe via an internal lock.
-    """
-
-    def __init__(self, log_path: Path, console_stream=None) -> None:
-        self._console = console_stream or sys.__stdout__
-        self._file = open(log_path, "a", encoding="utf-8", buffering=1)
-        self._at_line_start = True
-        self._lock = threading.Lock()
-
-    # ---- io.TextIOBase protocol ----
-
-    @property
-    def encoding(self) -> str:
-        return getattr(self._console, "encoding", "utf-8")
-
-    @property
-    def errors(self) -> str:
-        return getattr(self._console, "errors", "replace")
-
-    def readable(self) -> bool:
-        return False
-
-    def writable(self) -> bool:
-        return True
-
-    def seekable(self) -> bool:
-        return False
-
-    def fileno(self) -> int:
-        # Delegate to console so uvicorn/subprocess pipes still work.
-        try:
-            return self._console.fileno()
-        except (AttributeError, io.UnsupportedOperation):
-            raise io.UnsupportedOperation("fileno")
-
-    def isatty(self) -> bool:
-        return False
-
-    # ---- Core write / flush ----
-
-    def write(self, s: str) -> int:
-        if not s:
-            return 0
-
-        # Forward to console; fall back to encoded replacement on narrow terminals (e.g. GBK).
-        try:
-            self._console.write(s)
-        except UnicodeEncodeError:
-            enc = getattr(self._console, "encoding", None) or "utf-8"
-            safe = s.encode(enc, errors="replace").decode(enc, errors="replace")
-            try:
-                self._console.write(safe)
-            except Exception:
-                pass
-        try:
-            self._console.flush()
-        except Exception:
-            pass
-
-        # Strip ANSI codes and prefix each new line with [HH:MM:SS.mmm].
-        clean = _ANSI_RE.sub("", s)
-        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
-
-        with self._lock:
-            for part in clean.splitlines(keepends=True):
-                if self._at_line_start:
-                    self._file.write(f"[{ts}] ")
-                self._file.write(part)
-                self._at_line_start = part.endswith("\n")
-
-        return len(s)
-
-    def flush(self) -> None:
-        try:
-            self._console.flush()
-        except Exception:
-            pass
-        try:
-            self._file.flush()
-        except Exception:
-            pass
-
-    def close(self) -> None:
-        try:
-            self._file.flush()
-            self._file.close()
-        except Exception:
-            pass
-        super().close()
 
 
 def setup_file_logging(log_path=None) -> Path | None:
-    """Install stdout tee to logs/lumina_YYYYMMDD_HHMMSS.log.
+    """Configure a shared structured log file.
+    配置共享结构化日志文件。
 
-    Safe to call multiple times — only initializes once.
-    If log_path is provided, appends to that existing file instead of
-    creating a new timestamped file (used by worker processes).
-    Returns the log file path, or None if already initialized.
+    Safe to call multiple times: only the first successful call initializes.
+    多次调用是安全的：只有第一次成功调用会初始化。
+
+    If log_path is provided, append to that existing file path instead of
+    creating a new timestamped file. Returns the log file path, or None if
+    already initialized or if no candidate can be prepared.
+    如果提供 log_path，则复用该路径追加写入；返回日志路径，若已初始化或无可用候选则返回 None。
     """
-    global _logging_initialized, _tee_instance
+    global _logging_initialized
 
     if _logging_initialized:
         return None
 
-    tee: _Tee | None = None
+    env_log_path = os.environ.get("LUMINA_LOG_PATH")
+    is_parent_configured = os.environ.get(_LOG_INIT_BY_PARENT_ENV) == "1"
+    explicit_path = Path(log_path) if log_path is not None else None
+    use_env_log_path = explicit_path is None and bool(env_log_path)
     selected_path: Path | None = None
-    for candidate_path in _resolve_log_candidates(Path(log_path) if log_path is not None else None):
+    candidates = (
+        [Path(env_log_path)]
+        if use_env_log_path and env_log_path is not None
+        else _resolve_log_candidates(explicit_path)
+    )
+    for candidate_path in candidates:
         try:
-            candidate_path.parent.mkdir(parents=True, exist_ok=True)
-            tee = _Tee(candidate_path, console_stream=sys.stdout)
+            _prepare_log_path(candidate_path)
             selected_path = candidate_path
             break
         except OSError as exc:
             _emit_log_setup_warning(candidate_path, exc)
 
-    if tee is None or selected_path is None:
+    if selected_path is None:
         _logging_initialized = False
-        _tee_instance = None
         return None
 
-    sys.stdout = tee
-    _tee_instance = tee
+    resolved_path = selected_path.resolve()
+    suppress_configured_event = is_parent_configured and _matches_log_path(resolved_path, env_log_path)
+    os.environ["LUMINA_LOG_PATH"] = str(resolved_path)
+    os.environ[_LOG_INIT_BY_PARENT_ENV] = "1"
     _logging_initialized = True
 
-    # First log line mirrors old lumina_*.log convention.
-    print(f"[LOG] {selected_path}")
+    from api.structured_logging import configure_structured_logging, get_logger
+
+    configure_structured_logging()
+    if not suppress_configured_event:
+        get_logger(__name__).info(
+            "Log file configured",
+            extra={"event": "log_file_configured", "path": str(resolved_path)},
+        )
     return selected_path
+
+
+def _matches_log_path(path: Path, raw_path: str | None) -> bool:
+    """Return whether a resolved path matches a raw environment path."""
+
+    if not raw_path:
+        return False
+    try:
+        return path == Path(raw_path).expanduser().resolve()
+    except OSError:
+        return str(path) == str(Path(raw_path))
 
 
 def _resolve_log_candidates(explicit_path: Path | None) -> list[Path]:
@@ -197,6 +115,19 @@ def _resolve_log_candidates(explicit_path: Path | None) -> list[Path]:
             seen.add(key)
             deduped.append(candidate)
     return deduped
+
+
+def _prepare_log_path(log_path: Path) -> None:
+    """Create parent directories and verify append access.
+    创建父目录并验证追加写入权限。
+
+    Args:
+        log_path: Candidate log path. (候选日志路径)
+    """
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8"):
+        pass
 
 
 def _emit_log_setup_warning(log_path: Path, exc: OSError) -> None:

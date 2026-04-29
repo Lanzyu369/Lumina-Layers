@@ -7,17 +7,53 @@ S09 — 坐标变换与 3MF 导出。
 - BambuStudio 3MF 导出（含嵌入打印设置）
 """
 
+from api.structured_logging import get_logger
 import os
 import time
-import logging
 
 import numpy as np
 
-from config import MODELS_DIR, PrinterConfig
+from config import MODELS_DIR, PrinterConfig, get_printer_profile
 from core.naming import generate_model_filename
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
+
+
+def _center_scene_on_printer_bed(scene, printer_id: str) -> None:
+    """Translate the export scene to the selected printer's bed center."""
+    bounds = np.asarray(scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        return
+
+    min_bounds, max_bounds = bounds
+    if np.any(max_bounds[:2] <= min_bounds[:2]):
+        return
+
+    profile = get_printer_profile(printer_id)
+    current_center = (min_bounds[:2] + max_bounds[:2]) / 2.0
+    bed_center = np.array([profile.bed_width / 2.0, profile.bed_depth / 2.0], dtype=np.float64)
+    delta_xy = bed_center - current_center
+    if np.allclose(delta_xy, 0.0):
+        return
+
+    transform = np.eye(4)
+    transform[0, 3] = float(delta_xy[0])
+    transform[1, 3] = float(delta_xy[1])
+    for geom_name in list(scene.geometry.keys()):
+        scene.geometry[geom_name].apply_transform(transform)
+
+    _log.debug(
+        "Centered export scene on printer bed",
+        extra={
+            "event": "s09_scene_centered_on_bed",
+            "printer_id": profile.id,
+            "bed_width_mm": int(profile.bed_width),
+            "bed_depth_mm": int(profile.bed_depth),
+            "delta_x_mm": round(float(delta_xy[0]), 6),
+            "delta_y_mm": round(float(delta_xy[1]), 6),
+        },
+    )
 
 
 def run(ctx: dict) -> dict:
@@ -67,11 +103,14 @@ def run(ctx: dict) -> dict:
         for geom_name in list(scene.geometry.keys()):
             scene.geometry[geom_name].apply_transform(mirror_transform)
 
+    if bool(ctx.get("center_on_bed", True)):
+        _center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
+
     _prog = ctx.get("progress")
     if _prog is not None:
         _prog(0.50, "导出 3MF 中... | Exporting 3MF...")
 
-    _log.info(f"[S09] export_3mf start")
+    _log.debug(f"export_3mf start")
     _export_t0 = time.perf_counter() if _bench_enabled else None
 
     base_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -79,7 +118,7 @@ def run(ctx: dict) -> dict:
 
     # Check if scene has any geometry before exporting
     if len(scene.geometry) == 0:
-        _log.error("[S09] No meshes generated, cannot export 3MF")
+        _log.error("No meshes generated, cannot export 3MF")
         ctx["error"] = "[ERROR] Mesh generation failed: No valid meshes generated"
         return ctx
 
@@ -103,9 +142,9 @@ def run(ctx: dict) -> dict:
     }
 
     try:
-        _log.info(f"[S09] Exporting with BambuStudio metadata...")
+        _log.debug(f"Exporting with BambuStudio metadata...")
         _log.debug(
-            "[S09] Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
+            "Base-layer modifier: enabled=%s base_height_mm=%s color_height_mm=%s face_orientation=%s",
             bool(ctx.get("enable_base_layer_height_modifier", True)),
             float(ctx.get("bambu_base_height_mm", 0.0)),
             float(ctx.get("bambu_color_height_mm", 0.0)),
@@ -131,10 +170,10 @@ def run(ctx: dict) -> dict:
             _export_elapsed = time.perf_counter() - _export_t0
             _hifi_timings["export_3mf_s"] = _export_elapsed
             ctx["_hifi_timings"] = _hifi_timings
-            _log.info(f"[S09] export_3mf done: {_export_elapsed:.3f}s")
-        _log.info(f"[S09] 3MF exported with embedded settings: {out_path}")
+            _log.debug(f"export_3mf done: {_export_elapsed:.3f}s")
+        _log.debug(f"3MF exported with embedded settings: {out_path}")
     except (ValueError, TypeError, RuntimeError, OSError) as e:
-        _log.exception(f"[S09] Error exporting 3MF: {e}")
+        _log.exception(f"Error exporting 3MF: {e}")
         ctx["error"] = f"[ERROR] 3MF export failed: {e}"
         return ctx
 

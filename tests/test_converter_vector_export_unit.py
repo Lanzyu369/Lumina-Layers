@@ -182,6 +182,56 @@ class TestVectorBranchExport:
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
+    def test_vector_export_centers_scene_on_selected_printer_bed(self, MockVP, mock_bambu_export, tmp_path):
+        """Vector branch should center ordinary final exports before Bambu 3MF writing."""
+        from config import ModelingMode
+
+        svg_file = tmp_path / "center-vector.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<rect x="0" y="0" width="50" height="50" fill="#ffffff"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=[20, 10, 1])
+        mesh.metadata["name"] = "White"
+        fake_scene.add_geometry(mesh, geom_name="White")
+        MockVP.return_value = _build_fake_processor(fake_scene)
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-centered-vector.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=30.0,
+            spacer_thick=1.6,
+            structure_mode="Single-sided",
+            auto_bg=False,
+            bg_tol=30,
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            printer_id="bambu-p1s",
+        )
+
+        _, kwargs = mock_bambu_export.call_args
+        exported_scene = kwargs["scene"]
+        bounds = exported_scene.bounds
+        center_x = (bounds[0][0] + bounds[1][0]) / 2
+        center_y = (bounds[0][1] + bounds[1][1]) / 2
+        assert center_x == pytest.approx(128)
+        assert center_y == pytest.approx(128)
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
     def test_empty_scene_returns_error(self, MockVP, mock_bambu_export, tmp_path):
         """Empty vector scene should fail before exporter is called."""
         from config import ModelingMode

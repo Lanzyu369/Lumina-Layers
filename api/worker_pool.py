@@ -38,6 +38,26 @@ def _worker_init() -> None:
             pass
 
 
+def _run_in_worker_with_context(
+    fn: Callable[..., T],
+    request_id: str | None,
+    session_id: str | None,
+    *args: Any,
+) -> T:
+    """Replay parent-side contextvars inside the worker process before invoking fn.
+
+    在 worker 子进程中重放父进程的 request_id 与 session_id 后再执行 fn，
+    保证 worker 内部 logger 输出的事件能溯源到发起的 HTTP 请求。
+    """
+    from api.structured_logging import set_request_id, set_session_id
+
+    if request_id is not None:
+        set_request_id(request_id)
+    if session_id is not None:
+        set_session_id(session_id)
+    return fn(*args)
+
+
 class WorkerPoolManager:
     """Manage a ProcessPoolExecutor for CPU-bound tasks.
     管理用于 CPU 密集型任务的进程池。
@@ -92,11 +112,28 @@ class WorkerPoolManager:
         Raises:
             asyncio.TimeoutError: If task exceeds timeout. (任务超时)
             RuntimeError: If pool not started. (进程池未启动)
+
+        Parent-side contextvars (request_id / session_id) are captured at call
+        time and replayed inside the worker process, so worker-emitted log
+        records carry the same correlation IDs as the originating endpoint.
+        父进程当前的 request_id / session_id 会在调用时被快照，并在 worker
+        子进程内重放，使得 worker 发出的日志可与 endpoint 的请求关联。
         """
         if self._pool is None:
             raise RuntimeError("WorkerPool not started")
+        from api.structured_logging import get_request_id, get_session_id
+
         loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(self._pool, fn, *args)
+        request_id = get_request_id()
+        session_id = get_session_id()
+        future = loop.run_in_executor(
+            self._pool,
+            _run_in_worker_with_context,
+            fn,
+            request_id,
+            session_id,
+            *args,
+        )
         return await asyncio.wait_for(future, timeout=timeout)
 
     def shutdown(self, wait: bool = True) -> None:

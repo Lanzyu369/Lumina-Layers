@@ -198,7 +198,16 @@ def scan_registry() -> list[DetectedSlicer]:
                         display_name=config_display_name,
                         exe_path=exe_path,
                     )
-                    logger.info("[SLICER] Registry: %s -> %s", config_display_name, exe_path)
+                    logger.info(
+                        "Slicer registry entry detected: %s -> %s",
+                        config_display_name,
+                        exe_path,
+                        extra={
+                            "event": "slicer_registry_entry_detected",
+                            "slicer_name": config_display_name,
+                            "exe_path": exe_path,
+                        },
+                    )
             except OSError:
                 pass
 
@@ -223,7 +232,7 @@ def detect_installed_slicers() -> list[DetectedSlicer]:
     # Filter out entries whose exe no longer exists (defensive)
     slicers = [s for s in slicers if os.path.isfile(s.exe_path)]
     if not slicers:
-        logger.info("[SLICER] No slicers detected")
+        logger.info("No slicers detected", extra={"event": "slicers_not_detected"})
     return slicers
 
 

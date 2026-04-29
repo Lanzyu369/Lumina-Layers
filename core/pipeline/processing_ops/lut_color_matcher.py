@@ -7,17 +7,17 @@ DB-first + model fallback 语义。
 
 from __future__ import annotations
 
-import logging
 import time
 
 import cv2
 import numpy as np
 from scipy.spatial import KDTree
 
+from api.structured_logging import get_logger
 from core.native_reference import SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL
 from core.predictive_lut import _rgb_to_runtime_opencv_lab, match_unique_colors_with_runtime
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
@@ -58,7 +58,7 @@ def _match_colors_to_db(
 
     unique_lab = _rgb_to_lab(unique_colors)
     if hue_matcher is not None:
-        _log.info("[IMAGE_PROCESSOR] Hue-aware matching enabled")
+        _log.debug("Hue-aware matching enabled")
         indices = np.asarray(hue_matcher.match_colors_batch(unique_colors, k=32), dtype=np.int32)
         selected_lab = lut_lab[indices].astype(np.float64, copy=False)
         distances = np.linalg.norm(unique_lab - selected_lab, axis=1).astype(np.float32, copy=False)
@@ -180,13 +180,13 @@ def match_colors_to_lut(
         result = _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher)[0]
 
     if isinstance(result, dict):
-        _log.info(
-            "[IMAGE_PROCESSOR] Predictive LUT matching: %.2fs, mode=%s",
+        _log.debug(
+            "Predictive LUT matching: %.2fs, mode=%s",
             time.time() - t0,
             result.get("runtime_mode_key", "unknown"),
         )
     else:
-        _log.info("[IMAGE_PROCESSOR] LUT matching: %.2fs", time.time() - t0)
+        _log.debug("LUT matching: %.2fs", time.time() - t0)
     return result
 
 
@@ -202,7 +202,7 @@ def map_pixels_to_lut(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Map all pixels to LUT or predictive/runtime-derived recipes."""
     t0 = time.time()
-    _log.info("[IMAGE_PROCESSOR] Building color lookup table...")
+    _log.debug("Building color lookup table...")
 
     is_predictive = isinstance(unique_match, dict) and unique_match.get("match_mode") == "predictive"
 
@@ -237,5 +237,5 @@ def map_pixels_to_lut(
         matched_rgb = lut_rgb[lut_indices_for_pixels].reshape(target_h, target_w, 3)
         material_matrix = ref_stacks[lut_indices_for_pixels].reshape(target_h, target_w, layer_count)
 
-    _log.info("[IMAGE_PROCESSOR] Color mapping: %.2fs", time.time() - t0)
+    _log.debug("Color mapping: %.2fs", time.time() - t0)
     return matched_rgb, material_matrix

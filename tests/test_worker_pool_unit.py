@@ -36,6 +36,13 @@ def _slow_task(seconds: float) -> str:
     return "done"
 
 
+def _read_context_ids() -> tuple[str | None, str | None]:
+    """Top-level helper for asserting contextvar propagation into a worker."""
+    from api.structured_logging import get_request_id, get_session_id
+
+    return (get_request_id(), get_session_id())
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle tests
 # ---------------------------------------------------------------------------
@@ -153,3 +160,124 @@ class TestSubmit:
                 await pool.submit(_slow_task, 10.0, timeout=0.3)
         finally:
             pool.shutdown(wait=False)
+
+
+class TestContextvarPropagation:
+    """Verify request_id / session_id flow into the worker process."""
+
+    @pytest.mark.asyncio
+    async def test_submit_propagates_request_id_and_session_id(self) -> None:
+        from api.structured_logging import (
+            reset_request_id,
+            reset_session_id,
+            set_request_id,
+            set_session_id,
+        )
+
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        request_token = set_request_id("req-round2-abc")
+        session_token = set_session_id("sess-round2-xyz")
+        try:
+            result = await pool.submit(_read_context_ids)
+            assert result == ("req-round2-abc", "sess-round2-xyz")
+        finally:
+            reset_session_id(session_token)
+            reset_request_id(request_token)
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_submit_passes_none_when_parent_has_no_ids(self) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            result = await pool.submit(_read_context_ids)
+            assert result == (None, None)
+        finally:
+            pool.shutdown(wait=True)
+
+
+class TestSubmitIsTransparentToParentContext:
+    """submit() must not silently bind a new session_id on the parent context."""
+
+    @pytest.mark.asyncio
+    async def test_submit_leaves_parent_session_id_none_when_unset(self) -> None:
+        from api.structured_logging import get_session_id
+
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            assert get_session_id() is None
+            await pool.submit(_add, 1, 2)
+            assert get_session_id() is None
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_submit_preserves_parent_session_id_when_set(self) -> None:
+        from api.structured_logging import (
+            get_session_id,
+            reset_session_id,
+            set_session_id,
+        )
+
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        token = set_session_id("parent-sess-explicit")
+        try:
+            await pool.submit(_add, 1, 2)
+            assert get_session_id() == "parent-sess-explicit"
+        finally:
+            reset_session_id(token)
+            pool.shutdown(wait=True)
+
+
+class TestRunInWorkerWithContext:
+    """Unit-test the wrapper without spawning subprocesses."""
+
+    def test_wrapper_sets_request_id_before_invoking_fn(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+        from api.structured_logging import get_request_id, get_session_id
+
+        captured: dict[str, str | None] = {}
+
+        def _capture(*_args: object) -> None:
+            captured["request_id"] = get_request_id()
+            captured["session_id"] = get_session_id()
+
+        _run_in_worker_with_context(_capture, "req-direct", "sess-direct")
+        assert captured == {"request_id": "req-direct", "session_id": "sess-direct"}
+
+    def test_wrapper_skips_set_when_ids_are_none(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+        from api.structured_logging import (
+            get_request_id,
+            get_session_id,
+            reset_request_id,
+            reset_session_id,
+            set_request_id,
+            set_session_id,
+        )
+
+        outer_request = set_request_id("outer-req")
+        outer_session = set_session_id("outer-sess")
+        try:
+            captured: dict[str, str | None] = {}
+
+            def _capture(*_args: object) -> None:
+                captured["request_id"] = get_request_id()
+                captured["session_id"] = get_session_id()
+
+            _run_in_worker_with_context(_capture, None, None)
+            assert captured == {"request_id": "outer-req", "session_id": "outer-sess"}
+        finally:
+            reset_session_id(outer_session)
+            reset_request_id(outer_request)
+
+    def test_wrapper_returns_fn_result(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+
+        def _add_local(a: int, b: int) -> int:
+            return a + b
+
+        assert _run_in_worker_with_context(_add_local, "rid", "sid", 2, 3) == 5

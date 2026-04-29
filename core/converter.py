@@ -195,9 +195,10 @@ def convert_image_to_3d(
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
     matched_rgb_path: Optional[str] = None,
+    mask_solid_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
     piece_boundary_geometry_path: Optional[str] = None,
-    disable_material_dilation: bool = False,
+    disable_material_dilation: bool = True,
     loop_angle: float = 0.0,
     loop_offset_x: float = 0.0,
     loop_offset_y: float = 0.0,
@@ -206,6 +207,7 @@ def convert_image_to_3d(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     enable_base_layer_height_modifier: bool = True,
+    center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
     progress=None,
     enable_fridge_magnet: bool = False,
@@ -358,9 +360,10 @@ def generate_final_model(
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
     matched_rgb_path: Optional[str] = None,
+    mask_solid_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
     piece_boundary_geometry_path: Optional[str] = None,
-    disable_material_dilation: bool = False,
+    disable_material_dilation: bool = True,
     loop_angle: float = 0.0,
     loop_offset_x: float = 0.0,
     loop_offset_y: float = 0.0,
@@ -369,6 +372,7 @@ def generate_final_model(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     enable_base_layer_height_modifier: bool = True,
+    center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
     progress=None,
     enable_fridge_magnet: bool = False,
@@ -475,6 +479,7 @@ def generate_final_model(
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
+        mask_solid_path=mask_solid_path,
         material_matrix_path=material_matrix_path,
         piece_boundary_geometry_path=piece_boundary_geometry_path,
         disable_material_dilation=disable_material_dilation,
@@ -486,6 +491,7 @@ def generate_final_model(
         slicer=slicer,
         nozzle_size=nozzle_size,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
         progress=progress,
         enable_fridge_magnet=enable_fridge_magnet,
@@ -1204,21 +1210,21 @@ def detect_lut_color_mode(lut_path):
                     and layer_count == 6
                     and (max_mat is None or max_mat <= 4)
                 ):
-                    log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode from .npz ({total_colors} colors)")
+                    log.info(f"Detected 5-Color Extended mode from .npz ({total_colors} colors)")
                     return "5-Color Extended"
                 if total_colors >= 2600 and total_colors <= 2800:
-                    log.info(f"[AUTO_DETECT] Detected 8-Color mode from .npz ({total_colors} colors)")
+                    log.info(f"Detected 8-Color mode from .npz ({total_colors} colors)")
                     return "8-Color Max"
                 if total_colors >= 1200 and total_colors < 1400:
-                    log.info(f"[AUTO_DETECT] Detected 6-Color mode from .npz ({total_colors} colors)")
+                    log.info(f"Detected 6-Color mode from .npz ({total_colors} colors)")
                     return "6-Color (CMYWGK 1296)"
                 if total_colors >= 900 and total_colors < 1200:
-                    log.info(f"[AUTO_DETECT] Detected 4-Color mode from .npz ({total_colors} colors)")
+                    log.info(f"Detected 4-Color mode from .npz ({total_colors} colors)")
                     return "4-Color"
                 if total_colors >= 30 and total_colors <= 35:
-                    log.info(f"[AUTO_DETECT] Detected 2-Color BW mode from .npz ({total_colors} colors)")
+                    log.info(f"Detected 2-Color BW mode from .npz ({total_colors} colors)")
                     return "BW (Black & White)"
-            log.info(f"[AUTO_DETECT] Detected Merged LUT (.npz format)")
+            log.info(f"Detected Merged LUT (.npz format)")
             return "Merged"
 
         # .json (Keyed JSON) format
@@ -1228,29 +1234,29 @@ def detect_lut_color_mode(lut_path):
             rgb, stacks, _meta = LUTManager.load_lut_with_metadata(lut_path)
             # 优先使用存储的 color_mode
             if _meta and _meta.color_mode:
-                log.info(f"[AUTO_DETECT] Using stored color_mode from metadata: {_meta.color_mode}")
+                log.info(f"Using stored color_mode from metadata: {_meta.color_mode}")
                 return _meta.color_mode
             # 回退到基于数量的推断
             total_colors = len(rgb) if rgb is not None else 0
             layer_count = int(stacks.shape[1]) if isinstance(stacks, np.ndarray) and stacks.ndim == 2 else None
             max_mat = int(np.max(stacks)) if isinstance(stacks, np.ndarray) and stacks.size > 0 else None
-            log.info(f"[AUTO_DETECT] JSON LUT: {total_colors} colors, layer_count={layer_count}, max_mat={max_mat}")
+            log.info(f"JSON LUT: {total_colors} colors, layer_count={layer_count}, max_mat={max_mat}")
             if total_colors >= 2400 and total_colors < 2600 and layer_count == 6 and (max_mat is None or max_mat <= 4):
-                log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode from .json ({total_colors} colors)")
+                log.info(f"Detected 5-Color Extended mode from .json ({total_colors} colors)")
                 return "5-Color Extended"
             if total_colors >= 2600 and total_colors <= 2800:
-                log.info(f"[AUTO_DETECT] Detected 8-Color mode from .json ({total_colors} colors)")
+                log.info(f"Detected 8-Color mode from .json ({total_colors} colors)")
                 return "8-Color Max"
             if total_colors >= 1200 and total_colors < 1400:
-                log.info(f"[AUTO_DETECT] Detected 6-Color mode from .json ({total_colors} colors)")
+                log.info(f"Detected 6-Color mode from .json ({total_colors} colors)")
                 return "6-Color (CMYWGK 1296)"
             if total_colors >= 900 and total_colors < 1200:
-                log.info(f"[AUTO_DETECT] Detected 4-Color mode from .json ({total_colors} colors)")
+                log.info(f"Detected 4-Color mode from .json ({total_colors} colors)")
                 return "4-Color"
             if total_colors >= 30 and total_colors <= 35:
-                log.info(f"[AUTO_DETECT] Detected 2-Color BW mode from .json ({total_colors} colors)")
+                log.info(f"Detected 2-Color BW mode from .json ({total_colors} colors)")
                 return "BW (Black & White)"
-            log.info(f"[AUTO_DETECT] Non-standard JSON LUT size ({total_colors} colors), detected as Merged")
+            log.info(f"Non-standard JSON LUT size ({total_colors} colors), detected as Merged")
             return "Merged"
 
         # Standard .npy format
@@ -1262,7 +1268,7 @@ def detect_lut_color_mode(lut_path):
             if len(lut_data) % 3 == 0:
                 lut_data = lut_data.reshape(-1, 3)
             else:
-                log.info(f"[AUTO_DETECT] Invalid LUT format: cannot reshape to (N, 3)")
+                log.info(f"Invalid LUT format: cannot reshape to (N, 3)")
                 return None
 
         # 计算颜色数量
@@ -1271,36 +1277,36 @@ def detect_lut_color_mode(lut_path):
         else:
             total_colors = lut_data.shape[0] * lut_data.shape[1]
 
-        log.info(f"[AUTO_DETECT] LUT shape: {lut_data.shape}, total colors: {total_colors}")
+        log.info(f"LUT shape: {lut_data.shape}, total colors: {total_colors}")
 
         # 2色模式：32色 (2^5 = 32)
         if total_colors >= 30 and total_colors <= 35:
-            log.info(f"[AUTO_DETECT] Detected 2-Color BW mode (32 colors)")
+            log.info(f"Detected 2-Color BW mode (32 colors)")
             return "BW (Black & White)"
 
         # 5-Color Extended 模式：2468 色 (1024 base + 1444 extended)
         elif total_colors >= 2400 and total_colors < 2600:
-            log.info(f"[AUTO_DETECT] Detected 5-Color Extended mode ({total_colors} colors)")
+            log.info(f"Detected 5-Color Extended mode ({total_colors} colors)")
             return "5-Color Extended"
 
         # 8色模式：2600-2800色
         elif total_colors >= 2600 and total_colors <= 2800:
-            log.info(f"[AUTO_DETECT] Detected 8-Color mode ({total_colors} colors)")
+            log.info(f"Detected 8-Color mode ({total_colors} colors)")
             return "8-Color Max"
 
         # 6色模式：1200-1400色
         elif total_colors >= 1200 and total_colors < 1400:
-            log.info(f"[AUTO_DETECT] Detected 6-Color mode ({total_colors} colors)")
+            log.info(f"Detected 6-Color mode ({total_colors} colors)")
             return "6-Color (CMYWGK 1296)"
 
         # 4色模式：900-1200色
         elif total_colors >= 900 and total_colors < 1200:
-            log.info(f"[AUTO_DETECT] Detected 4-Color mode ({total_colors} colors)")
+            log.info(f"Detected 4-Color mode ({total_colors} colors)")
             return "4-Color"
 
         else:
             # 非标准尺寸：识别为合并色卡
-            log.info(f"[AUTO_DETECT] Non-standard LUT size ({total_colors} colors), detected as Merged")
+            log.info(f"Non-standard LUT size ({total_colors} colors), detected as Merged")
             return "Merged"
 
     except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
@@ -1334,10 +1340,10 @@ def detect_image_type(image_path: str | None) -> str | None:
         ext = os.path.splitext(image_path)[1].lower()
 
         if ext == ".svg":
-            log.info(f"[AUTO_DETECT] SVG file detected, recommending SVG Mode")
+            log.info(f"SVG file detected, recommending SVG Mode")
             return ModelingMode.VECTOR
         else:
-            log.info(f"[AUTO_DETECT] Raster image detected ({ext}), keeping current mode")
+            log.info(f"Raster image detected ({ext}), keeping current mode")
             return None
 
     except (TypeError, ValueError, OSError) as exc:

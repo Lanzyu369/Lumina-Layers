@@ -1,0 +1,122 @@
+{
+  "duplicate_event_count": 978,
+  "duplicate_event_ratio": 0.977022977022977,
+  "event_counts": {
+    "Material mode parsed: count=8 names=['彩多屋/彩多屋 PLA 肤色', '彩多屋/PLA 天蓝色', '瑞贝思/瑞贝思 PLA 黑', '瑞贝思/瑞贝思 PLA 黄', '瑞贝思/瑞贝思 PLA 蓝', '瑞贝思/瑞贝思 PLA 绿', '瑞贝思/瑞贝思 PLA 红', '瑞贝思/瑞贝思 PLA 白']": 3,
+    "[GENERATE][DEBUG-COMPARE] use_cached_matched_rgb=False, has_replacement_regions=False": 3,
+    "client_log": 93,
+    "converter_generate_timing": 3,
+    "converter_glb_completed": 7,
+    "converter_glb_discarded_after_build": 1,
+    "converter_glb_scheduled": 8,
+    "converter_layer_images_cache_hit": 10,
+    "converter_layer_images_cache_miss": 9,
+    "converter_preview_submit": 4,
+    "converter_preview_timing": 4,
+    "file_cleanup": 4,
+    "gradient_groups_computed": 4,
+    "inactive_session_registry_cleanup": 46,
+    "optional_dependency_missing": 1,
+    "request_completed": 613,
+    "unstructured": 169,
+    "worker_model_done": 3,
+    "worker_model_started": 3,
+    "worker_pool_started": 1,
+    "worker_preview_core_done": 4,
+    "worker_preview_serialization_done": 4,
+    "worker_preview_started": 4
+  },
+  "generated_at": "2026-04-26T07:45:45.262908+00:00",
+  "input_files": [
+    "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\logs\\lumina_20260425_232340.log"
+  ],
+  "label": "flow_before",
+  "request_completed_count": 613,
+  "request_completed_ratio": 0.6123876123876124,
+  "structured_lines": 832,
+  "top_events": [
+    {
+      "count": 613,
+      "event": "request_completed"
+    },
+    {
+      "count": 169,
+      "event": "unstructured"
+    },
+    {
+      "count": 93,
+      "event": "client_log"
+    },
+    {
+      "count": 46,
+      "event": "inactive_session_registry_cleanup"
+    },
+    {
+      "count": 10,
+      "event": "converter_layer_images_cache_hit"
+    },
+    {
+      "count": 9,
+      "event": "converter_layer_images_cache_miss"
+    },
+    {
+      "count": 8,
+      "event": "converter_glb_scheduled"
+    },
+    {
+      "count": 7,
+      "event": "converter_glb_completed"
+    },
+    {
+      "count": 4,
+      "event": "converter_preview_submit"
+    },
+    {
+      "count": 4,
+      "event": "worker_preview_started"
+    },
+    {
+      "count": 4,
+      "event": "worker_preview_core_done"
+    },
+    {
+      "count": 4,
+      "event": "worker_preview_serialization_done"
+    },
+    {
+      "count": 4,
+      "event": "gradient_groups_computed"
+    },
+    {
+      "count": 4,
+      "event": "converter_preview_timing"
+    },
+    {
+      "count": 4,
+      "event": "file_cleanup"
+    },
+    {
+      "count": 3,
+      "event": "Material mode parsed: count=8 names=['彩多屋/彩多屋 PLA 肤色', '彩多屋/PLA 天蓝色', '瑞贝思/瑞贝思 PLA 黑', '瑞贝思/瑞贝思 PLA 黄', '瑞贝思/瑞贝思 PLA 蓝', '瑞贝思/瑞贝思 PLA 绿', '瑞贝思/瑞贝思 PLA 红', '瑞贝思/瑞贝思 PLA 白']"
+    },
+    {
+      "count": 3,
+      "event": "[GENERATE][DEBUG-COMPARE] use_cached_matched_rgb=False, has_replacement_regions=False"
+    },
+    {
+      "count": 3,
+      "event": "worker_model_started"
+    },
+    {
+      "count": 3,
+      "event": "worker_model_done"
+    },
+    {
+      "count": 3,
+      "event": "converter_generate_timing"
+    }
+  ],
+  "total_bytes": 361231,
+  "total_lines": 1001,
+  "unstructured_lines": 169
+}

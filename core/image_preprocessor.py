@@ -25,7 +25,10 @@ try:
     HAS_HEIF = True
 except ImportError:
     HAS_HEIF = False
-    log.info("[WARN] [HEIC] pillow-heif not installed. HEIC/HEIF support disabled.")
+    log.info(
+        "Optional HEIC dependency unavailable; HEIC/HEIF support disabled",
+        extra={"event": "optional_dependency_missing", "dependency": "pillow_heif"},
+    )
 
 # RAW support (optional dependency)
 try:
@@ -34,7 +37,10 @@ try:
     HAS_RAW = True
 except ImportError:
     HAS_RAW = False
-    log.info("[WARN] [RAW] rawpy not installed. Camera RAW support disabled.")
+    log.info(
+        "Optional RAW dependency unavailable; camera RAW support disabled",
+        extra={"event": "optional_dependency_missing", "dependency": "rawpy"},
+    )
 
 RAW_EXTENSIONS: set[str] = {
     ".dng",

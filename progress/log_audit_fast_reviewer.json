@@ -1,0 +1,203 @@
+{
+  "ansi_field_count": 0,
+  "baseline_diff": null,
+  "bracket_tag_message_count": 0,
+  "catch_all_event_count": 0,
+  "checks": [
+    {
+      "actual": 14,
+      "name": "info_lines_within_budget",
+      "operator": "<=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 30
+    },
+    {
+      "actual": 1,
+      "name": "info_per_endpoint_within_budget",
+      "operator": "<=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 8
+    },
+    {
+      "actual": 0,
+      "name": "no_request_completed_catchall",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 0
+    },
+    {
+      "actual": 0,
+      "name": "no_unstructured_lines",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 0
+    },
+    {
+      "actual": 0,
+      "name": "no_catch_all_events",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 0
+    },
+    {
+      "actual": 0,
+      "name": "no_ansi_escape",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 0
+    },
+    {
+      "actual": 0,
+      "name": "no_bracket_tag_message",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 0
+    },
+    {
+      "actual": 1,
+      "name": "log_file_configured_once",
+      "operator": "==",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    }
+  ],
+  "duplicate_event_count": 2,
+  "error_lines": 0,
+  "event_counts": {
+    "converter_generate_timing": 2,
+    "converter_preview_timing": 2,
+    "converter_region_replace_timing": 1,
+    "extractor_extract_done": 1,
+    "extractor_merge_5color_extended_done": 1,
+    "extractor_merge_8color_done": 1,
+    "log_file_configured": 1,
+    "lut_colors_loaded": 1,
+    "lut_presets_discovered": 1,
+    "worker_pool_shutdown": 1,
+    "worker_pool_started": 1
+  },
+  "info_lines": 13,
+  "info_lines_by_endpoint": {
+    "08cf2c132ab04e80b6304d49caea5c07": 1,
+    "5d028c907b7c44bda59759c030ce9d8f": 1,
+    "8f3c23208fc5419fadc071c38127b2f1": 1,
+    "943dfdcf780c4f3692c9309a982940d8": 1,
+    "9a421f19e28a4c06ad133f1834d24c08": 1,
+    "a3fbfca9512344479fab42725a6fd90f": 1,
+    "a964ac3c106040eea4f1845b5e37baaa": 1,
+    "be627d178998463993e8961d05bf5baa": 1,
+    "caa31461fe9944e481a8a40437c92b0c": 1,
+    "e98092dfeb8341c7b323f9150ac254b2": 1
+  },
+  "log_file_configured_count": 1,
+  "log_path": "E:\\Lumina-Layers\\LL-1296\\Lumina-Layers\\progress\\log_audit_fast_reviewer.log",
+  "max_info_per_endpoint": 1,
+  "mode": "fast",
+  "overall_passed": true,
+  "request_completed_count": 0,
+  "structured_lines": 13,
+  "timestamp": "2026-04-28T05:26:14.187028+00:00",
+  "top_events": [
+    {
+      "count": 2,
+      "event": "converter_preview_timing"
+    },
+    {
+      "count": 2,
+      "event": "converter_generate_timing"
+    },
+    {
+      "count": 1,
+      "event": "log_file_configured"
+    },
+    {
+      "count": 1,
+      "event": "worker_pool_started"
+    },
+    {
+      "count": 1,
+      "event": "lut_presets_discovered"
+    },
+    {
+      "count": 1,
+      "event": "lut_colors_loaded"
+    },
+    {
+      "count": 1,
+      "event": "converter_region_replace_timing"
+    },
+    {
+      "count": 1,
+      "event": "extractor_extract_done"
+    },
+    {
+      "count": 1,
+      "event": "extractor_merge_8color_done"
+    },
+    {
+      "count": 1,
+      "event": "extractor_merge_5color_extended_done"
+    },
+    {
+      "count": 1,
+      "event": "worker_pool_shutdown"
+    }
+  ],
+  "total_bytes": 4146,
+  "total_lines": 13,
+  "unstructured_lines": 0,
+  "warning_lines": 0,
+  "workflow": [
+    "startup",
+    "lut_list",
+    "lut_colors",
+    "preview",
+    "generate",
+    "replace",
+    "extract",
+    "merge_8color",
+    "merge_5color_ext"
+  ],
+  "workflow_checks": [
+    {
+      "actual": 1,
+      "name": "workflow_event_converter_region_replace_timing",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_extract_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_merge_8color_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    },
+    {
+      "actual": 1,
+      "name": "workflow_event_extractor_merge_5color_extended_done",
+      "operator": ">=",
+      "passed": true,
+      "severity": "error",
+      "threshold": 1
+    }
+  ]
+}

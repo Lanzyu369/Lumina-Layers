@@ -22,6 +22,10 @@ import numpy as np
 import cv2
 from scipy.spatial import KDTree
 
+from api.structured_logging import get_logger
+
+log = get_logger(__name__)
+
 
 class HueAwareColorMatcher:
     """LCH 加权距离颜色匹配器"""
@@ -86,11 +90,17 @@ class HueAwareColorMatcher:
         # 构建无彩暗色子集（v7 暗色描边线保护）
         self._dark_indices, self._dark_kdtree, self._dark_lab = self._build_dark_achromatic_subset(max_L=153, max_C=8)
 
-        print(
-            f"[HueAwareMatcher] 初始化: {self.n_colors} 色, "
-            f"w_L={self.w_L:.2f}, w_C={self.w_C:.2f}, w_H={self.w_H:.2f}, "
-            f"chroma_gate={self.chroma_gate:.1f}, "
-            f"暗色子集={len(self._dark_indices)} 色"
+        log.debug(
+            "Hue-aware matcher initialized",
+            extra={
+                "event": "hue_aware_matcher_initialized",
+                "color_count": self.n_colors,
+                "weight_l": round(float(self.w_L), 3),
+                "weight_c": round(float(self.w_C), 3),
+                "weight_h": round(float(self.w_H), 3),
+                "chroma_gate": round(float(self.chroma_gate), 3),
+                "dark_subset_count": len(self._dark_indices),
+            },
         )
 
     def _resolve_weights(self, hue_weight, preset, w_L, w_C, w_H):
@@ -254,7 +264,10 @@ class HueAwareColorMatcher:
         input_rgb = np.asarray(input_rgb, dtype=np.uint8)
         n = len(input_rgb)
 
-        print(f"[HueAwareMatcher] match_colors_batch (vectorized) n={n}, k={k}")
+        log.debug(
+            "Hue-aware batch matching started",
+            extra={"event": "hue_aware_batch_matching_started", "input_count": n, "candidate_count": k},
+        )
 
         if abs(self.w_L - 1.0) < 1e-6 and abs(self.w_C - 1.0) < 1e-6 and abs(self.w_H - 1.0) < 1e-6:
             input_lab = self._rgb_to_lab(input_rgb)

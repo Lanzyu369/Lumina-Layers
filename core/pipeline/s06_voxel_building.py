@@ -11,13 +11,13 @@ S06 — 体素矩阵构建（5 种模式）。
 - _build_cloisonne_voxel_matrix: 掐丝珐琅体素矩阵
 """
 
-import logging
+from api.structured_logging import get_logger
 import time
 import numpy as np
 
 from config import PrinterConfig, get_source_kind
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _update_bambu_base_layer_ctx_from_voxels(
@@ -303,7 +303,7 @@ def _resolve_generation_backing_color_id(
         return base_channel_idx
 
     _log.warning(
-        "[S06] Invalid metadata base_channel_idx=%s for generation, falling back to backing_color_id=%s",
+        "Invalid metadata base_channel_idx=%s for generation, falling back to backing_color_id=%s",
         base_channel_idx,
         backing_color_id,
     )
@@ -509,12 +509,12 @@ def _build_relief_voxel_matrix(
     OPTICAL_LAYERS = 5
     OPTICAL_THICKNESS_MM = OPTICAL_LAYERS * PrinterConfig.LAYER_HEIGHT  # 0.4mm
 
-    _log.info(f"[RELIEF] Building 2.5D relief voxel matrix...")
-    _log.info(f"[RELIEF] Optical layer thickness: {OPTICAL_THICKNESS_MM}mm ({OPTICAL_LAYERS} layers)")
+    _log.debug(f"Building 2.5D relief voxel matrix...")
+    _log.debug(f"Optical layer thickness: {OPTICAL_THICKNESS_MM}mm ({OPTICAL_LAYERS} layers)")
 
     # Step 1: Build per-pixel height matrix
     if height_matrix is not None:
-        _log.info(f"[RELIEF] Using heightmap mode (per-pixel height)")
+        _log.debug(f"Using heightmap mode (per-pixel height)")
         pixel_heights = height_matrix.copy()
         pixel_heights[mask_solid & (pixel_heights < OPTICAL_THICKNESS_MM)] = OPTICAL_THICKNESS_MM
     else:
@@ -539,9 +539,9 @@ def _build_relief_voxel_matrix(
         max_height_mm = np.max(pixel_heights[mask_solid]) if np.any(mask_solid) else default_height
     max_z_layers = max(OPTICAL_LAYERS + 1, int(np.ceil(max_height_mm / PrinterConfig.LAYER_HEIGHT)))
 
-    _log.info(f"[RELIEF] Max height: {max_height_mm:.2f}mm ({max_z_layers} layers)")
+    _log.debug(f"Max height: {max_height_mm:.2f}mm ({max_z_layers} layers)")
     if np.any(mask_solid):
-        _log.info(f"[RELIEF] Height range: {np.min(pixel_heights[mask_solid]):.2f}mm - {max_height_mm:.2f}mm")
+        _log.debug(f"Height range: {np.min(pixel_heights[mask_solid]):.2f}mm - {max_height_mm:.2f}mm")
 
     # Step 3: Initialize voxel matrix
     full_matrix = np.full((max_z_layers, target_h, target_w), -1, dtype=int)
@@ -584,9 +584,9 @@ def _build_relief_voxel_matrix(
         "max_height_mm": max_height_mm,
     }
 
-    _log.info(f"[RELIEF] Relief voxel matrix built: {full_matrix.shape}")
-    _log.info(f"[RELIEF] Backing range: Z={backing_z_range[0]} to Z={backing_z_range[1]}")
-    _log.info(f"[RELIEF] Mode: Single-sided (viewing surface on top)")
+    _log.debug(f"Relief voxel matrix built: {full_matrix.shape}")
+    _log.debug(f"Backing range: Z={backing_z_range[0]} to Z={backing_z_range[1]}")
+    _log.debug(f"Mode: Single-sided (viewing surface on top)")
 
     return full_matrix, backing_metadata
 
@@ -659,8 +659,8 @@ def _build_cloisonne_voxel_matrix(
         "wire_layers": wire_layers,
     }
 
-    _log.info(
-        f"[CLOISONNE] Voxel matrix: {full_matrix.shape} "
+    _log.debug(
+        f"Voxel matrix: {full_matrix.shape} "
         f"(base={spacer_layers}, colour={OPTICAL}, wire={wire_layers})"
     )
     return full_matrix, backing_metadata
@@ -719,8 +719,8 @@ def run(ctx: dict) -> dict:
     if enable_fridge_magnet and fridge_magnets:
         min_fridge_spacer_thick = _resolve_min_fridge_spacer_thick(fridge_magnets)
         if spacer_thick + 1e-9 < min_fridge_spacer_thick:
-            _log.info(
-                "[S06] Raising spacer_thick from %.3fmm to %.3fmm so fridge cavity fits after layer quantization",
+            _log.debug(
+                "Raising spacer_thick from %.3fmm to %.3fmm so fridge cavity fits after layer quantization",
                 spacer_thick,
                 min_fridge_spacer_thick,
             )
@@ -731,10 +731,10 @@ def run(ctx: dict) -> dict:
     try:
         # ========== 5-Color Extended: force single-sided face-up ==========
         if "5-Color Extended" in color_mode:
-            _log.info(f"[S06] 5-Color Extended: forcing single-sided face-up")
+            _log.debug(f"5-Color Extended: forcing single-sided face-up")
             structure_mode = "单面"
             if enable_relief:
-                _log.info(f"[S06] 5-Color Extended: 2.5D relief mode disabled (incompatible)")
+                _log.debug(f"5-Color Extended: 2.5D relief mode disabled (incompatible)")
                 enable_relief = False
             full_matrix, backing_metadata = _build_voxel_matrix_faceup(
                 material_matrix, mask_solid, spacer_thick, effective_backing_color_id
@@ -742,10 +742,10 @@ def run(ctx: dict) -> dict:
 
         # ========== Cloisonne Mode ==========
         elif enable_cloisonne:
-            _log.info(f"[S06] Cloisonne Mode ENABLED")
+            _log.debug(f"Cloisonne Mode ENABLED")
             wire_width_mm = ctx.get("wire_width_mm", 0.4)
             wire_height_mm = ctx.get("wire_height_mm", 0.4)
-            _log.info(f"[S06] Wire: width={wire_width_mm}mm, height={wire_height_mm}mm")
+            _log.debug(f"Wire: width={wire_width_mm}mm, height={wire_height_mm}mm")
 
             # Force single-sided (face-up)
             structure_mode = "单面"
@@ -769,8 +769,8 @@ def run(ctx: dict) -> dict:
             heightmap_height_matrix = None
 
             if enable_relief and height_mode == "heightmap" and heightmap_path is not None:
-                _log.info(f"[S06] Heightmap Relief Mode: loading heightmap...")
-                _log.info(f"[S06] Heightmap path: {heightmap_path}")
+                _log.debug(f"Heightmap Relief Mode: loading heightmap...")
+                _log.debug(f"Heightmap path: {heightmap_path}")
                 try:
                     from core.heightmap_loader import HeightmapLoader
 
@@ -788,18 +788,18 @@ def run(ctx: dict) -> dict:
                         heightmap_height_matrix = hm_result["height_matrix"]
                         heightmap_stats = hm_result["stats"]
                         for w in hm_result.get("warnings", []):
-                            _log.warning(f"[S06] {w}")
-                        _log.info(f"[S06] Heightmap loaded: {heightmap_height_matrix.shape}")
+                            _log.warning(f"{w}")
+                        _log.debug(f"Heightmap loaded: {heightmap_height_matrix.shape}")
                     else:
-                        _log.warning(f"[S06] Heightmap processing failed: {hm_result['error']}, falling back to flat")
+                        _log.warning(f"Heightmap processing failed: {hm_result['error']}, falling back to flat")
                 except (ImportError, OSError, ValueError, TypeError, KeyError) as e:
-                    _log.warning(f"[S06] Heightmap processing error: {e}, falling back to flat")
+                    _log.warning(f"Heightmap processing error: {e}, falling back to flat")
             elif enable_relief and height_mode == "heightmap" and heightmap_path is None:
-                _log.warning("[S06] heightmap mode selected but no heightmap provided, falling back to flat")
+                _log.warning("heightmap mode selected but no heightmap provided, falling back to flat")
 
             if heightmap_height_matrix is not None:
                 # Heightmap mode
-                _log.info(f"[S06] 2.5D Heightmap Relief Mode ENABLED")
+                _log.debug(f"2.5D Heightmap Relief Mode ENABLED")
                 full_matrix, backing_metadata = _build_relief_voxel_matrix(
                     matched_rgb=matched_rgb,
                     material_matrix=material_matrix,
@@ -813,8 +813,8 @@ def run(ctx: dict) -> dict:
                     global_max_height=relief_global_max_height,
                 )
             elif enable_relief and height_mode == "color" and color_height_map:
-                _log.info(f"[S06] 2.5D Relief Mode ENABLED")
-                _log.info(f"[S06] Color height map: {color_height_map}")
+                _log.debug(f"2.5D Relief Mode ENABLED")
+                _log.debug(f"Color height map: {color_height_map}")
 
                 full_matrix, backing_metadata = _build_relief_voxel_matrix(
                     matched_rgb=matched_rgb,
@@ -843,16 +843,16 @@ def run(ctx: dict) -> dict:
             )
 
         total_layers = full_matrix.shape[0]
-        _log.info(f"[S06] Voxel matrix: {full_matrix.shape} (ZxHxW)")
-        _log.info(
-            f"[S06] Backing layer: z={backing_metadata['backing_z_range']}, "
+        _log.debug(f"Voxel matrix: {full_matrix.shape} (ZxHxW)")
+        _log.debug(
+            f"Backing layer: z={backing_metadata['backing_z_range']}, "
             f"color_id={backing_metadata['backing_color_id']}"
         )
 
     except (ValueError, TypeError, KeyError, RuntimeError, OSError) as e:
-        _log.error(f"[S06] Error marking backing layer: {e}")
+        _log.error(f"Error marking backing layer: {e}")
         _log.warning(
-            "[S06] Falling back to original behavior (backing_color_id=%s)",
+            "Falling back to original behavior (backing_color_id=%s)",
             effective_backing_color_id,
         )
 
@@ -866,7 +866,7 @@ def run(ctx: dict) -> dict:
                 backing_color_id=effective_backing_color_id,
             )
             total_layers = full_matrix.shape[0]
-            _log.info(f"[S06] Fallback successful: {full_matrix.shape} (ZxHxW)")
+            _log.debug(f"Fallback successful: {full_matrix.shape} (ZxHxW)")
         except (ValueError, TypeError, KeyError, RuntimeError, OSError) as fallback_error:
             ctx["error"] = f"[ERROR] Voxel matrix generation failed: {fallback_error}"
             return ctx
@@ -887,6 +887,6 @@ def run(ctx: dict) -> dict:
     )
 
     _elapsed = time.perf_counter() - _t0
-    _log.info(f"[S06] voxel_build done: {_elapsed:.3f}s")
+    _log.debug(f"voxel_build done: {_elapsed:.3f}s")
     ctx.setdefault("_hifi_timings", {})["voxel_build_s"] = _elapsed
     return ctx

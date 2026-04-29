@@ -577,11 +577,17 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    mask_solid_path: str | None = None
     material_matrix_path: str | None = None
-    log.info(
-        "[GENERATE][DEBUG-COMPARE] use_cached_matched_rgb=%s, has_replacement_regions=%s",
+    log.debug(
+        "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
         bool(replacement_regions),
+        extra={
+            "event": "converter_generate_cached_input_state",
+            "use_cached_matched_rgb": request.use_cached_matched_rgb,
+            "has_replacement_regions": bool(replacement_regions),
+        },
     )
     if request.use_cached_matched_rgb:
         cached_matched_rgb = cache.get("matched_rgb")
@@ -591,11 +597,31 @@ async def convert_generate(
             np.save(mr_temp_path, cached_matched_rgb)
             matched_rgb_path = mr_temp_path
             store.register_temp_file(body.session_id, mr_temp_path)
-            log.info(
-                "[GENERATE][DEBUG-COMPARE] cached matched_rgb saved: shape=%s, dtype=%s",
+            log.debug(
+                "Cached matched RGB saved for worker: shape=%s, dtype=%s",
                 cached_matched_rgb.shape,
                 cached_matched_rgb.dtype,
+                extra={
+                    "event": "converter_generate_cached_matched_rgb_saved",
+                    "matched_rgb_shape": list(cached_matched_rgb.shape),
+                    "matched_rgb_dtype": str(cached_matched_rgb.dtype),
+                },
             )
+
+            # Forward mask_solid alongside matched_rgb so the SVG-native
+            # vector branch can intersect each shape mask with the solid
+            # area when projecting region edits back into matched_shapes.
+            # Without this the vector 3MF stays on the SVG fill colour and
+            # silently drops every /region-replace mutation.
+            # 把 mask_solid 与 matched_rgb 一起透传给 worker，让矢量分支
+            # 可以在求交后回写颜色；不传就会丢掉用户的区域替换。
+            cached_mask_solid = cache.get("mask_solid")
+            if cached_mask_solid is not None:
+                fd, ms_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+                os.close(fd)
+                np.save(ms_temp_path, cached_mask_solid)
+                mask_solid_path = ms_temp_path
+                store.register_temp_file(body.session_id, ms_temp_path)
 
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -677,6 +703,7 @@ async def convert_generate(
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
         "matched_rgb_path": matched_rgb_path,
+        "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
@@ -1332,6 +1359,21 @@ async def convert_generate_large_format(
             warnings=warnings,
         )
 
+    log.info(
+        "Large-format conversion generated",
+        extra={
+            "event": "converter_generate_large_format_done",
+            "session_id": body.session_id,
+            "total_width_mm": total_w_mm,
+            "total_height_mm": total_h_mm,
+            "tile_width_mm": lf.tile_width_mm,
+            "tile_height_mm": lf.tile_height_mm,
+            "is_svg_vector": is_svg_vector,
+            "prefer_raster_svg": prefer_raster_svg,
+            "recipe_override_count": len(recipe_overrides or []),
+            "warning_count": len(result.get("warnings", [])),
+        },
+    )
     return LargeFormatGenerateResponse(**result)
 
 
@@ -1361,6 +1403,7 @@ async def convert_batch(
     每个批量项的 CPU 密集型转换逐个提交到工作进程池。
     """
     # Resolve LUT path (main thread)
+    image_count = len(images)
     lut_path = LUTManager.get_lut_path(lut_name)
     if lut_path is None:
         raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
@@ -1464,6 +1507,18 @@ async def convert_batch(
         success_count = sum(1 for r in results if r.status == "success")
         total_count = len(results)
 
+        log.info(
+            "Batch conversion completed",
+            extra={
+                "event": "converter_batch_done",
+                "image_count": image_count,
+                "success_count": success_count,
+                "total_count": total_count,
+                "lut_name": lut_name,
+                "color_mode": color_mode,
+                "modeling_mode": modeling_mode,
+            },
+        )
         return BatchResponse(
             status="ok" if success_count > 0 else "failed",
             message=f"Batch complete: {success_count}/{total_count} succeeded",

@@ -8,12 +8,12 @@ Median filter for salt-and-pepper noise removal.
 Extracted from _process_high_fidelity_mode Step 2.
 """
 
+from api.structured_logging import get_logger
 import time
-import logging
 import numpy as np
 import cv2
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def apply_median_filter(rgb: np.ndarray, kernel_size: int) -> np.ndarray:
@@ -30,10 +30,10 @@ def apply_median_filter(rgb: np.ndarray, kernel_size: int) -> np.ndarray:
     t0 = time.time()
     if kernel_size > 0:
         kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
-        _log.info(f"[IMAGE_PROCESSOR] Applying median blur (kernel={kernel_size})...")
+        _log.debug(f"Applying median blur (kernel={kernel_size})...")
         rgb_processed = cv2.medianBlur(rgb, kernel_size)
     else:
-        _log.info(f"[IMAGE_PROCESSOR] Median blur disabled (kernel=0)")
+        _log.debug(f"Median blur disabled (kernel=0)")
         rgb_processed = rgb
-    _log.info(f"[IMAGE_PROCESSOR] ⏱️ Median blur: {time.time() - t0:.2f}s")
+    _log.debug(f"⏱️ Median blur: {time.time() - t0:.2f}s")
     return rgb_processed

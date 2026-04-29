@@ -11,8 +11,11 @@ P04 — 预览缓存构建。
 import time
 import numpy as np
 
+from api.structured_logging import get_logger
 from config import BedManager
 from core.pipeline.pipeline_utils import _ensure_quantized_image_in_cache
+
+_log = get_logger(__name__)
 
 
 def run(ctx: dict) -> dict:
@@ -100,5 +103,17 @@ def run(ctx: dict) -> dict:
     ctx['cache'] = cache
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p04_s'] = _elapsed
-    print(f"[P04] cache_building done: {_elapsed:.3f}s")
+    _log.debug(
+        "cache_building done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "p04_cache_building_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "width": int(target_w),
+            "height": int(target_h),
+            "mode": str(color_mode),
+            "has_debug_data": debug_data is not None,
+            "has_quantized_image": cache.get("quantized_image") is not None,
+        },
+    )
     return ctx

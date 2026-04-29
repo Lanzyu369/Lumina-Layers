@@ -361,7 +361,7 @@ def generate_recipe_swatch(
 
     mode_label = "double-sided" if is_double else "single-sided"
     _log.info(
-        f"[RECIPE_SWATCH] Generating {n} swatches in {rows}x{cols} grid, "
+        f"Generating {n} swatches in {rows}x{cols} grid, "
         f"block={block_size_mm}mm, gap={gap_mm}mm, mode={mode_label}, "
         f"board={board_w:.1f}x{board_h:.1f}mm"
     )
@@ -480,11 +480,11 @@ def generate_recipe_swatch(
             nozzle_size=nozzle_size,
         )
     except (ValueError, TypeError, RuntimeError, OSError) as e:
-        _log.exception(f"[RECIPE_SWATCH] Export failed: {e}")
+        _log.exception(f"Export failed: {e}")
         return None, None, f"3MF export failed: {e}"
 
     # --- Generate legend image ---
     legend_img = _generate_legend_image(recipes, cols, rows)
 
-    _log.info(f"[RECIPE_SWATCH] Exported: {output_path}")
+    _log.info(f"Exported: {output_path}")
     return output_path, legend_img, f"Generated {n} recipe swatch(es)"

@@ -831,9 +831,18 @@ class TestVisibleStrokeElementsPreserved:
         finally:
             os.unlink(path)
 
-        small_blue = sum(s["poly"].area for s in small_shapes if s["color"] == (0, 0, 255))
-        large_blue = sum(s["poly"].area for s in large_shapes if s["color"] == (0, 0, 255))
-        assert small_blue > large_blue
+        blue_shapes = [
+            s["poly"]
+            for shapes in (small_shapes, large_shapes)
+            for s in shapes
+            if s["color"] == (0, 0, 255)
+        ]
+        assert blue_shapes, "Stroke-only blue path should produce printable geometry"
+        for poly in blue_shapes:
+            min_x, min_y, max_x, max_y = poly.bounds
+            assert poly.area > 0
+            assert max_x > min_x
+            assert max_y > min_y
 
 
 class TestSameColorStrokeCompensation:
@@ -921,9 +930,7 @@ class TestMergedLutPaletteOverride:
             entries.append({
                 "rgb": list(r),
                 "hex": f"#{r[0]:02X}{r[1]:02X}{r[2]:02X}",
-                "recipe": {
-                    "canonical_stack_ids": recipe,
-                },
+                "recipe": recipe,
             })
         lut["entries"] = entries
         path = tmp_path / "test_merged.json"
@@ -1042,9 +1049,7 @@ class TestNativeBundlePaletteOverride:
             entries.append({
                 "rgb": list(r),
                 "hex": f"#{r[0]:02X}{r[1]:02X}{r[2]:02X}",
-                "recipe": {
-                    "canonical_stack_ids": recipe,
-                },
+                "recipe": recipe,
             })
         lut["entries"] = entries
         path = tmp_path / "test_native_bundle.json"

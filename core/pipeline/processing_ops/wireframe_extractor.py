@@ -12,6 +12,10 @@ import time
 import numpy as np
 import cv2
 
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
+
 
 def extract_wireframe_mask(rgb_arr: np.ndarray, pixel_scale: float,
                            wire_width_mm: float = 0.6) -> np.ndarray:
@@ -52,8 +56,24 @@ def extract_wireframe_mask(rgb_arr: np.ndarray, pixel_scale: float,
     mask_wireframe = dilated > 0
 
     dt = time.time() - t0
-    print(f"[CLOISONNE] Wireframe extracted: Canny({low},{high}), "
-          f"dilate {wire_px}px ({wire_width_mm}mm), "
-          f"{np.sum(mask_wireframe)} wire pixels, {dt:.2f}s")
+    wire_pixels = int(np.sum(mask_wireframe))
+    _log.debug(
+        "Wireframe extracted: Canny(%s,%s), dilate %spx (%smm), %s wire pixels, %.2fs",
+        low,
+        high,
+        wire_px,
+        wire_width_mm,
+        wire_pixels,
+        dt,
+        extra={
+            "event": "cloisonne_wireframe_extracted",
+            "duration_ms": round(dt * 1000, 3),
+            "low_threshold": int(low),
+            "high_threshold": int(high),
+            "wire_width_px": int(wire_px),
+            "wire_width_mm": float(wire_width_mm),
+            "count": wire_pixels,
+        },
+    )
 
     return mask_wireframe

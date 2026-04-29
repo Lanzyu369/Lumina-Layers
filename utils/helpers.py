@@ -7,6 +7,11 @@ import zipfile
 import re
 from typing import List
 
+from api.structured_logging import get_logger
+
+
+log = get_logger(__name__)
+
 
 def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bool = True):
     """
@@ -50,7 +55,15 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
 
             # Collect object IDs for assembly
             object_ids = [info[3] for info in obj_info]
-            print(f"[DEBUG] Found {len(object_ids)} objects in 3MF: {object_ids}")
+            log.debug(
+                "Found objects in 3MF model",
+                extra={
+                    "event": "three_mf_objects_discovered",
+                    "path": filepath,
+                    "object_count": len(object_ids),
+                    "object_ids": object_ids,
+                },
+            )
 
             # Process in reverse order to preserve positions (for name fixing)
             for idx, (start, end, old_tag, obj_id) in enumerate(reversed(obj_info)):
@@ -88,7 +101,15 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
                 resources_end = content.find('</resources>')
                 if resources_end != -1:
                     content = content[:resources_end] + assembly_xml + content[resources_end:]
-                    print(f"[DEBUG] Created assembly with id={assembly_id}, containing {len(object_ids)} components")
+                    log.debug(
+                        "Created 3MF assembly",
+                        extra={
+                            "event": "three_mf_assembly_created",
+                            "path": filepath,
+                            "assembly_id": assembly_id,
+                            "component_count": len(object_ids),
+                        },
+                    )
 
                 # Modify <build> section to only reference the assembly
                 # Find and replace the build section
@@ -97,7 +118,14 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
                 if build_match:
                     new_build = f'<build>\n    <item objectid="{assembly_id}" />\n  </build>'
                     content = content[:build_match.start()] + new_build + content[build_match.end():]
-                    print(f"[DEBUG] Updated build section to reference assembly")
+                    log.debug(
+                        "Updated 3MF build section to reference assembly",
+                        extra={
+                            "event": "three_mf_build_section_updated",
+                            "path": filepath,
+                            "assembly_id": assembly_id,
+                        },
+                    )
 
             files_data[model_file] = content.encode('utf-8')
 
@@ -106,7 +134,23 @@ def safe_fix_3mf_names(filepath: str, slot_names: List[str], create_assembly: bo
             for name, data in files_data.items():
                 zf_out.writestr(name, data)
 
-        print(f"[DEBUG] 3MF file updated successfully: {filepath}")
+        log.info(
+            "3MF names updated",
+            extra={
+                "event": "three_mf_names_updated",
+                "path": filepath,
+                "slot_count": len(slot_names),
+                "assembly_enabled": create_assembly,
+            },
+        )
 
     except Exception as e:
-        print(f"Warning: Could not fix 3MF names: {e}")
+        log.warning(
+            "Could not fix 3MF names",
+            extra={
+                "event": "three_mf_name_fix_failed",
+                "path": filepath,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+        )

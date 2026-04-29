@@ -203,6 +203,46 @@ class TestSessionContainsPreviewCache:
         assert loaded_cache["target_w"] == 120
         assert loaded_cache["target_h"] == 80
 
+    def test_preview_binds_session_id_before_worker_submit_and_reuses_it(self) -> None:
+        """Worker submit should see the same session_id returned by preview."""
+        from api.structured_logging import get_session_id
+
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        captured: dict[str, str | None] = {}
+
+        async def _submit(*_args: object, **_kwargs: object) -> dict:
+            captured["session_id"] = get_session_id()
+            return worker_result
+
+        _mock_pool.submit = AsyncMock(side_effect=_submit)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200
+        assert captured["session_id"] == response.json()["session_id"]
+
     def test_preview_passes_model_assisted_controls_to_worker(self) -> None:
         """Preview route should forward model-assisted matching controls to the worker."""
         buf = _make_test_image_buf()

@@ -245,7 +245,10 @@ def assemble_puzzle_3mf(
     base_files[combined_object_model_path] = _to_xml_bytes(combined_object_model)
     base_files["3D/3dmodel.model"] = _to_xml_bytes(combined_root)
     base_files["3D/_rels/3dmodel.model.rels"] = _build_model_relationships_bytes([combined_object_model_path])
-    log.info("[PUZZLE_3MF] base-layer-height modifier disabled for combined puzzle package")
+    log.info(
+        "Base-layer-height modifier disabled for combined puzzle package",
+        extra={"event": "puzzle_base_layer_height_modifier_disabled"},
+    )
     writer = BambuStudio3MFWriter(
         output_path="combined-puzzle.3mf",
         settings={},

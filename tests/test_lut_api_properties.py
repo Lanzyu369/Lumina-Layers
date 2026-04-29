@@ -30,6 +30,11 @@ HIGH_MODES = ["6-Color", "8-Color"]
 LOW_MODES = ["BW", "4-Color"]
 
 
+def _canonical_public_mode(mode: str) -> str:
+    """Return the public API color-mode spelling used by LUT endpoints."""
+    return "8-Color Max" if mode == "8-Color" else mode
+
+
 @st.composite
 def rgb_array_st(draw: st.DrawFn, min_size: int = 2, max_size: int = 30) -> np.ndarray:
     """Generate a deterministic RGB array via Hypothesis."""
@@ -179,10 +184,17 @@ class TestLutInfoApiRoundTrip:
                 )
                 info_data = info_resp.json()
 
-                # color_mode from info should match the mode we set
-                assert info_data["color_mode"] == mode_map[lut_files[name]][0], (
+                expected_mode = _canonical_public_mode(mode_map[lut_files[name]][0])
+
+                # list and info should expose the same canonical public mode
+                assert list_mode == expected_mode, (
+                    f"List mode mismatch for '{name}': "
+                    f"list={list_mode}, expected={expected_mode}"
+                )
+                assert info_data["color_mode"] == expected_mode, (
                     f"Mode mismatch for '{name}': "
-                    f"list={list_mode}, info={info_data['color_mode']}"
+                    f"list={list_mode}, info={info_data['color_mode']}, "
+                    f"expected={expected_mode}"
                 )
                 # color_count must be a positive integer
                 assert info_data["color_count"] > 0, (

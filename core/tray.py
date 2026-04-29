@@ -17,6 +17,10 @@ import pystray
 from PIL import Image
 import locale
 
+from api.structured_logging import get_logger
+
+log = get_logger(__name__)
+
 
 class LuminaTray:
     def __init__(self, port=7860):
@@ -55,7 +59,7 @@ class LuminaTray:
 
     def exit_app(self, icon=None, item=None):
         """Shutdown the application completely."""
-        print("Exiting application...")
+        log.info("Tray exit requested", extra={"event": "tray_exit_requested"})
         if self.icon:
             self.icon.stop()
         self.running = False
@@ -98,7 +102,15 @@ class LuminaTray:
                 if image.size[0] > 64 or image.size[1] > 64:
                     image = image.resize((64, 64), Image.Resampling.LANCZOS)
         except Exception as e:
-            print(f"⚠️ Warning: Failed to load icon from {icon_path}: {e}")
+            log.warning(
+                "Failed to load tray icon",
+                extra={
+                    "event": "tray_icon_load_failed",
+                    "icon_path": icon_path,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             # Create a simple fallback icon
             if sys.platform == "darwin":
                 image = Image.new("RGB", (22, 22), color="red")
@@ -119,9 +131,17 @@ class LuminaTray:
         self.setup_tray()
         self.running = True
 
-        print(f"✅ System tray icon starting on {sys.platform}")
+        log.info("System tray icon starting", extra={"event": "tray_icon_starting", "platform": sys.platform})
         try:
             self.icon.run()
         except Exception as e:
-            print(f"⚠️ Warning: Failed to start system tray: {e}")
+            log.warning(
+                "Failed to start system tray",
+                extra={
+                    "event": "tray_icon_start_failed",
+                    "platform": sys.platform,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             self.running = False

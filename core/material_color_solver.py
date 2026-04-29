@@ -330,13 +330,21 @@ def solve_image_colors(
     delta_e_arr = np.zeros(C_count, dtype=np.float64)
 
     _log.info(
-        "[MaterialSolver] Solving %d unique colors with %d materials, %d layers, "
+        "Solving %d unique colors with %d materials, %d layers, "
         "%.2f mm/layer, beam=%d",
         C_count,
         len(materials),
         layer_count,
         layer_height_mm,
         beam_width,
+        extra={
+            "event": "material_solver_started",
+            "unique_color_count": C_count,
+            "material_count": len(materials),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "beam_width": beam_width,
+        },
     )
 
     for i in range(C_count):
@@ -356,9 +364,14 @@ def solve_image_colors(
     mean_de = float(np.mean(delta_e_arr)) if C_count > 0 else 0.0
     max_de = float(np.max(delta_e_arr)) if C_count > 0 else 0.0
     _log.info(
-        "[MaterialSolver] Done: mean_ΔE=%.2f, max_ΔE=%.2f",
+        "Material solver completed: mean_ΔE=%.2f, max_ΔE=%.2f",
         mean_de,
         max_de,
+        extra={
+            "event": "material_solver_done",
+            "mean_delta_e": mean_de,
+            "max_delta_e": max_de,
+        },
     )
     return matched_rgb, recipes, delta_e_arr
 

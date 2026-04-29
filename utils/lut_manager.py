@@ -5,7 +5,6 @@ LUT preset management module
 
 from dataclasses import dataclass
 import hashlib
-import logging
 import os
 import re
 import sys
@@ -21,6 +20,7 @@ from typing import Any
 import msgpack
 import numpy as np
 
+from api.structured_logging import get_logger
 from config import LUTMetadata, PaletteEntry, ColorSystem, PrinterConfig, TEMP_DIR
 from core.native_reference import (
     SOURCE_KIND_COLORD_DB,
@@ -47,7 +47,11 @@ from core.native_reference import (
 )
 from core.recipe_order import convert_recipe_between_orders, expand_recipe_by_layer_height, pad_recipe_to_layer_count
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
+_LUT_PRESET_CACHE_TTL_SECONDS = 30.0
+_lut_preset_cache_lock = threading.Lock()
+_lut_preset_cache_at: float | None = None
+_lut_preset_cache_value: dict[str, str] | None = None
 
 
 def _resolve_native_base_channel_idx(
@@ -244,6 +248,24 @@ class LUTManager:
         Returns:
             dict[str, str]: 映射 {显示名称: 文件路径}。
         """
+        global _lut_preset_cache_at, _lut_preset_cache_value
+        now = time.monotonic()
+        with _lut_preset_cache_lock:
+            if (
+                _lut_preset_cache_value is not None
+                and _lut_preset_cache_at is not None
+                and now - _lut_preset_cache_at <= _LUT_PRESET_CACHE_TTL_SECONDS
+            ):
+                _log.debug(
+                    "LUT presets cache hit",
+                    extra={
+                        "event": "lut_presets_cache_hit",
+                        "preset_count": len(_lut_preset_cache_value),
+                        "cache_age_ms": round((now - _lut_preset_cache_at) * 1000, 3),
+                    },
+                )
+                return dict(_lut_preset_cache_value)
+
         lut_files: dict[str, str] = {}
 
         # Priority: .msgpack > .json > .npz > .npy (higher priority overwrites lower)
@@ -273,8 +295,18 @@ class LUTManager:
         # Sort by name
         lut_files = dict(sorted(lut_files.items()))
         
-        print(f"[LUT_MANAGER] Found {len(lut_files)} LUT presets")
-        return lut_files
+        _log.info(
+            "Discovered LUT presets",
+            extra={
+                "event": "lut_presets_discovered",
+                "preset_count": len(lut_files),
+                "root_count": len(cls._scan_legacy_roots()),
+            },
+        )
+        with _lut_preset_cache_lock:
+            _lut_preset_cache_at = time.monotonic()
+            _lut_preset_cache_value = dict(lut_files)
+        return dict(lut_files)
     
     @classmethod
     def get_lut_choices(cls):
@@ -420,7 +452,15 @@ class LUTManager:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            print(f"[LUT_MANAGER] Failed to read JSON for mode detection: {e}")
+            _log.warning(
+                "Failed to read JSON for LUT mode detection",
+                extra={
+                    "event": "lut_mode_detection_json_read_failed",
+                    "path": file_path,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             return "4-Color (CMYW)"
 
         # 计算 entries 数量
@@ -561,9 +601,13 @@ class LUTManager:
                     continue
             except Exception as exc:
                 _log.warning(
-                    "Native source discovery failed for %s: %s",
-                    file_path,
-                    exc,
+                    "Native source discovery failed",
+                    extra={
+                        "event": "lut_native_source_discovery_failed",
+                        "path": file_path,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
                 )
                 continue
 
@@ -597,7 +641,8 @@ class LUTManager:
 
             if native_ctx.source_kind == SOURCE_KIND_COLORD_DB:
                 try:
-                    fingerprint = cls.compute_fingerprint(file_path)
+                    fingerprint_fn = cls.compute_fingerprint
+                    fingerprint = fingerprint_fn(file_path)
                 except OSError:
                     fingerprint = ""
                 group["db_options"][Path(file_path).name] = _NativeDbIndexItem(
@@ -693,7 +738,8 @@ class LUTManager:
             for file_path in all_files:
                 display_name = cls._display_name_for_root(root_label, root_dir, file_path)
                 try:
-                    fingerprint = cls.compute_fingerprint(file_path)
+                    fingerprint_fn = cls.compute_fingerprint
+                    fingerprint = fingerprint_fn(file_path)
                 except OSError:
                     fingerprint = ""
                 groups.setdefault(root_label, []).append(
@@ -860,7 +906,7 @@ class LUTManager:
         raise ValueError(f"No loadable source found for native brand: {vendor}/{material_type}")
 
     @staticmethod
-    def compute_fingerprint(file_path: str) -> str:
+    def _compute_lut_digest(file_path: str) -> str:
         """Compute a SHA-256 fingerprint (first 32 hex chars) for a LUT file.
         计算 LUT 文件的 SHA-256 指纹（前 32 个十六进制字符）。
 
@@ -875,6 +921,8 @@ class LUTManager:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha.update(chunk)
         return sha.hexdigest()[:32]
+
+    compute_fingerprint = staticmethod(_compute_lut_digest)
     
     @classmethod
     def save_uploaded_lut(cls, uploaded_file, custom_name=None):
@@ -953,12 +1001,27 @@ class LUTManager:
             # Build display name
             display_name = f"Custom - {Path(dest_path).stem}"
             
-            print(f"[LUT_MANAGER] Saved uploaded LUT: {dest_path}")
+            _log.info(
+                "Saved uploaded LUT",
+                extra={
+                    "event": "lut_saved",
+                    "path": dest_path,
+                    "display_name": display_name,
+                },
+            )
             
             return True, f"[OK] LUT saved: {display_name}\nPlease select from dropdown to use", cls.get_lut_choices()
             
         except Exception as e:
-            print(f"[LUT_MANAGER] Error saving LUT: {e}")
+            _log.warning(
+                "Error saving LUT",
+                extra={
+                    "event": "lut_save_failed",
+                    "path": dest_path if "dest_path" in locals() else str(getattr(uploaded_file, "name", "") or ""),
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             return False, f"[ERROR] Save failed: {e}", cls.get_lut_choices()
     
     @classmethod
@@ -983,10 +1046,26 @@ class LUTManager:
         
         try:
             os.remove(file_path)
-            print(f"[LUT_MANAGER] Deleted LUT: {file_path}")
+            _log.info(
+                "Deleted LUT",
+                extra={
+                    "event": "lut_deleted",
+                    "path": file_path,
+                    "display_name": display_name,
+                },
+            )
             return True, f"[OK] Deleted: {display_name}", cls.get_lut_choices()
         except Exception as e:
-            print(f"[LUT_MANAGER] Error deleting LUT: {e}")
+            _log.warning(
+                "Error deleting LUT",
+                extra={
+                    "event": "lut_delete_failed",
+                    "path": file_path,
+                    "display_name": display_name,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             return False, f"[ERROR] Delete failed: {e}", cls.get_lut_choices()
 
     # ------------------------------------------------------------------
@@ -1052,7 +1131,15 @@ class LUTManager:
             try:
                 rgb = np.load(file_path)
             except Exception as e:
-                print(f"[WARNING] Failed to load .npy file {file_path}: {e}")
+                _log.warning(
+                    "Failed to load NPY LUT file",
+                    extra={
+                        "event": "lut_npy_load_failed",
+                        "path": file_path,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
                 rgb = np.zeros((0, 3), dtype=np.uint8)
             metadata = cls.infer_default_metadata(display_name, file_path, len(rgb))
             return rgb, None, metadata
@@ -1070,7 +1157,15 @@ class LUTManager:
             try:
                 payload = msgpack.unpackb(Path(file_path).read_bytes(), raw=False)
             except Exception as e:
-                print(f"[WARNING] Failed to parse msgpack file {file_path}: {e}")
+                _log.warning(
+                    "Failed to parse msgpack LUT file",
+                    extra={
+                        "event": "lut_msgpack_parse_failed",
+                        "path": file_path,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
                 rgb = np.zeros((0, 3), dtype=np.uint8)
                 metadata = cls.infer_default_metadata(display_name, file_path, 0)
                 return rgb, None, metadata
@@ -1079,7 +1174,14 @@ class LUTManager:
             return cls._load_keyed_payload(payload, display_name, file_path)
 
         # Unsupported format – return empty defaults
-        print(f"[WARNING] Unsupported LUT format: {ext}")
+        _log.warning(
+            "Unsupported LUT format",
+            extra={
+                "event": "lut_unsupported_format",
+                "path": file_path,
+                "extension": ext,
+            },
+        )
         rgb = np.zeros((0, 3), dtype=np.uint8)
         metadata = cls.infer_default_metadata(display_name, file_path, 0)
         return rgb, None, metadata
@@ -1095,7 +1197,15 @@ class LUTManager:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            print(f"[WARNING] Failed to parse JSON file {file_path}: {e}")
+            _log.warning(
+                "Failed to parse JSON LUT file",
+                extra={
+                    "event": "lut_json_parse_failed",
+                    "path": file_path,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             rgb = np.zeros((0, 3), dtype=np.uint8)
             metadata = cls.infer_default_metadata(display_name, file_path, 0)
             return rgb, None, metadata
@@ -1131,7 +1241,14 @@ class LUTManager:
 
         # If palette is empty, infer defaults
         if not metadata.palette:
-            print(f"[WARNING] No valid palette in {file_path}, inferring defaults")
+            _log.warning(
+                "No valid LUT palette; inferring defaults",
+                extra={
+                    "event": "lut_palette_missing",
+                    "path": file_path,
+                    "display_name": display_name,
+                },
+            )
             default_meta = cls.infer_default_metadata(display_name, file_path, 0)
             metadata.palette = default_meta.palette
 
@@ -1159,7 +1276,16 @@ class LUTManager:
                     g = max(0, min(255, int(rgb_val[1])))
                     b = max(0, min(255, int(rgb_val[2])))
                 except (TypeError, ValueError) as e:
-                    print(f"[WARNING] RGB row conversion failed for {rgb_val}: {e}")
+                    _log.debug(
+                        "RGB row conversion failed",
+                        extra={
+                            "event": "lut_rgb_row_conversion_failed",
+                            "path": file_path,
+                            "rgb_value": rgb_val,
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                        },
+                    )
                     continue
                 row_rgb = [r, g, b]
                 
@@ -1167,7 +1293,16 @@ class LUTManager:
                 if hex_val:
                     expected_hex = f"#{r:02X}{g:02X}{b:02X}"
                     if hex_val.upper() != expected_hex:
-                        print(f"[WARNING] Hex mismatch: RGB {rgb_val} → {expected_hex}, but stored as {hex_val}")
+                        _log.debug(
+                            "LUT hex value does not match RGB",
+                            extra={
+                                "event": "lut_hex_mismatch",
+                                "path": file_path,
+                                "rgb_value": rgb_val,
+                                "expected_hex": expected_hex,
+                                "stored_hex": hex_val,
+                            },
+                        )
                         
             elif lab and len(lab) == 3:
                 try:
@@ -1183,7 +1318,16 @@ class LUTManager:
                     b = max(0, min(255, int(round(srgb.clamped_rgb_b * 255))))
                     row_rgb = [r, g, b]
                 except Exception as e:
-                    print(f"[WARNING] Lab→RGB conversion failed for {lab}: {e}")
+                    _log.debug(
+                        "Lab to RGB conversion failed",
+                        extra={
+                            "event": "lut_lab_rgb_conversion_failed",
+                            "path": file_path,
+                            "lab_value": lab,
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                        },
+                    )
                     continue
             else:
                 continue
@@ -1191,7 +1335,14 @@ class LUTManager:
             # Recipe: resolve color names to indices, support both formats
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
-                print(f"[WARNING] Invalid recipe payload skipped for entry: {recipe_raw}")
+                _log.debug(
+                    "Invalid LUT recipe payload skipped",
+                    extra={
+                        "event": "lut_recipe_payload_invalid",
+                        "path": file_path,
+                        "recipe_value": recipe_raw,
+                    },
+                )
                 continue
             recipe_indices: list[int] = []
             for v in recipe_raw:
@@ -1202,14 +1353,30 @@ class LUTManager:
                     elif v in name_to_idx:
                         recipe_indices.append(name_to_idx[v])
                     else:
-                        print(f"[WARNING] Unknown color name in recipe: {v}")
+                        _log.debug(
+                            "Unknown LUT recipe color name",
+                            extra={
+                                "event": "lut_recipe_color_unknown",
+                                "path": file_path,
+                                "color_name": v,
+                            },
+                        )
                         recipe_indices.append(0)
                 else:
                     # 旧格式兼容: 直接是数字索引
                     try:
                         recipe_indices.append(int(v))
                     except (TypeError, ValueError) as e:
-                        print(f"[WARNING] Invalid recipe member skipped for entry: {v} ({e})")
+                        _log.debug(
+                            "Invalid LUT recipe member skipped",
+                            extra={
+                                "event": "lut_recipe_member_invalid",
+                                "path": file_path,
+                                "recipe_member": v,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e),
+                            },
+                        )
                         recipe_indices = []
                         break
             if len(recipe_indices) != len(recipe_raw):
@@ -1693,11 +1860,35 @@ class LUTManager:
             base_channel_idx=0,
             layer_order="Top2Bottom",
         )
-        print(f"[LUT_MANAGER] Loaded flat-list JSON: {len(rgb_list)} entries, {len(palette)} colors from {file_path}")
+        _log.info(
+            "Loaded flat-list JSON LUT",
+            extra={
+                "event": "lut_flat_list_json_loaded",
+                "path": file_path,
+                "entry_count": len(rgb_list),
+                "palette_color_count": len(palette),
+                "has_stacks": stacks is not None,
+            },
+        )
         if stacks is not None:
-            print(f"[LUT_MANAGER] Generated stacks array: shape={stacks.shape}, dtype={stacks.dtype}")
+            _log.debug(
+                "Generated LUT stacks array",
+                extra={
+                    "event": "lut_stacks_array_generated",
+                    "path": file_path,
+                    "shape": tuple(int(value) for value in stacks.shape),
+                    "dtype": str(stacks.dtype),
+                },
+            )
         else:
-            print(f"[LUT_MANAGER] WARNING: stacks is None!")
+            _log.warning(
+                "LUT stacks array missing",
+                extra={
+                    "event": "lut_stacks_missing",
+                    "path": file_path,
+                    "entry_count": len(rgb_list),
+                },
+            )
         return rgb, stacks, metadata
 
     @classmethod
@@ -1708,7 +1899,15 @@ class LUTManager:
         try:
             npz = np.load(file_path, allow_pickle=False)
         except Exception as e:
-            print(f"[WARNING] Failed to load .npz file {file_path}: {e}")
+            _log.warning(
+                "Failed to load NPZ LUT file",
+                extra={
+                    "event": "lut_npz_load_failed",
+                    "path": file_path,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
             rgb = np.zeros((0, 3), dtype=np.uint8)
             metadata = cls.infer_default_metadata(display_name, file_path, 0)
             return rgb, None, metadata
@@ -1730,7 +1929,15 @@ class LUTManager:
                 metadata = LUTMetadata.from_dict(meta_dict)
                 metadata.color_mode = cls._canonicalize_legacy_color_mode(metadata.color_mode, meta_dict)
             except Exception as e:
-                print(f"[WARNING] Failed to parse metadata_json in {file_path}: {e}")
+                _log.warning(
+                    "Failed to parse LUT metadata_json",
+                    extra={
+                        "event": "lut_metadata_json_parse_failed",
+                        "path": file_path,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
                 metadata = cls.infer_default_metadata(display_name, file_path, len(rgb))
         else:
             metadata = cls.infer_default_metadata(display_name, file_path, len(rgb))

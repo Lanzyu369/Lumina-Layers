@@ -11,15 +11,15 @@ S03 — 颜色替换（全局替换 + 区域替换 + matched_rgb 覆盖）。
 - _apply_material_archive_color_replacements: 材料档案模式下的全局色替换
 """
 
+from api.structured_logging import get_logger
 import time
-import logging
 from collections import deque
 import pickle
 import numpy as np
 
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 
 def _extend_ctx_palette_with_virtuals(
@@ -204,7 +204,7 @@ def _apply_material_archive_color_replacements(
             orig_rgb_tuple = _hex_to_rgb_tuple(orig_hex)
             repl_rgb_tuple = _hex_to_rgb_tuple(repl_hex)
         except ValueError as exc:
-            _log.warning("[S03-Material] Skipping invalid hex pair %s→%s: %s",
+            _log.warning("Skipping invalid hex pair %s→%s: %s",
                          orig_hex, repl_hex, exc)
             continue
         orig_mask = np.all(matched_rgb == np.asarray(orig_rgb_tuple, dtype=np.uint8), axis=-1)
@@ -233,7 +233,7 @@ def _apply_material_archive_color_replacements(
         )
     except ImportError as exc:
         _log.warning(
-            "[S03-Material] Solver modules unavailable (%s); replacements skipped",
+            "Solver modules unavailable (%s); replacements skipped",
             exc,
         )
         return matched_rgb, material_matrix, 0
@@ -263,7 +263,7 @@ def _apply_material_archive_color_replacements(
             solver_path = "mitm"
     except (ValueError, TypeError, RuntimeError, OSError) as exc:
         _log.warning(
-            "[S03-Material] Solver call failed (%s); %d replacements skipped",
+            "Solver call failed (%s); %d replacements skipped",
             exc, len(jobs),
         )
         return matched_rgb, material_matrix, 0
@@ -287,8 +287,8 @@ def _apply_material_archive_color_replacements(
             )
         )
         if fallback_stats["applied"] and fallback_stats["improved_pixels"] > 0:
-            _log.info(
-                "[S03-Material] Not-worse fallback replaced %d/%d replacement "
+            _log.debug(
+                "Not-worse fallback replaced %d/%d replacement "
                 "colours (mean ΔE %.2f→%.2f, max ΔE %.2f→%.2f)",
                 fallback_stats["improved_pixels"],
                 int(unique_repl_srgb.shape[0]),
@@ -299,7 +299,7 @@ def _apply_material_archive_color_replacements(
             )
     except (ValueError, TypeError, RuntimeError) as exc:
         _log.warning(
-            "[S03-Material] Not-worse fallback failed (%s); keeping baseline recipes",
+            "Not-worse fallback failed (%s); keeping baseline recipes",
             exc,
         )
 
@@ -333,8 +333,8 @@ def _apply_material_archive_color_replacements(
             new_material_matrix.dtype, copy=False
         )
         applied += 1
-        _log.info(
-            "[S03-Material] %s %s → rgb(%d,%d,%d) ΔE=%.2f recipe=%s",
+        _log.debug(
+            "%s %s → rgb(%d,%d,%d) ΔE=%.2f recipe=%s",
             solver_path,
             orig_hex,
             int(achieved_rgb[0]), int(achieved_rgb[1]), int(achieved_rgb[2]),
@@ -611,7 +611,7 @@ def run(ctx: dict) -> dict:
             override_rgb = np.load(matched_rgb_path)
             if override_rgb.shape != matched_rgb.shape:
                 _log.warning(
-                    f"[S03] matched_rgb_path shape {override_rgb.shape} "
+                    f"matched_rgb_path shape {override_rgb.shape} "
                     f"does not match processed shape {matched_rgb.shape}, ignoring override"
                 )
             else:
@@ -626,20 +626,20 @@ def run(ctx: dict) -> dict:
                         _, lut_idx = processor.kdtree.query(repl_lab)
                         new_stacks = processor.ref_stacks[lut_idx[0]]
                         material_matrix[color_mask] = new_stacks
-                    _log.info(
-                        f"[S03] matched_rgb override applied: "
+                    _log.debug(
+                        f"matched_rgb override applied: "
                         f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
                     )
                 elif np.any(diff_mask):
-                    _log.info(
-                        "[S03] matched_rgb override: %d differing pixels skipped "
+                    _log.debug(
+                        "matched_rgb override: %d differing pixels skipped "
                         "(no LUT processor in material-archive mode)",
                         int(np.sum(diff_mask)),
                     )
                 matched_rgb = override_rgb
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
-                f"[S03] Failed to load matched_rgb_path '{matched_rgb_path}': {e}, " f"using original processed result"
+                f"Failed to load matched_rgb_path '{matched_rgb_path}': {e}, " f"using original processed result"
             )
 
     if material_matrix_path is not None:
@@ -647,14 +647,14 @@ def run(ctx: dict) -> dict:
             override_material_matrix = np.load(material_matrix_path)
             if override_material_matrix.shape != material_matrix.shape:
                 _log.warning(
-                    f"[S03] material_matrix_path shape {override_material_matrix.shape} "
+                    f"material_matrix_path shape {override_material_matrix.shape} "
                     f"does not match processed shape {material_matrix.shape}, ignoring override"
                 )
             else:
                 material_matrix = override_material_matrix
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
-                f"[S03] Failed to load material_matrix_path '{material_matrix_path}': {e}, "
+                f"Failed to load material_matrix_path '{material_matrix_path}': {e}, "
                 f"using original processed result"
             )
 
@@ -674,7 +674,7 @@ def run(ctx: dict) -> dict:
     )
     if effective_color_replacements and processor is None and not is_material_archive:
         _log.warning(
-            "[S03] %d color replacements skipped (no LUT processor in material-archive mode)",
+            "%d color replacements skipped (no LUT processor in material-archive mode)",
             len(effective_color_replacements),
         )
         effective_color_replacements = {}
@@ -700,14 +700,14 @@ def run(ctx: dict) -> dict:
             substrate_mat,
             grid_resolution=grid_res,
         )
-        _log.info("[S03] Applied %d material-archive color replacements", applied)
+        _log.debug("Applied %d material-archive color replacements", applied)
     elif effective_color_replacements:
         from core.color_replacement import ColorReplacementManager
 
         manager = ColorReplacementManager.from_dict(effective_color_replacements)
         old_rgb = matched_rgb.copy()
         matched_rgb = manager.apply_to_image(matched_rgb)
-        _log.info(f"[S03] Applied {len(manager)} color replacements")
+        _log.debug(f"Applied {len(manager)} color replacements")
 
         # Update material_matrix: find the replacement color's LUT entry
         for orig_hex, repl_hex in effective_color_replacements.items():
@@ -722,8 +722,8 @@ def run(ctx: dict) -> dict:
             new_stacks = processor.ref_stacks[lut_idx]
             material_matrix[orig_mask] = new_stacks
             lut_color = processor.lut_rgb[lut_idx]
-            _log.info(
-                f"[S03] material_matrix: {orig_hex} -> LUT#{lut_idx} "
+            _log.debug(
+                f"material_matrix: {orig_hex} -> LUT#{lut_idx} "
                 f"rgb({lut_color[0]},{lut_color[1]},{lut_color[2]}) stacks={new_stacks}"
             )
 
@@ -733,7 +733,7 @@ def run(ctx: dict) -> dict:
             with open(recipe_override_masks_path, "rb") as f:
                 region_masks = pickle.load(f)
         except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
-            _log.warning("[S03] Failed to load recipe override masks: %s", exc)
+            _log.warning("Failed to load recipe override masks: %s", exc)
             region_masks = {}
 
         if isinstance(region_masks, dict):
@@ -884,7 +884,7 @@ def run(ctx: dict) -> dict:
                         if rgb.shape == (3,):
                             matched_rgb[effective_mask] = rgb
                     except (AttributeError, ImportError, ModuleNotFoundError, TypeError, ValueError) as exc:
-                        _log.warning("[S03] Recipe color prediction failed for %s: %s", region_id, exc)
+                        _log.warning("Recipe color prediction failed for %s: %s", region_id, exc)
                 elif recipe_has_virtual:
                     # Paint the region with the topmost virtual material hex so
                     # the 2D preview and downstream stages see the user's
@@ -904,7 +904,7 @@ def run(ctx: dict) -> dict:
                                 )
                             except (ValueError, TypeError) as exc:
                                 _log.warning(
-                                    "[S03] Virtual material hex %s unreadable for %s: %s",
+                                    "Virtual material hex %s unreadable for %s: %s",
                                     intent_hex,
                                     region_id,
                                     exc,
@@ -913,7 +913,7 @@ def run(ctx: dict) -> dict:
     # ---- Apply region replacements in-order ----
     if replacement_regions and processor is None:
         _log.warning(
-            "[S03] %d replacement regions skipped (no LUT processor in material-archive mode)",
+            "%d replacement regions skipped (no LUT processor in material-archive mode)",
             len(replacement_regions),
         )
     elif replacement_regions:
@@ -939,5 +939,5 @@ def run(ctx: dict) -> dict:
     _hifi_timings = ctx.get("_hifi_timings", {})
     _hifi_timings["color_replace_s"] = _elapsed
     ctx["_hifi_timings"] = _hifi_timings
-    _log.info(f"[S03] color_replace done: {_elapsed:.3f}s")
+    _log.debug(f"color_replace done: {_elapsed:.3f}s")
     return ctx

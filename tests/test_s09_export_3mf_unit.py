@@ -177,3 +177,76 @@ def test_s09_passes_face_double_for_doublesided(tmp_path) -> None:
         s09_export_3mf.run(_make_minimal_s09_ctx(tmp_path, bambu_face_orientation="double"))
 
     assert mock_export.call_args.kwargs["face_orientation"] == "double"
+
+
+def test_s09_centers_export_scene_on_printer_bed(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
+        captured.update(kwargs)
+        return kwargs["output_path"]
+
+    scene = trimesh.Scene()
+    scene.add_geometry(trimesh.creation.box(extents=[20, 10, 1]), geom_name="Slot 1")
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "centered.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        _fake_export_scene_with_bambu_metadata,
+    ):
+        result = s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                scene=scene,
+                printer_id="bambu-p1s",
+            )
+        )
+
+    assert result["out_path"] == str(tmp_path / "centered.3mf")
+    exported_scene = captured["scene"]
+    bounds = exported_scene.bounds
+    center_x = (bounds[0][0] + bounds[1][0]) / 2
+    center_y = (bounds[0][1] + bounds[1][1]) / 2
+    assert center_x == 128
+    assert center_y == 128
+
+
+def test_s09_can_skip_bed_centering_for_piece_local_exports(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
+        captured.update(kwargs)
+        return kwargs["output_path"]
+
+    scene = trimesh.Scene()
+    scene.add_geometry(trimesh.creation.box(extents=[20, 10, 1]), geom_name="Slot 1")
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "piece-local.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        _fake_export_scene_with_bambu_metadata,
+    ):
+        result = s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                scene=scene,
+                printer_id="bambu-p1s",
+                center_on_bed=False,
+            )
+        )
+
+    assert result["out_path"] == str(tmp_path / "piece-local.3mf")
+    exported_scene = captured["scene"]
+    bounds = exported_scene.bounds
+    center_x = (bounds[0][0] + bounds[1][0]) / 2
+    center_y = (bounds[0][1] + bounds[1][1]) / 2
+    assert center_x == 16
+    assert center_y == 0

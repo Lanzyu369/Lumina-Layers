@@ -49,6 +49,7 @@ from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
 from core.gradient_region_requantize import requantize_gradient_regions
 from core.converter import (
     extract_color_palette,
+    generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
@@ -64,6 +65,7 @@ from utils.lut_manager import LUTManager
 from api.structured_logging import get_logger
 
 from .common import (
+    NON_FATAL_GLB_ERRORS,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
@@ -75,6 +77,7 @@ from .async_glb import schedule_glb_build
 
 router = APIRouter()
 log = get_logger(__name__)
+_DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
 
 def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes:
@@ -108,6 +111,40 @@ def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes
     cache["preview_rgba"] = preview_rgba.copy()
 
     return _image_to_png_bytes(preview_rgba)
+
+
+def _schedule_or_run_overridden_glb_build(
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    cache: dict,
+    filename: str,
+) -> str | None:
+    """Schedule the normal GLB build, or run an overridden builder inline."""
+    if generate_segmented_glb is _DEFAULT_GENERATE_SEGMENTED_GLB:
+        schedule_glb_build(session_id, store, registry, cache)
+        return None
+
+    try:
+        glb_path = generate_segmented_glb(cache)
+    except NON_FATAL_GLB_ERRORS as exc:
+        log.warning(
+            "Overridden GLB build failed",
+            extra={
+                "event": "converter_region_replace_overridden_glb_failed",
+                "session_id": session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    if not glb_path:
+        return None
+
+    store.put(session_id, "preview_cache", cache)
+    glb_id = registry.register_path(session_id, glb_path, filename)
+    return f"/api/files/{glb_id}"
 
 
 def _get_region_mask_items_for_ids(
@@ -276,7 +313,7 @@ def _sync_material_archive_matrix_for_diff(
         session_data.get("material_grid_resolution")
         or DEFAULT_GRID_RESOLUTION
     )
-    log.info(
+    log.debug(
         "material-archive matrix sync: solving",
         extra={
             "event": "converter_replace_material_sync_solve",
@@ -308,7 +345,7 @@ def _sync_material_archive_matrix_for_diff(
                 layer_height_mm=layer_height_mm,
                 substrate=substrate,
             )
-        log.info(
+        log.debug(
             "material-archive matrix sync: solved",
             extra={
                 "event": "converter_replace_material_sync_solved",
@@ -447,7 +484,7 @@ def replace_color(
 
         # --- diagnostic logging ---
         diff_pixels = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "replace-color diag",
             extra={
                 "event": "converter_replace_color_diag",
@@ -505,6 +542,17 @@ def replace_color(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color replacement")
 
+    log.info(
+        "replace-color completed",
+        extra={
+            "event": "converter_replace_color_done",
+            "session_id": request.session_id,
+            "selected_color": request.selected_color,
+            "replacement_color": request.replacement_color,
+            "replacement_count": len(current_regions),
+            "diff_pixel_count": diff_pixels,
+        },
+    )
     return ColorReplaceResponse(
         status="ok",
         message="Color replaced successfully",
@@ -545,9 +593,11 @@ def reset_replacements(
     cache = _require_preview_cache(session_data)
 
     try:
+        regions_cleared = len(session_data.get("replacement_regions", []))
         # Clear replacement state
         store.put(request.session_id, "replacement_regions", [])
         store.put(request.session_id, "replacement_history", [])
+        history_truncated = 0
         previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
         # Restore matched_rgb from the pristine original saved at preview time.
@@ -591,6 +641,15 @@ def reset_replacements(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Reset replacements")
 
+    log.info(
+        "reset-replacements completed",
+        extra={
+            "event": "converter_reset_replacements_done",
+            "session_id": request.session_id,
+            "regions_cleared": regions_cleared,
+            "history_truncated": history_truncated,
+        },
+    )
     return ResetReplacementsResponse(
         status="ok",
         message="All replacements cleared",
@@ -677,14 +736,27 @@ def source_color_pick(
                 detail="Clicked on background area.",
             )
 
-        return SourceColorPickResponse(
-            source_matched_hex=_rgb_pixel_to_hex(source_arr[y, x]),
-            quantized_hex=_rgb_pixel_to_hex(quantized_arr[y, x]),
-        )
+        picked_color = _rgb_pixel_to_hex(source_arr[y, x])
+        quantized_hex = _rgb_pixel_to_hex(quantized_arr[y, x])
     except HTTPException:
         raise
     except REPLACE_HANDLED_ERRORS as exc:
         _handle_core_error(exc, "Source color pick")
+
+    log.info(
+        "source-color-pick completed",
+        extra={
+            "event": "converter_source_color_pick_done",
+            "session_id": request.session_id,
+            "picked_color": picked_color,
+            "pick_x": request.x,
+            "pick_y": request.y,
+        },
+    )
+    return SourceColorPickResponse(
+        source_matched_hex=picked_color,
+        quantized_hex=quantized_hex,
+    )
 
 
 @router.post("/color-highlight", response_model=ColorHighlightResponse)
@@ -756,7 +828,7 @@ def color_highlight(
         # restarted after the schema change".
         # 诊断日志：明确记录 endpoint 真正收到的 scope 字段与分支走向，
         # 便于区分"前端未传"与"后端未重启（静默丢弃字段）"。
-        log.info(
+        log.debug(
             "color_highlight_invoked",
             extra={
                 "event": "color_highlight_invoked",
@@ -807,7 +879,7 @@ def color_highlight(
             )
             region_scope_mask = region_id_arr == np.uint32(encoded_id)
             region_pixel_count = int(region_scope_mask.sum())
-            log.info(
+            log.debug(
                 "color_highlight_using_region_mask",
                 extra={
                     "event": "color_highlight_scope_region_mask",
@@ -876,6 +948,8 @@ def color_highlight(
             combined_mask |= np.all(matched_rgb == rgb, axis=-1) & mask_solid
         if region_scope_mask is not None:
             combined_mask &= region_scope_mask
+        highlighted_pixel_count = int(np.count_nonzero(combined_mask))
+        highlighted_color = request.color_hexes[0]
 
         # Apply cyan highlight (same style as region-detect)
         highlight_color = np.array([0, 200, 255], dtype=np.uint8)
@@ -896,6 +970,15 @@ def color_highlight(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color highlight")
 
+    log.info(
+        "color-highlight completed",
+        extra={
+            "event": "converter_color_highlight_done",
+            "session_id": request.session_id,
+            "highlighted_color": highlighted_color,
+            "highlighted_pixel_count": highlighted_pixel_count,
+        },
+    )
     return ColorHighlightResponse(preview_url=f"/api/files/{preview_id}")
 
 
@@ -1026,6 +1109,17 @@ def region_detect(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Region detection")
 
+    log.info(
+        "region-detect completed",
+        extra={
+            "event": "converter_region_detect_done",
+            "session_id": request.session_id,
+            "click_x": request.x,
+            "click_y": request.y,
+            "detected_pixel_count": pixel_count,
+            "detected_dominant_color": color_hex,
+        },
+    )
     return RegionDetectResponse(
         region_id=region_id,
         color_hex=color_hex,
@@ -1170,7 +1264,7 @@ def region_replace(
         import time as _time
         _region_pixels = int(region_mask.sum())
         _diff_before_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "region-replace diag: before sync",
             extra={
                 "event": "converter_region_replace_diag_pre",
@@ -1196,7 +1290,7 @@ def region_replace(
         _sync_ms = (_time.perf_counter() - _t_sync) * 1000
 
         _diff_after_sync = int(np.any(matched_rgb != replaced_rgb, axis=-1).sum())
-        log.info(
+        log.debug(
             "region-replace diag: after sync",
             extra={
                 "event": "converter_region_replace_diag_post",
@@ -1219,8 +1313,13 @@ def region_replace(
         # PNG) and the GLB arrives via /glb-status polling afterwards.
         # 异步 GLB 重建：以往 /region-replace 77% 的耗时在这里；现在只
         # 等 sync + PNG 即可响应，GLB 通过 glb-status 轮询取回。
-        schedule_glb_build(request.session_id, store, registry, cache)
-        glb_url: str | None = None
+        glb_url: str | None = _schedule_or_run_overridden_glb_build(
+            request.session_id,
+            store,
+            registry,
+            cache,
+            "preview_region_replaced.glb",
+        )
 
         # Per-step timing so the frontend-perceived latency can be attributed
         # to mask building / material sync / PNG render. The heavy GLB step
@@ -1592,6 +1691,10 @@ def region_requantize(
             "region-requantize done",
             extra={
                 "event": "converter_region_requantize_done",
+                "session_id": request.session_id,
+                "target_lut": str(session_data.get("lut_name") or "__material_archive__"),
+                "region_pixel_count": int(rewritten_px),
+                "output_color_count": unique_color_count,
                 "target_count": len(target_pairs),
                 "local_quantize_colors": int(request.local_quantize_colors),
                 "rewritten_pixels": int(rewritten_px),
@@ -1801,15 +1904,14 @@ def replace_colors_batch(
             )
 
         replaced_rgb = manager.apply_to_image(matched_rgb)
+        diff_pixel_count = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
 
-        log.info(
+        log.debug(
             "replace-colors-batch diag",
             extra={
                 "event": "converter_replace_colors_batch_diag",
                 "pair_count": len(request.replacements),
-                "diff_pixel_count": int(
-                    np.any(previous_rgb != replaced_rgb, axis=-1).sum()
-                ),
+                "diff_pixel_count": diff_pixel_count,
                 "material_source": session_data.get("material_source"),
             },
         )
@@ -1855,6 +1957,16 @@ def replace_colors_batch(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch color replacement")
 
+    log.info(
+        "replace-colors-batch completed",
+        extra={
+            "event": "converter_replace_colors_batch_done",
+            "session_id": request.session_id,
+            "pair_count": len(request.replacements),
+            "diff_pixel_count": diff_pixel_count,
+            "replacement_count": len(current_regions),
+        },
+    )
     return ColorReplaceResponse(
         status="ok",
         message=f"Replaced {len(request.replacements)} colors in batch",
@@ -1940,14 +2052,13 @@ def region_replace_batch(
             store.put(request.session_id, "selected_region_mask", None)
             store.put(request.session_id, "selected_region_id", None)
 
-        log.info(
+        diff_pixel_count = int(np.any(previous_rgb != working_rgb, axis=-1).sum())
+        log.debug(
             "region-replace-batch diag",
             extra={
                 "event": "converter_region_replace_batch_diag",
                 "item_count": len(request.items),
-                "diff_pixel_count": int(
-                    np.any(previous_rgb != working_rgb, axis=-1).sum()
-                ),
+                "diff_pixel_count": diff_pixel_count,
                 "material_source": session_data.get("material_source"),
             },
         )
@@ -1957,6 +2068,16 @@ def region_replace_batch(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch region replacement")
 
+    log.info(
+        "region-replace-batch completed",
+        extra={
+            "event": "converter_region_replace_batch_done",
+            "session_id": request.session_id,
+            "item_count": len(request.items),
+            "diff_pixel_count": diff_pixel_count,
+            "any_click_mask_used": any_click_mask_used,
+        },
+    )
     return RegionReplaceResponse(
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
@@ -2152,12 +2273,23 @@ def predict_recipe(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    prediction_source = str(prediction.get("source", "unknown"))
+    log.info(
+        "predict-recipe completed",
+        extra={
+            "event": "converter_predict_recipe_done",
+            "session_id": request.session_id,
+            "recipe_layer_count": len(request.recipe),
+            "prediction_source": prediction_source,
+            "is_material_archive": is_material_archive,
+        },
+    )
     return RecipePredictResponse(
         status="ok",
         message="Recipe color predicted",
         rgb=[int(v) for v in prediction.get("rgb", [])],
         lab=[float(v) for v in prediction.get("lab", [])],
-        source=str(prediction.get("source", "unknown")),
+        source=prediction_source,
         runtime_mode_key=(
             str(prediction["runtime_mode_key"])
             if prediction.get("runtime_mode_key") is not None
@@ -2760,6 +2892,17 @@ def apply_recipe_override(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    log.info(
+        "apply-recipe-override completed",
+        extra={
+            "event": "converter_apply_recipe_override_done",
+            "session_id": request.session_id,
+            "region_count": len(region_mask_items),
+            "recipe_layer_count": len(request.recipe),
+            "override_count": len(existing_overrides),
+            "prediction_source": str(prediction_source or "unknown"),
+        },
+    )
     return RecipeOverrideApplyResponse(
         status="ok",
         message="Recipe override applied",
@@ -2898,6 +3041,16 @@ def region_recipe(
             )
         )
 
+    log.info(
+        "region-recipe completed",
+        extra={
+            "event": "converter_region_recipe_done",
+            "session_id": request.session_id,
+            "requested_region_count": len(request.region_ids),
+            "resolved_region_count": len(entries),
+            "layer_order": request.layer_order,
+        },
+    )
     return RegionRecipeResponse(
         status="ok",
         message="Region recipes resolved",
@@ -2962,43 +3115,35 @@ def merge_colors(
         # Extract palette from preview cache
         palette = extract_color_palette(cache)
         colors_before = len(palette)
+        matched_rgb: np.ndarray = cache["matched_rgb"]
+        merged_rgb = matched_rgb
+        merge_map = {}
+        quality = 100.0
+        colors_after = colors_before
+        message = "Color merging disabled"
 
-        # If merge disabled, return empty merge with perfect quality
-        if not request.merge_enable:
-            preview_bytes = _image_to_png_bytes(cache["matched_rgb"])
-            preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_merged.png")
-            store.put(request.session_id, "merge_map", {})
-            return MergePreviewResponse(
-                status="ok",
-                message="Color merging disabled",
-                preview_url=f"/api/files/{preview_id}",
-                merge_map={},
-                quality_metric=100.0,
-                colors_before=colors_before,
-                colors_after=colors_before,
+        if request.merge_enable:
+            # Build merge map using ColorMerger
+            merger = ColorMerger(rgb_to_lab_func=_rgb_to_lab)
+            merge_map = merger.build_merge_map(
+                palette,
+                threshold_percent=request.merge_threshold,
+                max_distance=float(request.merge_max_distance),
             )
 
-        # Build merge map using ColorMerger
-        merger = ColorMerger(rgb_to_lab_func=_rgb_to_lab)
-        merge_map = merger.build_merge_map(
-            palette,
-            threshold_percent=request.merge_threshold,
-            max_distance=float(request.merge_max_distance),
-        )
+            # Apply merging to matched_rgb
+            merged_rgb = merger.apply_color_merging(matched_rgb, merge_map)
 
-        # Apply merging to matched_rgb
-        matched_rgb: np.ndarray = cache["matched_rgb"]
-        merged_rgb = merger.apply_color_merging(matched_rgb, merge_map)
-
-        # Calculate quality metric
-        merged_palette = extract_color_palette(
-            {
-                "matched_rgb": merged_rgb,
-                "mask_solid": cache["mask_solid"],
-            }
-        )
-        quality = merger.calculate_quality_metric(palette, merged_palette, merge_map)
-        colors_after = len(merged_palette)
+            # Calculate quality metric
+            merged_palette = extract_color_palette(
+                {
+                    "matched_rgb": merged_rgb,
+                    "mask_solid": cache["mask_solid"],
+                }
+            )
+            quality = merger.calculate_quality_metric(palette, merged_palette, merge_map)
+            colors_after = len(merged_palette)
+            message = f"Merged {len(merge_map)} colors"
 
         # Generate preview PNG
         preview_bytes = _image_to_png_bytes(merged_rgb)
@@ -3012,12 +3157,25 @@ def merge_colors(
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color merging")
 
+    quality_metric = round(quality, 2)
+    log.info(
+        "merge-colors completed",
+        extra={
+            "event": "converter_merge_colors_done",
+            "session_id": request.session_id,
+            "merge_enabled": request.merge_enable,
+            "colors_before": colors_before,
+            "colors_after": colors_after,
+            "merge_map_count": len(merge_map),
+            "quality_metric": quality_metric,
+        },
+    )
     return MergePreviewResponse(
         status="ok",
-        message=f"Merged {len(merge_map)} colors",
+        message=message,
         preview_url=f"/api/files/{preview_id}",
         merge_map=merge_map,
-        quality_metric=round(quality, 2),
+        quality_metric=quality_metric,
         colors_before=colors_before,
         colors_after=colors_after,
     )

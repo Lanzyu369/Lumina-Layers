@@ -11,6 +11,10 @@ its parameters were dropped to shrink the surface and avoid misuse.
 
 import numpy as np
 
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
+
 
 def remove_background(alpha_arr: np.ndarray, rgb_arr: np.ndarray) -> np.ndarray:
     """基于 alpha 透明度返回实体掩码。
@@ -26,5 +30,16 @@ def remove_background(alpha_arr: np.ndarray, rgb_arr: np.ndarray) -> np.ndarray:
     """
     del rgb_arr  # currently unused; kept in signature for stability
     mask_transparent = alpha_arr < 10
+    transparent_count = int(np.sum(mask_transparent))
+    _log.debug(
+        "Found %s transparent pixels (alpha<10)",
+        transparent_count,
+        extra={
+            "event": "background_alpha_transparency_detected",
+            "count": transparent_count,
+            "width": int(alpha_arr.shape[1]) if alpha_arr.ndim == 2 else None,
+            "height": int(alpha_arr.shape[0]) if alpha_arr.ndim == 2 else None,
+        },
+    )
     mask_solid = ~mask_transparent
     return mask_solid

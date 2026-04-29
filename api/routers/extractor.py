@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from typing import List, Tuple
 
@@ -241,6 +242,7 @@ async def extractor_rotate(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    rotate_start = time.perf_counter()
     rotated = rotate_image(img_arr, rotation_label)
     if rotated is None:
         raise HTTPException(status_code=500, detail="Image rotation failed")
@@ -256,7 +258,19 @@ async def extractor_rotate(
         "rotated.png",
         ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
     )
+    rotate_ms = (time.perf_counter() - rotate_start) * 1000.0
     del rotated, rotated_bytes
+
+    log.info(
+        "Extractor rotate completed",
+        extra={
+            "event": "extractor_rotate_done",
+            "direction": str(direction_key),
+            "output_width": int(w),
+            "output_height": int(h),
+            "rotate_ms": round(rotate_ms, 2),
+        },
+    )
 
     return {
         "preview_url": f"/api/files/{file_id}",
@@ -278,6 +292,7 @@ async def extractor_preview_wb(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    wb_start = time.perf_counter()
     balanced = apply_auto_white_balance(img_arr)
     del img_arr
     balanced_bytes = ndarray_to_png_bytes(balanced)
@@ -288,7 +303,18 @@ async def extractor_preview_wb(
         "wb_preview.png",
         ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
     )
+    wb_ms = (time.perf_counter() - wb_start) * 1000.0
     del balanced, balanced_bytes
+
+    log.info(
+        "Extractor white-balance preview completed",
+        extra={
+            "event": "extractor_preview_wb_done",
+            "output_width": int(w),
+            "output_height": int(h),
+            "wb_ms": round(wb_ms, 2),
+        },
+    )
 
     return {
         "preview_url": f"/api/files/{file_id}",
@@ -337,6 +363,7 @@ async def extractor_extract(
         raise HTTPException(status_code=422, detail=str(e))
 
     # Call core extraction (field name mapping: distortion->barrel, vignette_correction->bright)
+    extract_start = time.perf_counter()
     try:
         vis_img, preview_img, lut_path, status_msg = run_extraction(
             img=img_arr,
@@ -351,6 +378,7 @@ async def extractor_extract(
             auto_wb=auto_wb,
             eight_color_full_export=eight_color_full_export,
         )
+        extract_ms = (time.perf_counter() - extract_start) * 1000.0
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color extraction")
 
@@ -431,6 +459,18 @@ async def extractor_extract(
         preview_bytes = _image_to_png_bytes(preview_img)
         lut_preview_id = registry.register_bytes(session_id, preview_bytes, "lut_preview.png")
 
+    log.info(
+        "Extractor extract completed",
+        extra={
+            "event": "extractor_extract_done",
+            "color_mode": effective_color_mode,
+            "page": page,
+            "eight_color_full_export": bool(eight_color_full_export),
+            "lut_path": str(lut_path),
+            "extract_ms": round(extract_ms, 1),
+        },
+    )
+
     return ExtractResponse(
         session_id=session_id,
         status="ok",
@@ -468,6 +508,7 @@ def extractor_manual_fix(
         if session_data and "lut_path" in session_data:
             lut_path = session_data["lut_path"]
 
+    manual_fix_start = time.perf_counter()
     try:
         preview_result, status_msg = manual_fix_cell(
             coord=request.cell_coord,
@@ -476,6 +517,7 @@ def extractor_manual_fix(
         )
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "Manual fix")
+    manual_fix_ms = (time.perf_counter() - manual_fix_start) * 1000.0
 
     if preview_result is None:
         raise HTTPException(status_code=500, detail=status_msg or "Manual fix failed")
@@ -489,6 +531,18 @@ def extractor_manual_fix(
         preview_bytes,
         "lut_preview.png",
         ttl_seconds=None if has_valid_session else EPHEMERAL_PREVIEW_TTL_SECONDS,
+    )
+
+    log.info(
+        "Extractor manual fix completed",
+        extra={
+            "event": "extractor_manual_fix_done",
+            "cell_coord_row": int(request.cell_coord[0]),
+            "cell_coord_col": int(request.cell_coord[1]),
+            "override_color": str(request.override_color),
+            "has_session": bool(has_valid_session),
+            "manual_fix_ms": round(manual_fix_ms, 2),
+        },
     )
 
     return ManualFixResponse(
@@ -523,6 +577,7 @@ def extractor_merge_5color_extended(
             detail="Missing temp pages. Please extract Page 1 and Page 2 first.",
         )
 
+    merge_start = time.perf_counter()
     try:
         rgb1, stacks1, meta1 = LUTManager.load_lut_with_metadata(path1)
         rgb2, stacks2, meta2 = LUTManager.load_lut_with_metadata(path2)
@@ -531,7 +586,12 @@ def extractor_merge_5color_extended(
         merged_rgb = np.vstack([rgb1, rgb2])
 
         # Merge stacks if available
-        if stacks1 is not None and stacks2 is not None and stacks1.shape[1] == stacks2.shape[1]:
+        stacks_compatible = (
+            stacks1 is not None
+            and stacks2 is not None
+            and stacks1.shape[1] == stacks2.shape[1]
+        )
+        if stacks_compatible:
             merged_stacks = np.vstack([stacks1, stacks2])
         else:
             merged_stacks = np.zeros((len(merged_rgb), 0), dtype=np.int32)
@@ -540,6 +600,7 @@ def extractor_merge_5color_extended(
         LUTManager.save_keyed_json(LUT_FILE_PATH, merged_rgb, merged_stacks, metadata)
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "5-Color Extended merge")
+    merge_ms = (time.perf_counter() - merge_start) * 1000.0
 
     # Create session for merged result
     session_id = store.create()
@@ -547,6 +608,16 @@ def extractor_merge_5color_extended(
     store.put(session_id, "color_mode", "5-Color Extended")
 
     lut_download_id = registry.register_path(session_id, LUT_FILE_PATH)
+
+    log.info(
+        "Extractor 5-Color Extended merge completed",
+        extra={
+            "event": "extractor_merge_5color_extended_done",
+            "merged_rgb_count": int(merged_rgb.shape[0]),
+            "stacks_compatible": bool(stacks_compatible),
+            "merge_ms": round(merge_ms, 2),
+        },
+    )
 
     return ExtractResponse(
         session_id=session_id,
@@ -594,6 +665,7 @@ def extractor_merge_8color(
             ),
         )
 
+    merge_start = time.perf_counter()
     try:
         rgb_parts = []
         stack_parts = []
@@ -632,6 +704,7 @@ def extractor_merge_8color(
         LUTManager.save_keyed_json(LUT_FILE_PATH, merged_rgb, merged_stacks, metadata)
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "8-Color merge")
+    merge_ms = (time.perf_counter() - merge_start) * 1000.0
 
     # Create session for merged result
     session_id = store.create()
@@ -639,6 +712,18 @@ def extractor_merge_8color(
     store.put(session_id, "color_mode", "8-Color Max")
 
     lut_download_id = registry.register_path(session_id, LUT_FILE_PATH)
+
+    log.info(
+        "Extractor 8-Color merge completed",
+        extra={
+            "event": "extractor_merge_8color_done",
+            "eight_color_full_export": bool(eight_color_full_export),
+            "total_pages": int(total_pages),
+            "merged_rgb_count": int(merged_rgb.shape[0]),
+            "stacks_compatible": bool(stacks_compatible),
+            "merge_ms": round(merge_ms, 2),
+        },
+    )
 
     return ExtractResponse(
         session_id=session_id,
@@ -677,6 +762,7 @@ def confirm_palette(
         if not entry.color or not entry.color.strip():
             raise HTTPException(status_code=422, detail="Color name cannot be blank")
 
+    confirm_start = time.perf_counter()
     bind_session_id(request.session_id)
     session_data = store.get(request.session_id)
     if session_data is None:
@@ -728,6 +814,21 @@ def confirm_palette(
             )
 
     store.put(request.session_id, "lut_metadata", metadata)
+    confirm_ms = (time.perf_counter() - confirm_start) * 1000.0
+
+    log.info(
+        "Extractor palette confirmation completed",
+        extra={
+            "event": "extractor_confirm_palette_done",
+            "palette_size": int(len(request.palette)),
+            "manufacturer": str(manufacturer),
+            "lut_type": str(lut_type),
+            "persisted_to_disk": bool(
+                lut_path is not None and os.path.exists(lut_path) and persist_warning is None
+            ),
+            "confirm_ms": round(confirm_ms, 2),
+        },
+    )
 
     if persist_warning:
         return {"status": "warning", "message": persist_warning}

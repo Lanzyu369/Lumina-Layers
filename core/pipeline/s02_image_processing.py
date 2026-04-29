@@ -12,7 +12,10 @@ S02 — 通过 LuminaImageProcessor 进行图像处理。
 import time
 import numpy as np
 
+from api.structured_logging import get_logger
 from core.image_processing import LuminaImageProcessor
+
+_log = get_logger(__name__)
 
 # Try to import LUTManager for metadata loading
 try:
@@ -83,7 +86,15 @@ def run(ctx: dict) -> dict:
         try:
             _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
         except Exception as e:
-            print(f"[S02] Warning: Failed to load LUT metadata: {e}")
+            _log.warning(
+                "Warning: Failed to load LUT metadata: %s",
+                e,
+                extra={
+                    "event": "s02_lut_metadata_load_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
 
     ctx['lut_metadata'] = lut_metadata
 
@@ -137,7 +148,20 @@ def run(ctx: dict) -> dict:
     ctx['processor'] = processor
     ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
 
-    print(f"[S02] image_proc done: {_elapsed:.3f}s, {target_w}x{target_h}px, "
-          f"scale={result['pixel_scale']}mm/px")
+    _log.debug(
+        "image_proc done: %.3fs, %sx%spx, scale=%smm/px",
+        _elapsed,
+        target_w,
+        target_h,
+        result["pixel_scale"],
+        extra={
+            "event": "s02_image_proc_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "width": int(target_w),
+            "height": int(target_h),
+            "pixel_scale": result["pixel_scale"],
+            "mode": str(getattr(modeling_mode, "value", modeling_mode)),
+        },
+    )
 
     return ctx

@@ -33,8 +33,10 @@ from api.schemas.system import (
     UserSettingsResponse,
 )
 from api.session_store import SessionStore
+from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/system", tags=["System"])
+log = get_logger(__name__)
 
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
@@ -147,17 +149,30 @@ async def image_preview(
     Returns:
         dict: {preview_url, width, height}
     """
+    original_filename = file.filename or "unknown"
     png_path = await ensure_png_tempfile(file)
     try:
         with Image.open(png_path) as img:
             width, height = img.size
-    except Exception as e:
+    except (OSError, ValueError) as e:
         raise HTTPException(status_code=422, detail=f"无法读取图片尺寸: {e}")
     file_id = file_registry.register_path(
         str(uuid.uuid4()),
         png_path,
         "preview.png",
         ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+    )
+    file_size_bytes = os.path.getsize(png_path)
+    log.info(
+        "Image preview generated",
+        extra={
+            "event": "system_image_preview_done",
+            "original_filename": original_filename,
+            "file_id": file_id,
+            "image_width": int(width),
+            "image_height": int(height),
+            "file_size_bytes": int(file_size_bytes),
+        },
     )
     return {"preview_url": f"/api/files/{file_id}", "width": width, "height": height}
 
@@ -270,9 +285,17 @@ def get_settings() -> UserSettingsResponse:
 def save_settings(settings: UserSettings) -> SaveSettingsResponse:
     """将 UserSettings 写入 user_settings.json。"""
     try:
-        SETTINGS_FILE.write_text(
-            json.dumps(settings.model_dump(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
+        settings_payload = settings.model_dump()
+        serialized = json.dumps(settings_payload, indent=2, ensure_ascii=False)
+        SETTINGS_FILE.write_text(serialized, encoding="utf-8")
+        log.info(
+            "User settings saved",
+            extra={
+                "event": "system_save_settings_done",
+                "settings_field_count": len(settings_payload),
+                "bytes_written": len(serialized.encode("utf-8")),
+                "settings_path": str(SETTINGS_FILE),
+            },
         )
         return SaveSettingsResponse(status="success", message="Settings saved")
     except OSError as e:

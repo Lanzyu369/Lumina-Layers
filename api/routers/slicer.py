@@ -20,10 +20,12 @@ from api.schemas.slicer import (
     SlicerLaunchRequest,
     SlicerLaunchResponse,
 )
+from api.structured_logging import get_logger
 from config import TEMP_DIR
 from core.slicer import detect_installed_slicers, launch_slicer
 
 router = APIRouter(prefix="/api/slicer", tags=["Slicer"])
+log = get_logger(__name__)
 _SLICER_LAUNCH_COPY_TTL_SECONDS = 60 * 60
 
 
@@ -38,7 +40,7 @@ def _create_launch_copy(file_path: str, registry: FileRegistry) -> str:
     os.close(fd)
     try:
         shutil.copy2(file_path, launch_copy_path)
-    except Exception:
+    except OSError:
         try:
             os.unlink(launch_copy_path)
         except OSError:
@@ -98,7 +100,7 @@ def launch_slicer_endpoint(
         )
     try:
         launch_file_path = _create_launch_copy(request.file_path, registry)
-    except Exception as exc:
+    except OSError as exc:
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
@@ -110,7 +112,7 @@ def launch_slicer_endpoint(
     # 3) Attempt launch
     try:
         success, message = launch_slicer(request.slicer_id, launch_file_path, slicers)
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
@@ -137,4 +139,15 @@ def launch_slicer_endpoint(
             ).model_dump(),
         )
 
+    log.info(
+        "Slicer launched",
+        extra={
+            "event": "slicer_launch_done",
+            "slicer_id": request.slicer_id,
+            "original_file_path": request.file_path,
+            "launch_copy_path": launch_file_path,
+            "launch_copy_filename": os.path.basename(launch_file_path),
+            "launch_message_length": len(message or ""),
+        },
+    )
     return SlicerLaunchResponse(status="success", message=message)

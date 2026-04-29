@@ -13,7 +13,10 @@ import numpy as np
 import trimesh
 from PIL import Image, ImageDraw
 
+from api.structured_logging import get_logger
 from config import PrinterConfig, BedManager, PREVIEW_SCALE
+
+_log = get_logger(__name__)
 
 
 def compute_bed_model_rect(
@@ -314,13 +317,34 @@ def _create_bed_mesh(bed_w_mm, bed_h_mm, is_dark=True):
         mesh.visual = TextureVisuals(uv=uv, material=SimpleMaterial(image=img))
 
         theme_name = "dark" if is_dark else "light"
-        print(f"[BED] Created {theme_name} {bed_w_mm}x{bed_h_mm}mm rounded bed ({n_pts} verts)")
+        _log.debug(
+            "Created %s %sx%smm rounded bed (%s verts)",
+            theme_name,
+            bed_w_mm,
+            bed_h_mm,
+            n_pts,
+            extra={
+                "event": "bed_mesh_created",
+                "width_mm": float(bed_w_mm),
+                "height_mm": float(bed_h_mm),
+                "theme": theme_name,
+                "vertex_count": int(n_pts),
+            },
+        )
         return mesh
 
     except Exception as e:
-        print(f"[BED] Failed to create bed mesh: {e}")
-        import traceback
-        traceback.print_exc()
+        _log.exception(
+            "Failed to create bed mesh: %s",
+            e,
+            extra={
+                "event": "bed_mesh_create_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "width_mm": float(bed_w_mm),
+                "height_mm": float(bed_h_mm),
+            },
+        )
         return None
 
 
@@ -368,5 +392,15 @@ def run(ctx: dict) -> dict:
     ctx['status_msg'] = status_msg
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p06_s'] = _elapsed
-    print(f"[P06] bed_rendering done: {_elapsed:.3f}s")
+    _log.debug(
+        "bed_rendering done: %.3fs",
+        _elapsed,
+        extra={
+            "event": "p06_bed_rendering_done",
+            "duration_ms": round(_elapsed * 1000, 3),
+            "width": int(target_w),
+            "height": int(target_h),
+            "count": int(num_colors),
+        },
+    )
     return ctx

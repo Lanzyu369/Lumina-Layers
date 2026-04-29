@@ -18,7 +18,6 @@ Key changes from v1:
 
 import os
 import re
-import logging
 import json
 import numpy as np
 import time
@@ -33,9 +32,10 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
-from config import PrinterConfig, ColorSystem
+from api.structured_logging import get_logger
+from config import PrinterConfig, ColorSystem, VectorConfig
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
@@ -376,17 +376,35 @@ def apply_recipe_overrides_to_analysis(
     for rid, mask in (region_masks or {}).items():
         arr = np.asarray(mask, dtype=bool)
         if arr.ndim != 2 or arr.shape != (h_px, w_px):
+            error_message = (
+                f"Region mask {rid} shape {arr.shape} does not match "
+                f"preview grid {(h_px, w_px)}"
+            )
             _log.warning(
-                "[VECTOR] Region mask %s shape %s does not match preview grid %s; skipped",
-                rid,
-                arr.shape,
-                (h_px, w_px),
+                "Region mask does not match preview grid; skipped",
+                extra={
+                    "event": "vector_recipe_region_mask_skipped",
+                    "error_type": "ValueError",
+                    "error_message": error_message,
+                    "region_id": str(rid),
+                    "mask_shape": list(arr.shape),
+                    "expected_shape": [int(h_px), int(w_px)],
+                },
             )
             continue
         normalised_masks[str(rid)] = arr
 
     if not normalised_masks:
-        _log.warning("[VECTOR] No region masks matched preview grid; recipe overrides ignored")
+        _log.warning(
+            "No region masks matched preview grid; recipe overrides ignored",
+            extra={
+                "event": "vector_recipe_region_masks_missing",
+                "error_type": "ValueError",
+                "error_message": "No recipe override region masks matched the preview grid",
+                "region_count": len(region_masks or {}),
+                "expected_shape": [int(h_px), int(w_px)],
+            },
+        )
         return
 
     # --- Build a global virtual-material registry (dedupe by name+hex) ---
@@ -582,8 +600,8 @@ def apply_recipe_overrides_to_analysis(
 
     analysis.num_layers = int(effective_target)
 
-    _log.info(
-        "[VECTOR] Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
+    _log.debug(
+        "Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
         "virtuals=%s, target_layers=%s",
         len(analysis.matched_shapes),
         overridden_count,
@@ -591,6 +609,240 @@ def apply_recipe_overrides_to_analysis(
         len(virtual_registry),
         effective_target,
     )
+
+
+def apply_matched_rgb_overrides_to_analysis(
+    analysis: "VectorAnalysis",
+    *,
+    matched_rgb: np.ndarray,
+    mask_solid: np.ndarray,
+    img_processor,
+    pixels_per_mm: float = 10.0,
+    max_width_px: int = 1600,
+) -> int:
+    """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
+    把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
+
+    The 2D preview / GLB previews route through ``cache.matched_rgb``:
+    ``/region-replace`` and ``/region-replace-batch`` mutate that array
+    by mask, so the preview reflects the user's edit immediately. The
+    SVG-native ``_run_vector_branch`` previously re-derived per-shape
+    colours from the SVG fill alone, silently dropping every spatial
+    edit. This helper closes that gap by:
+
+    1. Reproducing the same preview grid ``build_preview_cache`` uses
+       so the ``matched_rgb`` / ``mask_solid`` arrays line up pixel-for-
+       pixel with the analysis geometry.
+    2. Rasterising each ``analysis.matched_shapes`` entry into its own
+       boolean mask and intersecting it with ``mask_solid`` (background
+       pixels are ignored so a "carved out" hole cannot poison the
+       per-shape colour vote).
+    3. Picking the dominant RGB inside the effective mask. If it differs
+       from ``shape['matched_rgb']`` we re-run the same KDTree lookup
+       ``_match_colors`` uses so the new ``matched_rgb`` / ``recipe``
+       come from the LUT — guaranteeing the generated 3MF stays inside
+       the user's calibrated material set.
+
+    The helper preserves every public surface (the module exports it,
+    nothing else changes) and is therefore opt-in for callers that have
+    a fresh ``cache.matched_rgb`` to forward.
+
+    2D 预览 / GLB 走 ``cache.matched_rgb``，``/region-replace`` 之类
+    端点会按 mask 改写它，但生成阶段的矢量分支以前只从 SVG fill 复算
+    颜色，用户的空间改色被静默丢弃。本 helper 复现 ``build_preview_cache``
+    网格，逐 shape 求 mask，与 ``mask_solid`` 求交后取 dominant RGB，
+    若与原 ``matched_rgb`` 不一致则重新走 KDTree 查 LUT，把新颜色和配方
+    回写到 ``matched_shapes``，让 3MF 与 2D 预览保持一致。
+
+    Args:
+        analysis: ``VectorAnalysis`` from ``analyze_svg``; mutated in place.
+            （``analyze_svg`` 返回的分析结果，就地修改）
+        matched_rgb: ``(H, W, 3) uint8`` array taken from ``cache["matched_rgb"]``.
+            （取自 ``cache["matched_rgb"]`` 的预览栅格）
+        mask_solid: ``(H, W) bool`` array taken from ``cache["mask_solid"]``.
+            （取自 ``cache["mask_solid"]`` 的实体像素掩码）
+        img_processor: Object exposing ``_rgb_to_lab``, ``kdtree``,
+            ``lut_rgb`` and ``ref_stacks`` — the same interface
+            ``VectorProcessor._match_colors`` consumes.
+            （提供 LUT KDTree / 调色板 / 配方 stack 的处理器对象）
+        pixels_per_mm: Preview-grid density. Must match the value used
+            by :meth:`VectorProcessor.build_preview_cache`.
+            （预览网格密度，需与 ``build_preview_cache`` 一致）
+        max_width_px: Preview-grid width cap. Same constraint.
+            （预览网格宽度上限，同上）
+
+    Returns:
+        int: Number of shapes whose ``matched_rgb`` was rewritten.
+            （颜色被改写的 shape 数量）
+    """
+    if matched_rgb is None or mask_solid is None:
+        return 0
+    if not analysis.matched_shapes:
+        return 0
+
+    real_w = float(analysis.bbox[2])
+    real_h = float(analysis.bbox[3])
+    sf = float(analysis.scale_factor)
+    w_mm = real_w * sf
+    h_mm = real_h * sf
+    if w_mm <= 0 or h_mm <= 0:
+        return 0
+
+    ppm = float(pixels_per_mm)
+    w_px = max(1, int(round(w_mm * ppm)))
+    h_px = max(1, int(round(h_mm * ppm)))
+    if w_px > max_width_px:
+        ratio = max_width_px / w_px
+        w_px = max_width_px
+        h_px = max(1, int(round(h_px * ratio)))
+        ppm = w_px / w_mm
+    coord_scale = sf * ppm
+
+    matched_arr = np.asarray(matched_rgb)
+    mask_arr = np.asarray(mask_solid, dtype=bool)
+    if matched_arr.ndim != 3 or matched_arr.shape[2] != 3 or matched_arr.dtype != np.uint8:
+        error_message = (
+            f"matched_rgb shape/dtype {matched_arr.shape}/{matched_arr.dtype} "
+            "is not (H,W,3) uint8"
+        )
+        _log.warning(
+            "Vector matched RGB overrides skipped because input array is invalid",
+            extra={
+                "event": "vector_overrides_input_invalid",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "matched_rgb_shape": list(matched_arr.shape),
+                "matched_rgb_dtype": str(matched_arr.dtype),
+            },
+        )
+        return 0
+    if matched_arr.shape[:2] != (h_px, w_px) or mask_arr.shape != (h_px, w_px):
+        error_message = (
+            f"matched_rgb/mask_solid shape {matched_arr.shape[:2]}/{mask_arr.shape} "
+            f"does not match preview grid {(h_px, w_px)}"
+        )
+        _log.warning(
+            "Vector matched RGB overrides skipped because cache grid mismatched analysis",
+            extra={
+                "event": "vector_overrides_grid_mismatch",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "matched_rgb_shape": list(matched_arr.shape[:2]),
+                "mask_solid_shape": list(mask_arr.shape),
+                "expected_shape": [int(h_px), int(w_px)],
+            },
+        )
+        return 0
+
+    def _iter_polygons(geom):
+        if geom is None or geom.is_empty:
+            return []
+        if geom.geom_type == "Polygon":
+            return [geom]
+        if geom.geom_type == "MultiPolygon":
+            return list(geom.geoms)
+        return []
+
+    def _coords_to_pts(coords):
+        pts = np.column_stack(
+            [
+                coords[:, 0] * coord_scale,
+                coords[:, 1] * coord_scale,
+            ]
+        ).astype(np.int32)
+        if len(pts) < 3:
+            return None
+        return pts
+
+    def _shape_mask(geom):
+        region = np.zeros((h_px, w_px), dtype=np.uint8)
+        painted = False
+        for poly in _iter_polygons(geom):
+            if poly.is_empty:
+                continue
+            ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
+            if ext_pts is None:
+                continue
+            cv2.fillPoly(region, [ext_pts], 255)
+            painted = True
+            for interior in poly.interiors:
+                hole_pts = _coords_to_pts(np.array(interior.coords))
+                if hole_pts is not None:
+                    cv2.fillPoly(region, [hole_pts], 0)
+        if not painted:
+            return None
+        return region.astype(bool)
+
+    num_channels = int(getattr(analysis, "num_channels", 0) or 0)
+    num_layers = int(getattr(analysis, "num_layers", 0) or 0)
+    if num_channels <= 0 or num_layers <= 0:
+        return 0
+
+    lut_rgb = img_processor.lut_rgb
+    ref_stacks = img_processor.ref_stacks
+
+    changed = 0
+    for shape in analysis.matched_shapes:
+        geom = shape.get("geometry")
+        if geom is None or getattr(geom, "is_empty", False):
+            continue
+        shape_mask = _shape_mask(geom)
+        if shape_mask is None:
+            continue
+        effective_mask = np.logical_and(shape_mask, mask_arr)
+        if not np.any(effective_mask):
+            continue
+
+        pixels = matched_arr[effective_mask]
+        # Encode each RGB triplet into a uint32 so np.unique can vote on
+        # the dominant colour in a single vectorised pass.
+        # 三通道编码成 uint32，单次 np.unique 即可投票出主导色。
+        codes = (
+            pixels[:, 0].astype(np.uint32) * np.uint32(65536)
+            + pixels[:, 1].astype(np.uint32) * np.uint32(256)
+            + pixels[:, 2].astype(np.uint32)
+        )
+        uniq, counts = np.unique(codes, return_counts=True)
+        dominant_code = int(uniq[int(np.argmax(counts))])
+        dominant_rgb = (
+            (dominant_code >> 16) & 0xFF,
+            (dominant_code >> 8) & 0xFF,
+            dominant_code & 0xFF,
+        )
+
+        prev_rgb = shape.get("matched_rgb")
+        if isinstance(prev_rgb, tuple) and tuple(int(c) for c in prev_rgb) == dominant_rgb:
+            continue
+
+        query_lab = img_processor._rgb_to_lab(np.array([dominant_rgb], dtype=np.uint8))
+        _, index = img_processor.kdtree.query(query_lab)
+        try:
+            lut_idx = int(np.atleast_1d(index)[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
+
+        stack = ref_stacks[lut_idx]
+        new_recipe = [
+            min(int(stack[z]), num_channels - 1)
+            for z in range(min(num_layers, len(stack)))
+        ]
+
+        shape["matched_rgb"] = new_matched_rgb
+        shape["lut_idx"] = lut_idx
+        shape["recipe"] = new_recipe
+        changed += 1
+
+    if changed:
+        _log.debug(
+            "Vector matched RGB overrides applied",
+            extra={
+                "event": "vector_overrides_applied",
+                "shape_count": len(analysis.matched_shapes),
+                "rewritten_count": int(changed),
+            },
+        )
+    return changed
 
 
 class VectorProcessor:
@@ -609,7 +861,7 @@ class VectorProcessor:
 
     def __init__(self, lut_path: str, color_mode: str):
         self.color_mode = color_mode
-        _log.info("[VECTOR] Initializing Native Vector Engine (%s)...", color_mode)
+        _log.debug("Initializing Native Vector Engine (%s)...", color_mode)
 
         ImageProcessor = _get_image_processor_class()
         self.img_processor = ImageProcessor(lut_path, color_mode)
@@ -618,8 +870,9 @@ class VectorProcessor:
         self.parse_warnings: list[str] = []
         self.enable_fridge_magnet = False
         self.fridge_magnets: list = []
+        self.expand_stroke_to_fill = False
 
-        _log.info("[VECTOR] Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
+        _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
 
     # ── Geometry pre-processing helpers ─────────────────────────────────
 
@@ -661,6 +914,49 @@ class VectorProcessor:
                 polys.append(Polygon(p.exterior, kept))
             return MultiPolygon(polys)
         return geom
+
+    @staticmethod
+    def _filter_slits(geom, min_slit_width_mm=0.1):
+        """Filter sub-threshold slit-like features from polygonal geometry."""
+        if geom is None or geom.is_empty:
+            return geom
+
+        try:
+            distance = float(min_slit_width_mm) / 2.0 + 1e-9
+        except (TypeError, ValueError):
+            distance = 0.05 + 1e-9
+        if distance <= 0:
+            return geom
+
+        try:
+            expanded = geom.buffer(distance)
+            closed = expanded.buffer(-distance)
+            if closed.is_empty:
+                return geom
+
+            opened = geom.buffer(-distance).buffer(distance)
+            result = closed
+            if (
+                not opened.is_empty
+                and VectorProcessor._polygon_component_count(opened)
+                > VectorProcessor._polygon_component_count(closed)
+            ):
+                result = opened
+
+            result = VectorProcessor._extract_polygonal_geometry(make_valid(result))
+            return result if result is not None and not result.is_empty else geom
+        except VECTOR_HANDLED_ERRORS:
+            return geom
+
+    @staticmethod
+    def _polygon_component_count(geom) -> int:
+        if geom is None or geom.is_empty:
+            return 0
+        if geom.geom_type == "Polygon":
+            return 1
+        if geom.geom_type == "MultiPolygon":
+            return len(geom.geoms)
+        return 0
 
     @staticmethod
     def _centered_mm_to_vector_coords(center_x_mm, center_y_mm, bbox, scale_factor):
@@ -1179,8 +1475,9 @@ class VectorProcessor:
             A ``VectorAnalysis`` containing all intermediate data needed
             by ``build_mesh`` and ``render_preview``.
         """
-        _log.info("[VECTOR] Analyzing: %s", svg_path)
+        _log.debug("Analyzing: %s", svg_path)
         stage_timings = {}
+        expand_stroke_to_fill = bool(getattr(self, "expand_stroke_to_fill", False))
 
         # === Stage 1+2: Parse & Occlusion clip (with cache) ===
         cache_key = None
@@ -1192,6 +1489,7 @@ class VectorProcessor:
                 svg_abs,
                 round(float(target_width_mm), 4),
                 round(float(self.sampling_precision), 4),
+                expand_stroke_to_fill,
                 svg_mtime,
             )
             cached_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
@@ -1206,23 +1504,32 @@ class VectorProcessor:
             bbox = cached_entry["bbox"]
             stage_timings["parse_s"] = 0.0
             stage_timings["occlusion_s"] = 0.0
-            _log.info("[VECTOR] Parse/clip cache hit: %s", os.path.basename(svg_path))
-            _log.info("[VECTOR] Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
-            _log.info("[VECTOR] After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
+            _log.debug("Parse/clip cache hit: %s", os.path.basename(svg_path))
+            _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
+            _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
         else:
             t0 = time.perf_counter()
-            shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
+            had_parse_policy = hasattr(self, "_parse_expand_stroke_to_fill")
+            previous_parse_policy = getattr(self, "_parse_expand_stroke_to_fill", None)
+            self._parse_expand_stroke_to_fill = expand_stroke_to_fill
+            try:
+                shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
+            finally:
+                if had_parse_policy:
+                    self._parse_expand_stroke_to_fill = previous_parse_policy
+                else:
+                    delattr(self, "_parse_expand_stroke_to_fill")
             if not shape_data:
                 raise ValueError("No valid filled shapes found in SVG.")
             stage_timings["parse_s"] = time.perf_counter() - t0
-            _log.info("[VECTOR] Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
+            _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
 
             t0 = time.perf_counter()
             _pre_area = sum(it["poly"].area for it in shape_data if it["poly"] is not None)
             clipped_shapes, silhouette = self._clip_occlusion(shape_data, return_silhouette=True)
             _clip_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] _clip_occlusion: %s -> %s shapes, area %.1f -> %.1f (%.1f%%)",
+            _log.debug(
+                "_clip_occlusion: %s -> %s shapes, area %.1f -> %.1f (%.1f%%)",
                 len(shape_data),
                 len(clipped_shapes),
                 _pre_area,
@@ -1238,8 +1545,8 @@ class VectorProcessor:
                     item["geometry"] = g
                     post_clip.append(item)
             _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
+            _log.debug(
+                "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
                 len(clipped_shapes),
                 len(post_clip),
                 _clip_area,
@@ -1253,8 +1560,8 @@ class VectorProcessor:
                 {"geometry": it["poly"], "color": it["color"], "draw_order": idx} for idx, it in enumerate(split_output)
             ]
             _split_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.info(
-                "[VECTOR] split disconnected: %s -> %s shapes, area %.1f -> %.1f",
+            _log.debug(
+                "split disconnected: %s -> %s shapes, area %.1f -> %.1f",
                 len(post_clip),
                 len(clipped_shapes),
                 _norm_area,
@@ -1262,7 +1569,7 @@ class VectorProcessor:
             )
 
             stage_timings["occlusion_s"] = time.perf_counter() - t0
-            _log.info("[VECTOR] After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
+            _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
 
             if cache_key is not None:
                 _VECTOR_PARSE_CLIP_CACHE[cache_key] = {
@@ -1278,7 +1585,7 @@ class VectorProcessor:
         # === Stage 3: Resolve color system config ===
         is_six_color = len(self.img_processor.lut_rgb) == 1296
         if is_six_color:
-            _log.info("[VECTOR] Auto-detected 6-Color LUT. Forcing 6-Color mode.")
+            _log.debug("Auto-detected 6-Color LUT. Forcing 6-Color mode.")
             color_conf = ColorSystem.SIX_COLOR
             self.color_mode = "6-Color"
         else:
@@ -1317,9 +1624,17 @@ class VectorProcessor:
                     color_conf = dict(color_conf)
                     color_conf["slots"] = slot_names
                     color_conf["preview"] = preview_colors
-                    _log.info("[VECTOR] LUT palette override: %s", slot_names)
+                    _log.debug("LUT palette override: %s", slot_names)
             except Exception as e:
-                _log.warning("[VECTOR] Failed to extract LUT palette: %s", e)
+                _log.warning(
+                    "Failed to extract vector LUT palette",
+                    extra={
+                        "event": "vector_lut_palette_extract_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "path": str(lut_path),
+                    },
+                )
 
         # === Stage 4: Match fill colors to LUT recipes ===
         replacement_manager = None
@@ -1329,12 +1644,48 @@ class VectorProcessor:
 
                 replacement_manager = ColorReplacementManager.from_dict(color_replacements)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("[VECTOR] Failed to load color replacements: %s", e)
+                _log.warning(
+                    "Failed to load vector color replacements",
+                    extra={
+                        "event": "vector_color_replacements_load_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "replacement_count": len(color_replacements or []),
+                    },
+                )
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
+        min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
+        for idx, item in enumerate(clipped_shapes):
+            filtered_geometry = VectorProcessor._filter_backing_holes(
+                item["geometry"],
+                min_hole_area_mm2=min_hole_area_mm2,
+            )
+            item["geometry"] = filtered_geometry
+            if idx < len(matched_shapes):
+                matched_shapes[idx]["geometry"] = filtered_geometry
         stage_timings["color_match_s"] = time.perf_counter() - t0
-        _log.info("[VECTOR] Matched %s shapes to LUT recipes", len(matched_shapes))
+        _log.debug("Matched %s shapes to LUT recipes", len(matched_shapes))
+        legacy_stroke_only_shapes = sum(
+            1 for item in shape_data if item.get("source_kind") == "stroke_only"
+        )
+        fill_eq_stroke_double_buffer = sum(
+            1 for item in shape_data if item.get("same_color_stroke_double_buffer")
+        )
+        stroke_policy_message = (
+            "Stroke policy: "
+            f"expand={expand_stroke_to_fill} "
+            f"legacy_stroke_only_shapes={legacy_stroke_only_shapes} "
+            f"fill_eq_stroke_double_buffer={fill_eq_stroke_double_buffer}"
+        )
+        stroke_policy_extra = {
+            "event": "vector_stroke_policy",
+            "expand": expand_stroke_to_fill,
+            "legacy_stroke_only_shapes": legacy_stroke_only_shapes,
+            "fill_eq_stroke_double_buffer": fill_eq_stroke_double_buffer,
+        }
+        _log.info(stroke_policy_message, extra=stroke_policy_extra)
 
         return VectorAnalysis(
             shape_data=shape_data,
@@ -1370,7 +1721,7 @@ class VectorProcessor:
         Returns:
             A ``trimesh.Scene`` with one geometry per material slot.
         """
-        _log.info("[VECTOR] Building mesh: structure_mode=%s", structure_mode)
+        _log.debug("Building mesh: structure_mode=%s", structure_mode)
         stage_timings = dict(analysis.stage_timings)
         t_total_start = time.perf_counter()
 
@@ -1414,8 +1765,8 @@ class VectorProcessor:
                 face_up=True,
                 optical_z_base=backing_height,
             )
-            _log.info(
-                "[VECTOR] 5-Color face-up: %s optical layers above %.2fmm backing",
+            _log.debug(
+                "5-Color face-up: %s optical layers above %.2fmm backing",
                 num_layers,
                 backing_height,
             )
@@ -1445,7 +1796,7 @@ class VectorProcessor:
             backing_z_start = num_layers * layer_h
 
         if thickness_mm > 0 and silhouette is not None and not silhouette.is_empty:
-            _log.info("[VECTOR] Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
+            _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
             backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
             if backing_sil is None or backing_sil.is_empty:
                 backing_sil = silhouette
@@ -1495,7 +1846,7 @@ class VectorProcessor:
         t0 = time.perf_counter()
         is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
         if is_double_sided:
-            _log.info("[VECTOR] Adding mirrored color layers (double-sided mode)...")
+            _log.debug("Adding mirrored color layers (double-sided mode)...")
             top_z_start = backing_z_start + backing_layer_count * layer_h
             self._add_double_sided_layers(
                 matched_shapes,
@@ -1523,7 +1874,7 @@ class VectorProcessor:
             if not mesh_list:
                 continue
 
-            _log.info("[VECTOR] Merging %s parts for %s...", len(mesh_list), name)
+            _log.debug("Merging %s parts for %s...", len(mesh_list), name)
             combined = trimesh.util.concatenate(mesh_list) if len(mesh_list) > 1 else mesh_list[0]
             # Weld coincident border vertices produced by independent per-shape
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
@@ -1547,8 +1898,8 @@ class VectorProcessor:
         stage_timings["extrude_cache_entries"] = len(extrude_cache)
         self.last_stage_timings = stage_timings
 
-        _log.info(
-            "[VECTOR] Stage timings (s): parse=%.3f, clip=%.3f, match=%.3f, "
+        _log.debug(
+            "Stage timings (s): parse=%.3f, clip=%.3f, match=%.3f, "
             "extrude_bottom=%.3f, backing=%.3f, extrude_top=%.3f, assemble=%.3f, total=%.3f",
             stage_timings.get("parse_s", 0),
             stage_timings.get("occlusion_s", 0),
@@ -1559,8 +1910,8 @@ class VectorProcessor:
             stage_timings["assemble_s"],
             stage_timings["total_s"],
         )
-        _log.info("[VECTOR] Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
-        _log.info("[VECTOR] Scene complete: %s objects", len(scene.geometry))
+        _log.debug("Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
+        _log.debug("Scene complete: %s objects", len(scene.geometry))
         return scene
 
     def svg_to_mesh(
@@ -1988,7 +2339,7 @@ class VectorProcessor:
                 hex_c = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
                 matched_hex = f"#{matched_rgb[0]:02x}{matched_rgb[1]:02x}{matched_rgb[2]:02x}"
                 if recipe_log_mode == "full":
-                    _log.info("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
+                    _log.debug("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
                 elif recipe_log_mode == "summary" and len(sample_logs) < 8:
                     sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe}")
 
@@ -2003,13 +2354,13 @@ class VectorProcessor:
             )
 
         if recipe_log_mode == "summary":
-            _log.info(
-                "[VECTOR] Recipe cache summary: unique_colors=%s, shapes=%s",
+            _log.debug(
+                "Recipe cache summary: unique_colors=%s, shapes=%s",
                 len(color_cache),
                 len(clipped_shapes),
             )
             if sample_logs:
-                _log.info("[VECTOR] Recipe samples: %s", "; ".join(sample_logs))
+                _log.debug("Recipe samples: %s", "; ".join(sample_logs))
 
         return matched
 
@@ -2188,6 +2539,7 @@ class VectorProcessor:
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
+        parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
 
         def _sample_path_to_polygon(path_obj):
             try:
@@ -2319,7 +2671,7 @@ class VectorProcessor:
         skipped_types = {}
         skipped_gradient_count = 0
         skipped_polygon_count = 0
-        _log.info("[VECTOR] Parsing SVG geometry...")
+        _log.debug("Parsing SVG geometry...")
 
         def _sample_stroke_geometry(path_obj, stroke_width_svg, cap_style_name="round", join_style_name="round"):
             try:
@@ -2377,7 +2729,7 @@ class VectorProcessor:
                 except Exception:
                     stroke_width = 0.0
             if not has_fill:
-                if has_stroke:
+                if has_stroke and parse_expand_stroke_to_fill:
                     stroke_modeled = False
                     if isinstance(element, Shape) and not isinstance(element, Path):
                         try:
@@ -2535,7 +2887,12 @@ class VectorProcessor:
                 continue
 
             # --- Fix 3: morphological closing ---
-            if has_stroke and fill_hex is not None:
+            same_color_stroke_double_buffer = False
+            if (
+                parse_expand_stroke_to_fill
+                and has_stroke
+                and fill_hex is not None
+            ):
                 stroke_hex = _color_object_to_hex(getattr(element, "stroke", None))
                 try:
                     stroke_width = float(getattr(element, "stroke_width", 0.0) or 0.0)
@@ -2554,6 +2911,7 @@ class VectorProcessor:
                         expanded = VectorProcessor._extract_polygonal_geometry(make_valid(expanded))
                         if expanded is not None and not expanded.is_empty:
                             result_poly = expanded
+                            same_color_stroke_double_buffer = True
                     except Exception:
                         pass
 
@@ -2568,17 +2926,18 @@ class VectorProcessor:
                     "color": rgb,
                     "source_kind": "fill",
                     "same_color_stroke": bool(has_stroke and stroke_hex == fill_hex and stroke_width > 0.0),
+                    "same_color_stroke_double_buffer": same_color_stroke_double_buffer,
                     "stroke_width_svg": float(stroke_width) if has_stroke else 0.0,
                 }
             )
 
         if skipped_types:
-            _log.info(f"[VECTOR] Skipped non-path elements: {skipped_types}")
+            _log.debug(f"Skipped non-path elements: {skipped_types}")
         if skipped_gradient_count > 0:
-            _log.info(f"[VECTOR] {skipped_gradient_count} gradient fills could not be fully resolved")
+            _log.debug(f"{skipped_gradient_count} gradient fills could not be fully resolved")
         if skipped_polygon_count > 0:
-            _log.info(f"[VECTOR] Skipped {skipped_polygon_count} elements (invalid polygon after sampling)")
-        _log.info(f"[VECTOR] Successfully parsed {len(raw_shapes)} shapes from SVG")
+            _log.debug(f"Skipped {skipped_polygon_count} elements (invalid polygon after sampling)")
+        _log.debug(f"Successfully parsed {len(raw_shapes)} shapes from SVG")
 
         parse_warnings = []
         if skipped_gradient_count > 0:
@@ -2614,14 +2973,14 @@ class VectorProcessor:
                     gy0 = min(gy0, vb_y)
                     gx1 = max(gx1, vb_x + vb_w)
                     gy1 = max(gy1, vb_y + vb_h)
-                    _log.info("[VECTOR] SVG viewBox: (%s, %s, %s, %s)", vb_x, vb_y, vb_w, vb_h)
+                    _log.debug("SVG viewBox: (%s, %s, %s, %s)", vb_x, vb_y, vb_w, vb_h)
         except VECTOR_HANDLED_ERRORS:
             pass
 
         real_w = gx1 - gx0
         real_h = gy1 - gy0
 
-        _log.info("[VECTOR] Global bounds: x=%.1f, y=%.1f, w=%.1f, h=%.1f", gx0, gy0, real_w, real_h)
+        _log.debug("Global bounds: x=%.1f, y=%.1f, w=%.1f, h=%.1f", gx0, gy0, real_w, real_h)
         if real_w == 0:
             raise ValueError("Invalid geometry width (0)")
 
@@ -2652,7 +3011,16 @@ class VectorProcessor:
 
             if shifted.is_empty or shifted.area <= min_area_svg:
                 continue
-            final_shapes.append({"poly": shifted, "color": item["color"]})
+            final_item = {"poly": shifted, "color": item["color"]}
+            for key in (
+                "source_kind",
+                "same_color_stroke",
+                "same_color_stroke_double_buffer",
+                "stroke_width_svg",
+            ):
+                if key in item:
+                    final_item[key] = item[key]
+            final_shapes.append(final_item)
 
         return final_shapes, scale_factor, (gx0, gy0, real_w, real_h)
 
@@ -2695,7 +3063,15 @@ class VectorProcessor:
                 m.apply_translation([0, 0, z_offset])
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
-                _log.warning("[VECTOR] Failed to extrude polygon: %s", e)
+                _log.warning(
+                    "Failed to extrude vector polygon",
+                    extra={
+                        "event": "vector_polygon_extrude_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "geometry_type": getattr(poly, "geom_type", None),
+                    },
+                )
                 continue
 
         return meshes
