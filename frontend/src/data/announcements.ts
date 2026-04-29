@@ -16,6 +16,73 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-29",
+    title: {
+      zh: "Lumina Layers — 今日更新",
+      en: "Lumina Layers — Today's updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "转换器主面板拆分为「核心」「颜色」「高级」三个子标签页，常用功能和高级选项不再挤在同一屏，底部颜色工作站入口也改到了顶部二级标签，找起来更直觉",
+            en: "The converter panel is now split into Core / Colour / Advanced sub-tabs so everyday controls and power-user options no longer share a single scroll, and the Color Workstation entry moves from the bottom drawer to a top-level secondary tab for easier access",
+          },
+          {
+            zh: "3D 查看器右下角诊断弹窗精简：FPS 旁加了红/黄/绿状态点，新增帧耗时一行，去掉了几行只有开发者才关心的指标",
+            en: "The 3D viewer diagnostics popover is now leaner: FPS gets a green/yellow/red dot, a new frame-time row is added, and several developer-only metrics are removed",
+          },
+          {
+            zh: "颜色工作站 2D 叠层打开时不再上下滑入，改为淡入淡出，过渡更快也不会闪一下布局",
+            en: "The Color Workstation 2D overlay now fades in instead of sliding, making the transition faster and eliminating a brief layout flash",
+          },
+          {
+            zh: "所有滑块和复选框旁边的帮助提示统一为可见的小问号图标，鼠标悬停弹出说明，不再需要猜哪个控件有隐藏提示",
+            en: "Help hints on all sliders and checkboxes are now shown as a visible question-mark chip that reveals a description on hover, so you no longer have to guess which controls have hidden tooltips",
+          },
+        ],
+      },
+      {
+        category: {
+          zh: "校准 & 材料",
+          en: "Calibration & Materials",
+        },
+        items: [
+          {
+            zh: "校准板默认底板厚度从 1.6 mm 改为 1.2 mm，更贴近常见打印设置；已生成的校准板不受影响",
+            en: "Default calibration board backing thickness changed from 1.6 mm to 1.2 mm to better match common print settings; previously generated boards are unaffected",
+          },
+          {
+            zh: "所有颜色模式（包括 6 色）现在都能调底板厚度滑块，不再有模式限制",
+            en: "The backing thickness slider is now available in every colour mode including 6-Colour, with no mode restrictions",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "修复校准板生成完成后日志记录引用已删除字段导致的报错，之前在默认 4 色模式下生成校准板会返回 500",
+            en: "Fixed a logging error that referenced a removed field after calibration board generation, which previously turned a successful 4-colour generation into a 500 response",
+          },
+          {
+            zh: "5 色扩展 Page 2 的分层预览现在包含全部 6 个色层，之前漏掉了最后一层",
+            en: "The layer preview for 5-Colour Extended Page 2 now includes all 6 colour layers instead of silently dropping the last one",
+          },
+          {
+            zh: "Widget 面板不再拦截 3D 场景的旋转拖拽操作，拖到面板区域时模型照常转动",
+            en: "Widget panels no longer block 3D orbit controls — dragging into a panel area keeps the model rotating as expected",
+          },
+          {
+            zh: "LUT 详情标签页切换时不再黑屏闪烁",
+            en: "Switching LUT detail tabs no longer causes a brief black flash",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-28",
     title: {
       zh: "Lumina Layers — 今日更新",
