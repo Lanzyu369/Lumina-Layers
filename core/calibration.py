@@ -371,6 +371,7 @@ def generate_smart_board(
     *,
     color_conf=None,
     corner_colors=None,
+    backing_thickness_mm: Optional[float] = None,
 ):
     """Generate Lumina Smart 1296 (6-Color) calibration board with 38x38 border layout.
     生成 Lumina Smart 1296（6色）校准板（38×38 边框布局）。
@@ -389,6 +390,9 @@ def generate_smart_board(
         corner_colors: Tuple of 4 material IDs for TL/TR/BR/BL corner markers
                        (default: CMYW → (0, 1, 2, 4)).
                        (四角标记的材料 ID，默认 CMYW 方案)
+        backing_thickness_mm: Optional backing layer thickness in mm. Falls
+            back to ``PrinterConfig.BACKING_MM`` when ``None``.
+            可选底板厚度 (mm)，``None`` 时回落到 ``PrinterConfig.BACKING_MM``。
 
     Returns:
         Tuple of (output_path, preview_image, status_message)
@@ -542,7 +546,7 @@ def get_top_1296_colors_rybw():
     return get_top_1296_colors()
 
 
-def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8):
+def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8, backing_thickness_mm: Optional[float] = None):
     """Generate RYBW 6-Color Smart1296 board with RYBW slot names and corner markers.
     生成 RYBW 6 色 Smart1296 校准板，使用 RYBW 色槽名和角标。
 
@@ -553,6 +557,9 @@ def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8):
     Args:
         block_size_mm (float): Size of each color block in mm. (色块边长，毫米)
         gap_mm (float): Gap between blocks in mm. (色块间距，毫米)
+        backing_thickness_mm (float | None): Optional backing layer thickness in mm.
+            Falls back to ``PrinterConfig.BACKING_MM`` when ``None``.
+            可选底板厚度 (mm)，``None`` 时回落到 ``PrinterConfig.BACKING_MM``。
 
     Returns:
         tuple: (output_path, preview_image, status_message). (输出路径、预览图、状态信息)
@@ -603,6 +610,7 @@ def _save_8color_recipe_json(
     page_index: int,
     total_pages: int,
     export_variant: str,
+    backing_thickness_mm: Optional[float] = None,
 ) -> str:
     from config import LUTMetadata, PaletteEntry
     from utils.lut_manager import LUTManager
@@ -723,6 +731,7 @@ def _generate_8color_board_artifacts(
         page_index=page_index,
         total_pages=total_pages,
         export_variant=export_variant,
+        backing_thickness_mm=backing_thickness_mm,
     )
     return out_path, json_path, preview_imgs
 
@@ -1390,12 +1399,8 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
         color_mode="5-Color Extended",
     )
 
-    # Preview
-    bottom_layer = full_matrix[0].astype(np.uint8)
-    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
-    for mat_id, rgba in preview_colors.items():
-        if mat_id < 4:
-            preview_arr[bottom_layer == mat_id] = rgba[:3]
+    # Generate preview images
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
 
     Stats.increment("calibrations")
 
@@ -1513,11 +1518,8 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
         color_mode="5-Color Extended",
     )
 
-    # Preview
-    bottom_layer = full_matrix[0].astype(np.uint8)
-    preview_arr = np.zeros((voxel_h, voxel_w, 3), dtype=np.uint8)
-    for mat_id, rgba in preview_colors.items():
-        preview_arr[bottom_layer == mat_id] = rgba[:3]
+    # Generate preview images
+    preview_imgs = _generate_layer_previews(full_matrix, preview_colors, voxel_h, voxel_w)
 
     Stats.increment("calibrations")
 
