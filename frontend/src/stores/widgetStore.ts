@@ -320,6 +320,7 @@ export const useWidgetStore = create<WidgetStore>()(
       activeTab: "converter" as TabId,
       activeConverterSubTab: "core" as ConverterSubTabId,
       color2DOverlayOpen: false,
+      canvasInteracting: false,
 
       /**
        * Set the active TAB page.
@@ -635,6 +636,10 @@ export const useWidgetStore = create<WidgetStore>()(
               ? "core"
               : state.activeConverterSubTab,
         }));
+      },
+
+      setCanvasInteracting: (interacting: boolean) => {
+        set({ canvasInteracting: interacting });
       },
     }),
     {
