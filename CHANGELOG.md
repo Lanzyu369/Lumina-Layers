@@ -14,7 +14,18 @@ All notable changes to Lumina Studio are documented in this file.
 - **Single-Stage Workflow** - Added single-stage dataset extraction, Stage A fitting endpoints, store wiring, and UI/test coverage for the single-stage calibration flow
 - **Predictive Recipe Workflow** - Added predictive recipe color search/apply flows, native custom recipe editing, and supporting runtime metadata for predictive/native LUT sources
 
+### Improvements
+- **Converter Sub-tab Architecture** - Split converter primary tab into core/color/advanced sub-tabs; replaced bottom ColorWorkstation drawer with top secondary tab entry; scoped dock stack recalculation to active sub-tab widgets
+- **3D Viewer Diagnostics** - Icon-only floating dock with right-dock avoidance; FPS color indicator (green/yellow/red), frame-time row, removed esoteric metrics; canvas interaction bridge to track OrbitControls state
+- **Color2DOverlay** - Smoother entrance animation (opacity fade instead of slide); deferred auto-preview to avoid layout flash
+- **Widget Animation** - Removed backdrop-blur for performance; synchronised expand/collapse with sibling position shifts; preserved measured expandedHeight across resetLayout
+- **Tooltip & Theming** - Unified hover hints to WikiTooltip/HelpDot pattern across all tabs; migrated gray-* tokens to slate-* per DESIGN.md neutral alignment; dropped redundant PanelIntro eyebrows on sub-pages
+- **Calibration Defaults** - Changed default backing thickness from 1.6 mm to 1.2 mm; enabled backing thickness slider for all color modes including 6-Color
+- **Cleanup** - Removed auto_bg/bg_tol from converter pipeline; dropped 92 dead emoji-decorated i18n keys; removed React.lazy on LUT details to eliminate black flash on tab switch
+
 ### Fixes
+- **Calibration Board Generation** - Resolved 3 NameError bugs in calibration board generation; threaded backing_thickness through 5-color extended path; fixed reading of removed `backing` field that caused AttributeError on the default calibration path; fixed layer preview helper using hard-coded 5 layers instead of actual 6 for 5-Color Extended Page 2
+- **Widget Interaction** - Prevented widget panels from blocking 3D orbit interaction
 - **Puzzle Preview Reliability** - Fixed stale failure races that could clear a newer successful overlay, and allowed same-parameter puzzle overlay retries after transient failures
 - **Puzzle Import Normalization** - Imported recipes now normalize puzzle-vs-large-format and puzzle-vs-keychain-loop conflicts, and clear the reserved back-label engraving flag during import
 - **Combined Puzzle 3MF Metadata** - Combined exports now rebuild slice metadata, filament-sequence metadata, and package preview images instead of inheriting stale first-piece metadata
