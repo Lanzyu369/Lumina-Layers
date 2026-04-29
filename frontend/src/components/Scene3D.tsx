@@ -10,6 +10,7 @@ import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useWidgetStore } from "../stores/widgetStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -172,6 +173,26 @@ function ThemeUpdater() {
   useEffect(() => {
     gl.setClearColor(themeColors.canvasClearColor);
   }, [gl, themeColors.canvasClearColor]);
+  return null;
+}
+
+function CanvasInteractionBridge() {
+  const { controls } = useThree();
+  useEffect(() => {
+    if (!controls) return;
+
+    const onStart = () => useWidgetStore.getState().setCanvasInteracting(true);
+    const onEnd = () => useWidgetStore.getState().setCanvasInteracting(false);
+
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+
+    return () => {
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
+      useWidgetStore.getState().setCanvasInteracting(false);
+    };
+  }, [controls]);
   return null;
 }
 
@@ -397,18 +418,40 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           }}
           data-testid="scene3d-diagnostics-panel"
         >
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2">
             <span className="text-xs font-semibold text-slate-900 dark:text-slate-50">
               {t("viewer_diagnostics_title")}
             </span>
-            <span>{diagnostics?.renderer.frame ?? "—"}</span>
           </div>
           <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <span>{t("viewer_diagnostics_source")}</span>
             <span className="truncate text-right">{diagnosticsSourceLabel}</span>
             <span>{t("viewer_diagnostics_fps")}</span>
+            <span className="text-right flex items-center justify-end gap-1.5">
+              {diagnostics?.fps != null ? (
+                <>
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0"
+                    style={{
+                      backgroundColor:
+                        diagnostics.fps >= 50
+                          ? "#22c55e"
+                          : diagnostics.fps >= 30
+                            ? "#eab308"
+                            : "#ef4444",
+                    }}
+                  />
+                  {diagnostics.fps.toFixed(1)}
+                </>
+              ) : (
+                "—"
+              )}
+            </span>
+            <span>{t("viewer_diagnostics_frame_time")}</span>
             <span className="text-right">
-              {diagnostics?.fps != null ? diagnostics.fps.toFixed(1) : "—"}
+              {diagnostics?.fps != null && diagnostics.fps > 0
+                ? `${(1000 / diagnostics.fps).toFixed(1)} ms`
+                : "—"}
             </span>
             <span>{t("viewer_diagnostics_js_heap")}</span>
             <span className="text-right">
@@ -416,16 +459,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                 ? `${diagnostics.heap.used_js_heap_mb} / ${diagnostics.heap.total_js_heap_mb} MB`
                 : t("viewer_diagnostics_js_heap_unavailable")}
             </span>
-            <span>{t("viewer_diagnostics_geometries")}</span>
-            <span className="text-right">{diagnostics?.renderer.geometries ?? "—"}</span>
-            <span>{t("viewer_diagnostics_textures")}</span>
-            <span className="text-right">{diagnostics?.renderer.textures ?? "—"}</span>
-            <span>{t("viewer_diagnostics_programs")}</span>
-            <span className="text-right">{diagnostics?.renderer.programs ?? "—"}</span>
-            <span>{t("viewer_diagnostics_draw_calls")}</span>
-            <span className="text-right">{diagnostics?.renderer.calls ?? "—"}</span>
             <span>{t("viewer_diagnostics_triangles")}</span>
             <span className="text-right">{diagnostics?.renderer.triangles ?? "—"}</span>
+            <span>{t("viewer_diagnostics_draw_calls")}</span>
+            <span className="text-right">{diagnostics?.renderer.calls ?? "—"}</span>
+            <span>{t("viewer_diagnostics_textures")}</span>
+            <span className="text-right">{diagnostics?.renderer.textures ?? "—"}</span>
             <span>{t("viewer_diagnostics_canvas")}</span>
             <span className="text-right">
               {diagnostics?.renderer
@@ -490,6 +529,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         />
         <CameraDebugHelper />
         <ThemeUpdater />
+        <CanvasInteractionBridge />
         <Suspense fallback={null}>
           <Environment
             files={LIGHTING_CONFIG.environment.hdrFile}
