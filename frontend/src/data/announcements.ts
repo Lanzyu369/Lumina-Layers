@@ -16,6 +16,28 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-04-28",
+    title: {
+      zh: "Lumina Layers — 今日更新",
+      en: "Lumina Layers — Today's updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "面板展开/收起动画全面优化：展开时面板高度动画与同级组件位置避让完全同步，不再出现面板已展开但其他组件还在移动的明显割裂感；所有面板折叠/展开操作不再卡顿。",
+            en: "Widget expand/collapse animations fully optimised: panel height and sibling position shifts now animate in sync, eliminating the visible disconnect where the panel finished expanding but siblings were still sliding; all collapse/expand operations are now smooth.",
+          },
+          {
+            zh: "面板背景毛玻璃效果移除，改用 80% 不透明度背景：每个面板的 backdrop-blur 需要 GPU 每帧采样+卷积背后像素，在 92% 不透明度下模糊效果几乎不可见但开销显著；去掉后以接近零的 GPU 开销提供同等半透明视觉。",
+            en: "Panel backdrop-blur removed in favour of a fixed 80% opacity background: each panel's backdrop-blur required per-frame GPU sampling and convolution at 92% opacity where the blur was barely visible yet the cost was significant; removing it provides the same translucent look at near-zero GPU cost.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-27",
     title: {
       zh: "Lumina Layers — 今日修复",
