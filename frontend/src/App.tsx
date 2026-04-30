@@ -26,6 +26,7 @@ import ExtractorPanel from "./components/ExtractorPanel";
 import GradientCardGeneratePanel from "./components/GradientCardGeneratePanel";
 import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
 import MaterialLibraryPanel from "./components/MaterialLibraryPanel";
+import MaterialRecipeQueryPanel from "./components/MaterialRecipeQueryPanel";
 import LutComparePanel from "./components/LutComparePanel";
 import LutManagerPanel from "./components/LutManagerPanel";
 import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
@@ -362,6 +363,7 @@ function AppContent() {
         {activeTab === 'gradient-card-generate' && <GradientCardGeneratePanel />}
         {activeTab === 'gradient-card-extract' && <GradientCardExtractPanel />}
         {activeTab === 'material-library' && <MaterialLibraryPanel />}
+        {activeTab === 'material-recipe' && <MaterialRecipeQueryPanel />}
 
         {activeTab === 'extractor' && (
           <div className="flex h-full min-h-0">

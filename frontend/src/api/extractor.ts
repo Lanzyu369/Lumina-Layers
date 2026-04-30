@@ -12,6 +12,8 @@ import type {
   LutPreviewResolvedCell,
   ManualFixResponse,
   ManualOrientationLabel,
+  MaterialRecipePreviewRequest,
+  MaterialRecipePreviewResponse,
   SingleStageExtractResponse,
   StageAFitResponse,
 } from "./types";
@@ -168,6 +170,17 @@ export async function updateGradientCardMaterial(
     `/extractor/gradient-card-materials/${encodeDirectoryNameForPath(directoryName)}`,
     body,
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Forward-simulate a stacked material recipe. 正向模拟叠层耗材的预测颜色。 */
+export async function previewMaterialRecipe(
+  payload: MaterialRecipePreviewRequest,
+): Promise<MaterialRecipePreviewResponse> {
+  const response = await apiClient.post<MaterialRecipePreviewResponse>(
+    "/extractor/material-recipe-preview",
+    payload,
   );
   return response.data;
 }

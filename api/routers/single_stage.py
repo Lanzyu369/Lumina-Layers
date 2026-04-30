@@ -18,6 +18,7 @@ from api.file_registry import FileRegistry
 from api.schemas.single_stage import (
     GradientCardMaterialUpdateRequest,
     MaterialLibraryBulkExportRequest,
+    MaterialRecipePreviewRequest,
 )
 from api.schemas.responses import (
     GradientCardMaterialBulkExportResponse,
@@ -29,6 +30,8 @@ from api.schemas.responses import (
     GradientCardStageAExtractResponse,
     MaterialColorSuggestionItem,
     MaterialColorSuggestionsResponse,
+    MaterialRecipeLayerResponse,
+    MaterialRecipePreviewResponse,
     MaterialSolverCacheBuildResponse,
     MaterialSolverCacheDeleteResponse,
     MaterialSolverCacheEntryResponse,
@@ -58,6 +61,8 @@ from core.material_color_solver import (
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
     MIN_LAYER_COUNT as _SOLVER_MIN_LAYER_COUNT,  # noqa: N811
     ColorSuggestion,
+    forward_model,
+    linear_to_srgb_uint8,
     suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
@@ -104,6 +109,59 @@ _VALID_MANUAL_ORIENTATION_LABELS: frozenset[str] = frozenset(
         "transverse",
     }
 )
+
+
+_GRADIENT_CARD_ALLOWED_IMAGE_SOURCES: tuple[str, ...] = ("raw",)
+
+
+def _normalize_image_source(raw: str | None) -> str | None:
+    """Normalize and validate the gradient-card ``image_source`` form value.
+    规范化并校验梯度卡 ``image_source`` 表单值。
+
+    Stage A currently only supports ``"raw"`` direct camera/scanner captures.
+    The historical ``"restored"`` tag (white-balanced / geometrically restored
+    renders) is intentionally rejected at the API boundary as well, because:
+
+    1. The frontend selector is hidden and ``imageSource`` is pinned to
+       ``"raw"`` (`@frontend/src/components/GradientCardExtractPanel.tsx`).
+    2. Allowing ``"restored"`` here creates a trap-door: an archive tagged
+       ``restored`` cannot later be merged via the UI, since the merge
+       consistency check in
+       ``core.single_stage.materials.save_stage_a_material_archive`` rejects
+       mixing ``raw`` and ``restored`` runs.
+
+    The whitelist keeps API and UI in lock-step until a UI surface is added
+    back to manage ``restored`` captures explicitly.
+
+    目前 Stage A 仅支持 ``"raw"``。``"restored"`` 在前端选择器已隐藏的情况下
+    若由 API 写入，会形成无法通过 UI 合并的死路；故双锁拒绝。
+
+    Args:
+        raw (str | None): Raw form value, possibly ``None`` or whitespace.
+
+    Returns:
+        str | None: ``None`` if the input is empty/blank (lets the core layer
+        apply its ``raw`` default); otherwise the validated lowercase tag.
+
+    Raises:
+        HTTPException: ``422`` for any non-empty value outside the whitelist.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.strip().lower()
+    if not cleaned:
+        return None
+    if cleaned not in _GRADIENT_CARD_ALLOWED_IMAGE_SOURCES:
+        allowed = ", ".join(repr(s) for s in _GRADIENT_CARD_ALLOWED_IMAGE_SOURCES)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unsupported image_source '{raw}'. Stage A currently only "
+                f"accepts {allowed}; the gradient-card UI no longer exposes "
+                "other capture origins."
+            ),
+        )
+    return cleaned
 
 
 def _normalize_manual_orientation(raw: str | None) -> str | None:
@@ -291,11 +349,12 @@ async def extractor_extract_gradient_card_stage_a(
     image_source: str | None = Form(
         None,
         description=(
-            "Optional gradient-card capture origin tag. One of 'raw' "
-            "(default; direct camera/scanner capture) or 'restored' "
-            "(white-balanced or geometrically restored card render). "
-            "'restored' surfaces a strong warning and prevents merging "
-            "with raw-tagged verification runs."
+            "Optional gradient-card capture origin tag. Currently only "
+            "'raw' (direct camera/scanner capture, default) is accepted; "
+            "the historical 'restored' tag is rejected at the API "
+            "boundary because the gradient-card UI no longer exposes a "
+            "selector for it, and a 'restored'-tagged archive cannot "
+            "later be merged via the UI."
         ),
     ),
     store: SessionStore = Depends(get_session_store),
@@ -309,6 +368,7 @@ async def extractor_extract_gradient_card_stage_a(
     black_points = _parse_corner_points(black_corner_points, "black_corner_points")
     manual_white = _normalize_manual_orientation(manual_white_orientation)
     manual_black = _normalize_manual_orientation(manual_black_orientation)
+    validated_image_source = _normalize_image_source(image_source)
     zip_path: str | None = None
     session_id: str | None = None
     try:
@@ -323,7 +383,7 @@ async def extractor_extract_gradient_card_stage_a(
             zip_path,
             manual_white_orientation=manual_white,
             manual_black_orientation=manual_black,
-            image_source=image_source,
+            image_source=validated_image_source,
         )
         session_id = store.create()
         bind_session_id(session_id)
@@ -816,6 +876,89 @@ def _load_palette_or_raise(directory_names: list[str]):
         raise HTTPException(status_code=404, detail=str(exc))
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
+    """Resolve the substrate color in linear RGB for the forward model.
+    解析正向模型所需的基底线性 RGB。
+
+    The white substrate is fully modelled (every material archive carries
+    ``C0_white``). For black we fall back to a near-zero linear color because
+    Stage A archives currently only persist the white substrate parameter.
+    The fallback is conservative — any change here must keep
+    ``forward_model`` numerically stable for subsequent Beer-Lambert layers.
+
+    白基底由 ``C0_white`` 直接给出；黑基底退化为近似零线性色（当前 Stage A
+    存档只持久化白基底参数）。
+    """
+    if substrate == "white" and materials:
+        return np.asarray(materials[0].C0_white, dtype=np.float64).reshape(3)
+    if substrate == "black":
+        return np.full(3, 0.01, dtype=np.float64)
+    return np.ones(3, dtype=np.float64)
+
+
+@router.post("/material-recipe-preview")
+async def material_recipe_preview(
+    payload: MaterialRecipePreviewRequest,
+) -> MaterialRecipePreviewResponse:
+    """Forward-simulate a stacked-material recipe to predict its visible color.
+    根据选定耗材按顺序叠层，使用 Beer-Lambert 正向模型预测可见颜色。
+
+    Layer count is intentionally unconstrained beyond the schema's
+    ``max_length`` so users can preview any depth (the 5-layer limits in
+    :data:`MIN_LAYER_COUNT` / :data:`MAX_LAYER_COUNT` only apply to the
+    inverse solver, not this forward query).
+
+    层数仅受 schema 上限限制；求解器的 5 层下限不约束本接口。
+    """
+    materials = _load_palette_or_raise(payload.directory_names)
+    substrate_linear = _resolve_substrate_linear(materials, payload.substrate)
+
+    recipe = np.arange(len(materials), dtype=np.int32)
+    predicted_linear = forward_model(
+        recipe=recipe,
+        materials=materials,
+        layer_height_mm=float(payload.layer_height_mm),
+        substrate_linear=substrate_linear,
+    )
+    predicted_srgb = linear_to_srgb_uint8(predicted_linear.reshape(1, 3))[0]
+    predicted_rgb = [int(c) for c in predicted_srgb.tolist()]
+    predicted_hex = "#{:02X}{:02X}{:02X}".format(*predicted_rgb)
+
+    layers: list[MaterialRecipeLayerResponse] = []
+    for idx, mat in enumerate(materials):
+        rgb = [int(c) for c in np.asarray(mat.estimated_rgb).reshape(3).tolist()]
+        layers.append(
+            MaterialRecipeLayerResponse(
+                layer_index=idx,
+                directory_name=mat.directory_name,
+                material_name=mat.name,
+                estimated_rgb=rgb,
+                estimated_hex="#{:02X}{:02X}{:02X}".format(*rgb),
+            )
+        )
+
+    log.info(
+        "Material recipe preview computed",
+        extra={
+            "event": "extractor_material_recipe_preview_done",
+            "layer_count": len(materials),
+            "layer_height_mm": float(payload.layer_height_mm),
+            "substrate": payload.substrate,
+            "predicted_hex": predicted_hex,
+        },
+    )
+
+    return MaterialRecipePreviewResponse(
+        status="ok",
+        layer_count=len(materials),
+        layer_height_mm=float(payload.layer_height_mm),
+        substrate=payload.substrate,
+        predicted_rgb=predicted_rgb,
+        predicted_hex=predicted_hex,
+        layers=layers,
+    )
 
 
 def _cache_entry_from_metadata(

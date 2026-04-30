@@ -411,6 +411,41 @@ class MaterialSolverCacheListResponse(BaseModel):
     entries: list[MaterialSolverCacheEntryResponse] = Field(default_factory=list)
 
 
+class MaterialRecipeLayerResponse(BaseModel):
+    """One layer in a forward-simulated material recipe.
+    正向模拟配方中的一层。
+    """
+
+    layer_index: int = Field(..., description="0-based layer index, bottom to top.")
+    directory_name: str = Field(..., description="Saved material directory name.")
+    material_name: str = Field(..., description="Display material name.")
+    estimated_rgb: list[int] = Field(
+        ...,
+        description="Display sRGB [R, G, B] for the material itself, not the stack.",
+    )
+    estimated_hex: str = Field(..., description="Display sRGB hex for the material itself.")
+
+
+class MaterialRecipePreviewResponse(BaseModel):
+    """Forward-model prediction of a stacked-material recipe.
+    叠层耗材配方的正向预测响应。
+    """
+
+    status: str = Field("ok", description="Status indicator.")
+    layer_count: int = Field(..., description="Number of layers in the recipe.")
+    layer_height_mm: float = Field(..., description="Per-layer thickness in millimeters.")
+    substrate: str = Field(..., description="Substrate identifier ('white' or 'black').")
+    predicted_rgb: list[int] = Field(
+        ...,
+        description="Predicted stacked color as sRGB [R, G, B] in [0, 255].",
+    )
+    predicted_hex: str = Field(..., description="Predicted stacked color as #RRGGBB hex.")
+    layers: list[MaterialRecipeLayerResponse] = Field(
+        default_factory=list,
+        description="Per-layer detail in the requested stacking order.",
+    )
+
+
 class MaterialColorSuggestionItem(BaseModel):
     """One achievable-color candidate returned by the suggester.
     颜色建议器返回的一个可达色候选。

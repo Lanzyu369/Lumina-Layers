@@ -2288,3 +2288,114 @@ def test_processing_helpers_build_summaries(monkeypatch, tmp_path: Path) -> None
     assert fit_result.fit_summary["substrate_count"] == 1
     assert fit_result.fit_summary["channel_count"] == 1
     assert fit_result.fit_summary["warnings"] == ["fit warning"]
+
+
+# ---------------------------------------------------------------------------
+# image_source whitelist (API <-> UI lock-step)
+# image_source 白名单（API 与 UI 双锁）
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeImageSource:
+    """Unit tests for ``_normalize_image_source``.
+
+    The helper enforces parity between the API surface and the gradient-card
+    UI: the UI no longer offers a 'restored' selector, so the API must reject
+    'restored' too — otherwise a 'restored'-tagged archive could be created
+    via direct HTTP and then become unmerge-able through the UI (the merge
+    consistency check rejects mixed raw/restored runs).
+    """
+
+    def test_none_passes_through(self) -> None:
+        from api.routers.single_stage import _normalize_image_source
+
+        assert _normalize_image_source(None) is None
+
+    def test_blank_treated_as_none(self) -> None:
+        from api.routers.single_stage import _normalize_image_source
+
+        assert _normalize_image_source("") is None
+        assert _normalize_image_source("   ") is None
+
+    def test_raw_is_normalized_lowercase(self) -> None:
+        from api.routers.single_stage import _normalize_image_source
+
+        assert _normalize_image_source("raw") == "raw"
+        assert _normalize_image_source("RAW") == "raw"
+        assert _normalize_image_source("  Raw  ") == "raw"
+
+    def test_restored_is_rejected_with_422(self) -> None:
+        from fastapi import HTTPException
+
+        from api.routers.single_stage import _normalize_image_source
+
+        with pytest.raises(HTTPException) as exc_info:
+            _normalize_image_source("restored")
+        assert exc_info.value.status_code == 422
+        assert "restored" in exc_info.value.detail
+        assert "raw" in exc_info.value.detail
+
+    def test_unknown_value_is_rejected_with_422(self) -> None:
+        from fastapi import HTTPException
+
+        from api.routers.single_stage import _normalize_image_source
+
+        with pytest.raises(HTTPException) as exc_info:
+            _normalize_image_source("totally-bogus")
+        assert exc_info.value.status_code == 422
+
+
+def test_extract_gradient_card_endpoint_rejects_restored_image_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end guard: the HTTP endpoint must short-circuit ``restored``
+    before any upload work is attempted, returning 422 with an actionable
+    message. Sentinels on ``upload_to_ndarray`` and the core extractor would
+    fire if validation regressed.
+    """
+    client, _, _ = _client_with_state()
+
+    sentinel = {"upload_called": False, "extract_called": False}
+
+    async def _fail_upload_to_ndarray(*_args, **_kwargs):  # noqa: ANN001
+        sentinel["upload_called"] = True
+        raise AssertionError("upload_to_ndarray must not run for rejected image_source")
+
+    async def _fail_upload_to_tempfile(*_args, **_kwargs):  # noqa: ANN001
+        sentinel["upload_called"] = True
+        raise AssertionError("upload_to_tempfile must not run for rejected image_source")
+
+    def _fail_extract(*_args, **_kwargs):  # noqa: ANN001
+        sentinel["extract_called"] = True
+        raise AssertionError("extract_stage_a_material_from_gradient_cards must not run")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_ndarray", _fail_upload_to_ndarray
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile", _fail_upload_to_tempfile
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+        _fail_extract,
+    )
+
+    response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": json.dumps([[0, 0], [1, 0], [1, 1], [0, 1]]),
+            "black_corner_points": json.dumps([[0, 0], [1, 0], [1, 1], [0, 1]]),
+            "image_source": "restored",
+        },
+        files={
+            "white_image": ("white.png", b"white", "image/png"),
+            "black_image": ("black.png", b"black", "image/png"),
+            "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert "restored" in body["detail"]
+    assert sentinel["upload_called"] is False
+    assert sentinel["extract_called"] is False

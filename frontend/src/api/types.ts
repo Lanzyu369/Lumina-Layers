@@ -651,6 +651,13 @@ export const AGGREGATION_BIAS_FLAGS = [
   "black_substrate_flat",
   "orientation_unreliable",
   "mean_de_gt_3",
+  // Cross-material session outlier: this run's white_C0 disagrees with
+  // the median white_C0 of OTHER materials calibrated in the same
+  // session (same image_source, captured within the time window). The
+  // backend persists this code on both ``run_scores[].structural_flags``
+  // and ``excluded_runs[].reason`` for the affected run.
+  // 跨材料 session 白底中位数 outlier；前后端共用此稳定 code。
+  "c0_session_outlier",
 ] as const;
 
 export type AggregationBiasFlag = (typeof AGGREGATION_BIAS_FLAGS)[number];
@@ -679,6 +686,20 @@ export interface AggregationExcludedRun {
   fresh_white_c0_avg?: number;
   run_white_c0_avg?: number;
   ratio?: number;
+  // Cross-material session outlier diagnostics — populated when
+  // ``reason`` is ``"c0_session_outlier"`` so the UI can render a
+  // concrete "your run vs session median" comparison instead of just
+  // saying "outlier". All values are in linear RGB (per-channel for
+  // the two arrays, scalars for the rest).
+  // 跨材料 session 白底诊断字段；当 reason === c0_session_outlier 时
+  // 必填，前端可直接渲染"本次 vs 同期中位数"的对比卡片。
+  run_white_c0?: number[];
+  session_median?: number[];
+  max_abs_diff?: number;
+  max_rel_diff?: number;
+  abs_threshold?: number;
+  rel_threshold?: number;
+  sample_count?: number;
 }
 
 export interface AggregationSelection {
@@ -811,6 +832,30 @@ export interface GradientCardMaterialLibraryResponse {
   status: string;
   message: string;
   materials: SavedMaterialLibraryItem[];
+}
+
+export interface MaterialRecipePreviewRequest {
+  directory_names: string[];
+  layer_height_mm: number;
+  substrate: "white" | "black";
+}
+
+export interface MaterialRecipeLayer {
+  layer_index: number;
+  directory_name: string;
+  material_name: string;
+  estimated_rgb: [number, number, number];
+  estimated_hex: string;
+}
+
+export interface MaterialRecipePreviewResponse {
+  status: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  predicted_rgb: [number, number, number];
+  predicted_hex: string;
+  layers: MaterialRecipeLayer[];
 }
 
 export interface GradientCardMaterialBulkExportResponse {

@@ -211,14 +211,60 @@ class TestBuild:
             )
 
     def test_grid_resolution_bounds(self):
+        # Lower bound: anything below 8 is rejected (the bucket grid would be
+        # too coarse to be useful and stress-tests legacy callers that pass
+        # ``0`` or negative ints).
+        # 下界：低于 8 拒绝。
         with pytest.raises(ValueError):
             build_material_solver_cache(
                 SMALL_PALETTE, 5, 0.08, "white", grid_resolution=4,
             )
+        # Upper bound: 2048 is the current ceiling (matches the user-facing
+        # whitelist's top tier). Anything strictly larger must be rejected.
+        # 上界：2048（与用户白名单顶档一致）；超过即拒。
         with pytest.raises(ValueError):
             build_material_solver_cache(
-                SMALL_PALETTE, 5, 0.08, "white", grid_resolution=512,
+                SMALL_PALETTE, 5, 0.08, "white", grid_resolution=4096,
             )
+
+    def test_high_resolution_build_is_memory_bounded_by_recipe_count(self):
+        """1024^3 = 1.07 B buckets — the dense build path needed ~70 GB just
+        to allocate the per-bucket scratch arrays, which made this tier
+        unusable on any real machine. With the sparse build, peak memory is
+        bounded by the *recipe* count (3^5 = 243 here), not by the bucket
+        count.
+
+        Regression: assert that (a) the build completes at grid=1024 on a
+        SMALL_PALETTE (would OOM under the dense path), and (b) the resulting
+        ``valid_cell_count`` is bounded by ``total_combinations`` rather than
+        ``total_cell_count``. ``total_cell_count`` stays in metadata as the
+        nominal grid size for downstream UI / lookup math.
+        1024^3 在密集路径下需要 ~70 GB 仅用于分配，普通机器跑不动；稀疏路径
+        让构建期内存只随实际配方数（这里 3^5=243）增长，无关 grid 大小。
+        本用例确保 SMALL_PALETTE @ grid=1024 能跑完，且有效桶数被 recipe
+        数（而非桶总数）限制。
+        """
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=1024,
+        )
+        total_combinations = 3 ** 5
+        # valid cells <= unique recipes; usually exactly equal at very high
+        # grid resolutions because every recipe lands in its own bucket.
+        # 有效桶数 <= 不重复配方数；高分辨率下通常恰好相等。
+        assert 0 < cache.valid_cell_count <= total_combinations
+        # The metadata still surfaces the nominal 1024^3 cell count so the
+        # UI can render "valid / total" meaningfully.
+        # 元数据保留名义桶总数，UI 可继续显示「有效 / 总桶」比例。
+        assert cache.metadata["total_cell_count"] == 1024 ** 3
+        assert cache.metadata["valid_cell_count"] == cache.valid_cell_count
+        # Output arrays must be in canonical bucket-index ascending order
+        # so on-disk layout matches the legacy dense-path output.
+        # 输出按桶号升序，与旧密集路径的磁盘布局一致。
+        assert cache.recipes.shape == (cache.valid_cell_count, 5)
+        assert cache.lab_centers.shape == (cache.valid_cell_count, 3)
+        assert cache.achieved_srgb.shape == (cache.valid_cell_count, 3)
+        assert cache.center_delta_e.shape == (cache.valid_cell_count,)
 
 
 # ---------------------------------------------------------------------------
@@ -575,10 +621,20 @@ class TestInternalConsistency:
     def test_allowed_grid_resolutions_whitelist(self):
         from core.material_cache import ALLOWED_GRID_RESOLUTIONS
 
-        # Whitelist exposes exactly three tiers ("low/medium/high" in the UI);
-        # adding a tier requires matching translation/UI/settings changes.
-        assert ALLOWED_GRID_RESOLUTIONS == (64, 128, 256)
+        # Whitelist exposes six tiers spanning the doubled-cell-count ladder;
+        # adding/removing a tier requires matching translation/UI/settings
+        # changes plus a bump of the internal grid_resolution cap inside
+        # ``build_material_solver_cache``. 1024/2048 are intentionally exposed
+        # as expert-only entries (memory-prohibitive on the dense build path)
+        # so the whitelist is the single source of truth across surfaces.
+        assert ALLOWED_GRID_RESOLUTIONS == (64, 128, 256, 512, 1024, 2048)
         assert DEFAULT_GRID_RESOLUTION in ALLOWED_GRID_RESOLUTIONS
+        # Each consecutive tier must be exactly 2x the previous one so the
+        # UI can label them as a clean doubling ladder.
+        for prev, curr in zip(ALLOWED_GRID_RESOLUTIONS, ALLOWED_GRID_RESOLUTIONS[1:]):
+            assert curr == prev * 2, (
+                f"Tier ladder must double: {prev} -> {curr}"
+            )
 
 
 # ---------------------------------------------------------------------------

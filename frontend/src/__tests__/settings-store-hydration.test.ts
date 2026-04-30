@@ -107,7 +107,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       64,
     );
     expect(settingsStoreModule.SOLVER_CACHE_GRID_RESOLUTIONS).toEqual([
-      64, 128, 256,
+      64, 128, 256, 512, 1024, 2048,
     ]);
   });
 
@@ -128,7 +128,9 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     // snapshot from an older or hand-edited client.
     useSettingsStore
       .getState()
-      .setSolverCacheGridResolution(96 as unknown as 64 | 128 | 256);
+      .setSolverCacheGridResolution(
+        96 as unknown as 64 | 128 | 256 | 512 | 1024 | 2048,
+      );
     expect(useSettingsStore.getState().solverCacheGridResolution).toBe(128);
   });
 

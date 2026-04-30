@@ -83,43 +83,54 @@ DEFAULT_GRID_RESOLUTION: int = 64
 
 Default 64 (`low`) keeps compressed caches around ~4 MB, with a
 worst-case bucket-diagonal ΔE of ~5.5 — visible but acceptable for the
-default preview-grade workflow where build speed and RAM budget matter
-most. Users who want tighter color accuracy can opt in via the
-"Exhaustive density" setting and choose `medium` (128, ~30 MB cache,
-ΔE ~2.7) or `high` (256, ~240 MB cache, ΔE ~1.4); these raise build
-time, memory, and per-conversion lookup work proportionally to
-``grid_resolution ** 3``.
+default preview-grade workflow. Users who want tighter color accuracy
+can opt in via the "Exhaustive density" setting and pick a higher tier
+— see :data:`ALLOWED_GRID_RESOLUTIONS` for the full ladder.
 
-Supported values are enumerated in :data:`ALLOWED_GRID_RESOLUTIONS`;
-callers outside the CLI (API, tests) are expected to validate against
-that whitelist. On-disk caches at any supported resolution remain
-loadable regardless of the current default, thanks to the ``-g<grid>``
-filename suffix and the legacy-path fallback in
-:func:`load_material_solver_cache`.
+Higher tiers reduce *bucket-collision loss* (the number of distinct
+recipes that get discarded because they fall into the same Lab bucket
+as another recipe). At very high tiers virtually every reachable
+recipe lands in its own bucket, so the cache surfaces the full set of
+physically achievable colours.
 
-默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，属于"明显可见"
-区间但对默认预览工作流是可以接受的折衷（构建快、内存占用低）。需要
-更严格色彩精度的用户可以在"穷举数量"设置里开启自定义，选择中档
-（128，约 30 MB、ΔE ~2.7）或高档（256，约 240 MB、ΔE ~1.4）；
-构建时间、内存与每次查找的代价都会按 ``grid_resolution ** 3`` 比例放大。
-
-受支持的取值见 :data:`ALLOWED_GRID_RESOLUTIONS`；CLI 之外的调用方
-（API、测试）需要自行对白名单做校验。磁盘上的任意受支持分辨率缓存
-都能被加载，因为缓存文件名使用 ``-g<grid>`` 后缀，且
-:func:`load_material_solver_cache` 对无后缀的旧文件提供受控回退。
+默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，对默认预览
+工作流是可以接受的折衷。需要更严格色彩精度的用户可以在"穷举数量"
+设置里开启自定义并选择更高档位，完整阶梯见
+:data:`ALLOWED_GRID_RESOLUTIONS`。更高档主要降低"桶碰撞损失"（多个
+配方落入同一 Lab 桶时只保留一个）；极致档下几乎每条可达配方都独占
+一个桶，缓存就能完整暴露物理可达色集。
 """
 
-ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256)
+ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256, 512, 1024, 2048)
 """Whitelist of user-facing grid resolutions exposed through the UI/API.
 
-Kept deliberately small so every shipped value has been exercised by
-the cache build, lookup, and size-budgeting paths. ``core`` does not
-enforce this whitelist — build/save/load remain flexible for tests and
-internal callers — but API routes and pipeline adapters must reject
-unknown values with a 4xx error.
+Each tier doubles the per-axis cell count. Since
+:func:`build_material_solver_cache` uses sparse per-bucket storage,
+build memory does *not* scale with ``grid_resolution ** 3``; it scales
+with the number of physically reachable recipes
+(``materials ** layers``), bounded above by ``valid_cell_count``. So
+the high tiers are limited by lookup-time and cache-file size rather
+than RAM:
 
-面向用户的网格分辨率白名单；``core`` 层保持灵活（便于测试与内部调用），
-API 路由与 pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
+================  ============  ===============================
+grid_resolution   total buckets  notes / 备注
+================  ============  ===============================
+64                ~262 K         default / 默认；ΔE ~5.5
+128               ~2.1 M         medium / 中；ΔE ~2.7
+256               ~16.8 M        high / 高；ΔE ~1.4
+512               ~134 M         very high / 极高
+1024              ~1.07 B        ultra / 极致
+2048              ~8.59 B        ultra+ / 极致+；几乎无桶碰撞
+================  ============  ===============================
+
+``core`` does not enforce the whitelist — build/save/load remain
+flexible for tests and internal callers — but API routes and pipeline
+adapters must reject unknown values with a 4xx error.
+
+面向用户的网格分辨率白名单；构建期内存随实际可达配方数增长，与档位
+无关（稀疏存储），所以高档位的真实代价主要落在查找时间与缓存文件大小，
+而非内存。``core`` 层保持灵活（便于测试与内部调用），API 路由与
+pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
 """
 
 CACHE_SCHEMA_VERSION: str = "1.0"
@@ -660,9 +671,9 @@ def build_material_solver_cache(
         )
     if substrate not in ("white", "black"):
         raise ValueError(f"substrate must be 'white' or 'black', got {substrate!r}")
-    if grid_resolution < 8 or grid_resolution > 256:
+    if grid_resolution < 8 or grid_resolution > 2048:
         raise ValueError(
-            f"grid_resolution must be in [8, 256], got {grid_resolution}"
+            f"grid_resolution must be in [8, 2048], got {grid_resolution}"
         )
 
     start_time = time.time()
@@ -694,17 +705,22 @@ def build_material_solver_cache(
     K_top = top_alpha.shape[0]
     total_combinations = int(K_top) * int(K_bot)
 
-    # Sparse per-bucket state. Use dict mapping flat_bucket_idx -> (delta, rec_row).
+    # Sparse per-bucket state.
+    # ``best`` maps flat_bucket_idx -> (delta, recipe_int8, srgb_u8, center_f64).
+    # Only buckets that have actually been reached by some recipe consume
+    # memory, so the build cost scales with ``min(total_combinations,
+    # valid_cell_count)`` instead of ``grid_resolution ** 3``. This is what
+    # makes 1024 / 2048 tiers physically feasible: at 8 mats × 5 layers the
+    # dict holds at most 32 768 entries (~2.5 MB) regardless of the grid
+    # tier, while the dense equivalent at 2048 would have demanded ~560 GB.
+    # 稀疏每桶状态：``best`` 仅为真正命中的桶分配空间，因此构建期内存
+    # 取决于 ``min(总配方数, 有效桶数)`` 而非 ``grid_resolution ** 3``，
+    # 这是 1024/2048 档真正可用的关键。
     total_buckets = grid_resolution ** 3
-    # Dense arrays for fastest updates — at 128³ this is ~2.1M * (few bytes)
-    # ≈ 60-80 MB peak, still well within an 8 GB-class build budget.
-    best_delta = np.full(total_buckets, np.inf, dtype=np.float64)
-    best_recipes = np.zeros((total_buckets, layer_count), dtype=np.int8)
-    best_achieved_lab = np.zeros((total_buckets, 3), dtype=np.float64)
-    best_achieved_srgb = np.zeros((total_buckets, 3), dtype=np.uint8)
-    best_center_lab = np.zeros((total_buckets, 3), dtype=np.float64)
+    best: dict[int, tuple[float, np.ndarray, np.ndarray, np.ndarray]] = {}
 
     # Chunk tops so each (chunk × K_bot × 24B) fits the memory budget.
+    # 顶/底分桶分块，单块 (sub × K_bot × 24B) 受 _CHUNK_TARGET_BYTES 限制。
     per_row_bytes = K_bot * 24
     chunk_size = max(1, min(K_top, _CHUNK_TARGET_BYTES // max(per_row_bytes, 1)))
     num_chunks = (K_top + chunk_size - 1) // chunk_size
@@ -734,30 +750,62 @@ def build_material_solver_cache(
             continue
 
         chunk_best_deltas = delta_to_center[row_indices]
-        chunk_best_lab = flat_lab[row_indices]
         chunk_best_srgb = flat_srgb[row_indices]
         chunk_best_centers = bucket_center[row_indices]
 
         # Rebuild recipes for these rows. Each row index is a flat index into
         # (sub, K_bot): top_i = row // K_bot, bot_i = row % K_bot.
+        # 还原配方：每个 row 在 (sub, K_bot) 中的二维位置。
         top_idx_in_chunk = row_indices // K_bot
         bot_idx_in_chunk = row_indices % K_bot
         chunk_bot_recipes = bot_recipes[bot_idx_in_chunk]          # (K_hit, bottom_depth)
         chunk_top_recipes = chunk_recipes_top[top_idx_in_chunk]    # (K_hit, top_depth)
-
-        # Compare to global best, update where improved.
-        improved = chunk_best_deltas < best_delta[unique_buckets]
-        if not np.any(improved):
-            continue
-        idx_improved = unique_buckets[improved]
-        best_delta[idx_improved] = chunk_best_deltas[improved]
-        best_achieved_lab[idx_improved] = chunk_best_lab[improved]
-        best_achieved_srgb[idx_improved] = chunk_best_srgb[improved]
-        best_center_lab[idx_improved] = chunk_best_centers[improved]
+        # Stack into a single (K_hit, layer_count) recipe matrix in canonical
+        # bottom-then-top column order so the on-disk layout stays identical.
+        # 拼成 (K_hit, layer_count) 的 int8 配方矩阵，列序仍是先底后顶。
+        chunk_recipes = np.empty(
+            (row_indices.size, layer_count), dtype=np.int8
+        )
         if bottom_depth > 0:
-            best_recipes[idx_improved, :bottom_depth] = chunk_bot_recipes[improved]
+            chunk_recipes[:, :bottom_depth] = chunk_bot_recipes
         if top_depth > 0:
-            best_recipes[idx_improved, bottom_depth:] = chunk_top_recipes[improved]
+            chunk_recipes[:, bottom_depth:] = chunk_top_recipes
+
+        # Vectorised lookup of previous-best deltas; missing buckets default
+        # to +inf so the first hit always wins.
+        # 向量化拉出旧最优 delta；未命中桶默认 +inf，保证首发必胜。
+        prev_deltas = np.fromiter(
+            (best[int(b)][0] if int(b) in best else np.inf for b in unique_buckets),
+            dtype=np.float64,
+            count=unique_buckets.size,
+        )
+        improved = chunk_best_deltas < prev_deltas
+        if not np.any(improved):
+            if progress_callback is not None:
+                fraction = (chunk_idx + 1) / max(num_chunks, 1)
+                progress_callback(
+                    fraction,
+                    {
+                        "chunk_index": chunk_idx + 1,
+                        "total_chunks": num_chunks,
+                        "valid_bucket_count": len(best),
+                        "elapsed_seconds": time.time() - start_time,
+                    },
+                )
+            continue
+
+        # Write back the improved entries. The per-row arrays are tiny
+        # (3-9 ints / floats per entry), so the Python-level loop here is
+        # negligible vs the chunk-wide vectorised numpy work above.
+        # 回写改进项；每条记录非常小，Python 循环开销可忽略。
+        for i in np.flatnonzero(improved):
+            b = int(unique_buckets[i])
+            best[b] = (
+                float(chunk_best_deltas[i]),
+                chunk_recipes[i].copy(),
+                chunk_best_srgb[i].copy(),
+                chunk_best_centers[i].copy(),
+            )
 
         if progress_callback is not None:
             fraction = (chunk_idx + 1) / max(num_chunks, 1)
@@ -766,19 +814,42 @@ def build_material_solver_cache(
                 {
                     "chunk_index": chunk_idx + 1,
                     "total_chunks": num_chunks,
-                    "valid_bucket_count": int(np.sum(np.isfinite(best_delta))),
+                    "valid_bucket_count": len(best),
                     "elapsed_seconds": time.time() - start_time,
                 },
             )
 
-    # Materialize sparse output: only valid (reached) buckets.
-    valid_mask = np.isfinite(best_delta)
-    lab_centers = best_center_lab[valid_mask].astype(np.float32)
-    recipes = best_recipes[valid_mask]
-    achieved_srgb = best_achieved_srgb[valid_mask]
-    center_delta_e = best_delta[valid_mask].astype(np.float32)
+    # Materialize sparse output in canonical (ascending bucket_idx) order so
+    # downstream lookups can rely on a stable layout. The dense build path
+    # used to extract via ``np.isfinite(best_delta)``, which preserved the
+    # natural array order (== ascending bucket_idx); ``sorted(best)`` here
+    # reproduces that same order so existing on-disk caches and any caller
+    # that depends on row order keep working unchanged.
+    # 按桶号升序输出，与原密集路径的 np.isfinite 抽取序列一致，保证旧缓存
+    # 与依赖行序的下游代码无需改动。
+    sorted_buckets = sorted(best.keys())
+    valid_count = len(sorted_buckets)
+    if valid_count > 0:
+        lab_centers = np.stack(
+            [best[b][3] for b in sorted_buckets], axis=0
+        ).astype(np.float32, copy=False)
+        recipes = np.stack(
+            [best[b][1] for b in sorted_buckets], axis=0
+        )
+        achieved_srgb = np.stack(
+            [best[b][2] for b in sorted_buckets], axis=0
+        )
+        center_delta_e = np.fromiter(
+            (best[b][0] for b in sorted_buckets),
+            dtype=np.float32,
+            count=valid_count,
+        )
+    else:
+        lab_centers = np.zeros((0, 3), dtype=np.float32)
+        recipes = np.zeros((0, layer_count), dtype=np.int8)
+        achieved_srgb = np.zeros((0, 3), dtype=np.uint8)
+        center_delta_e = np.zeros(0, dtype=np.float32)
 
-    valid_count = int(lab_centers.shape[0])
     build_time = time.time() - start_time
 
     metadata = {

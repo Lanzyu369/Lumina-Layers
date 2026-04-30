@@ -2,12 +2,46 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-24T02:18:38.128285+00:00",
+    "generated_at": "2026-04-30T04:25:26.373352+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [],
-    "verification_count": 1,
-    "aggregation_method": "mean"
+    "image_source": "raw",
+    "verification_count": 2,
+    "aggregation_method": "mean",
+    "selection": {
+      "selected_indices": [
+        0,
+        1
+      ],
+      "excluded_runs": [],
+      "selection_strategy": "bias_filter_v1",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": false,
+          "bias_flag_count": 0,
+          "bias_flags": [],
+          "structural_flag_count": 0,
+          "structural_flags": [],
+          "white_c0_avg": 0.8746633333333333,
+          "image_source": null,
+          "cross_val_rmse": null
+        },
+        {
+          "index": 1,
+          "is_fresh": true,
+          "bias_flag_count": 0,
+          "bias_flags": [],
+          "structural_flag_count": 0,
+          "structural_flags": [],
+          "white_c0_avg": 0.8718356666666667,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 1
+    }
   },
   "parameters": {
     "channels": [
@@ -16,13 +50,13 @@
         "color_name": "彩多屋 PLA 肤色",
         "E": [
           1.0,
-          0.554509,
-          0.36812
+          0.540006,
+          0.361436
         ],
         "k": [
-          1.069118,
-          2.202276,
-          4.665912
+          1.065523,
+          2.375387,
+          4.912477
         ]
       }
     ],
@@ -33,7 +67,7 @@
         "display_name": "White",
         "C0": [
           0.879622,
-          0.921582,
+          0.917341,
           0.822786
         ]
       },
@@ -53,7 +87,7 @@
     "white": {
       "C0": [
         0.879622,
-        0.921582,
+        0.917341,
         0.822786
       ]
     },
@@ -67,16 +101,19 @@
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 2.7957901034497827,
+      "mean_delta_e": 2.386915411290663,
       "max_delta_e": 5.347119167154997,
-      "rmse_linear": 0.034699723472718685,
+      "rmse_linear": 0.03102592038400053,
       "channel_rmse": [
-        0.043409626918729564,
-        0.030630272266439832,
-        0.028099877916281213
+        0.04063983841907094,
+        0.025642864828114155,
+        0.023843129969303746
       ],
-      "best_run_mean_delta_e": 2.7957901034497827,
-      "verification_count": 1
+      "best_run_mean_delta_e": 1.978040719131543,
+      "verification_count": 2,
+      "aggregation_method": "mean",
+      "selected_run_count": 2,
+      "selection_strategy": "bias_filter_v1"
     }
   },
   "source": {

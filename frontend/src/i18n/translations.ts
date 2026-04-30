@@ -1371,6 +1371,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材库",
     en: "Material Library",
   },
+  "tab.materialRecipe": {
+    zh: "配方查询",
+    en: "Recipe Query",
+  },
   "tab.lutManager": {
     zh: "LUT 合并",
     en: "LUT Merge",
@@ -1480,8 +1484,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Exhaustive density",
   },
   "settings.solver_cache_density_description": {
-    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择中/高档以获得更低的色差，代价是构建时间、内存与每次查找都会成倍增加。",
-    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to medium or high for tighter color accuracy at the cost of proportionally longer build times, higher memory, and slower per-conversion lookups.",
+    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择更高档以保留更多可达配方、获得更低的色差。极高档把同一份耗材组合下所有物理可达的配方都各自保留，几乎不再因桶碰撞被丢弃。",
+    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to higher tiers to keep more reachable recipes and get tighter color accuracy. The ultra tiers retain every physically reachable recipe in a given material × layer setup, virtually eliminating bucket-collision losses.",
   },
   "settings.solver_cache_density_enable_label": {
     zh: "允许自定义穷举数量",
@@ -1507,9 +1511,21 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高（256³）",
     en: "High (256³)",
   },
+  "settings.solver_cache_density_option_512": {
+    zh: "极高（512³）",
+    en: "Very high (512³)",
+  },
+  "settings.solver_cache_density_option_1024": {
+    zh: "极致（1024³）",
+    en: "Ultra (1024³)",
+  },
+  "settings.solver_cache_density_option_2048": {
+    zh: "极致+（2048³，覆盖全部可达配方）",
+    en: "Ultra+ (2048³, captures every reachable recipe)",
+  },
   "settings.solver_cache_density_tip": {
-    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
-    en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
+    zh: "构建采用稀疏存储，内存只随实际可达配方数增长（与档位无关），极致档也不会爆内存；查找时间会随档位略有增加，但通常仍是毫秒级。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
+    en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
   "settings.auto_replace_gradient_heading": {
     zh: "渐变自动换色",
@@ -5655,6 +5671,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本次拟合平均 ΔE > 3（拟合本身已不可信，禁止其样本进入联合重拟）",
     en: "Run's own mean ΔE > 3 (fit already unreliable; samples blocked from joint refit)",
   },
+  mat_gradient_bias_flag_c0_session_outlier: {
+    zh: "白底读数与同期校准的其他材料中位数偏差过大（疑似白底取样位置错误或光照不一致，建议重拍）",
+    en: "White-substrate reading deviates from the session median across other materials (likely wrong patch sample or inconsistent lighting; please re-shoot)",
+  },
   mat_gradient_aggregation_excluded_reason_bias_filter: {
     zh: "偏置硬过滤",
     en: "Bias filter",
@@ -5666,6 +5686,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_aggregation_excluded_reason_c0_white_pairwise_mismatch: {
     zh: "白底亮度与新捕获相差过大（>1.5×，光照环境不一致）",
     en: "White-substrate brightness differs from fresh capture by more than 1.5x (inconsistent lighting)",
+  },
+  mat_gradient_aggregation_excluded_reason_c0_session_outlier: {
+    zh: "白底跨材料一致性（与同 session 其他材料的中位数偏差超阈值）",
+    en: "Cross-material session white_C0 outlier (deviates from same-session median beyond threshold)",
   },
   mat_gradient_white_signal_label: {
     zh: "白底信号",
@@ -6022,5 +6046,121 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_workflow_single_stage: {
     zh: "梯度卡",
     en: "Gradient Card",
+  },
+  material_recipe_title: {
+    zh: "耗材配方查询",
+    en: "Material Recipe Query",
+  },
+  material_recipe_desc: {
+    zh: "从耗材库中按顺序选择多层耗材，使用 Beer-Lambert 正向模型直接预测叠层颜色，不依赖任何 LUT。层数不受 5 层限制。",
+    en: "Pick materials from the library in order; the Beer-Lambert forward model predicts the stacked color directly, without any LUT. Layer count is not capped at 5.",
+  },
+  material_recipe_layers_heading: {
+    zh: "配方层（从基底向外）",
+    en: "Recipe layers (substrate → top)",
+  },
+  material_recipe_layers_empty: {
+    zh: "尚未添加任何层。点击下方耗材以追加为最外层。",
+    en: "No layers yet. Click a material below to append it as the outermost layer.",
+  },
+  material_recipe_layers_count: {
+    zh: "已选 {count} 层",
+    en: "{count} layer(s)",
+  },
+  material_recipe_layer_label: {
+    zh: "第 {index} 层",
+    en: "Layer {index}",
+  },
+  material_recipe_remove_layer: {
+    zh: "移除该层",
+    en: "Remove this layer",
+  },
+  material_recipe_clear: {
+    zh: "清空",
+    en: "Clear",
+  },
+  material_recipe_undo: {
+    zh: "撤销最后一层",
+    en: "Undo last layer",
+  },
+  material_recipe_reverse: {
+    zh: "反序",
+    en: "Reverse",
+  },
+  material_recipe_search_placeholder: {
+    zh: "搜索耗材名 / 品牌 / 目录名",
+    en: "Search material name / brand / directory",
+  },
+  material_recipe_search_empty: {
+    zh: "未找到匹配的耗材",
+    en: "No materials match the search",
+  },
+  material_recipe_search_clear: {
+    zh: "清除搜索",
+    en: "Clear search",
+  },
+  material_recipe_query: {
+    zh: "计算混色",
+    en: "Compute color",
+  },
+  material_recipe_query_loading: {
+    zh: "计算中...",
+    en: "Computing...",
+  },
+  material_recipe_substrate_label: {
+    zh: "基底",
+    en: "Substrate",
+  },
+  material_recipe_substrate_white: {
+    zh: "白色基底",
+    en: "White",
+  },
+  material_recipe_substrate_black: {
+    zh: "黑色基底",
+    en: "Black",
+  },
+  material_recipe_layer_height_label: {
+    zh: "层厚 (mm)",
+    en: "Layer height (mm)",
+  },
+  material_recipe_palette_heading: {
+    zh: "耗材库",
+    en: "Material library",
+  },
+  material_recipe_palette_empty: {
+    zh: "耗材库为空，请先在「耗材库」或「梯度卡提取」页面建立耗材。",
+    en: "Material library is empty. Use the Material Library or Gradient Extractor first to create materials.",
+  },
+  material_recipe_palette_loading: {
+    zh: "加载耗材库...",
+    en: "Loading material library...",
+  },
+  material_recipe_palette_load_failed: {
+    zh: "加载耗材库失败",
+    en: "Failed to load material library",
+  },
+  material_recipe_result_heading: {
+    zh: "预测颜色",
+    en: "Predicted color",
+  },
+  material_recipe_result_pending: {
+    zh: "添加至少一层并点击「计算混色」即可查看预测结果。",
+    en: "Add at least one layer then click \"Compute color\" to see the prediction.",
+  },
+  material_recipe_query_failed: {
+    zh: "配方计算失败",
+    en: "Recipe computation failed",
+  },
+  material_recipe_close_error: {
+    zh: "关闭错误",
+    en: "Close error",
+  },
+  material_recipe_result_rgb_value: {
+    zh: "RGB {value}",
+    en: "RGB {value}",
+  },
+  material_recipe_result_meta: {
+    zh: "{count} 层 · {height} mm · {substrate}",
+    en: "{count} layer(s) · {height} mm · {substrate}",
   },
 };

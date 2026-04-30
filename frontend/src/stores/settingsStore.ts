@@ -10,13 +10,29 @@ import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
  * User-facing grid-resolution tiers for the material-solver exhaustive
  * cache. The numeric value equals the Lab bucket count per axis and must
  * stay in sync with ``ALLOWED_GRID_RESOLUTIONS`` on the backend.
- * 穷举数量的三档用户选项；数值等于 Lab 网格每轴桶数，必须与后端
- * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。
+ *
+ * The ladder doubles per step. The build path is sparse, so peak build
+ * memory tracks the number of physically reachable recipes (~materials^
+ * layers) rather than the cube of the tier — even Ultra+ stays light.
+ * Higher tiers mainly reduce bucket-collision loss (more distinct
+ * recipes survive into the cache); per-lookup cost scales mildly.
+ *
+ * 穷举数量的用户档位；数值等于 Lab 网格每轴桶数，必须与后端
+ * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。每档边长翻倍，但构建采用稀疏
+ * 存储，峰值内存只随实际可达配方数（~材料^层数）增长，与档位无关——
+ * 极致+ 档也很轻。更高档主要减少桶碰撞损失（更多配方被保留进缓存）；
+ * 单次查找时间随档位略增。
  */
-export type SolverCacheGridResolution = 64 | 128 | 256;
+export type SolverCacheGridResolution =
+  | 64
+  | 128
+  | 256
+  | 512
+  | 1024
+  | 2048;
 
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
-  [64, 128, 256] as const;
+  [64, 128, 256, 512, 1024, 2048] as const;
 
 export interface SettingsState {
   language: "zh" | "en";
