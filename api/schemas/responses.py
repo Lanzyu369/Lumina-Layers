@@ -135,6 +135,52 @@ class GradientCardMaterialSummaryResponse(BaseModel):
     estimated_k: list[float] = Field(default_factory=list)
 
 
+class AggregationRunScoreResponse(BaseModel):
+    """Per-run diagnostic score in the multi-run selection block.
+    多 run 选择诊断中单个 run 的评分信息。
+
+    Mirrors :func:`_select_runs_for_refit`'s ``run_scores`` entries so the
+    frontend can render a per-run breakdown without re-implementing the
+    bias scoring logic.
+    """
+
+    index: int
+    is_fresh: bool = False
+    bias_flag_count: int = 0
+    bias_flags: list[str] = Field(default_factory=list)
+    structural_flag_count: int = 0
+    structural_flags: list[str] = Field(default_factory=list)
+    white_c0_avg: float | None = None
+    image_source: str | None = None
+    cross_val_rmse: float | None = None
+
+
+class AggregationExcludedRunResponse(BaseModel):
+    """One run excluded from the joint refit, with reason and flags."""
+
+    index: int
+    reason: str
+    bias_flags: list[str] = Field(default_factory=list)
+    structural_flags: list[str] = Field(default_factory=list)
+    cross_val_rmse: float | None = None
+
+
+class AggregationSelectionResponse(BaseModel):
+    """Full selection diagnostic block for the multi-run aggregator.
+    多 run 聚合的完整选择诊断块。
+
+    Surfaced to the frontend so the "merge diagnostics" panel can
+    explain which runs participated in the joint refit and why others
+    were dropped (bias filter or cross-val ranking).
+    """
+
+    selected_indices: list[int] = Field(default_factory=list)
+    excluded_runs: list[AggregationExcludedRunResponse] = Field(default_factory=list)
+    selection_strategy: str = "bias_filter_v1"
+    run_scores: list[AggregationRunScoreResponse] = Field(default_factory=list)
+    fresh_index: int | None = None
+
+
 class SavedMaterialSummaryResponse(BaseModel):
     """Summary of a saved material archive."""
 
@@ -146,6 +192,13 @@ class SavedMaterialSummaryResponse(BaseModel):
     verification_count: int = 1
     created_at: str | None = None
     updated_at: str | None = None
+    # Aggregation diagnostics carried alongside the identity fields so a
+    # single response payload covers both "where is the file" and "how
+    # was it merged". Both are optional: legacy archives or single-run
+    # saves may omit them.
+    # 聚合诊断信息附在身份字段旁，单一响应覆盖"文件在哪"和"如何合并"。
+    aggregation_method: str | None = None
+    aggregation_selection: AggregationSelectionResponse | None = None
 
 
 class OrientationCandidateResponse(BaseModel):

@@ -288,6 +288,16 @@ async def extractor_extract_gradient_card_stage_a(
         None,
         description="Optional manual orientation label for the black capture (same enum as white)",
     ),
+    image_source: str | None = Form(
+        None,
+        description=(
+            "Optional gradient-card capture origin tag. One of 'raw' "
+            "(default; direct camera/scanner capture) or 'restored' "
+            "(white-balanced or geometrically restored card render). "
+            "'restored' surfaces a strong warning and prevents merging "
+            "with raw-tagged verification runs."
+        ),
+    ),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardStageAExtractResponse:
@@ -313,6 +323,7 @@ async def extractor_extract_gradient_card_stage_a(
             zip_path,
             manual_white_orientation=manual_white,
             manual_black_orientation=manual_black,
+            image_source=image_source,
         )
         session_id = store.create()
         bind_session_id(session_id)

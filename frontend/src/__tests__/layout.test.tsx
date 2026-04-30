@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import App from "../App";
 import { useWidgetStore } from "../stores/widgetStore";
+import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/client", () => ({
   default: {
@@ -101,5 +102,52 @@ describe("Widget Workspace Layout", () => {
 
     fireEvent.click(screen.getByTestId("subtab-gradient-card-generate"));
     expect(useWidgetStore.getState().activeTab).toBe("gradient-card-generate");
+  });
+
+  it("clears material-verification state when the user clicks the gradient-card-extract sub-tab", () => {
+    // Repro: user clicks "再次校验" in the Material Library (which sets
+    // verification state and switches tabs via the store), then navigates
+    // away and clicks the "提取耗材" sub-tab expecting a fresh extraction.
+    // The verification state must be dropped on this explicit nav click,
+    // otherwise the panel keeps rendering 覆盖/合并 buttons in extract mode.
+    // 复现：用户在耗材库点「再次校验」后切换 tab，再点「提取耗材」子页期望
+    // 全新提取，必须清掉验证状态，否则面板还会显示覆盖/合并按钮。
+    useSingleStageStore.setState({
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      materialName: "PLA Basic",
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId("tab-material-management"));
+    fireEvent.click(screen.getByTestId("subtab-gradient-card-extract"));
+
+    expect(useWidgetStore.getState().activeTab).toBe("gradient-card-extract");
+    const state = useSingleStageStore.getState();
+    expect(state.verificationTargetDirectoryName).toBeNull();
+    expect(state.verificationTargetCount).toBe(0);
+  });
+
+  it("preserves material-verification state when entering via store.setActiveTab (re-verify path)", () => {
+    // Reverse-direction guard: the Material Library re-verify entry calls
+    // setActiveTab directly via the store, NOT through the TabNavBar's
+    // onTabChange handler. The verification state seeded by
+    // startMaterialVerification must survive that programmatic switch.
+    // 反向哨兵：「再次校验」走 store.setActiveTab 而非 TabNavBar 的 onTabChange，
+    // 不能被错误清除。
+    render(<App />);
+
+    useSingleStageStore.setState({
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      materialName: "PLA Basic",
+    });
+    useWidgetStore.getState().setActiveTab("gradient-card-extract");
+
+    expect(useWidgetStore.getState().activeTab).toBe("gradient-card-extract");
+    const state = useSingleStageStore.getState();
+    expect(state.verificationTargetDirectoryName).toBe("pla-basic");
+    expect(state.verificationTargetCount).toBe(3);
   });
 });

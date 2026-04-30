@@ -599,7 +599,7 @@ describe("GradientCardExtractPanel", () => {
     const whiteWrapper = screen.getByTestId("manual-white-anchor-select");
     const whiteCombobox = within(whiteWrapper).getByRole("combobox");
     fireEvent.click(whiteCombobox);
-    
+
     // The option uses the translated label
     const option = await screen.findByRole("option", { name: /右下角|Bottom-right/i });
     fireEvent.click(option);
@@ -686,6 +686,106 @@ describe("GradientCardExtractPanel", () => {
     expect(screen.getByTestId("orientation-flat-substrate-hint")).toBeInTheDocument();
   });
 
+  it("does not render the image-source selector UI and pins imageSource to raw", () => {
+    // Stage A no longer exposes the raw/restored toggle: restored
+    // captures break the Beer-Lambert C0_white anchor and are caught
+    // post-hoc by the bias filter. The store retains the field for
+    // backend contract compatibility but the UI must stay hidden so
+    // every extract call goes out as ``raw``.
+    render(<GradientCardExtractPanel />);
+
+    // None of the legacy testids should resolve.
+    expect(
+      screen.queryByTestId("gradient-card-image-source-section"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("gradient-card-image-source-raw"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("gradient-card-image-source-restored"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("gradient-card-image-source-restored-warning"),
+    ).not.toBeInTheDocument();
+
+    // Store still defaults to raw so submitExtract sends raw.
+    expect(useSingleStageStore.getState().imageSource).toBe("raw");
+  });
+
+  it("propagates the store's imageSource value to the extractGradientCardStageA call", async () => {
+    const extractMock = vi.mocked(extractGradientCardStageA);
+    extractMock.mockResolvedValue({
+      session_id: "sess-img-source",
+      status: "ok",
+      message: "",
+      stage_a_params_url: "/api/files/stage-a.json",
+      white_warp_preview_url: "/api/files/white-warp.png",
+      black_warp_preview_url: "/api/files/black-warp.png",
+      fit_summary: {
+        substrate_count: 2,
+        channel_count: 1,
+        substrates: ["black", "white"],
+        colors: ["PLA Basic"],
+        overall_validation: { mean_delta_e: 0.5, max_delta_e: 1.0, rmse_linear: 0.01 },
+        warnings: [],
+      },
+      material_summary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        warp_width_px: 1240,
+        warp_height_px: 620,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [200, 200, 200],
+        estimated_k: [1.2, 1.3, 1.4],
+      },
+      warnings: [],
+    });
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "dataset.zip", { type: "application/zip" }),
+      whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+      blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    // The UI radio is intentionally hidden (raw is the only supported
+    // source). We still exercise the contract by mutating the store
+    // directly to confirm submitExtract forwards whatever imageSource
+    // is set, so the wire format stays stable for power-users / tests
+    // that flip the field programmatically.
+    await act(async () => {
+      useSingleStageStore.getState().setImageSource("restored");
+    });
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitExtract();
+    });
+
+    expect(extractMock).toHaveBeenCalledTimes(1);
+    expect(extractMock).toHaveBeenCalledWith(
+      expect.objectContaining({ imageSource: "restored" }),
+    );
+  });
+
   it("shows the manual badge and suppresses the flat hint once a manual override is in effect", () => {
     useSingleStageStore.setState({
       manualWhiteAnchor: "tr",
@@ -748,6 +848,167 @@ describe("GradientCardExtractPanel", () => {
     expect(screen.getByTestId("white-orientation-signal-manual-badge")).toBeInTheDocument();
     expect(
       screen.queryByTestId("orientation-flat-substrate-hint"),
+    ).not.toBeInTheDocument();
+  });
+
+  // ----- Merge diagnostics section -----------------------------------
+  // The "merge diagnostics" card is only rendered when the saved
+  // material summary carries a populated ``aggregation_selection``
+  // block. These tests pin down the three states the user actually
+  // sees: hidden when missing, "no exclusions" message after a clean
+  // single-run save, and a per-run breakdown with badges & flag
+  // labels after a multi-run merge that excluded a biased run.
+
+  it("does not render the merge diagnostics section when no aggregation_selection is present", () => {
+    useSingleStageStore.setState({
+      savedMaterialSummary: {
+        material_name: "Test",
+        directory_name: "test",
+        archive_path: "/m/test/material.json",
+        stage_a_params_path: "/m/test/stage_A_parameters.json",
+        verification_count: 1,
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    expect(
+      screen.queryByTestId("merge-diagnostics-section"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the merge diagnostics section with included badges and 'no excluded' message after a clean single-run save", () => {
+    useSingleStageStore.setState({
+      savedMaterialSummary: {
+        material_name: "Test",
+        directory_name: "test",
+        archive_path: "/m/test/material.json",
+        stage_a_params_path: "/m/test/stage_A_parameters.json",
+        verification_count: 1,
+        aggregation_method: "refit_combined_samples",
+        aggregation_selection: {
+          selected_indices: [0],
+          excluded_runs: [],
+          selection_strategy: "bias_filter_v1",
+          fresh_index: 0,
+          run_scores: [
+            {
+              index: 0,
+              is_fresh: true,
+              bias_flag_count: 0,
+              bias_flags: [],
+              structural_flag_count: 0,
+              structural_flags: [],
+              white_c0_avg: 0.88,
+              image_source: "raw",
+              cross_val_rmse: null,
+            },
+          ],
+        },
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    expect(screen.getByTestId("merge-diagnostics-section")).toBeInTheDocument();
+    expect(screen.getByTestId("merge-diagnostics-runs-used")).toHaveTextContent(
+      /1.*1|1\s*\/\s*1/,
+    );
+    expect(screen.getByTestId("merge-diagnostics-method")).toHaveTextContent(
+      /合并样本重拟合|Refit on combined samples/i,
+    );
+    expect(screen.getByTestId("merge-diagnostics-strategy")).toHaveTextContent(
+      /偏置硬过滤|Bias filter/i,
+    );
+    expect(
+      screen.getByTestId("merge-diagnostics-run-0-fresh-badge"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("merge-diagnostics-run-0-included-badge"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("merge-diagnostics-run-0-excluded-badge"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("merge-diagnostics-no-excluded"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders excluded badges and the matching bias-flag label when a historical run is dropped by the bias filter", () => {
+    useSingleStageStore.setState({
+      savedMaterialSummary: {
+        material_name: "Test",
+        directory_name: "test",
+        archive_path: "/m/test/material.json",
+        stage_a_params_path: "/m/test/stage_A_parameters.json",
+        verification_count: 2,
+        aggregation_method: "refit_combined_samples",
+        aggregation_selection: {
+          selected_indices: [1],
+          excluded_runs: [
+            {
+              index: 0,
+              reason: "bias_filter",
+              bias_flags: ["c0_white_avg_gt_0_95"],
+              structural_flags: ["c0_white_avg_gt_0_95"],
+              cross_val_rmse: null,
+            },
+          ],
+          selection_strategy: "bias_filter_v1",
+          fresh_index: 1,
+          run_scores: [
+            {
+              index: 0,
+              is_fresh: false,
+              bias_flag_count: 1,
+              bias_flags: ["c0_white_avg_gt_0_95"],
+              structural_flag_count: 1,
+              structural_flags: ["c0_white_avg_gt_0_95"],
+              white_c0_avg: 0.97,
+              image_source: "raw",
+              cross_val_rmse: null,
+            },
+            {
+              index: 1,
+              is_fresh: true,
+              bias_flag_count: 0,
+              bias_flags: [],
+              structural_flag_count: 0,
+              structural_flags: [],
+              white_c0_avg: 0.88,
+              image_source: "raw",
+              cross_val_rmse: null,
+            },
+          ],
+        },
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    // Top-level summary line shows "1 of 2".
+    expect(screen.getByTestId("merge-diagnostics-runs-used")).toHaveTextContent(
+      /1.*2|1\s*\/\s*2/,
+    );
+    // Excluded run gets the excluded badge and the c0_white bias label.
+    expect(
+      screen.getByTestId("merge-diagnostics-run-0-excluded-badge"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId(
+        "merge-diagnostics-run-0-flag-c0_white_avg_gt_0_95",
+      ),
+    ).toBeInTheDocument();
+    // The fresh run keeps included + fresh badges.
+    expect(
+      screen.getByTestId("merge-diagnostics-run-1-fresh-badge"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("merge-diagnostics-run-1-included-badge"),
+    ).toBeInTheDocument();
+    // Because at least one run is excluded the "no excluded" hint is hidden.
+    expect(
+      screen.queryByTestId("merge-diagnostics-no-excluded"),
     ).not.toBeInTheDocument();
   });
 });

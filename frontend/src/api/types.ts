@@ -643,6 +643,52 @@ export interface GradientCardSampleBox {
   thickness_layers: number;
 }
 
+export const AGGREGATION_BIAS_FLAGS = [
+  "c0_white_avg_gt_0_95",
+  "c0_white_avg_lt_0_60",
+  "image_source_restored",
+  "white_substrate_flat",
+  "black_substrate_flat",
+  "orientation_unreliable",
+  "mean_de_gt_3",
+] as const;
+
+export type AggregationBiasFlag = (typeof AGGREGATION_BIAS_FLAGS)[number];
+
+export interface AggregationRunScore {
+  index: number;
+  is_fresh: boolean;
+  bias_flag_count: number;
+  bias_flags: AggregationBiasFlag[];
+  structural_flag_count: number;
+  structural_flags: AggregationBiasFlag[];
+  white_c0_avg: number | null;
+  image_source: string | null;
+  cross_val_rmse: number | null;
+}
+
+export interface AggregationExcludedRun {
+  index: number;
+  reason: string;
+  bias_flags: AggregationBiasFlag[];
+  structural_flags: AggregationBiasFlag[];
+  cross_val_rmse: number | null;
+  // Pairwise white_C0 mismatch only — populated when ``reason`` is
+  // ``"c0_white_pairwise_mismatch"`` so the UI can show the actual
+  // ratio + values that triggered the exclusion.
+  fresh_white_c0_avg?: number;
+  run_white_c0_avg?: number;
+  ratio?: number;
+}
+
+export interface AggregationSelection {
+  selected_indices: number[];
+  excluded_runs: AggregationExcludedRun[];
+  selection_strategy: string;
+  run_scores: AggregationRunScore[];
+  fresh_index: number | null;
+}
+
 export interface SavedMaterialSummary {
   material_name: string;
   directory_name: string;
@@ -652,6 +698,8 @@ export interface SavedMaterialSummary {
   verification_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
+  aggregation_method?: string | null;
+  aggregation_selection?: AggregationSelection | null;
 }
 
 export interface OrientationCandidate {

@@ -21,6 +21,14 @@ import { normalizeResourceUrl } from "../utils/resourceUrl";
 
 export type ExtractorWorkflow = "legacy" | "single-stage";
 
+/** Capture-origin tag forwarded to the gradient-card extractor.
+ * 梯度卡输入图像来源标签：
+ *   - ``raw``: camera/scanner output, no white-balance / restoration.
+ *   - ``restored``: white-balanced / geometrically restored render
+ *     (biases (E, k); the backend surfaces a strong warning).
+ */
+export type GradientCardImageSource = "raw" | "restored";
+
 type CornerPoint = [number, number];
 
 interface SingleStageState {
@@ -53,6 +61,7 @@ interface SingleStageState {
   orientationRanking: OrientationRanking | null;
   manualWhiteAnchor: GradientCardAnchorCorner | null;
   manualBlackAnchor: GradientCardAnchorCorner | null;
+  imageSource: GradientCardImageSource;
   materialName: string;
   materialBrand: string;
   verificationTargetDirectoryName: string | null;
@@ -85,6 +94,7 @@ interface SingleStageActions {
   setMaterialBrand: (value: string) => void;
   setManualWhiteAnchor: (value: GradientCardAnchorCorner | null) => void;
   setManualBlackAnchor: (value: GradientCardAnchorCorner | null) => void;
+  setImageSource: (value: GradientCardImageSource) => void;
   startMaterialVerification: (target: {
     materialName: string;
     directoryName: string;
@@ -297,6 +307,7 @@ const DEFAULT_STATE: SingleStageState = {
   orientationRanking: null,
   manualWhiteAnchor: null,
   manualBlackAnchor: null,
+  imageSource: "raw",
   materialName: "",
   materialBrand: "",
   verificationTargetDirectoryName: null,
@@ -570,6 +581,9 @@ export const useSingleStageStore = create<
   setManualBlackAnchor: (value: GradientCardAnchorCorner | null) =>
     set({ manualBlackAnchor: value, extractError: null }),
 
+  setImageSource: (value: GradientCardImageSource) =>
+    set({ imageSource: value, extractError: null }),
+
   startMaterialVerification: ({
     materialName,
     directoryName,
@@ -647,6 +661,7 @@ export const useSingleStageStore = create<
         manualBlackOrientation: anchorToOrientationLabel(
           state.manualBlackAnchor,
         ),
+        imageSource: state.imageSource,
       });
       set({
         sessionId: response.session_id,
