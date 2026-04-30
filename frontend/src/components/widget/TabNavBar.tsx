@@ -14,10 +14,14 @@ import { motion } from 'framer-motion';
 
 type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'settings';
 type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-details' | 'lut-compare' | 'five-color';
-type MaterialSubTabId = 'gradient-card-generate' | 'gradient-card-extract' | 'material-library';
+type MaterialSubTabId =
+  | 'gradient-card-generate'
+  | 'gradient-card-extract'
+  | 'material-library'
+  | 'material-recipe';
 
 const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-details', 'lut-compare', 'five-color'];
-const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'gradient-card-generate', 'gradient-card-extract'];
+const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'gradient-card-generate', 'gradient-card-extract', 'material-recipe'];
 
 const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
   'converter': (

@@ -105,6 +105,59 @@ class GradientCardMaterialUpdateRequest(BaseModel):
         return normalized
 
 
+class MaterialRecipePreviewRequest(BaseModel):
+    """Forward-simulate the predicted color of a stacked-material recipe.
+    正向模拟选定耗材按顺序叠层的预测颜色。
+
+    Each entry in ``directory_names`` is one print layer (bottom -> top relative
+    to the substrate). The endpoint loads the corresponding Stage A parameters
+    and runs a Beer-Lambert forward pass; no LUT is consulted. The recipe
+    length is intentionally unconstrained beyond a sane upper bound so users
+    can preview any layer count, not just the 5-layer presets the inverse
+    solver requires.
+
+    每个 ``directory_names`` 元素代表一层打印（从基底向外）。后端会加载对应
+    Stage A 参数，使用 Beer-Lambert 正向模型求解叠层颜色；不依赖任何 LUT。
+    层数上限设得宽松，以便用户预览任意层数。
+    """
+
+    directory_names: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Saved material directory names, in stacking order from substrate "
+            "(index 0) to outermost visible layer (index -1)."
+        ),
+    )
+    layer_height_mm: float = Field(
+        0.08,
+        gt=0.0,
+        le=1.0,
+        description="Per-layer thickness in millimeters used by the forward model.",
+    )
+    substrate: str = Field(
+        "white",
+        description="Substrate identifier; only 'white' is supported in v1.",
+    )
+
+    @field_validator("directory_names")
+    @classmethod
+    def validate_directory_names(cls, value: list[str]) -> list[str]:
+        cleaned = [name.strip() for name in value if isinstance(name, str) and name.strip()]
+        if len(cleaned) != len(value) or not cleaned:
+            raise ValueError("directory_names must contain non-empty strings")
+        return cleaned
+
+    @field_validator("substrate")
+    @classmethod
+    def validate_substrate(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in ("white", "black"):
+            raise ValueError("substrate must be 'white' or 'black'")
+        return cleaned
+
+
 class MaterialLibraryBulkExportRequest(BaseModel):
     """Request model for exporting multiple saved material archives."""
 

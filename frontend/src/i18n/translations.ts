@@ -1371,6 +1371,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材库",
     en: "Material Library",
   },
+  "tab.materialRecipe": {
+    zh: "配方查询",
+    en: "Recipe Query",
+  },
   "tab.lutManager": {
     zh: "LUT 合并",
     en: "LUT Merge",
@@ -6042,5 +6046,121 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_workflow_single_stage: {
     zh: "梯度卡",
     en: "Gradient Card",
+  },
+  material_recipe_title: {
+    zh: "耗材配方查询",
+    en: "Material Recipe Query",
+  },
+  material_recipe_desc: {
+    zh: "从耗材库中按顺序选择多层耗材，使用 Beer-Lambert 正向模型直接预测叠层颜色，不依赖任何 LUT。层数不受 5 层限制。",
+    en: "Pick materials from the library in order; the Beer-Lambert forward model predicts the stacked color directly, without any LUT. Layer count is not capped at 5.",
+  },
+  material_recipe_layers_heading: {
+    zh: "配方层（从基底向外）",
+    en: "Recipe layers (substrate → top)",
+  },
+  material_recipe_layers_empty: {
+    zh: "尚未添加任何层。点击下方耗材以追加为最外层。",
+    en: "No layers yet. Click a material below to append it as the outermost layer.",
+  },
+  material_recipe_layers_count: {
+    zh: "已选 {count} 层",
+    en: "{count} layer(s)",
+  },
+  material_recipe_layer_label: {
+    zh: "第 {index} 层",
+    en: "Layer {index}",
+  },
+  material_recipe_remove_layer: {
+    zh: "移除该层",
+    en: "Remove this layer",
+  },
+  material_recipe_clear: {
+    zh: "清空",
+    en: "Clear",
+  },
+  material_recipe_undo: {
+    zh: "撤销最后一层",
+    en: "Undo last layer",
+  },
+  material_recipe_reverse: {
+    zh: "反序",
+    en: "Reverse",
+  },
+  material_recipe_search_placeholder: {
+    zh: "搜索耗材名 / 品牌 / 目录名",
+    en: "Search material name / brand / directory",
+  },
+  material_recipe_search_empty: {
+    zh: "未找到匹配的耗材",
+    en: "No materials match the search",
+  },
+  material_recipe_search_clear: {
+    zh: "清除搜索",
+    en: "Clear search",
+  },
+  material_recipe_query: {
+    zh: "计算混色",
+    en: "Compute color",
+  },
+  material_recipe_query_loading: {
+    zh: "计算中...",
+    en: "Computing...",
+  },
+  material_recipe_substrate_label: {
+    zh: "基底",
+    en: "Substrate",
+  },
+  material_recipe_substrate_white: {
+    zh: "白色基底",
+    en: "White",
+  },
+  material_recipe_substrate_black: {
+    zh: "黑色基底",
+    en: "Black",
+  },
+  material_recipe_layer_height_label: {
+    zh: "层厚 (mm)",
+    en: "Layer height (mm)",
+  },
+  material_recipe_palette_heading: {
+    zh: "耗材库",
+    en: "Material library",
+  },
+  material_recipe_palette_empty: {
+    zh: "耗材库为空，请先在「耗材库」或「梯度卡提取」页面建立耗材。",
+    en: "Material library is empty. Use the Material Library or Gradient Extractor first to create materials.",
+  },
+  material_recipe_palette_loading: {
+    zh: "加载耗材库...",
+    en: "Loading material library...",
+  },
+  material_recipe_palette_load_failed: {
+    zh: "加载耗材库失败",
+    en: "Failed to load material library",
+  },
+  material_recipe_result_heading: {
+    zh: "预测颜色",
+    en: "Predicted color",
+  },
+  material_recipe_result_pending: {
+    zh: "添加至少一层并点击「计算混色」即可查看预测结果。",
+    en: "Add at least one layer then click \"Compute color\" to see the prediction.",
+  },
+  material_recipe_query_failed: {
+    zh: "配方计算失败",
+    en: "Recipe computation failed",
+  },
+  material_recipe_close_error: {
+    zh: "关闭错误",
+    en: "Close error",
+  },
+  material_recipe_result_rgb_value: {
+    zh: "RGB {value}",
+    en: "RGB {value}",
+  },
+  material_recipe_result_meta: {
+    zh: "{count} 层 · {height} mm · {substrate}",
+    en: "{count} layer(s) · {height} mm · {substrate}",
   },
 };

@@ -834,6 +834,30 @@ export interface GradientCardMaterialLibraryResponse {
   materials: SavedMaterialLibraryItem[];
 }
 
+export interface MaterialRecipePreviewRequest {
+  directory_names: string[];
+  layer_height_mm: number;
+  substrate: "white" | "black";
+}
+
+export interface MaterialRecipeLayer {
+  layer_index: number;
+  directory_name: string;
+  material_name: string;
+  estimated_rgb: [number, number, number];
+  estimated_hex: string;
+}
+
+export interface MaterialRecipePreviewResponse {
+  status: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  predicted_rgb: [number, number, number];
+  predicted_hex: string;
+  layers: MaterialRecipeLayer[];
+}
+
 export interface GradientCardMaterialBulkExportResponse {
   status: string;
   message: string;

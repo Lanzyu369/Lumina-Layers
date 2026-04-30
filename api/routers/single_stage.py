@@ -18,6 +18,7 @@ from api.file_registry import FileRegistry
 from api.schemas.single_stage import (
     GradientCardMaterialUpdateRequest,
     MaterialLibraryBulkExportRequest,
+    MaterialRecipePreviewRequest,
 )
 from api.schemas.responses import (
     GradientCardMaterialBulkExportResponse,
@@ -29,6 +30,8 @@ from api.schemas.responses import (
     GradientCardStageAExtractResponse,
     MaterialColorSuggestionItem,
     MaterialColorSuggestionsResponse,
+    MaterialRecipeLayerResponse,
+    MaterialRecipePreviewResponse,
     MaterialSolverCacheBuildResponse,
     MaterialSolverCacheDeleteResponse,
     MaterialSolverCacheEntryResponse,
@@ -58,6 +61,8 @@ from core.material_color_solver import (
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
     MIN_LAYER_COUNT as _SOLVER_MIN_LAYER_COUNT,  # noqa: N811
     ColorSuggestion,
+    forward_model,
+    linear_to_srgb_uint8,
     suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
@@ -871,6 +876,89 @@ def _load_palette_or_raise(directory_names: list[str]):
         raise HTTPException(status_code=404, detail=str(exc))
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
+    """Resolve the substrate color in linear RGB for the forward model.
+    解析正向模型所需的基底线性 RGB。
+
+    The white substrate is fully modelled (every material archive carries
+    ``C0_white``). For black we fall back to a near-zero linear color because
+    Stage A archives currently only persist the white substrate parameter.
+    The fallback is conservative — any change here must keep
+    ``forward_model`` numerically stable for subsequent Beer-Lambert layers.
+
+    白基底由 ``C0_white`` 直接给出；黑基底退化为近似零线性色（当前 Stage A
+    存档只持久化白基底参数）。
+    """
+    if substrate == "white" and materials:
+        return np.asarray(materials[0].C0_white, dtype=np.float64).reshape(3)
+    if substrate == "black":
+        return np.full(3, 0.01, dtype=np.float64)
+    return np.ones(3, dtype=np.float64)
+
+
+@router.post("/material-recipe-preview")
+async def material_recipe_preview(
+    payload: MaterialRecipePreviewRequest,
+) -> MaterialRecipePreviewResponse:
+    """Forward-simulate a stacked-material recipe to predict its visible color.
+    根据选定耗材按顺序叠层，使用 Beer-Lambert 正向模型预测可见颜色。
+
+    Layer count is intentionally unconstrained beyond the schema's
+    ``max_length`` so users can preview any depth (the 5-layer limits in
+    :data:`MIN_LAYER_COUNT` / :data:`MAX_LAYER_COUNT` only apply to the
+    inverse solver, not this forward query).
+
+    层数仅受 schema 上限限制；求解器的 5 层下限不约束本接口。
+    """
+    materials = _load_palette_or_raise(payload.directory_names)
+    substrate_linear = _resolve_substrate_linear(materials, payload.substrate)
+
+    recipe = np.arange(len(materials), dtype=np.int32)
+    predicted_linear = forward_model(
+        recipe=recipe,
+        materials=materials,
+        layer_height_mm=float(payload.layer_height_mm),
+        substrate_linear=substrate_linear,
+    )
+    predicted_srgb = linear_to_srgb_uint8(predicted_linear.reshape(1, 3))[0]
+    predicted_rgb = [int(c) for c in predicted_srgb.tolist()]
+    predicted_hex = "#{:02X}{:02X}{:02X}".format(*predicted_rgb)
+
+    layers: list[MaterialRecipeLayerResponse] = []
+    for idx, mat in enumerate(materials):
+        rgb = [int(c) for c in np.asarray(mat.estimated_rgb).reshape(3).tolist()]
+        layers.append(
+            MaterialRecipeLayerResponse(
+                layer_index=idx,
+                directory_name=mat.directory_name,
+                material_name=mat.name,
+                estimated_rgb=rgb,
+                estimated_hex="#{:02X}{:02X}{:02X}".format(*rgb),
+            )
+        )
+
+    log.info(
+        "Material recipe preview computed",
+        extra={
+            "event": "extractor_material_recipe_preview_done",
+            "layer_count": len(materials),
+            "layer_height_mm": float(payload.layer_height_mm),
+            "substrate": payload.substrate,
+            "predicted_hex": predicted_hex,
+        },
+    )
+
+    return MaterialRecipePreviewResponse(
+        status="ok",
+        layer_count=len(materials),
+        layer_height_mm=float(payload.layer_height_mm),
+        substrate=payload.substrate,
+        predicted_rgb=predicted_rgb,
+        predicted_hex=predicted_hex,
+        layers=layers,
+    )
 
 
 def _cache_entry_from_metadata(
