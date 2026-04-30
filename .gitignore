@@ -305,6 +305,10 @@ logs/
 
 # Material solver exhaustive cache (regenerable per palette)
 materials/_solver_cache/
+# Local backup dirs (never commit these — restore from git history instead)
+materials_*_ago/
+materials_backup*/
+**/_backup/
 # AI IDE local config
 .claude/
 .codex/
