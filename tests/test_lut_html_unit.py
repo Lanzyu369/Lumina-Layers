@@ -48,7 +48,9 @@ def test_html_function_lives_in_api_lut_html(name: str) -> None:
     fn = getattr(lut_html, name, None)
     assert callable(fn), f"`{name}` must be defined in api.lut_html after Sub-PR B"
     src = inspect.getsourcefile(fn) or ""
-    assert src.endswith("/api/lut_html.py"), (
+    # Normalize separators so the contract pins the same path on Windows + POSIX
+    # 归一化分隔符，确保该契约在 Windows 与 POSIX 平台都成立。
+    assert src.replace("\\", "/").endswith("/api/lut_html.py"), (
         f"`{name}` must physically live in api/lut_html.py (found at {src!r})"
     )
 
@@ -65,7 +67,9 @@ def test_click_helper_lives_in_api_color_workstation_helpers(name: str) -> None:
         f"`{name}` must be defined in api.color_workstation_helpers after Sub-PR B"
     )
     src = inspect.getsourcefile(fn) or ""
-    assert src.endswith("/api/color_workstation_helpers.py"), (
+    # Normalize separators so the contract pins the same path on Windows + POSIX
+    # 归一化分隔符，确保该契约在 Windows 与 POSIX 平台都成立。
+    assert src.replace("\\", "/").endswith("/api/color_workstation_helpers.py"), (
         f"`{name}` must physically live in api/color_workstation_helpers.py "
         f"(found at {src!r})"
     )

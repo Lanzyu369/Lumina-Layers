@@ -122,14 +122,20 @@ class TestS01InputValidation:
         ctx["material_source"] = "material_archive"
         ctx["selected_materials"] = ["fake/material"]
 
+        # Phase 0 Sub-PR C (PR #128) extracted the material-archive branch into
+        # core.pipeline._input_validation_common, so the mock targets follow the
+        # symbol's new physical location rather than the s01 caller module.
+        # PR #128 Phase 0 Sub-PR C 把 material-archive 分支抽到了
+        # core.pipeline._input_validation_common, 因此 mock 路径要跟随符号实际
+        # 位置, 而不是 s01 调用方模块。
         with patch(
-            "core.pipeline.s01_input_validation.load_multiple_materials",
+            "core.pipeline._input_validation_common.load_multiple_materials",
             return_value=[object()],
         ), patch(
-            "core.pipeline.s01_input_validation.build_material_slot_names",
+            "core.pipeline._input_validation_common.build_material_slot_names",
             return_value=["Material A"],
         ), patch(
-            "core.pipeline.s01_input_validation.build_material_preview_colors",
+            "core.pipeline._input_validation_common.build_material_preview_colors",
             return_value={0: (255, 0, 0, 255)},
         ):
             result = run(ctx)
