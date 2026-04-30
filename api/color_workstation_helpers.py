@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from core.pipeline.pipeline_utils import _rgb_to_hex
+# NOTE: ``_rgb_to_hex`` is inlined below (3 lines) instead of imported from
+# ``core.pipeline.pipeline_utils`` because the latter re-exports symbols from
+# this module, which would create a module-load cycle on cold imports.
+# 内联以避免与 ``core.pipeline.pipeline_utils`` 的循环导入。
 
 __all__ = [
     "_recommend_lut_colors_by_rgb",
@@ -26,6 +29,14 @@ __all__ = [
     "_build_dual_recommendations",
     "_resolve_click_selection_hexes",
 ]
+
+
+def _rgb_to_hex(rgb) -> str:
+    """Convert RGB tuple to ``#rrggbb`` lowercase string.
+    将 RGB 三元组转换为 ``#rrggbb``（与 ``core.pipeline.pipeline_utils._rgb_to_hex`` 等价）。
+    """
+    r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _recommend_lut_colors_by_rgb(base_rgb, lut_colors, top_k=10):

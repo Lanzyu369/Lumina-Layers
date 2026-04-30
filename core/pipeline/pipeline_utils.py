@@ -373,6 +373,27 @@ def get_lut_color_choices(lut_path: str) -> List[tuple]:
 # the deferred re-export block at the bottom of this file.
 
 
+def _resolve_color_mode_from_size(
+    total_colors: int,
+    layer_count: int | None,
+    max_mat: int | None,
+) -> str | None:
+    """将 (size, layers, max_material) 三元组解析为展示字符串。
+    Resolve a (size, layers, max_material) triple into the canonical display
+    string used by ``detect_lut_color_mode``. Returns ``None`` if the size
+    falls outside every registered window.
+
+    Phase 1: replaces the three threshold cascades (npz / json / npy) that
+    previously lived inline inside ``detect_lut_color_mode``.
+    """
+    from core.color_modes import ColorMode
+
+    mode = ColorMode.from_lut_size_and_layers(int(total_colors), layer_count, max_mat)
+    if mode is None:
+        return None
+    return mode.canonical_display_name
+
+
 def detect_lut_color_mode(lut_path):
     """
     自动检测LUT文件的颜色模式。
@@ -397,41 +418,18 @@ def detect_lut_color_mode(lut_path):
                 stacks = data["stacks"] if "stacks" in data else None
                 layer_count = int(stacks.shape[1]) if isinstance(stacks, np.ndarray) and stacks.ndim == 2 else None
                 max_mat = int(np.max(stacks)) if isinstance(stacks, np.ndarray) and stacks.size > 0 else None
-                if (
-                    total_colors >= 2400
-                    and total_colors < 2600
-                    and layer_count == 6
-                    and (max_mat is None or max_mat <= 4)
-                ):
+                resolved = _resolve_color_mode_from_size(total_colors, layer_count, max_mat)
+                if resolved is not None:
                     log.info(
                         "Detected LUT color mode",
-                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
+                        extra={
+                            "event": "lut_color_mode_detected",
+                            "source": "npz",
+                            "color_count": int(total_colors),
+                            "color_mode": resolved,
+                        },
                     )
-                    return "5-Color Extended"
-                if total_colors >= 2600 and total_colors <= 2800:
-                    log.info(
-                        "Detected LUT color mode",
-                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "8-Color Max"},
-                    )
-                    return "8-Color Max"
-                if total_colors >= 1200 and total_colors < 1400:
-                    log.info(
-                        "Detected LUT color mode",
-                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
-                    )
-                    return "6-Color (CMYWGK 1296)"
-                if total_colors >= 900 and total_colors < 1200:
-                    log.info(
-                        "Detected LUT color mode",
-                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "4-Color"},
-                    )
-                    return "4-Color"
-                if total_colors >= 30 and total_colors <= 35:
-                    log.info(
-                        "Detected LUT color mode",
-                        extra={"event": "lut_color_mode_detected", "source": "npz", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
-                    )
-                    return "BW (Black & White)"
+                    return resolved
             log.info(
                 "Detected merged LUT color mode",
                 extra={"event": "lut_color_mode_detected", "source": "npz", "color_mode": "Merged"},
@@ -463,36 +461,18 @@ def detect_lut_color_mode(lut_path):
                     "max_material": max_mat,
                 },
             )
-            if total_colors >= 2400 and total_colors < 2600 and layer_count == 6 and (max_mat is None or max_mat <= 4):
+            resolved = _resolve_color_mode_from_size(total_colors, layer_count, max_mat)
+            if resolved is not None:
                 log.info(
                     "Detected LUT color mode",
-                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
+                    extra={
+                        "event": "lut_color_mode_detected",
+                        "source": "json",
+                        "color_count": int(total_colors),
+                        "color_mode": resolved,
+                    },
                 )
-                return "5-Color Extended"
-            if total_colors >= 2600 and total_colors <= 2800:
-                log.info(
-                    "Detected LUT color mode",
-                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "8-Color Max"},
-                )
-                return "8-Color Max"
-            if total_colors >= 1200 and total_colors < 1400:
-                log.info(
-                    "Detected LUT color mode",
-                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
-                )
-                return "6-Color (CMYWGK 1296)"
-            if total_colors >= 900 and total_colors < 1200:
-                log.info(
-                    "Detected LUT color mode",
-                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "4-Color"},
-                )
-                return "4-Color"
-            if total_colors >= 30 and total_colors <= 35:
-                log.info(
-                    "Detected LUT color mode",
-                    extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
-                )
-                return "BW (Black & White)"
+                return resolved
             log.info(
                 "Detected merged LUT color mode",
                 extra={"event": "lut_color_mode_detected", "source": "json", "color_count": int(total_colors), "color_mode": "Merged"},
@@ -525,53 +505,38 @@ def detect_lut_color_mode(lut_path):
             extra={"event": "lut_mode_inputs_resolved", "lut_shape": list(lut_data.shape), "color_count": int(total_colors)},
         )
 
-        # 2色模式：32色 (2^5 = 32)
-        if total_colors >= 30 and total_colors <= 35:
+        # 尝试从 ColorMode 表中解析。.npy 格式没有随带 stacks 信息，于是
+        # ``layers`` / ``max_material`` 传 None，让 5-Color Extended 以重叠卷靠 size 属于
+        # 2400-2599 区间。多个随备序重定位在该 ColorMode 上。
+        # Try ColorMode taxonomy first (single canonical implementation).
+        # NB: .npy LUTs do not carry stacks metadata, so layers + max_material
+        # are unknown; the 5-Color Extended window is reachable via size alone
+        # because its registered size_range (2400-2600) does not overlap the
+        # 8-color window (2600-2801).
+        resolved = _resolve_color_mode_from_size(total_colors, None, None)
+        if resolved is not None:
             log.info(
                 "Detected LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "BW (Black & White)"},
+                extra={
+                    "event": "lut_color_mode_detected",
+                    "source": "npy",
+                    "color_count": int(total_colors),
+                    "color_mode": resolved,
+                },
             )
-            return "BW (Black & White)"
+            return resolved
 
-        # 5-Color Extended模式：~2468色 (1024 base + 1444 extended)
-        elif total_colors >= 2400 and total_colors < 2600:
-            log.info(
-                "Detected LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "5-Color Extended"},
-            )
-            return "5-Color Extended"
-
-        # 8色模式：2600-2800色
-        elif total_colors >= 2600 and total_colors <= 2800:
-            log.info(
-                "Detected LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "8-Color Max"},
-            )
-            return "8-Color Max"
-
-        # 6色模式：1200-1400色
-        elif total_colors >= 1200 and total_colors < 1400:
-            log.info(
-                "Detected LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "6-Color (CMYWGK 1296)"},
-            )
-            return "6-Color (CMYWGK 1296)"
-
-        # 4色模式：900-1200色
-        elif total_colors >= 900 and total_colors < 1200:
-            log.info(
-                "Detected LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "4-Color"},
-            )
-            return "4-Color"
-
-        else:
-            # 非标准尺寸：识别为合并色卡
-            log.info(
-                "Detected merged LUT color mode",
-                extra={"event": "lut_color_mode_detected", "source": "npy", "color_count": int(total_colors), "color_mode": "Merged"},
-            )
-            return "Merged"
+        # 非标准尺寸：识别为合并色卡。Non-canonical size -> Merged.
+        log.info(
+            "Detected merged LUT color mode",
+            extra={
+                "event": "lut_color_mode_detected",
+                "source": "npy",
+                "color_count": int(total_colors),
+                "color_mode": "Merged",
+            },
+        )
+        return "Merged"
 
     except (OSError, ValueError, TypeError, KeyError) as e:
         log.exception(

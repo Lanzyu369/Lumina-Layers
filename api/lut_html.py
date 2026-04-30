@@ -26,7 +26,12 @@ import os
 
 import numpy as np
 
-from core.pipeline.pipeline_utils import extract_lut_available_colors
+# NOTE: ``extract_lut_available_colors`` is imported lazily inside the
+# functions below (instead of at module-top) so this module can be loaded
+# before ``core.pipeline.pipeline_utils`` finishes initialising — the latter
+# re-exports our public symbols, which would otherwise create a module-load
+# cycle on cold imports.
+# 延迟导入避免与 ``core.pipeline.pipeline_utils`` 的循环导入。
 
 __all__ = [
     "generate_lut_color_dropdown_html",
@@ -57,6 +62,8 @@ def generate_lut_color_dropdown_html(lut_path: str, selected_color: str = None, 
     """
     # NOTE: HTML generation was previously delegated to legacy UI extension
     # modules. The web frontend now renders color grid UI via API data.
+    from core.pipeline.pipeline_utils import extract_lut_available_colors
+
     colors = extract_lut_available_colors(lut_path)
     if not colors:
         return ""
@@ -108,6 +115,7 @@ def generate_lut_grid_html(lut_path, lang: str = "zh"):
         str: HTML 字符串
     """
     from core.i18n import I18n
+    from core.pipeline.pipeline_utils import extract_lut_available_colors
 
     colors = extract_lut_available_colors(lut_path)
 

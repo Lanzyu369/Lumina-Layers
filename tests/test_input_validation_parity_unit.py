@@ -21,7 +21,7 @@ Coverage:
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -136,7 +136,6 @@ def _fake_build_material_preview_colors(materials):
 def test_material_archive_branch_uses_event_prefix(
     event_prefix: str,
     expected_event: str,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """material_archive 验证事件必须带上调用方的前缀。
     Material-archive validated event must carry the caller's prefix so the
@@ -144,8 +143,11 @@ def test_material_archive_branch_uses_event_prefix(
     """
     from core.pipeline import _input_validation_common as common
 
-    log = logging.getLogger(f"lumina.test.{event_prefix}")
-    caplog.set_level(logging.DEBUG, logger=log.name)
+    # Use a Mock logger so we can inspect the exact ``extra={...}`` payload
+    # passed to ``log.debug``. The structured_logging wrapper renames events
+    # on non-lumina-prefixed loggers when records propagate to root, which
+    # makes ``caplog``-based assertions brittle here.
+    log = MagicMock(spec=logging.Logger)
 
     with patch.object(common, "load_multiple_materials", _fake_load_multiple_materials), \
          patch.object(common, "build_material_slot_names", _fake_build_material_slot_names), \
@@ -162,10 +164,15 @@ def test_material_archive_branch_uses_event_prefix(
         )
 
     assert outcome == "validated"
-    events = [getattr(record, "event", None) for record in caplog.records]
-    assert expected_event in events, (
+
+    # Inspect the ``extra={"event": ...}`` payload of every log.debug call.
+    debug_events: list[str | None] = []
+    for call in log.debug.call_args_list:
+        extra = call.kwargs.get("extra") or {}
+        debug_events.append(extra.get("event"))
+    assert expected_event in debug_events, (
         f"Expected `{expected_event}` to be emitted under prefix `{event_prefix}`; "
-        f"got {events}"
+        f"got {debug_events}"
     )
 
     # Canonical keys present.
@@ -192,15 +199,12 @@ def test_material_archive_branch_empty_selection_writes_error() -> None:
     assert "No materials selected" in ctx["error"]
 
 
-def test_material_archive_branch_unsupported_grid_falls_back(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_material_archive_branch_unsupported_grid_falls_back() -> None:
     """不支持的 ``material_grid_resolution`` -> 回落到默认并打 warning。"""
     from core.material_cache import DEFAULT_GRID_RESOLUTION
     from core.pipeline import _input_validation_common as common
 
-    log = logging.getLogger("lumina.test.bad_grid")
-    caplog.set_level(logging.WARNING, logger=log.name)
+    log = MagicMock(spec=logging.Logger)
 
     with patch.object(common, "load_multiple_materials", _fake_load_multiple_materials), \
          patch.object(common, "build_material_slot_names", _fake_build_material_slot_names), \
@@ -215,7 +219,11 @@ def test_material_archive_branch_unsupported_grid_falls_back(
             event_prefix="p01",
         )
     assert ctx["grid_resolution"] == int(DEFAULT_GRID_RESOLUTION)
-    assert any("ignoring unsupported" in record.getMessage() for record in caplog.records)
+    # Helper must emit a single warning whose first positional arg contains
+    # the canonical "ignoring unsupported" phrase.
+    assert log.warning.called
+    warning_args = log.warning.call_args[0]
+    assert any("ignoring unsupported" in str(arg) for arg in warning_args)
 
 
 # ---------------------------------------------------------------------------
