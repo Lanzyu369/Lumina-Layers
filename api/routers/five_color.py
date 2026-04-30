@@ -85,7 +85,12 @@ def _extract_sources_from_keyed_json(json_path: str) -> list[str]:
     try:
         with open(json_path, "r", encoding="utf-8") as f:
             data = _json.load(f)
-        entries = data.get("entries", [])
+        if isinstance(data, list):
+            entries: list = data
+        elif isinstance(data, dict):
+            entries = data.get("entries", [])
+        else:
+            return []
         return [e.get("source", "") if isinstance(e, dict) else "" for e in entries]
     except (OSError, TypeError, ValueError):
         return []
