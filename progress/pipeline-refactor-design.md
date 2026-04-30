@@ -186,9 +186,72 @@ The 4^5 = 1024 base-stack generator appears verbatim in at least three files:
 
 Same loop body, four copies. This is a textbook DRY violation that the new abstraction must collapse.
 
-### 2.5 Summary of the architectural smell
+### 2.5 Summary of architectural smells (calibration N×M×K)
 
-Using Fowler's terms: this is **"Switch on Type"** with the type encoded as a string and the switch duplicated. The cure is **"Replace Conditional with Polymorphism"** — turn color mode into a first-class object with the per-mode parameters and behaviors as fields/methods, then dispatch through it.
+§2.1-2.4 are all faces of one underlying smell. Using Fowler's terms: this is **"Switch on Type"** with the type encoded as a string and the switch duplicated. The cure is **"Replace Conditional with Polymorphism"** — turn color mode into a first-class object with the per-mode parameters and behaviors as fields/methods, then dispatch through it. This family is solved by Phase 1 (ColorMode unification, §5).
+
+### 2.6 s/p input-validation modules are near-duplicates
+
+The raster pipeline's `core/pipeline/s01_input_validation.py` (333 LOC) and the preview pipeline's `core/pipeline/p01_preview_validation.py` (234 LOC) duplicate the same logic:
+
+- Same `material_archive` branch: `load_multiple_materials` → `build_material_slot_names` → `build_material_preview_colors` → synthetic `color_conf` → `color_layers` / `layer_height_mm` / `grid_resolution`.
+- Same LUT path resolution: `isinstance(lut_path, str)` ↔ `hasattr(lut_path, "name")` ↔ same error-prefix branching (only the error-message strings differ slightly).
+- Same Merged-LUT palette extraction: `LUTManager.load_lut_with_metadata` → `build_palette_preview_colors` → identical try/except fallback to `color_conf` defaults.
+- Same `quantize_colors` clamp (`max(8, min(256, ...))`).
+
+The only meaningful differences are:
+
+- s01 additionally handles `is_svg_vector` detection (vector-routing for raster path), `separate_backing` and `backing_color_id` validation.
+- s01 writes timing into `_hifi_timings` and emits `s01_*` events; p01 writes `_preview_timings` and emits `p01_*` events.
+
+This is **shotgun surgery**: adding a new color mode, changing the LUT loader, or adjusting an error message must be replicated in two files; missing one yields silent drift between preview and generate paths. The vector-mode bug fixed in v2.1 (`coordinator.py:535-549`, where ColorWorkstation region edits had to be back-written into `analysis.matched_shapes`) is the same family — the preview path's `cache.matched_rgb` and the generate path's `analysis.matched_shapes` each carried a partial copy of the replacement state.
+
+### 2.7 `pipeline_utils.py` is a 36 KB god module + layering violation
+
+`core/pipeline/pipeline_utils.py` (36826 bytes) mixes seven unrelated concerns:
+
+| Section (per existing comment headers) | Approx. LOC | Concern |
+|---|---|---|
+| Color utility functions (L23-250) | ~230 | Pure utility (legitimate) |
+| LUT utility functions (L253-610) | ~360 | Business — includes `detect_lut_color_mode` (~200 LOC, the 6th dispatch site already noted in §2.1) |
+| Detection utility functions (L613-657) | ~45 | Business |
+| Cache helper functions (L659-682) | ~25 | Business |
+| **LUT HTML grid functions (L684-886)** | ~200 | **UI/presentation — does not belong in `core/`** |
+| **Color selection helper functions (L889-994+)** | ~100+ | UI/click-handling — does not belong in `core/` |
+
+The HTML and click-selection segments violate `AGENTS.md`'s layering invariant:
+
+> Preserve layering: `core/` -> API/workers -> UI
+
+Any change to LUT preview button styling currently requires editing `core/pipeline/`, and conversely any pure-domain refactor in `core/pipeline/` risks accidentally breaking UI rendering.
+
+Companion file `core/pipeline/preview_color_utils.py` (9286 bytes) further fragments color helpers — same concept split across two files with no clear edge condition. It is unclear which file should be the home for new color utilities.
+
+### 2.8 Vector branch lives inside `coordinator.py`
+
+`core/pipeline/coordinator.py` (37454 bytes) contains both:
+
+- The clean, table-driven raster/preview pipeline orchestrators (`_RASTER_STEPS` + `_PREVIEW_STEPS` loops, ~250 LOC).
+- Two large vector-branch handlers (`_run_vector_preview_branch` ~70 LOC at L380-448, `_run_vector_branch` ~400+ LOC starting at L456) that completely bypass S02-S12 and directly invoke `VectorProcessor.analyze_svg`, `apply_matched_rgb_overrides_to_analysis`, 3MF export, and GLB preview generation.
+
+The orchestrator should not know about renderer-level concerns (3MF writer specifics, GLB preview details, `apply_matched_rgb_overrides_to_analysis`). Phase 3 (BoardLayout IR + Renderer plugins) is the right long-term home for this code, but the immediate hygiene fix is to extract the vector branch from `coordinator.py` into a peer module so the orchestrator regains single responsibility.
+
+### 2.9 `processing_ops/` contains zero-logic re-export shims
+
+Of the 11 modules in `core/pipeline/processing_ops/`, two are pure namespace-redirect shims:
+
+- `hue_aware_matcher.py` (371 bytes): only `from core.color_matching_hue_aware import HueAwareColorMatcher`.
+- `isolated_pixel_cleanup.py` (373 bytes): only `from core.isolated_pixel_cleanup import cleanup_isolated_pixels`.
+
+Several others (`bilateral_filter.py` 1.2 KB, `median_filter.py` 1.2 KB, `background_remover.py` 2.0 KB, `wireframe_extractor.py` 2.6 KB) need closer inspection during Phase 0 sub-PR A; some may also be thin wrappers around `core/*` real implementations. This is decorative architecture — a layer that exists only for the sake of existing.
+
+### 2.10 Summary of architectural smells (pipeline hygiene)
+
+§2.6-2.9 are a **different family** of smells from §2.1-2.4. They are not "Switch on Type"; they are **"over-coupling disguised as decoupling"** — files / modules / numbering schemes look separated, but the same logic is copy-pasted across them, and presentation logic has leaked into the domain layer.
+
+The cures are mechanical: **"Inline Trivial Wrapper"** (delete the shims), **"Extract Common Method"** (collapse s01/p01), **"Move Method (across layers)"** (relocate HTML helpers to `api/`), and **"Move Method (within package)"** (extract vector branch from coordinator). No new abstractions are introduced.
+
+This family is solved by Phase 0 (Pipeline Hygiene, §14), which is sequenced **before** Phase 1 because Phase 1's deliverables include modifications to `core/pipeline/pipeline_utils.py::detect_lut_color_mode` — Phase 0 first restructures that file to remove the layering violations, after which Phase 1's edits land on a cleaner target.
 
 ---
 
@@ -281,18 +344,23 @@ The matrix is N + M + K, not N × M × K.
 
 ## 4. Phased Migration Plan
 
-The refactor lands in **four sequenced PRs**, each its own design doc and round of subagent work. Each PR is **lossless** (existing tests must continue passing) and **independently revertable**.
+The refactor lands in **five sequenced PRs** (Phase 0 + Phases 1-4), each its own design doc and round of subagent work. Each PR is **lossless** (existing tests must continue passing) and **independently revertable**.
 
 | Phase | Goal | Estimated effort | Lands when |
 |---|---|---|---|
-| **Phase 1: ColorMode unification** | Replace 6 string-matching dispatch sites with a single `ColorMode` value object. Existing behavior bit-exact. | 1-2 weeks | Bug Report v2.1 has shipped + 1 week of soak |
+| **Phase 0: Pipeline Hygiene** | Delete `processing_ops/` shims; split `pipeline_utils.py` (extract HTML/UI helpers to `api/`); merge s01/p01 input validation; extract vector branch from `coordinator.py`. No new abstractions. | 3-5 days (4 independent sub-PRs) | Bug Report v2.1 has shipped + 1 week of soak |
+| **Phase 1: ColorMode unification** | Replace 6 string-matching dispatch sites with a single `ColorMode` value object. Existing behavior bit-exact. | 1-2 weeks | Phase 0 has shipped |
 | **Phase 2: CalibrationMethod ABC** | Introduce `CalibrationMethod` Protocol; refactor existing `generate_*_board` functions to subclasses; entry points unchanged. | 3-5 days | Phase 1 has shipped |
-| **Phase 3: BoardLayout IR + Renderer plugins** | Extract `BoardLayout` IR; split mesh generation into `VoxelMeshRenderer`; add `SVGRenderer` as the lighthouse adoption. | 1-2 weeks | Phase 2 has shipped |
+| **Phase 3: BoardLayout IR + Renderer plugins** | Extract `BoardLayout` IR; split mesh generation into `VoxelMeshRenderer`; add `SVGRenderer` as the lighthouse adoption. Folds the Phase-0-extracted `core/pipeline/vector_branch.py` into the new Renderer abstraction. | 1-2 weeks | Phase 2 has shipped |
 | **Phase 4: Adoption + cleanup** | Migrate `extractor.py`, `lut_loader.py`, `lut_merger.py`, `pipeline_utils.py` to consume `ColorMode` directly; delete dead string-matching code; team's new calibration method lands as a `CalibrationMethod` subclass. | 3-5 days | Phase 3 has shipped + team's new method is ready |
 
-**Total**: 3-5 weeks of subagent time, ~4 PRs, ~6-8 weeks wall-clock (including soak windows between phases).
+**Total**: 4-6 weeks of subagent time, ~5 PRs (Phase 0 may be 4 sub-PRs), ~7-9 weeks wall-clock (including soak windows between phases).
 
-**Critical sequencing constraint**: do NOT start Phase 1 before Bug Report v2.1 has shipped and accumulated 1 week of real user reports. The bug-report channel is the radar during the refactor; without it, regressions go unnoticed.
+**Critical sequencing constraints**:
+
+1. Do NOT start Phase 0 before Bug Report v2.1 has shipped + 1 week of real user reports. The bug-report channel is the radar during the refactor; without it, regressions go unnoticed.
+2. Do NOT start Phase 1 before Phase 0 has shipped. Phase 1 modifies `pipeline_utils.py::detect_lut_color_mode`; Phase 0 first restructures `pipeline_utils.py` (extracting HTML/UI segments to `api/`), so Phase 1's edits land on a cleaner target. Running Phase 0 first also de-risks the `s01/p01` input-validation merge before Phase 1 introduces the `ColorMode` value object that both s01 and p01 will consume.
+3. Phase 0's four sub-PRs (A: shims, B: pipeline_utils split, C: input-validation merge, D: vector branch extraction) are **independent** and may ship in any order or in parallel, but all four must land before Phase 1 starts.
 
 ---
 
@@ -301,6 +369,8 @@ The refactor lands in **four sequenced PRs**, each its own design doc and round 
 ### 5.1 Phase 1 mission
 
 Introduce a single canonical `ColorMode` object that holds all the per-mode parameters currently scattered across `config.py`, `calibration.py`, `extractor.py`, `lut_loader.py`, `lut_merger.py`, and `pipeline_utils.py`. Replace the six string-matching dispatch sites with `ColorMode` lookups + attribute reads. Keep all public function signatures and observable behavior unchanged.
+
+**Phase 1 prerequisite**: Phase 0 (Pipeline Hygiene, §14) must ship first. Phase 0 restructures `core/pipeline/pipeline_utils.py` (extracts HTML/UI segments to `api/lut_html.py`) and merges the `s01_input_validation.py` / `p01_preview_validation.py` duplication into a shared helper. This Phase 1 spec assumes that restructured layout when modifying `detect_lut_color_mode` (§5.2 item 7) and when wiring `ColorMode` into the input-validation flow.
 
 ### 5.2 Phase 1 deliverables
 
@@ -356,7 +426,7 @@ Introduce a single canonical `ColorMode` object that holds all the per-mode para
    - `_SIZE_TO_MODE`, `_MODE_PRIORITY`, `_MODE_MAX_MATERIAL` deleted; queries replaced by `ColorMode.from_lut_size(...)`, `mode.priority`, `mode.n_materials - 1`.
    - The `LUMINA_LUT_2468_MODE=merged` env override stays where it is (special-case business rule).
 
-7. Modified `core/pipeline/pipeline_utils.py::detect_lut_color_mode` (~80 LOC delta):
+7. Modified `core/pipeline/pipeline_utils.py::detect_lut_color_mode` (post-Phase-0 — HTML/UI segments have been extracted to `api/lut_html.py`, so the surrounding file is ~15-18 KB instead of 36 KB) (~80 LOC delta):
    - Body becomes a thin call: `mode = ColorMode.from_lut_size_and_layers(total_colors, layer_count)`. Returns `mode.display_names[0]` (or `None`) so external string consumers are unaffected.
    - The size-range thresholds (`>= 2400 and < 2600`, etc.) are codified inside `ColorMode.from_lut_size_and_layers` as one canonical implementation.
 
@@ -590,7 +660,7 @@ Migrate the remaining downstream consumers (`extractor.py`, `lut_loader.py`, `lu
 
 ## 12. Hand-off TL;DR for the GPT Subagent (Phase 1 only)
 
-You are implementing **Phase 1 of 4** as specified in §5 of this document.
+You are implementing **Phase 1 of 5** (the second of five phases — see §14 for Phase 0, which must ship first) as specified in §5 of this document.
 
 **Read first**: `AGENTS.md` (especially Engineering Rules, Lossless Refactoring, Logging Governance, Tests sections) + this entire document, NOT just §5. Phase 2-4 sketches inform the shape of Phase 1's interfaces.
 
@@ -630,7 +700,181 @@ You are implementing **Phase 1 of 4** as specified in §5 of this document.
 
 ---
 
-## 14. Long-term Vision (post-Phase 4)
+## 14. Phase 0 Detailed Spec — Pipeline Hygiene
+
+### 14.1 Phase 0 mission
+
+Eliminate the over-coupling-disguised-as-decoupling identified in §2.6-2.9 by:
+
+- Deleting zero-logic re-export shims in `core/pipeline/processing_ops/`.
+- Extracting HTML/UI helpers from `core/pipeline/pipeline_utils.py` to `api/lut_html.py` (restoring `core/` layering invariant per `AGENTS.md`).
+- Merging the duplicated logic between `s01_input_validation.py` and `p01_preview_validation.py` into a shared helper.
+- Moving `_run_vector_branch` and `_run_vector_preview_branch` out of `coordinator.py` into a peer module `core/pipeline/vector_branch.py`.
+
+Phase 0 introduces **no new abstractions** (those come in Phases 1-4). Every change is a mechanical refactor with parity tests written first per `AGENTS.md` L48-51.
+
+### 14.2 Phase 0 deliverables (4 independent sub-PRs)
+
+The four deliverables are **independent and parallelizable**; each is a separate PR that can ship without waiting for the others. All four must land before Phase 1 starts.
+
+#### 14.2.1 Sub-PR A: Delete `processing_ops/` shims
+
+- Delete `core/pipeline/processing_ops/hue_aware_matcher.py` (371 bytes, pure shim).
+- Delete `core/pipeline/processing_ops/isolated_pixel_cleanup.py` (373 bytes, pure shim).
+- Audit `bilateral_filter.py`, `median_filter.py`, `background_remover.py`, `wireframe_extractor.py`; delete any that are also pure shims, retain those with real local logic.
+- Update every call site to import directly from the underlying `core/` module:
+  ```python
+  # before
+  from core.pipeline.processing_ops.hue_aware_matcher import HueAwareColorMatcher
+  # after
+  from core.color_matching_hue_aware import HueAwareColorMatcher
+  ```
+- LOC: -2 to -8 files; net source LOC roughly unchanged.
+
+#### 14.2.2 Sub-PR B: Split `pipeline_utils.py`
+
+- Extract HTML grid generation (`generate_lut_grid_html`, `generate_lut_card_grid_html`, `generate_lut_color_dropdown_html`) → new `api/lut_html.py`.
+- Extract click-selection helpers (`_build_selection_meta`, `_resolve_highlight_mask`, `_build_dual_recommendations`, `_resolve_click_selection_hexes`) → existing `api/routers/color_workstation.py` or new `api/color_workstation_helpers.py`.
+- Update every call site to import from the new location.
+- `core/pipeline/pipeline_utils.py` retains: color utilities (RGB↔hex, luminance), `generate_auto_height_map`, LUT metadata extraction, `detect_lut_color_mode`, `detect_image_type`, cache helpers.
+- Optionally: also fold `core/pipeline/preview_color_utils.py` into `pipeline_utils.py`, OR split `pipeline_utils.py` further into `core/pipeline/color_utils.py` + `core/pipeline/lut_meta.py`. Defer this decision to sub-PR review if uncertain.
+- Result: `pipeline_utils.py` shrinks from 36 KB to ~15-18 KB; `api/lut_html.py` ~200 LOC.
+- LOC delta: ~-200 from `core/`, ~+200 to `api/`, net 0.
+
+#### 14.2.3 Sub-PR C: Merge s01/p01 input validation
+
+- New file `core/pipeline/_input_validation_common.py` (~200 LOC) with private helpers:
+  - `_resolve_lut_path_or_error(ctx, *, error_prefix: str) -> tuple[str | None, str | None]`.
+  - `_apply_material_archive_branch(ctx, *, log, event_prefix: str) -> dict | None` (the shared `material_archive` block; returns updated ctx fragment or None on error).
+  - `_load_lut_palette(actual_lut_path, color_conf, *, event_prefix: str, log) -> tuple[list, dict]` (the shared Merged LUT palette extraction with try/except fallback).
+  - `_clamp_quantize_colors(value: int) -> int`.
+- `core/pipeline/s01_input_validation.py` retains: `is_svg_vector` detection, `separate_backing` + `backing_color_id` validation, writes to `_hifi_timings`, emits `s01_*` events. Reduces from 333 to ~150 LOC.
+- `core/pipeline/p01_preview_validation.py` retains: writes to `_preview_timings`, emits `p01_*` events. Reduces from 234 to ~80 LOC.
+- Helpers do NOT emit their own structured-logging events — they accept `event_prefix` and `log` parameters so the calling module emits with its own `s01_*` / `p01_*` prefix; this preserves the FROZEN canonical INFO budget.
+- LOC delta: ~-200 net (eliminate duplication).
+
+#### 14.2.4 Sub-PR D: Extract vector branch
+
+- Move `_run_vector_preview_branch` (lines ~380-448) and `_run_vector_branch` (lines ~456-eof) from `core/pipeline/coordinator.py` to new `core/pipeline/vector_branch.py`.
+- Move `_normalize_color_replacements_input` and any other helpers used only by the vector branch.
+- `coordinator.py::run_raster_pipeline` and `coordinator.py::run_preview_pipeline` import from the new location.
+- `coordinator.py` shrinks from 37 KB to ~25 KB; `vector_branch.py` becomes ~12 KB.
+- This aligns with Phase 3's eventual Renderer-plugin abstraction — when Phase 3 lands, the file is replaced by a `VectorRenderer` subclass without touching `coordinator.py`.
+- LOC delta: 0 (pure move).
+
+### 14.3 New tests required (write FIRST per AGENTS.md L48-51)
+
+For each sub-PR, write characterization tests against current behavior BEFORE modifying implementation.
+
+#### Sub-PR A tests (~60 LOC)
+
+- `tests/test_processing_ops_imports_unit.py`: assert that every public symbol previously importable from `core.pipeline.processing_ops.<shim>` is still importable from the new direct path post-refactor. Catches missed call sites.
+
+#### Sub-PR B tests (~120 LOC)
+
+- `tests/test_lut_html_unit.py`: characterization tests for HTML-grid and click-selection helpers. Run them against the **current** `pipeline_utils.py` location to capture exact byte-output of HTML strings; then re-run against the new `api/lut_html.py` location and assert the HTML is byte-identical.
+
+#### Sub-PR C tests (~150 LOC)
+
+- `tests/test_input_validation_parity_unit.py`:
+  - For each combination of (`material_source` ∈ {"lut", "material_archive"}, `lut_path` format ∈ {.npy, .json, .msgpack, file-like}, `modeling_mode` ∈ {HIGH_FIDELITY, PIXEL_ART, VECTOR}, `color_mode` ∈ {"4-Color", "BW", "8-Color", "5-Color Extended", "6-Color (RYBWGK 1296)"}):
+    - Build a synthetic ctx.
+    - Run pre-refactor `s01.run(ctx)` and `p01.run(ctx)`; pickle both output ctx dicts (excluding timing keys).
+    - After refactor, re-run and assert deep-equality with the pickled baselines.
+- `tests/test_input_validation_event_parity_unit.py`: capture structured-logging event payloads (via a fake handler) from pre-refactor s01/p01 and assert post-refactor emits the same set of events.
+
+#### Sub-PR D tests (~80 LOC)
+
+- `tests/test_vector_branch_extraction_unit.py`:
+  - Run a small synthetic SVG through `run_raster_pipeline` (vector branch) and `run_preview_pipeline` (vector preview branch) before refactor; pickle output ctx.
+  - After refactor, re-run; assert output ctx is deep-equal.
+  - Hash-based assertion on `result_tuple` bytes when present.
+
+### 14.4 Logging governance compliance
+
+- No new mutating endpoints introduced; no new `*_done` canary INFO required.
+- All event names preserved verbatim (`s01_*`, `p01_*`, `pipeline_*`, etc.). The `_input_validation_common.py` helpers do NOT emit their own events — they accept `log` and `event_prefix` parameters so the calling module emits with its own prefix. This preserves the FROZEN canonical 14/30 INFO budget.
+- Run `python scripts/log_quality_check.py --mode fast` after each sub-PR; INFO budget unchanged.
+- Run `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v` after each sub-PR; PASS unchanged.
+
+### 14.5 Phase 0 acceptance matrix (per sub-PR)
+
+For each of sub-PR A / B / C / D:
+
+- [ ] All new parity tests in §14.3 pass.
+- [ ] Existing test suite passes unmodified: `python -m pytest tests/ -v`.
+- [ ] `cd frontend && npx vitest --run` — PASS.
+- [ ] `python scripts/log_quality_check.py --mode fast` — INFO 14/30 PASS (UNCHANGED).
+- [ ] `python scripts/log_quality_check.py --mode full` — PASS.
+- [ ] No new `_log` / `*_log` / `request_*` / `status_*` bucket events introduced.
+- [ ] Performance regression: `python scripts/profile_stage3.py --also-write-latest && python scripts/check_perf_regression.py` — within tolerance.
+- [ ] No Chinese mojibake markers (`锟` / `鎷` / `鍙` / `涓`) in any modified file; `Get-Content -Encoding UTF8` clean per `AGENTS.md`.
+- [ ] PR description includes a "before" / "after" file-tree diff for the relevant directory and a single-line scope statement ("Phase 0 sub-PR X: <summary>").
+
+### 14.6 Phase 0 risk register
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Missed import call site after deleting a `processing_ops/` shim | M | M | Sub-PR A tests in §14.3 enumerate every public symbol; CI grep gate `grep -rn "from core.pipeline.processing_ops" --include='*.py'` should match only the remaining (real) modules |
+| HTML output byte-drift after relocating `generate_lut_grid_html` | L | M | Sub-PR B characterization tests pickle the exact HTML bytes against current behavior and assert post-refactor equality |
+| s01/p01 behavioral drift after extracting common helper | M | H | Sub-PR C parity tests cover every (material_source, lut_format, modeling_mode, color_mode) combination |
+| Event-name regression breaking the FROZEN log budget | L | H | Sub-PR C event-parity test asserts every `s01_*` / `p01_*` event name still emitted; `log_quality_check.py` gate run after each sub-PR |
+| Vector branch extraction breaks SVG flow (raster or preview) | M | H | Sub-PR D pickle-based parity test on full vector pipeline output for raster + preview |
+| Phase 0 work creates merge conflicts with Phase 1 work | L | M | Phase 0 ships strictly before Phase 1 starts; no parallel execution between phases |
+| `preview_color_utils.py` consolidation accidentally rewrites color math | L | M | Optional; defer the consolidation to a later phase if uncertain |
+| Removing a shim used by a test fixture | L | L | Sub-PR A test enumeration catches; if a fixture only-test-uses a shim path, update the fixture import |
+
+### 14.7 Phase 0 hand-off TL;DR
+
+You are implementing **Phase 0 of 5** as specified in §14 of this document. Phase 0 is hygiene: no new abstractions, no behavior change, mechanical refactor only.
+
+**Read first**: `AGENTS.md` (Engineering Rules + Lossless Refactoring + Logging Governance + Tests sections) + this entire document, NOT just §14. Phases 1-4 inform why the §14 splits / extractions are shaped the way they are.
+
+**Constraints (hard, do not violate)**:
+
+1. **Lossless**: every existing public function signature unchanged; every existing test still passes unmodified.
+2. **Tests first**: §14.3 tests are added in commit 1 of each sub-PR, BEFORE any source-code changes.
+3. **No event-name drift**: every `s01_*` / `p01_*` / `pipeline_*` event still emitted post-refactor (Sub-PR C parity test).
+4. **No INFO budget regression**: canonical 14/30 budget unchanged.
+5. **No new abstractions**: Phase 0 only deletes / moves / inlines. Do NOT introduce `ColorMode`, `CalibrationMethod`, `BoardLayout`, or any other Phase 1-4 type.
+6. **Bilingual Google-style docstrings** for every new public symbol (e.g. `_input_validation_common.py` helpers if they become non-private).
+7. **UTF-8 encoding** on every modified file; mojibake check after each commit.
+
+**Branch**: cut from `dev-refactor` HEAD; one branch per sub-PR (`refactor/pipeline-hygiene-A-shims`, `-B-pipeline-utils-split`, `-C-input-validation-merge`, `-D-vector-branch-extract`).
+
+**Sub-PR ordering recommendation** (lowest-risk first):
+
+1. Sub-PR A (delete shims) — ~10 minutes; immediately shippable; warms up the test infrastructure.
+2. Sub-PR D (extract vector branch) — ~3-4 hours; pure file move with test coverage.
+3. Sub-PR B (split `pipeline_utils.py`) — ~6-8 hours; touches `api/` layer.
+4. Sub-PR C (merge s01/p01) — ~6-8 hours; highest-risk because it touches both pipelines simultaneously.
+
+**Out of scope for Phase 0**:
+
+- No behavioral changes anywhere.
+- No `ColorMode` / `CalibrationMethod` / `BoardLayout` / `Renderer` types introduced.
+- No `_generate_voxel_mesh` modifications.
+- No `core/vector_engine.py` modifications.
+- No new color modes added.
+- No new logging events at INFO level.
+
+**If any item in this Phase 0 spec is ambiguous**: ask first; do not guess. Phase 0 is the foundation that Phase 1 builds on; getting it wrong cascades.
+
+### 14.8 Phase 0 estimated effort
+
+| Activity | Sub-PR A | Sub-PR B | Sub-PR C | Sub-PR D |
+|---|---|---|---|---|
+| Tests (§14.3) | 1 hour | 2 hours | 3-4 hours | 1-2 hours |
+| Implementation | 1-2 hours | 4-6 hours | 4-6 hours | 2-3 hours |
+| Verification + perf gate + log gate | 30 min | 30 min | 30 min | 30 min |
+| PR description + acceptance matrix | 15 min | 30 min | 30 min | 15 min |
+| **Total per sub-PR** | **~3 hours** | **~7-9 hours** | **~8-11 hours** | **~4-6 hours** |
+
+**Total Phase 0**: ~22-29 hours of GPT-subagent time across 4 PRs; ~1-2 weeks of wall-clock time including review (each sub-PR can be reviewed and merged independently, and they may execute in parallel by different subagents).
+
+---
+
+## 15. Long-term Vision (post-Phase 4)
 
 After Phase 4, the architecture supports:
 
@@ -643,4 +887,4 @@ The team's "new calibration method only works for 5 layers and voxel mode" pain 
 
 ---
 
-*End of design document. Last updated: 2026-04-29 by Cascade.*
+*End of design document. Last updated: 2026-04-30 by Cascade — added Phase 0 (Pipeline Hygiene) per §2.6-2.10 + §14, revised §4 sequencing to require Phase 0 before Phase 1.*
