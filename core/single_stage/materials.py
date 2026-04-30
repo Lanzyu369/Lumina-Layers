@@ -7,7 +7,7 @@ import tempfile
 import uuid
 import zipfile
 from dataclasses import asdict, dataclass, fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -1727,6 +1727,7 @@ _BIAS_FLAG_WHITE_SUBSTRATE_FLAT = "white_substrate_flat"
 _BIAS_FLAG_BLACK_SUBSTRATE_FLAT = "black_substrate_flat"
 _BIAS_FLAG_ORIENTATION_UNRELIABLE = "orientation_unreliable"
 _BIAS_FLAG_MEAN_DE_HIGH = "mean_de_gt_3"
+_BIAS_FLAG_C0_SESSION_OUTLIER = "c0_session_outlier"
 
 # Single-run thresholds. Pinned at the module level so tests, frontend
 # i18n and any future docs reference one canonical number.
@@ -1737,11 +1738,25 @@ _MEAN_DELTA_E_HIGH_THRESHOLD = 3.0
 
 # Cross-run pairwise threshold: two captures whose white_C0 averages
 # differ by more than this multiplicative factor cannot share a single
-# joint refit because the cost surface has no consistent (E, k) for
-# both lighting environments. Ratio is computed as max/min so it is
+# joint Beer-Lambert fit (the cost surface has no consistent (E, k) for
+# both lighting environments). Ratio is computed as max/min so it is
 # direction-agnostic.
 # 跨 run 白底亮度比阈值；超过即视为光照环境不一致，无法共拟合。
 _C0_WHITE_PAIRWISE_RATIO_THRESHOLD = 1.5
+
+# Cross-material session reference thresholds. A run trips the session
+# outlier flag when *any* of its three white_C0 channels is more than
+# ``_C0_SESSION_OUTLIER_ABS_THRESHOLD`` (linear-RGB units, absolute) OR
+# ``_C0_SESSION_OUTLIER_REL_THRESHOLD`` (proportional, vs the session
+# median) away from the session median. Either guard is a hit so we
+# catch both bright-room shifts (small relative, big absolute on dark
+# channels) and dark-room shifts (small absolute, large relative).
+# Default window is 24 h: the same operator-session timeframe.
+# 跨材料 session 中位数比对阈值；任一通道超过绝对阈值或相对阈值即触发，
+# 兼顾亮室漂移（绝对差大）与暗室漂移（相对差大）。默认 24 小时窗口。
+_C0_SESSION_OUTLIER_ABS_THRESHOLD = 0.05
+_C0_SESSION_OUTLIER_REL_THRESHOLD = 0.05
+_C0_SESSION_WINDOW_HOURS = 24.0
 
 # Structural-bias flags: each indicates the *physics* of the capture
 # is compromised (white-balanced input, underexposed input, restored
@@ -1756,6 +1771,7 @@ _STRUCTURAL_BIAS_FLAGS = frozenset(
         _BIAS_FLAG_WHITE_SUBSTRATE_FLAT,
         _BIAS_FLAG_BLACK_SUBSTRATE_FLAT,
         _BIAS_FLAG_MEAN_DE_HIGH,
+        _BIAS_FLAG_C0_SESSION_OUTLIER,
     }
 )
 # Advisory flags: surfaced in the UI for awareness but not used for the
@@ -1983,10 +1999,255 @@ def _cross_val_score_runs(
     return scores
 
 
+# ---------------------------------------------------------------------------
+# Cross-material session reference for white_C0 consistency
+# 跨材料 session 级白底参考
+# ---------------------------------------------------------------------------
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse an ISO-8601 timestamp into a timezone-aware :class:`datetime`.
+    将 ISO-8601 时间戳解析为带时区的 datetime。
+
+    Returns ``None`` for any input that cannot be parsed (non-string,
+    malformed, etc.) so the caller can simply skip rows whose
+    ``captured_at`` is missing rather than abort the whole walk.
+    解析失败返回 None，调用方按 row 级跳过即可。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    # ``datetime.fromisoformat`` only learned to accept the ``Z`` suffix
+    # in 3.11; normalise to ``+00:00`` for older interpreters.
+    # ``fromisoformat`` 在 3.11 之前不接受 ``Z`` 后缀；统一改写。
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _collect_session_white_c0_samples(
+    materials_root: Path,
+    *,
+    image_source: str | None,
+    captured_at: datetime | None,
+    window_hours: float = _C0_SESSION_WINDOW_HOURS,
+    exclude_directory: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Collect ``white_C0`` readings from other materials in the same session.
+    从同一 session 的其他材料里收集 ``white_C0`` 读数。
+
+    A "session" is the set of captures sharing the same ``image_source``
+    and falling within ``window_hours`` of ``captured_at``. The current
+    material being saved (``exclude_directory``) is intentionally
+    skipped so its own white reading does not anchor the median against
+    which it will be compared.
+    "session" 定义为同 ``image_source`` 且 ``captured_at`` 在窗口内的样本集合；
+    保存中的材料目录会被显式排除，避免自我参照。
+
+    Args:
+        materials_root: Root directory containing saved material archives. (耗材根目录)
+        image_source: Required match for each candidate run. ``None``
+            matches runs that have no recorded image_source. (匹配 image_source)
+        captured_at: Anchor timestamp; ``None`` disables the time-window
+            filter (used for tests / batch revalidation). (锚定时间)
+        window_hours: Half-window size in hours. (窗口半径，小时)
+        exclude_directory: Material directory to skip during the walk. (排除目录)
+
+    Returns:
+        List of ``{"directory", "captured_at", "white_C0"}`` rows;
+        empty when no qualifying samples were found. (匹配样本列表)
+    """
+    if not materials_root.exists():
+        return []
+    samples: list[dict[str, Any]] = []
+    exclude_resolved = (
+        exclude_directory.resolve() if exclude_directory is not None else None
+    )
+    delta_max = timedelta(hours=float(window_hours))
+    for archive_path in materials_root.rglob("material.json"):
+        try:
+            if not archive_path.is_file():
+                continue
+            material_dir = archive_path.parent.resolve()
+            if exclude_resolved is not None and material_dir == exclude_resolved:
+                continue
+            payload = json.loads(archive_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            # Corrupt / unreadable archives are silently skipped: the
+            # session check is opportunistic, not a load-time validator.
+            # 损坏档案静默跳过；该层是机会性检查，不承担加载校验职责。
+            continue
+        runs = payload.get("verification_runs")
+        if not isinstance(runs, list):
+            continue
+        archive_aggregation = (
+            payload.get("aggregation")
+            if isinstance(payload.get("aggregation"), dict)
+            else {}
+        )
+        archive_image_source = (
+            archive_aggregation.get("image_source")
+            if isinstance(archive_aggregation, dict)
+            else None
+        )
+        archive_image_source_str = (
+            str(archive_image_source)
+            if isinstance(archive_image_source, str)
+            else None
+        )
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            run_source = (
+                run.get("source") if isinstance(run.get("source"), dict) else {}
+            )
+            run_image_source_value = (
+                run_source.get("image_source") if isinstance(run_source, dict) else None
+            )
+            run_image_source = (
+                str(run_image_source_value)
+                if isinstance(run_image_source_value, str)
+                else archive_image_source_str
+            )
+            if image_source != run_image_source:
+                continue
+            run_captured = _parse_iso_datetime(run.get("captured_at"))
+            if captured_at is not None:
+                if run_captured is None:
+                    continue
+                if abs(run_captured - captured_at) > delta_max:
+                    continue
+            params = (
+                run.get("params") if isinstance(run.get("params"), dict) else {}
+            )
+            white_c0_raw = params.get("white_C0") if isinstance(params, dict) else None
+            if not isinstance(white_c0_raw, list) or len(white_c0_raw) != 3:
+                continue
+            try:
+                values = [float(v) for v in white_c0_raw]
+            except (TypeError, ValueError):
+                continue
+            samples.append(
+                {
+                    "directory": str(material_dir),
+                    "captured_at": run.get("captured_at"),
+                    "white_C0": values,
+                }
+            )
+    return samples
+
+
+def _compute_session_white_c0_reference(
+    materials_root: Path | None,
+    *,
+    image_source: str | None,
+    captured_at_iso: str | None,
+    window_hours: float = _C0_SESSION_WINDOW_HOURS,
+    exclude_directory: Path | None = None,
+) -> dict[str, Any] | None:
+    """Compute the per-channel median ``white_C0`` across the session.
+    计算同一 session 内的 ``white_C0`` 逐通道中位数。
+
+    Returns ``None`` when no qualifying samples exist (greenfield
+    materials root, mismatched image source, archives outside the time
+    window). The ``_select_runs_for_refit`` layer treats ``None`` as
+    "skip the session check" so first-time calibrations don't trip on
+    an empty reference.
+    无可用样本时返回 None；selection 层视为"跳过本层"，避免在首次校准时
+    把唯一的 fresh run 排除。
+    """
+    if materials_root is None:
+        return None
+    captured_at = _parse_iso_datetime(captured_at_iso)
+    samples = _collect_session_white_c0_samples(
+        materials_root,
+        image_source=image_source,
+        captured_at=captured_at,
+        window_hours=window_hours,
+        exclude_directory=exclude_directory,
+    )
+    if not samples:
+        return None
+    arr = np.asarray([s["white_C0"] for s in samples], dtype=np.float64)
+    median = np.median(arr, axis=0)
+    return {
+        "median": [float(v) for v in median.tolist()],
+        "sample_count": int(arr.shape[0]),
+        "image_source": image_source,
+        "window_hours": float(window_hours),
+        "abs_threshold": _C0_SESSION_OUTLIER_ABS_THRESHOLD,
+        "rel_threshold": _C0_SESSION_OUTLIER_REL_THRESHOLD,
+        "captured_at_anchor": captured_at_iso,
+    }
+
+
+def _check_run_against_session_c0(
+    run: dict[str, Any],
+    reference: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Test a single run's ``white_C0`` against the session reference.
+    将单个 run 的 ``white_C0`` 与 session 中位数对比。
+
+    Returns ``None`` when the run is within tolerance, or a diagnostic
+    dict (``run_white_c0``, ``session_median``, ``max_abs_diff``,
+    ``max_rel_diff``, thresholds, ``sample_count``) when it trips the
+    outlier rule. The diagnostic is wired straight into the
+    ``selection.excluded_runs`` audit list so the UI can render a
+    concrete "your run vs session" comparison.
+    通过返回 None；越界返回诊断字典直接拼到 ``excluded_runs`` 供前端展示。
+    """
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    white_c0_raw = params.get("white_C0") if isinstance(params, dict) else None
+    if not isinstance(white_c0_raw, list) or len(white_c0_raw) != 3:
+        return None
+    try:
+        values = np.asarray([float(v) for v in white_c0_raw], dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    median_list = reference.get("median")
+    if not isinstance(median_list, list) or len(median_list) != 3:
+        return None
+    try:
+        median = np.asarray([float(v) for v in median_list], dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    abs_diff = np.abs(values - median)
+    safe_denom = np.maximum(np.abs(median), 1e-6)
+    rel_diff = abs_diff / safe_denom
+    max_abs = float(abs_diff.max())
+    max_rel = float(rel_diff.max())
+    abs_threshold = float(
+        reference.get("abs_threshold", _C0_SESSION_OUTLIER_ABS_THRESHOLD)
+    )
+    rel_threshold = float(
+        reference.get("rel_threshold", _C0_SESSION_OUTLIER_REL_THRESHOLD)
+    )
+    if max_abs <= abs_threshold and max_rel <= rel_threshold:
+        return None
+    return {
+        "run_white_c0": values.tolist(),
+        "session_median": median.tolist(),
+        "max_abs_diff": max_abs,
+        "max_rel_diff": max_rel,
+        "abs_threshold": abs_threshold,
+        "rel_threshold": rel_threshold,
+        "sample_count": int(reference.get("sample_count") or 0),
+    }
+
+
 def _select_runs_for_refit(
     verification_runs: list[dict[str, Any]],
     *,
     cross_val_threshold: int = 3,
+    session_white_c0_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pick which runs participate in the joint refit.
     选择哪些 run 参与联合重拟合。
@@ -2177,6 +2438,57 @@ def _select_runs_for_refit(
 
     selected_indices = sorted(set(clean_historical) | {fresh_index})
 
+    # --- Layer 1.7: cross-material session-level white_C0 consistency ---
+    # When a session reference is available, every selected run
+    # (including ``fresh_index``) is compared against the session's
+    # median white_C0. A run whose white_C0 deviates beyond either
+    # threshold is excluded — even if it is fresh — because a wrong
+    # white substrate sample cannot be salvaged by force-keeping: the
+    # resulting (E, k) would absorb the lighting offset and bias every
+    # downstream multi-material colour prediction. The earlier layers
+    # are intentionally fresh-canonical (the operator's most recent
+    # capture is trusted *relative to history*), but here the median of
+    # other materials in the same session provides an objective
+    # reference, so the fresh-keep contract is correctly weakened.
+    # 跨材料 session-level 白底比对放在最后：用同 session 其他材料的
+    # 中位数为客观参考，任意 selected run（含 fresh）越界即排除。该层有
+    # 意识地不享受 fresh 强留，因为白底参照是物理客观，不存在"最近就一定
+    # 对"的语义。
+    if session_white_c0_reference is not None:
+        survivors_after_session: list[int] = []
+        any_session_outlier = False
+        for i in selected_indices:
+            outlier_diag = _check_run_against_session_c0(
+                verification_runs[i],
+                session_white_c0_reference,
+            )
+            if outlier_diag is None:
+                survivors_after_session.append(i)
+                continue
+            # Fold the new structural flag into ``run_scores`` so the
+            # UI's per-run badge list stays the single source of truth
+            # for "what's wrong with this run". (将新标签合并进 run_scores)
+            score = run_scores[i]
+            if _BIAS_FLAG_C0_SESSION_OUTLIER not in score["bias_flags"]:
+                score["bias_flags"].append(_BIAS_FLAG_C0_SESSION_OUTLIER)
+                score["bias_flag_count"] = len(score["bias_flags"])
+            if _BIAS_FLAG_C0_SESSION_OUTLIER not in score["structural_flags"]:
+                score["structural_flags"].append(_BIAS_FLAG_C0_SESSION_OUTLIER)
+                score["structural_flag_count"] = len(score["structural_flags"])
+            excluded.append(
+                {
+                    "index": i,
+                    "reason": "c0_session_outlier",
+                    "bias_flags": list(score["bias_flags"]),
+                    "structural_flags": list(score["structural_flags"]),
+                    **outlier_diag,
+                }
+            )
+            any_session_outlier = True
+        selected_indices = survivors_after_session
+        if any_session_outlier and "session_c0" not in selection_strategy:
+            selection_strategy = f"{selection_strategy}+session_c0"
+
     return {
         "selected_indices": selected_indices,
         "excluded_runs": excluded,
@@ -2193,6 +2505,7 @@ def _aggregate_stage_a_runs(
     fit_summary: dict[str, Any],
     material_summary: dict[str, Any],
     verification_runs: list[dict[str, Any]],
+    session_white_c0_reference: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     fallback_e_values, fallback_k_values, fallback_white_c0_values, fallback_black_c0_values = _extract_stage_a_vectors(params_payload)
 
@@ -2203,9 +2516,15 @@ def _aggregate_stage_a_runs(
     # toward a model that "looks great" against its own biased samples
     # but predicts colour poorly in production. Selection metadata is
     # persisted later so the UI can explain *why* a run was dropped.
+    # The optional session reference enables the cross-material white_C0
+    # consistency check (Layer 1.7); ``None`` keeps legacy behaviour.
     # 选择哪些 run 参与联合重拟合，把已知偏置的 run 隔离掉；选择详情会写
-    # 入 archive，便于前端解释为何某个 run 被排除。
-    selection = _select_runs_for_refit(verification_runs)
+    # 入 archive，便于前端解释为何某个 run 被排除。可选的 session 参考用于
+    # 跨材料白底一致性检查（Layer 1.7），传 None 保持旧行为。
+    selection = _select_runs_for_refit(
+        verification_runs,
+        session_white_c0_reference=session_white_c0_reference,
+    )
     selected_runs = [verification_runs[i] for i in selection["selected_indices"]]
 
     combined = _collect_combined_run_samples(selected_runs)
@@ -2541,12 +2860,42 @@ def save_stage_a_material_archive(
             source_summary=source_summary,
         )
     )
+
+    # Compute the cross-material session reference once per save call.
+    # We anchor on the freshly appended run's ``captured_at`` and the
+    # current ``image_source`` so the median is drawn only from captures
+    # that share the same physical lighting/exposure context. The
+    # current material directory is excluded from the walk so its own
+    # historical reading does not anchor the median against which it
+    # would later be compared (i.e. self-anchoring is forbidden).
+    # When no qualifying samples exist (first calibration session,
+    # mismatched image source, etc.) the helper returns ``None`` and
+    # ``_aggregate_stage_a_runs`` falls back to legacy selection.
+    # 一次保存只算一次 session 中位数；锚点是新 run 的捕获时间 + image_source。
+    # 排除当前材料目录避免自我参照；无匹配样本时返回 None，落回旧逻辑。
+    fresh_run_captured_at = (
+        verification_runs[-1].get("captured_at")
+        if verification_runs and isinstance(verification_runs[-1], dict)
+        else None
+    )
+    session_white_c0_reference = _compute_session_white_c0_reference(
+        target_root,
+        image_source=new_image_source,
+        captured_at_iso=(
+            fresh_run_captured_at
+            if isinstance(fresh_run_captured_at, str)
+            else None
+        ),
+        exclude_directory=material_dir,
+    )
+
     payload, aggregated_fit_summary, aggregated_material_summary = _aggregate_stage_a_runs(
         material_name=final_material_name,
         params_payload=params_payload,
         fit_summary=fit_summary,
         material_summary=material_summary,
         verification_runs=verification_runs,
+        session_white_c0_reference=session_white_c0_reference,
     )
 
     stage_a_params_path = material_dir / "stage_A_parameters.json"
