@@ -1219,9 +1219,37 @@ class LUTManager:
         data: Any,
         display_name: str,
         file_path: str,
+        *,
+        skip_malformed_recipes: bool = False,
     ) -> tuple[np.ndarray, np.ndarray | None, 'LUTMetadata']:
         """Load a keyed LUT payload from JSON or msgpack content.
+
         从 JSON 或 msgpack 内容加载 keyed LUT 载荷。
+
+        Args:
+            data: Parsed JSON/msgpack object (dict).
+                (解析后的 JSON/msgpack 对象。)
+            display_name: Human-readable LUT name. (人类可读 LUT 名称。)
+            file_path: Source file path for diagnostic logging.
+                (用于诊断日志的源文件路径。)
+            skip_malformed_recipes: When True (strict mode), rows whose recipe
+                is malformed (non-list/tuple payload, OR contains a member that
+                is neither a string nor int-castable) are dropped entirely
+                instead of being kept with an all-(-1) sentinel stack. The
+                lenient default (False) preserves the contract relied on by
+                ``api/routers/five_color.py``: the row stays so
+                ``/api/five-color/match-color`` can return the row index with
+                ``reason="recipe_unavailable"``. Strict mode is used by
+                ``core/lut_details/parser.py`` where ``parsed.rgb`` /
+                ``parsed.lab`` must only reflect rows with usable recipes.
+                (True 严格模式下 recipe 不合法的行会被整行丢弃; 默认 False 宽松
+                模式保留行+sentinel, 供 five-color match-color API 返回
+                recipe_unavailable。)
+
+        Returns:
+            (rgb, stacks, metadata): rgb is (N, 3) uint8; stacks is (N, L)
+            int32 or None when no recipe rows exist; metadata is the populated
+            ``LUTMetadata`` instance.
         """
 
         native_ctx = discover_native_reference_context(file_path, data)
@@ -1334,9 +1362,22 @@ class LUTManager:
             else:
                 continue
 
-            # Recipe: resolve color names to indices, support both formats
+            # Recipe: resolve color names to indices, support both formats.
+            # In strict mode (skip_malformed_recipes=True), drop rows with
+            # non-list payloads or non-castable members entirely so downstream
+            # parsers (core/lut_details/parser.py) only see usable rows.
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
+                if skip_malformed_recipes:
+                    _log.debug(
+                        "Skipping row with non-list recipe payload (strict)",
+                        extra={
+                            "event": "lut_recipe_payload_invalid",
+                            "path": file_path,
+                            "recipe_value": recipe_raw,
+                        },
+                    )
+                    continue
                 _log.debug(
                     "Invalid LUT recipe payload marked unavailable",
                     extra={
@@ -1347,6 +1388,26 @@ class LUTManager:
                 )
                 recipe_indices = [-1, -1, -1, -1, -1]
             else:
+                if skip_malformed_recipes:
+                    has_invalid_member = False
+                    for member in recipe_raw:
+                        if isinstance(member, str):
+                            continue
+                        try:
+                            int(member)
+                        except (TypeError, ValueError):
+                            has_invalid_member = True
+                            break
+                    if has_invalid_member:
+                        _log.debug(
+                            "Skipping row with non-castable recipe member (strict)",
+                            extra={
+                                "event": "lut_recipe_member_invalid",
+                                "path": file_path,
+                                "recipe_value": recipe_raw,
+                            },
+                        )
+                        continue
                 recipe_indices = [
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
