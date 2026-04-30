@@ -212,6 +212,11 @@ class _FiveColorBaseColorsEngine(_FiveColorQueryEngine):
     def __init__(self, stack_lut):
         self.stack_lut = stack_lut
 
+    def get_combinations(self):
+        if self.stack_lut is None:
+            return None
+        return self.stack_lut.tolist()
+
 
 class TestFiveColorQueryCanary:
     def test_success_emits_sessionless_five_color_query_done(
