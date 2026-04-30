@@ -23,6 +23,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from api.postgres_db import create_engine_from_env
 from api.session_store import SessionStore
 from api.session_value_codec import decode_session_value, encode_session_value
+from api.structured_logging import get_logger
+
+_log = get_logger(__name__)
 
 
 _METADATA = MetaData()
@@ -63,7 +66,22 @@ class PostgresSessionBackend(SessionStore):
     """
 
     def __init__(self, ttl: int = SessionStore.DEFAULT_TTL, engine: Any | None = None) -> None:
-        self._engine = engine if engine is not None else create_engine_from_env()
+        if engine is not None:
+            self._engine = engine
+        else:
+            try:
+                self._engine = create_engine_from_env()
+            except Exception as exc:  # noqa: BLE001 — escalation boundary for Postgres init
+                _log.error(
+                    "Postgres session backend init failed",
+                    extra={
+                        "event": "postgres_session_backend_init_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "dependency": "postgres",
+                    },
+                )
+                raise
         self._lease_seconds = ttl
 
     def create(self, session_id: str | None = None) -> str:
@@ -284,8 +302,24 @@ class PostgresSessionBackend(SessionStore):
     def dispose(self) -> None:
         """Dispose the underlying SQLAlchemy engine.
         释放底层 SQLAlchemy engine。
+
+        Best-effort: dispose failures are logged at WARNING but never
+        re-raised, so callers in shutdown paths can keep tearing down
+        other resources.
+        尽力清理: 释放失败仅 WARNING 记录, 不再抛, 以免阻塞后续 shutdown.
         """
-        self._engine.dispose()
+        try:
+            self._engine.dispose()
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup boundary
+            _log.warning(
+                "Postgres session backend dispose failed",
+                extra={
+                    "event": "postgres_session_backend_dispose_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "dependency": "postgres",
+                },
+            )
 
     def _cleanup_session(
         self,
