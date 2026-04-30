@@ -130,7 +130,7 @@ def test_real_svg_default_logs_zero_legacy_stroke_geometry(processor: VectorProc
     caplog.set_level(logging.INFO, logger="lumina.core.vector_engine")
 
     try:
-        processor.analyze_svg(str(REPO_ROOT / "test_images" / "1 (1).svg"), target_width_mm=TARGET_WIDTH_MM)
+        processor.analyze_svg(str(REPO_ROOT / "test_images" / "1.svg"), target_width_mm=TARGET_WIDTH_MM)
     finally:
         vector_logger.removeHandler(caplog.handler)
 

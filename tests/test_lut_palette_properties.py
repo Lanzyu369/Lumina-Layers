@@ -15,12 +15,27 @@ from config import LUTMetadata, PaletteEntry
 # Strategies — 生成随机 PaletteEntry 和 LUTMetadata
 # ---------------------------------------------------------------------------
 
-# 颜色名称：非空可打印字符串
+def _is_numeric_literal(value: str) -> bool:
+    """Mirror utils.lut_manager._is_numeric_recipe_literal so the strategy
+    excludes names that the production loader treats as numeric tokens
+    (e.g. ``"1"``, ``"-3"``, ``"1e5"``, ``"INF"``, ``"NaN"``).
+    """
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+# 颜色名称：非空可打印字符串。
+# 排除任何 float() 可解析的字符串（整数、浮点、科学计数、"INF"、"NaN" 等），
+# 避免与生产代码 _resolve_recipe_member 短路解析为 sentinel(-1) 而非调色板名称
+# （utils/lut_manager.py:1396-1404, 1417-1427）。
 _color_names = st.text(
     st.characters(whitelist_categories=("L", "N", "P", "S")),
     min_size=1,
     max_size=30,
-).filter(lambda s: s.strip() != "")
+).filter(lambda s: s.strip() != "" and not _is_numeric_literal(s.strip()))
 
 # 材料名称：非空可打印字符串
 _material_names = st.text(
@@ -361,17 +376,15 @@ _rgb_stacks_metadata = st.integers(min_value=1, max_value=30).flatmap(
                 min_size=n,
                 max_size=n,
             ).map(lambda rows: np.array(rows, dtype=np.uint8)),
-            st.integers(min_value=1, max_value=8).flatmap(
-                lambda cols: st.lists(
-                    st.lists(
-                        st.integers(0, palette_size - 1),
-                        min_size=cols,
-                        max_size=cols,
-                    ),
-                    min_size=n,
-                    max_size=n,
-                ).map(lambda rows: np.array(rows, dtype=np.int32))
-            ),
+            st.lists(
+                st.lists(
+                    st.integers(0, palette_size - 1),
+                    min_size=5,
+                    max_size=5,
+                ),
+                min_size=n,
+                max_size=n,
+            ).map(lambda rows: np.array(rows, dtype=np.int32)),
             st.lists(
                 palette_entry_strategy,
                 min_size=palette_size,
