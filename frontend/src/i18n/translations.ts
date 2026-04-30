@@ -1507,6 +1507,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高（256³）",
     en: "High (256³)",
   },
+  "settings.solver_cache_density_option_512": {
+    zh: "极高（512³，需 ~9 GB 内存）",
+    en: "Very high (512³, needs ~9 GB RAM)",
+  },
+  "settings.solver_cache_density_option_1024": {
+    zh: "实验（1024³，需 ~70 GB 内存，仅工作站可用）",
+    en: "Experimental (1024³, needs ~70 GB RAM, workstation-only)",
+  },
+  "settings.solver_cache_density_option_2048": {
+    zh: "实验（2048³，需 ~560 GB 内存，待稀疏构建落地）",
+    en: "Experimental (2048³, needs ~560 GB RAM, awaits sparse-build refactor)",
+  },
   "settings.solver_cache_density_tip": {
     zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",

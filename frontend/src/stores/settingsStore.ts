@@ -10,13 +10,27 @@ import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
  * User-facing grid-resolution tiers for the material-solver exhaustive
  * cache. The numeric value equals the Lab bucket count per axis and must
  * stay in sync with ``ALLOWED_GRID_RESOLUTIONS`` on the backend.
- * 穷举数量的三档用户选项；数值等于 Lab 网格每轴桶数，必须与后端
- * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。
+ *
+ * The ladder doubles per step, so build/storage cost grows ~×8 per tier.
+ * 64-256 are everyday-safe; 512 needs a workstation-class machine; 1024
+ * and 2048 are exposed for expert use but are memory-prohibitive on the
+ * current dense build path until the planned sparse-build refactor lands.
+ *
+ * 穷举数量的用户档位；数值等于 Lab 网格每轴桶数，必须与后端
+ * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。每档边长翻倍，构建/存储成本
+ * 约 ×8。1024/2048 在密集构建通路下需要工作站级硬件，等稀疏化重构
+ * 之后才真正可用——此处先打开入口便于后续切换。
  */
-export type SolverCacheGridResolution = 64 | 128 | 256;
+export type SolverCacheGridResolution =
+  | 64
+  | 128
+  | 256
+  | 512
+  | 1024
+  | 2048;
 
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
-  [64, 128, 256] as const;
+  [64, 128, 256, 512, 1024, 2048] as const;
 
 export interface SettingsState {
   language: "zh" | "en";

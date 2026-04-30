@@ -85,41 +85,53 @@ Default 64 (`low`) keeps compressed caches around ~4 MB, with a
 worst-case bucket-diagonal ΔE of ~5.5 — visible but acceptable for the
 default preview-grade workflow where build speed and RAM budget matter
 most. Users who want tighter color accuracy can opt in via the
-"Exhaustive density" setting and choose `medium` (128, ~30 MB cache,
-ΔE ~2.7) or `high` (256, ~240 MB cache, ΔE ~1.4); these raise build
-time, memory, and per-conversion lookup work proportionally to
-``grid_resolution ** 3``.
+"Exhaustive density" setting and pick a higher tier — see
+:data:`ALLOWED_GRID_RESOLUTIONS` for the full ladder.
 
-Supported values are enumerated in :data:`ALLOWED_GRID_RESOLUTIONS`;
-callers outside the CLI (API, tests) are expected to validate against
-that whitelist. On-disk caches at any supported resolution remain
-loadable regardless of the current default, thanks to the ``-g<grid>``
-filename suffix and the legacy-path fallback in
-:func:`load_material_solver_cache`.
+Build memory and on-disk size scale with ``grid_resolution ** 3``
+because the build pass currently allocates dense per-bucket arrays.
+The ladder spans more than three orders of magnitude in cost, so users
+should treat the high tiers as opt-in expert features rather than safe
+defaults; in particular ``1024`` and ``2048`` typically need a
+workstation-class machine (and a sparser build implementation, which
+is tracked as a follow-up refactor).
 
-默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，属于"明显可见"
-区间但对默认预览工作流是可以接受的折衷（构建快、内存占用低）。需要
-更严格色彩精度的用户可以在"穷举数量"设置里开启自定义，选择中档
-（128，约 30 MB、ΔE ~2.7）或高档（256，约 240 MB、ΔE ~1.4）；
-构建时间、内存与每次查找的代价都会按 ``grid_resolution ** 3`` 比例放大。
+默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，对默认预览
+工作流是可以接受的折衷（构建快、内存占用低）。需要更严格色彩精度的
+用户可以在"穷举数量"设置里开启自定义并选择更高档位，完整阶梯见
+:data:`ALLOWED_GRID_RESOLUTIONS`。
 
-受支持的取值见 :data:`ALLOWED_GRID_RESOLUTIONS`；CLI 之外的调用方
-（API、测试）需要自行对白名单做校验。磁盘上的任意受支持分辨率缓存
-都能被加载，因为缓存文件名使用 ``-g<grid>`` 后缀，且
-:func:`load_material_solver_cache` 对无后缀的旧文件提供受控回退。
+构建峰值内存与磁盘占用按 ``grid_resolution ** 3`` 增长（因为当前
+build 通路对每个桶分配密集数组）。整条阶梯横跨三个数量级，
+因此高档位本质上属于"专家可选"而非默认安全档；尤其 ``1024``
+与 ``2048`` 通常需要工作站级机器（也跟踪一个改稀疏构建的后续重构）。
 """
 
-ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256)
+ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256, 512, 1024, 2048)
 """Whitelist of user-facing grid resolutions exposed through the UI/API.
 
-Kept deliberately small so every shipped value has been exercised by
-the cache build, lookup, and size-budgeting paths. ``core`` does not
-enforce this whitelist — build/save/load remain flexible for tests and
-internal callers — but API routes and pipeline adapters must reject
-unknown values with a 4xx error.
+Each tier doubles the per-axis cell count, so build/storage cost
+roughly grows ×8 per step:
 
-面向用户的网格分辨率白名单；``core`` 层保持灵活（便于测试与内部调用），
-API 路由与 pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
+================  ============  =================  =================
+grid_resolution   total buckets  build peak memory  notes / 备注
+================  ============  =================  =================
+64                ~262 K         ~17 MB             default / 默认
+128               ~2.1 M         ~140 MB            recommended / 推荐
+256               ~16.8 M        ~1.1 GB            cap before 2026-04
+512               ~134 M         ~8.7 GB            workstation-class
+1024              ~1.07 B        ~70 GB             not feasible on consumer HW
+2048              ~8.59 B        ~560 GB            requires sparse build refactor
+================  ============  =================  =================
+
+``core`` does not enforce the whitelist — build/save/load remain
+flexible for tests and internal callers — but API routes and pipeline
+adapters must reject unknown values with a 4xx error.
+
+面向用户的网格分辨率白名单；阶梯按倍增递增，构建/存储成本约 ×8/档。
+``core`` 层保持灵活（便于测试与内部调用），API 路由与 pipeline 适配层
+必须拒绝白名单之外的值并返回 4xx。1024/2048 在密集构建路径下事实上
+需要工作站级硬件，等稀疏化重构落地后才真正可用。
 """
 
 CACHE_SCHEMA_VERSION: str = "1.0"
@@ -660,9 +672,9 @@ def build_material_solver_cache(
         )
     if substrate not in ("white", "black"):
         raise ValueError(f"substrate must be 'white' or 'black', got {substrate!r}")
-    if grid_resolution < 8 or grid_resolution > 256:
+    if grid_resolution < 8 or grid_resolution > 2048:
         raise ValueError(
-            f"grid_resolution must be in [8, 256], got {grid_resolution}"
+            f"grid_resolution must be in [8, 2048], got {grid_resolution}"
         )
 
     start_time = time.time()

@@ -211,13 +211,20 @@ class TestBuild:
             )
 
     def test_grid_resolution_bounds(self):
+        # Lower bound: anything below 8 is rejected (the bucket grid would be
+        # too coarse to be useful and stress-tests legacy callers that pass
+        # ``0`` or negative ints).
+        # 下界：低于 8 拒绝。
         with pytest.raises(ValueError):
             build_material_solver_cache(
                 SMALL_PALETTE, 5, 0.08, "white", grid_resolution=4,
             )
+        # Upper bound: 2048 is the current ceiling (matches the user-facing
+        # whitelist's top tier). Anything strictly larger must be rejected.
+        # 上界：2048（与用户白名单顶档一致）；超过即拒。
         with pytest.raises(ValueError):
             build_material_solver_cache(
-                SMALL_PALETTE, 5, 0.08, "white", grid_resolution=512,
+                SMALL_PALETTE, 5, 0.08, "white", grid_resolution=4096,
             )
 
 
@@ -575,10 +582,20 @@ class TestInternalConsistency:
     def test_allowed_grid_resolutions_whitelist(self):
         from core.material_cache import ALLOWED_GRID_RESOLUTIONS
 
-        # Whitelist exposes exactly three tiers ("low/medium/high" in the UI);
-        # adding a tier requires matching translation/UI/settings changes.
-        assert ALLOWED_GRID_RESOLUTIONS == (64, 128, 256)
+        # Whitelist exposes six tiers spanning the doubled-cell-count ladder;
+        # adding/removing a tier requires matching translation/UI/settings
+        # changes plus a bump of the internal grid_resolution cap inside
+        # ``build_material_solver_cache``. 1024/2048 are intentionally exposed
+        # as expert-only entries (memory-prohibitive on the dense build path)
+        # so the whitelist is the single source of truth across surfaces.
+        assert ALLOWED_GRID_RESOLUTIONS == (64, 128, 256, 512, 1024, 2048)
         assert DEFAULT_GRID_RESOLUTION in ALLOWED_GRID_RESOLUTIONS
+        # Each consecutive tier must be exactly 2x the previous one so the
+        # UI can label them as a clean doubling ladder.
+        for prev, curr in zip(ALLOWED_GRID_RESOLUTIONS, ALLOWED_GRID_RESOLUTIONS[1:]):
+            assert curr == prev * 2, (
+                f"Tier ladder must double: {prev} -> {curr}"
+            )
 
 
 # ---------------------------------------------------------------------------
