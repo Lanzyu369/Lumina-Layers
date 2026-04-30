@@ -42,7 +42,7 @@ from api.schemas.responses import (
     ResetReplacementsResponse,
 )
 from api.session_store import SessionStore
-from config import LUTMetadata, PaletteEntry
+from config import LUTMetadata, OUTPUT_DIR, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
@@ -52,6 +52,7 @@ from core.converter import (
     generate_segmented_glb,
     _compute_connected_region_mask_4n,
 )
+from core.naming import generate_segmented_glb_filename
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
 from core.material_lut_synthesis import load_multiple_materials, solve_image_colors_optimal
 from core.pipeline.processing_ops.lut_loader import load_lut
@@ -125,8 +126,12 @@ def _schedule_or_run_overridden_glb_build(
         schedule_glb_build(session_id, store, registry, cache)
         return None
 
+    target_path = os.path.join(
+        OUTPUT_DIR,
+        generate_segmented_glb_filename(session_id),
+    )
     try:
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=target_path)
     except NON_FATAL_GLB_ERRORS as exc:
         log.warning(
             "Overridden GLB build failed",

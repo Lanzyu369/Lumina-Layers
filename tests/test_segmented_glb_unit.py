@@ -52,6 +52,19 @@ def _get_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
     return nodes
 
 
+@pytest.fixture
+def out_path(tmp_path) -> str:
+    """Per-test session-scoped GLB output path.
+    逐个测试隔离的 GLB 输出路径.
+
+    ``generate_segmented_glb`` now requires ``output_path`` to eliminate
+    the cross-session collision documented in
+    ``progress/glb-internals-audit-2026-04-30.md``. Each test gets its own
+    pytest ``tmp_path`` so per-test outputs never overlap.
+    """
+    return str(tmp_path / "segmented_test.glb")
+
+
 # ============================================================================
 # Test 1: None cache returns None
 # ============================================================================
@@ -59,22 +72,22 @@ def _get_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
 class TestEmptyAndNoneInputs:
     """Tests for empty/None inputs returning None."""
 
-    def test_none_cache_returns_none(self) -> None:
+    def test_none_cache_returns_none(self, out_path: str) -> None:
         """None cache should return None immediately."""
-        result = generate_segmented_glb(None)
+        result = generate_segmented_glb(None, output_path=out_path)
         assert result is None
 
-    def test_empty_image_all_transparent_returns_none(self) -> None:
+    def test_empty_image_all_transparent_returns_none(self, out_path: str) -> None:
         """All mask_solid=False (no solid pixels) should return None."""
         h, w = 8, 8
         matched_rgb = np.zeros((h, w, 3), dtype=np.uint8)
         mask_solid = np.zeros((h, w), dtype=bool)  # all transparent
         cache = _make_cache(matched_rgb, mask_solid)
 
-        result = generate_segmented_glb(cache)
+        result = generate_segmented_glb(cache, output_path=out_path)
         assert result is None
 
-    def test_missing_matched_rgb_returns_none(self) -> None:
+    def test_missing_matched_rgb_returns_none(self, out_path: str) -> None:
         """Cache without matched_rgb key should return None."""
         cache = {
             "mask_solid": np.ones((4, 4), dtype=bool),
@@ -82,10 +95,10 @@ class TestEmptyAndNoneInputs:
             "target_h": 4,
             "target_width_mm": 4.0,
         }
-        result = generate_segmented_glb(cache)
+        result = generate_segmented_glb(cache, output_path=out_path)
         assert result is None
 
-    def test_missing_mask_solid_returns_none(self) -> None:
+    def test_missing_mask_solid_returns_none(self, out_path: str) -> None:
         """Cache without mask_solid key should return None."""
         cache = {
             "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
@@ -93,7 +106,7 @@ class TestEmptyAndNoneInputs:
             "target_h": 4,
             "target_width_mm": 4.0,
         }
-        result = generate_segmented_glb(cache)
+        result = generate_segmented_glb(cache, output_path=out_path)
         assert result is None
 
 
@@ -104,7 +117,7 @@ class TestEmptyAndNoneInputs:
 class TestSingleColorImage:
     """Tests for single-color images producing exactly 1 Mesh."""
 
-    def test_single_color_generates_one_mesh(self) -> None:
+    def test_single_color_generates_one_mesh(self, out_path: str) -> None:
         """A uniform red image should produce exactly 1 Mesh named color_ff0000."""
         h, w = 6, 6
         red = np.array([255, 0, 0], dtype=np.uint8)
@@ -112,7 +125,7 @@ class TestSingleColorImage:
         mask_solid = np.ones((h, w), dtype=bool)
         cache = _make_cache(matched_rgb, mask_solid)
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None
         assert os.path.isfile(glb_path)
@@ -132,7 +145,7 @@ class TestSingleColorImage:
         # Verify Pivot Point constraint: min_z = 0
         assert np.isclose(mesh.vertices[:, 2].min(), 0.0, atol=1e-6)
 
-    def test_single_color_with_partial_mask(self) -> None:
+    def test_single_color_with_partial_mask(self, out_path: str) -> None:
         """Single color with some transparent pixels still produces 1 Mesh."""
         h, w = 8, 8
         blue = np.array([0, 0, 255], dtype=np.uint8)
@@ -145,7 +158,7 @@ class TestSingleColorImage:
         mask_solid[-1, -1] = False
         cache = _make_cache(matched_rgb, mask_solid)
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)
@@ -162,7 +175,7 @@ class TestSingleColorImage:
 class TestExactly64Colors:
     """Tests for exactly 64 colors not triggering merge logic."""
 
-    def test_64_colors_no_merge(self) -> None:
+    def test_64_colors_no_merge(self, out_path: str) -> None:
         """Exactly 64 unique colors with default max_meshes=64 should produce 64 Meshes."""
         # Generate 64 distinct colors spread across the RGB cube
         colors = []
@@ -182,7 +195,7 @@ class TestExactly64Colors:
         mask_solid = np.ones((h, w), dtype=bool)
         cache = _make_cache(matched_rgb, mask_solid)
 
-        glb_path = generate_segmented_glb(cache, max_meshes=64)
+        glb_path = generate_segmented_glb(cache, output_path=out_path, max_meshes=64)
 
         assert glb_path is not None
         assert os.path.isfile(glb_path)
@@ -239,7 +252,7 @@ class TestCacheMaxMeshesOverride:
         mask_solid = np.ones((h, w), dtype=bool)
         return matched_rgb, mask_solid
 
-    def test_override_above_default_keeps_all_unique_colors(self) -> None:
+    def test_override_above_default_keeps_all_unique_colors(self, out_path: str) -> None:
         """``glb_max_meshes`` larger than default must survive into the GLB.
         覆盖值高于默认时，所有唯一色都要保留为独立 mesh。
         """
@@ -248,7 +261,7 @@ class TestCacheMaxMeshesOverride:
         # 72 unique colours, override the cap to 128 so none gets merged.
         cache["glb_max_meshes"] = 128
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)
@@ -257,7 +270,7 @@ class TestCacheMaxMeshesOverride:
         # All 72 unique colours must survive — the override prevented merging.
         assert len(color_nodes) == 72
 
-    def test_override_below_default_is_ignored(self) -> None:
+    def test_override_below_default_is_ignored(self, out_path: str) -> None:
         """Override < default must NOT lower the cap (safety floor).
         覆盖值小于默认时不能反向降低上限，避免误伤普通预览。
         """
@@ -267,7 +280,7 @@ class TestCacheMaxMeshesOverride:
         # max_meshes=64 must still apply.
         cache["glb_max_meshes"] = 16
 
-        glb_path = generate_segmented_glb(cache, max_meshes=64)
+        glb_path = generate_segmented_glb(cache, output_path=out_path, max_meshes=64)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)
@@ -276,7 +289,7 @@ class TestCacheMaxMeshesOverride:
         # Should merge to 64, not down to 16, since override < default.
         assert len(color_nodes) == 64
 
-    def test_no_override_keeps_function_default(self) -> None:
+    def test_no_override_keeps_function_default(self, out_path: str) -> None:
         """Without override the function default still rules.
         无覆盖时仍按函数默认 max_meshes 合并。
         """
@@ -284,7 +297,7 @@ class TestCacheMaxMeshesOverride:
         cache = _make_cache(matched_rgb, mask_solid)
         # No glb_max_meshes key in cache.
 
-        glb_path = generate_segmented_glb(cache, max_meshes=64)
+        glb_path = generate_segmented_glb(cache, output_path=out_path, max_meshes=64)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)
@@ -347,7 +360,7 @@ class TestContourExtrusionSizeRegression:
         mask_solid[:, -border:] = False
         return matched_rgb, mask_solid
 
-    def test_glb_size_under_2mb(self) -> None:
+    def test_glb_size_under_2mb(self, out_path: str) -> None:
         """Representative 256x256 / 6-colour image must produce a GLB < 2 MB.
 
         Pre-refactor voxel baseline for this exact image is ~15 MB; the
@@ -358,7 +371,7 @@ class TestContourExtrusionSizeRegression:
         matched_rgb, mask_solid = self._representative_image()
         cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None, "generate_segmented_glb returned None"
         assert os.path.isfile(glb_path), f"GLB file not found: {glb_path}"
@@ -371,7 +384,7 @@ class TestContourExtrusionSizeRegression:
             f"baseline was ~15 MB)."
         )
 
-    def test_vertex_count_far_below_voxel_baseline(self) -> None:
+    def test_vertex_count_far_below_voxel_baseline(self, out_path: str) -> None:
         """Total vertex count must be well under the voxel-box equivalent.
 
         Voxel baseline = solid_pixel_count * 8 (each pixel = 8 vertices).
@@ -381,7 +394,7 @@ class TestContourExtrusionSizeRegression:
         matched_rgb, mask_solid = self._representative_image()
         cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)
@@ -397,7 +410,7 @@ class TestContourExtrusionSizeRegression:
             f"20x reduction) from the contour-extrusion refactor."
         )
 
-    def test_volume_coverage_preserved(self) -> None:
+    def test_volume_coverage_preserved(self, out_path: str) -> None:
         """Sum of per-colour mesh volume equals the expected pixel volume.
 
         Representation-agnostic invariant proving the refactor did not lose
@@ -407,7 +420,7 @@ class TestContourExtrusionSizeRegression:
         matched_rgb, mask_solid = self._representative_image()
         cache = _make_cache(matched_rgb, mask_solid, target_width_mm=100.0)
 
-        glb_path = generate_segmented_glb(cache)
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
         assert glb_path is not None
         scene = trimesh.load(glb_path)

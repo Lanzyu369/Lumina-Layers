@@ -171,8 +171,11 @@ class TestRegionReplaceGlbProperty:
 
         try:
             with patch("api.routers.converter.replace.generate_segmented_glb") as mock_glb:
-                # Mock GLB generation: write contours into cache and return path
-                def _fake_generate(cache: dict) -> str:
+                # Mock GLB generation: write contours into cache and return path.
+                # Production caller now passes ``output_path=`` per
+                # progress/glb-internals-audit-2026-04-30.md, so the mock must
+                # accept it (and ignore it — the fake path below is what we return).
+                def _fake_generate(cache: dict, *, output_path: str) -> str:
                     cache["color_contours"] = fake_contours
                     return fake_glb_path
 
@@ -331,7 +334,7 @@ class TestRegionReplaceColorContours:
         try:
             with patch("api.routers.converter.replace.generate_segmented_glb") as mock_glb:
 
-                def _fake_generate(cache: dict) -> str:
+                def _fake_generate(cache: dict, *, output_path: str) -> str:
                     cache["color_contours"] = expected_contours
                     return fake_glb_path
 
