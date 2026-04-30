@@ -706,17 +706,22 @@ def build_material_solver_cache(
     K_top = top_alpha.shape[0]
     total_combinations = int(K_top) * int(K_bot)
 
-    # Sparse per-bucket state. Use dict mapping flat_bucket_idx -> (delta, rec_row).
+    # Sparse per-bucket state.
+    # ``best`` maps flat_bucket_idx -> (delta, recipe_int8, srgb_u8, center_f64).
+    # Only buckets that have actually been reached by some recipe consume
+    # memory, so the build cost scales with ``min(total_combinations,
+    # valid_cell_count)`` instead of ``grid_resolution ** 3``. This is what
+    # makes 1024 / 2048 tiers physically feasible: at 8 mats × 5 layers the
+    # dict holds at most 32 768 entries (~2.5 MB) regardless of the grid
+    # tier, while the dense equivalent at 2048 would have demanded ~560 GB.
+    # 稀疏每桶状态：``best`` 仅为真正命中的桶分配空间，因此构建期内存
+    # 取决于 ``min(总配方数, 有效桶数)`` 而非 ``grid_resolution ** 3``，
+    # 这是 1024/2048 档真正可用的关键。
     total_buckets = grid_resolution ** 3
-    # Dense arrays for fastest updates — at 128³ this is ~2.1M * (few bytes)
-    # ≈ 60-80 MB peak, still well within an 8 GB-class build budget.
-    best_delta = np.full(total_buckets, np.inf, dtype=np.float64)
-    best_recipes = np.zeros((total_buckets, layer_count), dtype=np.int8)
-    best_achieved_lab = np.zeros((total_buckets, 3), dtype=np.float64)
-    best_achieved_srgb = np.zeros((total_buckets, 3), dtype=np.uint8)
-    best_center_lab = np.zeros((total_buckets, 3), dtype=np.float64)
+    best: dict[int, tuple[float, np.ndarray, np.ndarray, np.ndarray]] = {}
 
     # Chunk tops so each (chunk × K_bot × 24B) fits the memory budget.
+    # 顶/底分桶分块，单块 (sub × K_bot × 24B) 受 _CHUNK_TARGET_BYTES 限制。
     per_row_bytes = K_bot * 24
     chunk_size = max(1, min(K_top, _CHUNK_TARGET_BYTES // max(per_row_bytes, 1)))
     num_chunks = (K_top + chunk_size - 1) // chunk_size
@@ -746,30 +751,62 @@ def build_material_solver_cache(
             continue
 
         chunk_best_deltas = delta_to_center[row_indices]
-        chunk_best_lab = flat_lab[row_indices]
         chunk_best_srgb = flat_srgb[row_indices]
         chunk_best_centers = bucket_center[row_indices]
 
         # Rebuild recipes for these rows. Each row index is a flat index into
         # (sub, K_bot): top_i = row // K_bot, bot_i = row % K_bot.
+        # 还原配方：每个 row 在 (sub, K_bot) 中的二维位置。
         top_idx_in_chunk = row_indices // K_bot
         bot_idx_in_chunk = row_indices % K_bot
         chunk_bot_recipes = bot_recipes[bot_idx_in_chunk]          # (K_hit, bottom_depth)
         chunk_top_recipes = chunk_recipes_top[top_idx_in_chunk]    # (K_hit, top_depth)
-
-        # Compare to global best, update where improved.
-        improved = chunk_best_deltas < best_delta[unique_buckets]
-        if not np.any(improved):
-            continue
-        idx_improved = unique_buckets[improved]
-        best_delta[idx_improved] = chunk_best_deltas[improved]
-        best_achieved_lab[idx_improved] = chunk_best_lab[improved]
-        best_achieved_srgb[idx_improved] = chunk_best_srgb[improved]
-        best_center_lab[idx_improved] = chunk_best_centers[improved]
+        # Stack into a single (K_hit, layer_count) recipe matrix in canonical
+        # bottom-then-top column order so the on-disk layout stays identical.
+        # 拼成 (K_hit, layer_count) 的 int8 配方矩阵，列序仍是先底后顶。
+        chunk_recipes = np.empty(
+            (row_indices.size, layer_count), dtype=np.int8
+        )
         if bottom_depth > 0:
-            best_recipes[idx_improved, :bottom_depth] = chunk_bot_recipes[improved]
+            chunk_recipes[:, :bottom_depth] = chunk_bot_recipes
         if top_depth > 0:
-            best_recipes[idx_improved, bottom_depth:] = chunk_top_recipes[improved]
+            chunk_recipes[:, bottom_depth:] = chunk_top_recipes
+
+        # Vectorised lookup of previous-best deltas; missing buckets default
+        # to +inf so the first hit always wins.
+        # 向量化拉出旧最优 delta；未命中桶默认 +inf，保证首发必胜。
+        prev_deltas = np.fromiter(
+            (best[int(b)][0] if int(b) in best else np.inf for b in unique_buckets),
+            dtype=np.float64,
+            count=unique_buckets.size,
+        )
+        improved = chunk_best_deltas < prev_deltas
+        if not np.any(improved):
+            if progress_callback is not None:
+                fraction = (chunk_idx + 1) / max(num_chunks, 1)
+                progress_callback(
+                    fraction,
+                    {
+                        "chunk_index": chunk_idx + 1,
+                        "total_chunks": num_chunks,
+                        "valid_bucket_count": len(best),
+                        "elapsed_seconds": time.time() - start_time,
+                    },
+                )
+            continue
+
+        # Write back the improved entries. The per-row arrays are tiny
+        # (3-9 ints / floats per entry), so the Python-level loop here is
+        # negligible vs the chunk-wide vectorised numpy work above.
+        # 回写改进项；每条记录非常小，Python 循环开销可忽略。
+        for i in np.flatnonzero(improved):
+            b = int(unique_buckets[i])
+            best[b] = (
+                float(chunk_best_deltas[i]),
+                chunk_recipes[i].copy(),
+                chunk_best_srgb[i].copy(),
+                chunk_best_centers[i].copy(),
+            )
 
         if progress_callback is not None:
             fraction = (chunk_idx + 1) / max(num_chunks, 1)
@@ -778,19 +815,42 @@ def build_material_solver_cache(
                 {
                     "chunk_index": chunk_idx + 1,
                     "total_chunks": num_chunks,
-                    "valid_bucket_count": int(np.sum(np.isfinite(best_delta))),
+                    "valid_bucket_count": len(best),
                     "elapsed_seconds": time.time() - start_time,
                 },
             )
 
-    # Materialize sparse output: only valid (reached) buckets.
-    valid_mask = np.isfinite(best_delta)
-    lab_centers = best_center_lab[valid_mask].astype(np.float32)
-    recipes = best_recipes[valid_mask]
-    achieved_srgb = best_achieved_srgb[valid_mask]
-    center_delta_e = best_delta[valid_mask].astype(np.float32)
+    # Materialize sparse output in canonical (ascending bucket_idx) order so
+    # downstream lookups can rely on a stable layout. The dense build path
+    # used to extract via ``np.isfinite(best_delta)``, which preserved the
+    # natural array order (== ascending bucket_idx); ``sorted(best)`` here
+    # reproduces that same order so existing on-disk caches and any caller
+    # that depends on row order keep working unchanged.
+    # 按桶号升序输出，与原密集路径的 np.isfinite 抽取序列一致，保证旧缓存
+    # 与依赖行序的下游代码无需改动。
+    sorted_buckets = sorted(best.keys())
+    valid_count = len(sorted_buckets)
+    if valid_count > 0:
+        lab_centers = np.stack(
+            [best[b][3] for b in sorted_buckets], axis=0
+        ).astype(np.float32, copy=False)
+        recipes = np.stack(
+            [best[b][1] for b in sorted_buckets], axis=0
+        )
+        achieved_srgb = np.stack(
+            [best[b][2] for b in sorted_buckets], axis=0
+        )
+        center_delta_e = np.fromiter(
+            (best[b][0] for b in sorted_buckets),
+            dtype=np.float32,
+            count=valid_count,
+        )
+    else:
+        lab_centers = np.zeros((0, 3), dtype=np.float32)
+        recipes = np.zeros((0, layer_count), dtype=np.int8)
+        achieved_srgb = np.zeros((0, 3), dtype=np.uint8)
+        center_delta_e = np.zeros(0, dtype=np.float32)
 
-    valid_count = int(lab_centers.shape[0])
     build_time = time.time() - start_time
 
     metadata = {

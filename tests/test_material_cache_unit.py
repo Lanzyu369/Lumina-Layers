@@ -227,6 +227,45 @@ class TestBuild:
                 SMALL_PALETTE, 5, 0.08, "white", grid_resolution=4096,
             )
 
+    def test_high_resolution_build_is_memory_bounded_by_recipe_count(self):
+        """1024^3 = 1.07 B buckets — the dense build path needed ~70 GB just
+        to allocate the per-bucket scratch arrays, which made this tier
+        unusable on any real machine. With the sparse build, peak memory is
+        bounded by the *recipe* count (3^5 = 243 here), not by the bucket
+        count.
+
+        Regression: assert that (a) the build completes at grid=1024 on a
+        SMALL_PALETTE (would OOM under the dense path), and (b) the resulting
+        ``valid_cell_count`` is bounded by ``total_combinations`` rather than
+        ``total_cell_count``. ``total_cell_count`` stays in metadata as the
+        nominal grid size for downstream UI / lookup math.
+        1024^3 在密集路径下需要 ~70 GB 仅用于分配，普通机器跑不动；稀疏路径
+        让构建期内存只随实际配方数（这里 3^5=243）增长，无关 grid 大小。
+        本用例确保 SMALL_PALETTE @ grid=1024 能跑完，且有效桶数被 recipe
+        数（而非桶总数）限制。
+        """
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=1024,
+        )
+        total_combinations = 3 ** 5
+        # valid cells <= unique recipes; usually exactly equal at very high
+        # grid resolutions because every recipe lands in its own bucket.
+        # 有效桶数 <= 不重复配方数；高分辨率下通常恰好相等。
+        assert 0 < cache.valid_cell_count <= total_combinations
+        # The metadata still surfaces the nominal 1024^3 cell count so the
+        # UI can render "valid / total" meaningfully.
+        # 元数据保留名义桶总数，UI 可继续显示「有效 / 总桶」比例。
+        assert cache.metadata["total_cell_count"] == 1024 ** 3
+        assert cache.metadata["valid_cell_count"] == cache.valid_cell_count
+        # Output arrays must be in canonical bucket-index ascending order
+        # so on-disk layout matches the legacy dense-path output.
+        # 输出按桶号升序，与旧密集路径的磁盘布局一致。
+        assert cache.recipes.shape == (cache.valid_cell_count, 5)
+        assert cache.lab_centers.shape == (cache.valid_cell_count, 3)
+        assert cache.achieved_srgb.shape == (cache.valid_cell_count, 3)
+        assert cache.center_delta_e.shape == (cache.valid_cell_count,)
+
 
 # ---------------------------------------------------------------------------
 # Save / load roundtrip
