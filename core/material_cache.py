@@ -83,55 +83,54 @@ DEFAULT_GRID_RESOLUTION: int = 64
 
 Default 64 (`low`) keeps compressed caches around ~4 MB, with a
 worst-case bucket-diagonal ΔE of ~5.5 — visible but acceptable for the
-default preview-grade workflow where build speed and RAM budget matter
-most. Users who want tighter color accuracy can opt in via the
-"Exhaustive density" setting and pick a higher tier — see
-:data:`ALLOWED_GRID_RESOLUTIONS` for the full ladder.
+default preview-grade workflow. Users who want tighter color accuracy
+can opt in via the "Exhaustive density" setting and pick a higher tier
+— see :data:`ALLOWED_GRID_RESOLUTIONS` for the full ladder.
 
-Build memory and on-disk size scale with ``grid_resolution ** 3``
-because the build pass currently allocates dense per-bucket arrays.
-The ladder spans more than three orders of magnitude in cost, so users
-should treat the high tiers as opt-in expert features rather than safe
-defaults; in particular ``1024`` and ``2048`` typically need a
-workstation-class machine (and a sparser build implementation, which
-is tracked as a follow-up refactor).
+Higher tiers reduce *bucket-collision loss* (the number of distinct
+recipes that get discarded because they fall into the same Lab bucket
+as another recipe). At very high tiers virtually every reachable
+recipe lands in its own bucket, so the cache surfaces the full set of
+physically achievable colours.
 
 默认 64（低档）压缩后缓存约 4 MB，最坏桶对角 ΔE ~5.5，对默认预览
-工作流是可以接受的折衷（构建快、内存占用低）。需要更严格色彩精度的
-用户可以在"穷举数量"设置里开启自定义并选择更高档位，完整阶梯见
-:data:`ALLOWED_GRID_RESOLUTIONS`。
-
-构建峰值内存与磁盘占用按 ``grid_resolution ** 3`` 增长（因为当前
-build 通路对每个桶分配密集数组）。整条阶梯横跨三个数量级，
-因此高档位本质上属于"专家可选"而非默认安全档；尤其 ``1024``
-与 ``2048`` 通常需要工作站级机器（也跟踪一个改稀疏构建的后续重构）。
+工作流是可以接受的折衷。需要更严格色彩精度的用户可以在"穷举数量"
+设置里开启自定义并选择更高档位，完整阶梯见
+:data:`ALLOWED_GRID_RESOLUTIONS`。更高档主要降低"桶碰撞损失"（多个
+配方落入同一 Lab 桶时只保留一个）；极致档下几乎每条可达配方都独占
+一个桶，缓存就能完整暴露物理可达色集。
 """
 
 ALLOWED_GRID_RESOLUTIONS: tuple[int, ...] = (64, 128, 256, 512, 1024, 2048)
 """Whitelist of user-facing grid resolutions exposed through the UI/API.
 
-Each tier doubles the per-axis cell count, so build/storage cost
-roughly grows ×8 per step:
+Each tier doubles the per-axis cell count. Since
+:func:`build_material_solver_cache` uses sparse per-bucket storage,
+build memory does *not* scale with ``grid_resolution ** 3``; it scales
+with the number of physically reachable recipes
+(``materials ** layers``), bounded above by ``valid_cell_count``. So
+the high tiers are limited by lookup-time and cache-file size rather
+than RAM:
 
-================  ============  =================  =================
-grid_resolution   total buckets  build peak memory  notes / 备注
-================  ============  =================  =================
-64                ~262 K         ~17 MB             default / 默认
-128               ~2.1 M         ~140 MB            recommended / 推荐
-256               ~16.8 M        ~1.1 GB            cap before 2026-04
-512               ~134 M         ~8.7 GB            workstation-class
-1024              ~1.07 B        ~70 GB             not feasible on consumer HW
-2048              ~8.59 B        ~560 GB            requires sparse build refactor
-================  ============  =================  =================
+================  ============  ===============================
+grid_resolution   total buckets  notes / 备注
+================  ============  ===============================
+64                ~262 K         default / 默认；ΔE ~5.5
+128               ~2.1 M         medium / 中；ΔE ~2.7
+256               ~16.8 M        high / 高；ΔE ~1.4
+512               ~134 M         very high / 极高
+1024              ~1.07 B        ultra / 极致
+2048              ~8.59 B        ultra+ / 极致+；几乎无桶碰撞
+================  ============  ===============================
 
 ``core`` does not enforce the whitelist — build/save/load remain
 flexible for tests and internal callers — but API routes and pipeline
 adapters must reject unknown values with a 4xx error.
 
-面向用户的网格分辨率白名单；阶梯按倍增递增，构建/存储成本约 ×8/档。
-``core`` 层保持灵活（便于测试与内部调用），API 路由与 pipeline 适配层
-必须拒绝白名单之外的值并返回 4xx。1024/2048 在密集构建路径下事实上
-需要工作站级硬件，等稀疏化重构落地后才真正可用。
+面向用户的网格分辨率白名单；构建期内存随实际可达配方数增长，与档位
+无关（稀疏存储），所以高档位的真实代价主要落在查找时间与缓存文件大小，
+而非内存。``core`` 层保持灵活（便于测试与内部调用），API 路由与
+pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
 """
 
 CACHE_SCHEMA_VERSION: str = "1.0"

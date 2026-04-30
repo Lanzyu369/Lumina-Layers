@@ -1480,8 +1480,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Exhaustive density",
   },
   "settings.solver_cache_density_description": {
-    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择中/高档以获得更低的色差，代价是构建时间、内存与每次查找都会成倍增加。",
-    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to medium or high for tighter color accuracy at the cost of proportionally longer build times, higher memory, and slower per-conversion lookups.",
+    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择更高档以保留更多可达配方、获得更低的色差。极高档把同一份耗材组合下所有物理可达的配方都各自保留，几乎不再因桶碰撞被丢弃。",
+    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to higher tiers to keep more reachable recipes and get tighter color accuracy. The ultra tiers retain every physically reachable recipe in a given material × layer setup, virtually eliminating bucket-collision losses.",
   },
   "settings.solver_cache_density_enable_label": {
     zh: "允许自定义穷举数量",
@@ -1508,20 +1508,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "High (256³)",
   },
   "settings.solver_cache_density_option_512": {
-    zh: "极高（512³，需 ~9 GB 内存）",
-    en: "Very high (512³, needs ~9 GB RAM)",
+    zh: "极高（512³）",
+    en: "Very high (512³)",
   },
   "settings.solver_cache_density_option_1024": {
-    zh: "实验（1024³，需 ~70 GB 内存，仅工作站可用）",
-    en: "Experimental (1024³, needs ~70 GB RAM, workstation-only)",
+    zh: "极致（1024³）",
+    en: "Ultra (1024³)",
   },
   "settings.solver_cache_density_option_2048": {
-    zh: "实验（2048³，需 ~560 GB 内存，待稀疏构建落地）",
-    en: "Experimental (2048³, needs ~560 GB RAM, awaits sparse-build refactor)",
+    zh: "极致+（2048³，覆盖全部可达配方）",
+    en: "Ultra+ (2048³, captures every reachable recipe)",
   },
   "settings.solver_cache_density_tip": {
-    zh: "提高分辨率会让构建穷举缓存的时间、占用的内存和后续生成的每次查找都变长；需要暂用更多磁盘空间。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
-    en: "Higher resolutions make the exhaustive build, its memory footprint, and every later lookup all take proportionally longer, and they consume more disk space. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
+    zh: "构建采用稀疏存储，内存只随实际可达配方数增长（与档位无关），极致档也不会爆内存；查找时间会随档位略有增加，但通常仍是毫秒级。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
+    en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
   "settings.auto_replace_gradient_heading": {
     zh: "渐变自动换色",

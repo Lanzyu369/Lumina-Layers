@@ -11,15 +11,17 @@ import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
  * cache. The numeric value equals the Lab bucket count per axis and must
  * stay in sync with ``ALLOWED_GRID_RESOLUTIONS`` on the backend.
  *
- * The ladder doubles per step, so build/storage cost grows ~×8 per tier.
- * 64-256 are everyday-safe; 512 needs a workstation-class machine; 1024
- * and 2048 are exposed for expert use but are memory-prohibitive on the
- * current dense build path until the planned sparse-build refactor lands.
+ * The ladder doubles per step. The build path is sparse, so peak build
+ * memory tracks the number of physically reachable recipes (~materials^
+ * layers) rather than the cube of the tier — even Ultra+ stays light.
+ * Higher tiers mainly reduce bucket-collision loss (more distinct
+ * recipes survive into the cache); per-lookup cost scales mildly.
  *
  * 穷举数量的用户档位；数值等于 Lab 网格每轴桶数，必须与后端
- * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。每档边长翻倍，构建/存储成本
- * 约 ×8。1024/2048 在密集构建通路下需要工作站级硬件，等稀疏化重构
- * 之后才真正可用——此处先打开入口便于后续切换。
+ * ``ALLOWED_GRID_RESOLUTIONS`` 保持一致。每档边长翻倍，但构建采用稀疏
+ * 存储，峰值内存只随实际可达配方数（~材料^层数）增长，与档位无关——
+ * 极致+ 档也很轻。更高档主要减少桶碰撞损失（更多配方被保留进缓存）；
+ * 单次查找时间随档位略增。
  */
 export type SolverCacheGridResolution =
   | 64
