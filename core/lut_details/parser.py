@@ -60,7 +60,10 @@ class LutParser:
         suffix = resolved_path.suffix.lower()
         loaded_model_package = False
         if suffix == ".json" and raw_payload is not None:
-            rgb, _stacks, metadata = LUTManager._load_keyed_payload(raw_payload, name, str(resolved_path))
+            rgb, _stacks, metadata = LUTManager._load_keyed_payload(
+                raw_payload, name, str(resolved_path),
+                skip_malformed_recipes=True,
+            )
         elif suffix == ".msgpack" and isinstance(raw_payload, dict):
             if LUTManager._is_model_package_payload(raw_payload):
                 try:
@@ -68,11 +71,17 @@ class LutParser:
                     loaded_model_package = True
                 except Exception:
                     if isinstance(raw_payload.get("entries"), list):
-                        rgb, _stacks, metadata = LUTManager._load_keyed_payload(raw_payload, name, str(resolved_path))
+                        rgb, _stacks, metadata = LUTManager._load_keyed_payload(
+                            raw_payload, name, str(resolved_path),
+                            skip_malformed_recipes=True,
+                        )
                     else:
                         raise
             else:
-                rgb, _stacks, metadata = LUTManager._load_keyed_payload(raw_payload, name, str(resolved_path))
+                rgb, _stacks, metadata = LUTManager._load_keyed_payload(
+                    raw_payload, name, str(resolved_path),
+                    skip_malformed_recipes=True,
+                )
         else:
             rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(str(resolved_path))
         rgb = np.asarray(rgb if rgb is not None else np.zeros((0, 3), dtype=np.uint8), dtype=np.uint8).reshape(-1, 3)
