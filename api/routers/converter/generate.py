@@ -1283,6 +1283,7 @@ async def convert_generate_large_format(
                 "inspection_source": "generate-large-format",
             }
             session_data["svg_large_format_policy"] = policy
+            store.put(sid, "svg_large_format_policy", policy)
         warnings.extend(list(policy.get("warnings", [])))
 
         if bool(policy.get("native_tiling_supported", False)) and not prefer_raster_svg:

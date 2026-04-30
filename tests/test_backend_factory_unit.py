@@ -8,12 +8,12 @@ Pin three contracts after the ``LUMINA_BACKEND`` env switch lands in
    :class:`SessionStore` / :class:`FileRegistry` instances bit-equivalent
    to pre-A4 desktop behavior. Module-level singletons + ``get_*``
    factories continue to expose the same public API.
-2. ``"postgres"`` raises :class:`NotImplementedError` with a pointer to
-   PR A4-2 / A4-3 (the implementation PRs).
+2. ``"postgres"`` yields the Phase A4 Postgres backends when
+   ``LUMINA_DATABASE_URL`` is set.
 3. Any other value raises :class:`ValueError` (no silent fallback).
 
 固定 LUMINA_BACKEND 环境开关落地后的三条契约: 默认 / memory 维持原行为,
-postgres 抛 NotImplementedError 指向后续 PR, 其它值抛 ValueError.
+postgres 返回 Phase A4 后端, 其它值抛 ValueError.
 
 These tests use the private ``_resolve_backend_name`` /
 ``_build_session_store`` / ``_build_file_registry`` helpers because the
@@ -32,6 +32,9 @@ import pytest
 import api.dependencies as deps_mod
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+
+
+_DUMMY_DATABASE_URL = "postgresql+psycopg://lumina:lumina@localhost:5432/lumina_dev"
 
 
 # ─── _resolve_backend_name ────────────────────────────────────────────
@@ -114,13 +117,29 @@ class TestBuildSessionStore:
         store = deps_mod._build_session_store()
         assert isinstance(store, SessionStore)
 
-    def test_postgres_raises_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``postgres`` backend must raise ``NotImplementedError`` with
-        a pointer to PR A4-2 (the actual implementation).
-        ``postgres`` 后端抛 NotImplementedError 并指向 A4-2.
+    def test_postgres_returns_postgres_session_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``postgres`` backend must return the Phase A4 session backend.
+        ``postgres`` 后端返回 Phase A4 session 实现。
+        """
+        pytest.importorskip("sqlalchemy")
+        pytest.importorskip("psycopg")
+        monkeypatch.setenv("LUMINA_BACKEND", "postgres")
+        monkeypatch.setenv("LUMINA_DATABASE_URL", _DUMMY_DATABASE_URL)
+        from api.session_store_postgres import PostgresSessionBackend
+
+        store = deps_mod._build_session_store()
+        try:
+            assert isinstance(store, PostgresSessionBackend)
+        finally:
+            store.dispose()
+
+    def test_postgres_without_database_url_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``postgres`` backend must fail fast without a database URL.
+        ``postgres`` 后端缺少连接串时快速失败。
         """
         monkeypatch.setenv("LUMINA_BACKEND", "postgres")
-        with pytest.raises(NotImplementedError, match=r"A4-2"):
+        monkeypatch.delenv("LUMINA_DATABASE_URL", raising=False)
+        with pytest.raises(RuntimeError, match=r"LUMINA_DATABASE_URL"):
             deps_mod._build_session_store()
 
 
@@ -146,13 +165,29 @@ class TestBuildFileRegistry:
         registry = deps_mod._build_file_registry()
         assert isinstance(registry, FileRegistry)
 
-    def test_postgres_raises_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``postgres`` backend must raise ``NotImplementedError`` with
-        a pointer to PR A4-3 (the actual implementation).
-        ``postgres`` 后端抛 NotImplementedError 并指向 A4-3.
+    def test_postgres_returns_postgres_file_registry_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``postgres`` backend must return the Phase A4 file registry backend.
+        ``postgres`` 后端返回 Phase A4 file registry 实现。
+        """
+        pytest.importorskip("sqlalchemy")
+        pytest.importorskip("psycopg")
+        monkeypatch.setenv("LUMINA_BACKEND", "postgres")
+        monkeypatch.setenv("LUMINA_DATABASE_URL", _DUMMY_DATABASE_URL)
+        from api.file_registry_postgres import PostgresFileRegistryBackend
+
+        registry = deps_mod._build_file_registry()
+        try:
+            assert isinstance(registry, PostgresFileRegistryBackend)
+        finally:
+            registry.dispose()
+
+    def test_postgres_without_database_url_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``postgres`` registry backend must fail fast without a database URL.
+        ``postgres`` registry 后端缺少连接串时快速失败。
         """
         monkeypatch.setenv("LUMINA_BACKEND", "postgres")
-        with pytest.raises(NotImplementedError, match=r"A4-3"):
+        monkeypatch.delenv("LUMINA_DATABASE_URL", raising=False)
+        with pytest.raises(RuntimeError, match=r"LUMINA_DATABASE_URL"):
             deps_mod._build_file_registry()
 
 

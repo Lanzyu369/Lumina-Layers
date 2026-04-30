@@ -12,15 +12,12 @@ Phase A4 backend dispatch
 ``LUMINA_BACKEND`` selects which storage backend powers the global
 ``SessionStore`` / ``FileRegistry`` singletons. The default ``memory``
 keeps the historical desktop / single-user behaviour bit-exact:
-in-process Python dicts, restart drops everything. ``postgres`` is the
-server-side backend that lands across PRs A4-2 (session store) + A4-3
-(file registry); the env value is accepted today but each ``_build_*``
-helper raises ``NotImplementedError`` until its backend ships.
+in-process Python dicts, restart drops everything. ``postgres`` selects
+the server-side Phase A4 backends and requires ``LUMINA_DATABASE_URL``.
 
 ``LUMINA_BACKEND`` 决定全局 SessionStore / FileRegistry 单例的存储后端。
 默认 ``memory`` 与 A4 之前完全一致 (内存字典, 重启清零). ``postgres`` 后端
-随 A4-2 / A4-3 分别落地; 当前 PR 接受 env 取值但抛 NotImplementedError
-指向后续 PR.
+选择 Phase A4 服务端实现, 并要求配置 ``LUMINA_DATABASE_URL``.
 """
 
 from __future__ import annotations
@@ -75,22 +72,20 @@ def _build_session_store() -> SessionStore:
         默认 ``memory`` 时返回内存版 :class:`SessionStore`.
 
     Raises:
-        NotImplementedError: ``LUMINA_BACKEND=postgres`` is set but the
-            Postgres backend has not landed yet (PR A4-2). The desktop
-            default is unchanged; this guard exists so a typo in CI / a
-            premature production deploy fails loud rather than silently
-            corrupting state.
-            ``postgres`` 后端尚未落地 (PR A4-2); 显式抛错防止误用.
+        RuntimeError: ``LUMINA_BACKEND=postgres`` is set but
+            ``LUMINA_DATABASE_URL`` is missing.
+            ``postgres`` 后端已开启但缺少 ``LUMINA_DATABASE_URL``.
     """
     backend = _resolve_backend_name()
     if backend == "memory":
         return SessionStore(ttl=1800)
     if backend == "postgres":
-        raise NotImplementedError(
-            "PostgresSessionBackend lands in PR A4-2. "
-            "Set LUMINA_BACKEND=memory (or leave unset) for current "
-            "desktop / single-user behavior."
-        )
+        from api.postgres_db import resolve_database_url
+
+        resolve_database_url()
+        from api.session_store_postgres import PostgresSessionBackend
+
+        return PostgresSessionBackend(ttl=1800)
     raise AssertionError(f"unreachable backend dispatch: {backend!r}")
 
 
@@ -104,19 +99,20 @@ def _build_file_registry() -> FileRegistry:
         默认 ``memory`` 时返回内存版 :class:`FileRegistry`.
 
     Raises:
-        NotImplementedError: ``LUMINA_BACKEND=postgres`` is set but the
-            Postgres-backed registry has not landed yet (PR A4-3).
-            ``postgres`` 后端尚未落地 (PR A4-3); 显式抛错防止误用.
+        RuntimeError: ``LUMINA_BACKEND=postgres`` is set but
+            ``LUMINA_DATABASE_URL`` is missing.
+            ``postgres`` 后端已开启但缺少 ``LUMINA_DATABASE_URL``.
     """
     backend = _resolve_backend_name()
     if backend == "memory":
         return FileRegistry()
     if backend == "postgres":
-        raise NotImplementedError(
-            "PostgresFileRegistryBackend lands in PR A4-3. "
-            "Set LUMINA_BACKEND=memory (or leave unset) for current "
-            "desktop / single-user behavior."
-        )
+        from api.postgres_db import resolve_database_url
+
+        resolve_database_url()
+        from api.file_registry_postgres import PostgresFileRegistryBackend
+
+        return PostgresFileRegistryBackend()
     raise AssertionError(f"unreachable backend dispatch: {backend!r}")
 
 
