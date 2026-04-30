@@ -1,0 +1,56 @@
+# Lumina Studio — Phase A4 server-side data plane.
+# Lumina Studio — Phase A4 服务端数据平面.
+#
+# Default desktop / single-user runs do NOT need this file. Set
+# LUMINA_BACKEND=memory (or leave unset) and run `python api_server.py`
+# exactly like before.
+# 默认桌面 / 单人模式不需要这份文件: LUMINA_BACKEND=memory (默认) +
+# `python api_server.py` 即可, 与 A4 之前完全一致.
+#
+# Server-side runs (B2B Elegoo on-prem, B2C SaaS) start the data plane via:
+#   docker compose up -d postgres redis
+#   export LUMINA_BACKEND=postgres
+#   export LUMINA_DATABASE_URL=postgresql+psycopg://lumina:lumina@localhost:5432/lumina_dev
+#   alembic -c api/migrations/alembic.ini upgrade head
+#   python api_server.py
+# 服务端模式启动顺序如上; B2B Elegoo on-prem 与 B2C SaaS 共用此栈, 仅
+# 部署清单与连接串不同.
+#
+# A4-1 PR ships only this scaffold + the migration; the actual Postgres
+# session/file backends land in A4-2 + A4-3.
+# 本 PR (A4-1) 仅交付脚手架 + 迁移文件; Postgres 后端实现在 A4-2/A4-3.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lumina-postgres
+    environment:
+      POSTGRES_DB: lumina_dev
+      POSTGRES_USER: lumina
+      POSTGRES_PASSWORD: lumina
+    ports:
+      - "5432:5432"
+    volumes:
+      - lumina_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumina -d lumina_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: lumina-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - lumina_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  lumina_postgres_data:
+  lumina_redis_data:
