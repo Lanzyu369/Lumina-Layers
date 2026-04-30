@@ -14,7 +14,55 @@ import io
 import os
 import sys
 
+from api.structured_logging import get_logger
+
 T = TypeVar("T")
+
+_log = get_logger(__name__)
+
+_ENV_MAX_TASKS_PER_CHILD = "LUMINA_WORKER_MAX_TASKS_PER_CHILD"
+_DEFAULT_MAX_TASKS_PER_CHILD = 20
+
+
+def _resolve_max_tasks_per_child() -> int | None:
+    """Resolve LUMINA_WORKER_MAX_TASKS_PER_CHILD into a ProcessPoolExecutor arg.
+    解析 LUMINA_WORKER_MAX_TASKS_PER_CHILD 环境变量为 ProcessPoolExecutor 参数.
+
+    Behavior:
+        - Unset / empty: returns ``_DEFAULT_MAX_TASKS_PER_CHILD`` (20).
+        - Positive int: returns that value (custom recycle threshold).
+        - 0 or negative: returns ``None`` (disable recycling, preserve old behavior).
+        - Invalid (non-int): emits a structured WARNING and returns the default.
+
+    行为:
+        - 未设置或为空: 返回默认值 20.
+        - 正整数: 返回该值 (自定义回收阈值).
+        - 0 或负数: 返回 None (禁用回收, 保留旧行为).
+        - 非法值 (非整数): 打结构化 WARNING 后回退到默认值.
+
+    Returns:
+        int | None: The ``max_tasks_per_child`` argument for ``ProcessPoolExecutor``.
+                    (传给 ``ProcessPoolExecutor`` 的 ``max_tasks_per_child`` 参数)
+    """
+    raw = os.environ.get(_ENV_MAX_TASKS_PER_CHILD)
+    if raw is None or raw == "":
+        return _DEFAULT_MAX_TASKS_PER_CHILD
+    try:
+        value = int(raw)
+    except ValueError:
+        _log.warning(
+            "Invalid LUMINA_WORKER_MAX_TASKS_PER_CHILD value; falling back to default",
+            extra={
+                "event": "worker_pool_max_tasks_invalid",
+                "raw_value": raw,
+                "error_type": "ValueError",
+                "fallback": _DEFAULT_MAX_TASKS_PER_CHILD,
+            },
+        )
+        return _DEFAULT_MAX_TASKS_PER_CHILD
+    if value <= 0:
+        return None
+    return value
 
 
 def _worker_init() -> None:
@@ -64,6 +112,9 @@ class WorkerPoolManager:
 
     Attributes:
         _max_workers (int): Maximum number of worker processes. (最大工作进程数)
+        _max_tasks_per_child (int | None): Tasks each child handles before being
+            recycled, or ``None`` to disable recycling.
+            (每个子进程被回收前可处理的任务数，``None`` 表示禁用回收)
         _pool (ProcessPoolExecutor | None): The underlying executor. (底层执行器)
     """
 
@@ -74,8 +125,15 @@ class WorkerPoolManager:
         Args:
             max_workers (int | None): Max worker processes. Defaults to min(cpu_count, 4).
                                       (最大工作进程数，默认 min(cpu_count, 4))
+
+        The per-child recycle threshold is read once from
+        ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` (default 20) so each pool instance
+        captures its env value at construction time.
+        子进程回收阈值在构造时从 ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` 读一次
+        (默认 20)，保证每个 pool 实例捕获自己的环境变量快照。
         """
         self._max_workers: int = max_workers or min(os.cpu_count() or 2, 4)
+        self._max_tasks_per_child: int | None = _resolve_max_tasks_per_child()
         self._pool: ProcessPoolExecutor | None = None
 
     def start(self) -> None:
@@ -87,6 +145,7 @@ class WorkerPoolManager:
         self._pool = ProcessPoolExecutor(
             max_workers=self._max_workers,
             initializer=_worker_init,
+            max_tasks_per_child=self._max_tasks_per_child,
         )
 
     async def submit(
@@ -167,3 +226,15 @@ class WorkerPoolManager:
             int: Max workers count. (最大工作进程数)
         """
         return self._max_workers
+
+    @property
+    def max_tasks_per_child(self) -> int | None:
+        """Get the per-child task recycling threshold.
+        获取每个子进程的任务回收阈值。
+
+        Returns:
+            int | None: Max tasks a worker handles before being recycled, or
+                ``None`` if recycling is disabled.
+                (子进程被回收前可处理的最大任务数，``None`` 表示禁用回收)
+        """
+        return self._max_tasks_per_child
