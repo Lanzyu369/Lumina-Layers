@@ -14,11 +14,10 @@ from api.structured_logging import get_logger
 import time
 
 from config import ModelingMode, ColorSystem
-from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
-from core.material_lut_synthesis import (
-    build_material_preview_colors,
-    build_material_slot_names,
-    load_multiple_materials,
+from core.pipeline._input_validation_common import (
+    _apply_material_archive_branch,
+    _clamp_quantize_colors,
+    _resolve_lut_path_or_error,
 )
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from utils.lut_manager import LUTManager
@@ -70,86 +69,32 @@ def run(ctx: dict) -> dict:
         modeling_mode = ModelingMode(modeling_mode)
 
     # ---- quantize_colors clamp ----
-    quantize_colors = max(8, min(256, quantize_colors))
+    quantize_colors = _clamp_quantize_colors(quantize_colors)
 
     # ---- Material-archive branch ----
     if material_source == "material_archive":
-        selected_materials = ctx.get("selected_materials") or []
-        if not selected_materials:
-            ctx["error"] = "[ERROR] No materials selected for material-archive mode"
+        outcome = _apply_material_archive_branch(
+            ctx,
+            log=_log,
+            event_prefix="p01",
+        )
+        if outcome == "error":
             return ctx
-        try:
-            materials = load_multiple_materials(selected_materials)
-        except (FileNotFoundError, ValueError) as exc:
-            ctx["error"] = f"[ERROR] Failed to load materials: {exc}"
-            return ctx
-        slot_names = build_material_slot_names(materials)
-        preview_colors = build_material_preview_colors(materials)
-        # Build a synthetic color_conf compatible with downstream steps
-        color_conf = {
-            "name": "Material",
-            "slots": slot_names,
-            "preview": preview_colors,
-            "map": {name: idx for idx, name in enumerate(slot_names)},
-        }
-        material_layer_count = int(ctx.get("material_layer_count") or 5)
-        material_layer_height = float(ctx.get("material_layer_height_mm") or 0.08)
-        ctx["actual_lut_path"] = "__material_archive__"
+        # P01 finalises modeling_mode + quantize_colors that were normalised
+        # above the material-archive branch (helper does not see them).
         ctx["modeling_mode"] = modeling_mode
         ctx["quantize_colors"] = quantize_colors
-        ctx["preview_colors"] = preview_colors
-        ctx["slot_names"] = slot_names
-        ctx["color_conf"] = color_conf
-        ctx["color_layers"] = material_layer_count
-        ctx["layer_height_mm"] = material_layer_height
-        ctx["_material_params"] = materials
-        ctx["material_source"] = "material_archive"
-        # Normalise opt-in exhaustive-cache grid_resolution.
-        requested_grid = ctx.get("material_grid_resolution")
-        if requested_grid is None:
-            resolved_grid = int(DEFAULT_GRID_RESOLUTION)
-        else:
-            try:
-                requested_grid_int = int(requested_grid)
-            except (TypeError, ValueError):
-                requested_grid_int = None
-            if requested_grid_int in ALLOWED_GRID_RESOLUTIONS:
-                resolved_grid = requested_grid_int
-            else:
-                _log.warning(
-                    "material_archive mode: ignoring unsupported "
-                    "material_grid_resolution=%r, falling back to default=%d",
-                    requested_grid, int(DEFAULT_GRID_RESOLUTION),
-                )
-                resolved_grid = int(DEFAULT_GRID_RESOLUTION)
-        ctx["grid_resolution"] = resolved_grid
         _elapsed = time.perf_counter() - _t0
         ctx.setdefault("_preview_timings", {})["p01_s"] = _elapsed
-        _log.debug(
-            "material_archive mode: %d materials, %d layers, %.2f mm/layer, grid=%d",
-            len(materials), material_layer_count, material_layer_height, resolved_grid,
-            extra={
-                "event": "p01_material_archive_validated",
-                "count": len(materials),
-                "layer_count": material_layer_count,
-                "layer_height_mm": material_layer_height,
-                "grid_resolution": resolved_grid,
-            },
-        )
         return ctx
 
     # ---- LUT branch (existing logic) ----
-    if lut_path is None:
-        ctx["error"] = "[WARNING] Please select or upload calibration file"
-        return ctx
-
-    # ---- LUT 路径解析 ----
-    if isinstance(lut_path, str):
-        actual_lut_path = lut_path
-    elif hasattr(lut_path, "name"):
-        actual_lut_path = lut_path.name
-    else:
-        ctx["error"] = "[ERROR] Invalid LUT file format"
+    actual_lut_path, lut_err = _resolve_lut_path_or_error(
+        ctx,
+        error_prefix="[WARNING] Please select or upload calibration file",
+    )
+    if lut_err is not None:
+        ctx["error"] = lut_err
         return ctx
 
     # ---- 颜色系统配置 ----

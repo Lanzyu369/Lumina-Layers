@@ -45,14 +45,40 @@ except ImportError:
 
 log = get_logger(__name__)
 
+# Phase 1: canonical ColorMode taxonomy lives in core.color_modes. The dict
+# tables below are kept as backward-compat shims (some external scripts may
+# still import them); their values are now derived from the registry.
+# 短键（``"BW"``/``"4-Color"``/``"6-Color"``/``"8-Color"``）保留旧版本约定，
+# 因 lut_merger 内部其他逻辑用这种简化形态做字典 key。
+from core.color_modes import ColorMode, lut_2468_should_be_merged
 
-# Color mode size mapping
+_SHORT_KEY_BY_NAME = {
+    "bw": "BW",
+    "4-color-rybw": "4-Color",
+    "6-color-cmyw-1296": "6-Color",
+    "5-color-extended": "5-Color Extended",
+    "8-color-max": "8-Color",
+    "merged": "Merged",
+}
+
+
+def _short_key_for(mode: ColorMode | None) -> str | None:
+    if mode is None:
+        return None
+    return _SHORT_KEY_BY_NAME.get(mode.name)
+
+
+# Color mode size mapping (legacy shape, derived from registry).
 _SIZE_TO_MODE = {
-    32: "BW",
-    1024: "4-Color",
-    1296: "6-Color",
-    2468: "5-Color Extended",
-    2738: "8-Color",
+    mode.expected_lut_size: _SHORT_KEY_BY_NAME[mode.name]
+    for mode in (
+        ColorMode.from_name("BW"),
+        ColorMode.from_name("4-Color"),
+        ColorMode.from_name("6-Color (CMYWGK 1296)"),
+        ColorMode.from_name("5-Color Extended"),
+        ColorMode.from_name("8-Color Max"),
+    )
+    if mode is not None and mode.expected_lut_size is not None
 }
 
 
@@ -62,39 +88,49 @@ def _detect_mode_by_size(count):
     Backward-compat switch:
         - Default: 2468 -> "5-Color Extended"
         - If env LUMINA_LUT_2468_MODE=merged: 2468 -> "Merged"
+
+    Phase 1: thresholds are now sourced from ``core.color_modes.ColorMode``;
+    behaviour is preserved bit-exact.
     """
-    if count == 2468 and os.getenv("LUMINA_LUT_2468_MODE", "").strip().lower() == "merged":
+    if count == 2468 and lut_2468_should_be_merged():
         return "Merged"
 
-    # Exact match first
-    if count in _SIZE_TO_MODE:
-        return _SIZE_TO_MODE[count]
+    mode = ColorMode.from_lut_size(int(count))
+    if mode is not None:
+        return _short_key_for(mode)
+
     # BW tolerance: 30-36 (some BW LUTs have slightly non-standard sizes)
     if 30 <= count <= 36:
         return "BW"
     return None
 
 
-# Color mode priority (higher = keep during dedup)
-# Merged gets lowest priority: its stacks may be unreliable (e.g. dummy zeros
-# from non-standard sizes), so we always prefer entries from known modes.
+# Color mode priority (higher = keep during dedup). Derived from registry.
 _MODE_PRIORITY = {
-    "Merged": -1,
-    "BW": 0,
-    "4-Color": 1,
-    "5-Color Extended": 1,
-    "6-Color": 2,
-    "8-Color": 3,
+    _SHORT_KEY_BY_NAME[mode.name]: mode.priority
+    for mode in (
+        ColorMode.from_name("Merged"),
+        ColorMode.from_name("BW"),
+        ColorMode.from_name("4-Color"),
+        ColorMode.from_name("5-Color Extended"),
+        ColorMode.from_name("6-Color (CMYWGK 1296)"),
+        ColorMode.from_name("8-Color Max"),
+    )
+    if mode is not None
 }
 
-# Max material ID per mode
+# Max material ID per mode. Derived from registry.
 _MODE_MAX_MATERIAL = {
-    "BW": 1,
-    "4-Color": 3,
-    "6-Color": 5,
-    "5-Color Extended": 4,
-    "8-Color": 7,
-    "Merged": 7,
+    _SHORT_KEY_BY_NAME[mode.name]: mode.max_material_id
+    for mode in (
+        ColorMode.from_name("BW"),
+        ColorMode.from_name("4-Color"),
+        ColorMode.from_name("6-Color (CMYWGK 1296)"),
+        ColorMode.from_name("5-Color Extended"),
+        ColorMode.from_name("8-Color Max"),
+        ColorMode.from_name("Merged"),
+    )
+    if mode is not None
 }
 
 # Standard 8-Color slot order for merged palette sorting
