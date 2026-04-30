@@ -291,6 +291,7 @@ class TestExtractGradientCardStageACanary:
             *,
             manual_white_orientation: str | None,
             manual_black_orientation: str | None,
+            image_source: str | None = None,
         ) -> GradientCardStageAResult:
             assert white_rgb.shape == (16, 16, 3)
             assert black_rgb.shape == (16, 16, 3)
@@ -299,6 +300,7 @@ class TestExtractGradientCardStageACanary:
             assert dataset_zip_path.endswith(".zip")
             assert manual_white_orientation == "rotate_90_cw"
             assert manual_black_orientation is None
+            assert image_source is None
             return GradientCardStageAResult(
                 params_path=str(params_path),
                 params_payload={"version": "stage_a/v1"},
