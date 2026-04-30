@@ -441,6 +441,7 @@ const STRUCTURAL_BIAS_FLAGS = new Set<AggregationBiasFlag>([
   "white_substrate_flat",
   "black_substrate_flat",
   "mean_de_gt_3",
+  "c0_session_outlier",
 ]);
 
 const biasFlagI18nKey = (flag: AggregationBiasFlag) =>

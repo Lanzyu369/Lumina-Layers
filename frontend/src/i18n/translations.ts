@@ -5667,6 +5667,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本次拟合平均 ΔE > 3（拟合本身已不可信，禁止其样本进入联合重拟）",
     en: "Run's own mean ΔE > 3 (fit already unreliable; samples blocked from joint refit)",
   },
+  mat_gradient_bias_flag_c0_session_outlier: {
+    zh: "白底读数与同期校准的其他材料中位数偏差过大（疑似白底取样位置错误或光照不一致，建议重拍）",
+    en: "White-substrate reading deviates from the session median across other materials (likely wrong patch sample or inconsistent lighting; please re-shoot)",
+  },
   mat_gradient_aggregation_excluded_reason_bias_filter: {
     zh: "偏置硬过滤",
     en: "Bias filter",
@@ -5678,6 +5682,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_aggregation_excluded_reason_c0_white_pairwise_mismatch: {
     zh: "白底亮度与新捕获相差过大（>1.5×，光照环境不一致）",
     en: "White-substrate brightness differs from fresh capture by more than 1.5x (inconsistent lighting)",
+  },
+  mat_gradient_aggregation_excluded_reason_c0_session_outlier: {
+    zh: "白底跨材料一致性（与同 session 其他材料的中位数偏差超阈值）",
+    en: "Cross-material session white_C0 outlier (deviates from same-session median beyond threshold)",
   },
   mat_gradient_white_signal_label: {
     zh: "白底信号",
