@@ -7,6 +7,8 @@ import type { FiveColorState } from "../stores/fiveColorStore";
 vi.mock("../api/fiveColor", () => ({
   fetchBaseColors: vi.fn(),
   queryFiveColor: vi.fn(),
+  matchFiveColorByHex: vi.fn(),
+  generateRecipeSwatch: vi.fn(),
 }));
 
 import { fetchBaseColors, queryFiveColor } from "../api/fiveColor";
@@ -20,6 +22,8 @@ const DEFAULT_STATE: Partial<FiveColorState> = {
   lutName: "",
   baseColors: [],
   selectedIndices: [],
+  manualSelectedIndices: [],
+  selectionSource: "manual",
   queryResult: null,
   isLoading: false,
   error: null,

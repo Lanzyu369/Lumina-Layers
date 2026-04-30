@@ -7,7 +7,6 @@ Extracts color data from printed calibration boards.
 import os
 import logging
 import itertools
-import math
 import re
 from functools import lru_cache
 import numpy as np
@@ -20,6 +19,16 @@ from config import (
     CELL_SIZE,
     LUT_FILE_PATH,
     get_asset_path,
+)
+from core.lut_card_layout import (
+    EIGHT_COLOR_FULL_TOTAL_RECIPES,
+    EIGHT_COLOR_PAGE_CAPACITY,
+    LutCardPage,
+    cell_for_row_index,
+    localize_page_layout,
+    resolve_extraction_page_layout,
+    resolve_lut_layout,
+    row_index_for_cell,
 )
 from utils import Stats
 from utils.lut_manager import LUTManager
@@ -35,9 +44,7 @@ EXTRACTOR_HANDLED_ERRORS = (
     OSError,
     RuntimeError,
 )
-EIGHT_COLOR_PAGE_CAPACITY = 1369
-EIGHT_COLOR_FULL_TOTAL_RECIPES = 8 ** 5
-EIGHT_COLOR_FULL_TOTAL_PAGES = int(math.ceil(EIGHT_COLOR_FULL_TOTAL_RECIPES / EIGHT_COLOR_PAGE_CAPACITY))
+EIGHT_COLOR_FULL_TOTAL_PAGES = int(np.ceil(EIGHT_COLOR_FULL_TOTAL_RECIPES / EIGHT_COLOR_PAGE_CAPACITY))
 
 
 def _srgb_to_linear(arr: np.ndarray) -> np.ndarray:
@@ -228,12 +235,12 @@ def _build_full_8color_stacks() -> np.ndarray:
 
 
 def _get_8color_page_cell_count(page_choice: str, eight_color_full_export: bool) -> int:
-    if not eight_color_full_export:
-        return EIGHT_COLOR_PAGE_CAPACITY
-    page_number = min(max(_parse_page_number(page_choice), 1), EIGHT_COLOR_FULL_TOTAL_PAGES)
-    start = (page_number - 1) * EIGHT_COLOR_PAGE_CAPACITY
-    remaining = max(0, EIGHT_COLOR_FULL_TOTAL_RECIPES - start)
-    return min(EIGHT_COLOR_PAGE_CAPACITY, remaining)
+    page_layout = resolve_extraction_page_layout(
+        "8-Color Max",
+        page=page_choice,
+        eight_color_full_export=eight_color_full_export,
+    )
+    return page_layout.item_count
 
 
 def _get_8color_page_stacks(page_choice: str, eight_color_full_export: bool) -> np.ndarray:
@@ -341,7 +348,7 @@ def _generate_recipes(
                 stacks.append(digits[::-1])
             return np.array(stacks, dtype=np.int32)
 
-    # Default: 4-Color (RYBW/CMYW) 鈥?4^5 = 1024 combinations, 5 layers
+    # Default: 4-Color (RYBW/CMYW), 4^5 = 1024 combinations, 5 layers
     stacks = []
     for i in range(total_cells):
         digits = []
@@ -584,35 +591,18 @@ def run_extraction(
     if len(points) != 4:
         return None, None, None, "[ERROR] Please select 4 corner points"
 
-    # 动态确定网格大小
-    if color_mode == "BW (Black & White)" or color_mode == "BW":
-        grid_size = 6  # Data: 6x6 (32色，可用前 32 个)
-        physical_grid = 8  # Physical: 8x8 (含边框)
-        total_cells = 32
-    elif "8-Color" in color_mode:
-        grid_size = 37  # Data: 37x37 (1369色)
-        physical_grid = 39  # Physical: 39x39
-        total_cells = _get_8color_page_cell_count(page_choice, eight_color_full_export)
-    elif "6-Color" in color_mode:
-        grid_size = 36  # 核心数据还是 36x36 (1296色)
-        physical_grid = 38  # 物理上有 38x38 (含边框)
-        total_cells = 1296
-    elif "5-Color Extended" in color_mode:
-        # 5-Color Extended dual-page mode
-        # Page 1: 32x32 = 1024 colors (5-layer)
-        # Page 2: 38x38 = 1444 colors (6-layer)
-        if "2" in str(page_choice):
-            grid_size = 38  # Page 2: 38x38 data
-            physical_grid = 40  # Physical: 40x40
-            total_cells = 1444
-        else:
-            grid_size = 32  # Page 1: 32x32 data
-            physical_grid = 34  # Physical: 34x34
-            total_cells = 1024
-    else:
-        grid_size = DATA_GRID_SIZE  # 32
-        physical_grid = PHYSICAL_GRID_SIZE  # 34
-        total_cells = 1024
+    page_layout = resolve_extraction_page_layout(
+        color_mode,
+        page=page_choice,
+        eight_color_full_export=eight_color_full_export,
+    )
+    grid_rows = page_layout.data_rows
+    grid_cols = page_layout.data_cols
+    if grid_rows != grid_cols or page_layout.physical_rows != page_layout.physical_cols:
+        raise ValueError("Only square calibration layouts are supported by extractor sampling")
+    grid_size = grid_rows
+    physical_grid = page_layout.physical_rows
+    total_cells = page_layout.item_count
 
     log.info(
         f"Mode: {color_mode}, Logic: {grid_size}x{grid_size} inside {physical_grid}x{physical_grid}, auto_wb={auto_wb}, bright={bright}, eight_color_full_export={eight_color_full_export}"
@@ -635,7 +625,7 @@ def run_extraction(
         warped = apply_brightness_correction(warped)
 
     # Sampling — pre-compute corrected centers and per-cell adaptive ROI
-    extracted = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
+    extracted = np.zeros((grid_rows, grid_cols, 3), dtype=np.uint8)
     vis = warped.copy()
 
     centers_x, centers_y, half_roi_map = _compute_sampling_geometry(
@@ -647,8 +637,8 @@ def run_extraction(
     cells_to_extract = total_cells
 
     extracted_count = 0
-    for r in range(grid_size):
-        for c in range(grid_size):
+    for r in range(grid_rows):
+        for c in range(grid_cols):
             if extracted_count >= cells_to_extract:
                 break
 
@@ -774,7 +764,14 @@ def probe_lut_cell(
     return html, hex_c, (r, c)
 
 
-def manual_fix_cell(coord, color_input, lut_path=None):
+def manual_fix_cell(
+    coord=None,
+    color_input=None,
+    lut_path=None,
+    *,
+    row_index: int | None = None,
+    page_layout: LutCardPage | None = None,
+):
     """Manually fix a specific cell color in the LUT."""
     actual_path = LUT_FILE_PATH
     if isinstance(lut_path, str) and lut_path:
@@ -782,9 +779,9 @@ def manual_fix_cell(coord, color_input, lut_path=None):
     elif hasattr(lut_path, "name"):
         actual_path = lut_path.name
 
-    if not coord or not actual_path or not os.path.exists(actual_path):
+    if (coord is None and row_index is None) or not actual_path or not os.path.exists(actual_path):
         log.info(
-            f"Error: coord={coord}, actual_path={actual_path}, exists={os.path.exists(actual_path) if actual_path else False}"
+            f"Error: coord={coord}, row_index={row_index}, actual_path={actual_path}, exists={os.path.exists(actual_path) if actual_path else False}"
         )
         return None, "[WARNING] 错误"
 
@@ -792,16 +789,39 @@ def manual_fix_cell(coord, color_input, lut_path=None):
         log.info(f"Loading LUT from: {actual_path}")
         rgb, stacks, metadata = LUTManager.load_lut_with_metadata(actual_path)
         log.info(f"RGB shape: {rgb.shape}")
-        r, c = coord
-
-        # 从 1D rgb 数组推断 2D 网格尺寸
         n = len(rgb)
-        side = int(np.sqrt(n))
-        if side * side != n:
-            side = int(np.ceil(np.sqrt(n)))
+        local_layout = None
+        if page_layout is not None:
+            local_layout = localize_page_layout(page_layout, item_count=n)
 
-        # 将 2D 坐标映射为 1D 索引
-        idx = r * side + c
+        if row_index is not None:
+            idx = int(row_index)
+            if idx < 0:
+                return None, "[WARNING] 索引超出范围"
+            if local_layout is not None:
+                try:
+                    cell = cell_for_row_index(local_layout, idx)
+                except ValueError:
+                    return None, "[WARNING] 索引超出范围"
+                r, c = cell.data_row, cell.data_col
+            else:
+                side = int(np.ceil(np.sqrt(max(n, 1))))
+                r, c = divmod(idx, side)
+        else:
+            if not coord:
+                return None, "[WARNING] 错误"
+            r, c = coord
+            if local_layout is not None:
+                idx_value = row_index_for_cell(local_layout, 0, int(r), int(c))
+                if idx_value is None:
+                    return None, "[WARNING] 索引超出范围"
+                idx = idx_value
+            else:
+                layout = resolve_lut_layout(getattr(metadata, "color_mode", "") or "", n)
+                idx_value = row_index_for_cell(layout, 0, int(r), int(c))
+                if idx_value is None:
+                    return None, "[WARNING] 索引超出范围"
+                idx = idx_value
         if idx >= n:
             return None, "[WARNING] 索引超出范围"
 
@@ -851,7 +871,19 @@ def manual_fix_cell(coord, color_input, lut_path=None):
                     log.info(f"Also saved to assets: {assets_path}")
 
         # 将 1D rgb reshape 回 2D grid 用于预览
-        lut_2d = rgb[: side * side].reshape(side, side, 3) if n >= side * side else rgb.reshape(-1, 1, 3)
+        if local_layout is not None:
+            page = local_layout.pages[0]
+            lut_2d = np.zeros((page.data_rows, page.data_cols, 3), dtype=np.uint8)
+            lut_2d.reshape(-1, 3)[:n] = rgb[:n]
+        else:
+            layout = resolve_lut_layout(getattr(metadata, "color_mode", "") or "", n)
+            page = layout.pages[0]
+            if n <= page.capacity:
+                lut_2d = np.zeros((page.data_rows, page.data_cols, 3), dtype=np.uint8)
+                lut_2d.reshape(-1, 3)[:n] = rgb[:n]
+            else:
+                side = int(np.ceil(np.sqrt(max(n, 1))))
+                lut_2d = rgb[: side * side].reshape(side, side, 3) if n >= side * side else rgb.reshape(-1, 1, 3)
         preview = cv2.resize(lut_2d, (512, 512), interpolation=cv2.INTER_NEAREST)
         log.info(f"Preview shape: {preview.shape}")
         return preview, "[OK] Cell updated"

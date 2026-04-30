@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ExtractorColorMode, ExtractorPage } from "../api/types";
+import type { ExtractorColorMode, ExtractorPage, LutCardLayout } from "../api/types";
 import {
   EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES,
   ExtractorColorMode as ExtractorColorModeEnum,
@@ -107,6 +107,7 @@ export interface ExtractorState {
   lut_download_url: string | null;
   warp_view_url: string | null;
   lut_preview_url: string | null;
+  lut_layout: LutCardLayout | null;
 
   // 手动修正
   manualFixLoading: boolean;
@@ -154,7 +155,7 @@ export interface ExtractorActions {
   setManufacturer: (value: string) => void;
   setType: (value: string) => void;
   submitExtract: () => Promise<void>;
-  submitManualFix: (row: number, col: number, color: string) => Promise<void>;
+  submitManualFix: (rowIndex: number, color: string) => Promise<void>;
   submitMerge: () => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -191,6 +192,7 @@ const DEFAULT_STATE: ExtractorState = {
   lut_download_url: null,
   warp_view_url: null,
   lut_preview_url: null,
+  lut_layout: null,
   manualFixLoading: false,
   manualFixError: null,
   page1Extracted: false,
@@ -241,6 +243,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           lut_download_url: null,
           warp_view_url: null,
           lut_preview_url: null,
+          lut_layout: null,
           defaultPalette: [],
           paletteConfirmed: false,
           paletteConfirmError: null,
@@ -263,6 +266,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           lut_download_url: null,
           warp_view_url: null,
           lut_preview_url: null,
+          lut_layout: null,
           defaultPalette: [],
           paletteConfirmed: false,
           paletteConfirmError: null,
@@ -308,6 +312,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         lut_download_url: null,
         warp_view_url: null,
         lut_preview_url: null,
+        lut_layout: null,
         defaultPalette: [],
         paletteConfirmed: false,
         paletteConfirmError: null,
@@ -432,6 +437,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         active_corner_index: null,
         warp_view_url: null,
         lut_preview_url: null,
+        lut_layout: null,
         lut_download_url: null,
         session_id: null,
         error: null,
@@ -612,6 +618,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           lut_preview_url: response.lut_preview_url
             ? normalizeResourceUrl(response.lut_preview_url)
             : null,
+          lut_layout: response.lut_layout ?? null,
           isLoading: false,
           defaultPalette: response.default_palette ?? [],
           paletteConfirmed: false,
@@ -626,7 +633,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       }
     },
 
-    submitManualFix: async (row: number, col: number, color: string) => {
+    submitManualFix: async (rowIndex: number, color: string) => {
       const state = get();
       if (!state.session_id) return;
 
@@ -634,13 +641,14 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       try {
         const response = await manualFixCell(
           state.session_id,
-          [row, col],
+          rowIndex,
           color,
         );
         set({
           lut_preview_url: response.lut_preview_url
             ? normalizeResourceUrl(response.lut_preview_url)
             : null,
+          lut_layout: response.lut_layout ?? state.lut_layout,
           manualFixLoading: false,
         });
       } catch (err) {
@@ -683,6 +691,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           lut_preview_url: response.lut_preview_url
             ? normalizeResourceUrl(response.lut_preview_url)
             : null,
+          lut_layout: response.lut_layout ?? null,
           defaultPalette: response.default_palette ?? [],
           paletteConfirmed: false,
           paletteConfirmError: null,

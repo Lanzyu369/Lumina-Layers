@@ -1,9 +1,10 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useRef, useEffect, useCallback, useState } from "react";
 import { useExtractorStore } from "../stores/extractorStore";
-import { ExtractorColorMode, ExtractorPage } from "../api/types";
+import { ExtractorColorMode, ExtractorPage, type LutPreviewResolvedCell } from "../api/types";
+import { resolveLutPreviewCell } from "../api/extractor";
 import { useI18n } from "../i18n/context";
-import { getObjectFitRect, lutClickToCell, getCellOverlayStyle, sampleCellHexColor, type RenderedImageRect } from "../utils/lutCoordUtils";
+import { getObjectFitRect, type RenderedImageRect } from "../utils/lutCoordUtils";
 import { hexToRgb } from "../utils/colorUtils";
 import { UI_COLOR_TOKENS } from "../theme/uiTokens";
 
@@ -188,20 +189,21 @@ function drawCanvas(
   });
 }
 
-// ========== LUT grid size per color mode ==========
-
-export const LUT_GRID_SIZE: Record<string, number> = {
-  [ExtractorColorMode.BW]: 6,
-  [ExtractorColorMode.FOUR_COLOR_CMYW]: 32,
-  [ExtractorColorMode.FOUR_COLOR_RYBW]: 32,
-  [ExtractorColorMode.SIX_COLOR]: 36,
-  [ExtractorColorMode.SIX_COLOR_RYBW]: 36,
-  [ExtractorColorMode.EIGHT_COLOR]: 37,
-  [ExtractorColorMode.FIVE_COLOR_EXT]: 38,
-};
-
 const EXTRACTOR_RESULT_MEDIA_MAX_HEIGHT = "clamp(16rem, 48vh, 56rem)";
 const EXTRACTOR_CANVAS_MAX_HEIGHT = "min(78vh, calc(100dvh - 12rem))";
+
+function getResolvedCellOverlayStyle(
+  resolved: LutPreviewResolvedCell,
+  rendered: RenderedImageRect,
+) {
+  const bbox = resolved.overlay_bbox;
+  return {
+    left: rendered.offsetX + bbox.left * rendered.width,
+    top: rendered.offsetY + bbox.top * rendered.height,
+    width: bbox.width * rendered.width,
+    height: bbox.height * rendered.height,
+  };
+}
 
 // ========== Component ==========
 
@@ -218,6 +220,7 @@ export default function ExtractorCanvas() {
   const page = useExtractorStore((s) => s.page);
   const warp_view_url = useExtractorStore((s) => s.warp_view_url);
   const lut_preview_url = useExtractorStore((s) => s.lut_preview_url);
+  const session_id = useExtractorStore((s) => s.session_id);
   const addCornerPoint = useExtractorStore((s) => s.addCornerPoint);
 
   const submitManualFix = useExtractorStore((s) => s.submitManualFix);
@@ -230,7 +233,7 @@ export default function ExtractorCanvas() {
   // instead of the entire canvas + LUT preview tree.
   // ``initialFixColor`` 仅作为 ManualFixPopover 内部状态的初值，避免拖动
   // 取色器时连带整张画布 + LUT 预览一起重绘。
-  const [selectedCell, setSelectedCell] = useState<[number, number] | null>(null);
+  const [selectedCell, setSelectedCell] = useState<LutPreviewResolvedCell | null>(null);
   const [initialFixColor, setInitialFixColor] = useState<string>(
     UI_COLOR_TOKENS.extractorFixColorDefault,
   );
@@ -297,34 +300,33 @@ export default function ExtractorCanvas() {
       const img = lutPreviewRef.current;
       if (!img) return;
       const rect = img.getBoundingClientRect();
-      const gridSize = LUT_GRID_SIZE[color_mode] ?? 32;
 
       const rendered = getObjectFitRect(
         img.naturalWidth, img.naturalHeight,
         rect.width, rect.height
       );
-      const cell = lutClickToCell(
-        e.clientX - rect.left,
-        e.clientY - rect.top,
-        rendered,
-        gridSize
-      );
-      if (cell) {
-        setSelectedCell(cell);
-        setRenderedRect(rendered);
-        // 采样该色块当前颜色作为取色器初始值，便于用户基于真实颜色微调。
-        const sampled = sampleCellHexColor(img, cell[0], cell[1], gridSize);
-        setInitialFixColor(sampled || UI_COLOR_TOKENS.extractorFixColorDefault);
-      }
+      if (!session_id || rendered.width <= 0 || rendered.height <= 0) return;
+      const relX = e.clientX - rect.left - rendered.offsetX;
+      const relY = e.clientY - rect.top - rendered.offsetY;
+      if (relX < 0 || relY < 0 || relX >= rendered.width || relY >= rendered.height) return;
+      const x = relX / rendered.width;
+      const y = relY / rendered.height;
+      void resolveLutPreviewCell(session_id, x, y)
+        .then((cell) => {
+          setSelectedCell(cell);
+          setRenderedRect(rendered);
+          setInitialFixColor(cell.hex || UI_COLOR_TOKENS.extractorFixColorDefault);
+        })
+        .catch(() => setSelectedCell(null));
       // 留白区域点击被忽略
     },
-    [color_mode]
+    [session_id]
   );
 
   const handleFixSubmit = useCallback(
     (hex: string) => {
       if (!selectedCell) return;
-      void submitManualFix(selectedCell[0], selectedCell[1], hex);
+      void submitManualFix(selectedCell.cell.row_index, hex);
       setSelectedCell(null);
     },
     [selectedCell, submitManualFix],
@@ -373,8 +375,7 @@ export default function ExtractorCanvas() {
                   style={{ maxHeight: EXTRACTOR_RESULT_MEDIA_MAX_HEIGHT }}
                 />
                 {selectedCell && renderedRect && (() => {
-                  const gridSize = LUT_GRID_SIZE[color_mode] ?? 32;
-                  const overlay = getCellOverlayStyle(selectedCell[0], selectedCell[1], renderedRect, gridSize);
+                  const overlay = getResolvedCellOverlayStyle(selectedCell, renderedRect);
                   return (
                     <div
                       data-testid="cell-highlight-overlay"
@@ -399,7 +400,7 @@ export default function ExtractorCanvas() {
         {/* 手动修正浮层：选中色块后悬浮显示 */}
         {selectedCell && (
           <ManualFixPopover
-            key={`${selectedCell[0]},${selectedCell[1]}`}
+            key={`${selectedCell.cell.row_index}`}
             cell={selectedCell}
             initialColor={initialFixColor}
             loading={manualFixLoading}
@@ -481,7 +482,7 @@ export default function ExtractorCanvas() {
 // ---------------------------------------------------------------------------
 
 interface ManualFixPopoverProps {
-  cell: [number, number];
+  cell: LutPreviewResolvedCell;
   initialColor: string;
   loading: boolean;
   onSubmit: (hex: string) => void;
@@ -523,7 +524,7 @@ function ManualFixPopover({
       className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/96 px-4 py-3 shadow-lg dark:border-slate-700/80 dark:bg-slate-900/96"
     >
       <span className="text-sm text-slate-700 dark:text-slate-300">
-        {t("ext_canvas_row")} {cell[0] + 1} / {t("ext_canvas_col")} {cell[1] + 1}
+        {t("ext_canvas_row")} {cell.cell.display_row} / {t("ext_canvas_col")} {cell.cell.display_col}
       </span>
       <input
         data-testid="fix-color-picker"

@@ -4,7 +4,7 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class BaseColorEntry(BaseModel):
@@ -22,7 +22,10 @@ class BaseColorsResponse(BaseModel):
     lut_name: str = Field(..., description="LUT 显示名称")
     color_count: int = Field(..., description="基础颜色数量")
     colors: list[BaseColorEntry] = Field(..., description="基础颜色列表")
-    combinations: Optional[list[list[int]]] = Field(None, description="所有合法的五色组合索引，若为空则所有组合合法")
+    combinations: Optional[list[list[int]]] = Field(
+        None,
+        description="所有合法的五色组合索引；null 表示不限制组合，空列表表示没有合法的五色组合",
+    )
 
 
 class FiveColorQueryRequest(BaseModel):
@@ -44,6 +47,87 @@ class FiveColorQueryResponse(BaseModel):
     row_index: int = Field(..., description="Stack LUT 行索引")
     message: str = Field(..., description="状态消息")
     source: str = Field("", description="来源标识")
+    reason: Optional[str] = Field(None, description="结构化原因码")
+
+
+class FiveColorCardCoordinate(BaseModel):
+    """匹配颜色在色卡布局中的坐标。"""
+
+    card_index: int = Field(..., description="色卡索引，0-based")
+    card_label: str = Field(..., description="色卡显示标签")
+    page_index: int = Field(..., description="页面索引，0-based")
+    page_label: str = Field(..., description="页面显示标签")
+    grid_size: int = Field(..., description="色卡方阵尺寸")
+    data_rows: int = Field(..., description="数据区行数")
+    data_cols: int = Field(..., description="数据区列数")
+    row: int = Field(..., description="行坐标，0-based")
+    col: int = Field(..., description="列坐标，0-based")
+    data_row: int = Field(..., description="数据区行坐标，0-based")
+    data_col: int = Field(..., description="数据区列坐标，0-based")
+    display_row: int = Field(..., description="显示行号，1-based")
+    display_col: int = Field(..., description="显示列号，1-based")
+    physical_row: int = Field(..., description="物理行坐标，0-based，含边框")
+    physical_col: int = Field(..., description="物理列坐标，0-based，含边框")
+    row_index: int = Field(..., description="LUT 行索引")
+
+
+class FiveColorNeighborhoodCell(BaseModel):
+    """虚拟小色卡中的单个格子。"""
+
+    card_index: Optional[int] = Field(None, description="色卡索引，0-based；空格为 None")
+    card_label: Optional[str] = Field(None, description="色卡显示标签；空格为 None")
+    page_index: Optional[int] = Field(None, description="页面索引，0-based；空格为 None")
+    page_label: Optional[str] = Field(None, description="页面显示标签；空格为 None")
+    grid_size: Optional[int] = Field(None, description="色卡方阵尺寸；空格为 None")
+    data_rows: Optional[int] = Field(None, description="数据区行数；空格为 None")
+    data_cols: Optional[int] = Field(None, description="数据区列数；空格为 None")
+    row: Optional[int] = Field(None, description="行坐标，0-based；空格为 None")
+    col: Optional[int] = Field(None, description="列坐标，0-based；空格为 None")
+    data_row: Optional[int] = Field(None, description="数据区行坐标，0-based；空格为 None")
+    data_col: Optional[int] = Field(None, description="数据区列坐标，0-based；空格为 None")
+    display_row: Optional[int] = Field(None, description="显示行号，1-based")
+    display_col: Optional[int] = Field(None, description="显示列号，1-based")
+    physical_row: Optional[int] = Field(None, description="物理行坐标，0-based，含边框")
+    physical_col: Optional[int] = Field(None, description="物理列坐标，0-based，含边框")
+    row_index: Optional[int] = Field(None, description="LUT 行索引；空格为 None")
+    rgb: Optional[tuple[int, int, int]] = Field(None, description="格子 RGB")
+    hex: Optional[str] = Field(None, description="格子 Hex")
+    is_match: bool = Field(False, description="是否为当前匹配格")
+
+
+class FiveColorMatchRequest(BaseModel):
+    """按目标色值反查五层配方请求。"""
+
+    lut_name: str = Field(..., description="LUT 显示名称")
+    target_hex: str = Field(..., description="目标 Hex 颜色，例如 #FF8040")
+    neighborhood_radius: int = Field(2, ge=0, le=4, description="虚拟小色卡邻域半径")
+
+    @field_validator("target_hex")
+    @classmethod
+    def normalize_target_hex(cls, value: str) -> str:
+        """Normalize and validate a #RRGGBB value."""
+        normalized = value.strip().upper()
+        if not normalized.startswith("#"):
+            normalized = f"#{normalized}"
+        if len(normalized) != 7:
+            raise ValueError("target_hex must be #RRGGBB")
+        try:
+            int(normalized[1:], 16)
+        except ValueError as exc:
+            raise ValueError("target_hex must be #RRGGBB") from exc
+        return normalized
+
+
+class FiveColorMatchResponse(FiveColorQueryResponse):
+    """按目标色值反查五层配方响应。"""
+
+    target_rgb: tuple[int, int, int] = Field(..., description="目标 RGB")
+    target_hex: str = Field(..., description="目标 Hex")
+    matched_rgb: Optional[tuple[int, int, int]] = Field(None, description="匹配 RGB")
+    matched_hex: Optional[str] = Field(None, description="匹配 Hex")
+    delta_e: Optional[float] = Field(None, description="OpenCV Lab 最近邻距离")
+    coordinate: FiveColorCardCoordinate = Field(..., description="匹配色卡坐标")
+    neighborhood: list[list[FiveColorNeighborhoodCell]] = Field(..., description="虚拟小色卡")
 
 
 # ========== Recipe Swatch Models ==========

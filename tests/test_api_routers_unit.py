@@ -11,7 +11,9 @@ across randomly generated valid request bodies.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from hypothesis import given, settings
@@ -19,6 +21,7 @@ from hypothesis import strategies as st
 from pydantic import BaseModel
 
 from api.app import create_app
+from api.dependencies import get_session_store
 from api.schemas.calibration import BackingColor, CalibrationGenerateRequest
 from api.schemas.converter import (
     ColorMergePreviewRequest,
@@ -37,6 +40,7 @@ from api.schemas.extractor import (
     ExtractorManualFixRequest,
     ExtractorPage,
 )
+from api.session_store import SessionStore
 
 # ---------------------------------------------------------------------------
 # Shared fixtures and constants
@@ -153,6 +157,48 @@ class TestExtractorEndpoints:
         }
         resp = client.post("/api/extractor/manual-fix", json=payload)
         assert resp.status_code == 500
+
+    def test_post_manual_fix_requires_cell_locator(self, client: TestClient) -> None:
+        """POST /api/extractor/manual-fix requires row_index or cell_coord."""
+        payload = {
+            "lut_path": "/tmp/test.npy",
+            "override_color": "#aabbcc",
+        }
+
+        resp = client.post("/api/extractor/manual-fix", json=payload)
+
+        assert resp.status_code == 422
+        assert "row_index or cell_coord" in resp.text
+
+    def test_resolve_cell_invalid_card_index_returns_422(self) -> None:
+        """POST /api/extractor/resolve-cell maps invalid card_index to 422."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", "/fake/lut.json")
+        store.put(session_id, "color_mode", "8-Color Max")
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch(
+                "api.routers.extractor.LUTManager.load_lut_with_metadata",
+                return_value=(np.zeros((2738, 3), dtype=np.uint8), None, None),
+            ):
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "card_index": 99,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 422
+        assert "card_index" in resp.text
 
 
 class TestCalibrationEndpoints:

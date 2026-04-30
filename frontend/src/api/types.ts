@@ -558,6 +558,7 @@ export interface ExtractResponse {
   warp_view_url: string;
   lut_preview_url: string;
   default_palette: ExtractorPaletteEntry[];
+  lut_layout?: LutCardLayout | null;
 }
 
 export interface SingleStageCoverageItem {
@@ -915,6 +916,7 @@ export interface ManualFixResponse {
   status: string;
   message: string;
   lut_preview_url: string;
+  lut_layout?: LutCardLayout | null;
 }
 
 // ========== LUT Manager Models ==========
@@ -1135,10 +1137,68 @@ export interface LutColorEntry {
   rgb: [number, number, number];
 }
 
+export interface LutCardPage {
+  page_index: number;
+  page_label: string;
+  card_index: number;
+  card_label: string;
+  start_index: number;
+  item_count: number;
+  data_rows: number;
+  data_cols: number;
+  padding: number;
+  physical_rows: number;
+  physical_cols: number;
+}
+
+export interface LutCardLayout {
+  color_mode: string;
+  total_count: number;
+  pages: LutCardPage[];
+}
+
+export interface LutCardCellCoordinate {
+  card_index: number;
+  card_label: string;
+  page_index: number;
+  page_label: string;
+  grid_size: number;
+  data_rows: number;
+  data_cols: number;
+  row: number;
+  col: number;
+  data_row: number;
+  data_col: number;
+  display_row: number;
+  display_col: number;
+  physical_row: number;
+  physical_col: number;
+  row_index: number;
+}
+
+export interface LutPreviewResolvedCell {
+  cell: LutCardCellCoordinate;
+  rgb: [number, number, number];
+  hex: string;
+  overlay_bbox: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface LutColorsCard {
+  page: LutCardPage;
+  colors: LutColorEntry[];
+}
+
 export interface LutColorsResponse {
   lut_name: string;
   total: number;
   colors: LutColorEntry[];
+  layout?: LutCardLayout | null;
+  cards?: LutColorsCard[];
 }
 
 // ========== Slicer Models ==========
@@ -1222,6 +1282,64 @@ export interface FiveColorQueryResponse {
   row_index: number;
   message: string;
   source: string;
+  reason?: string | null;
+}
+
+export interface FiveColorCardCoordinate {
+  card_index: number;
+  card_label: string;
+  page_index: number;
+  page_label: string;
+  grid_size: number;
+  data_rows: number;
+  data_cols: number;
+  row: number;
+  col: number;
+  data_row: number;
+  data_col: number;
+  display_row: number;
+  display_col: number;
+  physical_row: number;
+  physical_col: number;
+  row_index: number;
+}
+
+export interface FiveColorNeighborhoodCell {
+  card_index: number | null;
+  card_label: string | null;
+  page_index: number | null;
+  page_label: string | null;
+  grid_size: number | null;
+  data_rows: number | null;
+  data_cols: number | null;
+  row: number | null;
+  col: number | null;
+  data_row: number | null;
+  data_col: number | null;
+  display_row: number | null;
+  display_col: number | null;
+  physical_row: number | null;
+  physical_col: number | null;
+  row_index: number | null;
+  rgb: [number, number, number] | null;
+  hex: string | null;
+  is_match: boolean;
+}
+
+export interface FiveColorMatchRequest {
+  lut_name: string;
+  target_hex: string;
+  neighborhood_radius?: number;
+}
+
+export interface FiveColorMatchResponse extends FiveColorQueryResponse {
+  target_rgb: [number, number, number];
+  target_hex: string;
+  matched_rgb: [number, number, number] | null;
+  matched_hex: string | null;
+  delta_e: number | null;
+  coordinate: FiveColorCardCoordinate;
+  neighborhood: FiveColorNeighborhoodCell[][];
 }
 
 export interface RecipeSwatchItemRequest {

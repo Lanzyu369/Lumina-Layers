@@ -4039,6 +4039,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡 B",
     en: "Card B",
   },
+  lut_grid_card_label: {
+    zh: "色卡 {card}",
+    en: "Card {card}",
+  },
 
   // ==================== Replace Confirmation ====================
   replace_confirm_btn: {
@@ -4211,6 +4215,106 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "基础色板",
     en: "Base Palette",
   },
+  five_color_match_title: {
+    zh: "按色值查询",
+    en: "Match by color value",
+  },
+  five_color_match_desc: {
+    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配五层配方。",
+    en: "Enter a target Hex value and match the nearest five-layer recipe from the current LUT card.",
+  },
+  five_color_match_input_label: {
+    zh: "目标色值",
+    en: "Target Hex",
+  },
+  five_color_match_input_placeholder: {
+    zh: "#RRGGBB",
+    en: "#RRGGBB",
+  },
+  five_color_match_button: {
+    zh: "匹配配方",
+    en: "Match recipe",
+  },
+  five_color_match_target: {
+    zh: "目标色",
+    en: "Target",
+  },
+  five_color_match_matched: {
+    zh: "匹配色",
+    en: "Matched",
+  },
+  five_color_match_rgb_value: {
+    zh: "RGB {value}",
+    en: "RGB {value}",
+  },
+  five_color_match_delta: {
+    zh: "ΔE",
+    en: "Delta E",
+  },
+  five_color_match_position: {
+    zh: "色卡位置",
+    en: "Card position",
+  },
+  five_color_match_card: {
+    zh: "色卡 {card}",
+    en: "Card {card}",
+  },
+  five_color_match_row: {
+    zh: "第 {row} 行",
+    en: "Row {row}",
+  },
+  five_color_match_col: {
+    zh: "第 {col} 列",
+    en: "Column {col}",
+  },
+  five_color_match_recipe: {
+    zh: "匹配配方",
+    en: "Matched recipe",
+  },
+  five_color_match_neighborhood: {
+    zh: "虚拟小色卡",
+    en: "Virtual card",
+  },
+  five_color_match_empty_cell: {
+    zh: "空位",
+    en: "Empty cell",
+  },
+  five_color_match_recipe_unavailable: {
+    zh: "已找到最接近的色卡颜色，但该行无法反推出五层配方。",
+    en: "The nearest LUT color was found, but this row cannot be converted into a five-layer recipe.",
+  },
+  five_color_match_recipe_unavailable_title: {
+    zh: "无法生成五层配方",
+    en: "Recipe unavailable",
+  },
+  five_color_error_select_lut_first: {
+    zh: "请先选择 LUT",
+    en: "Select a LUT first",
+  },
+  five_color_error_load_base_colors_failed: {
+    zh: "基础色板加载失败",
+    en: "Base palette loading failed",
+  },
+  five_color_error_match_failed: {
+    zh: "按色值查询失败",
+    en: "Color value lookup failed",
+  },
+  five_color_error_invalid_hex: {
+    zh: "请输入 #RRGGBB 格式的色值",
+    en: "Enter a color value in #RRGGBB format",
+  },
+  five_color_error_query_failed: {
+    zh: "五色配方查询失败",
+    en: "Five-color recipe lookup failed",
+  },
+  five_color_error_generate_swatch_failed: {
+    zh: "色卡生成失败",
+    en: "Swatch generation failed",
+  },
+  five_color_error_generic: {
+    zh: "五色操作失败",
+    en: "Five-color operation failed",
+  },
   five_color_actions: {
     zh: "操作",
     en: "Actions",
@@ -4271,6 +4375,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡结构",
     en: "Swatch structure",
   },
+  five_color_swatch_single_sided: {
+    zh: "单面",
+    en: "Single-sided",
+  },
+  five_color_swatch_double_sided: {
+    zh: "双面",
+    en: "Double-sided",
+  },
   five_color_swatch_legend_alt: {
     zh: "色卡预览图",
     en: "Swatch preview",
@@ -4315,6 +4427,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "行号",
     en: "Row",
   },
+  five_color_result_lut_row_index: {
+    zh: "LUT 行索引（0 起）",
+    en: "LUT row index (0-based)",
+  },
   five_color_result_source: {
     zh: "来源",
     en: "Source",
@@ -4330,6 +4446,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   five_color_not_found: {
     zh: "未找到匹配",
     en: "No match found",
+  },
+  five_color_not_found_message: {
+    zh: "当前五层颜色顺序没有对应的色卡记录。",
+    en: "The current five-layer color order does not match a LUT record.",
   },
   five_color_selection_progress: {
     zh: "已选择 {count}/{total} 种颜色，请继续完成配方。",

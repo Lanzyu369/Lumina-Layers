@@ -24,6 +24,8 @@ from config import get_asset_path
 
 REFERENCE_REPO_ROOT = Path("reference/ChromaPrint3D").resolve()
 REFERENCE_DATA_ROOT = REFERENCE_REPO_ROOT / "data"
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
 REFERENCE_DB_ROOT = REFERENCE_DATA_ROOT / "dbs"
 REFERENCE_MODEL_PACK_ROOT = REFERENCE_DATA_ROOT / "model_packs"
 REFERENCE_FORWARD_MODEL_ROOT = REFERENCE_DATA_ROOT / "models" / "forward"
@@ -648,7 +650,7 @@ def discover_native_reference_context(path: str, data: Any | None = None) -> Nat
             recipe_path=resolved_path,
             supported_modes=(
                 supported_mode_dict(
-                    int(meta.get("color_layers", len(data.get("recipes", [])[0]) if data.get("recipes") else 0)),
+                    _recipe_color_layers(data.get("recipes", []), meta),
                     float(meta.get("layer_height_mm", 0.08)),
                     layer_order=str(meta.get("layer_order", "Top2Bottom")),
                 ),
@@ -719,15 +721,92 @@ def discover_native_reference_context(path: str, data: Any | None = None) -> Nat
     return None
 
 
+def _parse_reference_recipe_integer(value: Any) -> int | None:
+    if isinstance(value, (bool, np.bool_)):
+        return None
+    if isinstance(value, str):
+        stripped_value = value.strip()
+        digits = stripped_value[1:] if stripped_value[:1] in ("+", "-") else stripped_value
+        if not digits or not digits.isdigit():
+            return None
+        try:
+            integer_value = int(stripped_value)
+        except ValueError:
+            return None
+        if _INT32_MIN <= integer_value <= _INT32_MAX:
+            return integer_value
+        return None
+    if isinstance(value, (int, np.integer)):
+        integer_value = int(value)
+        if _INT32_MIN <= integer_value <= _INT32_MAX:
+            return integer_value
+    return None
+
+
+def _recipe_color_layers(raw_recipes: Any, meta: dict[str, Any]) -> int:
+    try:
+        color_layers = int(meta.get("color_layers", 0))
+    except (TypeError, ValueError):
+        color_layers = 0
+    if color_layers > 0:
+        return color_layers
+    valid_row_length_counts: dict[int, int] = {}
+    structural_row_lengths: list[int] = []
+    if isinstance(raw_recipes, list):
+        for row in raw_recipes:
+            if not isinstance(row, (list, tuple)) or not row:
+                continue
+            structural_row_lengths.append(len(row))
+            parsed_row = [_parse_reference_recipe_integer(value) for value in row]
+            if any(value is None for value in parsed_row):
+                continue
+            valid_row_length_counts[len(row)] = valid_row_length_counts.get(len(row), 0) + 1
+    if 5 in structural_row_lengths:
+        return 5
+    if valid_row_length_counts:
+        max_count = max(valid_row_length_counts.values())
+        candidates = [
+            length for length, count in valid_row_length_counts.items()
+            if count == max_count
+        ]
+        return max(candidates)
+    if structural_row_lengths:
+        return max(structural_row_lengths)
+    if isinstance(raw_recipes, list) and raw_recipes:
+        return 5
+    return 0
+
+
+def _normalize_reference_recipe_rows(raw_recipes: Any, color_layers: int) -> np.ndarray:
+    if color_layers <= 0 or not isinstance(raw_recipes, list):
+        raise ValueError("Invalid reference recipe payload")
+    invalid_row = [-1] * color_layers
+    normalized_rows: list[list[int]] = []
+    for row in raw_recipes:
+        if not isinstance(row, (list, tuple)) or len(row) != color_layers:
+            normalized_rows.append(list(invalid_row))
+            continue
+        parsed_row = [_parse_reference_recipe_integer(value) for value in row]
+        if any(value is None for value in parsed_row):
+            normalized_rows.append(list(invalid_row))
+        else:
+            normalized_rows.append([int(value) for value in parsed_row])
+    if not normalized_rows:
+        raise ValueError("Invalid reference recipe payload")
+    return np.asarray(normalized_rows, dtype=np.int32)
+
+
 def build_recipe_runtime_payload(data: dict[str, Any]) -> dict[str, Any]:
     """Convert a reference recipe JSON to a Lumina-style runtime package payload."""
     meta = data.get("meta", {}) if isinstance(data.get("meta"), dict) else {}
-    recipes = np.asarray(data.get("recipes", []), dtype=np.int32)
+    raw_recipes = data.get("recipes", [])
+    color_layers = _recipe_color_layers(raw_recipes, meta)
+    recipes = _normalize_reference_recipe_rows(raw_recipes, color_layers)
     pred_lab = np.asarray(data.get("predicted_lab_opencv", []), dtype=np.float32)
     if recipes.ndim != 2 or pred_lab.ndim != 2 or pred_lab.shape != (recipes.shape[0], 3):
         raise ValueError("Invalid reference recipe payload")
     mode = supported_mode_dict(
-        int(meta.get("color_layers", recipes.shape[1])),
+        recipes.shape[1],
         float(meta.get("layer_height_mm", 0.08)),
         layer_order=str(meta.get("layer_order", "Top2Bottom")),
     )
