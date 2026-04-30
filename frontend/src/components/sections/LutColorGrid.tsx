@@ -3,7 +3,7 @@ import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { hexToRgb, sortByColorDistance } from "../../utils/colorUtils";
 import { isCardModeAvailable } from "../../utils/cardUtils";
-import type { LutColorEntry } from "../../api/types";
+import type { LutColorEntry, LutColorsCard } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
 import MaterialColorPicker from "./MaterialColorPicker";
@@ -174,6 +174,7 @@ function LutColorGridInner() {
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const lutColors = useConverterStore((s) => s.lutColors);
+  const lutColorCards = useConverterStore((s) => s.lutColorCards);
   const lutColorsLoading = useConverterStore((s) => s.lutColorsLoading);
   const lutColorsLutName = useConverterStore((s) => s.lutColorsLutName);
   const selectionMode = useConverterStore((s) => s.selectionMode);
@@ -189,8 +190,8 @@ function LutColorGridInner() {
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const cardAvailable = useMemo(
-    () => isCardModeAvailable(colorMode),
-    [colorMode],
+    () => isCardModeAvailable(colorMode) && lutColorCards.length > 0,
+    [colorMode, lutColorCards.length],
   );
 
   // --- Local Components ---
@@ -253,57 +254,36 @@ function LutColorGridInner() {
   };
 
   const CardGrid = ({
-    lutColors,
-    colorMode,
+    cards,
     selectedColor,
     colorRemapMap,
     onColorClick,
   }: {
-    lutColors: LutColorEntry[];
-    colorMode: string;
+    cards: LutColorsCard[];
     selectedColor: string | null;
     colorRemapMap: Record<string, string>;
     onColorClick: (hex: string) => void;
   }) => {
-    const total = lutColors.length;
-    const isEightColor = colorMode === "8-Color Max";
-
-    if (isEightColor && total > 1) {
-      const half = Math.floor(total / 2);
-      const colsA = Math.ceil(Math.sqrt(half));
-      const colsB = Math.ceil(Math.sqrt(total - half));
-      return (
-        <div className="flex gap-3 overflow-auto">
-          <CardSection
-            colors={lutColors.slice(0, half)}
-            cols={colsA}
-            title={t("lut_grid_card_a")}
-            selectedColor={selectedColor}
-            colorRemapMap={colorRemapMap}
-            onColorClick={onColorClick}
-          />
-          <CardSection
-            colors={lutColors.slice(half)}
-            cols={colsB}
-            title={t("lut_grid_card_b")}
-            selectedColor={selectedColor}
-            colorRemapMap={colorRemapMap}
-            onColorClick={onColorClick}
-          />
-        </div>
-      );
-    }
-
-    const cols = Math.ceil(Math.sqrt(total));
+    const visibleCards = cards.filter((card) => card.colors.length > 0);
+    if (visibleCards.length === 0) return null;
+    const cardTitle = (card: LutColorsCard) => {
+      if (card.page.card_label === "A") return t("lut_grid_card_a");
+      if (card.page.card_label === "B") return t("lut_grid_card_b");
+      return t("lut_grid_card_label").replace("{card}", card.page.card_label);
+    };
     return (
-      <div className="overflow-auto">
-        <CardSection
-          colors={lutColors}
-          cols={cols}
-          selectedColor={selectedColor}
-          colorRemapMap={colorRemapMap}
-          onColorClick={onColorClick}
-        />
+      <div className="flex gap-3 overflow-auto">
+        {visibleCards.map((card) => (
+          <CardSection
+            key={`${card.page.page_index}-${card.page.card_label}`}
+            colors={card.colors}
+            cols={card.page.data_cols}
+            title={visibleCards.length > 1 ? cardTitle(card) : undefined}
+            selectedColor={selectedColor}
+            colorRemapMap={colorRemapMap}
+            onColorClick={onColorClick}
+          />
+        ))}
       </div>
     );
   };
@@ -570,11 +550,10 @@ function LutColorGridInner() {
             )}
           </div>
 
-          {/* Color grid 鈥?conditional swatch vs card rendering */}
+          {/* Color grid: conditional swatch vs card rendering */}
           {paletteMode === "card" && cardAvailable ? (
             <CardGrid
-              lutColors={lutColors}
-              colorMode={colorMode}
+              cards={lutColorCards}
               selectedColor={selectedColor}
               colorRemapMap={colorRemapMap}
               onColorClick={handleColorClick}
@@ -667,5 +646,3 @@ function LutColorGridInner() {
     </div>
   );
 }
-
-

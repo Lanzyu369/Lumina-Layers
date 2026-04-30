@@ -6,9 +6,47 @@
 从 8 个基础颜色中选择 5 次（可重复），查询对应的结果颜色。
 """
 
-import numpy as np
-from typing import Tuple, List, Optional
 from dataclasses import dataclass
+import re
+from typing import Tuple, List, Optional
+
+import cv2
+import numpy as np
+from scipy.spatial import KDTree
+
+from core.lut_card_layout import (
+    LutCardCellCoordinate,
+    LutCardNeighborhoodCell,
+    build_neighborhood as build_lut_card_neighborhood,
+    cell_for_row_index,
+    resolve_lut_layout,
+)
+
+
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+_INTEGER_STRING_PATTERN = re.compile(r"[+-]?\d+")
+
+
+def _parse_stack_recipe_integer(value: object) -> int | None:
+    if isinstance(value, (bool, np.bool_)):
+        return None
+    if isinstance(value, str):
+        stripped_value = value.strip()
+        if not _INTEGER_STRING_PATTERN.fullmatch(stripped_value):
+            return None
+        try:
+            integer_value = int(stripped_value)
+        except ValueError:
+            return None
+        if _INT32_MIN <= integer_value <= _INT32_MAX:
+            return integer_value
+        return None
+    if isinstance(value, (int, np.integer)):
+        integer_value = int(value)
+        if _INT32_MIN <= integer_value <= _INT32_MAX:
+            return integer_value
+    return None
 
 
 @dataclass
@@ -21,6 +59,28 @@ class ColorQueryResult:
     row_index: int  # 在 stack LUT 中的行索引
     message: str  # 状态消息
     source: str = ""  # 来源标识（例如 "Aliz-PETG-8色"）
+
+
+ColorCardCoordinate = LutCardCellCoordinate
+ColorCardCell = LutCardNeighborhoodCell
+
+
+@dataclass
+class ColorMatchResult:
+    """Result of matching an arbitrary RGB target against the LUT card."""
+
+    found: bool
+    selected_indices: List[int]
+    result_rgb: Optional[Tuple[int, int, int]]
+    row_index: int
+    message: str
+    source: str
+    target_rgb: Tuple[int, int, int]
+    matched_rgb: Optional[Tuple[int, int, int]]
+    delta_e: float | None
+    coordinate: ColorCardCoordinate
+    neighborhood: list[list[ColorCardCell]]
+    reason: str = ""
 
 
 class ColorCountDetector:
@@ -53,6 +113,10 @@ class ColorCountDetector:
         if combination_count in ColorCountDetector.KNOWN_FORMATS:
             color_count = ColorCountDetector.KNOWN_FORMATS[combination_count]
             return (color_count, combination_count)
+
+        for candidate_count in range(2, 9):
+            if combination_count == candidate_count ** 5:
+                return (candidate_count, combination_count)
 
         # 未知格式，返回 0 表示无法识别
         return (0, combination_count)
@@ -118,7 +182,7 @@ class StackLUTLoader:
             tuple: (success, message, stack_data)
                 - success: 是否成功
                 - message: 状态消息
-                - stack_data: (N, 5) 数组，每行是一个 5 色组合索引
+                - stack_data: (N, 5) 数组，每行是一个 5 色组合索引；None 或 (N, 0) 表示无配方列
         """
         try:
             data = np.load(file_path)
@@ -160,22 +224,32 @@ class StackLUTLoader:
             if "rgb" not in data:
                 return False, "错误：NPZ 文件缺少 'rgb' 数据", None, None
 
-            if "stacks" not in data:
-                return False, "错误：NPZ 文件缺少 'stacks' 数据", None, None
-
             rgb_data = data["rgb"]
-            stack_data = data["stacks"]
+            stack_data = None
+            if "stacks" in data:
+                try:
+                    stack_data = data["stacks"]
+                except ValueError as exc:
+                    if "Object arrays cannot be loaded" not in str(exc):
+                        raise
+                    stack_data = np.full((len(rgb_data), 5), -1, dtype=int)
 
             # 验证 RGB 数据格式
             if rgb_data.ndim != 2 or rgb_data.shape[1] != 3:
                 return False, f"错误：RGB 数据形状应为 (N, 3)，实际为 {rgb_data.shape}", None, None
 
-            # 验证 stack 数据格式
-            if stack_data.ndim != 2 or stack_data.shape[1] != 5:
-                return False, f"错误：Stack 数据形状应为 (N, 5)，实际为 {stack_data.shape}", None, None
+            # 验证 stack 数据格式；缺失或空列表示该 LUT 没有可直接查询的配方列。
+            if stack_data is not None and (stack_data.ndim != 2 or stack_data.shape[1] not in (0, 5)):
+                return False, f"错误：Stack 数据形状应为 (N, 5) 或 (N, 0)，实际为 {stack_data.shape}", None, None
 
             # 验证数据长度一致
-            if len(rgb_data) != len(stack_data):
+            stack_is_unavailable = (
+                stack_data is not None
+                and stack_data.ndim == 2
+                and stack_data.shape[0] == 0
+                and stack_data.shape[1] in (0, 5)
+            )
+            if stack_data is not None and not stack_is_unavailable and len(rgb_data) != len(stack_data):
                 return False, f"错误：RGB 和 Stack 数据长度不一致: {len(rgb_data)} vs {len(stack_data)}", None, None
 
             # 验证 RGB 值范围
@@ -238,9 +312,9 @@ class StackLUTLoader:
         # 1) 尝试从 NPZ 的 sources 字段读取
         if npz_path.endswith(".npz"):
             try:
-                data = np.load(npz_path, allow_pickle=True)
-                if "sources" in data:
-                    return [str(s) for s in data["sources"]]
+                with np.load(npz_path, allow_pickle=False) as data:
+                    if "sources" in data:
+                        return [str(s) for s in data["sources"]]
             except Exception:
                 pass
         # 2) 回退到同名 JSON
@@ -268,30 +342,57 @@ class ColorQueryEngine:
         """初始化查询引擎
 
         Args:
-            stack_lut: (N, 5) 堆叠查找表（可选，如果没有则使用动态查询）
+            stack_lut: (N, 5) 堆叠查找表；(N, 0) 或 None 时使用动态查询
             lut_rgb: (N, 3) RGB 颜色数据
             color_count: 颜色数量（可选，如果没有则自动检测）
             sources: 每条记录的来源标识列表（可选）
         """
         self.lut_rgb = lut_rgb
-        self.stack_lut = stack_lut
+        stack_arr = np.asarray(stack_lut) if stack_lut is not None else None
+        raw_stack_lut = (
+            None
+            if stack_arr is not None
+            and stack_arr.ndim == 2
+            and (stack_arr.shape[1] == 0 or stack_arr.shape[0] == 0)
+            else stack_arr
+        )
         self.sources = sources or []
+        stack_is_reliable = raw_stack_lut is not None
+
+        # 验证 stack_lut 和 lut_rgb 长度一致（如果有 stack_lut）
+        stack_is_unavailable = (
+            raw_stack_lut is not None
+            and raw_stack_lut.ndim == 2
+            and raw_stack_lut.shape == (0, 5)
+        )
+        if raw_stack_lut is not None and not stack_is_unavailable and len(raw_stack_lut) != len(lut_rgb):
+            raise ValueError(f"Stack LUT 和 RGB 数据长度不匹配: {len(raw_stack_lut)} vs {len(lut_rgb)}")
 
         # 检测颜色数量
         if color_count is not None:
             self.color_count = color_count
-        elif stack_lut is not None:
-            # 从 stack_lut 的最大值推断
-            max_color_idx = int(stack_lut.max())
-            self.color_count = max_color_idx + 1
+        elif raw_stack_lut is not None:
+            detected_count, _ = ColorCountDetector.detect_color_count(lut_rgb)
+            if detected_count > 0:
+                self.color_count = detected_count
+            else:
+                inferred_count = self._infer_supported_stack_color_count(raw_stack_lut)
+                if inferred_count is not None:
+                    self.color_count = inferred_count
+                else:
+                    self.color_count = 8
+                    stack_is_reliable = False
         else:
             # 尝试从 lut_rgb 检测
             detected_count, _ = ColorCountDetector.detect_color_count(lut_rgb)
             self.color_count = detected_count if detected_count > 0 else 8  # 默认 8 色
 
-        # 验证 stack_lut 和 lut_rgb 长度一致（如果有 stack_lut）
-        if stack_lut is not None and len(stack_lut) != len(lut_rgb):
-            raise ValueError(f"Stack LUT 和 RGB 数据长度不匹配: {len(stack_lut)} vs {len(lut_rgb)}")
+        if raw_stack_lut is None:
+            self.stack_lut = None
+        elif stack_is_reliable:
+            self.stack_lut = self._normalize_stack_lut_for_matching(raw_stack_lut)
+        else:
+            self.stack_lut = np.empty((0, 5), dtype=int)
 
         # 提取基础颜色（从前 color_count 行，每行应该是 [i,i,i,i,i]）
         self.base_colors = []
@@ -301,6 +402,128 @@ class ColorQueryEngine:
             else:
                 # 如果 LUT 不够，使用默认颜色
                 self.base_colors.append((128, 128, 128))
+
+    @staticmethod
+    def _infer_supported_stack_color_count(stack_lut: np.ndarray) -> int | None:
+        stack_arr = np.asarray(stack_lut)
+        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5 or stack_arr.size == 0:
+            return None
+        max_index = -1
+        for row in stack_arr:
+            row_values: list[int] = []
+            row_is_valid = True
+            for value in row.tolist():
+                integer_value = _parse_stack_recipe_integer(value)
+                if integer_value is None or integer_value < 0 or integer_value >= 8:
+                    row_is_valid = False
+                    break
+                row_values.append(integer_value)
+            if row_is_valid:
+                max_index = max(max_index, max(row_values))
+        inferred_count = max_index + 1
+        if inferred_count < 1 or inferred_count > 8:
+            return None
+        return inferred_count
+
+    def _normalize_stack_lut_for_matching(self, stack_lut: np.ndarray) -> np.ndarray:
+        stack_arr = np.asarray(stack_lut)
+        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5:
+            return np.empty((0, 5), dtype=int)
+        if stack_arr.shape[0] == 0:
+            return np.empty((0, 5), dtype=int)
+        normalized_rows: list[list[int]] = []
+        invalid_row = [-1, -1, -1, -1, -1]
+        for row in stack_arr:
+            recipe = self._normalize_five_layer_recipe(row.tolist())
+            normalized_rows.append(recipe if recipe is not None else invalid_row)
+        return np.asarray(normalized_rows, dtype=int)
+
+    def get_combinations(self) -> Optional[List[List[int]]]:
+        """Return valid five-layer stack combinations for UI filtering.
+        返回可用于前端筛选的合法五层 stack 组合。
+        """
+        if self.stack_lut is None:
+            return None if self._supports_dynamic_five_layer_row_decoding() else []
+        stack_arr = np.asarray(self.stack_lut)
+        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5:
+            return None
+        combinations: list[list[int]] = []
+        for row in stack_arr:
+            recipe = self._normalize_five_layer_recipe(row.tolist())
+            if recipe is not None:
+                combinations.append(recipe)
+        return combinations
+
+    def match_color(
+        self,
+        target_rgb: Tuple[int, int, int],
+        *,
+        neighborhood_radius: int = 2,
+    ) -> ColorMatchResult:
+        """Match a target RGB to the nearest LUT row using standard Lab KDTree lookup.
+
+        Args:
+            target_rgb: RGB target in 0-255 sRGB. (目标 sRGB 颜色)
+            neighborhood_radius: Radius around the matched card cell. (邻域半径)
+
+        Returns:
+            ColorMatchResult: Nearest row, recipe, card coordinate, and neighborhood.
+        """
+        lut_rgb = np.asarray(self.lut_rgb, dtype=np.uint8).reshape(-1, 3)
+        if lut_rgb.size == 0:
+            raise ValueError("LUT RGB data is empty")
+
+        target_arr = np.asarray(target_rgb, dtype=np.uint8).reshape(1, 3)
+        lut_lab = _rgb_to_lab(lut_rgb)
+        target_lab = _rgb_to_lab(target_arr)
+        distance, row_idx = KDTree(lut_lab).query(target_lab)
+        row_index = int(np.asarray(row_idx).reshape(-1)[0])
+        delta_e = float(np.asarray(distance).reshape(-1)[0])
+        matched_rgb = tuple(int(v) for v in lut_rgb[row_index])
+        layout = resolve_lut_layout("", int(lut_rgb.shape[0]))
+        coordinate = cell_for_row_index(layout, row_index)
+        radius = max(0, int(neighborhood_radius))
+        neighborhood = build_lut_card_neighborhood(
+            layout,
+            lut_rgb,
+            coordinate,
+            match_row_index=row_index,
+            radius=radius,
+        )
+
+        recipe = self._recipe_for_row_index(row_index)
+        if recipe is None:
+            return ColorMatchResult(
+                found=False,
+                selected_indices=[],
+                result_rgb=None,
+                row_index=row_index,
+                message=(
+                    f"Matched row {row_index}, but no five-layer recipe is "
+                    "available for this LUT row."
+                ),
+                source=self.sources[row_index] if row_index < len(self.sources) else "",
+                target_rgb=tuple(int(v) for v in target_rgb),
+                matched_rgb=matched_rgb,
+                delta_e=delta_e,
+                coordinate=coordinate,
+                neighborhood=neighborhood,
+                reason="recipe_unavailable",
+            )
+
+        return ColorMatchResult(
+            found=True,
+            selected_indices=recipe,
+            result_rgb=matched_rgb,
+            row_index=row_index,
+            message=f"找到最近匹配！行索引: {row_index}",
+            source=self.sources[row_index] if row_index < len(self.sources) else "",
+            target_rgb=tuple(int(v) for v in target_rgb),
+            matched_rgb=matched_rgb,
+            delta_e=delta_e,
+            coordinate=coordinate,
+            neighborhood=neighborhood,
+        )
 
     def query(self, selected_indices: List[int]) -> ColorQueryResult:
         """查询 5 色组合
@@ -358,6 +581,15 @@ class ColorQueryEngine:
         """动态查询（无 stack 文件）"""
         from itertools import product
 
+        if not self._supports_dynamic_five_layer_row_decoding():
+            return ColorQueryResult(
+                found=False,
+                selected_indices=selected_indices,
+                result_rgb=None,
+                row_index=-1,
+                message="当前 LUT 行号无法可靠反推五层配方",
+            )
+
         # 生成所有可能的 5 色组合
         target = tuple(selected_indices)
 
@@ -379,6 +611,53 @@ class ColorQueryEngine:
         return ColorQueryResult(
             found=False, selected_indices=selected_indices, result_rgb=None, row_index=-1, message="未找到匹配的组合"
         )
+
+    def _recipe_for_row_index(self, row_index: int) -> List[int] | None:
+        if self.stack_lut is not None:
+            stack_arr = np.asarray(self.stack_lut)
+            if stack_arr.ndim != 2:
+                return None
+            if stack_arr.shape[1] == 5:
+                if row_index < 0 or row_index >= stack_arr.shape[0]:
+                    return None
+                return self._normalize_five_layer_recipe(stack_arr[row_index].tolist())
+            if stack_arr.shape[1] != 0:
+                return None
+
+        if self.color_count <= 0 or row_index < 0:
+            return None
+        if not self._supports_dynamic_five_layer_row_decoding():
+            return None
+        total = int(self.color_count) ** 5
+        if row_index >= total:
+            return None
+        remaining = int(row_index)
+        recipe: list[int] = []
+        for power in range(4, -1, -1):
+            base = int(self.color_count) ** power
+            value = remaining // base
+            recipe.append(int(value))
+            remaining -= value * base
+        return recipe
+
+    def _normalize_five_layer_recipe(self, values: List[int]) -> List[int] | None:
+        if len(values) != 5 or self.color_count <= 0:
+            return None
+        recipe: list[int] = []
+        for value in values:
+            integer_value = _parse_stack_recipe_integer(value)
+            if integer_value is None:
+                return None
+            recipe.append(integer_value)
+        if any(index < 0 or index >= self.color_count for index in recipe):
+            return None
+        return recipe
+
+    def _supports_dynamic_five_layer_row_decoding(self) -> bool:
+        row_count = int(np.asarray(self.lut_rgb).reshape(-1, 3).shape[0])
+        if self.color_count <= 0:
+            return False
+        return row_count == int(self.color_count) ** 5
 
     def get_base_colors(self) -> List[Tuple[int, int, int]]:
         """获取基础颜色
@@ -422,6 +701,15 @@ def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
         str: 十六进制颜色代码，例如 "#FF5733"
     """
     return f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"
+
+
+def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
+    """Convert RGB uint8 rows to OpenCV CIELAB values used by standard matching."""
+    rgb_3d = np.asarray(rgb_array, dtype=np.uint8).reshape(1, -1, 3)
+    bgr = cv2.cvtColor(rgb_3d, cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab).reshape(-1, 3).astype(np.float64)
+
+
 
 
 def format_selection_sequence(selected_indices: List[int], color_names: Optional[List[str]] = None) -> str:

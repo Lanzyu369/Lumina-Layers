@@ -136,6 +136,52 @@ class GradientCardMaterialSummaryResponse(BaseModel):
     estimated_k: list[float] = Field(default_factory=list)
 
 
+class AggregationRunScoreResponse(BaseModel):
+    """Per-run diagnostic score in the multi-run selection block.
+    多 run 选择诊断中单个 run 的评分信息。
+
+    Mirrors :func:`_select_runs_for_refit`'s ``run_scores`` entries so the
+    frontend can render a per-run breakdown without re-implementing the
+    bias scoring logic.
+    """
+
+    index: int
+    is_fresh: bool = False
+    bias_flag_count: int = 0
+    bias_flags: list[str] = Field(default_factory=list)
+    structural_flag_count: int = 0
+    structural_flags: list[str] = Field(default_factory=list)
+    white_c0_avg: float | None = None
+    image_source: str | None = None
+    cross_val_rmse: float | None = None
+
+
+class AggregationExcludedRunResponse(BaseModel):
+    """One run excluded from the joint refit, with reason and flags."""
+
+    index: int
+    reason: str
+    bias_flags: list[str] = Field(default_factory=list)
+    structural_flags: list[str] = Field(default_factory=list)
+    cross_val_rmse: float | None = None
+
+
+class AggregationSelectionResponse(BaseModel):
+    """Full selection diagnostic block for the multi-run aggregator.
+    多 run 聚合的完整选择诊断块。
+
+    Surfaced to the frontend so the "merge diagnostics" panel can
+    explain which runs participated in the joint refit and why others
+    were dropped (bias filter or cross-val ranking).
+    """
+
+    selected_indices: list[int] = Field(default_factory=list)
+    excluded_runs: list[AggregationExcludedRunResponse] = Field(default_factory=list)
+    selection_strategy: str = "bias_filter_v1"
+    run_scores: list[AggregationRunScoreResponse] = Field(default_factory=list)
+    fresh_index: int | None = None
+
+
 class SavedMaterialSummaryResponse(BaseModel):
     """Summary of a saved material archive."""
 
@@ -147,6 +193,13 @@ class SavedMaterialSummaryResponse(BaseModel):
     verification_count: int = 1
     created_at: str | None = None
     updated_at: str | None = None
+    # Aggregation diagnostics carried alongside the identity fields so a
+    # single response payload covers both "where is the file" and "how
+    # was it merged". Both are optional: legacy archives or single-run
+    # saves may omit them.
+    # 聚合诊断信息附在身份字段旁，单一响应覆盖"文件在哪"和"如何合并"。
+    aggregation_method: str | None = None
+    aggregation_selection: AggregationSelectionResponse | None = None
 
 
 class OrientationCandidateResponse(BaseModel):
@@ -625,6 +678,7 @@ class ExtractResponse(BaseModel):
         default_factory=list,
         description="默认调色板数组，每项含 color、material、hex_color、color_name",
     )
+    lut_layout: Optional["LutCardLayoutResponse"] = None
 
 
 class ManualFixResponse(BaseModel):
@@ -633,6 +687,7 @@ class ManualFixResponse(BaseModel):
     status: str
     message: str
     lut_preview_url: str
+    lut_layout: Optional["LutCardLayoutResponse"] = None
 
 
 class HeightmapUploadResponse(BaseModel):
@@ -653,12 +708,79 @@ class LutColorEntry(BaseModel):
     rgb: tuple[int, int, int]
 
 
+class LutCardPageResponse(BaseModel):
+    """Single LUT card/page layout descriptor."""
+
+    page_index: int
+    page_label: str
+    card_index: int
+    card_label: str
+    start_index: int
+    item_count: int
+    data_rows: int
+    data_cols: int
+    padding: int
+    physical_rows: int
+    physical_cols: int
+
+
+class LutCardLayoutResponse(BaseModel):
+    """Resolved LUT card layout."""
+
+    color_mode: str
+    total_count: int
+    pages: list[LutCardPageResponse]
+
+
+class LutCardCellCoordinateResponse(BaseModel):
+    """Resolved coordinate for one LUT row."""
+
+    card_index: int
+    card_label: str
+    page_index: int
+    page_label: str
+    grid_size: int
+    data_rows: int
+    data_cols: int
+    row: int
+    col: int
+    data_row: int
+    data_col: int
+    display_row: int
+    display_col: int
+    physical_row: int
+    physical_col: int
+    row_index: int
+
+
+class LutPreviewResolvedCell(BaseModel):
+    """Resolved LUT preview click target."""
+
+    cell: LutCardCellCoordinateResponse
+    rgb: tuple[int, int, int]
+    hex: str
+    overlay_bbox: dict[str, float]
+
+
+class LutColorsCardResponse(BaseModel):
+    """LUT colors grouped by backend-resolved card/page."""
+
+    page: LutCardPageResponse
+    colors: list[LutColorEntry]
+
+
 class LutColorsResponse(BaseModel):
     """LUT 颜色列表响应。"""
 
     lut_name: str
     total: int
     colors: list[LutColorEntry]
+    layout: Optional[LutCardLayoutResponse] = None
+    cards: list[LutColorsCardResponse] = Field(default_factory=list)
+
+
+ExtractResponse.model_rebuild()
+ManualFixResponse.model_rebuild()
 
 
 class CropResponse(BaseModel):

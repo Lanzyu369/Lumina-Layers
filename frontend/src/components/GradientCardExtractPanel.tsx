@@ -11,7 +11,13 @@ import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import Dropdown from "./ui/Dropdown";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import { type SubstrateOrientationInfo } from "../api/types";
+import {
+  type AggregationBiasFlag,
+  type AggregationExcludedRun,
+  type AggregationRunScore,
+  type AggregationSelection,
+  type SubstrateOrientationInfo,
+} from "../api/types";
 import {
   GRADIENT_CARD_ANCHOR_CORNERS,
   type GradientCardAnchorCorner,
@@ -414,6 +420,197 @@ const InlineStatusMessage = ({
   );
 };
 
+// --- Merge diagnostics section -----------------------------------------
+//
+// Renders the multi-run aggregator's selection block: which historical
+// captures took part in the joint refit, which were dropped, and why.
+// The component is purely presentational — it consumes the typed
+// ``AggregationSelection`` blob the backend returns on save.
+// 多 run 聚合诊断的展示组件，纯渲染、不持有状态。
+
+const aggregationBadgeIncluded = `${badgeClass} bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300`;
+const aggregationBadgeExcluded = `${badgeClass} bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300`;
+const aggregationBadgeFresh = `${badgeClass} bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300`;
+const aggregationBadgeStructural = `${badgeClass} bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300`;
+const aggregationBadgeAdvisory = `${badgeClass} bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300`;
+
+const STRUCTURAL_BIAS_FLAGS = new Set<AggregationBiasFlag>([
+  "c0_white_avg_gt_0_95",
+  "c0_white_avg_lt_0_60",
+  "image_source_restored",
+  "white_substrate_flat",
+  "black_substrate_flat",
+  "mean_de_gt_3",
+]);
+
+const biasFlagI18nKey = (flag: AggregationBiasFlag) =>
+  `mat_gradient_bias_flag_${flag}` as const;
+
+const aggregationMethodI18nKey = (method: string | null | undefined) =>
+  method
+    ? (`mat_gradient_aggregation_method_${method}` as const)
+    : ("mat_gradient_aggregation_method_mean" as const);
+
+const aggregationStrategyI18nKey = (strategy: string | null | undefined) =>
+  strategy
+    ? (`mat_gradient_aggregation_strategy_${strategy}` as const)
+    : ("mat_gradient_aggregation_strategy_bias_filter_v1" as const);
+
+const aggregationExcludeReasonKey = (reason: string | null | undefined) =>
+  reason
+    ? (`mat_gradient_aggregation_excluded_reason_${reason}` as const)
+    : ("mat_gradient_aggregation_excluded_reason_bias_filter" as const);
+
+const MergeDiagnosticsSection = ({
+  aggregationMethod,
+  selection,
+  sectionClass,
+  cardClass,
+}: {
+  aggregationMethod: string | null;
+  selection: AggregationSelection;
+  sectionClass: string;
+  cardClass: string;
+}) => {
+  const { t } = useI18n();
+  const totalRuns = selection.run_scores.length;
+  const usedRuns = selection.selected_indices.length;
+  const excludedByIndex = useMemo(() => {
+    const map = new Map<number, AggregationExcludedRun>();
+    for (const entry of selection.excluded_runs) {
+      map.set(entry.index, entry);
+    }
+    return map;
+  }, [selection.excluded_runs]);
+
+  return (
+    <section
+      data-testid="merge-diagnostics-section"
+      className={`${sectionClass} flex flex-col gap-3`}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+          {t("mat_gradient_aggregation_section_title")}
+        </h3>
+        <span
+          data-testid="merge-diagnostics-runs-used"
+          className="text-xs text-slate-500 dark:text-slate-400"
+        >
+          {tRuntime("mat_gradient_aggregation_runs_used", {
+            used: String(usedRuns),
+            total: String(totalRuns),
+          })}
+        </span>
+      </div>
+
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+        <div className="flex items-baseline gap-2">
+          <dt className="text-slate-500 dark:text-slate-400">
+            {t("mat_gradient_aggregation_method_label")}
+          </dt>
+          <dd
+            data-testid="merge-diagnostics-method"
+            className="font-medium text-slate-800 dark:text-slate-200"
+          >
+            {t(aggregationMethodI18nKey(aggregationMethod))}
+          </dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="text-slate-500 dark:text-slate-400">
+            {t("mat_gradient_aggregation_selection_strategy_label")}
+          </dt>
+          <dd
+            data-testid="merge-diagnostics-strategy"
+            className="font-medium text-slate-800 dark:text-slate-200"
+          >
+            {t(aggregationStrategyI18nKey(selection.selection_strategy))}
+          </dd>
+        </div>
+      </dl>
+
+      <ul
+        data-testid="merge-diagnostics-run-list"
+        className="flex flex-col gap-2"
+      >
+        {selection.run_scores.map((score: AggregationRunScore) => {
+          const excluded = excludedByIndex.get(score.index);
+          const isIncluded = !excluded;
+          return (
+            <li
+              key={score.index}
+              data-testid={`merge-diagnostics-run-${score.index}`}
+              data-included={isIncluded ? "true" : "false"}
+              className={`${cardClass} flex flex-col gap-1`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                  {tRuntime("mat_gradient_aggregation_run_label", {
+                    index: String(score.index + 1),
+                  })}
+                </span>
+                {score.is_fresh ? (
+                  <span
+                    className={aggregationBadgeFresh}
+                    data-testid={`merge-diagnostics-run-${score.index}-fresh-badge`}
+                  >
+                    {t("mat_gradient_aggregation_run_fresh_badge")}
+                  </span>
+                ) : null}
+                {isIncluded ? (
+                  <span
+                    className={aggregationBadgeIncluded}
+                    data-testid={`merge-diagnostics-run-${score.index}-included-badge`}
+                  >
+                    {t("mat_gradient_aggregation_run_included_badge")}
+                  </span>
+                ) : (
+                  <span
+                    className={aggregationBadgeExcluded}
+                    data-testid={`merge-diagnostics-run-${score.index}-excluded-badge`}
+                  >
+                    {t("mat_gradient_aggregation_run_excluded_badge")}
+                  </span>
+                )}
+              </div>
+              {score.bias_flags.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {score.bias_flags.map((flag) => (
+                    <span
+                      key={flag}
+                      data-testid={`merge-diagnostics-run-${score.index}-flag-${flag}`}
+                      className={
+                        STRUCTURAL_BIAS_FLAGS.has(flag)
+                          ? aggregationBadgeStructural
+                          : aggregationBadgeAdvisory
+                      }
+                    >
+                      {t(biasFlagI18nKey(flag))}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {excluded ? (
+                <p className="text-[11px] text-rose-600 dark:text-rose-300">
+                  {t(aggregationExcludeReasonKey(excluded.reason))}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+
+      {selection.excluded_runs.length === 0 ? (
+        <p
+          data-testid="merge-diagnostics-no-excluded"
+          className="text-xs text-slate-500 dark:text-slate-400"
+        >
+          {t("mat_gradient_aggregation_no_excluded")}
+        </p>
+      ) : null}
+    </section>
+  );
+};
+
 export default function GradientCardExtractPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
@@ -681,6 +878,11 @@ export default function GradientCardExtractPanel() {
       />
 
       <div className="flex flex-col gap-6 w-full">
+        {/* Image-source selector intentionally hidden: Stage A only
+           supports raw camera/scanner captures. Restored images break
+           the Beer-Lambert C0_white anchor and are detected post-hoc
+           by the bias filter (`image_source_restored` flag). The store
+           keeps `imageSource` pinned to its `"raw"` default. */}
         <div className="grid gap-6 lg:grid-cols-2 w-full">
 <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
           <div>
@@ -980,6 +1182,14 @@ export default function GradientCardExtractPanel() {
               />
             )}
           </AnimatePresence>
+          {savedMaterialSummary?.aggregation_selection ? (
+            <MergeDiagnosticsSection
+              aggregationMethod={savedMaterialSummary.aggregation_method ?? null}
+              selection={savedMaterialSummary.aggregation_selection}
+              sectionClass={resolveSectionCardClass(workspace.mode)}
+              cardClass={mutedSectionCardClass}
+            />
+          ) : null}
           <div data-testid="extract-action-container">
             <Button
               label={t("mat_gradient_compute_btn")}
@@ -1198,7 +1408,7 @@ export default function GradientCardExtractPanel() {
             </section>
           )}
 
-          
+
 
           {detailsDialogOpen && hasDetailInfo ? (
             <div

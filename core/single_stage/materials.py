@@ -135,6 +135,27 @@ _INVALID_WINDOWS_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MATERIAL_EXPORT_MANIFEST_FILENAME = "lumina_material_export.json"
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
+_C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
+"""Linear-RGB threshold above which the zero-thickness ``C0_white``
+samples are treated as suspiciously close to ideal white (= 1.0). When
+exceeded, the input gradient-card image was almost certainly
+white-balanced / restored before Stage A fitting; the resulting
+``(E, k)`` will be biased away from the true physical attenuation.
+线性 RGB 阈值，超过该值则零厚度白底采样过于接近理想纯白，输入图像
+极可能在拟合前被白平衡 / 还原处理过，会导致 (E, k) 偏离真实物理值。
+"""
+
+_VALID_IMAGE_SOURCES: frozenset[str] = frozenset({"raw", "restored"})
+"""Allowed values for the gradient-card capture origin tag.
+``raw`` = camera/scanner output without white-balance/restoration;
+``restored`` = card image that has already been color-normalized or
+geometrically restored. The fitter accepts both but ``restored`` carries
+a strong warning because white-balanced inputs systematically bias
+``C0_white`` toward 1.0 and ``k`` toward small values.
+``raw`` 表示未经白平衡/还原的原图；``restored`` 表示已经做过色彩归一化
+或几何还原的图。两者都允许拟合，但 ``restored`` 会给出强警告，因为
+白平衡过的输入会系统性地把 C0_white 推向 1.0、把 k 推得偏小。
+"""
 _CORNER_ORIENTATION_CANDIDATES: tuple[tuple[str, tuple[int, int, int, int]], ...] = (
     ("identity", (0, 1, 2, 3)),
     ("rotate_90_cw", (1, 2, 3, 0)),
@@ -502,6 +523,15 @@ def _build_fit_payload(
     }
     if overall_validation["mean_delta_e"] > 3.0:
         warnings.append("Stage A 拟合误差较高，请检查图像方向和角点选择。")
+    c0_white_mean = float(np.mean(np.asarray(c0_white_values, dtype=np.float64)))
+    if c0_white_mean > _C0_WHITE_OVERBRIGHT_THRESHOLD:
+        warnings.append(
+            "零厚度白底采样接近纯白（C0_white 均值 "
+            f"{c0_white_mean:.3f} > {_C0_WHITE_OVERBRIGHT_THRESHOLD:.2f}），"
+            "输入图像可能已被自动白平衡或色卡还原处理过。"
+            "这会让拟合得到的 (E, k) 偏离真实物理值，"
+            "建议改用未经白平衡 / 还原处理的原图重新校准。"
+        )
     params_payload: dict[str, Any] = {
         "param_type": "stage_A",
         "meta": {
@@ -573,6 +603,28 @@ def _build_fit_payload(
         "black_zero_rgb": _linear_to_srgb_uint8(np.asarray([c0_black_values], dtype=np.float64))[0].tolist(),
         "estimated_rgb": _linear_to_srgb_uint8(np.asarray([e_values], dtype=np.float64))[0].tolist(),
         "estimated_k": [round(float(value), 6) for value in k_values],
+        # Persist the linear-RGB sample matrices (one row per sampled grid
+        # cell, three channels per row) and matching thickness_mm vector so
+        # multi-run "再次验证" aggregation can re-fit on the *combined* sample
+        # set instead of averaging per-run parameters. Averaging non-linear
+        # Beer-Lambert parameters is statistically unsound; combined-sample
+        # refitting is the only way "more captures = more accurate (E, k)"
+        # holds true.
+        # 持久化线性 RGB 样本矩阵与厚度向量，使"再次验证"聚合时能基于
+        # 合并样本重新拟合（而非对参数做算术平均），让"多次校准 = 更精确"
+        # 在统计上成立。
+        "fit_samples": {
+            "schema_version": "1.0",
+            "thickness_mm": [float(value) for value in thickness_mm.tolist()],
+            "white_linear": [
+                [float(value) for value in row]
+                for row in np.asarray(white_linear, dtype=np.float64).tolist()
+            ],
+            "black_linear": [
+                [float(value) for value in row]
+                for row in np.asarray(black_linear, dtype=np.float64).tolist()
+            ],
+        },
     }
     return params_payload, fit_summary, material_summary, warnings
 
@@ -747,6 +799,7 @@ def extract_stage_a_material_from_gradient_cards(
     *,
     manual_white_orientation: str | None = None,
     manual_black_orientation: str | None = None,
+    image_source: str | None = None,
 ) -> GradientCardStageAResult:
     """Extract Stage A material data from white/black gradient-card images.
     从白底/黑底梯度卡图像中提取 Stage A 耗材参数。
@@ -764,10 +817,26 @@ def extract_stage_a_material_from_gradient_cards(
             ``flip_horizontal``, ``flip_vertical``, ``transpose``,
             ``transverse``. (可选：手动指定白底方向，覆盖自动检测)
         manual_black_orientation: Same for the black capture. (黑底方向，同上)
+        image_source: Optional capture origin tag, one of ``"raw"`` or
+            ``"restored"``. ``"raw"`` (default) means the input is a direct
+            camera/scanner capture; ``"restored"`` means the image has been
+            white-balanced or geometrically restored, which biases
+            ``(E, k)`` and surfaces a warning. The tag is also persisted in
+            ``source_summary["image_source"]`` so the multi-run aggregator
+            can refuse to mix raw/restored captures.
+            可选的图像来源标签：``"raw"`` 为相机/扫描原图（默认），
+            ``"restored"`` 为已白平衡或几何还原过的图（会给出警告并阻止
+            与原图样本混合聚合）。
 
     Returns:
         GradientCardStageAResult: Extraction result bundle. (提取结果)
     """
+    image_source_tag: str = "raw" if image_source is None else str(image_source).strip().lower()
+    if image_source_tag not in _VALID_IMAGE_SOURCES:
+        raise ValueError(
+            f"image_source must be one of {sorted(_VALID_IMAGE_SOURCES)}, "
+            f"got {image_source!r}"
+        )
     manifest = _load_manifest_from_zip(dataset_zip_path)
     spec = _coerce_spec(manifest)
     white_points = _coerce_points(white_corner_points)
@@ -855,6 +924,24 @@ def extract_stage_a_material_from_gradient_cards(
             "如发现拟合误差偏高，请使用界面的“纯色块位置”选项手动指定方向。"
         )
     fit_summary["orientation_ranking"] = orientation_ranking
+    if image_source_tag == "restored":
+        # ``warnings`` is the same list object held by ``fit_summary["warnings"]``
+        # and ``params_payload["meta"]["warnings"]`` (set inside _build_fit_payload),
+        # so this single append surfaces the warning everywhere.
+        # 该 list 同时被 fit_summary 与 params_meta 引用，append 一次即可在三处可见。
+        warnings.append(
+            "已选择“已还原图（白平衡/色彩归一化处理过）”作为输入。"
+            "白平衡会把白底零厚度采样推向纯白 1.0，导致拟合得到的 (E, k) "
+            "偏离真实物理值，打印效果会显著恶化。强烈建议改用未经白平衡 / "
+            "还原处理的相机原图重新校准。"
+        )
+    # Persist the image-source tag in params meta so external tooling
+    # (audit scripts, downstream consumers) can read the tag straight from
+    # the JSON payload without having to reconstruct it from source_summary.
+    # 把 image_source 写入 params meta，使审计脚本/下游消费者无需重建
+    # source_summary 即可直接读到来源标签。
+    params_meta = params_payload.setdefault("meta", {})
+    params_meta["image_source"] = image_source_tag
     white_warp_rgb = white_candidate.warped_rgb
     black_warp_rgb = black_candidate.warped_rgb
     if output_path is None:
@@ -875,6 +962,7 @@ def extract_stage_a_material_from_gradient_cards(
         "black_orientation_info": black_orientation_info,
         "orientation_ranking": orientation_ranking,
         "spec": asdict(spec),
+        "image_source": image_source_tag,
     }
     return GradientCardStageAResult(
         params_path=str(output_path),
@@ -1098,6 +1186,16 @@ def _material_summary_from_saved_archive(
         payload,
         relative_directory_name,
     )
+    aggregation = payload.get("aggregation") if isinstance(payload.get("aggregation"), dict) else None
+    aggregation_method: str | None = None
+    aggregation_selection: dict[str, Any] | None = None
+    if isinstance(aggregation, dict):
+        method_value = aggregation.get("method")
+        if isinstance(method_value, str):
+            aggregation_method = method_value
+        selection_value = aggregation.get("selection")
+        if isinstance(selection_value, dict):
+            aggregation_selection = _json_clone(selection_value)
     return {
         "material_name": str(payload.get("material_name") or material_dir.name),
         "directory_name": relative_directory_name,
@@ -1107,6 +1205,12 @@ def _material_summary_from_saved_archive(
         "verification_count": verification_count,
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at") or payload.get("created_at"),
+        # Aggregation diagnostics surfaced to the frontend so the user
+        # can see which historical runs participated in the joint refit
+        # and which were excluded by the bias filter / cross-val ranking.
+        # (聚合诊断信息透传给前端用于"合并诊断"折叠区)
+        "aggregation_method": aggregation_method,
+        "aggregation_selection": aggregation_selection,
     }
 
 
@@ -1310,7 +1414,8 @@ def _build_verification_run(
     captured_at: str | None = None,
 ) -> dict[str, Any]:
     e_values, k_values, white_c0_values, black_c0_values = _extract_stage_a_vectors(params_payload)
-    return {
+    samples = _normalize_fit_samples_payload(material_summary.get("fit_samples"))
+    run: dict[str, Any] = {
         "captured_at": captured_at or _now_iso(),
         "params": {
             "E": [round(float(value), 6) for value in e_values],
@@ -1321,6 +1426,59 @@ def _build_verification_run(
         "fit_summary": _json_clone(fit_summary),
         "material_summary": _json_clone(material_summary),
         "source": _json_clone(source_summary),
+    }
+    if samples is not None:
+        run["samples"] = samples
+    return run
+
+
+def _normalize_fit_samples_payload(value: Any) -> dict[str, Any] | None:
+    """Validate and normalize a stored ``fit_samples`` block.
+    校验并规范化已存储的 ``fit_samples`` 数据块。
+
+    Returns ``None`` when the block is missing or malformed (so the caller
+    falls back to parameter-mean aggregation). Returned dict carries
+    plain lists ready to be JSON-serialized; numerical conversion happens
+    here so downstream code can rely on shape and dtype.
+    缺失或格式异常时返回 ``None``，调用方将回退到参数均值聚合；返回的
+    字典统一为 JSON 安全的 list 形态，避免下游再做形状检查。
+    """
+    if not isinstance(value, dict):
+        return None
+    thickness_raw = value.get("thickness_mm")
+    white_raw = value.get("white_linear")
+    black_raw = value.get("black_linear")
+    if not isinstance(thickness_raw, list) or not isinstance(white_raw, list) or not isinstance(black_raw, list):
+        return None
+    try:
+        thickness_mm = [float(v) for v in thickness_raw]
+    except (TypeError, ValueError):
+        return None
+    if not thickness_mm:
+        return None
+
+    def _normalize_matrix(rows: list[Any], expected_rows: int) -> list[list[float]] | None:
+        if len(rows) != expected_rows:
+            return None
+        normalized: list[list[float]] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            try:
+                normalized.append([float(v) for v in row])
+            except (TypeError, ValueError):
+                return None
+        return normalized
+
+    white_linear = _normalize_matrix(white_raw, len(thickness_mm))
+    black_linear = _normalize_matrix(black_raw, len(thickness_mm))
+    if white_linear is None or black_linear is None:
+        return None
+    return {
+        "schema_version": str(value.get("schema_version") or "1.0"),
+        "thickness_mm": thickness_mm,
+        "white_linear": white_linear,
+        "black_linear": black_linear,
     }
 
 
@@ -1375,6 +1533,658 @@ def _average_numeric_vectors(vectors: list[list[float]], fallback: list[float]) 
     return np.mean(np.asarray(normalized, dtype=np.float64), axis=0).tolist()
 
 
+def _collect_combined_run_samples(
+    verification_runs: list[dict[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Concatenate ``samples`` from every run when *all* runs have them.
+    若所有 run 都带样本则将其拼接。
+
+    Returns ``None`` when any run is missing samples or has shape errors,
+    forcing the caller to fall back to parameter-mean aggregation. We require
+    completeness instead of mixing samples-vs-mean to keep the aggregation
+    semantics single-method-per-archive (so ``aggregation_method`` is a
+    truthful single value rather than a per-run patchwork).
+    任何 run 缺样本或形状不一致时返回 ``None``，强制调用方使用参数均值；
+    保持每次聚合采用单一方法，便于追踪 ``aggregation_method``。
+    """
+    if not verification_runs:
+        return None
+    thickness_chunks: list[np.ndarray] = []
+    white_chunks: list[np.ndarray] = []
+    black_chunks: list[np.ndarray] = []
+    for run in verification_runs:
+        samples = _normalize_fit_samples_payload(run.get("samples"))
+        if samples is None:
+            return None
+        thickness = np.asarray(samples["thickness_mm"], dtype=np.float64)
+        white = np.asarray(samples["white_linear"], dtype=np.float64)
+        black = np.asarray(samples["black_linear"], dtype=np.float64)
+        if thickness.ndim != 1 or thickness.size == 0:
+            return None
+        if white.shape != (thickness.size, 3) or black.shape != (thickness.size, 3):
+            return None
+        thickness_chunks.append(thickness)
+        white_chunks.append(white)
+        black_chunks.append(black)
+    return (
+        np.concatenate(thickness_chunks, axis=0),
+        np.concatenate(white_chunks, axis=0),
+        np.concatenate(black_chunks, axis=0),
+    )
+
+
+def _refit_combined_samples(
+    thickness_mm: np.ndarray,
+    white_linear: np.ndarray,
+    black_linear: np.ndarray,
+) -> tuple[
+    list[float], list[float], list[float], list[float], list[float], dict[str, float]
+]:
+    """Run a fresh per-channel ``_fit_component`` on combined samples.
+    在合并样本上重新执行逐通道 ``_fit_component`` 拟合。
+
+    Statistical rationale: averaging Beer-Lambert ``(E, k)`` is invalid
+    because the model is non-linear in ``k``. Concatenating samples and
+    refitting is the correct generalization of "more data = tighter fit"
+    and is the only way the verification count actually improves accuracy.
+    Beer-Lambert 在 ``k`` 上是非线性的，对参数取均值无统计意义；合并样
+    本重拟合才是"多次校准 = 更精确"的正确实现。
+
+    Returns:
+        ``(E, k, C0_white, C0_black, channel_rmse, overall_validation)``.
+    """
+    e_values: list[float] = []
+    k_values: list[float] = []
+    c0_white_values: list[float] = []
+    c0_black_values: list[float] = []
+    channel_rmse: list[float] = []
+    for channel_idx in range(3):
+        e_val, k_val, c0_white, c0_black, rmse = _fit_component(
+            thickness_mm,
+            white_linear[:, channel_idx],
+            black_linear[:, channel_idx],
+        )
+        e_values.append(e_val)
+        k_values.append(k_val)
+        c0_white_values.append(c0_white)
+        c0_black_values.append(c0_black)
+        channel_rmse.append(rmse)
+
+    e_arr = np.asarray(e_values, dtype=np.float64)
+    k_arr = np.asarray(k_values, dtype=np.float64)
+    c0w_arr = np.asarray(c0_white_values, dtype=np.float64)
+    c0b_arr = np.asarray(c0_black_values, dtype=np.float64)
+    decay = np.exp(-np.outer(thickness_mm, k_arr))
+    pred_white = e_arr + (c0w_arr - e_arr) * decay
+    pred_black = e_arr + (c0b_arr - e_arr) * decay
+    observed_linear = np.vstack([white_linear, black_linear])
+    predicted_linear = np.vstack([pred_white, pred_black])
+    observed_srgb = _linear_to_srgb_uint8(observed_linear)
+    predicted_srgb = _linear_to_srgb_uint8(predicted_linear)
+    delta_e = np.linalg.norm(
+        _rgb_to_lab_float(observed_srgb) - _rgb_to_lab_float(predicted_srgb), axis=1
+    )
+    overall_validation: dict[str, float] = {
+        "mean_delta_e": float(np.mean(delta_e)) if delta_e.size else 0.0,
+        "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
+        "rmse_linear": float(np.sqrt(np.mean(np.square(predicted_linear - observed_linear))))
+        if observed_linear.size
+        else 0.0,
+    }
+    return e_values, k_values, c0_white_values, c0_black_values, channel_rmse, overall_validation
+
+
+def _coerce_image_source(value: Any) -> str | None:
+    """Normalize a stored ``image_source`` value to a known tag or ``None``.
+    将持久化的 ``image_source`` 标签归一化为已知值或 ``None``。
+
+    Returns ``None`` for missing / non-string / unknown values so legacy
+    archives written before the tag existed are treated as "unknown" and
+    do not block re-verification merges. Known tags are normalized to
+    lowercase to make matching case-insensitive.
+    历史档案缺失该字段或为非法值时返回 ``None``，不阻塞合并；已知值统一
+    转小写以做大小写无关匹配。
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().lower()
+    if candidate not in _VALID_IMAGE_SOURCES:
+        return None
+    return candidate
+
+
+def _collect_run_image_sources(
+    verification_runs: list[dict[str, Any]],
+) -> set[str]:
+    """Return the set of known ``image_source`` tags across the given runs.
+    提取已知 ``image_source`` 标签集合。
+
+    Runs whose source lacks the tag (legacy archives) contribute nothing
+    so the merge consistency check only fires when at least one run
+    carries an explicit, recognised tag.
+    """
+    seen: set[str] = set()
+    for run in verification_runs:
+        source = run.get("source")
+        if not isinstance(source, dict):
+            continue
+        tag = _coerce_image_source(source.get("image_source"))
+        if tag is not None:
+            seen.add(tag)
+    return seen
+
+
+def _collect_run_warnings(verification_runs: list[dict[str, Any]]) -> list[str]:
+    """Union of all run-level fit warnings, deduplicated and sorted.
+    汇总所有 run 的拟合警告并去重排序。
+    """
+    warning_values: list[str] = []
+    for run in verification_runs:
+        run_fit_summary = run.get("fit_summary") or {}
+        if not isinstance(run_fit_summary, dict):
+            continue
+        run_warnings = run_fit_summary.get("warnings")
+        if isinstance(run_warnings, list):
+            warning_values.extend(str(value) for value in run_warnings if str(value).strip())
+    return sorted(dict.fromkeys(warning_values))
+
+
+# --- Multi-run selection: bias filter + cross-validation -----------------
+#
+# Why this exists: when more than one verification_run lives in an archive,
+# blindly concatenating every run's samples lets a single biased capture
+# (e.g. white-balanced input pushing C0_white to ~1.0) drag the joint LM
+# fit toward physically wrong (E, k). The fit RMSE may even look BETTER
+# under bias because the model bends to fit the biased data perfectly,
+# which is exactly the trap "low ΔE != accurate" warned about during the
+# 品红 calibration debugging session.
+#
+# The mitigation has two layers:
+#
+#   1. ``_score_run_bias`` flags KNOWN bias indicators on each run
+#      (C0_white avg > 0.95, image_source=restored, flat substrate,
+#      unreliable orientation). Scoring is independent of the run's own
+#      fit metrics so a "self-consistently biased" run cannot hide.
+#
+#   2. ``_cross_val_score_runs`` (only when N>=3) measures how well each
+#      run's ``(E, k)`` predicts the OTHER runs' samples. A biased run
+#      fits itself but generalises poorly, so its cross-val mean ΔE is
+#      high. This catches "unknown unknown" biases that 1) misses.
+#
+# ``_select_runs_for_refit`` composes the two: hard-filter by bias first,
+# then optionally rank survivors by cross-val. The fresh run (last in the
+# list) is ALWAYS kept regardless of its bias score because the user just
+# captured it on purpose; we let the operator inspect the diagnostics
+# instead of silently discarding their freshest input.
+#
+# 多 run 选择：偏置硬过滤 + 跨 run 交叉验证。低 ΔE 不等于准确，配合时既筛
+# 掉已知偏置 run，又通过 N>=3 时的 cross-val 抓"未知偏置"。新 run（列表
+# 末尾）始终保留，便于审计。
+_BIAS_FLAG_C0_WHITE_HIGH = "c0_white_avg_gt_0_95"
+_BIAS_FLAG_C0_WHITE_LOW = "c0_white_avg_lt_0_60"
+_BIAS_FLAG_IMAGE_SOURCE_RESTORED = "image_source_restored"
+_BIAS_FLAG_WHITE_SUBSTRATE_FLAT = "white_substrate_flat"
+_BIAS_FLAG_BLACK_SUBSTRATE_FLAT = "black_substrate_flat"
+_BIAS_FLAG_ORIENTATION_UNRELIABLE = "orientation_unreliable"
+_BIAS_FLAG_MEAN_DE_HIGH = "mean_de_gt_3"
+
+# Single-run thresholds. Pinned at the module level so tests, frontend
+# i18n and any future docs reference one canonical number.
+# 单 run 阈值集中在模块级，避免散落在判定逻辑中难以维护。
+_C0_WHITE_AVG_HIGH_THRESHOLD = 0.95
+_C0_WHITE_AVG_LOW_THRESHOLD = 0.60
+_MEAN_DELTA_E_HIGH_THRESHOLD = 3.0
+
+# Cross-run pairwise threshold: two captures whose white_C0 averages
+# differ by more than this multiplicative factor cannot share a single
+# joint refit because the cost surface has no consistent (E, k) for
+# both lighting environments. Ratio is computed as max/min so it is
+# direction-agnostic.
+# 跨 run 白底亮度比阈值；超过即视为光照环境不一致，无法共拟合。
+_C0_WHITE_PAIRWISE_RATIO_THRESHOLD = 1.5
+
+# Structural-bias flags: each indicates the *physics* of the capture
+# is compromised (white-balanced input, underexposed input, restored
+# image, flat substrate, or fit metrics already untrustworthy), so
+# dropping a strictly-worse-than-fresh run is justified.
+# 结构性偏置标签：捕获本身的物理意义被破坏，可作为硬过滤依据。
+_STRUCTURAL_BIAS_FLAGS = frozenset(
+    {
+        _BIAS_FLAG_C0_WHITE_HIGH,
+        _BIAS_FLAG_C0_WHITE_LOW,
+        _BIAS_FLAG_IMAGE_SOURCE_RESTORED,
+        _BIAS_FLAG_WHITE_SUBSTRATE_FLAT,
+        _BIAS_FLAG_BLACK_SUBSTRATE_FLAT,
+        _BIAS_FLAG_MEAN_DE_HIGH,
+    }
+)
+# Advisory flags: surfaced in the UI for awareness but not used for the
+# strict-worse comparison. Orientation reliability depends on the
+# ``delta_e_gap`` margin between top orientation candidates, which is
+# stochastic in noisy captures — flagging a run for orientation alone
+# would give false positives on otherwise-fine inputs.
+# 提示性标签：仅在 UI 中展示，不参与硬过滤；朝向可靠性会随噪声波动，
+# 单凭它丢 run 容易误伤。
+_ADVISORY_BIAS_FLAGS = frozenset(
+    {
+        _BIAS_FLAG_ORIENTATION_UNRELIABLE,
+    }
+)
+
+
+def _safe_mean(values: list[float] | None) -> float | None:
+    if not values:
+        return None
+    try:
+        arr = np.asarray([float(v) for v in values], dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if arr.size == 0:
+        return None
+    return float(np.mean(arr))
+
+
+def _score_run_bias(run: dict[str, Any]) -> dict[str, Any]:
+    """Compute bias indicators for a single verification run.
+    为单个 verification run 计算偏置指标。
+
+    Each detected indicator pushes the run toward exclusion from the joint
+    refit. Indicators are intentionally *physical* / structural, never
+    derived from the run's own fit ΔE: a self-consistently biased capture
+    produces low ΔE precisely because the model bends to fit its biased
+    data, so ΔE-based scores would silently approve those runs.
+    每个指标都是物理 / 结构性的，**不**用 run 自身的 ΔE，因为"自我一致地
+    偏置"的捕获 ΔE 反而会很低、骗过基于 ΔE 的打分器。
+
+    Args:
+        run: A single ``verification_runs[*]`` dict as persisted on disk.
+            (磁盘上单条 verification_runs 字典)
+
+    Returns:
+        ``{"bias_flag_count": int, "bias_flags": list[str], "white_c0_avg":
+        float | None, "image_source": str | None}``. ``bias_flags`` uses
+        the stable ``_BIAS_FLAG_*`` codes so frontend i18n can map them
+        to localised labels without parsing free text.
+    """
+    flags: list[str] = []
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    white_c0 = params.get("white_C0") if isinstance(params, dict) else None
+    white_c0_avg = _safe_mean(white_c0 if isinstance(white_c0, list) else None)
+    if white_c0_avg is not None and white_c0_avg > _C0_WHITE_AVG_HIGH_THRESHOLD:
+        flags.append(_BIAS_FLAG_C0_WHITE_HIGH)
+    # Mirror image of the high-white check: severely underexposed
+    # captures land white_C0 below the typical PLA white substrate
+    # band (0.85-0.92). Below 0.60 the dynamic range squeezes so much
+    # that LM has to inflate ``k`` to bend exp through near-step data,
+    # producing physically meaningless parameters.
+    # 白底过暗（<0.60）会压扁动态范围导致拟合失真。
+    if white_c0_avg is not None and white_c0_avg < _C0_WHITE_AVG_LOW_THRESHOLD:
+        flags.append(_BIAS_FLAG_C0_WHITE_LOW)
+
+    source = run.get("source") if isinstance(run.get("source"), dict) else {}
+    image_source = source.get("image_source") if isinstance(source, dict) else None
+    image_source_str = str(image_source) if isinstance(image_source, str) else None
+    if image_source_str == "restored":
+        flags.append(_BIAS_FLAG_IMAGE_SOURCE_RESTORED)
+
+    fit_summary = run.get("fit_summary") if isinstance(run.get("fit_summary"), dict) else {}
+    ranking = (
+        fit_summary.get("orientation_ranking")
+        if isinstance(fit_summary, dict)
+        else None
+    )
+
+    if isinstance(ranking, dict):
+        white_info = ranking.get("white_orientation_info")
+        if isinstance(white_info, dict) and white_info.get("flat") is True:
+            flags.append(_BIAS_FLAG_WHITE_SUBSTRATE_FLAT)
+        black_info = ranking.get("black_orientation_info")
+        if isinstance(black_info, dict) and black_info.get("flat") is True:
+            flags.append(_BIAS_FLAG_BLACK_SUBSTRATE_FLAT)
+        if ranking.get("orientation_reliable") is False:
+            flags.append(_BIAS_FLAG_ORIENTATION_UNRELIABLE)
+
+    # The run's own goodness-of-fit guards "garbage in, garbage out":
+    # if a single capture's mean ΔE is already above 3.0 (the
+    # printer-profile "borderline acceptable" line), feeding its
+    # samples into a joint refit can only drag the merged (E, k)
+    # toward this run's distorted fit.
+    # 单 run mean_dE>3 表示拟合已不可信，禁止其参与联合重拟。
+    overall_validation = (
+        fit_summary.get("overall_validation")
+        if isinstance(fit_summary, dict)
+        else None
+    )
+    if isinstance(overall_validation, dict):
+        mean_de = overall_validation.get("mean_delta_e")
+        if (
+            isinstance(mean_de, (int, float))
+            and not isinstance(mean_de, bool)
+            and float(mean_de) > _MEAN_DELTA_E_HIGH_THRESHOLD
+        ):
+            flags.append(_BIAS_FLAG_MEAN_DE_HIGH)
+
+    structural_flags = [flag for flag in flags if flag in _STRUCTURAL_BIAS_FLAGS]
+    return {
+        "bias_flag_count": len(flags),
+        "bias_flags": flags,
+        # ``structural_flag_count`` drives the strict-worse comparison
+        # in :func:`_select_runs_for_refit`; advisory flags such as
+        # ``orientation_unreliable`` show up in ``bias_flags`` for UI
+        # awareness but do NOT make a run "structurally biased".
+        # 仅结构性标签参与硬过滤；提示性标签只在 UI 中展示。
+        "structural_flag_count": len(structural_flags),
+        "structural_flags": structural_flags,
+        "white_c0_avg": white_c0_avg,
+        "image_source": image_source_str,
+    }
+
+
+def _predict_substrate_linear(
+    e_values: np.ndarray,
+    k_values: np.ndarray,
+    c0_values: np.ndarray,
+    thickness_mm: np.ndarray,
+) -> np.ndarray:
+    """Forward Beer-Lambert: predict linear-RGB observations.
+    Beer-Lambert 前向：根据 (E, k, C0) 预测线性 RGB 观测值。
+
+    Vectorised over samples and channels: ``pred[s, c] = E[c] + (C0[c] -
+    E[c]) * exp(-k[c] * t[s])``.
+    """
+    decay = np.exp(-k_values[None, :] * thickness_mm[:, None])
+    return e_values[None, :] + (c0_values[None, :] - e_values[None, :]) * decay
+
+
+def _cross_val_score_runs(
+    verification_runs: list[dict[str, Any]],
+    candidate_indices: list[int],
+) -> dict[int, float]:
+    """Score each candidate run by how well it predicts OTHER candidates.
+    用每个候选 run 拟合的 (E, k) 预测其他候选 run 的样本，得分越低越好。
+
+    Algorithm: for each candidate ``R`` in ``candidate_indices``, fit
+    ``(E, k, C0_white, C0_black)`` per channel using only ``R``'s
+    samples, then predict the union of all OTHER candidates' samples
+    using ``R``'s parameters and report the linear-space RMSE.
+
+    A biased run fits itself perfectly (low intra-run RMSE) but produces
+    parameters that fail to explain other captures, yielding a HIGH
+    cross-val RMSE. An unbiased run yields a low one. This generalises
+    "low ΔE != accurate" detection beyond the hand-coded bias flags.
+
+    Args:
+        verification_runs: Full archive list (only the entries at
+            ``candidate_indices`` are touched). (完整 verification_runs)
+        candidate_indices: Indices to score. Need at least 2; with 1 the
+            score is undefined and this function returns an empty dict.
+            (候选索引列表，<2 时返回空 dict)
+
+    Returns:
+        Mapping from candidate index to cross-val RMSE in linear RGB
+        space. Lower = more accurate / less biased.
+        (候选索引 -> 线性 RGB 空间 cross-val RMSE 映射)
+    """
+    if len(candidate_indices) < 2:
+        return {}
+
+    samples_per_index: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for idx in candidate_indices:
+        run = verification_runs[idx]
+        normalized = _normalize_fit_samples_payload(run.get("samples"))
+        if normalized is None:
+            continue
+        thickness = np.asarray(normalized["thickness_mm"], dtype=np.float64)
+        white = np.asarray(normalized["white_linear"], dtype=np.float64)
+        black = np.asarray(normalized["black_linear"], dtype=np.float64)
+        if thickness.ndim != 1 or thickness.size == 0:
+            continue
+        if white.shape != (thickness.size, 3) or black.shape != (thickness.size, 3):
+            continue
+        samples_per_index[idx] = (thickness, white, black)
+
+    if len(samples_per_index) < 2:
+        return {}
+
+    scores: dict[int, float] = {}
+    for fit_idx, (fit_t, fit_white, fit_black) in samples_per_index.items():
+        e_values: list[float] = []
+        k_values: list[float] = []
+        c0_white_values: list[float] = []
+        c0_black_values: list[float] = []
+        for channel in range(3):
+            e_val, k_val, c0_white, c0_black, _rmse = _fit_component(
+                fit_t,
+                fit_white[:, channel],
+                fit_black[:, channel],
+            )
+            e_values.append(e_val)
+            k_values.append(k_val)
+            c0_white_values.append(c0_white)
+            c0_black_values.append(c0_black)
+        e_arr = np.asarray(e_values, dtype=np.float64)
+        k_arr = np.asarray(k_values, dtype=np.float64)
+        c0w_arr = np.asarray(c0_white_values, dtype=np.float64)
+        c0b_arr = np.asarray(c0_black_values, dtype=np.float64)
+
+        residual_chunks: list[np.ndarray] = []
+        for other_idx, (other_t, other_white, other_black) in samples_per_index.items():
+            if other_idx == fit_idx:
+                continue
+            pred_white = _predict_substrate_linear(e_arr, k_arr, c0w_arr, other_t)
+            pred_black = _predict_substrate_linear(e_arr, k_arr, c0b_arr, other_t)
+            residual_chunks.append((pred_white - other_white).reshape(-1))
+            residual_chunks.append((pred_black - other_black).reshape(-1))
+        if not residual_chunks:
+            continue
+        residual = np.concatenate(residual_chunks, axis=0)
+        scores[fit_idx] = float(np.sqrt(np.mean(np.square(residual))))
+
+    return scores
+
+
+def _select_runs_for_refit(
+    verification_runs: list[dict[str, Any]],
+    *,
+    cross_val_threshold: int = 3,
+) -> dict[str, Any]:
+    """Pick which runs participate in the joint refit.
+    选择哪些 run 参与联合重拟合。
+
+    Selection policy (two-layer):
+
+    1. **Bias filter**: a historical run is dropped when it carries
+       *strictly more* bias flags than the fresh run. Equal-or-fewer
+       flags are kept so the joint refit can still benefit from extra
+       samples when both the fresh capture and the historical share
+       the same level of bias (e.g. both ``image_source=restored``).
+       There is no "graceful degradation" that keeps a strictly-worse
+       historical: if every historical is worse than the fresh run we
+       fall back to a single-run refit on the fresh capture alone,
+       because adding biased samples to the LM cost would corrupt
+       ``(E, k)`` more than helping precision.
+    2. **Cross-val ranking**: when ``cross_val_threshold`` or more
+       historical runs survive the bias filter, score them by how well
+       each predicts the others (lower RMSE = more accurate); keep the
+       top ``ceil(N/2)`` (at least one). With N<threshold the cross-val
+       tie-breaker is skipped — too few candidates to detect bias by
+       mutual disagreement.
+
+    The fresh run (assumed to be the LAST entry in ``verification_runs``)
+    is always kept so the user's most recent capture cannot be silently
+    discarded — surfacing it lets the operator see why their workflow
+    is flagged instead of pretending the capture never happened.
+
+    Args:
+        verification_runs: Full chronological list as persisted on disk.
+            (完整按时间排序的 verification_runs)
+        cross_val_threshold: Minimum surviving historical count required
+            to enable cross-val ranking. Defaults to 3 because cross-val
+            on 2 runs only checks "do they agree", not "which is right".
+            (启用 cross-val 的最小存活历史数量；2 个时只能查"是否一致")
+
+    Returns:
+        Dict with keys:
+          - ``selected_indices``: sorted list of indices to refit on
+          - ``excluded_runs``: list of dicts ``{index, reason, score?,
+            bias_flags}`` for audit / UI display
+          - ``selection_strategy``: stable string code identifying which
+            policy ran (``bias_filter_v1`` vs ``bias_filter_v1+cross_val``)
+          - ``run_scores``: per-run diagnostic dict (always present, lets
+            UI show every run's bias flags + cross-val score even when no
+            run was excluded)
+          - ``fresh_index``: the index of the run that was force-kept
+    """
+    if not verification_runs:
+        return {
+            "selected_indices": [],
+            "excluded_runs": [],
+            "selection_strategy": "bias_filter_v1",
+            "run_scores": [],
+            "fresh_index": None,
+        }
+
+    fresh_index = len(verification_runs) - 1
+    historical_indices = list(range(fresh_index))
+
+    run_scores: list[dict[str, Any]] = []
+    for idx, run in enumerate(verification_runs):
+        bias = _score_run_bias(run)
+        run_scores.append(
+            {
+                "index": idx,
+                "is_fresh": idx == fresh_index,
+                "bias_flag_count": bias["bias_flag_count"],
+                "bias_flags": bias["bias_flags"],
+                "structural_flag_count": bias["structural_flag_count"],
+                "structural_flags": bias["structural_flags"],
+                "white_c0_avg": bias["white_c0_avg"],
+                "image_source": bias["image_source"],
+                "cross_val_rmse": None,
+            }
+        )
+
+    excluded: list[dict[str, Any]] = []
+
+    # --- Layer 1: bias filter on historical runs ---
+    # Drop historicals strictly worse (more *structural* flags) than the
+    # fresh run. We use ``structural_flag_count``, not the broader
+    # ``bias_flag_count``, because advisory flags like
+    # ``orientation_unreliable`` are signal-to-noise driven and would
+    # cause spurious drops on equally-good captures whose noise
+    # happens to land just below the orientation_ranker threshold.
+    # 仅按"结构性"偏置标签做硬过滤；提示性标签会在 UI 中展示但不参与丢
+    # 弃决策，避免噪声驱动的朝向标志误伤同等水平的历史 run。
+    fresh_struct_flags = run_scores[fresh_index]["structural_flag_count"]
+    clean_historical = [
+        i
+        for i in historical_indices
+        if run_scores[i]["structural_flag_count"] <= fresh_struct_flags
+    ]
+    for i in historical_indices:
+        if i in clean_historical:
+            continue
+        excluded.append(
+            {
+                "index": i,
+                "reason": "bias_filter",
+                "bias_flags": list(run_scores[i]["bias_flags"]),
+                "structural_flags": list(run_scores[i]["structural_flags"]),
+            }
+        )
+
+    selection_strategy = "bias_filter_v1"
+
+    # --- Layer 1.5: pairwise white_C0 mismatch vs fresh ---
+    # Two runs whose white_C0 averages differ by more than
+    # ``_C0_WHITE_PAIRWISE_RATIO_THRESHOLD`` cannot share a single
+    # joint refit: the cost surface has no consistent (E, k) for both
+    # lighting environments. The fresh run is the canonical reference
+    # (the operator just captured it on purpose), so the historical
+    # is the one excluded. We compute ratio = max/min so the rule is
+    # symmetric whether the fresh is brighter or darker.
+    # 跨 run 的成对白底比较：与新 run 偏离超过 1.5× 即视为光照不一致，
+    # 剔除历史 run。
+    fresh_white_c0 = run_scores[fresh_index]["white_c0_avg"]
+    if (
+        isinstance(fresh_white_c0, (int, float))
+        and not isinstance(fresh_white_c0, bool)
+        and fresh_white_c0 > 0.0
+    ):
+        survived_pairwise: list[int] = []
+        for i in clean_historical:
+            run_white_c0 = run_scores[i]["white_c0_avg"]
+            if (
+                not isinstance(run_white_c0, (int, float))
+                or isinstance(run_white_c0, bool)
+                or run_white_c0 <= 0.0
+            ):
+                # Cannot compare without a numeric reference; let
+                # Layer 1's single-run filter speak for this run.
+                survived_pairwise.append(i)
+                continue
+            ratio = max(run_white_c0, fresh_white_c0) / min(
+                run_white_c0, fresh_white_c0
+            )
+            if ratio > _C0_WHITE_PAIRWISE_RATIO_THRESHOLD:
+                excluded.append(
+                    {
+                        "index": i,
+                        "reason": "c0_white_pairwise_mismatch",
+                        "bias_flags": list(run_scores[i]["bias_flags"]),
+                        "structural_flags": list(
+                            run_scores[i]["structural_flags"]
+                        ),
+                        "fresh_white_c0_avg": float(fresh_white_c0),
+                        "run_white_c0_avg": float(run_white_c0),
+                        "ratio": float(ratio),
+                    }
+                )
+            else:
+                survived_pairwise.append(i)
+        clean_historical = survived_pairwise
+
+    # --- Layer 2: cross-val on surviving historicals (+ fresh) when N>=threshold ---
+    if len(clean_historical) >= cross_val_threshold:
+        cross_val_candidates = clean_historical + [fresh_index]
+        cv_scores = _cross_val_score_runs(verification_runs, cross_val_candidates)
+        for i in cross_val_candidates:
+            if i in cv_scores:
+                run_scores[i]["cross_val_rmse"] = cv_scores[i]
+        if cv_scores:
+            selection_strategy = "bias_filter_v1+cross_val"
+            historical_with_score = [
+                i for i in clean_historical if i in cv_scores
+            ]
+            if historical_with_score:
+                historical_with_score.sort(key=lambda i: cv_scores[i])
+                keep_count = max(1, (len(historical_with_score) + 1) // 2)
+                kept_after_cv = set(historical_with_score[:keep_count])
+                kept_after_cv.update(
+                    i for i in clean_historical if i not in cv_scores
+                )
+                for i in clean_historical:
+                    if i not in kept_after_cv:
+                        excluded.append(
+                            {
+                                "index": i,
+                                "reason": "cross_val",
+                                "bias_flags": list(run_scores[i]["bias_flags"]),
+                                "cross_val_rmse": cv_scores.get(i),
+                            }
+                        )
+                clean_historical = sorted(kept_after_cv)
+
+    selected_indices = sorted(set(clean_historical) | {fresh_index})
+
+    return {
+        "selected_indices": selected_indices,
+        "excluded_runs": excluded,
+        "selection_strategy": selection_strategy,
+        "run_scores": run_scores,
+        "fresh_index": fresh_index,
+    }
+
 
 def _aggregate_stage_a_runs(
     *,
@@ -1385,109 +2195,170 @@ def _aggregate_stage_a_runs(
     verification_runs: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     fallback_e_values, fallback_k_values, fallback_white_c0_values, fallback_black_c0_values = _extract_stage_a_vectors(params_payload)
-    mean_e_values = _average_numeric_vectors(
-        [list((run.get("params") or {}).get("E") or []) for run in verification_runs],
-        fallback_e_values,
-    )
-    mean_k_values = _average_numeric_vectors(
-        [list((run.get("params") or {}).get("k") or []) for run in verification_runs],
-        fallback_k_values,
-    )
-    mean_white_c0_values = _average_numeric_vectors(
-        [list((run.get("params") or {}).get("white_C0") or []) for run in verification_runs],
-        fallback_white_c0_values,
-    )
-    mean_black_c0_values = _average_numeric_vectors(
-        [list((run.get("params") or {}).get("black_C0") or []) for run in verification_runs],
-        fallback_black_c0_values,
-    )
 
-    mean_delta_e_values: list[float] = []
-    max_delta_e_values: list[float] = []
-    rmse_linear_values: list[float] = []
-    channel_rmse_values: list[list[float]] = []
-    warning_values: list[str] = []
-    for run in verification_runs:
-        run_fit_summary = run.get("fit_summary") or {}
-        if not isinstance(run_fit_summary, dict):
-            continue
-        overall_validation = run_fit_summary.get("overall_validation") or {}
-        if not isinstance(overall_validation, dict):
-            overall_validation = {}
-        try:
-            if "mean_delta_e" in overall_validation:
-                mean_delta_e_values.append(float(overall_validation["mean_delta_e"]))
-            if "max_delta_e" in overall_validation:
-                max_delta_e_values.append(float(overall_validation["max_delta_e"]))
-            if "rmse_linear" in overall_validation:
-                rmse_linear_values.append(float(overall_validation["rmse_linear"]))
-        except (TypeError, ValueError):
-            pass
-        channel_rmse = overall_validation.get("channel_rmse")
-        if isinstance(channel_rmse, list):
+    aggregated_warnings = _collect_run_warnings(verification_runs)
+
+    # Decide which runs participate in the joint refit. Biased runs are
+    # excluded so a single white-balanced capture cannot drag the LM fit
+    # toward a model that "looks great" against its own biased samples
+    # but predicts colour poorly in production. Selection metadata is
+    # persisted later so the UI can explain *why* a run was dropped.
+    # 选择哪些 run 参与联合重拟合，把已知偏置的 run 隔离掉；选择详情会写
+    # 入 archive，便于前端解释为何某个 run 被排除。
+    selection = _select_runs_for_refit(verification_runs)
+    selected_runs = [verification_runs[i] for i in selection["selected_indices"]]
+
+    combined = _collect_combined_run_samples(selected_runs)
+    if combined is not None:
+        # Preferred path: re-fit Beer-Lambert on the combined sample set.
+        # Statistically valid; lets verification_count actually improve (E, k).
+        # 合并样本重拟合：统计有效，验证次数能真正提升精度。
+        thickness_mm, white_linear, black_linear = combined
+        (
+            agg_e_values,
+            agg_k_values,
+            agg_white_c0_values,
+            agg_black_c0_values,
+            channel_rmse,
+            overall_validation_refit,
+        ) = _refit_combined_samples(thickness_mm, white_linear, black_linear)
+        aggregation_method = "refit_combined_samples"
+        overall_validation: dict[str, Any] = dict(overall_validation_refit)
+        overall_validation["channel_rmse"] = channel_rmse
+        per_run_mean_de: list[float] = []
+        for run in selected_runs:
+            ov = (run.get("fit_summary") or {}).get("overall_validation") or {}
             try:
-                channel_rmse_values.append([float(value) for value in channel_rmse])
+                per_run_mean_de.append(float(ov["mean_delta_e"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if per_run_mean_de:
+            overall_validation["best_run_mean_delta_e"] = float(np.min(np.asarray(per_run_mean_de, dtype=np.float64)))
+    else:
+        # Fallback path: per-run parameter arithmetic mean. Used when any
+        # historical run lacks ``samples`` (older archives) or when stored
+        # samples failed schema validation. Aggregation is statistically
+        # weaker but never worse than a single run, and preserves backwards
+        # compatibility for archives saved before the samples field existed.
+        # 历史档案缺 samples 或 schema 校验失败时回退到参数均值，保持向后兼容。
+        # Mean fallback also operates only on selected_runs so the bias
+        # filter applies regardless of which path the aggregator takes.
+        # 参数均值兜底同样只对 selected_runs 平均，确保偏置过滤在两个路径上一致生效。
+        agg_e_values = _average_numeric_vectors(
+            [list((run.get("params") or {}).get("E") or []) for run in selected_runs],
+            fallback_e_values,
+        )
+        agg_k_values = _average_numeric_vectors(
+            [list((run.get("params") or {}).get("k") or []) for run in selected_runs],
+            fallback_k_values,
+        )
+        agg_white_c0_values = _average_numeric_vectors(
+            [list((run.get("params") or {}).get("white_C0") or []) for run in selected_runs],
+            fallback_white_c0_values,
+        )
+        agg_black_c0_values = _average_numeric_vectors(
+            [list((run.get("params") or {}).get("black_C0") or []) for run in selected_runs],
+            fallback_black_c0_values,
+        )
+        aggregation_method = "mean"
+
+        mean_delta_e_values: list[float] = []
+        max_delta_e_values: list[float] = []
+        rmse_linear_values: list[float] = []
+        channel_rmse_values: list[list[float]] = []
+        for run in selected_runs:
+            run_fit_summary = run.get("fit_summary") or {}
+            if not isinstance(run_fit_summary, dict):
+                continue
+            ov = run_fit_summary.get("overall_validation") or {}
+            if not isinstance(ov, dict):
+                ov = {}
+            try:
+                if "mean_delta_e" in ov:
+                    mean_delta_e_values.append(float(ov["mean_delta_e"]))
+                if "max_delta_e" in ov:
+                    max_delta_e_values.append(float(ov["max_delta_e"]))
+                if "rmse_linear" in ov:
+                    rmse_linear_values.append(float(ov["rmse_linear"]))
             except (TypeError, ValueError):
                 pass
-        run_warnings = run_fit_summary.get("warnings")
-        if isinstance(run_warnings, list):
-            warning_values.extend(str(value) for value in run_warnings if str(value).strip())
+            channel_rmse_per_run = ov.get("channel_rmse")
+            if isinstance(channel_rmse_per_run, list):
+                try:
+                    channel_rmse_values.append([float(value) for value in channel_rmse_per_run])
+                except (TypeError, ValueError):
+                    pass
+
+        overall_validation = _json_clone(fit_summary.get("overall_validation") or {})
+        if mean_delta_e_values:
+            overall_validation["mean_delta_e"] = float(np.mean(np.asarray(mean_delta_e_values, dtype=np.float64)))
+            overall_validation["best_run_mean_delta_e"] = float(np.min(np.asarray(mean_delta_e_values, dtype=np.float64)))
+        if max_delta_e_values:
+            overall_validation["max_delta_e"] = float(np.max(np.asarray(max_delta_e_values, dtype=np.float64)))
+        if rmse_linear_values:
+            overall_validation["rmse_linear"] = float(np.mean(np.asarray(rmse_linear_values, dtype=np.float64)))
+        if channel_rmse_values:
+            overall_validation["channel_rmse"] = [
+                float(value)
+                for value in np.mean(np.asarray(channel_rmse_values, dtype=np.float64), axis=0).tolist()
+            ]
+
+    overall_validation["verification_count"] = len(verification_runs)
+    overall_validation["aggregation_method"] = aggregation_method
+    overall_validation["selected_run_count"] = len(selected_runs)
+    overall_validation["selection_strategy"] = selection["selection_strategy"]
 
     aggregated_fit_summary = _json_clone(fit_summary)
     aggregated_fit_summary["colors"] = [material_name]
-    aggregated_fit_summary["warnings"] = sorted(dict.fromkeys(warning_values))
-    overall_validation = _json_clone(aggregated_fit_summary.get("overall_validation") or {})
-    if mean_delta_e_values:
-        overall_validation["mean_delta_e"] = float(np.mean(np.asarray(mean_delta_e_values, dtype=np.float64)))
-        overall_validation["best_run_mean_delta_e"] = float(np.min(np.asarray(mean_delta_e_values, dtype=np.float64)))
-    if max_delta_e_values:
-        overall_validation["max_delta_e"] = float(np.max(np.asarray(max_delta_e_values, dtype=np.float64)))
-    if rmse_linear_values:
-        overall_validation["rmse_linear"] = float(np.mean(np.asarray(rmse_linear_values, dtype=np.float64)))
-    if channel_rmse_values:
-        overall_validation["channel_rmse"] = [
-            float(value)
-            for value in np.mean(np.asarray(channel_rmse_values, dtype=np.float64), axis=0).tolist()
-        ]
-    overall_validation["verification_count"] = len(verification_runs)
+    aggregated_fit_summary["warnings"] = aggregated_warnings
     aggregated_fit_summary["overall_validation"] = overall_validation
 
     aggregated_material_summary = _json_clone(material_summary)
     aggregated_material_summary["white_zero_rgb"] = _linear_to_srgb_uint8(
-        np.asarray([mean_white_c0_values], dtype=np.float64)
+        np.asarray([agg_white_c0_values], dtype=np.float64)
     )[0].tolist()
     aggregated_material_summary["black_zero_rgb"] = _linear_to_srgb_uint8(
-        np.asarray([mean_black_c0_values], dtype=np.float64)
+        np.asarray([agg_black_c0_values], dtype=np.float64)
     )[0].tolist()
     aggregated_material_summary["estimated_rgb"] = _linear_to_srgb_uint8(
-        np.asarray([mean_e_values], dtype=np.float64)
+        np.asarray([agg_e_values], dtype=np.float64)
     )[0].tolist()
-    aggregated_material_summary["estimated_k"] = [round(float(value), 6) for value in mean_k_values]
+    aggregated_material_summary["estimated_k"] = [round(float(value), 6) for value in agg_k_values]
     aggregated_material_summary["verification_count"] = len(verification_runs)
+    aggregated_material_summary["aggregation_method"] = aggregation_method
+    aggregated_material_summary["selected_run_count"] = len(selected_runs)
+    # Drop the per-run ``fit_samples`` from the aggregated material_summary.
+    # The samples are preserved per-run inside ``verification_runs[*].samples``
+    # so we don't need to keep a copy on the top-level summary, and removing
+    # it keeps the archive footprint stable across multi-run aggregations.
+    # 聚合后的 material_summary 不再保留 fit_samples（它们已存在每个 run 内），
+    # 减少多次验证后档案体积膨胀。
+    aggregated_material_summary.pop("fit_samples", None)
 
     aggregated_params_payload = _json_clone(params_payload)
     meta = aggregated_params_payload.setdefault("meta", {})
     meta["generated_at"] = _now_iso()
-    meta["warnings"] = aggregated_fit_summary["warnings"]
+    meta["warnings"] = aggregated_warnings
     meta["verification_count"] = len(verification_runs)
-    meta["aggregation_method"] = "mean"
+    meta["aggregation_method"] = aggregation_method
+    meta["selection"] = _json_clone(selection)
     parameters = aggregated_params_payload.setdefault("parameters", {})
     channels = parameters.get("channels") or []
     if channels and isinstance(channels[0], dict):
         channels[0]["color_name"] = material_name
-        channels[0]["E"] = [round(float(value), 6) for value in mean_e_values]
-        channels[0]["k"] = [round(float(value), 6) for value in mean_k_values]
+        channels[0]["E"] = [round(float(value), 6) for value in agg_e_values]
+        channels[0]["k"] = [round(float(value), 6) for value in agg_k_values]
     substrates = parameters.get("substrates") or []
     for substrate in substrates:
         if not isinstance(substrate, dict):
             continue
         if substrate.get("substrate_id") == "white":
-            substrate["C0"] = [round(float(value), 6) for value in mean_white_c0_values]
+            substrate["C0"] = [round(float(value), 6) for value in agg_white_c0_values]
         elif substrate.get("substrate_id") == "black":
-            substrate["C0"] = [round(float(value), 6) for value in mean_black_c0_values]
+            substrate["C0"] = [round(float(value), 6) for value in agg_black_c0_values]
     fitted_substrates = aggregated_params_payload.setdefault("fitted_substrates", {})
-    fitted_substrates["white"] = {"C0": [round(float(value), 6) for value in mean_white_c0_values]}
-    fitted_substrates["black"] = {"C0": [round(float(value), 6) for value in mean_black_c0_values]}
+    fitted_substrates["white"] = {"C0": [round(float(value), 6) for value in agg_white_c0_values]}
+    fitted_substrates["black"] = {"C0": [round(float(value), 6) for value in agg_black_c0_values]}
     validation = aggregated_params_payload.setdefault("validation", {})
     validation["overall"] = overall_validation
     return aggregated_params_payload, aggregated_fit_summary, aggregated_material_summary
@@ -1638,6 +2509,30 @@ def save_stage_a_material_archive(
         archive_path = material_dir / "material.json"
         created_at = _now_iso()
 
+    new_image_source = _coerce_image_source(source_summary.get("image_source"))
+    if save_mode == "merge" and verification_runs:
+        existing_image_sources = _collect_run_image_sources(verification_runs)
+        # Two physically inconsistent sources cannot be safely merged: their
+        # (E, k) live in different "white-balanced reference" frames so any
+        # combined refit (or even a parameter mean) is meaningless.
+        # Reject the merge with an actionable error so the user can either
+        # re-shoot the new capture in the same mode or drop into ``override``.
+        # 两种来源的样本不可混合聚合：它们的 (E, k) 处于不同的"白平衡参考系"，
+        # 任何合并重拟合或参数均值都没有物理意义。明确拒绝并给出 actionable
+        # 错误，让用户要么按相同来源重拍，要么改用 override 模式。
+        if (
+            existing_image_sources
+            and new_image_source not in existing_image_sources
+            and new_image_source is not None
+        ):
+            existing_label = ", ".join(sorted(existing_image_sources))
+            raise ValueError(
+                "Cannot merge gradient-card captures from different image "
+                f"sources: existing runs use [{existing_label}] but the new "
+                f"capture is tagged '{new_image_source}'. Re-capture the new "
+                "card in the same mode, or use save_mode='override' to "
+                "discard previous verification runs."
+            )
     verification_runs.append(
         _build_verification_run(
             params_payload=params_payload,
@@ -1661,6 +2556,25 @@ def save_stage_a_material_archive(
     )
 
     updated_at = _now_iso()
+    archive_aggregation_method = str(
+        ((payload.get("meta") or {}).get("aggregation_method"))
+        or "mean"
+    )
+    archive_selection = (payload.get("meta") or {}).get("selection")
+    if not isinstance(archive_selection, dict):
+        archive_selection = None
+    image_source_tags = _collect_run_image_sources(verification_runs)
+    if not image_source_tags:
+        image_source_label: str | None = None
+    elif len(image_source_tags) == 1:
+        image_source_label = next(iter(image_source_tags))
+    else:
+        # Cannot happen in normal flow because the merge-consistency check
+        # rejects mixed sources earlier, but if it ever does (e.g. legacy
+        # archive seeded with mixed sources), preserve the truth so audits
+        # can flag it instead of silently picking one.
+        # 正常流程不会触发；保留真实状态便于审计而非偷偷择一。
+        image_source_label = "mixed"
     archive_payload = {
         "schema_version": "1.1",
         "kind": "lumina_stage_a_material",
@@ -1675,8 +2589,10 @@ def save_stage_a_material_archive(
         "verification_count": len(verification_runs),
         "verification_runs": verification_runs,
         "aggregation": {
-            "method": "mean",
+            "method": archive_aggregation_method,
             "aggregated_at": updated_at,
+            "image_source": image_source_label,
+            "selection": archive_selection,
         },
     }
     archive_path.write_text(

@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense, Component } from "react";
+import { useState, useEffect, useCallback, Suspense, Component } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
@@ -13,6 +13,8 @@ import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
+import { BugReportButton } from "./components/BugReportButton";
+import { BugReportModal } from "./components/BugReportModal";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
@@ -216,8 +218,31 @@ function AppContent() {
 
   const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
+  const clearMaterialVerification = useSingleStageStore(
+    (s) => s.clearMaterialVerification,
+  );
+
+  // When the user explicitly clicks the “提取耗材” (gradient-card-extract)
+  // sub-tab via the nav bar, treat it as “start a fresh extraction” and
+  // drop any leftover material-verification state. The re-verification
+  // entry from MaterialLibraryPanel sets verification state and calls
+  // setActiveTab directly via the widgetStore, bypassing this handler, so
+  // that flow is unaffected.
+  // 用户从导航栏主动点击「提取耗材」子页时视为「全新提取」，清除遗留的再次
+  // 校验状态；从耗材库「再次校验」进入的路径直接调 store 的 setActiveTab，不走
+  // 这里，所以验证模式不会被错误清除。
+  const handleTabChange = useCallback(
+    (tab: typeof activeTab) => {
+      if (tab === "gradient-card-extract") {
+        clearMaterialVerification();
+      }
+      setActiveTab(tab);
+    },
+    [setActiveTab, clearMaterialVerification],
+  );
 
   useEffect(() => {
     apiClient
@@ -270,6 +295,7 @@ function AppContent() {
           <WidgetToggles />
           <LanguageToggle />
           <ThemeToggle />
+          <BugReportButton onClick={() => setBugReportOpen(true)} />
           {connected === null ? (
             <span className="text-sm text-slate-500 dark:text-slate-400">{t("app_checking_backend")}</span>
           ) : connected ? (
@@ -295,7 +321,7 @@ function AppContent() {
         <div className={`min-w-0 w-full ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
           <TabNavBar
             activeTab={activeTab}
-            onTabChange={setActiveTab}
+            onTabChange={handleTabChange}
             compact={workspace.isCompact}
           />
         </div>
@@ -363,6 +389,10 @@ function AppContent() {
         entry={announcement.entry}
         onClose={announcement.close}
         onDismissVersion={announcement.dismissThisVersion}
+      />
+      <BugReportModal
+        open={bugReportOpen}
+        onClose={() => setBugReportOpen(false)}
       />
     </div>
   );

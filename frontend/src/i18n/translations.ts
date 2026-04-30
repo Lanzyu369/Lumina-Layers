@@ -13,6 +13,99 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "面板控件",
     en: "Panel Controls",
   },
+  bug_report_button_label: {
+    zh: "反馈问题",
+    en: "Report a bug",
+  },
+  bug_report_button_tooltip: {
+    zh: "向开发者发送 bug 反馈",
+    en: "Send a bug report to the developer",
+  },
+  bug_report_modal_title: {
+    zh: "反馈问题",
+    en: "Report a bug",
+  },
+  bug_report_modal_description_label: {
+    zh: "问题描述",
+    en: "Describe the problem",
+  },
+  bug_report_modal_description_placeholder: {
+    zh: "请详细描述发生了什么、你期望发生什么、复现步骤……",
+    en: "What happened, what did you expect, and how can we reproduce it?",
+  },
+  bug_report_modal_email_label: {
+    zh: "你的邮箱（可选，方便我们回复你）",
+    en: "Your email (optional, so we can follow up)",
+  },
+  bug_report_modal_context_disclosure: {
+    zh: "已自动收集的信息（点击展开）",
+    en: "Automatically collected info (click to expand)",
+  },
+  bug_report_modal_privacy_note: {
+    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，不经过任何第三方服务。",
+    en: "This report is sent only to the Lumina Studio developer mailbox. No third-party services are involved.",
+  },
+  bug_report_modal_submit: {
+    zh: "发送",
+    en: "Send",
+  },
+  bug_report_modal_cancel: {
+    zh: "取消",
+    en: "Cancel",
+  },
+  bug_report_toast_success: {
+    zh: "已收到，谢谢。工单号：{{ticket}}",
+    en: "Thanks, we got it. Ticket: {{ticket}}",
+  },
+  bug_report_toast_error: {
+    zh: "提交失败，请稍后再试。",
+    en: "Submission failed, please retry.",
+  },
+  bug_report_success_ticket_label: {
+    zh: "工单号",
+    en: "Ticket ID",
+  },
+  bug_report_success_copy: {
+    zh: "复制",
+    en: "Copy",
+  },
+  bug_report_success_copied: {
+    zh: "已复制",
+    en: "Copied",
+  },
+  bug_report_success_emailed_yes: {
+    zh: "报告已通过邮件发送给开发者。",
+    en: "Report has been emailed to the developer.",
+  },
+  bug_report_success_emailed_no: {
+    zh: "邮件未配置，报告已保存到本地。请把工单号告知开发者，便于查找原始记录。",
+    en: "Email is not configured; the report was saved locally. Share the ticket id with the developer so the original record can be located.",
+  },
+  bug_report_success_dump_path_label: {
+    zh: "本地路径",
+    en: "Local path",
+  },
+  bug_report_success_close: {
+    zh: "完成",
+    en: "Done",
+  },
+  bug_report_validation_description_required: {
+    zh: "请填写问题描述",
+    en: "Please describe the problem",
+  },
+  bug_report_validation_description_truncated: {
+    zh: "问题描述已截断到 10000 个字符。",
+    en: "The description was truncated to 10,000 characters.",
+  },
+  lang_btn_zh: {
+    zh: "🌐 中文",
+    en: "🌐 中文",
+  },
+  lang_btn_en: {
+    zh: "🌐 English",
+    en: "🌐 English",
+  },
+
   // ==================== Stats Bar ====================
   stats_calibrations: {
     zh: "校准板",
@@ -3729,6 +3822,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡 B",
     en: "Card B",
   },
+  lut_grid_card_label: {
+    zh: "色卡 {card}",
+    en: "Card {card}",
+  },
 
   // ==================== Replace Confirmation ====================
   replace_confirm_btn: {
@@ -3901,6 +3998,106 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "基础色板",
     en: "Base Palette",
   },
+  five_color_match_title: {
+    zh: "按色值查询",
+    en: "Match by color value",
+  },
+  five_color_match_desc: {
+    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配五层配方。",
+    en: "Enter a target Hex value and match the nearest five-layer recipe from the current LUT card.",
+  },
+  five_color_match_input_label: {
+    zh: "目标色值",
+    en: "Target Hex",
+  },
+  five_color_match_input_placeholder: {
+    zh: "#RRGGBB",
+    en: "#RRGGBB",
+  },
+  five_color_match_button: {
+    zh: "匹配配方",
+    en: "Match recipe",
+  },
+  five_color_match_target: {
+    zh: "目标色",
+    en: "Target",
+  },
+  five_color_match_matched: {
+    zh: "匹配色",
+    en: "Matched",
+  },
+  five_color_match_rgb_value: {
+    zh: "RGB {value}",
+    en: "RGB {value}",
+  },
+  five_color_match_delta: {
+    zh: "ΔE",
+    en: "Delta E",
+  },
+  five_color_match_position: {
+    zh: "色卡位置",
+    en: "Card position",
+  },
+  five_color_match_card: {
+    zh: "色卡 {card}",
+    en: "Card {card}",
+  },
+  five_color_match_row: {
+    zh: "第 {row} 行",
+    en: "Row {row}",
+  },
+  five_color_match_col: {
+    zh: "第 {col} 列",
+    en: "Column {col}",
+  },
+  five_color_match_recipe: {
+    zh: "匹配配方",
+    en: "Matched recipe",
+  },
+  five_color_match_neighborhood: {
+    zh: "虚拟小色卡",
+    en: "Virtual card",
+  },
+  five_color_match_empty_cell: {
+    zh: "空位",
+    en: "Empty cell",
+  },
+  five_color_match_recipe_unavailable: {
+    zh: "已找到最接近的色卡颜色，但该行无法反推出五层配方。",
+    en: "The nearest LUT color was found, but this row cannot be converted into a five-layer recipe.",
+  },
+  five_color_match_recipe_unavailable_title: {
+    zh: "无法生成五层配方",
+    en: "Recipe unavailable",
+  },
+  five_color_error_select_lut_first: {
+    zh: "请先选择 LUT",
+    en: "Select a LUT first",
+  },
+  five_color_error_load_base_colors_failed: {
+    zh: "基础色板加载失败",
+    en: "Base palette loading failed",
+  },
+  five_color_error_match_failed: {
+    zh: "按色值查询失败",
+    en: "Color value lookup failed",
+  },
+  five_color_error_invalid_hex: {
+    zh: "请输入 #RRGGBB 格式的色值",
+    en: "Enter a color value in #RRGGBB format",
+  },
+  five_color_error_query_failed: {
+    zh: "五色配方查询失败",
+    en: "Five-color recipe lookup failed",
+  },
+  five_color_error_generate_swatch_failed: {
+    zh: "色卡生成失败",
+    en: "Swatch generation failed",
+  },
+  five_color_error_generic: {
+    zh: "五色操作失败",
+    en: "Five-color operation failed",
+  },
   five_color_actions: {
     zh: "操作",
     en: "Actions",
@@ -3961,6 +4158,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡结构",
     en: "Swatch structure",
   },
+  five_color_swatch_single_sided: {
+    zh: "单面",
+    en: "Single-sided",
+  },
+  five_color_swatch_double_sided: {
+    zh: "双面",
+    en: "Double-sided",
+  },
   five_color_swatch_legend_alt: {
     zh: "色卡预览图",
     en: "Swatch preview",
@@ -4005,6 +4210,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "行号",
     en: "Row",
   },
+  five_color_result_lut_row_index: {
+    zh: "LUT 行索引（0 起）",
+    en: "LUT row index (0-based)",
+  },
   five_color_result_source: {
     zh: "来源",
     en: "Source",
@@ -4020,6 +4229,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   five_color_not_found: {
     zh: "未找到匹配",
     en: "No match found",
+  },
+  five_color_not_found_message: {
+    zh: "当前五层颜色顺序没有对应的色卡记录。",
+    en: "The current five-layer color order does not match a LUT record.",
   },
   five_color_selection_progress: {
     zh: "已选择 {count}/{total} 种颜色，请继续完成配方。",
@@ -5332,6 +5545,127 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_corner_pick_order_hint: {
     zh: "请按 1.左上 → 2.右上 → 3.右下 → 4.左下 顺序点选 4 个角。",
     en: "Click the four corners in 1.top-left → 2.top-right → 3.bottom-right → 4.bottom-left order.",
+  },
+  mat_gradient_image_source_section_title: {
+    zh: "图像来源",
+    en: "Image Source",
+  },
+  mat_gradient_image_source_section_desc: {
+    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「色卡还原图（已白平衡 / 几何归一化）」。还原图会让零厚度白底像素被推到接近纯白，导致拟合得到的 (E, k) 严重偏离真实物理值，打印效果会变差；强烈建议使用未经处理的原图。",
+    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or already-restored card renders (white-balanced / geometrically normalized). Restored inputs push zero-thickness white pixels toward 1.0, biasing the fitted (E, k) and degrading print results — strongly prefer raw photos.",
+  },
+  mat_gradient_image_source_option_raw: {
+    zh: "原图（相机/扫描仪直出，推荐）",
+    en: "Raw photo (camera/scanner direct, recommended)",
+  },
+  mat_gradient_image_source_option_restored: {
+    zh: "已还原图（白平衡 / 几何归一化处理过）",
+    en: "Restored image (white-balanced / normalized)",
+  },
+  mat_gradient_image_source_restored_warning: {
+    zh: "已选择「已还原图」。该模式仅供调试或与已有还原图档案合并验证；用于实际打印时拟合参数会有偏差，请尽量改用原图。",
+    en: "Restored mode selected. This is intended for debugging or merging with existing restored archives; fits will be physically biased and print quality may suffer. Prefer raw photos when possible.",
+  },
+  mat_gradient_image_source_mismatch_error: {
+    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
+    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or restored) or use override mode when saving to discard previous verification runs.",
+  },
+  // ----- Aggregation diagnostics ("merge diagnostics" section) -----
+  // Surfaced in the saved-material card after a successful save so the
+  // user can see which historical runs participated in the joint refit
+  // and why others were dropped.
+  mat_gradient_aggregation_section_title: {
+    zh: "合并诊断",
+    en: "Merge Diagnostics",
+  },
+  mat_gradient_aggregation_method_label: {
+    zh: "聚合方式",
+    en: "Aggregation Method",
+  },
+  mat_gradient_aggregation_method_refit_combined_samples: {
+    zh: "合并样本重拟合",
+    en: "Refit on combined samples",
+  },
+  mat_gradient_aggregation_method_mean: {
+    zh: "参数均值兜底",
+    en: "Parameter-mean fallback",
+  },
+  mat_gradient_aggregation_selection_strategy_label: {
+    zh: "选择策略",
+    en: "Selection Strategy",
+  },
+  mat_gradient_aggregation_strategy_bias_filter_v1: {
+    zh: "偏置硬过滤",
+    en: "Bias filter",
+  },
+  "mat_gradient_aggregation_strategy_bias_filter_v1+cross_val": {
+    zh: "偏置过滤 + 交叉验证",
+    en: "Bias filter + cross-val",
+  },
+  mat_gradient_aggregation_runs_used: {
+    zh: "{{used}} / {{total}} 次校准参与本次重拟合",
+    en: "{{used}} of {{total}} verification runs participated in this refit",
+  },
+  mat_gradient_aggregation_run_label: {
+    zh: "第 {{index}} 次校准",
+    en: "Run #{{index}}",
+  },
+  mat_gradient_aggregation_run_fresh_badge: {
+    zh: "本次新增",
+    en: "Fresh",
+  },
+  mat_gradient_aggregation_run_excluded_badge: {
+    zh: "已排除",
+    en: "Excluded",
+  },
+  mat_gradient_aggregation_run_included_badge: {
+    zh: "已采纳",
+    en: "Included",
+  },
+  mat_gradient_aggregation_no_excluded: {
+    zh: "本次合并未排除任何历史校准。",
+    en: "No historical runs were excluded by the bias filter for this merge.",
+  },
+  // Bias-flag labels (stable codes from backend → localised strings)
+  mat_gradient_bias_flag_c0_white_avg_gt_0_95: {
+    zh: "白底零厚度像素接近纯白（C0_white > 0.95，疑似白平衡）",
+    en: "Zero-thickness white near pure white (C0_white > 0.95, likely white-balanced)",
+  },
+  mat_gradient_bias_flag_image_source_restored: {
+    zh: "图像来源标记为「已还原图」",
+    en: "Image source tagged as restored",
+  },
+  mat_gradient_bias_flag_white_substrate_flat: {
+    zh: "白底信号过弱（朝向不可分辨）",
+    en: "White substrate signal too flat",
+  },
+  mat_gradient_bias_flag_black_substrate_flat: {
+    zh: "黑底信号过弱（朝向不可分辨）",
+    en: "Black substrate signal too flat",
+  },
+  mat_gradient_bias_flag_orientation_unreliable: {
+    zh: "朝向打分不可靠（提示性，不参与硬过滤）",
+    en: "Orientation ranking unreliable (advisory, not used for hard filter)",
+  },
+  mat_gradient_bias_flag_c0_white_avg_lt_0_60: {
+    zh: "白底零厚度像素过暗（C0_white < 0.60，曝光不足或角点选错）",
+    en: "Zero-thickness white too dark (C0_white < 0.60, underexposed or wrong anchor)",
+  },
+  mat_gradient_bias_flag_mean_de_gt_3: {
+    zh: "本次拟合平均 ΔE > 3（拟合本身已不可信，禁止其样本进入联合重拟）",
+    en: "Run's own mean ΔE > 3 (fit already unreliable; samples blocked from joint refit)",
+  },
+  mat_gradient_aggregation_excluded_reason_bias_filter: {
+    zh: "偏置硬过滤",
+    en: "Bias filter",
+  },
+  mat_gradient_aggregation_excluded_reason_cross_val: {
+    zh: "交叉验证排序",
+    en: "Cross-val ranking",
+  },
+  mat_gradient_aggregation_excluded_reason_c0_white_pairwise_mismatch: {
+    zh: "白底亮度与新捕获相差过大（>1.5×，光照环境不一致）",
+    en: "White-substrate brightness differs from fresh capture by more than 1.5x (inconsistent lighting)",
   },
   mat_gradient_white_signal_label: {
     zh: "白底信号",

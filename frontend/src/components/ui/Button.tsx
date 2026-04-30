@@ -5,6 +5,7 @@ import { cx } from "./panelPrimitives";
 interface ButtonProps {
   label: string;
   onClick: () => void;
+  type?: "button" | "submit" | "reset";
   disabled?: boolean;
   loading?: boolean;
   variant?: "primary" | "secondary";
@@ -17,6 +18,7 @@ interface ButtonProps {
 export default function Button({
   label,
   onClick,
+  type = "button",
   disabled = false,
   loading = false,
   variant = "primary",
@@ -44,7 +46,7 @@ export default function Button({
       whileHover={isDisabled ? {} : { scale: 1.01, y: -1 }}
       whileTap={isDisabled ? {} : { scale: 0.99 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      type="button"
+      type={type}
       onClick={onClick}
       disabled={isDisabled}
       title={title ?? (icon ? label : undefined)}

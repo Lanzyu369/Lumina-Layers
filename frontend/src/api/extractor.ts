@@ -9,6 +9,7 @@ import type {
   GradientCardMaterialSaveResponse,
   GradientCardMaterialUpdateResponse,
   GradientCardStageAExtractResponse,
+  LutPreviewResolvedCell,
   ManualFixResponse,
   ManualOrientationLabel,
   SingleStageExtractResponse,
@@ -52,6 +53,11 @@ export async function extractColors(
   return response.data;
 }
 
+/** Capture-origin tag forwarded as the ``image_source`` form field.
+ * 上传给后端的输入图像来源标签。
+ */
+export type GradientCardImageSourceLabel = "raw" | "restored";
+
 export async function extractGradientCardStageA(params: {
   datasetZip: File;
   whiteImage: File;
@@ -60,6 +66,7 @@ export async function extractGradientCardStageA(params: {
   blackCornerPoints: Array<[number, number]>;
   manualWhiteOrientation?: ManualOrientationLabel | null;
   manualBlackOrientation?: ManualOrientationLabel | null;
+  imageSource?: GradientCardImageSourceLabel | null;
 }): Promise<GradientCardStageAExtractResponse> {
   const fd = new FormData();
   fd.append("dataset_zip", params.datasetZip);
@@ -72,6 +79,9 @@ export async function extractGradientCardStageA(params: {
   }
   if (params.manualBlackOrientation) {
     fd.append("manual_black_orientation", params.manualBlackOrientation);
+  }
+  if (params.imageSource) {
+    fd.append("image_source", params.imageSource);
   }
   const response = await apiClient.post<GradientCardStageAExtractResponse>(
     "/extractor/extract-gradient-card-stage-a",
@@ -199,15 +209,33 @@ export async function importGradientCardMaterials(
 /** 手动修正 LUT 单元格 - JSON */
 export async function manualFixCell(
   sessionId: string,
-  cellCoord: [number, number],
+  rowIndex: number,
   overrideColor: string,
 ): Promise<ManualFixResponse> {
   const response = await apiClient.post<ManualFixResponse>(
     "/extractor/manual-fix",
     {
       session_id: sessionId,
-      cell_coord: cellCoord,
+      row_index: rowIndex,
       override_color: overrideColor,
+    },
+  );
+  return response.data;
+}
+
+export async function resolveLutPreviewCell(
+  sessionId: string,
+  x: number,
+  y: number,
+  cardIndex = 0,
+): Promise<LutPreviewResolvedCell> {
+  const response = await apiClient.post<LutPreviewResolvedCell>(
+    "/extractor/resolve-cell",
+    {
+      session_id: sessionId,
+      x,
+      y,
+      card_index: cardIndex,
     },
   );
   return response.data;

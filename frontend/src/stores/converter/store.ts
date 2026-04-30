@@ -19,6 +19,7 @@ import type {
   NativeBrandGroup,
   LutSupportedMode,
   LutDetailsCatalogGroup,
+  LutColorsCard,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -1323,6 +1324,7 @@ export interface ConverterState {
 
   // LUT 全部颜色
   lutColors: LutColorEntry[];
+  lutColorCards: LutColorsCard[];
   lutColorsLoading: boolean;
   lutColorsLutName: string;
 
@@ -2031,6 +2033,7 @@ export const DEFAULT_STATE: ConverterState = {
   legacyCatalogLoading: false,
   selectedLegacyManufacturer: "",
   lutColors: [],
+  lutColorCards: [],
   lutColorsLoading: false,
   lutColorsLutName: "",
   materialSuggestions: null,
@@ -4633,7 +4636,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
     fetchLutColors: async (lutName: string) => {
       if (!lutName) {
-        set({ lutColors: [], lutColorsLutName: "" });
+        set({ lutColors: [], lutColorCards: [], lutColorsLutName: "" });
         return;
       }
       // 缓存命中检查：LUT 名称未变且已有数据时跳过请求
@@ -4645,6 +4648,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         const response = await apiFetchLutColors(lutName);
         set({
           lutColors: response.colors,
+          lutColorCards: response.cards ?? [],
           lutColorsLoading: false,
           lutColorsLutName: lutName,
         });

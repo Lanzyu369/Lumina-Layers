@@ -35,6 +35,13 @@ from colormath.color_conversions import convert_color
 from colormath.color_diff import delta_e_cie2000
 
 from config import PrinterConfig, ColorSystem, SmartConfig, MODELS_DIR, get_asset_path
+from core.lut_card_layout import (
+    EIGHT_COLOR_PAGE_CAPACITY,
+    cell_for_row_index,
+    localize_page_layout,
+    resolve_extraction_page_layout,
+    resolve_lut_layout,
+)
 from core.naming import generate_calibration_filename
 from utils import Stats
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
@@ -46,7 +53,6 @@ CALIBRATION_HANDLED_ERRORS = (
     OSError,
     RuntimeError,
 )
-EIGHT_COLOR_PAGE_CAPACITY = 1369
 EIGHT_COLOR_DATA_DIM = 37
 EIGHT_COLOR_PADDING = 1
 EIGHT_COLOR_TOTAL_DIM = 39
@@ -178,8 +184,10 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
 
     backing_id = color_map.get(backing_color, 0)
 
-    grid_dim, padding = 32, 1
-    total_w = total_h = grid_dim + (padding * 2)
+    layout = resolve_lut_layout(color_mode, 1024)
+    page = layout.pages[0]
+    total_w = page.physical_cols
+    total_h = page.physical_rows
 
     pixels_per_block = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
     pixels_gap = max(1, int(gap_mm / PrinterConfig.NOZZLE_WIDTH))
@@ -201,8 +209,9 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
             temp //= 4
         stack = digits[::-1]
 
-        row = (i // grid_dim) + padding
-        col = (i % grid_dim) + padding
+        cell = cell_for_row_index(layout, i)
+        row = cell.physical_row
+        col = cell.physical_col
         px = col * (pixels_per_block + pixels_gap)
         py = row * (pixels_per_block + pixels_gap)
 
@@ -423,10 +432,9 @@ def generate_smart_board(
     # Get 1296 intelligently selected colors
     stacks = get_top_1296_colors()
 
-    # Geometry parameters (38x38 layout)
-    data_dim = 36
-    padding = 1
-    total_dim = data_dim + 2 * padding
+    layout = resolve_lut_layout(color_conf.get("name", "6-Color") if color_conf else "6-Color", 1296)
+    page = layout.pages[0]
+    total_dim = page.physical_rows
     block_w = float(block_size_mm)
     gap = float(gap_mm)
     margin = 5.0
@@ -482,13 +490,9 @@ def generate_smart_board(
 
     # Fill 1296 intelligent color blocks (with padding offset)
     for idx, stack in enumerate(stacks):
-        # Data area logical coordinates (0..35)
-        r_data = idx // data_dim
-        c_data = idx % data_dim
-
-        # Physical area coordinates (with border offset -> 1..36)
-        row = r_data + padding
-        col = c_data + padding
+        cell = cell_for_row_index(layout, idx)
+        row = cell.physical_row
+        col = cell.physical_col
 
         px = col * (pixels_per_block + pixels_gap)
         py = row * (pixels_per_block + pixels_gap)
@@ -698,19 +702,24 @@ def _save_8color_recipe_json(
     payload["page_index"] = page_index + 1
     payload["total_pages"] = total_pages
     payload["export_variant"] = export_variant
+    page_layout = resolve_extraction_page_layout(
+        "8-Color Max",
+        page=f"Page {page_index + 1}",
+        eight_color_full_export=export_variant == "full",
+    )
     payload["data_grid"] = {
-        "rows": EIGHT_COLOR_DATA_DIM,
-        "cols": EIGHT_COLOR_DATA_DIM,
-        "padding": EIGHT_COLOR_PADDING,
-        "physical_rows": EIGHT_COLOR_TOTAL_DIM,
-        "physical_cols": EIGHT_COLOR_TOTAL_DIM,
+        "rows": page_layout.data_rows,
+        "cols": page_layout.data_cols,
+        "padding": page_layout.padding,
+        "physical_rows": page_layout.physical_rows,
+        "physical_cols": page_layout.physical_cols,
     }
     for idx, entry in enumerate(payload.get("entries", [])):
         entry["page_recipe_index"] = idx
-        entry["data_row"] = idx // EIGHT_COLOR_DATA_DIM
-        entry["data_col"] = idx % EIGHT_COLOR_DATA_DIM
-        entry["physical_row"] = entry["data_row"] + EIGHT_COLOR_PADDING
-        entry["physical_col"] = entry["data_col"] + EIGHT_COLOR_PADDING
+        entry["data_row"] = idx // page_layout.data_cols
+        entry["data_col"] = idx % page_layout.data_cols
+        entry["physical_row"] = entry["data_row"] + page_layout.padding
+        entry["physical_col"] = entry["data_col"] + page_layout.padding
     with open(json_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=4)
     return json_path
@@ -726,13 +735,18 @@ def _generate_8color_board_artifacts(
     calibration_type: str,
     export_variant: str,
 ):
+    page_layout = resolve_extraction_page_layout(
+        "8-Color Max",
+        page=f"Page {page_index + 1}",
+        eight_color_full_export=export_variant == "full",
+    )
     px_blk = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
     px_gap = max(1, int(gap_mm / PrinterConfig.NOZZLE_WIDTH))
-    v_w = EIGHT_COLOR_TOTAL_DIM * (px_blk + px_gap)
+    v_w = page_layout.physical_cols * (px_blk + px_gap)
     full_matrix = np.full((5 + _resolve_backing_layers(backing_thickness_mm), v_w, v_w), 0, dtype=int)
     for i, stack in enumerate(stacks):
-        r = (i // EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
-        c = (i % EIGHT_COLOR_DATA_DIM) + EIGHT_COLOR_PADDING
+        r = (i // page_layout.data_cols) + page_layout.padding
+        c = (i % page_layout.data_cols) + page_layout.padding
         py = r * (px_blk + px_gap)
         px = c * (px_blk + px_gap)
         for z, mid in enumerate(stack):
@@ -740,9 +754,9 @@ def _generate_8color_board_artifacts(
     page_mark = 1 if page_index % 2 == 0 else 2
     corners = [
         (0, 0, 0),
-        (0, EIGHT_COLOR_TOTAL_DIM - 1, page_mark),
-        (EIGHT_COLOR_TOTAL_DIM - 1, EIGHT_COLOR_TOTAL_DIM - 1, 5),
-        (EIGHT_COLOR_TOTAL_DIM - 1, 0, 4),
+        (0, page_layout.physical_cols - 1, page_mark),
+        (page_layout.physical_rows - 1, page_layout.physical_cols - 1, 5),
+        (page_layout.physical_rows - 1, 0, 4),
     ]
     for r, c, mid in corners:
         py = r * (px_blk + px_gap)
@@ -931,10 +945,9 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
 
     backing_id = color_map.get(backing_color, 0)
 
-    # Geometry parameters (8x8 layout with border)
-    data_dim = 6  # 6x6 = 36 blocks (we only use 32)
-    padding = 1  # 1 block border on each side
-    total_dim = data_dim + 2 * padding  # 8x8 total
+    layout = resolve_lut_layout("BW", 32)
+    page = layout.pages[0]
+    total_dim = page.physical_rows
     block_w = float(block_size_mm)
     gap = float(gap_mm)
     margin = 5.0
@@ -995,13 +1008,9 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
 
     # Fill 32 blocks in 6x6 data area (with padding offset)
     for idx in range(32):
-        # Data area logical coordinates (0..5)
-        r_data = idx // data_dim
-        c_data = idx % data_dim
-
-        # Physical area coordinates (with border offset -> 1..6)
-        row = r_data + padding
-        col = c_data + padding
+        cell = cell_for_row_index(layout, idx)
+        row = cell.physical_row
+        col = cell.physical_col
 
         stack = stacks[idx]
 
@@ -1459,10 +1468,13 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
         extra={"event": "five_color_extended_base_page_generation_started", "color_count": 1024, "layer_count": 5},
     )
 
-    # 32x32 grid for 1024 colors
-    data_dim = 32
-    padding = 1
-    total_dim = data_dim + 2 * padding  # 34x34 physical
+    page_layout = resolve_extraction_page_layout(
+        "5-Color Extended",
+        2468,
+        page="Page 1",
+    )
+    layout = resolve_lut_layout("5-Color Extended", 1024)
+    total_dim = page_layout.physical_rows
     block_w = float(block_size_mm)
     gap = float(gap_mm)
     margin = 5.0
@@ -1492,8 +1504,9 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
             temp //= 4
         stack = digits[::-1]  # [top...bottom] for Face-Down mode (Z=0 is viewing surface)
 
-        row = (i // data_dim) + padding
-        col = (i % data_dim) + padding
+        cell = cell_for_row_index(layout, i)
+        row = cell.physical_row
+        col = cell.physical_col
 
         px = col * (pixels_per_block + pixels_gap)
         py = row * (pixels_per_block + pixels_gap)
@@ -1587,10 +1600,13 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
     # Get extended 1444 stacks (6-layer)
     extended_stacks = select_extended_1444_colors(base_stacks)
 
-    # 38x38 grid for 1444 colors
-    data_dim = 38
-    padding = 1
-    total_dim = data_dim + 2 * padding  # 40x40 physical
+    page_layout = resolve_extraction_page_layout(
+        "5-Color Extended",
+        2468,
+        page="Page 2",
+    )
+    local_layout = localize_page_layout(page_layout, item_count=1444)
+    total_dim = page_layout.physical_rows
     block_w = float(block_size_mm)
     gap = float(gap_mm)
     margin = 5.0
@@ -1613,11 +1629,9 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
     # Fill 1444 extended colors (6-layer)
     for idx in range(1444):
         stack = extended_stacks[idx]
-        r_data = idx // data_dim
-        c_data = idx % data_dim
-
-        row = r_data + padding
-        col = c_data + padding
+        cell = cell_for_row_index(local_layout, idx)
+        row = cell.physical_row
+        col = cell.physical_col
 
         px = col * (pixels_per_block + pixels_gap)
         py = row * (pixels_per_block + pixels_gap)

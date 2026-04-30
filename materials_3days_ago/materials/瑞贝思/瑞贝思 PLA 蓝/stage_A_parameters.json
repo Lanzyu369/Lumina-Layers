@@ -2,10 +2,12 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-26T04:11:51.772221+00:00",
+    "generated_at": "2026-04-17T05:46:48.949377+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
-    "warnings": [],
+    "warnings": [
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
+    ],
     "verification_count": 1,
     "aggregation_method": "mean"
   },
@@ -13,16 +15,16 @@
     "channels": [
       {
         "channel_index": 0,
-        "color_name": "品红 PLA",
+        "color_name": "瑞贝思 PLA 蓝",
         "E": [
-          0.91714,
-          0.161037,
-          0.458154
+          0.066061,
+          0.208274,
+          0.715859
         ],
         "k": [
-          1.167109,
-          6.73929,
-          3.159657
+          18.196259,
+          8.763243,
+          2.945691
         ]
       }
     ],
@@ -42,9 +44,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.033105,
-          0.031896,
-          0.029557
+          0.046665,
+          0.056128,
+          0.059511
         ]
       }
     ]
@@ -59,23 +61,23 @@
     },
     "black": {
       "C0": [
-        0.033105,
-        0.031896,
-        0.029557
+        0.046665,
+        0.056128,
+        0.059511
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 2.3566470936588244,
-      "max_delta_e": 5.337968252757209,
-      "rmse_linear": 0.025589902779710943,
+      "mean_delta_e": 3.8808364659748786,
+      "max_delta_e": 7.522690182307344,
+      "rmse_linear": 0.03705921660331794,
       "channel_rmse": [
-        0.034463115456430306,
-        0.011664257685769798,
-        0.025313398398909007
+        0.019585438011176102,
+        0.030141013970396285,
+        0.05317975649156043
       ],
-      "best_run_mean_delta_e": 2.3566470936588244,
+      "best_run_mean_delta_e": 3.8808364659748786,
       "verification_count": 1
     }
   },

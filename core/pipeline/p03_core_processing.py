@@ -18,6 +18,93 @@ import numpy as np
 _log = get_logger(__name__)
 
 
+def _snap_svg_to_fill_palette(
+    *,
+    rgb_arr: np.ndarray,
+    mask_transparent: np.ndarray,
+    quantize_budget: int,
+    coverage_threshold: float = 0.99,
+) -> np.ndarray:
+    """Collapse a rasterized SVG into its true fill palette via KDTree snap.
+    将栅格化后的 SVG 还原到真实填充色板，避免抗锯齿过渡带产生杂色配方。
+
+    The SVG → resvg → numpy pipeline produces anti-aliased edges where
+    neighbouring fill colors linearly blend. Critically, when the SVG has
+    an opaque background, the AA blending happens entirely in RGB while
+    alpha stays at 255 — so an alpha-based heuristic cannot distinguish
+    fills from edge blends. Instead we exploit the fact that **real fills
+    cover large contiguous regions while AA pixels are spread thin** (each
+    unique blend RGB appears only at pixel-thick transitions).
+
+    Algorithm:
+
+    1. Build a histogram over visible (non-transparent) pixels: ``(unique
+       RGB, count)``.
+    2. Sort by count descending and take the smallest prefix whose
+       cumulative count covers ``coverage_threshold`` of visible pixels.
+       For SVGs with N pure fills, this prefix is exactly the N fills (AA
+       contributes <1% in aggregate). For gradient SVGs, the prefix grows
+       gracefully with the gradient's pixel count distribution.
+    3. Cap by ``quantize_budget`` so the user's quantize cap still binds.
+    4. KDTree-snap every visible pixel to its nearest selected fill.
+       Transparent pixels are reassigned to ``fill_palette[0]`` so they
+       don't pollute ``unique_colors`` (they'll be set to -1 in the
+       material matrix later anyway).
+
+    Args:
+        rgb_arr: ``(H, W, 3)`` uint8 RGB after rasterization (no alpha).
+        mask_transparent: ``(H, W)`` bool — pixels already classified as
+            transparent (``alpha < 10`` plus auto-bg results).
+        quantize_budget: Upper bound on resulting unique colors. The user's
+            ``quantize_colors`` setting from the request.
+        coverage_threshold: Cumulative pixel fraction that the fill palette
+            must explain. Defaults to 0.99 — empirically this captures all
+            real fills of a typical multi-color SVG while excluding the
+            sub-1% noise floor of anti-aliased edge blends.
+
+    Returns:
+        ``(H, W, 3)`` uint8 image with at most ``min(len(fill_palette),
+        quantize_budget)`` distinct RGB values.
+    """
+    from scipy.spatial import KDTree
+
+    visible_mask = ~mask_transparent
+    if not np.any(visible_mask):
+        return rgb_arr.copy()
+
+    visible_pixels = rgb_arr[visible_mask].reshape(-1, 3)
+    unique_rgb, counts = np.unique(visible_pixels, axis=0, return_counts=True)
+
+    # Sort by frequency descending. Real fills are dense; AA pixels are rare.
+    order = np.argsort(-counts)
+    unique_rgb = unique_rgb[order]
+    counts = counts[order]
+
+    total_visible = int(visible_pixels.shape[0])
+    cumulative = np.cumsum(counts)
+    coverage_cap = int(np.searchsorted(cumulative, total_visible * coverage_threshold)) + 1
+    fill_count = max(1, min(coverage_cap, int(quantize_budget), int(unique_rgb.shape[0])))
+    fill_palette = unique_rgb[:fill_count]
+
+    _log.debug(
+        "SVG fill palette: %d/%d unique RGB selected (coverage=%.3f, budget=%d)",
+        fill_count,
+        unique_rgb.shape[0],
+        coverage_threshold,
+        quantize_budget,
+    )
+
+    quantized_image = np.empty_like(rgb_arr)
+    tree = KDTree(fill_palette.astype(np.float32))
+    _, idx = tree.query(visible_pixels.astype(np.float32))
+    quantized_image[visible_mask] = fill_palette[idx]
+    # Transparent pixels: assign palette[0] so they share an existing
+    # ``unique_colors`` entry (they'll be masked out via material_matrix=-1).
+    if np.any(mask_transparent):
+        quantized_image[mask_transparent] = fill_palette[0]
+    return quantized_image
+
+
 def _run_material_archive_branch(ctx: dict) -> dict:
     """Material-archive processing: quantize image, solve recipes via cache or B&B.
     耗材档案模式处理：量化图像，通过缓存命中或 B&B 最优求解器生成配方。
@@ -92,23 +179,62 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     mask_solid = ~mask_transparent
 
     # ---- Quantize ----
-    # Pass ``skip_post_blur=True``: the material-archive solver (and its
-    # cache) consumes ``unique_colors`` and relies on the quantization
-    # contract (``unique RGB count <= quantize_colors_n``). Letting
-    # ``cv2.medianBlur`` run would inflate unique_colors by 10-100x and
-    # produce visible banding at higher layer counts because neighbouring
-    # pixels get mapped to distinct recipes for colors that were supposed
-    # to collapse into the same cluster.
-    # (耗材档案分支必须关闭后量化模糊：medianBlur 逐通道取中值会把 unique
-    # RGB 数炸到 10-100 倍，层数越多相邻像素越容易被映射到不同配方，从而
-    # 在预览里表现为肉眼可见的色块/带状化。)
-    rgb_processed = apply_bilateral_filter(rgb_arr, 10)
-    rgb_processed = apply_median_filter(rgb_processed, 0)
-    quantized_image = kmeans_quantize(
-        rgb_processed, quantize_colors_n, skip_post_blur=True
-    )
+    # Two paths:
+    #
+    # 1. **SVG fill-palette snapping** (``is_svg`` branch). resvg outputs
+    #    anti-aliased edges where neighbouring fill colors blend into
+    #    intermediate RGB triples. Feeding those edge blends into K-Means
+    #    with a large budget (``quantize_colors_n=256``) makes the algorithm
+    #    spend clusters on transition bands; each transition cluster then
+    #    resolves to its own material recipe, producing the "noise pixels
+    #    not following the SVG strokes" symptom. Instead we derive the fill
+    #    palette directly from the RGB histogram of visible pixels:
+    #    real fills cover dense regions while AA edge blends are spread
+    #    thin, so the smallest top-K colors covering 99% of visible pixels
+    #    are exactly the SVG's true fills. We then KDTree-snap every
+    #    visible pixel to its nearest fill. This keeps ``unique_colors``
+    #    bounded by the SVG's actual fill count, no matter how large the
+    #    user's ``quantize_colors`` is. (NB: with an opaque background the
+    #    AA blending happens entirely in RGB while alpha stays at 255, so
+    #    an alpha-based heuristic cannot distinguish fills from edges —
+    #    the histogram-frequency signal is the robust one.)
+    #    (SVG 走线杂色根因：resvg 抗锯齿边缘是相邻填充色的混合 RGB，K-Means
+    #    给 256 预算时会专门给过渡带开簇，过渡带每个 cluster 又被独立查表
+    #    成不相关配方，这就是「不沿走线的杂色」。改为：对可见像素做 RGB 直方图，
+    #    取累计覆盖 99% 像素的高频色作为填充色板（AA 像素分布稀疏总和 <1% 自然
+    #    被剔除），其余可见像素 KDTree 吸附到最近填充色。注意当 SVG 有不透明
+    #    背景时，AA 混合完全发生在 RGB 上而 alpha 仍为 255，因此只有频次信号
+    #    可靠，alpha 阈值无效。)
+    #
+    # 2. **Raster path** (PNG/JPG/HEIC). Apply edge-preserving smoothing,
+    #    then K-Means. Pass ``skip_post_blur=True``: the material-archive
+    #    solver (and its cache) consumes ``unique_colors`` and relies on
+    #    the quantization contract (``unique RGB count <= quantize_colors_n``).
+    #    Letting ``cv2.medianBlur`` run would inflate unique_colors by
+    #    10-100x and produce visible banding at higher layer counts because
+    #    neighbouring pixels get mapped to distinct recipes for colors that
+    #    were supposed to collapse into the same cluster.
+    #    (耗材档案分支必须关闭后量化模糊：medianBlur 逐通道取中值会把 unique
+    #    RGB 数炸到 10-100 倍，层数越多相邻像素越容易被映射到不同配方，从而
+    #    在预览里表现为肉眼可见的色块/带状化。)
+    if is_svg:
+        quantized_image = _snap_svg_to_fill_palette(
+            rgb_arr=rgb_arr,
+            mask_transparent=mask_transparent,
+            quantize_budget=quantize_colors_n,
+        )
+    else:
+        rgb_processed = apply_bilateral_filter(rgb_arr, 10)
+        rgb_processed = apply_median_filter(rgb_processed, 0)
+        quantized_image = kmeans_quantize(
+            rgb_processed, quantize_colors_n, skip_post_blur=True
+        )
     unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
-    _log.debug("%d unique colors after quantization", len(unique_colors))
+    _log.debug(
+        "%d unique colors after quantization (svg=%s)",
+        len(unique_colors),
+        is_svg,
+    )
 
     # ---- Resolve recipes: cache lookup or per-image B&B fallback ----
     solver_t0 = time.perf_counter()

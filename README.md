@@ -283,6 +283,10 @@ Using Docker is the easiest way to run Lumina Studio without worrying about syst
 pip install -r requirements.txt
 ```
 
+### Configuration
+
+Lumina Studio reads optional local environment overrides from `.env.local`. Use `.env.example` as the template for SMTP-backed bug-report delivery, and never commit real secrets. Store your real SMTP password only in `.env.local`.
+
 ---
 
 ## Usage Guide

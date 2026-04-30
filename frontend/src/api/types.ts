@@ -557,6 +557,7 @@ export interface ExtractResponse {
   warp_view_url: string;
   lut_preview_url: string;
   default_palette: ExtractorPaletteEntry[];
+  lut_layout?: LutCardLayout | null;
 }
 
 export interface SingleStageCoverageItem {
@@ -642,6 +643,52 @@ export interface GradientCardSampleBox {
   thickness_layers: number;
 }
 
+export const AGGREGATION_BIAS_FLAGS = [
+  "c0_white_avg_gt_0_95",
+  "c0_white_avg_lt_0_60",
+  "image_source_restored",
+  "white_substrate_flat",
+  "black_substrate_flat",
+  "orientation_unreliable",
+  "mean_de_gt_3",
+] as const;
+
+export type AggregationBiasFlag = (typeof AGGREGATION_BIAS_FLAGS)[number];
+
+export interface AggregationRunScore {
+  index: number;
+  is_fresh: boolean;
+  bias_flag_count: number;
+  bias_flags: AggregationBiasFlag[];
+  structural_flag_count: number;
+  structural_flags: AggregationBiasFlag[];
+  white_c0_avg: number | null;
+  image_source: string | null;
+  cross_val_rmse: number | null;
+}
+
+export interface AggregationExcludedRun {
+  index: number;
+  reason: string;
+  bias_flags: AggregationBiasFlag[];
+  structural_flags: AggregationBiasFlag[];
+  cross_val_rmse: number | null;
+  // Pairwise white_C0 mismatch only — populated when ``reason`` is
+  // ``"c0_white_pairwise_mismatch"`` so the UI can show the actual
+  // ratio + values that triggered the exclusion.
+  fresh_white_c0_avg?: number;
+  run_white_c0_avg?: number;
+  ratio?: number;
+}
+
+export interface AggregationSelection {
+  selected_indices: number[];
+  excluded_runs: AggregationExcludedRun[];
+  selection_strategy: string;
+  run_scores: AggregationRunScore[];
+  fresh_index: number | null;
+}
+
 export interface SavedMaterialSummary {
   material_name: string;
   directory_name: string;
@@ -651,6 +698,8 @@ export interface SavedMaterialSummary {
   verification_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
+  aggregation_method?: string | null;
+  aggregation_selection?: AggregationSelection | null;
 }
 
 export interface OrientationCandidate {
@@ -866,6 +915,7 @@ export interface ManualFixResponse {
   status: string;
   message: string;
   lut_preview_url: string;
+  lut_layout?: LutCardLayout | null;
 }
 
 // ========== LUT Manager Models ==========
@@ -1086,10 +1136,68 @@ export interface LutColorEntry {
   rgb: [number, number, number];
 }
 
+export interface LutCardPage {
+  page_index: number;
+  page_label: string;
+  card_index: number;
+  card_label: string;
+  start_index: number;
+  item_count: number;
+  data_rows: number;
+  data_cols: number;
+  padding: number;
+  physical_rows: number;
+  physical_cols: number;
+}
+
+export interface LutCardLayout {
+  color_mode: string;
+  total_count: number;
+  pages: LutCardPage[];
+}
+
+export interface LutCardCellCoordinate {
+  card_index: number;
+  card_label: string;
+  page_index: number;
+  page_label: string;
+  grid_size: number;
+  data_rows: number;
+  data_cols: number;
+  row: number;
+  col: number;
+  data_row: number;
+  data_col: number;
+  display_row: number;
+  display_col: number;
+  physical_row: number;
+  physical_col: number;
+  row_index: number;
+}
+
+export interface LutPreviewResolvedCell {
+  cell: LutCardCellCoordinate;
+  rgb: [number, number, number];
+  hex: string;
+  overlay_bbox: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface LutColorsCard {
+  page: LutCardPage;
+  colors: LutColorEntry[];
+}
+
 export interface LutColorsResponse {
   lut_name: string;
   total: number;
   colors: LutColorEntry[];
+  layout?: LutCardLayout | null;
+  cards?: LutColorsCard[];
 }
 
 // ========== Slicer Models ==========
@@ -1171,6 +1279,64 @@ export interface FiveColorQueryResponse {
   row_index: number;
   message: string;
   source: string;
+  reason?: string | null;
+}
+
+export interface FiveColorCardCoordinate {
+  card_index: number;
+  card_label: string;
+  page_index: number;
+  page_label: string;
+  grid_size: number;
+  data_rows: number;
+  data_cols: number;
+  row: number;
+  col: number;
+  data_row: number;
+  data_col: number;
+  display_row: number;
+  display_col: number;
+  physical_row: number;
+  physical_col: number;
+  row_index: number;
+}
+
+export interface FiveColorNeighborhoodCell {
+  card_index: number | null;
+  card_label: string | null;
+  page_index: number | null;
+  page_label: string | null;
+  grid_size: number | null;
+  data_rows: number | null;
+  data_cols: number | null;
+  row: number | null;
+  col: number | null;
+  data_row: number | null;
+  data_col: number | null;
+  display_row: number | null;
+  display_col: number | null;
+  physical_row: number | null;
+  physical_col: number | null;
+  row_index: number | null;
+  rgb: [number, number, number] | null;
+  hex: string | null;
+  is_match: boolean;
+}
+
+export interface FiveColorMatchRequest {
+  lut_name: string;
+  target_hex: string;
+  neighborhood_radius?: number;
+}
+
+export interface FiveColorMatchResponse extends FiveColorQueryResponse {
+  target_rgb: [number, number, number];
+  target_hex: string;
+  matched_rgb: [number, number, number] | null;
+  matched_hex: string | null;
+  delta_e: number | null;
+  coordinate: FiveColorCardCoordinate;
+  neighborhood: FiveColorNeighborhoodCell[][];
 }
 
 export interface RecipeSwatchItemRequest {
