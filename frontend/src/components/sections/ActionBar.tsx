@@ -768,6 +768,14 @@ export default function ActionBar() {
             overlay={previewSurfaceOverlay}
             floatingOverlay={previewDebugOverlay}
             resetLabel={t("zoom_reset")}
+            // Quantized previews must downsample with nearest-neighbor so each
+            // discrete color block keeps its identity in the thumbnail. Bilinear
+            // smoothing averages a small bright cell with its (often differently
+            // colored) neighbours, which makes 2D thumbs look "muddier" than
+            // the 3D viewer where every pixel is its own mesh face.
+            // 量化预览必须用最近邻缩放，否则小色块会被周围颜色"污染"，导致
+            // 缩略图色感与 3D / 实物打印明显不一致。
+            renderingQuality="crisp"
             onHoverSample={handlePreviewHoverSample}
             onSurfaceReady={handlePreviewSurfaceReady}
           />
