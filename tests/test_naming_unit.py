@@ -18,11 +18,15 @@ from core.naming import (
     generate_calibration_filename,
     generate_model_filename,
     generate_preview_filename,
+    generate_segmented_glb_filename,
     parse_filename,
 )
 
 # Timestamp pattern used across tests
 TS_RE = r"\d{8}_\d{6}"
+
+# Pattern for segmented GLB filenames: segmented_{prefix<=8}_{uuid12}.{ext}
+SEGMENTED_GLB_RE = re.compile(r"^segmented_([A-Za-z0-9_]{1,8})_([0-9a-f]{12})\.glb$")
 
 
 # =========================================================================
@@ -246,3 +250,80 @@ class TestParseFilename:
         parsed = parse_filename(filename)
         assert parsed is not None
         assert parsed["file_type"] == "batch"
+
+
+# =========================================================================
+# 5. Segmented GLB filename: session-scoped + collision-free
+# =========================================================================
+
+class TestGenerateSegmentedGlbFilename:
+    """Tests for ``generate_segmented_glb_filename`` session-scoped uniqueness.
+    ``generate_segmented_glb_filename`` 会话级唯一性测试.
+
+    The helper exists to eliminate the cross-session GLB overwrite class of
+    bug documented in ``progress/glb-internals-audit-2026-04-30.md``: every
+    filename it returns must be unique on disk regardless of how rapidly the
+    same or different sessions call it.
+    该助手函数专门为了消除《分色 GLB 跨会话覆写》这类缺陷；
+    详见 ``progress/glb-internals-audit-2026-04-30.md``。不论同会话还是
+    跨会话，调用多频时返回的文件名都必须在磁盘上保持唯一。
+    """
+
+    def test_format_matches_expected_pattern(self):
+        """Returned name must match ``segmented_<prefix>_<uuid12>.glb``."""
+        name = generate_segmented_glb_filename("abcdef0123456789")
+        assert SEGMENTED_GLB_RE.match(name), f"Unexpected filename: {name}"
+
+    def test_session_id_prefix_truncated_to_8_chars(self):
+        """Long session_ids must be truncated so the prefix stays bounded.
+        较长的 session_id 必须被截取，防止文件名过长。
+        """
+        long_sid = "A" * 64
+        name = generate_segmented_glb_filename(long_sid)
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        assert m.group(1) == "AAAAAAAA"
+        assert len(m.group(1)) == 8
+
+    @pytest.mark.parametrize("session_id", [None, ""])
+    def test_falsy_session_id_falls_back_to_anon(self, session_id):
+        """None / empty session_id must not raise; fallback prefix is ``anon``.
+        ``None`` 或空字符串不能报错，回退前缀为 ``anon``。
+        """
+        name = generate_segmented_glb_filename(session_id)
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        assert m.group(1) == "anon"
+
+    def test_unsafe_session_id_chars_get_sanitized(self):
+        """Forbidden FS characters in session_id must be replaced.
+        session_id 中的非法文件系统字符必须被转为下划线。
+        """
+        name = generate_segmented_glb_filename("ab/cd:ef")
+        m = SEGMENTED_GLB_RE.match(name)
+        assert m is not None
+        prefix = m.group(1)
+        for ch in '<>:"/\\|?*':
+            assert ch not in prefix
+
+    def test_repeated_calls_produce_unique_filenames(self):
+        """100 calls with identical session_id must yield 100 distinct names.
+        同一 session_id 调用 100 次必须返回 100 个不同名字。
+
+        This is the core anti-collision guarantee: even if a single session
+        races multiple GLB builds within the same second, no two builds
+        ever target the same path on disk.
+        这是防止跨调用冲突的核心契约：同一会话在同一秒内起多个 GLB
+        任务也不会出现同一路径。
+        """
+        names = {
+            generate_segmented_glb_filename("sess0001")
+            for _ in range(100)
+        }
+        assert len(names) == 100
+
+    def test_custom_extension_is_honoured(self):
+        """Caller-supplied extension must replace the default ``.glb``."""
+        name = generate_segmented_glb_filename("sess0001", extension=".gltf")
+        assert name.endswith(".gltf")
+        assert not name.endswith(".glb")
