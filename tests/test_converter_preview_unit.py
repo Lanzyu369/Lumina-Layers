@@ -281,10 +281,10 @@ class TestSessionContainsPreviewCache:
 
         assert response.status_code == 200
         call_args = _mock_pool.submit.call_args.args
-        assert call_args[13] is True
-        assert call_args[14] is False
-        assert call_args[15] == 6.5
-        assert call_args[16] == 0.9
+        assert call_args[11] is True
+        assert call_args[12] is False
+        assert call_args[13] == 6.5
+        assert call_args[14] == 0.9
 
 
 # =========================================================================

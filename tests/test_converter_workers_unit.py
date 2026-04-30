@@ -152,7 +152,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 23
+        assert len(sig.parameters) == 21
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""

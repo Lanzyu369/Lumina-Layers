@@ -210,8 +210,6 @@ class TestVectorBranchExport:
             target_width_mm=30.0,
             spacer_thick=1.6,
             structure_mode="Single-sided",
-            auto_bg=False,
-            bg_tol=30,
             color_mode="4-Color",
             add_loop=False,
             loop_width=5,
