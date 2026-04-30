@@ -487,7 +487,11 @@ def generate_empty_bed_glb(
         return None
 
 
-def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optional[str] = None) -> Optional[str]:
+def generate_segmented_glb(
+    cache: dict,
+    output_path: str,
+    max_meshes: int = 64,
+) -> Optional[str]:
     """Generate a color-segmented GLB preview with one named Mesh per color.
     生成按颜色分段的 GLB 预览，每种颜色一个独立 Mesh。
 
@@ -505,11 +509,41 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
               可选：调用方写入的 mesh 数上限覆盖。例如二次量化会引入
               大量低频新色，若按默认 64 合并它们会被丢回原色，导致 GLB
               和 2D 预览不一致。
+        output_path (str): Required absolute path the exported GLB is written to.
+            Callers MUST pass a session-scoped, collision-free path (typically
+            built via ``core.naming.generate_segmented_glb_filename`` joined to
+            ``OUTPUT_DIR``). Sharing one process-global path across concurrent
+            sessions overwrites peer GLBs on disk and surfaces as a 3D preview
+            cross-session contamination bug; see
+            ``progress/glb-internals-audit-2026-04-30.md``.
+            必填。调用方必须传入会话隔离、不会冲突的路径（通常由
+            ``core.naming.generate_segmented_glb_filename`` 拼 接
+            ``OUTPUT_DIR`` 得到）。共用同一进程级路径会跨会话覆写彼此的 GLB，
+            表现为“3D 预览串联”；详见
+            ``progress/glb-internals-audit-2026-04-30.md``。
         max_meshes (int): Default Mesh count before merging when no cache
             override is present (default 64).
 
     Returns:
-        str: Path to the exported GLB file, or None on failure.
+        str: Path to the exported GLB file (== ``output_path`` on success),
+            or ``None`` on failure.
+
+    Side effects (cache mutations):
+        On success the function writes two keys back into ``cache`` for
+        downstream consumers:
+            - ``cache['color_contours']``: ``dict[str, list[list[list[float]]]]``
+                Per-colour world-space pixel contours extracted via
+                ``cv2.findContours``; consumed by API responses to draw
+                SVG overlays aligned with the GLB.
+            - ``cache['_segmented_glb_timings']``: ``dict[str, float]``
+                Per-stage wall-clock timings (downsample/unique/merge/...)
+                useful for performance profiling.
+        Each ``cache`` is per-session, so these writes never cross sessions,
+        but callers should not assume the input dict is read-only.
+        会话级缓存反馈：成功调用后函数向 ``cache`` 写入 ``color_contours``
+        （每色轮廓）与 ``_segmented_glb_timings``（各阶段耗时）两个键；
+        ``cache`` 本身属于单个会话，因此该写入不会跨会话，但调用方
+        不能把入参当作只读。
     """
     if cache is None:
         return None
@@ -716,7 +750,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
 
         # 6. Export GLB
         _t = time.perf_counter()
-        glb_path = output_path if output_path else os.path.join(OUTPUT_DIR, "segmented_preview.glb")
+        glb_path = output_path
         scene.export(glb_path)
         _t_export = time.perf_counter() - _t
 
@@ -745,7 +779,7 @@ def generate_segmented_glb(cache: dict, max_meshes: int = 64, output_path: Optio
         return None
 
 
-def generate_realtime_glb(cache: dict) -> Optional[str]:
+def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
     """Generate a lightweight GLB preview from cached preview data.
     从缓存的预览数据生成轻量级 GLB 预览。
 
@@ -754,9 +788,15 @@ def generate_realtime_glb(cache: dict) -> Optional[str]:
 
     Args:
         cache (dict): Preview cache dict from generate_preview_cached.
+        output_path (str): Required absolute path the exported GLB is written to.
+            Same session-isolation rules as :func:`generate_segmented_glb`—
+            callers MUST pass a unique per-session path to avoid cross-session
+            overwrites on disk.
+            必填。与 :func:`generate_segmented_glb` 同样的会话隔离要求，
+            调用方必须传入会话隔离、不会冲突的路径。
 
     Returns:
-        str: Path to GLB file, or None on failure.
+        str: Path to GLB file (== ``output_path`` on success), or ``None`` on failure.
     """
     if cache is None:
         return None
@@ -796,7 +836,7 @@ def generate_realtime_glb(cache: dict) -> Optional[str]:
         transform[2, 2] = PrinterConfig.LAYER_HEIGHT
         preview_mesh.apply_transform(transform)
 
-        glb_path = os.path.join(OUTPUT_DIR, "realtime_preview.glb")
+        glb_path = output_path
         preview_mesh.export(glb_path)
         _log.debug(f"Exported: {glb_path}")
         return glb_path

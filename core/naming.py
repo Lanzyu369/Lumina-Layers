@@ -5,6 +5,7 @@
 """
 
 import re
+import uuid
 from datetime import datetime
 from typing import Optional, Dict
 
@@ -94,6 +95,42 @@ def generate_preview_filename(
     base = _sanitize(_strip_temp_prefix(base_name.strip())) if base_name.strip() else "untitled"
     ts = _get_timestamp()
     return f"{base}_Preview_{ts}{extension}"
+
+
+def generate_segmented_glb_filename(
+    session_id: Optional[str],
+    extension: str = ".glb",
+) -> str:
+    """Generate a session-scoped, collision-free filename for segmented GLB output.
+    生成按会话隔离且不会冲突的分色 GLB 输出文件名。
+
+    Combines a short session_id prefix (for traceability in OUTPUT_DIR listings
+    and log correlation) with a uuid4 segment (for uniqueness even when the
+    same session triggers multiple concurrent GLB builds within the same
+    second). API endpoints that expose ``/api/files/{glb_id}`` rely on this
+    so cross-session writes never overwrite each other on disk.
+    将 session_id 前 8 位（便于在 OUTPUT_DIR 列表与日志中追溯）与 uuid4 短段
+    （即便同一会话在同一秒内并发触发多次 GLB 生成也保持唯一）拼接。暴露
+    ``/api/files/{glb_id}`` 的 API 端点依赖该助手，确保跨会话写入不会在磁盘
+    上互相覆盖。
+
+    Format / 格式: ``segmented_{session_prefix}_{uuid12}{extension}``
+
+    Args:
+        session_id (str | None): Caller's session identifier. ``None`` or empty
+            falls back to ``"anon"`` so the helper never raises on missing sessions.
+            (会话标识；``None`` 或空字符串回退为 ``"anon"``，确保调用永远不抛错)
+        extension (str): File extension including the leading dot. Default ``.glb``.
+            (含前导点的扩展名，默认 ``.glb``)
+
+    Returns:
+        str: Collision-free basename safe for ``os.path.join(OUTPUT_DIR, ...)``.
+            (可直接拼到 ``OUTPUT_DIR`` 后的无冲突文件名)
+    """
+    raw_prefix = (session_id or "anon")[:8] or "anon"
+    safe_prefix = _sanitize(raw_prefix)
+    rand = uuid.uuid4().hex[:12]
+    return f"segmented_{safe_prefix}_{rand}{extension}"
 
 
 def generate_calibration_filename(

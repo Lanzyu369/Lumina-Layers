@@ -12,7 +12,7 @@ import sys
 import numpy as np
 import pytest
 import trimesh
-from hypothesis import assume, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 # Ensure project root is on sys.path
@@ -106,9 +106,12 @@ def matched_rgb_strategy(draw: st.DrawFn):
 # **Validates: Requirements 1.1, 1.2, 1.4**
 # ============================================================================
 
-@settings(max_examples=100)
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(data=matched_rgb_strategy())
-def test_glb_segmentation_correctness(data):
+def test_glb_segmentation_correctness(tmp_path, data):
     """Property 1: GLB 分段正确性
 
     For any valid preview cache (with matched_rgb and mask_solid),
@@ -117,11 +120,16 @@ def test_glb_segmentation_correctness(data):
     (b) Each Mesh is named color_<hex> (6-digit lowercase hex)
     (c) Each Mesh's face color matches the hex in its name
     (d) Each Mesh's vertex min Z = 0 (Pivot Point constraint)
+
+    ``tmp_path`` is reused across all hypothesis examples; each example
+    writes-reads-asserts sequentially, so file overwrites within the test
+    are safe and never observable to other tests.
     """
     matched_rgb, mask_solid, expected_unique_colors = data
     cache = _make_cache(matched_rgb, mask_solid)
 
-    glb_path = generate_segmented_glb(cache)
+    out_path = str(tmp_path / "segmented_test.glb")
+    glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     # Function should succeed for valid input with solid pixels
     assert glb_path is not None, "generate_segmented_glb returned None for valid input"
@@ -259,9 +267,12 @@ def many_colors_strategy(draw: st.DrawFn):
 # **Validates: Requirements 1.5**
 # ============================================================================
 
-@settings(max_examples=100)
+@settings(
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(data=many_colors_strategy())
-def test_glb_mesh_count_limit(data):
+def test_glb_mesh_count_limit(tmp_path, data):
     """Property 2: GLB Mesh 数量上限
 
     For any matched_rgb with more unique colors than max_meshes,
@@ -272,7 +283,8 @@ def test_glb_mesh_count_limit(data):
     matched_rgb, mask_solid, max_meshes = data
     cache = _make_cache(matched_rgb, mask_solid)
 
-    glb_path = generate_segmented_glb(cache, max_meshes=max_meshes)
+    out_path = str(tmp_path / "segmented_test.glb")
+    glb_path = generate_segmented_glb(cache, output_path=out_path, max_meshes=max_meshes)
 
     # Should succeed for valid input with solid pixels
     assert glb_path is not None, "generate_segmented_glb returned None for valid input"

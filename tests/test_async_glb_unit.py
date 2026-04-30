@@ -133,7 +133,10 @@ def _install_glb_stub(
 
     calls: list[str] = []
 
-    def _wrapper(cache: dict) -> str | None:
+    def _wrapper(cache: dict, *, output_path: str) -> str | None:
+        # Production caller now passes ``output_path=`` after the A2
+        # follow-up signature change; absorb it so every legacy
+        # builder lambda continues to work unchanged.
         calls.append(cache.get("glb_job_token", ""))
         return builder(cache)
 

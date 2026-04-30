@@ -30,8 +30,9 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
-from config import BedManager, PrinterConfig, TEMP_DIR
+from config import BedManager, OUTPUT_DIR, PrinterConfig, TEMP_DIR
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
+from core.naming import generate_segmented_glb_filename
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
@@ -604,7 +605,11 @@ async def convert_preview(
     _t = time.perf_counter()
     preview_glb_url: str | None = None
     try:
-        glb_path = generate_segmented_glb(cache_data)
+        target_path = os.path.join(
+            OUTPUT_DIR,
+            generate_segmented_glb_filename(session_id),
+        )
+        glb_path = generate_segmented_glb(cache_data, output_path=target_path)
         if glb_path and os.path.exists(glb_path):
             glb_id = registry.register_path(session_id, glb_path)
             preview_glb_url = f"/api/files/{glb_id}"

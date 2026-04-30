@@ -38,7 +38,9 @@ from typing import Optional, TypedDict
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
+from config import OUTPUT_DIR
 from core.converter import generate_segmented_glb
+from core.naming import generate_segmented_glb_filename
 
 from .common import NON_FATAL_GLB_ERRORS
 
@@ -173,7 +175,11 @@ def _run_glb_build_job(
             )
             return
 
-        glb_path = generate_segmented_glb(latest_cache)
+        target_path = os.path.join(
+            OUTPUT_DIR,
+            generate_segmented_glb_filename(session_id),
+        )
+        glb_path = generate_segmented_glb(latest_cache, output_path=target_path)
 
         # Re-check the token post-build: another replace might have landed
         # while the heavy Shapely/trimesh work was running. Honour the
