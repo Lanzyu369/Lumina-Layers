@@ -18,6 +18,12 @@ export type TabId =
   | "vectorizer"
   | "settings";
 
+// ===== Converter 二级 sub-tab ID =====
+// Converter 主 tab 下的语义分组：核心设置 / 颜色调整 / 高级功能。
+// 颜色调整 sub-tab 与 Color2DOverlay 双向同步：进入 'color' 即打开 overlay，
+// 离开 'color' 或关闭 overlay 都会回到上一个 sub-tab（默认 'core'）。
+export type ConverterSubTabId = "core" | "color" | "advanced";
+
 // ===== Widget ID =====
 export type WidgetId =
   | "basic-settings"
@@ -52,9 +58,11 @@ export interface WidgetStore {
   isDragging: boolean;
   activeWidgetId: WidgetId | null;
   activeTab: TabId;
+  activeConverterSubTab: ConverterSubTabId;
 
   // TAB 切换
   setActiveTab: (tab: TabId) => void;
+  setActiveConverterSubTab: (subTab: ConverterSubTabId) => void;
 
   // 布局操作
   moveWidget: (id: WidgetId, position: { x: number; y: number }) => void;
@@ -78,14 +86,13 @@ export interface WidgetStore {
     orderedIds: WidgetId[],
   ) => void;
 
-  // ColorWorkstation 展开/收起
-  colorWorkstationCollapsed: boolean;
-  toggleColorWorkstation: () => void;
-
   // 2D 颜色覆盖层
   color2DOverlayOpen: boolean;
   openColor2DOverlay: () => void;
   closeColor2DOverlay: () => void;
+
+  canvasInteracting: boolean;
+  setCanvasInteracting: (interacting: boolean) => void;
 }
 
 // ===== 吸附计算 =====

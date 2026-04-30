@@ -29,14 +29,20 @@ export default function Color2DOverlay() {
   const [showHoverMagnifier, setShowHoverMagnifier] = useState(true);
   const [showHoverLayerDetails, setShowHoverLayerDetails] = useState(true);
 
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setContentReady(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // Auto-trigger preview when overlay opens with an image but no preview
   const didAutoPreview = useRef(false);
   useEffect(() => {
-    if (imageFile && !previewImageUrl && !isLoading && !didAutoPreview.current) {
+    if (contentReady && imageFile && !previewImageUrl && !isLoading && !didAutoPreview.current) {
       didAutoPreview.current = true;
       void submitPreview();
     }
-  }, [imageFile, previewImageUrl, isLoading, submitPreview]);
+  }, [contentReady, imageFile, previewImageUrl, isLoading, submitPreview]);
 
   // ESC key to close (return to 3D view)
   const handleKeyDown = useCallback(
@@ -55,10 +61,10 @@ export default function Color2DOverlay() {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -50 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 50 }}
-      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
       data-testid="color-2d-overlay"
       className="absolute inset-0 z-[45] flex flex-col bg-slate-50/95 dark:bg-slate-950/95 backdrop-blur-sm"
     >
@@ -78,6 +84,7 @@ export default function Color2DOverlay() {
       </div>
 
       {/* Content: left = 2D preview, right = palette + LUT grid in two columns */}
+      {contentReady && (
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,0.82fr)_minmax(17rem,0.46fr)_minmax(20rem,0.72fr)] gap-0">
         {/* Left: 2D preview image (click to select color/region) */}
         <div className="min-h-0 border-r border-slate-200/60 px-2 py-3 dark:border-slate-800/60">
@@ -106,6 +113,7 @@ export default function Color2DOverlay() {
           </div>
         </div>
       </div>
+      )}
     </motion.div>
   );
 }

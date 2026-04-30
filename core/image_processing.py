@@ -199,8 +199,6 @@ class LuminaImageProcessor:
         target_width_mm,
         modeling_mode,
         quantize_colors,
-        auto_bg,
-        bg_tol,
         blur_kernel=0,
         smooth_sigma=10,
     ):
@@ -221,7 +219,8 @@ class LuminaImageProcessor:
             modeling_mode, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
         )
         matched_rgb, material_matrix = self._apply_cleanup(modeling_mode, matched_rgb, material_matrix)
-        mask_transparent = self._merge_auto_bg_mask(auto_bg, bg_ref, bg_tol, mask_transparent)
+        # bg_ref is no longer used post auto_bg removal; suppress unused warning
+        del bg_ref
         # Result contract keys: 'matched_rgb', 'material_matrix', 'mask_solid',
         # 'dimensions', 'pixel_scale', 'mode_info', 'quantized_image'.
         result = self._finalize_process_result(
@@ -321,15 +320,6 @@ class LuminaImageProcessor:
             )
         matched_rgb, material_matrix, bg_ref = self._process_pixel_mode(rgb_arr, target_h, target_w)
         return matched_rgb, material_matrix, bg_ref, None
-
-    def _merge_auto_bg_mask(self, auto_bg, bg_ref, bg_tol, mask_transparent):
-        """Merge auto background mask when enabled.
-        如果启用自动背景蒙版，则合并蒙版。
-        """
-        if not auto_bg:
-            return mask_transparent
-        bg_mask = np.sum(np.abs(bg_ref - bg_ref[0, 0]), axis=-1) < bg_tol
-        return np.logical_or(mask_transparent, bg_mask)
 
     def _build_process_result(
         self,

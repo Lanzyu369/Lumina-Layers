@@ -300,6 +300,9 @@ frontend/.eslint-report.json
 assets/temp_*.npy
 assets/temp_*.json
 
+# Application runtime logs (machine-local, regenerated each run)
+logs/
+
 # Material solver exhaustive cache (regenerable per palette)
 materials/_solver_cache/
 # AI IDE local config
@@ -309,6 +312,7 @@ materials/_solver_cache/
 *.3mf
 .cursor/
 .windsurf/
+.trae/
 .worktrees/
 
 # Cascade browser tool traces and console captures

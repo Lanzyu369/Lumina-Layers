@@ -140,8 +140,6 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     target_width_mm = ctx["target_width_mm"]
     modeling_mode = ctx["modeling_mode"]
     quantize_colors_n = ctx["quantize_colors"]
-    auto_bg = ctx["auto_bg"]
-    bg_tol = ctx["bg_tol"]
     materials = ctx["_material_params"]
     layer_count = int(ctx.get("color_layers") or 5)
     layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
@@ -178,13 +176,6 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     rgb_arr = img_arr[:, :, :3]
     alpha_arr = img_arr[:, :, 3]
     mask_transparent = alpha_arr < 10
-
-    # ---- Auto background removal ----
-    if auto_bg:
-        bg_ref = rgb_arr.copy()
-        bg_mask = np.sum(np.abs(bg_ref.astype(np.int16) - bg_ref[0, 0].astype(np.int16)), axis=-1) < bg_tol
-        mask_transparent = np.logical_or(mask_transparent, bg_mask)
-
     mask_solid = ~mask_transparent
 
     # ---- Quantize ----
@@ -459,8 +450,6 @@ def run(ctx: dict) -> dict:
         - target_width_mm (float): 目标宽度（毫米）
         - modeling_mode (ModelingMode): 建模模式
         - quantize_colors (int): 量化颜色数
-        - auto_bg (bool): 是否自动移除背景
-        - bg_tol (int): 背景容差
         - enable_cleanup (bool): 是否启用孤立像素清理
 
     PipelineContext 输出键 / Output keys:
@@ -491,8 +480,6 @@ def run(ctx: dict) -> dict:
     target_width_mm = ctx['target_width_mm']
     modeling_mode = ctx['modeling_mode']
     quantize_colors = ctx['quantize_colors']
-    auto_bg = ctx['auto_bg']
-    bg_tol = ctx['bg_tol']
     enable_cleanup = ctx.get('enable_cleanup', True)
     color_layers = ctx.get('color_layers')
     layer_height_mm = ctx.get('layer_height_mm')
@@ -521,8 +508,6 @@ def run(ctx: dict) -> dict:
         target_width_mm=target_width_mm,
         modeling_mode=modeling_mode,
         quantize_colors=quantize_colors,
-        auto_bg=auto_bg,
-        bg_tol=bg_tol,
         blur_kernel=0,
         smooth_sigma=10
     )

@@ -682,6 +682,7 @@ export default function BasicSettings() {
 
           <Slider
             label={t("basic_material_layer_count_label")}
+            tooltip={t("basic_material_layer_count_hint")}
             value={materialLayerCount}
             min={5}
             max={10}
@@ -753,6 +754,7 @@ export default function BasicSettings() {
                 <>
                   <Slider
                     label={t("basic_color_layers_label")}
+                    tooltip={t("basic_color_layers_hint")}
                     value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
                     min={1}
                     max={10}
@@ -882,6 +884,7 @@ export default function BasicSettings() {
 
       <Slider
         label={t("basic_width")}
+        tooltip={t("basic_width_hint")}
         value={target_width_mm}
         min={10}
         max={dimMax}
@@ -892,6 +895,7 @@ export default function BasicSettings() {
 
       <Slider
         label={t("basic_height")}
+        tooltip={t("basic_height_hint")}
         value={target_height_mm}
         min={10}
         max={dimMax}
@@ -928,6 +932,7 @@ export default function BasicSettings() {
         <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
           <Slider
             label={t("basic_tile_width")}
+            tooltip={t("basic_tile_width_hint")}
             value={tileWidthMm}
             min={50}
             max={500}
@@ -937,6 +942,7 @@ export default function BasicSettings() {
           />
           <Slider
             label={t("basic_tile_height")}
+            tooltip={t("basic_tile_height_hint")}
             value={tileHeightMm}
             min={50}
             max={500}
@@ -957,6 +963,7 @@ export default function BasicSettings() {
 
       <Slider
         label={t("basic_thickness")}
+        tooltip={t("basic_thickness_hint")}
         value={spacer_thick}
         min={THICKNESS_SLIDER_MIN_MM}
         max={THICKNESS_SLIDER_MAX_MM}
@@ -981,6 +988,8 @@ export default function BasicSettings() {
         onChange={(v) => setModelingMode(v as ModelingMode)}
       />
 
+      <QuantizeColorsControl />
+
       <ImportConfirmDialog
         open={importDialogOpen}
         preview={importPreview}
@@ -989,6 +998,47 @@ export default function BasicSettings() {
         onCancel={handleImportCancel}
         isLoading={importLoading}
       />
+    </div>
+  );
+}
+
+function QuantizeColorsControl() {
+  const { t } = useI18n();
+  const quantize_colors = useConverterStore((s) => s.quantize_colors);
+  const quantize_colors_unlocked = useConverterStore((s) => s.quantize_colors_unlocked);
+  const imageFile = useConverterStore((s) => s.imageFile);
+  const autoDetectLoading = useConverterStore((s) => s.autoDetectColorsLoading);
+  const setQuantizeColors = useConverterStore((s) => s.setQuantizeColors);
+  const autoDetectColors = useConverterStore((s) => s.autoDetectColors);
+  const upperBound = quantize_colors_unlocked ? 8192 : 256;
+  // Step must divide (upperBound - min=8) so the slider can reach the
+  // declared ceiling. (8192 - 8) is divisible by 8 but not by 32, hence
+  // step=8 even in unlocked mode to keep 8192 reachable; otherwise the
+  // slider would max out at 8168.
+  // 步长必须能整除 (upperBound - min=8)，否则滑条到不了声明的上限。
+  // (8192 - 8) 能被 8 整除但不能被 32 整除，所以解锁后仍用 step=8，
+  // 不然滑条只能停在 8168。
+  const step = 8;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Slider
+        label={t("adv_quantize_colors")}
+        tooltip={t("adv_quantize_colors_hint")}
+        value={quantize_colors}
+        min={8}
+        max={upperBound}
+        step={step}
+        onChange={setQuantizeColors}
+      />
+      <button
+        type="button"
+        disabled={!imageFile || autoDetectLoading}
+        onClick={autoDetectColors}
+        className="self-end px-3 py-1 text-xs rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        {autoDetectLoading ? t("conv_auto_color_calculating") : t("conv_auto_color_btn")}
+      </button>
     </div>
   );
 }

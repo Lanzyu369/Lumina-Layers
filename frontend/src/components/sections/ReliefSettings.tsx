@@ -86,6 +86,7 @@ export default function ReliefSettings() {
           <>
             <Slider
               label={t("relief_max_height")}
+              tooltip={t("relief_max_height_hint")}
               value={heightmap_max_height}
               min={0.08}
               max={15.0}

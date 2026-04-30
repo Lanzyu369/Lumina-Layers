@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import CalibrationPanel from "../components/CalibrationPanel";
-import { CalibrationColorMode, BackingColor } from "../api/types";
+import { CalibrationColorMode } from "../api/types";
 import { useCalibrationStore } from "../stores/calibrationStore";
 
 vi.mock("../api/calibration", () => ({
@@ -17,7 +17,7 @@ beforeEach(() => {
     color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
     block_size: 5,
     gap: 0.84,
-    backing: BackingColor.WHITE,
+    backing_thickness: 1.2,
     eight_color_full_export: false,
     substrateId: "white",
     substrateDisplayName: "White",
@@ -64,16 +64,17 @@ describe("CalibrationPanel", () => {
     expect(screen.getByText("导出全部 8 色配方")).toBeInTheDocument();
   });
 
-  it("disables only backing in 6-Color mode", () => {
+  it("enables all controls in 6-Color mode", () => {
     useCalibrationStore.setState({ color_mode: CalibrationColorMode.SIX_COLOR });
     render(<CalibrationPanel />);
 
     const sliders = screen.getAllByRole("slider");
     const selects = screen.getAllByRole("combobox");
 
-    expect(sliders[0]).not.toBeDisabled();
-    expect(sliders[1]).not.toBeDisabled();
-    expect(selects[1]).toBeDisabled();
+    expect(sliders).toHaveLength(3);
+    sliders.forEach((slider) => expect(slider).not.toBeDisabled());
+    expect(selects).toHaveLength(1);
+    expect(selects[0]).not.toBeDisabled();
   });
 
   it("enables all controls in BW mode", () => {
@@ -83,10 +84,10 @@ describe("CalibrationPanel", () => {
     const sliders = screen.getAllByRole("slider");
     const selects = screen.getAllByRole("combobox");
 
-    expect(sliders[0]).not.toBeDisabled();
-    expect(sliders[1]).not.toBeDisabled();
+    expect(sliders).toHaveLength(3);
+    sliders.forEach((slider) => expect(slider).not.toBeDisabled());
+    expect(selects).toHaveLength(1);
     expect(selects[0]).not.toBeDisabled();
-    expect(selects[1]).not.toBeDisabled();
   });
 
   it("enables all controls in 4-Color mode", () => {
@@ -95,10 +96,18 @@ describe("CalibrationPanel", () => {
     const sliders = screen.getAllByRole("slider");
     const selects = screen.getAllByRole("combobox");
 
-    expect(sliders[0]).not.toBeDisabled();
-    expect(sliders[1]).not.toBeDisabled();
+    expect(sliders).toHaveLength(3);
+    sliders.forEach((slider) => expect(slider).not.toBeDisabled());
+    expect(selects).toHaveLength(1);
     expect(selects[0]).not.toBeDisabled();
-    expect(selects[1]).not.toBeDisabled();
+  });
+
+  it("reflects backing thickness slider value from the store", () => {
+    useCalibrationStore.setState({ backing_thickness: 2.4 });
+    render(<CalibrationPanel />);
+
+    const slider = screen.getByTestId("backing-thickness-slider");
+    expect(slider).toHaveValue("2.4");
   });
 
   it("disables generate button when isLoading is true", () => {

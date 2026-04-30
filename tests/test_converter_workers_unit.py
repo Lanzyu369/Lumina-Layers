@@ -168,8 +168,8 @@ class TestParameterAnnotations:
         """Verify expected parameter names for worker_generate_preview."""
         sig = inspect.signature(worker_generate_preview)
         expected = {
-            "image_path", "lut_path", "target_width_mm", "auto_bg",
-            "bg_tol", "color_mode", "modeling_mode", "quantize_colors",
+            "image_path", "lut_path", "target_width_mm",
+            "color_mode", "modeling_mode", "quantize_colors",
             "color_layers", "layer_height_mm", "enable_cleanup", "is_dark",
             "model_enable", "model_only", "model_threshold", "model_margin",
             "hue_weight", "chroma_gate",
@@ -284,8 +284,6 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "target_width_mm": 80.0,
         "spacer_thick": 1.5,
         "structure_mode": "Single-sided",
-        "auto_bg": True,
-        "bg_tol": 60,
         "color_mode": "4-Color (RYBW)",
         "add_loop": True,
         "loop_width": 5.0,
@@ -331,8 +329,6 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
             image_path="image.png",
             lut_path="lut.npy",
             target_width_mm=60.0,
-            auto_bg=False,
-            bg_tol=40,
             color_mode="4-Color (RYBW)",
             modeling_mode="high-fidelity",
             color_layers=10,

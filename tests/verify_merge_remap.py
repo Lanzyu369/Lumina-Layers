@@ -342,8 +342,6 @@ def verify_image_conversion():
             target_width_mm=80,
             modeling_mode=ModelingMode.HIGH_FIDELITY,
             quantize_colors=32,
-            auto_bg=True,
-            bg_tol=30,
             blur_kernel=0,
             smooth_sigma=10
         )

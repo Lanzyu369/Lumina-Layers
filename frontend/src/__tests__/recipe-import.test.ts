@@ -45,8 +45,6 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
           modeling_mode: "high-fidelity",
           target_width_mm: 80,
           target_height_mm: 60,
-          auto_bg: true,
-          bg_tol: 30,
           quantize_colors: 32,
           enable_cleanup: true,
           hue_enable: false,
@@ -181,7 +179,6 @@ describe("recipe/importRecipe", () => {
       expect(state.lut_name).toBe("MyLUT");
       expect(state.target_width_mm).toBe(80);
       expect(state.target_height_mm).toBe(60);
-      expect(state.auto_bg).toBe(true);
       expect(state.hue_enable).toBe(false);
 
       // Geometry

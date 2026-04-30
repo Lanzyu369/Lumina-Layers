@@ -76,20 +76,20 @@ describe("GradientCardGeneratePanel", () => {
     render(<GradientCardGeneratePanel />);
 
     expect(
-      screen.getByText(/需要打两张|needs two prints/i),
+      screen.getByText(/需要打印两张|requires printing two/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/会给\s*lumina\s*提供\s*mw\s*积分|MakerWorld points/i),
+      screen.getByText(/MakerWorld/i),
     ).toBeInTheDocument();
 
     expect(
-      screen.getByRole("link", { name: /梯度色卡在线模型|gradient card online model/i }),
+      screen.getByRole("link", { name: /梯度卡在线模型|gradient card online model/i }),
     ).toHaveAttribute(
       "href",
       "https://makerworld.com.cn/zh/models/2394753-lumina2-0-ti-xing-xiao-se-se-qia-0-08ceng-gao-15ce#profileId-2721317",
     );
     expect(
-      screen.getByRole("link", { name: /梯度色卡参数化盒子|gradient card parametric box/i }),
+      screen.getByRole("link", { name: /梯度卡收纳盒在线模型|Gradient Card Parametric Storage Box/i }),
     ).toHaveAttribute(
       "href",
       "https://makerworld.com.cn/zh/models/2400920-can-shu-hua-lumina-2-0ti-du-se-qia-zi-ding-yi-shou#profileId-2729620",

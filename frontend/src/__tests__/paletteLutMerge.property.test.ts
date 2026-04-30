@@ -27,127 +27,15 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       isDragging: false,
       activeWidgetId: null,
       activeTab: 'converter' as TabId,
-      colorWorkstationCollapsed: true,
     });
   });
 
-  // Feature: palette-lut-merge, Property 1: 折叠/展开状态控制内容可见性
-  describe('Property 1: 折叠/展开状态控制内容可见性', () => {
-    it('colorWorkstationCollapsed state correctly reflects the set value, controlling content visibility', () => {
-      // **Validates: Requirements 1.5, 1.6**
-      //
-      // For any boolean collapsed value, setting colorWorkstationCollapsed in the store
-      // should persist that exact value. Content visibility is the inverse: !collapsed.
-      // When collapsed=true → content hidden; when collapsed=false → content visible.
-      fc.assert(
-        fc.property(
-          fc.boolean(),
-          (collapsed: boolean) => {
-            // Set the collapsed state to the generated boolean
-            useWidgetStore.setState({ colorWorkstationCollapsed: collapsed });
-
-            // Read back the state
-            const state = useWidgetStore.getState();
-
-            // The stored collapsed value must match what was set
-            expect(state.colorWorkstationCollapsed).toBe(collapsed);
-
-            // Content visibility is the inverse of collapsed
-            const contentVisible = !state.colorWorkstationCollapsed;
-            expect(contentVisible).toBe(!collapsed);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-
-    it('content visibility is always the logical negation of collapsed state', () => {
-      // **Validates: Requirements 1.5, 1.6**
-      //
-      // For any sequence of boolean states, the content visibility invariant
-      // (!collapsed === visible) must hold after each state change.
-      fc.assert(
-        fc.property(
-          fc.array(fc.boolean(), { minLength: 1, maxLength: 20 }),
-          (collapsedSequence: boolean[]) => {
-            for (const collapsed of collapsedSequence) {
-              useWidgetStore.setState({ colorWorkstationCollapsed: collapsed });
-              const state = useWidgetStore.getState();
-
-              // Invariant: content visible iff not collapsed
-              expect(!state.colorWorkstationCollapsed).toBe(!collapsed);
-
-              // Collapsed=true means content hidden (Requirements 1.5)
-              if (collapsed) {
-                expect(state.colorWorkstationCollapsed).toBe(true);
-              }
-              // Collapsed=false means content visible (Requirements 1.6)
-              if (!collapsed) {
-                expect(state.colorWorkstationCollapsed).toBe(false);
-              }
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
-
-  // Feature: palette-lut-merge, Property 2: 切换操作的 Round-Trip 属性
-  describe('Property 2: 切换操作的 Round-Trip 属性', () => {
-    it('calling toggleColorWorkstation twice restores the original collapsed state', () => {
-      // **Validates: Requirements 4.1**
-      //
-      // For any initial collapsed state (true or false), calling toggleColorWorkstation
-      // twice must restore the state to its original value: toggle(toggle(state)) === state.
-      fc.assert(
-        fc.property(
-          fc.boolean(),
-          (initialCollapsed: boolean) => {
-            // Set the initial collapsed state
-            useWidgetStore.setState({ colorWorkstationCollapsed: initialCollapsed });
-
-            // Toggle twice
-            useWidgetStore.getState().toggleColorWorkstation();
-            useWidgetStore.getState().toggleColorWorkstation();
-
-            // State must be back to the original value
-            const finalState = useWidgetStore.getState();
-            expect(finalState.colorWorkstationCollapsed).toBe(initialCollapsed);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
-
-  // Feature: palette-lut-merge, Property 3: Tab 条件渲染
-  describe('Property 3: Tab 条件渲染', () => {
-    it('ColorWorkstation should only render when activeTab is converter', () => {
-      // **Validates: Requirements 4.3**
-      //
-      // For any TabId value, ColorWorkstation should render (shouldRender=true)
-      // only when activeTab is 'converter'. For all non-converter tabs,
-      // ColorWorkstation should not render (shouldRender=false).
-      fc.assert(
-        fc.property(
-          fc.constantFrom<TabId>('converter', 'calibration', 'extractor', 'lut-manager', 'lut-details', 'lut-compare', 'five-color', 'vectorizer', 'settings'),
-          (tab: TabId) => {
-            useWidgetStore.setState({ activeTab: tab });
-
-            const state = useWidgetStore.getState();
-            const shouldRender = state.activeTab === 'converter';
-
-            if (tab === 'converter') {
-              expect(shouldRender).toBe(true);
-            } else {
-              expect(shouldRender).toBe(false);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+  // The legacy `colorWorkstationCollapsed` field and bottom-drawer ColorWorkstation
+  // component have been removed; the color editor entry now lives in the top-level
+  // secondary tab row. Only the persist-migration invariants below remain. 颜色编辑
+  // 入口已迁至顶部二级 tab，仅保留持久化迁移不变式。
+  describe.skip('Property 1–3 (legacy ColorWorkstation, retired)', () => {
+    it.skip('placeholder', () => undefined);
   });
 
   // Feature: palette-lut-merge, Property 4: 持久化迁移正确性
@@ -212,7 +100,7 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       // the migrate function must produce a result without 'palette-panel' or 'lut-color-grid'.
       fc.assert(
         fc.property(
-          fc.integer({ min: 0, max: 5 }),
+          fc.integer({ min: 0, max: 6 }),
           persistedStateArb,
           (version: number, persistedState: Record<string, unknown>) => {
             const result = migrate(persistedState, version);
@@ -221,6 +109,8 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
             // Core invariant: old WidgetIds must never exist after migration
             expect(resultWidgets).not.toHaveProperty('palette-panel');
             expect(resultWidgets).not.toHaveProperty('lut-color-grid');
+            // colorWorkstationCollapsed has been retired; migration must drop it.
+            expect(asRecord(result)).not.toHaveProperty('colorWorkstationCollapsed');
           }
         ),
         { numRuns: 100 }
@@ -254,14 +144,14 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       );
     });
 
-    it('version 3-5 preserves other widgets and injects the fridge widget when missing', () => {
+    it('version 3-6 preserves other widgets and injects the fridge widget when missing', () => {
       // **Validates: Requirements 5.1**
       //
-      // When version is 3-5, migration should keep all widgets except
+      // When version is 3-6, migration should keep all widgets except
       // 'palette-panel' and 'lut-color-grid', and add missing migrated widgets.
       fc.assert(
         fc.property(
-          fc.constantFrom(3, 4, 5),
+          fc.constantFrom(3, 4, 5, 6),
           persistedStateArb,
           (version: number, persistedState: Record<string, unknown>) => {
             const inputWidgets = asRecord(persistedState.widgets);
@@ -284,15 +174,15 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
             expect(resultKeys).toEqual(expectedKeys);
             expect(resultWidgets).toHaveProperty('fridge-magnet-settings');
 
-            // colorWorkstationCollapsed should be set to true
-            expect(asRecord(result).colorWorkstationCollapsed).toBe(true);
+            // The legacy collapsed flag must be dropped, not propagated.
+            expect(asRecord(result)).not.toHaveProperty('colorWorkstationCollapsed');
           }
         ),
         { numRuns: 100 }
       );
     });
 
-    it('version 3-5 reorders right-dock converter widgets to unique stack orders', () => {
+    it('version 3-6 reorders right-dock converter widgets to unique stack orders', () => {
       const persistedState = {
         widgets: {
           'action-bar': { ...DEFAULT_LAYOUT['action-bar'], stackOrder: 0, snapEdge: 'right' as const },
@@ -300,10 +190,9 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
           'advanced-settings': { ...DEFAULT_LAYOUT['advanced-settings'], stackOrder: 2, snapEdge: 'right' as const },
         },
         activeTab: 'converter',
-        colorWorkstationCollapsed: false,
       };
 
-      for (const version of [3, 4, 5] as const) {
+      for (const version of [3, 4, 5, 6] as const) {
         const result = migrate(persistedState, version);
         const widgets = asRecord(asRecord(result).widgets) as Record<string, { stackOrder: number; snapEdge: string | null }>;
         const rightOrders = ['action-bar', 'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'advanced-settings']

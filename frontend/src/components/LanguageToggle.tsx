@@ -14,7 +14,7 @@ export function LanguageToggle() {
     <button
       onClick={handleToggle}
       aria-label={t("app_toggle_language")}
-      className="px-3 py-1 rounded text-sm font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
+      className="px-3 py-1 rounded text-sm font-medium bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
     >
       {language === "zh" ? "EN" : "中"}
     </button>

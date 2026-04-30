@@ -294,8 +294,6 @@ class TestGenerateParameterCompleteness:
                 "target_width_mm": 80.0,
                 "spacer_thick": 1.5,
                 "structure_mode": "Single-sided",
-                "auto_bg": True,
-                "bg_tol": 60,
                 "color_mode": "4-Color (RYBW)",
                 "modeling_mode": "high-fidelity",
                 "model_enable": True,
@@ -367,8 +365,6 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["target_width_mm"] == 80.0
         assert submitted_params["spacer_thick"] == 1.5
         assert submitted_params["structure_mode"] == "Single-sided"
-        assert submitted_params["auto_bg"] is True
-        assert submitted_params["bg_tol"] == 60
         assert submitted_params["color_mode"] == "4-Color (RYBW)"
         assert submitted_params["model_enable"] is True
         assert submitted_params["model_only"] is False

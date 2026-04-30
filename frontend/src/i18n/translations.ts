@@ -5,10 +5,6 @@
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
   // ==================== Application Title and Header ====================
-  app_title: {
-    zh: "✨ Lumina Studio",
-    en: "✨ Lumina Studio",
-  },
   app_subtitle: {
     zh: "多材料3D打印色彩系统 | v1.6.3",
     en: "Multi-Material 3D Print Color System | v1.6.3",
@@ -111,10 +107,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Stats Bar ====================
-  stats_total: {
-    zh: "📊 累计生成",
-    en: "📊 Total Generated",
-  },
   stats_calibrations: {
     zh: "校准板",
     en: "Calibrations",
@@ -129,18 +121,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Tab Titles ====================
-  tab_converter: {
-    zh: "💎 图像转换",
-    en: "💎 Image Converter",
-  },
-  tab_calibration: {
-    zh: "📐 校准板生成",
-    en: "📐 Calibration",
-  },
-  tab_extractor: {
-    zh: "🎨 颜色提取",
-    en: "🎨 Color Extractor",
-  },
   tab_about: {
     zh: "ℹ️ 关于",
     en: "ℹ️ About",
@@ -155,10 +135,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "**两种建模模式**：高保真（RLE无缝拼接）、像素艺术（方块风格）\n\n**流程**: 上传LUT和图像 → 选择建模模式 → 调整色彩细节 → 预览 → 生成",
     en: "**Two Modeling Modes**: High-Fidelity (RLE seamless) and Pixel Art (blocky style)\n\n**Workflow**: Upload LUT & Image → Select Mode → Adjust Color Detail → Preview → Generate",
   },
-  conv_input_section: {
-    zh: "#### 📁 输入",
-    en: "#### 📁 Input",
-  },
   conv_lut_title: {
     zh: "**校准数据**",
     en: "**Calibration Data**",
@@ -170,22 +146,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conv_lut_info: {
     zh: "从预设库中选择LUT",
     en: "Select from library",
-  },
-  conv_lut_status_default: {
-    zh: "💡 拖放 .npy / .json / .npz 文件自动添加",
-    en: "💡 Drop .npy / .json / .npz to add",
-  },
-  conv_lut_status_selected: {
-    zh: "✅ 已选择",
-    en: "✅ Selected",
-  },
-  conv_lut_status_saved: {
-    zh: "✅ LUT已保存",
-    en: "✅ LUT saved",
-  },
-  conv_lut_status_error: {
-    zh: "❌ 文件不存在",
-    en: "❌ File not found",
   },
   conv_image_label: {
     zh: "输入图像",
@@ -227,14 +187,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认裁剪",
     en: "Confirm crop",
   },
-  crop_auto_color: {
-    zh: "🎨 计算最佳色彩细节",
-    en: "🎨 Calculate optimal color detail",
-  },
-  conv_params_section: {
-    zh: "#### ⚙️ 参数",
-    en: "#### ⚙️ Parameters",
-  },
   conv_color_mode: {
     zh: "色彩模式",
     en: "Color Mode",
@@ -259,57 +211,21 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "单面",
     en: "Single-sided",
   },
-  conv_modeling_mode: {
-    zh: "🎨 建模模式",
-    en: "🎨 Modeling Mode",
-  },
   conv_modeling_mode_info: {
     zh: "高保真：RLE无缝拼接，水密模型 | 像素艺术：经典方块美学 | SVG模式：矢量直接转换",
     en: "High-Fidelity: RLE seamless, watertight | Pixel Art: Classic blocky aesthetic | SVG Mode: Direct vector conversion",
-  },
-  conv_modeling_mode_hifi: {
-    zh: "🎨 高保真",
-    en: "🎨 High-Fidelity",
-  },
-  conv_modeling_mode_pixel: {
-    zh: "🧱 像素艺术",
-    en: "🧱 Pixel Art",
-  },
-  conv_modeling_mode_vector: {
-    zh: "📐 SVG模式",
-    en: "📐 SVG Mode",
-  },
-  conv_quantize_colors: {
-    zh: "🎨 色彩细节",
-    en: "🎨 Color Detail",
   },
   conv_quantize_info: {
     zh: "颜色数量越多细节越丰富，但生成越慢",
     en: "Higher = More detail, Slower",
   },
   conv_auto_color_btn: {
-    zh: "🔍 自动计算",
-    en: "🔍 Auto Detect",
+    zh: "自动计算",
+    en: "Auto Detect",
   },
   conv_auto_color_calculating: {
     zh: "⏳ 计算中...",
     en: "⏳ Calculating...",
-  },
-  conv_auto_bg: {
-    zh: "🗑️ 移除背景",
-    en: "🗑️ Remove Background",
-  },
-  conv_auto_bg_info: {
-    zh: "自动移除图像背景色",
-    en: "Auto remove background",
-  },
-  conv_tolerance: {
-    zh: "容差",
-    en: "Tolerance",
-  },
-  conv_tolerance_info: {
-    zh: "背景容差值 (0-150)，值越大移除越多",
-    en: "Higher = Remove more",
   },
   conv_width: {
     zh: "宽度 (mm)",
@@ -327,21 +243,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "底板颜色",
     en: "Backing Color",
   },
-  conv_preview_btn: {
-    zh: "👁️ 生成预览",
-    en: "👁️ Generate Preview",
-  },
-  conv_preview_section: {
-    zh: "#### 🎨 2D预览",
-    en: "#### 🎨 2D Preview",
-  },
   converter_preview_2d_alt: {
     zh: "2D 预览图",
     en: "2D preview image",
-  },
-  conv_palette: {
-    zh: "🎨 颜色调色板",
-    en: "🎨 Color Palette",
   },
   conv_palette_step1: {
     zh: "### 1. 原图颜色（点击预览图）",
@@ -371,17 +275,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "已生效的替换",
     en: "Applied Replacements",
   },
-  conv_palette_apply_btn: {
-    zh: "✅ 确认替换",
-    en: "✅ Apply",
-  },
   conv_palette_undo_btn: {
     zh: "↩️ 撤销",
     en: "↩️ Undo",
-  },
-  conv_palette_clear_btn: {
-    zh: "🗑️ 清除所有",
-    en: "🗑️ Clear",
   },
   conv_palette_user_replacements_title: {
     zh: "用户替换",
@@ -395,10 +291,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除选中",
     en: "Delete Selected",
   },
-  conv_palette_delete_selected_empty: {
-    zh: "❌ 请先选中一项用户替换",
-    en: "❌ Select one user replacement first",
-  },
   conv_palette_user_empty: {
     zh: "暂无替换",
     en: "No replacements",
@@ -407,27 +299,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "暂无自动配准",
     en: "No auto pairs",
   },
-  lut_grid_invalid: {
-    zh: "⚠️ 请先选择一个有效的 LUT 文件",
-    en: "⚠️ Please select a valid LUT file",
-  },
-  lut_grid_header: {
-    zh: "🎨 当前 LUT 包含 <b>{count}</b> 种可打印颜色（点击选择）",
-    en: "🎨 Current LUT contains <b>{count}</b> printable colors (click to select)",
-  },
-
   // ==================== Loop / Outline / Cloisonne / Coating ====================
-  conv_loop_section: {
-    zh: "##### 🔗 挂孔设置",
-    en: "##### 🔗 Loop Settings",
-  },
   conv_loop_enable: {
     zh: "启用挂孔",
     en: "Enable Loop",
-  },
-  conv_loop_remove: {
-    zh: "🗑️ 移除挂孔",
-    en: "🗑️ Remove Loop",
   },
   conv_loop_width: {
     zh: "宽度(mm)",
@@ -482,16 +357,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Wire Color Slot",
   },
   conv_free_color_btn: {
-    zh: "🎯 标记为自由色",
-    en: "🎯 Mark as Free Color",
+    zh: "标记为自由色",
+    en: "Mark as Free Color",
   },
   conv_free_color_clear_btn: {
     zh: "清除自由色",
     en: "Clear Free Colors",
   },
   conv_free_color_label: {
-    zh: "🎯 自由色",
-    en: "🎯 Free Colors",
+    zh: "自由色",
+    en: "Free Colors",
   },
   conv_coating_section: {
     zh: "##### 透明镀层",
@@ -508,18 +383,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   conv_status: {
     zh: "状态",
     en: "Status",
-  },
-  conv_generate_btn: {
-    zh: "🚀 生成3MF",
-    en: "🚀 Generate 3MF",
-  },
-  conv_3d_preview: {
-    zh: "#### 🎮 3D预览",
-    en: "#### 🎮 3D Preview",
-  },
-  conv_download_section: {
-    zh: "#### 📁 下载【务必合并对象后再切片】",
-    en: "#### 📁 Download [Merge objects before slicing]",
   },
   conv_download_file: {
     zh: "3MF文件",
@@ -551,10 +414,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "间隙 (mm)",
     en: "Gap (mm)",
   },
-  cal_backing: {
-    zh: "底板颜色",
-    en: "Backing Color",
-  },
   cal_generate_btn: {
     zh: "生成",
     en: "Generate",
@@ -581,14 +440,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "拍摄打印好的校准板照片，提取真实的色彩数据生成 LUT 文件。",
     en: "Take a photo of your printed calibration board to extract real color data.",
   },
-  ext_upload_section: {
-    zh: "#### 📸 上传照片",
-    en: "#### 📸 Upload Photo",
-  },
-  ext_color_mode: {
-    zh: "🎨 色彩模式",
-    en: "🎨 Color Mode",
-  },
   ext_photo: {
     zh: "校准板照片",
     en: "Calibration Photo",
@@ -596,10 +447,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_rotate_btn: {
     zh: "↺ 旋转",
     en: "↺ Rotate",
-  },
-  ext_reset_btn: {
-    zh: "🗑️ 重置",
-    en: "🗑️ Reset",
   },
   ext_correction_section: {
     zh: "校正参数",
@@ -612,6 +459,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_nudge_step_label: {
     zh: "微调步长 (像素)",
     en: "Step (px)",
+  },
+  ext_nudge_step_hint: {
+    zh: "每次点击方向按钮时角点移动的像素数量。值越大移动越快，值越小移动越精细。",
+    en: "Number of pixels each directional button press moves the corner. Larger values move faster, smaller values allow finer adjustment.",
   },
   ext_nudge_active_corner_label: {
     zh: "当前调整角点",
@@ -672,37 +523,13 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "Y偏移",
     en: "Offset Y",
   },
-  ext_extract_btn: {
-    zh: "🚀 提取",
-    en: "🚀 Extract",
-  },
   ext_status: {
     zh: "状态",
     en: "Status",
   },
-  ext_hint_white: {
-    zh: "#### 👉 点击: **白色色块 (左上角)**",
-    en: "#### 👉 Click: **White Block (Top-Left)**",
-  },
   ext_marked: {
     zh: "标记图",
     en: "Marked",
-  },
-  ext_sampling: {
-    zh: "#### 📍 采样预览",
-    en: "#### 📍 Sampling",
-  },
-  ext_reference: {
-    zh: "#### 🎯 参考",
-    en: "#### 🎯 Reference",
-  },
-  ext_result: {
-    zh: "#### 📊 结果 (点击修正)",
-    en: "#### 📊 Result (Click to fix)",
-  },
-  ext_manual_fix: {
-    zh: "#### 🛠️ 手动修正",
-    en: "#### 🛠️ Manual Fix",
   },
   ext_click_cell: {
     zh: "点击左侧色块查看...",
@@ -711,10 +538,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_override: {
     zh: "替换颜色",
     en: "Override Color",
-  },
-  ext_apply_btn: {
-    zh: "🔧 应用",
-    en: "🔧 Apply",
   },
   ext_download_npy: {
     zh: "下载 .npy",
@@ -761,6 +584,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   viewer_diagnostics_fps: {
     zh: "FPS",
     en: "FPS",
+  },
+  viewer_diagnostics_frame_time: {
+    zh: "帧时间",
+    en: "Frame Time",
   },
   viewer_diagnostics_js_heap: {
     zh: "JS 堆",
@@ -836,31 +663,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Footer ====================
-  footer_tip: {
-    zh: "💡 提示: 使用高质量的PLA/PETG basic材料可获得最佳效果",
-    en: "💡 Tip: Use high-quality translucent PLA/PETG basic for best results",
-  },
-
   // ==================== Status Messages ====================
-  msg_no_image: {
-    zh: "❌ 请上传图片",
-    en: "❌ Please upload an image",
-  },
-  msg_no_lut: {
-    zh: "⚠️ 请选择或上传校准文件！",
-    en: "⚠️ Please select or upload a calibration file!",
-  },
-  msg_preview_success: {
-    zh: "✅ 预览",
-    en: "✅ Preview",
-  },
   msg_click_to_place: {
     zh: "点击图片放置挂孔",
     en: "Click to place loop",
-  },
-  msg_conversion_complete: {
-    zh: "✅ 转换完成",
-    en: "✅ Conversion complete",
   },
   msg_resolution: {
     zh: "分辨率",
@@ -869,10 +675,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   msg_loop: {
     zh: "挂孔",
     en: "Loop",
-  },
-  msg_model_too_large: {
-    zh: "⚠️ 模型过大，已禁用3D预览",
-    en: "⚠️ Model too large, 3D preview disabled",
   },
   msg_preview_simplified: {
     zh: "ℹ️ 3D预览已简化",
@@ -903,30 +705,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   palette_click_to_select: {
     zh: "点击调色板选择颜色",
     en: "Click palette to select",
-  },
-  palette_need_preview: {
-    zh: "❌ 请先生成预览",
-    en: "❌ Please generate preview first",
-  },
-  palette_need_original: {
-    zh: "❌ 请先选择要替换的颜色",
-    en: "❌ Select a color to replace",
-  },
-  palette_need_replacement: {
-    zh: "❌ 请先选择替换颜色",
-    en: "❌ Select a replacement color",
-  },
-  palette_replaced: {
-    zh: "✅ 已替换 {src} → {dst}",
-    en: "✅ Replaced {src} → {dst}",
-  },
-  palette_cleared: {
-    zh: "✅ 已清除所有颜色替换",
-    en: "✅ Cleared all replacements",
-  },
-  palette_undo_empty: {
-    zh: "❌ 没有可撤销的操作",
-    en: "❌ Nothing to undo",
   },
   palette_undone: {
     zh: "↩️ 已撤销",
@@ -986,59 +764,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "只合并距离小于此值的颜色",
     en: "Only merge colors with distance below this value",
   },
-  merge_preview_btn: {
-    zh: "🔍 预览合并效果 Preview Merge",
-    en: "🔍 Preview Merge",
-  },
-  merge_apply_btn: {
-    zh: "✅ 应用合并 Apply Merge",
-    en: "✅ Apply Merge",
-  },
   merge_revert_btn: {
     zh: "↩️ 恢复原始 Revert",
     en: "↩️ Revert",
-  },
-  merge_status_empty: {
-    zh: "💡 调整参数后点击预览",
-    en: "💡 Adjust parameters and click preview",
-  },
-  merge_status_preview: {
-    zh: "🔍 预览: {merged} 种颜色被合并 (质量: {quality:.1f})",
-    en: "🔍 Preview: {merged} colors merged (quality: {quality:.1f})",
-  },
-  merge_status_applied: {
-    zh: "✅ 已应用: {merged} 种颜色被合并",
-    en: "✅ Applied: {merged} colors merged",
   },
   merge_status_reverted: {
     zh: "↩️ 已恢复到原始颜色",
     en: "↩️ Reverted to original colors",
   },
-  merge_error_empty_palette: {
-    zh: "❌ 调色板为空，无法执行颜色合并",
-    en: "❌ Empty palette, cannot perform color merging",
-  },
-  merge_error_single_color: {
-    zh: "❌ 图像只包含一种颜色，已禁用颜色合并",
-    en: "❌ Image contains only one color, merging disabled",
-  },
-  merge_error_all_below_threshold: {
-    zh: "⚠️ 所有颜色使用率都低于阈值，已禁用颜色合并以防止颜色丢失",
-    en: "⚠️ All colors below threshold, merging disabled to prevent color loss",
-  },
-  merge_warning_no_targets: {
-    zh: "⚠️ 部分颜色未找到合适的合并目标，保持原始颜色",
-    en: "⚠️ Some colors have no suitable merge targets, keeping original",
-  },
-  merge_info_low_usage: {
-    zh: "💡 检测到 {count} 种低使用率颜色 (<{threshold}%)",
-    en: "💡 Detected {count} low-usage colors (<{threshold}%)",
-  },
-  merge_accordion_title: {
-    zh: "🎨 颜色合并 Color Merging",
-    en: "🎨 Color Merging",
-  },
-
   // ==================== LUT Grid ====================
   lut_grid_load_hint: {
     zh: "加载 LUT 后显示可用颜色",
@@ -1068,10 +801,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "点击选择: {hex}",
     en: "Click to select: {hex}",
   },
-  lut_grid_picker_label: {
-    zh: "🎯 以色找色",
-    en: "🎯 Find by Color",
-  },
   lut_grid_picker_hint: {
     zh: "选一个颜色，自动匹配 LUT 中最接近的物理色",
     en: "Pick a color to find the closest match in LUT",
@@ -1079,10 +808,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lut_grid_picker_btn: {
     zh: "匹配最近色",
     en: "Find Nearest",
-  },
-  lut_grid_picker_result: {
-    zh: "✅ 最接近: {hex} (距离: {dist:.1f})",
-    en: "✅ Nearest: {hex} (distance: {dist:.1f})",
   },
   lut_grid_hue_all: {
     zh: "全部",
@@ -1130,71 +855,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Settings ====================
-  settings_title: {
-    zh: "## ⚙️ 设置",
-    en: "## ⚙️ Settings",
-  },
-  settings_clear_cache: {
-    zh: "🗑️ 清空缓存",
-    en: "🗑️ Clear Cache",
-  },
-  settings_clear_output: {
-    zh: "🗑️ 清空输出",
-    en: "🗑️ Clear Output",
-  },
-  settings_reset_counters: {
-    zh: "🔢 使用计数归零",
-    en: "🔢 Reset Counters",
-  },
-  settings_cache_cleared: {
-    zh: "✅ 缓存已清空，释放了 {} 空间",
-    en: "✅ Cache cleared, freed {} of space",
-  },
-  settings_output_cleared: {
-    zh: "✅ 输出已清空，释放了 {} 空间",
-    en: "✅ Output cleared, freed {} of space",
-  },
-  settings_counters_reset: {
-    zh: "✅ 计数器已归零：校准板: {} | 颜色提取: {} | 模型转换: {}",
-    en: "✅ Counters reset: Calibrations: {} | Extractions: {} | Conversions: {}",
-  },
-  settings_cache_size: {
-    zh: "📦 缓存大小: {}",
-    en: "📦 Cache size: {}",
-  },
-  settings_output_size: {
-    zh: "📦 输出大小: {}",
-    en: "📦 Output size: {}",
-  },
-  theme_toggle_night: {
-    zh: "🌙 夜间模式",
-    en: "🌙 Night Mode",
-  },
-  theme_toggle_day: {
-    zh: "☀️ 日间模式",
-    en: "☀️ Day Mode",
-  },
-
   // ==================== LUT Merge Tab ====================
-  tab_merge: {
-    zh: "🔀 色卡合并",
-    en: "🔀 LUT Merge",
-  },
-  merge_title: {
-    zh: "### 🔀 色卡合并",
-    en: "### 🔀 LUT Merge",
-  },
   merge_desc: {
     zh: "将不同色彩模式的LUT色卡合并为一个，获得更丰富的色彩。",
     en: "Merge LUT cards from different color modes into one for richer colors.",
-  },
-  merge_lut_primary_label: {
-    zh: "🎯 主色卡（6色或8色）",
-    en: "🎯 Primary LUT (6-Color or 8-Color)",
-  },
-  merge_lut_secondary_label: {
-    zh: "➕ 副色卡（可多选）",
-    en: "➕ Secondary LUTs (Multi-select)",
   },
   merge_lut_1_label: {
     zh: "选择LUT 1（主色卡）",
@@ -1212,18 +876,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "未选择副色卡",
     en: "No secondary LUTs selected",
   },
-  merge_primary_hint: {
-    zh: "💡 请先选择一个6色或8色的主色卡",
-    en: "💡 Please select a 6-Color or 8-Color primary LUT first",
-  },
-  merge_primary_not_high: {
-    zh: "❌ 主色卡必须是6色或8色模式",
-    en: "❌ Primary LUT must be 6-Color or 8-Color mode",
-  },
-  merge_error_no_secondary: {
-    zh: "❌ 请至少选择一个副色卡",
-    en: "❌ Please select at least one secondary LUT",
-  },
   merge_mode_label: {
     zh: "检测到的模式",
     en: "Detected Mode",
@@ -1240,39 +892,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "值越大去除的相近色越多，0=仅精确去重",
     en: "Higher = remove more similar colors, 0 = exact dedup only",
   },
-  merge_btn: {
-    zh: "🔀 执行合并",
-    en: "🔀 Merge",
-  },
-  merge_status_ready: {
-    zh: "💡 选择两个LUT后点击合并",
-    en: "💡 Select two LUTs then click Merge",
-  },
   merge_status_running: {
     zh: "⏳ 合并中...",
     en: "⏳ Merging...",
   },
-  merge_status_success: {
-    zh: "✅ 合并完成！合并前: {before} 色 → 合并后: {after} 色（精确去重: {exact}，相近色去除: {similar}）\n保存至: {path}",
-    en: "✅ Merge complete! Before: {before} → After: {after} (exact dupes: {exact}, similar removed: {similar})\nSaved to: {path}",
-  },
-  merge_error_no_lut: {
-    zh: "❌ 请选择至少两个LUT文件",
-    en: "❌ Please select at least two LUT files",
-  },
-  merge_error_same_lut: {
-    zh: "❌ 请选择不同的LUT文件",
-    en: "❌ Please select different LUT files",
-  },
-  merge_error_incompatible: {
-    zh: "❌ 不兼容的LUT组合: {msg}",
-    en: "❌ Incompatible LUT combination: {msg}",
-  },
-  merge_error_failed: {
-    zh: "❌ 合并失败: {msg}",
-    en: "❌ Merge failed: {msg}",
-  },
-
   // ==================== About Page Content ====================
   about_content: {
     zh: [
@@ -1729,8 +1352,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Management",
   },
   "tab.calibration": {
-    zh: "LUT校准",
-    en: "LUT Calibration",
+    zh: "生成校准板",
+    en: "Calibration Board",
   },
   "tab.extractor": {
     zh: "LUT提取",
@@ -1771,6 +1394,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "tab.settings": {
     zh: "设置",
     en: "Settings",
+  },
+  "tab.colorEditor": {
+    zh: "颜色编辑",
+    en: "Color Editor",
+  },
+  "tab.converterCore": {
+    zh: "核心设置",
+    en: "Core Settings",
+  },
+  "tab.converterColor": {
+    zh: "颜色调整",
+    en: "Color Adjustment",
+  },
+  "tab.converterAdvanced": {
+    zh: "高级功能",
+    en: "Advanced",
   },
 
   // ==================== Settings Panel (Particle Loading) ====================
@@ -1941,8 +1580,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== App Header ====================
   app_header_title: {
-    zh: "Lumina Studio 2.0",
-    en: "Lumina Studio 2.0",
+    zh: "Lumina Studio 2",
+    en: "Lumina Studio 2",
   },
   app_checking_backend: {
     zh: "正在检查后端…",
@@ -2556,8 +2195,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== About View ====================
   about_title: {
-    zh: "Lumina Studio 2.0",
-    en: "Lumina Studio 2.0",
+    zh: "Lumina Studio 2",
+    en: "Lumina Studio 2",
   },
   about_desc: {
     zh: "更多信息即将推出",
@@ -2589,17 +2228,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "颜色模式",
     en: "Color Mode",
   },
+  cal_color_mode_hint: {
+    zh: "选择要生成的校准板颜色模式。",
+    en: "Select the color mode for the calibration board.",
+  },
   cal_block_size_label: {
     zh: "色块尺寸",
     en: "Block Size",
+  },
+  cal_block_size_hint: {
+    zh: "定义单个色块的边长（毫米）。推荐值: 5.00mm。",
+    en: "Define the edge length of a single block (in mm). Recommended: 5.00mm.",
   },
   cal_gap_label: {
     zh: "色块间距",
     en: "Block Gap",
   },
-  cal_backing_label: {
-    zh: "底板颜色",
-    en: "Backing Color",
+  cal_gap_hint: {
+    zh: "定义相邻色块之间的间隙（毫米）。推荐值: 0.84mm。",
+    en: "Define the gap between adjacent blocks (in mm). Recommended: 0.84mm.",
+  },
+  cal_backing_thickness_label: {
+    zh: "底板厚度",
+    en: "Backing Thickness",
+  },
+  cal_backing_thickness_hint: {
+    zh: "调整底板层的物理厚度（毫米）。每一格对应一层打印层（0.08 mm），推荐值: 1.20 mm。",
+    en: "Adjust the backing layer thickness in millimeters. Each tick equals one print layer (0.08 mm); recommended: 1.20 mm.",
   },
   cal_generate_btn_panel: {
     zh: "生成校准板",
@@ -2635,9 +2290,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "颜色模式",
     en: "Color Mode",
   },
+  ext_color_mode_hint: {
+    zh: "选择与您打印的校准板对应的颜色模式。不同的模式会决定提取颜色时使用的色块数量和布局。",
+    en: "Select the color mode corresponding to your printed calibration board. This determines the number and layout of color blocks extracted.",
+  },
   ext_page_label: {
-    zh: "页码",
-    en: "Page",
+    zh: "校准板页码",
+    en: "Board Page",
+  },
+  ext_page_hint: {
+    zh: "选择当前上传照片对应的校准板页码。部分颜色模式（如 8色 或 5色扩展）由多张校准板组成。",
+    en: "Select the page number for the current photo. Some color modes (like 8-Color or 5-Color Extended) span multiple boards.",
   },
   ext_page_number_prefix: {
     zh: "",
@@ -2655,25 +2318,49 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "水平偏移 (offset_x)",
     en: "Horizontal Offset (offset_x)",
   },
+  ext_offset_x_hint: {
+    zh: "水平方向位移校正。向右偏移为正，向左为负，单位为像素。",
+    en: "Horizontal displacement correction. Positive moves right, negative moves left, in pixels.",
+  },
   ext_offset_y_label: {
     zh: "垂直偏移 (offset_y)",
     en: "Vertical Offset (offset_y)",
+  },
+  ext_offset_y_hint: {
+    zh: "垂直方向位移校正。向下偏移为正，向上为负，单位为像素。",
+    en: "Vertical displacement correction. Positive moves down, negative moves up, in pixels.",
   },
   ext_zoom_label: {
     zh: "缩放 (zoom)",
     en: "Zoom",
   },
+  ext_zoom_hint: {
+    zh: "对检测到的棋盘格进行缩放校正。1.0 表示原始尺寸，小于 1 则缩小，大于 1 则放大。",
+    en: "Scale correction for the detected checkerboard. 1.0 means original size; less than 1 shrinks, greater than 1 enlarges.",
+  },
   ext_distortion_label: {
     zh: "畸变校正 (distortion)",
     en: "Distortion Correction",
+  },
+  ext_distortion_hint: {
+    zh: "桶形/枕形畸变校正系数。正值矫正桶形畸变，负值矫正枕形畸变，0 表示不校正。",
+    en: "Barrel/pincushion distortion correction coefficient. Positive corrects barrel distortion, negative corrects pincushion, zero disables correction.",
   },
   ext_vignette_label: {
     zh: "暗角校正",
     en: "Vignette Correction",
   },
+  ext_vignette_hint: {
+    zh: "自动检测并补偿镜头暗角导致的边缘亮度下降，使颜色提取更均匀准确。",
+    en: "Automatically detects and compensates for edge brightness falloff caused by lens vignetting for more uniform and accurate color extraction.",
+  },
   ext_auto_wb_label: {
     zh: "自动白平衡",
     en: "Auto White Balance",
+  },
+  ext_auto_wb_hint: {
+    zh: "自动校正图像的白平衡，将白色参考块还原为标准白色，使整体色彩更准确。",
+    en: "Automatically corrects the image white balance, restoring the white reference patch to standard white for more accurate overall colors.",
   },
   ext_extract_btn_label: {
     zh: "提取颜色",
@@ -2951,6 +2638,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u53e0\u8272\u5c42\u6570",
     en: "Color Layers",
   },
+  basic_material_layer_count_hint: {
+    zh: "\u53c2\u4e0e\u53e0\u8272\u6df7\u5408\u7684\u8017\u6750\u79cd\u7c7b\u6570\u91cf\u3002\u5c42\u6570\u8d8a\u591a\u8272\u5f69\u8fc7\u6e21\u8d8a\u4e30\u5bcc\uff0c\u4f46\u6253\u5370\u65f6\u95f4\u8d8a\u957f\u3002",
+    en: "Number of material types involved in color blending. More layers produce richer color transitions but increase print time.",
+  },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
@@ -3159,9 +2850,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "叠色层数",
     en: "Color Layers",
   },
+  basic_color_layers_hint: {
+    zh: "叠色混合使用的层数。层数越多可表现的颜色越丰富，但打印耗时和耗材消耗也相应增加。",
+    en: "Number of layers used for color blending. More layers enable richer colors but increase print time and material consumption.",
+  },
   basic_layer_height_label: {
     zh: "叠色层高",
     en: "Layer Height",
+  },
+  basic_layer_height_hint: {
+    zh: "每层叠色的打印高度（毫米）。较小的层高可获得更细腻的色彩过渡，但打印时间更长。",
+    en: "Print height per color layer (in mm). Smaller layer heights produce smoother color transitions but increase print time.",
   },
   basic_supported_modes_label: {
     zh: "支持模式",
@@ -3199,13 +2898,25 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "宽度",
     en: "Width",
   },
+  basic_width_hint: {
+    zh: "打印成品的宽度（毫米）。需在打印机有效打印范围内。",
+    en: "Printed output width (in mm). Must be within the printer's effective print area.",
+  },
   basic_height: {
     zh: "高度",
     en: "Height",
   },
+  basic_height_hint: {
+    zh: "打印成品的高度（毫米）。需在打印机有效打印范围内。",
+    en: "Printed output height (in mm). Must be within the printer's effective print area.",
+  },
   basic_thickness: {
     zh: "厚度",
     en: "Thickness",
+  },
+  basic_thickness_hint: {
+    zh: "底板的厚度（毫米）。每一格对应一层打印层（0.08 mm），影响成品的整体厚度。",
+    en: "Base plate thickness (in mm). Each tick equals one print layer (0.08 mm), affecting the overall thickness of the output.",
   },
   basic_structure_mode: {
     zh: "结构模式",
@@ -3241,9 +2952,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "切片宽度",
     en: "Tile Width",
   },
+  basic_tile_width_hint: {
+    zh: "大画幅模式下每个切片的宽度（毫米）。切片越小，拼接数量越多。",
+    en: "Width of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
+  },
   basic_tile_height: {
     zh: "切片高度",
     en: "Tile Height",
+  },
+  basic_tile_height_hint: {
+    zh: "大画幅模式下每个切片的高度（毫米）。切片越小，拼接数量越多。",
+    en: "Height of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
   },
 
   // ==================== Structure Mode Options ====================
@@ -3275,29 +2994,49 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "量化颜色数",
     en: "Quantize Colors",
   },
-  adv_bg_tolerance: {
-    zh: "背景容差",
-    en: "Background Tolerance",
+  adv_quantize_colors_hint: {
+    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。",
+    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering.",
   },
-  adv_auto_bg: {
-    zh: "自动背景",
-    en: "Auto Background",
+  adv_isolated_pixel_cleanup: {
+    zh: "孤立像素清理",
+    en: "Isolated Pixel Cleanup",
   },
-  adv_enable_cleanup: {
-    zh: "启用清理",
-    en: "Enable Cleanup",
+  adv_isolated_pixel_cleanup_hint: {
+    zh: "将 LUT 匹配后与周围8邻域颜色完全不同的孤立像素替换为邻域众数，使输出更干净。仅在高保真模式且非预测匹配时生效。",
+    en: "Replaces isolated pixels (whose color differs from all 8 neighbors) after LUT matching with the neighborhood mode for a cleaner output. Only active in High-Fidelity mode with non-predictive matching.",
   },
   adv_separate_backing: {
     zh: "分离底板",
     en: "Separate Backing",
   },
+  adv_separate_backing_hint: {
+    zh: "将底板层（通常是白色或背景色）作为独立颜色层输出，适用于需要单独处理底板的打印机或后处理流程。",
+    en: "Outputs the backing layer as a separate color layer, useful for printers or post-processing workflows that handle the backing layer independently.",
+  },
   adv_hue_protection: {
-    zh: "🎨 色相保护",
-    en: "🎨 Hue Protection",
+    zh: "色相保护",
+    en: "Hue Protection",
+  },
+  adv_hue_protection_hint: {
+    zh: "在色彩匹配时优先保护色相，减少色相漂移。适合色彩准确度要求高、颜色种类多的图像。",
+    en: "Prioritizes hue preservation during color matching to reduce hue shift. Suitable for images requiring high color accuracy and a wide variety of colors.",
+  },
+  adv_unlock_quantize: {
+    zh: "解锁量化颜色数",
+    en: "Unlock quantize ceiling",
+  },
+  adv_unlock_quantize_hint: {
+    zh: "解锁后最高可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景。",
+    en: "Unlocking raises the ceiling to 8192. This significantly increases memory and processing time; use only for extreme cases.",
   },
   adv_chroma_gate: {
-    zh: "🌈 暗色彩度门槛",
-    en: "🌈 Dark Chroma Gate",
+    zh: "暗色彩度门槛",
+    en: "Dark Chroma Gate",
+  },
+  adv_chroma_gate_hint: {
+    zh: "仅对色度低于此值的暗色区域启用色相保护。设为 0 则对所有暗色生效，设为较高值则仅对非常暗的阴影生效。推荐值: 15。",
+    en: "Applies hue protection only to dark areas whose chroma is below this threshold. Set to 0 to apply to all dark colors; higher values restrict it to very dark shadows. Recommended: 15.",
   },
 
   // ==================== Relief Settings ====================
@@ -3312,6 +3051,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   relief_max_height: {
     zh: "最大高度",
     en: "Max Height",
+  },
+  relief_max_height_hint: {
+    zh: "浮雕模型最高点的高度（毫米）。值越大浮雕凸起越高，值越小浮雕越浅。",
+    en: "The height of the tallest point of the relief model (in mm). Larger values produce taller relief, smaller values produce shallower relief.",
   },
   relief_auto_height_mode: {
     zh: "自动高度模式",
@@ -3347,6 +3090,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "外轮廓厚度",
     en: "Outline Width",
   },
+  outline_width_hint: {
+    zh: "外描边线条的宽度（毫米）。值越大轮廓线越粗，值越小轮廓线越细。",
+    en: "Width of the outline stroke (in mm). Larger values produce thicker lines, smaller values produce thinner lines.",
+  },
 
   // ==================== Cloisonne Settings ====================
   cloisonne_enable: {
@@ -3357,9 +3104,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "金属丝宽度",
     en: "Wire Width",
   },
+  cloisonne_wire_width_hint: {
+    zh: "掐丝珐琅金属丝的水平宽度（毫米）。值越大金属丝越粗，掐丝效果越明显。",
+    en: "Horizontal width of the cloisonné wire (in mm). Larger values produce thicker wires with more pronounced cloisonné effect.",
+  },
   cloisonne_wire_height: {
     zh: "金属丝高度",
     en: "Wire Height",
+  },
+  cloisonne_wire_height_hint: {
+    zh: "掐丝珐琅金属丝的垂直高度（毫米）。值越大金属丝凸起越高，立体感越强。",
+    en: "Vertical height of the cloisonné wire (in mm). Larger values produce taller wire protrusion with stronger three-dimensional appearance.",
   },
   cloisonne_wip: {
     zh: "此功能正在施工中，部分效果可能不完整",
@@ -3375,6 +3130,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "涂层高度",
     en: "Coating Height",
   },
+  coating_height_hint: {
+    zh: "透明涂层覆盖层的高度（毫米）。值越大涂层凸起越高，表面越光滑。",
+    en: "Height of the transparent coating layer (in mm). Larger values produce taller coating protrusion and a smoother surface.",
+  },
 
   // ==================== Keychain Loop Settings ====================
   loop_enable: {
@@ -3385,17 +3144,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "环宽度",
     en: "Loop Width",
   },
+  loop_width_hint: {
+    zh: "挂件环的水平宽度（毫米）。值越大环越宽。",
+    en: "Horizontal width of the keychain loop (in mm). Larger values produce a wider loop.",
+  },
   loop_length: {
     zh: "环长度",
     en: "Loop Length",
+  },
+  loop_length_hint: {
+    zh: "挂件环的垂直长度（毫米）。值越大环越长。",
+    en: "Vertical length of the keychain loop (in mm). Larger values produce a longer loop.",
   },
   loop_hole_diameter: {
     zh: "环孔直径",
     en: "Loop Hole Diameter",
   },
+  loop_hole_diameter_hint: {
+    zh: "挂件环内孔的直径（毫米）。需确保钥匙扣或挂绳能穿过。",
+    en: "Diameter of the inner hole (in mm). Must be large enough for a keychain or lanyard to pass through.",
+  },
   loop_angle: {
     zh: "旋转角度",
     en: "Rotation Angle",
+  },
+  loop_angle_hint: {
+    zh: "挂件环相对于模型的旋转角度（度）。0° 为竖直向上，正值顺时针旋转。",
+    en: "Rotation angle of the loop relative to the model (in degrees). 0° is vertical upward; positive values rotate clockwise.",
   },
   loop_position_preset: {
     zh: "位置预设",
@@ -3405,9 +3180,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "X 偏移",
     en: "X Offset",
   },
+  loop_offset_x_hint: {
+    zh: "挂件环中心相对于模型中心的水平偏移（毫米）。正值向右，负值向左。",
+    en: "Horizontal offset of the loop center from the model center (in mm). Positive moves right, negative moves left.",
+  },
   loop_offset_y: {
     zh: "Y 偏移",
     en: "Y Offset",
+  },
+  loop_offset_y_hint: {
+    zh: "挂件环中心相对于模型中心的垂直偏移（毫米）。正值向上，负值向下。",
+    en: "Vertical offset of the loop center from the model center (in mm). Positive moves up, negative moves down.",
   },
   loop_preset_top_center: {
     zh: "上中",

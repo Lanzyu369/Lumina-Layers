@@ -44,7 +44,7 @@ export function WidgetHeader({
       {...dragListeners}
       {...dragAttributes}
     >
-      <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
         {t(titleKey)}
       </span>
       <button
@@ -55,7 +55,7 @@ export function WidgetHeader({
           onToggleCollapse();
         }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="ml-1 flex-shrink-0 w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200/60 dark:hover:bg-gray-700/60 transition-colors text-gray-500 dark:text-gray-400"
+        className="ml-1 flex-shrink-0 w-7 h-7 flex items-center justify-center rounded hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors text-slate-500 dark:text-slate-400"
       >
         <span className="text-xs">{collapsed ? '\u25B6' : '\u25BC'}</span>
       </button>

@@ -20,6 +20,7 @@ export default function CoatingSettings() {
       {enable_coating && (
         <Slider
           label={t("coating_height")}
+          tooltip={t("coating_height_hint")}
           value={coating_height_mm}
           min={0.04}
           max={0.12}

@@ -6,9 +6,7 @@
  * and ColorWorkstation rendering behavior.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { I18nProvider } from '../i18n/context';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { translations } from '../i18n/translations';
 import {
   useWidgetStore,
@@ -18,25 +16,9 @@ import {
 } from '../stores/widgetStore';
 import type { TabId } from '../types/widget';
 
-// PalettePanel and LutColorGrid are no longer rendered inside ColorWorkstation
-// (they moved to Color2DOverlay), so no mocks needed for them.
-
-// Mock settingsStore for enableBlur
-vi.mock('../stores/settingsStore', () => ({
-  useSettingsStore: (
-    selector?: (state: { language: "zh"; enableBlur: boolean }) => unknown,
-  ) => {
-    const state = { language: 'zh' as const, enableBlur: true };
-    return selector ? selector(state) : state;
-  },
-}));
-
-// Lazy import ColorWorkstation after mocks are set up
-import ColorWorkstation from '../components/widget/ColorWorkstation';
-
-function renderWithI18n(ui: React.ReactElement) {
-  return render(<I18nProvider>{ui}</I18nProvider>);
-}
+// The legacy ColorWorkstation bottom drawer has been replaced by a top-level
+// secondary tab entry; this file now covers registry / translation / persist
+// invariants only. 颜色编辑入口已迁移到顶部二级 tab，此处仅校验注册表/翻译/持久化版本。
 
 describe('Palette-LUT Merge Unit Tests', () => {
   beforeEach(() => {
@@ -45,7 +27,6 @@ describe('Palette-LUT Merge Unit Tests', () => {
       isDragging: false,
       activeWidgetId: null,
       activeTab: 'converter' as TabId,
-      colorWorkstationCollapsed: true,
     });
   });
 
@@ -87,38 +68,12 @@ describe('Palette-LUT Merge Unit Tests', () => {
 
   // ===== Persist version 验证 =====
   describe('Persist version', () => {
-    it('persist version is 6', () => {
-      // Requirements 5.3
+    it('persist version is 7', () => {
+      // 颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed -> bump v7
       const options = (
         useWidgetStore.persist as unknown as { getOptions: () => { version: number } }
       ).getOptions();
-      expect(options.version).toBe(6);
-    });
-  });
-
-  // ===== ColorWorkstation 渲染验证 =====
-  describe('ColorWorkstation rendering', () => {
-    it('renders the entry bar with hint text when activeTab is converter', () => {
-      // ColorWorkstation is now a thin entry bar that opens the 2D overlay
-      useWidgetStore.setState({
-        activeTab: 'converter',
-      });
-
-      renderWithI18n(<ColorWorkstation />);
-
-      expect(screen.getByTestId('color-workstation')).toBeInTheDocument();
-      // Hint text from widget.colorWorkstationHint
-      expect(screen.getByText(translations['widget.colorWorkstationHint'].zh)).toBeInTheDocument();
-      // PalettePanel and LutColorGrid are no longer inside ColorWorkstation
-      expect(screen.queryByTestId('palette-panel')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('lut-color-grid')).not.toBeInTheDocument();
-    });
-
-    it('returns null when activeTab is not converter', () => {
-      useWidgetStore.setState({ activeTab: 'calibration' });
-
-      const { container } = renderWithI18n(<ColorWorkstation />);
-      expect(container.innerHTML).toBe('');
+      expect(options.version).toBe(7);
     });
   });
 });

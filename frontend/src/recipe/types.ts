@@ -38,8 +38,10 @@ export interface ConverterRecipeBase {
   modeling_mode: string;
   target_width_mm: number;
   target_height_mm: number;
-  auto_bg: boolean;
-  bg_tol: number;
+  /** @deprecated removed; kept optional for legacy recipe parsing only */
+  auto_bg?: boolean;
+  /** @deprecated removed; kept optional for legacy recipe parsing only */
+  bg_tol?: number;
   quantize_colors: number;
   enable_cleanup: boolean;
   hue_enable: boolean;

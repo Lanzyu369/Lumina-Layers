@@ -74,8 +74,6 @@ export type ConvertSourceSelection =
 
 export type ConvertPreviewRequest = ConvertSourceSelection & {
   target_width_mm: number;
-  auto_bg: boolean;
-  bg_tol: number;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
   color_layers?: number;
@@ -453,7 +451,7 @@ export interface CalibrationGenerateRequest {
   color_mode: CalibrationColorMode;
   block_size: number;
   gap: number;
-  backing: BackingColor;
+  backing_thickness: number;
   eight_color_full_export: boolean;
 }
 
@@ -464,6 +462,7 @@ export interface CalibrationResponse {
   message: string;
   download_url: string;
   preview_url: string | null;
+  layer_urls: string[] | null;
 }
 
 export interface SingleStageJobSummary {
@@ -1243,8 +1242,6 @@ export interface BatchConvertParams {
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;
-  auto_bg: boolean;
-  bg_tol: number;
   color_mode: string;
   modeling_mode: string;
   quantize_colors: number;

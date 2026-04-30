@@ -57,9 +57,14 @@ def main() -> int:
     started_at = datetime.now()
     t0 = time.perf_counter()
     print(f"Full gate start: {started_at:%Y-%m-%d %H:%M:%S}")
+    vitest_wrapper = ROOT / "scripts" / "run_vitest.py"
     steps: list[tuple[list[str], Path | None, str]] = [
         ([sys.executable, "-m", "pytest", "tests", "-q"], None, "Backend full regression failed"),
-        (["npm", "exec", "--", "vitest", "--run"], ROOT / "frontend", "Frontend full regression failed"),
+        (
+            [sys.executable, str(vitest_wrapper), "run"],
+            ROOT / "frontend",
+            "Frontend full regression failed",
+        ),
         (["npm", "run", "lint"], ROOT / "frontend", "Frontend lint failed"),
     ]
     try:

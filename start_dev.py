@@ -185,6 +185,55 @@ def _is_our_process(pid: int) -> bool:
     ]
     return any(m in cmdline for m in markers)
 
+def _kill_lumina_node_orphans():
+    """Kill vitest fork workers that belong to this project / 杀掉本项目的 vitest fork worker.
+
+    These do not listen on any port, so ``_kill_listening`` cannot reach
+    them. We identify ownership via the command line containing the
+    project root and the vitest worker entry point.
+
+    这些 worker 不监听端口，因此 ``_kill_listening`` 无法清理；这里通过命令行
+    包含项目根路径及 vitest worker 入口的方式识别归属。
+    """
+    if os.name != "nt":
+        return
+    try:
+        ps_script = (
+            "$ErrorActionPreference='SilentlyContinue';"
+            "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+            "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+        )
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True, text=True, encoding="utf-8", errors="ignore",
+            creationflags=0x08000000, timeout=10,
+        ).stdout
+    except Exception as e:
+        _err(f"扫描 node.exe 时出错: {e}")
+        return
+
+    root_str = str(ROOT).lower()
+    killed = 0
+    for line in out.splitlines():
+        parts = line.split("|", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        cmdline = (parts[1] or "").lower()
+        if root_str not in cmdline and "lumina-layers" not in cmdline:
+            continue
+        if "vitest" not in cmdline:
+            continue
+        _kill_pid_tree(pid)
+        _sys(f"已终止 vitest 残留 PID {pid}")
+        killed += 1
+    if killed:
+        _ok(f"清理 vitest 残留完成（{killed} 个）")
+
+
 def _kill_listening(ports, force=False):
     """杀掉所有监听指定端口的进程（进程树一起杀）
     
@@ -362,6 +411,7 @@ def main():
                          FRONTEND_PORT + 1, FRONTEND_PORT + 2,
                          FRONTEND_PORT + 3, FRONTEND_PORT + 4],
                         force=args.force)
+        _kill_lumina_node_orphans()
         _ok("完成")
         return
 
@@ -379,6 +429,7 @@ def main():
     if run_f:
         ports_to_clean += [FRONTEND_PORT + i for i in range(6)]
     _kill_listening(ports_to_clean)
+    _kill_lumina_node_orphans()
     # 等后端端口释放（前端不用等，Vite 自行处理）
     if run_b:
         _wait_port_free(BACKEND_PORT, timeout=10)

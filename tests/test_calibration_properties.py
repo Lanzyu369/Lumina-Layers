@@ -113,13 +113,17 @@ def test_voxel_grid_dimension_calculation(block_size_mm: float, gap_mm: float):
 # **Validates: Requirements 3.1, 3.2, 3.3**
 # ============================================================================
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from PIL import Image
 
 from fastapi.testclient import TestClient
 
 from api.schemas.extractor import CalibrationColorMode
-from api.schemas.calibration import BackingColor
+from api.schemas.calibration import (
+    DEFAULT_BACKING_THICKNESS_MM,
+    MAX_BACKING_THICKNESS_MM,
+    MIN_BACKING_THICKNESS_MM,
+)
 
 # Build a lightweight TestClient without triggering the lifespan (worker pool).
 # We import the router directly and mount it on a bare FastAPI app.
@@ -159,17 +163,25 @@ _DUMMY_RETURN = ("/tmp/dummy.3mf", Image.new("RGB", (10, 10)), "ok")
     mode=st.sampled_from(list(CalibrationColorMode)),
     block_size=st.integers(min_value=3, max_value=10),
     gap=st.floats(min_value=0.4, max_value=2.0, allow_nan=False, allow_infinity=False),
+    backing_thickness=st.floats(
+        min_value=MIN_BACKING_THICKNESS_MM,
+        max_value=MAX_BACKING_THICKNESS_MM,
+        allow_nan=False,
+        allow_infinity=False,
+    ),
 )
 def test_api_forwards_block_size_and_gap_for_all_modes(
     mode: CalibrationColorMode,
     block_size: int,
     gap: float,
+    backing_thickness: float,
 ):
-    """Property 3: API forwards block_size and gap for all modes
+    """Property 3: API forwards block_size, gap, and backing_thickness for all modes.
 
-    For any CalibrationColorMode and any valid block_size (3-10) / gap (0.4-2.0),
-    the API route SHALL call the corresponding core function with the provided
-    block_size_mm and gap_mm values.
+    For any CalibrationColorMode and any valid block_size (3-10), gap (0.4-2.0)
+    and backing_thickness (0.4-3.5), the API route SHALL call the corresponding
+    core function with the provided ``block_size_mm``, ``gap_mm`` and
+    ``backing_thickness_mm`` values.
 
     **Validates: Requirements 3.1, 3.2, 3.3**
     """
@@ -181,7 +193,7 @@ def test_api_forwards_block_size_and_gap_for_all_modes(
             "color_mode": mode.value,
             "block_size": block_size,
             "gap": gap,
-            "backing": BackingColor.WHITE.value,
+            "backing_thickness": backing_thickness,
         }
         resp = client.post("/api/calibration/generate", json=payload)
 
@@ -212,3 +224,68 @@ def test_api_forwards_block_size_and_gap_for_all_modes(
             f"gap_mm mismatch: expected {gap}, "
             f"got {kwargs['gap_mm']} for mode={mode.value}"
         )
+
+        # Property: backing_thickness_mm is forwarded as float(backing_thickness).
+        assert "backing_thickness_mm" in kwargs, (
+            f"backing_thickness_mm not passed to {core_func_path} for mode={mode.value}"
+        )
+        assert kwargs["backing_thickness_mm"] == float(backing_thickness), (
+            f"backing_thickness_mm mismatch: expected {float(backing_thickness)}, "
+            f"got {kwargs['backing_thickness_mm']} for mode={mode.value}"
+        )
+
+
+def test_default_backing_thickness_constant_matches_printer_config():
+    """Schema default backing thickness must match ``PrinterConfig.BACKING_MM``."""
+    assert DEFAULT_BACKING_THICKNESS_MM == PrinterConfig.BACKING_MM
+
+
+# ============================================================================
+# Property 4: Backing layer resolver scales linearly with thickness
+# Feature: calibration-backing-thickness, Property 4: backing layer resolver
+# **Validates: Requirements 1.6, 3.5**
+# ============================================================================
+
+
+@settings(max_examples=200)
+@given(
+    backing_thickness_mm=st.floats(
+        min_value=MIN_BACKING_THICKNESS_MM,
+        max_value=MAX_BACKING_THICKNESS_MM,
+        allow_nan=False,
+        allow_infinity=False,
+    )
+)
+def test_resolve_backing_layers_scales_linearly_with_thickness(
+    backing_thickness_mm: float,
+) -> None:
+    """``_resolve_backing_layers`` returns ``max(1, int(t / layer_height))``.
+
+    For any valid backing thickness in ``[0.4, 3.5]`` mm, the helper SHALL
+    produce at least 1 layer and exactly match the truncated division by
+    ``PrinterConfig.LAYER_HEIGHT``.
+    """
+    from core.calibration import _resolve_backing_layers
+
+    layers = _resolve_backing_layers(backing_thickness_mm)
+    expected = max(1, int(backing_thickness_mm / PrinterConfig.LAYER_HEIGHT))
+
+    assert layers == expected, (
+        f"Layer count mismatch for thickness={backing_thickness_mm}: "
+        f"got {layers}, expected {expected}"
+    )
+    assert layers >= 1
+
+
+def test_resolve_backing_layers_falls_back_to_printer_config_when_none() -> None:
+    """``_resolve_backing_layers(None)`` SHALL fall back to ``PrinterConfig.BACKING_MM``.
+
+    This guards backward compatibility: any call site that omits the
+    ``backing_thickness_mm`` keyword argument should keep the historical layer
+    count derived from the printer-wide default.
+    """
+    from core.calibration import _resolve_backing_layers
+
+    assert _resolve_backing_layers(None) == max(
+        1, int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
+    )

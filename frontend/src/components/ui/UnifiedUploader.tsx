@@ -123,14 +123,14 @@ export default function UnifiedUploader({
 
   const borderClass = isDragging
     ? "border-blue-500 bg-blue-500/10"
-    : "border-gray-300 dark:border-gray-600 border-dashed";
+    : "border-slate-300 dark:border-slate-600 border-dashed";
 
   // BatchMode: file list + "add more" area
   if (isBatchMode && batchFiles.length > 0) {
     return (
       <div className="flex flex-col gap-2">
         {/* File count */}
-        <p className="text-xs text-gray-500 dark:text-gray-400">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
           {t("upload_file_count").replace("{count}", String(batchFiles.length))}
         </p>
 
@@ -142,14 +142,14 @@ export default function UnifiedUploader({
           {batchFiles.map((file, index) => (
             <li
               key={`${file.name}-${index}`}
-              className="flex items-center justify-between rounded-2xl border border-transparent bg-gray-100 px-2 py-1 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+              className="flex items-center justify-between rounded-2xl border border-transparent bg-slate-100 px-2 py-1 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
               <span className="truncate mr-2">{file.name}</span>
               <button
                 type="button"
                 aria-label={t("upload_delete_file").replace("{name}", file.name)}
                 onClick={() => onBatchFileRemove(index)}
-                className="shrink-0 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                className="shrink-0 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
               >
                 ✕
               </button>
@@ -180,7 +180,7 @@ export default function UnifiedUploader({
             className="hidden"
             aria-hidden="true"
           />
-          <span className="text-sm text-gray-500 dark:text-gray-400 select-none">
+          <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
             {t("upload_add_more")}
           </span>
         </div>
@@ -222,7 +222,7 @@ export default function UnifiedUploader({
           />
         </div>
       ) : (
-        <span className="text-sm text-gray-500 dark:text-gray-400 select-none">
+        <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
           {t("upload_unified_hint")}
         </span>
       )}

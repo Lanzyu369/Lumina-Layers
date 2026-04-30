@@ -726,8 +726,6 @@ async def generate_puzzle(
             "target_width_mm": piece.bbox_mm[2] - piece.bbox_mm[0],
             "spacer_thick": generate_params.spacer_thick,
             "structure_mode": generate_params.structure_mode.value,
-            "auto_bg": False,
-            "bg_tol": generate_params.bg_tol,
             "color_mode": generate_params.color_mode.value,
             "add_loop": False,
             "loop_width": generate_params.loop_width,

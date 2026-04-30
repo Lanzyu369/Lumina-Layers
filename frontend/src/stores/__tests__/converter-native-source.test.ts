@@ -531,8 +531,6 @@ describe("native bundle converter flow", () => {
         },
       ],
       target_width_mm: 90,
-      auto_bg: true,
-      bg_tol: 20,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       quantize_colors: 48,
       enable_cleanup: true,
@@ -697,8 +695,6 @@ describe("native bundle converter flow", () => {
       source_version: "native",
       lut_name: "",
       target_width_mm: 90,
-      auto_bg: true,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       color_layers: 5,
@@ -734,7 +730,6 @@ describe("native bundle converter flow", () => {
       model_threshold: 6.5,
       model_margin: 0.9,
       target_width_mm: 90,
-      auto_bg: true,
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
@@ -756,8 +751,6 @@ describe("native bundle converter flow", () => {
       source_version: "native",
       lut_name: "",
       target_width_mm: 90,
-      auto_bg: true,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       color_layers: 5,
@@ -800,8 +793,6 @@ describe("native bundle converter flow", () => {
       source_version: "native",
       lut_name: "",
       target_width_mm: 90,
-      auto_bg: false,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       quantize_colors: 48,
@@ -849,7 +840,6 @@ describe("native bundle converter flow", () => {
       model_enable: true,
       model_only: false,
       target_width_mm: 90,
-      auto_bg: false,
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(result).toBe("/api/files/native-model.glb");
@@ -873,8 +863,6 @@ describe("native bundle converter flow", () => {
       lut_name: "legacy-lut",
       target_width_mm: 90,
       target_height_mm: 60,
-      auto_bg: false,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       quantize_colors: 48,
@@ -945,8 +933,6 @@ describe("native bundle converter flow", () => {
       source_version: "legacy",
       lut_name: "legacy-lut",
       target_width_mm: 90,
-      auto_bg: false,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       quantize_colors: 48,
@@ -1083,8 +1069,6 @@ describe("native bundle converter flow", () => {
       source_version: "legacy",
       lut_name: "legacy-lut",
       target_width_mm: 90,
-      auto_bg: true,
-      bg_tol: 20,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       color_layers: null,

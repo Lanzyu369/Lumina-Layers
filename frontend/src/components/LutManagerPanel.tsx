@@ -7,7 +7,6 @@ import Button from "./ui/Button";
 import { motion } from "framer-motion";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
-  PanelIntro,
   StatusBanner,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
@@ -145,16 +144,10 @@ export default function LutManagerPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="lut-manager-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
       >
-      <PanelIntro
-        eyebrow={t("tab.lutManager")}
-        title={t("lut_manager_title")}
-        description={t("lut_manager_desc")}
-      />
-
       <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
           <div className={desktopPrimaryColumnClass}>
            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`} data-testid="primary-dropdown">
@@ -191,6 +184,7 @@ export default function LutManagerPanel() {
            <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
             <Slider
               label={t("lut_manager_dedup_label")}
+              tooltip={t("lut_manager_dedup_hint")}
               value={dedupThreshold}
               min={0}
               max={20}
@@ -198,9 +192,6 @@ export default function LutManagerPanel() {
               onChange={setDedupThreshold}
               disabled={allDisabled}
             />
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {t("lut_manager_dedup_hint")}
-            </p>
           </section>
 
           <Button

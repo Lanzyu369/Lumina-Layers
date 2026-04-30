@@ -7,7 +7,6 @@ import {
   ExtractorColorMode,
   ExtractorPage,
   CalibrationColorMode,
-  BackingColor,
 } from "../api/types";
 
 // ========== Mock browser APIs ==========
@@ -117,8 +116,6 @@ function snapshotConverterState() {
     structure_mode: s.structure_mode,
     color_mode: s.color_mode,
     modeling_mode: s.modeling_mode,
-    auto_bg: s.auto_bg,
-    bg_tol: s.bg_tol,
     quantize_colors: s.quantize_colors,
     enable_cleanup: s.enable_cleanup,
     separate_backing: s.separate_backing,
@@ -149,7 +146,7 @@ function snapshotCalibrationState() {
     color_mode: s.color_mode,
     block_size: s.block_size,
     gap: s.gap,
-    backing: s.backing,
+    backing_thickness: s.backing_thickness,
     isLoading: s.isLoading,
     error: s.error,
     downloadUrl: s.downloadUrl,
@@ -642,7 +639,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         noNaN: true,
         noDefaultInfinity: true,
       }),
-      auto_bg: fc.boolean(),
       enable_cleanup: fc.boolean(),
       enable_outline: fc.boolean(),
     });
@@ -654,7 +650,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         const convStore = useConverterStore.getState();
         convStore.setLutName(mutation.lut_name);
         convStore.setTargetWidthMm(mutation.target_width_mm);
-        convStore.setAutoBg(mutation.auto_bg);
         convStore.setEnableCleanup(mutation.enable_cleanup);
         convStore.setEnableOutline(mutation.enable_outline);
 
@@ -665,7 +660,6 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           lut_name: "",
           target_width_mm: 60,
           target_height_mm: 60,
-          auto_bg: false,
           enable_cleanup: true,
           enable_outline: false,
         });
@@ -696,12 +690,12 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         noNaN: true,
         noDefaultInfinity: true,
       }),
-      backing: fc.constantFrom(
-        BackingColor.WHITE,
-        BackingColor.CYAN,
-        BackingColor.MAGENTA,
-        BackingColor.YELLOW,
-      ),
+      backing_thickness: fc.double({
+        min: -5,
+        max: 10,
+        noNaN: true,
+        noDefaultInfinity: true,
+      }),
     });
 
     fc.assert(
@@ -712,7 +706,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
         calStore.setColorMode(mutation.color_mode);
         calStore.setBlockSize(mutation.block_size);
         calStore.setGap(mutation.gap);
-        calStore.setBacking(mutation.backing);
+        calStore.setBackingThickness(mutation.backing_thickness);
 
         const after = snapshotExtractorState();
 
@@ -721,7 +715,7 @@ describe("Feature: extractor-calibration-tab, Property 9: Store 三向隔离", (
           color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
           block_size: 5,
           gap: 0.84,
-          backing: BackingColor.WHITE,
+          backing_thickness: 1.6,
           eight_color_full_export: false,
           singleStageLayerHeightMm: 0.08,
         });

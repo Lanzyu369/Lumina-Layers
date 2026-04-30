@@ -10,13 +10,13 @@ export default function AboutView() {
   return (
     <aside
       data-testid="about-panel"
-      className="flex h-full w-full max-w-full flex-col gap-4 overflow-y-auto rounded-[28px] bg-gray-800 p-4 lg:basis-[clamp(18rem,24vw,26rem)] lg:max-w-[26rem]"
+      className="flex h-full w-full max-w-full flex-col gap-4 overflow-y-auto rounded-[28px] bg-slate-800 p-4 lg:basis-[clamp(18rem,24vw,26rem)] lg:max-w-[26rem]"
     >
       <div>
-        <h2 className="text-lg font-semibold text-gray-100">
+        <h2 className="text-lg font-semibold text-slate-100">
           {t("about_title")}
         </h2>
-        <p className="text-xs text-gray-400 mt-1">{t("about_desc")}</p>
+        <p className="text-xs text-slate-400 mt-1">{t("about_desc")}</p>
       </div>
 
       <Button

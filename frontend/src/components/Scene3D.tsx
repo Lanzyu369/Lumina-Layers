@@ -10,6 +10,7 @@ import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useWidgetStore } from "../stores/widgetStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -21,6 +22,7 @@ import {
   getThreePerfDebugConfig,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { ActivityIcon, MaximizeIcon, MinimizeIcon, CameraIcon } from "./ui/icons";
 
 declare global {
   interface Window {
@@ -171,6 +173,26 @@ function ThemeUpdater() {
   useEffect(() => {
     gl.setClearColor(themeColors.canvasClearColor);
   }, [gl, themeColors.canvasClearColor]);
+  return null;
+}
+
+function CanvasInteractionBridge() {
+  const { controls } = useThree();
+  useEffect(() => {
+    if (!controls) return;
+
+    const onStart = () => useWidgetStore.getState().setCanvasInteracting(true);
+    const onEnd = () => useWidgetStore.getState().setCanvasInteracting(false);
+
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+
+    return () => {
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
+      useWidgetStore.getState().setCanvasInteracting(false);
+    };
+  }, [controls]);
   return null;
 }
 
@@ -336,59 +358,100 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       className="relative w-full h-full"
       data-testid="scene3d-container"
     >
-      {/* Toolbar buttons */}
-      <div className="absolute top-2 right-2 z-10 flex gap-1">
+      {/* Floating action buttons — bottom-right with right-dock avoidance.
+       * 浮动按钮组：右下角悬浮，依赖 WidgetWorkspace 注入的
+       * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
+       */}
+      <div
+        className="absolute z-10 flex gap-1.5"
+        style={{
+          bottom: "12px",
+          right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
+        }}
+      >
         <button
           onClick={toggleDiagnostics}
-          className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
+          aria-pressed={diagnosticsVisible}
           aria-label={t("viewer_diagnostics_toggle")}
           title={t("viewer_diagnostics_toggle")}
           data-testid="scene3d-diagnostics-toggle"
+          className={
+            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
+            (diagnosticsVisible
+              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
+              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
+          }
         >
-          {t("viewer_diagnostics_toggle")}
+          <ActivityIcon className="h-4 w-4" />
         </button>
         {fullscreenSupported && (
           <button
             onClick={toggleFullscreen}
-            className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
             aria-label={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
             title={isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
           >
-            {isFullscreen ? "⛶" : "⛶"} {isFullscreen ? t("viewer_exit_fullscreen") : t("viewer_fullscreen")}
+            {isFullscreen ? <MinimizeIcon className="h-4 w-4" /> : <MaximizeIcon className="h-4 w-4" />}
           </button>
         )}
         <button
           onClick={takeScreenshot}
-          className="rounded px-2 py-1 text-xs font-medium bg-slate-100/85 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-600 backdrop-blur-sm"
           aria-label={t("viewer_screenshot")}
           title={t("viewer_screenshot")}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-slate-100/85 text-slate-600 backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors hover:bg-slate-200/90 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80"
         >
-          {t("viewer_screenshot")}
+          <CameraIcon className="h-4 w-4" />
         </button>
       </div>
 
       {diagnosticsVisible && (
         <div
-          className="absolute left-2 top-2 z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
+          role="dialog"
+          aria-label={t("viewer_diagnostics_title")}
+          className="absolute z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
           style={{
+            bottom: "56px",
+            right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
             borderColor: "var(--surface-outline)",
             background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
             color: "var(--surface-text-muted)",
           }}
           data-testid="scene3d-diagnostics-panel"
         >
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2">
             <span className="text-xs font-semibold text-slate-900 dark:text-slate-50">
               {t("viewer_diagnostics_title")}
             </span>
-            <span>{diagnostics?.renderer.frame ?? "—"}</span>
           </div>
           <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <span>{t("viewer_diagnostics_source")}</span>
             <span className="truncate text-right">{diagnosticsSourceLabel}</span>
             <span>{t("viewer_diagnostics_fps")}</span>
+            <span className="text-right flex items-center justify-end gap-1.5">
+              {diagnostics?.fps != null ? (
+                <>
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0"
+                    style={{
+                      backgroundColor:
+                        diagnostics.fps >= 50
+                          ? "#22c55e"
+                          : diagnostics.fps >= 30
+                            ? "#eab308"
+                            : "#ef4444",
+                    }}
+                  />
+                  {diagnostics.fps.toFixed(1)}
+                </>
+              ) : (
+                "—"
+              )}
+            </span>
+            <span>{t("viewer_diagnostics_frame_time")}</span>
             <span className="text-right">
-              {diagnostics?.fps != null ? diagnostics.fps.toFixed(1) : "—"}
+              {diagnostics?.fps != null && diagnostics.fps > 0
+                ? `${(1000 / diagnostics.fps).toFixed(1)} ms`
+                : "—"}
             </span>
             <span>{t("viewer_diagnostics_js_heap")}</span>
             <span className="text-right">
@@ -396,16 +459,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                 ? `${diagnostics.heap.used_js_heap_mb} / ${diagnostics.heap.total_js_heap_mb} MB`
                 : t("viewer_diagnostics_js_heap_unavailable")}
             </span>
-            <span>{t("viewer_diagnostics_geometries")}</span>
-            <span className="text-right">{diagnostics?.renderer.geometries ?? "—"}</span>
-            <span>{t("viewer_diagnostics_textures")}</span>
-            <span className="text-right">{diagnostics?.renderer.textures ?? "—"}</span>
-            <span>{t("viewer_diagnostics_programs")}</span>
-            <span className="text-right">{diagnostics?.renderer.programs ?? "—"}</span>
-            <span>{t("viewer_diagnostics_draw_calls")}</span>
-            <span className="text-right">{diagnostics?.renderer.calls ?? "—"}</span>
             <span>{t("viewer_diagnostics_triangles")}</span>
             <span className="text-right">{diagnostics?.renderer.triangles ?? "—"}</span>
+            <span>{t("viewer_diagnostics_draw_calls")}</span>
+            <span className="text-right">{diagnostics?.renderer.calls ?? "—"}</span>
+            <span>{t("viewer_diagnostics_textures")}</span>
+            <span className="text-right">{diagnostics?.renderer.textures ?? "—"}</span>
             <span>{t("viewer_diagnostics_canvas")}</span>
             <span className="text-right">
               {diagnostics?.renderer
@@ -470,6 +529,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         />
         <CameraDebugHelper />
         <ThemeUpdater />
+        <CanvasInteractionBridge />
         <Suspense fallback={null}>
           <Environment
             files={LIGHTING_CONFIG.environment.hdrFile}
@@ -556,7 +616,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
                 </div>
               </div>
               {enableWittyLoading && (
-                <div className="rounded-full border border-white/10 bg-gray-900/92 px-4 py-2">
+                <div className="rounded-full border border-white/10 bg-slate-900/92 px-4 py-2">
                   <p className="whitespace-nowrap text-sm font-medium tracking-wide text-white">
                     {wittyMsg}
                   </p>

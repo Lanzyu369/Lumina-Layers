@@ -66,7 +66,7 @@ class PrinterConfig:
     LAYER_HEIGHT: float = 0.08
     NOZZLE_WIDTH: float = 0.42
     COLOR_LAYERS: int = 5
-    BACKING_MM: float = 1.6
+    BACKING_MM: float = 1.2
     SHRINK_OFFSET: float = 0.02
 
 

@@ -22,9 +22,9 @@ import type {
   DragEndEvent,
 } from '@dnd-kit/core';
 import { AnimatePresence } from 'framer-motion';
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP } from '../../stores/widgetStore';
+import { useWidgetStore, WIDGET_REGISTRY, CONVERTER_SUB_TAB_WIDGET_MAP } from '../../stores/widgetStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { computeSnap, computeStackPositions, computeDockBottomInset, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
+import { computeSnap, computeStackPositions, resolveResponsiveWidgetWidth, resolveWidgetHeight, WIDGET_WIDTH, COLLAPSED_HEIGHT, STACK_GAP, WIDGET_PANEL_RADIUS } from '../../utils/widgetUtils';
 import { WidgetPanel } from './WidgetPanel';
 import { SnapGuides } from './SnapGuides';
 import BasicSettingsWidgetContent from './BasicSettingsWidgetContent';
@@ -41,7 +41,6 @@ import CalibrationWidgetContent from './CalibrationWidgetContent';
 import ExtractorWidgetContent from './ExtractorWidgetContent';
 import LutManagerWidgetContent from './LutManagerWidgetContent';
 import FiveColorWidgetContent from './FiveColorWidgetContent';
-import ColorWorkstation from './ColorWorkstation';
 import Color2DOverlay from './Color2DOverlay';
 import { useConverterDataInit } from '../../hooks/useConverterDataInit';
 import { useWorkspaceMode } from '../../hooks/useWorkspaceMode';
@@ -92,12 +91,19 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const isDragging = useWidgetStore((s) => s.isDragging);
   const activeWidgetId = useWidgetStore((s) => s.activeWidgetId);
   const activeTab = useWidgetStore((s) => s.activeTab);
-  const colorWorkstationCollapsed = useWidgetStore((s) => s.colorWorkstationCollapsed);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const color2DOverlayOpen = useWidgetStore((s) => s.color2DOverlayOpen);
 
   // Always render converter widgets only; other tabs have their own
   // page-level rendering and do not use the widget dock system.
-  const converterWidgetIds = TAB_WIDGET_MAP['converter'];
+  // The Converter sub-tab (核心 / 高级) further narrows the visible widget set;
+  // hidden widgets keep their persisted state but do not occupy dock space.
+  // Converter 二级 sub-tab（核心 / 高级）进一步收窄可见 widget 集合；
+  // 被收起的 widget 保留持久化状态但不占用 dock 空间。
+  const converterWidgetIds = useMemo(
+    () => CONVERTER_SUB_TAB_WIDGET_MAP[activeConverterSubTab] as readonly WidgetId[],
+    [activeConverterSubTab],
+  );
   const activeWidgetIds = converterWidgetIds;
   const activeRegistry = WIDGET_REGISTRY.filter((c) => converterWidgetIds.includes(c.id));
   const activeWidgets = useWidgetStore(
@@ -110,14 +116,12 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const leftDockRef = useRef<HTMLDivElement>(null);
   const rightDockRef = useRef<HTMLDivElement>(null);
-  const colorWorkstationRef = useRef<HTMLDivElement>(null);
   const measuredHeightsRef = useRef(new Map<WidgetId, number>());
   const dragPositionRef = useRef<{ x: number; y: number } | null>(null);
   const dragSourceRef = useRef<{ edge: 'left' | 'right'; scrollTop: number } | null>(null);
   const insertPreviewRef = useRef<InsertPreviewState | null>(null);
   const isDraggingRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
-  const [dockBottomInsets, setDockBottomInsets] = useState({ left: 0, right: 0 });
   const activeWidgetMap = useMemo(() => {
     const map = new Map(activeWidgets.map((widget) => [widget.id, widget]));
     return map;
@@ -142,8 +146,13 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       return;
     }
 
-    const nextHeights = new Map<WidgetId, number>();
-    for (const id of TAB_WIDGET_MAP['converter']) {
+    // Only measure widgets currently in the DOM. Hidden widgets (e.g. those
+    // outside the active converter sub-tab) are skipped because their nodes
+    // simply do not exist; previously cached heights remain valid for them.
+    // 仅测量当前 DOM 中的 widget；sub-tab 隐藏的 widget 节点不存在，
+    // 沨用之前缓存的高度即可。
+    const nextHeights = new Map(measuredHeightsRef.current);
+    for (const id of converterWidgetIds) {
       const el = container.querySelector(`[data-widget-id="${id}"]`) as HTMLElement | null;
       if (el) {
         nextHeights.set(id, el.offsetHeight);
@@ -151,7 +160,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     }
 
     measuredHeightsRef.current = nextHeights;
-  }, []);
+  }, [converterWidgetIds]);
 
   // Responsive resize handler — clamp free widgets & recalculate stacks
   // Only processes widgets belonging to the current active tab to prevent
@@ -163,7 +172,12 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
 
     const { width } = container.getBoundingClientRect();
     const state = useWidgetStore.getState();
-    const currentTabIds = TAB_WIDGET_MAP['converter'];
+    // Only stack widgets that are actually rendered in the current sub-tab.
+    // Using the full converter set would let hidden widgets push visible ones
+    // off-screen via accumulated stackOrder offsets after a layout reset.
+    // 仅在当前 sub-tab 可见集合上计算 stack；否则重置后隐藏 widget 的
+    // stackOrder 会把可见 widget 顶到画面外。
+    const currentTabIds = converterWidgetIds;
     const tabWidgets = currentTabIds.map((id) => state.widgets[id]);
 
     // Force any free-floating widgets in current tab to snap to left edge
@@ -176,8 +190,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     // Measure actual DOM heights for expanded widgets
     const measuredHeights = measuredHeightsRef.current;
 
-    // Recalculate stack positions for snapped widgets in current tab only
-    // Re-read state after potential snapToEdge calls
+    // Recalculate stack positions for snapped widgets in the active sub-tab.
+    // Re-read state after potential snapToEdge calls.
     const updatedState = useWidgetStore.getState();
     const updatedTabWidgets = currentTabIds.map((id) => updatedState.widgets[id]);
     const batchedPositions: Partial<Record<WidgetId, { x: number; y: number }>> = {};
@@ -191,7 +205,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
       }
     }
     setWidgetPositions(batchedPositions);
-  }, [setWidgetPositions, widgetWidth]);
+  }, [setWidgetPositions, widgetWidth, converterWidgetIds]);
 
   // ResizeObserver to detect widget content height changes (e.g. checkbox
   // toggling extra options) and recalculate stack positions automatically.
@@ -251,9 +265,15 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   }, [recalculateStacks]);
 
   // Recalculate stack positions when any widget's collapsed state or
-  // expandedHeight changes. This prevents widgets from overlapping after
-  // expand/collapse or when content dynamically changes height.
-  // Uses a targeted selector to avoid subscribing to the entire widgets object.
+  // expandedHeight changes. Uses a one-frame debounce (16ms) so that
+  // sibling position shifts start in near-sync with the expand/collapse
+  // animation while still coalescing rapid layout changes.
+  // resolveWidgetHeight returns the cached expandedHeight (not the
+  // mid-animation DOM height) so the first recalculation is correct.
+  // 当任何 Widget 的 collapsed 状态或 expandedHeight 变化时重算堆叠位置。
+  // 使用一帧防抖（16ms），使同级组件位置避让与展开/折叠动画近同步开始，
+  // 同时合并快速布局变化。resolveWidgetHeight 返回缓存的 expandedHeight
+  // （而非动画中间态的 DOM 高度），确保首次重算位置正确。
   const layoutKey = useWidgetStore(
     useCallback(
       (s: { widgets: Record<WidgetId, { collapsed: boolean; expandedHeight: number }> }) =>
@@ -265,7 +285,8 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   );
 
   useEffect(() => {
-    recalculateStacks();
+    const timer = setTimeout(() => recalculateStacks(), 16);
+    return () => clearTimeout(timer);
   }, [layoutKey, activeTab, recalculateStacks]);
 
   // Auto-detect backdrop-filter support and disable blur if unsupported
@@ -287,53 +308,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
     return () => window.removeEventListener('resize', updateWidth);
   }, []);
 
-  // Only recompute dock avoidance on viewport or workstation size changes.
-  // This keeps the runtime cost low while still responding to real overlap.
-  useEffect(() => {
-    let frameId = 0;
-
-    const updateDockInsets = () => {
-      const workstationRect = colorWorkstationRef.current?.getBoundingClientRect();
-      const leftDockRect = leftDockRef.current?.getBoundingClientRect();
-      const rightDockRect = rightDockRef.current?.getBoundingClientRect();
-
-      const nextInsets = {
-        left: workstationRect && leftDockRect ? computeDockBottomInset(leftDockRect, workstationRect) : 0,
-        right: workstationRect && rightDockRect ? computeDockBottomInset(rightDockRect, workstationRect) : 0,
-      };
-
-      setDockBottomInsets((prev) =>
-        prev.left === nextInsets.left && prev.right === nextInsets.right ? prev : nextInsets
-      );
-    };
-
-    const scheduleDockInsetUpdate = () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(updateDockInsets);
-    };
-
-    scheduleDockInsetUpdate();
-    window.addEventListener('resize', scheduleDockInsetUpdate);
-    window.addEventListener('widget-animation-complete', scheduleDockInsetUpdate);
-    window.addEventListener('color-workstation-geometry-change', scheduleDockInsetUpdate);
-
-    const observer = new ResizeObserver(scheduleDockInsetUpdate);
-    if (containerRef.current) observer.observe(containerRef.current);
-    if (colorWorkstationRef.current) observer.observe(colorWorkstationRef.current);
-
-    return () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      window.removeEventListener('resize', scheduleDockInsetUpdate);
-      window.removeEventListener('widget-animation-complete', scheduleDockInsetUpdate);
-      window.removeEventListener('color-workstation-geometry-change', scheduleDockInsetUpdate);
-      observer.disconnect();
-    };
-  }, [activeTab, colorWorkstationCollapsed]);
-
   const leftRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge !== 'right');
   const rightRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge === 'right');
 
@@ -351,6 +325,16 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const leftStackHeight = stackHeight('left');
   const rightStackHeight = stackHeight('right');
   const rightDockOffset = Math.max(0, (containerWidth || window.innerWidth) - widgetWidth);
+
+  // Whether the right dock currently hosts at least one visible widget.
+  // Consumers (e.g. floating action buttons over the 3D scene) read this
+  // through the `--lumina-right-dock-width` CSS variable below to avoid being
+  // hidden behind dock widgets.
+  // 当前右侧坞是否承载可见 widget，用于让浮动按钮通过 CSS 变量避让。
+  const hasVisibleRightWidget = activeWidgets.some(
+    (w) => w.visible && w.snapEdge === 'right',
+  );
+  const rightDockWidthVar = hasVisibleRightWidget ? `${dockScrollWidth}px` : '0px';
 
   const getDockScrollTop = useCallback((edge: 'left' | 'right') => {
     return edge === 'left'
@@ -377,7 +361,9 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const computeInsertion = useCallback(
     (draggedId: WidgetId, targetEdge: 'left' | 'right', contentDropY: number) => {
       const state = useWidgetStore.getState();
-      const currentTabIds = TAB_WIDGET_MAP['converter'];
+      // Only siblings currently visible in the active sub-tab participate in
+      // insertion ordering; widgets hidden by sub-tab are inert.
+      const currentTabIds = converterWidgetIds;
       const siblings = currentTabIds
         .map((wid) => state.widgets[wid])
         .filter((w) => w.snapEdge === targetEdge && w.visible && w.id !== draggedId)
@@ -417,7 +403,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
 
       return { orderedIds, lineY, upperId, lowerId };
     },
-    []
+    [converterWidgetIds]
   );
 
   const handleDragStart = useCallback(
@@ -548,7 +534,10 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
         <div
           ref={containerRef}
           className="relative w-full h-full overflow-hidden"
-          style={{ pointerEvents: isDragging ? 'all' : undefined }}
+          style={{
+            pointerEvents: isDragging ? 'all' : undefined,
+            ['--lumina-right-dock-width' as string]: rightDockWidthVar,
+          }}
         >
           {/* Center Canvas (Three.js / Extractor) — z-10 */}
           <div className="absolute inset-0 z-10 flex flex-col" style={{ pointerEvents: 'auto' }}>
@@ -578,7 +567,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             data-testid="left-dock"
             style={{
               width: dockScrollWidth,
-              bottom: dockBottomInsets.left,
               pointerEvents: 'none',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
@@ -610,7 +598,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
             data-testid="right-dock"
             style={{
               width: dockScrollWidth,
-              bottom: dockBottomInsets.right,
               pointerEvents: 'none',
               overflowX: 'hidden',
               overscrollBehaviorX: 'none',
@@ -649,13 +636,6 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           </DragOverlay>
         </div>
       </DndContext>
-      {/* ColorWorkstation — fixed bottom center, outside DnD system (z-35) */}
-      <ColorWorkstation
-        ref={colorWorkstationRef}
-        workspaceWidth={containerWidth}
-        dockWidth={dockScrollWidth}
-        mode={workspace.mode}
-      />
     </>
   );
 }

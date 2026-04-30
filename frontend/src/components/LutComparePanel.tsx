@@ -7,7 +7,6 @@ import type { CompareResponse } from "../api/types";
 import Dropdown from "./ui/Dropdown";
 import Button from "./ui/Button";
 import {
-  PanelIntro,
   StatusBanner,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
@@ -263,16 +262,10 @@ export default function LutComparePanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="lut-compare-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        eyebrow={t("tab.lutCompare")}
-        title={t("lut_compare_title")}
-        description={t("lut_compare_desc")}
-      />
-
       <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
         <div className={desktopPrimaryColumnClass}>
           <section

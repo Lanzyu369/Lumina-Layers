@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Dropdown from "./ui/Dropdown";
-import { PanelIntro, StatusBanner, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, resolveSectionCardClass, mutedSectionCardClass } from "./ui/panelPrimitives";
+import { StatusBanner, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, resolveSectionCardClass, mutedSectionCardClass } from "./ui/panelPrimitives";
 import { useLutDetailsStore, filterLutDetailsCatalog } from "../stores/lutDetailsStore";
 import {
   LutScatterChart,
@@ -1004,16 +1004,10 @@ export default function LutDetailsPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="lut-details-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        eyebrow={t("tab.lutDetails")}
-        title={t("lut_details_title")}
-        description={t("lut_details_desc")}
-      />
-
       <div data-testid="lut-details-layout" className={resolveDesktopSplitLayoutClass(workspace.mode)}>
         <div data-testid="lut-details-primary-column" className={desktopPrimaryColumnClass}>
           <section data-testid="lut-details-selection-card" className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>

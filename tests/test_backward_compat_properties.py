@@ -131,8 +131,6 @@ class TestProperty5ConvertImageTo3dSignature:
             "target_width_mm",
             "spacer_thick",
             "structure_mode",
-            "auto_bg",
-            "bg_tol",
             "color_mode",
             "add_loop",
             "loop_width",
@@ -238,8 +236,6 @@ class TestProperty6GeneratePreviewCachedSignature:
             "image_path",
             "lut_path",
             "target_width_mm",
-            "auto_bg",
-            "bg_tol",
             "color_mode",
         ]
         for param in required_params:

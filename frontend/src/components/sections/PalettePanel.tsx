@@ -103,7 +103,7 @@ function PaletteItem({
     ? "border-2 border-dashed border-red-400"
     : isRemapped
       ? "border border-yellow-500"
-      : "border border-gray-600";
+      : "border border-slate-600";
 
   // Compact block mode (no height slider)
   if (!showHeightSlider) {

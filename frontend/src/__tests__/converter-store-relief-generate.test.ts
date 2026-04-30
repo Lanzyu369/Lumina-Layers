@@ -87,8 +87,6 @@ function baseReadyState() {
     lut_name: "legacy-lut",
     target_width_mm: 90,
     target_height_mm: 72,
-    auto_bg: false,
-    bg_tol: 40,
     color_mode: ColorMode.FOUR_COLOR_RYBW,
     modeling_mode: ModelingMode.HIGH_FIDELITY,
     color_layers: 5,

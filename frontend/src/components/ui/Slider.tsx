@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { cx } from "./panelPrimitives";
+import HelpDot from "./HelpDot";
 
 interface SliderProps {
   label: string;
   value: number;
   min: number;
+  /** Optional data-testid forwarded to the underlying range input. */
+  /** 可选的 data-testid，转发给底层 range 输入。 */
+  "data-testid"?: string;
   max: number;
   step: number;
   onChange: (value: number) => void;
@@ -15,7 +19,8 @@ interface SliderProps {
   minInputWidthCh?: number;
 }
 
-export default function Slider({
+export default function Slider(props: SliderProps) {
+  const {
   label,
   value,
   min,
@@ -27,7 +32,8 @@ export default function Slider({
   tooltip,
   displayDecimals,
   minInputWidthCh,
-}: SliderProps) {
+  } = props;
+  const testId = props["data-testid"];
   // 输入框的本地文本状态，编辑时不立即同步外部 value
   const [inputText, setInputText] = useState(() => formatValue(value, step, displayDecimals));
   const [isFocused, setIsFocused] = useState(false);
@@ -114,8 +120,9 @@ export default function Slider({
   return (
     <div className="flex flex-col gap-1.5">
       {label && (
-        <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span title={tooltip}>{label}</span>
+        <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+          <span>{label}</span>
+          {tooltip && <HelpDot title={label} description={tooltip} />}
         </label>
       )}
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">
@@ -127,6 +134,7 @@ export default function Slider({
           value={value}
           disabled={disabled}
           aria-label={label}
+          data-testid={testId}
           onChange={(e) => onChange(clampAndRound(Number(e.target.value)))}
           className={cx(
             "slider-track min-w-0 flex-1 appearance-none cursor-pointer rounded-full accent-blue-500 transition-all duration-200",

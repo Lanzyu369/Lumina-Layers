@@ -53,3 +53,21 @@ Legacy BasicSettings will read the two-level selector data from `GET /lut/detail
 `/lut/catalog` remains the existing legacy/native source catalog for `lutList`, native brands, and upload refresh compatibility.
 `converterStore.fetchLegacyCatalog()` owns the new BasicSettings catalog request and cache; it must not call `useLutDetailsStore.fetchCatalog()` because the LUT details tab is lazy-mounted and BasicSettings must work independently.
 The store may reuse the shared `api/lut.ts` apiClient wrapper and the canonical `LutDetailsCatalogGroup` / `LutDetailsCatalogItem` types from `frontend/src/api/types.ts`.
+
+## Calibration Board Backing UX (2026-04-26)
+Goal: simplify the Generate Calibration Board panel — the backing color picker is replaced with a hard-coded White backing, and a new "Backing Thickness" slider is exposed alongside Block Size and Gap.
+
+Decisions:
+- API: drop `backing` from `CalibrationGenerateRequest`; add `backing_thickness: float` (default 1.6 mm, range 0.4–3.5 mm). Router always passes `backing_color="White"` to core.
+- Core: every `generate_*_calibration_board` / `generate_*_batch_zip` accepts an optional `backing_thickness_mm` (defaults to `PrinterConfig.BACKING_MM`) and uses it for the spacer layer count and 8-color recipe metadata. Backward compatible: omitting the kwarg keeps current behavior.
+- Slider step is `PrinterConfig.LAYER_HEIGHT = 0.08 mm` so each tick adds one print layer; this matches existing converter validation (`MAX_BACKING_THICKNESS_MM = 3.5`).
+- Frontend: `BackingColor` enum stays for backward compatibility but is no longer surfaced in `CalibrationPanel`; store loses `backing` / `setBacking`, gains `backing_thickness` / `setBackingThickness` (clamped 0.4–3.5).
+- Tests: update `tests/test_calibration_routing_properties.py`, `tests/test_calibration_integration_unit.py`, `tests/test_calibration_properties.py`, and the matching frontend property/unit tests so they no longer assert `backing` and now exercise the thickness slider plumbing.
+
+Status (2026-04-26):
+- Backend: `python -m pytest tests/test_calibration_routing_properties.py tests/test_calibration_integration_unit.py tests/test_calibration_properties.py tests/test_api_routers_unit.py tests/test_api_schemas_properties.py` -> 38 passed, 1 skipped (unrelated stub).
+- Backend smoke `python scripts/run_smoke_tests.py` Python phase: 80 passed.
+- Frontend: `npx tsc --noEmit` clean; `npx vitest run src/__tests__/calibration-store.property.test.ts src/__tests__/calibration-panel.test.tsx src/__tests__/CalibrationPanel.property.test.tsx src/__tests__/extractor-store.property.test.ts` -> 45 passed.
+- Pre-existing failure unrelated to this work: `src/__tests__/theme.property.test.ts` `Property 3: 主题持久化 Round-Trip > storage.setItem is not a function` reproduces on the clean tree (verified via temporary `git stash`).
+- Added regression coverage: `tests/test_calibration_properties.py::test_resolve_backing_layers_scales_linearly_with_thickness` and `::test_resolve_backing_layers_falls_back_to_printer_config_when_none` to lock in the new helper semantics.
+- Docs: refreshed `docs/api_mapping_blueprint.md` to document the new `backing_thickness` field on `CalibrationGenerateRequest`.

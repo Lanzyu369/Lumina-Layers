@@ -22,8 +22,6 @@ describe("recipe/exportRecipe", () => {
         modeling_mode: "high-fidelity" as ConverterState["modeling_mode"],
         target_width_mm: 100,
         target_height_mm: 75,
-        auto_bg: true,
-        bg_tol: 25,
         quantize_colors: 64,
         enable_cleanup: true,
         hue_enable: true,

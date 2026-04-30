@@ -513,8 +513,6 @@ class TestSvgLargeFormatWarnings:
                     vendor=None,
                     db_names=None,
                     target_width_mm=60.0,
-                    auto_bg=False,
-                    bg_tol=40,
                     color_mode="4-Color",
                     modeling_mode="high-fidelity",
                     color_layers=None,

@@ -17,6 +17,7 @@ import type {
   WidgetStore,
   WidgetConfig,
   TabId,
+  ConverterSubTabId,
 } from "../types/widget";
 
 // ===== TAB → Widget 映射 =====
@@ -45,6 +46,27 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   "five-color": ["five-color"],
   vectorizer: [],
   settings: [],
+};
+
+// ===== Converter sub-tab → Widget 映射 =====
+// 核心设置：只有基础设置、操作栏、高级设置 3 个面板，专注于 3MF 生成所需的主要参数。
+// 颜色调整：dock 中不显示任何 widget；改由 Color2DOverlay 全屏接管。
+// 高级功能：可访问全部 10 个 widget，承载所有进阶可选功能。
+export const CONVERTER_SUB_TAB_WIDGET_MAP: Record<ConverterSubTabId, readonly WidgetId[]> = {
+  core: ["basic-settings", "action-bar", "advanced-settings"],
+  color: [],
+  advanced: [
+    "basic-settings",
+    "advanced-settings",
+    "relief-settings",
+    "outline-settings",
+    "cloisonne-settings",
+    "coating-settings",
+    "keychain-loop",
+    "fridge-magnet-settings",
+    "puzzle-settings",
+    "action-bar",
+  ],
 };
 
 // ===== 默认布局 =====
@@ -296,8 +318,9 @@ export const useWidgetStore = create<WidgetStore>()(
       isDragging: false,
       activeWidgetId: null,
       activeTab: "converter" as TabId,
-      colorWorkstationCollapsed: true,
+      activeConverterSubTab: "core" as ConverterSubTabId,
       color2DOverlayOpen: false,
+      canvasInteracting: false,
 
       /**
        * Set the active TAB page.
@@ -305,6 +328,23 @@ export const useWidgetStore = create<WidgetStore>()(
        */
       setActiveTab: (tab: TabId) => {
         set({ activeTab: tab });
+      },
+
+      /**
+       * Set the active Converter sub-tab.
+       * Switching to 'color' opens the Color2DOverlay; leaving 'color' closes it.
+       * Sub-tab and overlay state stay in lockstep so the overlay behaves like a
+       * full-bleed page rather than a modal.
+       *
+       * 设置 Converter 页面下的二级 sub-tab。
+       * 切到「颜色调整」即打开 2D 颜色覆盖层；离开「颜色调整」即关闭，
+       * 让覆盖层像普通子页面一样进入/退出，而不是模态弹层。
+       */
+      setActiveConverterSubTab: (subTab: ConverterSubTabId) => {
+        set({
+          activeConverterSubTab: subTab,
+          color2DOverlayOpen: subTab === "color",
+        });
       },
 
       /**
@@ -491,14 +531,39 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       /**
-       * Reset all widgets to default layout.
-       * 重置所有 Widget 到默认布局。
+       * Reset all widgets to default layout, preserving measured expandedHeight.
+       *
+       * `expandedHeight` is a ResizeObserver-derived runtime measurement, not a
+       * user-facing layout setting. If we reset it to the static default
+       * (EXPANDED_HEIGHT = 400) the wrapper instantly clips taller widgets
+       * (e.g. BasicSettings ≈ 650px) and the observer never re-fires until
+       * the user manually toggles collapse — visible as a one-frame "snap and
+       * shrink" right after Reset Layout.
+       *
+       * 重置 widget 布局，但保留已测得的 expandedHeight。
+       * expandedHeight 是 ResizeObserver 在运行时测量得到的派生值，并非
+       * 用户可配置的布局项；如果一并重置成静态默认 400，wrapper 会瞬间
+       * 把基础设置（~650px）等内容裁短，且 observer 不会再触发，必须
+       * 手动收起/展开才能恢复——用户可见的「按下重置就被裁短」即此。
        */
       resetLayout: () => {
-        set({
-          widgets: { ...DEFAULT_LAYOUT },
-          isDragging: false,
-          activeWidgetId: null,
+        set((state) => {
+          const widgets = {} as Record<WidgetId, WidgetLayoutState>;
+          (Object.keys(DEFAULT_LAYOUT) as WidgetId[]).forEach((id) => {
+            const measured = state.widgets[id]?.expandedHeight;
+            widgets[id] = {
+              ...DEFAULT_LAYOUT[id],
+              expandedHeight:
+                typeof measured === "number" && measured > 0
+                  ? measured
+                  : DEFAULT_LAYOUT[id].expandedHeight,
+            };
+          });
+          return {
+            widgets,
+            isDragging: false,
+            activeWidgetId: null,
+          };
         });
       },
 
@@ -548,34 +613,38 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       /**
-       * Toggle ColorWorkstation collapsed state.
-       * 切换 ColorWorkstation 展开/收起状态。
+       * Open the 2D color overlay and switch the converter sub-tab to 'color'.
+       * 打开 2D 颜色覆盖层，并把 converter 二级 sub-tab 切到「颜色调整」。
        */
-      toggleColorWorkstation: () => {
+      openColor2DOverlay: () => {
+        set({ color2DOverlayOpen: true, activeConverterSubTab: "color" });
+      },
+
+      /**
+       * Close the 2D color overlay. If the converter is currently sitting on
+       * the 'color' sub-tab, fall back to 'core' so the user lands on a real
+       * settings page rather than an empty dock.
+       *
+       * 关闭 2D 颜色覆盖层。如果 converter 当前位于「颜色调整」sub-tab，
+       * 则自动回退到「核心设置」，避免用户看到一个空的工作区。
+       */
+      closeColor2DOverlay: () => {
         set((state) => ({
-          colorWorkstationCollapsed: !state.colorWorkstationCollapsed,
+          color2DOverlayOpen: false,
+          activeConverterSubTab:
+            state.activeConverterSubTab === "color"
+              ? "core"
+              : state.activeConverterSubTab,
         }));
       },
 
-      /**
-       * Open the 2D color overlay.
-       * 打开 2D 颜色覆盖层。
-       */
-      openColor2DOverlay: () => {
-        set({ color2DOverlayOpen: true });
-      },
-
-      /**
-       * Close the 2D color overlay.
-       * 关闭 2D 颜色覆盖层。
-       */
-      closeColor2DOverlay: () => {
-        set({ color2DOverlayOpen: false });
+      setCanvasInteracting: (interacting: boolean) => {
+        set({ canvasInteracting: interacting });
       },
     }),
     {
       name: "lumina-widget-layout",
-      version: 6,
+      version: 7,
       migrate: (persistedState, version) => {
         type PersistedWidgetState = {
           widgets?: Record<WidgetId, WidgetLayoutState>;
@@ -587,7 +656,7 @@ export const useWidgetStore = create<WidgetStore>()(
         if (version < 3) {
           return { widgets: { ...DEFAULT_LAYOUT }, activeTab: "converter" };
         }
-        if (version === 3 || version === 4 || version === 5) {
+        if (version === 3 || version === 4 || version === 5 || version === 6) {
           const state =
             typeof persistedState === "object" && persistedState !== null
               ? (persistedState as PersistedWidgetState)
@@ -630,10 +699,14 @@ export const useWidgetStore = create<WidgetStore>()(
 
           reorderConverterEdge("left");
           reorderConverterEdge("right");
+          // Drop the deprecated `colorWorkstationCollapsed` field if it lingers in
+          // the persisted payload; the entry has moved to a top-level secondary tab.
+          // 颜色入口已迁移至顶部二级 tab，丢弃过时的折叠状态字段。
+          const { colorWorkstationCollapsed: _drop, ...rest } = state;
+          void _drop;
           return {
-            ...state,
+            ...rest,
             widgets,
-            colorWorkstationCollapsed: true,
           };
         }
         return persistedState as WidgetStore;
@@ -641,7 +714,7 @@ export const useWidgetStore = create<WidgetStore>()(
       partialize: (state) => ({
         widgets: state.widgets,
         activeTab: state.activeTab,
-        colorWorkstationCollapsed: state.colorWorkstationCollapsed,
+        activeConverterSubTab: state.activeConverterSubTab,
       }),
       onRehydrateStorage: () => () => {},
     },

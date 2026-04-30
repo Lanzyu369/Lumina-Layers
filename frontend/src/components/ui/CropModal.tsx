@@ -221,17 +221,17 @@ export function CropModal({
         aria-modal="true"
         aria-label={t("crop_modal_title")}
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-slate-50 shadow-2xl outline-none dark:bg-gray-800"
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-slate-50 shadow-2xl outline-none dark:bg-slate-800"
       >
         {/* Title bar */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-          <h2 className="text-base font-semibold text-gray-800 dark:text-gray-100">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+          <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
             {t("crop_modal_title")}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
             aria-label={t("crop_modal_close")}
           >
             <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -261,7 +261,7 @@ export function CropModal({
         </div>
 
         {/* Info bar */}
-        <div className="flex flex-wrap items-center gap-4 border-t border-gray-200 px-4 py-2 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-400">
+        <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 px-4 py-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-400">
           <span>
             {t("crop_modal_original")}: {naturalWidth} × {naturalHeight} {t("common_unit_px")}
           </span>
@@ -284,7 +284,7 @@ export function CropModal({
                 className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                   isActive
                     ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
                 }`}
               >
                 {preset.label === "crop_modal_free" ? t("crop_modal_free") : preset.label}
@@ -304,7 +304,7 @@ export function CropModal({
             ] as const
           ).map((item) => (
             <label key={item.label} className="flex items-center gap-1.5 text-xs">
-              <span className="text-gray-600 dark:text-gray-400">
+              <span className="text-slate-600 dark:text-slate-400">
                 {item.label}
               </span>
               <input
@@ -312,19 +312,19 @@ export function CropModal({
                 min={0}
                 value={item.value}
                 onChange={(e) => syncManualInput(item.field, e.target.value)}
-                className="w-20 rounded border border-gray-300 bg-slate-50 px-2 py-1 text-xs text-gray-800 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                className="w-20 rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs text-slate-800 outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200"
               />
             </label>
           ))}
         </div>
 
         {/* Bottom buttons */}
-        <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
           <button
             type="button"
             onClick={onUseOriginal}
             disabled={isLoading}
-            className="rounded-md bg-gray-600 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md bg-slate-600 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {t("crop_modal_use_original")}
           </button>

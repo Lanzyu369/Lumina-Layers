@@ -19,7 +19,6 @@ import { useWidgetStore } from "../stores/widgetStore";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
 import {
-  PanelIntro,
   StatusBanner,
   mutedSectionCardClass,
   resolvePanelSurfaceClass,
@@ -325,16 +324,10 @@ export default function MaterialLibraryPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="material-library-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        eyebrow={t("tab.materialManagement")}
-        title={t("mat_gradient_library_title")}
-        description={t("mat_gradient_library_desc")}
-      />
-
       <input
         ref={importInputRef}
         type="file"

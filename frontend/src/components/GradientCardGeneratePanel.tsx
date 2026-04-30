@@ -6,7 +6,6 @@ import Button from "./ui/Button";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { MATERIAL_PRESET_OPTIONS } from "../constants/materialPresets";
 import {
-  PanelIntro,
   StatusBanner,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
@@ -44,16 +43,10 @@ export default function GradientCardGeneratePanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="gradient-card-generate-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        eyebrow={t("tab.materialManagement")}
-        title={t("mat_gradient_generate_title")}
-        description={t("mat_gradient_generate_desc")}
-      />
-
       <div className="flex flex-col gap-6 w-full">
         <div className="grid gap-6 lg:grid-cols-2 w-full">
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>

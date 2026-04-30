@@ -1191,9 +1191,8 @@ export interface ConverterState {
   materialLayerHeightMm: number;
 
   // 高级设置
-  auto_bg: boolean;
-  bg_tol: number;
   quantize_colors: number;
+  quantize_colors_unlocked: boolean;
   enable_cleanup: boolean;
   hue_enable: boolean;
   chroma_gate: number;
@@ -1433,9 +1432,8 @@ export interface ConverterActions {
   setModelOnly: (enabled: boolean) => void;
   setModelThreshold: (value: number | null) => void;
   setModelMargin: (value: number | null) => void;
-  setAutoBg: (enabled: boolean) => void;
-  setBgTol: (tol: number) => void;
   setQuantizeColors: (colors: number) => void;
+  setQuantizeColorsUnlocked: (unlocked: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
   setHueEnable: (enabled: boolean) => void;
   setChromaGate: (gate: number) => void;
@@ -1951,9 +1949,8 @@ export const DEFAULT_STATE: ConverterState = {
   selectedMaterialDirNames: loadSelectedMaterialDirNames(),
   materialLayerCount: 5,
   materialLayerHeightMm: 0.08,
-  auto_bg: false,
-  bg_tol: 40,
   quantize_colors: 48,
+  quantize_colors_unlocked: false,
   enable_cleanup: true,
   hue_enable: false,
   chroma_gate: 15,
@@ -2759,20 +2756,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       }),
 
     // --- 高级设置 ---
-    setAutoBg: (enabled: boolean) =>
-      set({ auto_bg: enabled, threemfDiskPath: null, downloadUrl: null }),
-    setBgTol: (tol: number) =>
+    setQuantizeColors: (colors: number) => {
+      const state = _get();
+      const upperBound = state.quantize_colors_unlocked ? 8192 : 256;
       set({
-        bg_tol: clampValue(tol, 0, 150),
+        quantize_colors: clampValue(colors, 8, upperBound),
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
-    setQuantizeColors: (colors: number) =>
+      });
+    },
+    setQuantizeColorsUnlocked: (unlocked: boolean) => {
+      const state = _get();
+      const upperBound = unlocked ? 8192 : 256;
       set({
-        quantize_colors: clampValue(colors, 8, 256),
+        quantize_colors_unlocked: unlocked,
+        quantize_colors: clampValue(state.quantize_colors, 8, upperBound),
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
+      });
+    },
     setEnableCleanup: (enabled: boolean) =>
       set({
         enable_cleanup: enabled,
@@ -5109,8 +5111,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
                 ? (sourceParams.layer_height_mm ?? undefined)
                 : (state.layer_height_mm ?? undefined),
           target_width_mm: state.target_width_mm,
-          auto_bg: state.auto_bg,
-          bg_tol: state.bg_tol,
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
@@ -5128,8 +5128,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           color_mode: previewParams.color_mode,
           modeling_mode: previewParams.modeling_mode,
           quantize_colors: previewParams.quantize_colors,
-          auto_bg: previewParams.auto_bg,
-          bg_tol: previewParams.bg_tol,
         });
         const response = await apiConvertPreview(
           state.imageFile,
@@ -5392,8 +5390,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
               ? (sourceParams.layer_height_mm ?? undefined)
               : (state.layer_height_mm ?? undefined),
           target_width_mm: state.target_width_mm,
-          auto_bg: state.auto_bg,
-          bg_tol: state.bg_tol,
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
@@ -5645,7 +5641,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           state.target_width_mm,
         );
         set({
-          quantize_colors: clampValue(result.recommended, 8, 256),
+          quantize_colors: clampValue(result.recommended, 8, _get().quantize_colors_unlocked ? 8192 : 256),
           autoDetectColorsLoading: false,
           threemfDiskPath: null,
           downloadUrl: null,
@@ -5924,8 +5920,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           target_width_mm: state.target_width_mm,
           spacer_thick: state.spacer_thick,
           structure_mode: state.structure_mode,
-          auto_bg: state.auto_bg,
-          bg_tol: state.bg_tol,
           color_mode: state.color_mode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,

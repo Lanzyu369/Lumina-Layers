@@ -25,6 +25,7 @@ export default function OutlineSettings() {
       {enable_outline && (
         <Slider
           label={t("outline_width")}
+          tooltip={t("outline_width_hint")}
           value={outline_width}
           min={0.5}
           max={10.0}

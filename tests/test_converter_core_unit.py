@@ -46,8 +46,6 @@ def test_generate_final_model_forwards_fridge_magnet_kwargs_intact() -> None:
             target_width_mm=80.0,
             spacer_thick=1.5,
             structure_mode="Single-sided",
-            auto_bg=True,
-            bg_tol=60,
             color_mode="4-Color (RYBW)",
             add_loop=True,
             loop_width=5.0,

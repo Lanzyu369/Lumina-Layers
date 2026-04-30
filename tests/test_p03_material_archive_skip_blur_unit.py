@@ -67,8 +67,6 @@ def _material_archive_ctx(image_path: str) -> dict:
         "target_width_mm": 10.0,
         "modeling_mode": None,
         "quantize_colors": 8,
-        "auto_bg": False,
-        "bg_tol": 0,
         "_material_params": [object()],  # opaque; only used by cache/solver stubs
         "color_layers": 5,
         "layer_height_mm": 0.08,

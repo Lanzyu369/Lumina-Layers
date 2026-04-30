@@ -41,8 +41,6 @@ describe("convertPreview", () => {
     source_kind: "legacy_single",
     lut_name: "test-lut",
     target_width_mm: 80,
-    auto_bg: true,
-    bg_tol: 40,
     color_mode: ColorMode.FOUR_COLOR_RYBW,
     modeling_mode: ModelingMode.HIGH_FIDELITY,
     quantize_colors: 48,
@@ -75,8 +73,6 @@ describe("convertPreview", () => {
     expect(fd.get("image")).toBeInstanceOf(File);
     expect(fd.get("lut_name")).toBe("test-lut");
     expect(fd.get("target_width_mm")).toBe("80");
-    expect(fd.get("auto_bg")).toBe("true");
-    expect(fd.get("bg_tol")).toBe("40");
     expect(fd.get("color_mode")).toBe(ColorMode.FOUR_COLOR_RYBW);
     expect(fd.get("modeling_mode")).toBe(ModelingMode.HIGH_FIDELITY);
     expect(fd.get("quantize_colors")).toBe("48");
@@ -124,8 +120,6 @@ describe("convertPreview", () => {
       model_enable: true,
       model_only: false,
       target_width_mm: 80,
-      auto_bg: true,
-      bg_tol: 40,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
       quantize_colors: 48,
@@ -156,8 +150,6 @@ describe("convertGenerate", () => {
     source_kind: "legacy_single",
     lut_name: "gen-lut",
     target_width_mm: 100,
-    auto_bg: false,
-    bg_tol: 30,
     color_mode: ColorMode.EIGHT_COLOR,
     modeling_mode: ModelingMode.PIXEL,
     quantize_colors: 64,
@@ -281,8 +273,6 @@ describe("convertGenerate", () => {
       model_enable: true,
       model_only: false,
       target_width_mm: 100,
-      auto_bg: false,
-      bg_tol: 30,
       color_mode: ColorMode.EIGHT_COLOR,
       modeling_mode: ModelingMode.PIXEL,
       quantize_colors: 64,
@@ -328,8 +318,6 @@ describe("convertGenerateLargeFormat", () => {
       params: {
         source_kind: "legacy_single",
         lut_name: "gen-lut",
-        auto_bg: false,
-        bg_tol: 30,
         color_mode: ColorMode.EIGHT_COLOR,
         modeling_mode: ModelingMode.VECTOR,
         quantize_colors: 64,
@@ -441,8 +429,6 @@ describe("convertGeneratePuzzle", () => {
       params: {
         lut_name: "gen-lut",
         target_width_mm: 100,
-        auto_bg: false,
-        bg_tol: 30,
         color_mode: ColorMode.EIGHT_COLOR,
         modeling_mode: ModelingMode.PIXEL,
         quantize_colors: 64,

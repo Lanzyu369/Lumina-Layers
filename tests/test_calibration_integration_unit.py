@@ -6,7 +6,7 @@ Validates:
 - Core exception returns HTTP 500 (Requirement 3.6)
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -42,7 +42,7 @@ class TestColorModeRouting:
                     "color_mode": "BW (Black & White)",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                 },
             )
             assert response.status_code == 200
@@ -50,6 +50,7 @@ class TestColorModeRouting:
                 block_size_mm=5.0,
                 gap_mm=0.84,
                 backing_color="White",
+                backing_thickness_mm=1.6,
             )
 
     def test_four_color_mode_routes_to_generate_calibration_board(self) -> None:
@@ -63,7 +64,7 @@ class TestColorModeRouting:
                     "color_mode": "4-Color (RYBW)",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                 },
             )
             assert response.status_code == 200
@@ -72,6 +73,7 @@ class TestColorModeRouting:
                 block_size_mm=5.0,
                 gap_mm=0.84,
                 backing_color="White",
+                backing_thickness_mm=1.6,
             )
 
     def test_six_color_mode_routes_to_generate_smart_board(self) -> None:
@@ -85,13 +87,14 @@ class TestColorModeRouting:
                     "color_mode": "6-Color (CMYWGK 1296)",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
                 gap_mm=0.84,
+                backing_thickness_mm=1.6,
             )
 
     def test_eight_color_full_export_routes_to_generate_8color_full_batch_zip(self) -> None:
@@ -105,7 +108,7 @@ class TestColorModeRouting:
                     "color_mode": "8-Color Max",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                     "eight_color_full_export": True,
                 },
             )
@@ -113,6 +116,7 @@ class TestColorModeRouting:
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
                 gap_mm=0.84,
+                backing_thickness_mm=1.6,
             )
 
     def test_eight_color_mode_routes_to_generate_8color_batch_zip(self) -> None:
@@ -126,13 +130,14 @@ class TestColorModeRouting:
                     "color_mode": "8-Color Max",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=5.0,
                 gap_mm=0.84,
+                backing_thickness_mm=1.6,
             )
 
 
@@ -155,18 +160,44 @@ class TestParameterMapping:
                     "color_mode": "BW (Black & White)",
                     "block_size": 8,
                     "gap": 1.5,
-                    "backing": "Cyan",
+                    "backing_thickness": 2.4,
                 },
             )
             assert response.status_code == 200
             mock_fn.assert_called_once_with(
                 block_size_mm=8.0,
                 gap_mm=1.5,
-                backing_color="Cyan",
+                backing_color="White",
+                backing_thickness_mm=2.4,
             )
-            # Verify block_size is passed as float
+            # Verify block_size is passed as float and backing color is hard-coded.
             call_kwargs = mock_fn.call_args.kwargs
             assert isinstance(call_kwargs["block_size_mm"], float)
+            assert call_kwargs["backing_color"] == "White"
+
+    def test_backing_thickness_defaults_when_omitted(self) -> None:
+        """Omitting backing_thickness in the payload should fall back to the schema default (1.2 mm)."""
+        with patch(
+            "api.routers.calibration.generate_calibration_board",
+            return_value=_mock_return,
+        ) as mock_fn:
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "4-Color (RYBW)",
+                    "block_size": 5,
+                    "gap": 0.84,
+                },
+            )
+            assert response.status_code == 200
+            mock_fn.assert_called_once_with(
+                color_mode="RYBW",
+                block_size_mm=5.0,
+                gap_mm=0.84,
+                backing_color="White",
+                backing_thickness_mm=1.2,
+            )
+
 
 
 # =========================================================================
@@ -188,7 +219,7 @@ class TestErrorHandling:
                     "color_mode": "4-Color (RYBW)",
                     "block_size": 5,
                     "gap": 0.84,
-                    "backing": "White",
+                    "backing_thickness": 1.6,
                 },
             )
             assert response.status_code == 500

@@ -5,6 +5,8 @@ import { tRuntime } from "../i18n/runtime";
 import { listGradientCardMaterials } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import Button from "./ui/Button";
+import Slider from "./ui/Slider";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import Dropdown from "./ui/Dropdown";
@@ -21,14 +23,13 @@ import {
   type GradientCardAnchorCorner,
 } from "../utils/gradientCardAnchor";
 import {
-  PanelIntro,
   StatusBanner,
   cx,
   mutedSectionCardClass,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
-import WikiTooltip from "./ui/WikiTooltip";
+import HelpDot from "./ui/HelpDot";
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
@@ -103,11 +104,7 @@ const AnchorCornerSelect = ({
         options={options}
         labelAccessory={
           tooltip ? (
-            <WikiTooltip title={label} description={tooltip}>
-              <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600">
-                ?
-              </span>
-            </WikiTooltip>
+            <HelpDot title={label} description={tooltip} />
           ) : undefined
         }
       />
@@ -366,24 +363,25 @@ const CornerNudgeControl = ({
           </div>
         </div>
       )}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 items-center">
-         <label className="flex flex-col gap-1 flex-1 min-w-0">
-           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{t("ext_nudge_step_label")}</span>
-           <input type="range" min={1} max={10} step={1} value={nudgeStep} onChange={(e) => onNudgeStepChange(Number(e.target.value))} className="w-full accent-blue-500" />
-         </label>
-         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 tabular-nums w-8 text-right">{nudgeStep}</span>
-      </div>
-      <div className="grid grid-cols-3 gap-2">
+      <Slider
+        label={t("ext_nudge_step_label")}
+        value={nudgeStep}
+        min={1}
+        max={10}
+        step={1}
+        onChange={onNudgeStepChange}
+      />
+      <div className="grid grid-cols-3 gap-2 justify-items-center">
         <div />
-        <Button label={`↑`} variant="secondary" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_up")} icon={<ChevronUp />} variant="secondary" size="icon" onClick={() => onNudge(0, -1)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={`←`} variant="secondary" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
-        <div className="flex items-center justify-center text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+        <Button label={t("ext_nudge_left")} icon={<ChevronLeft />} variant="secondary" size="icon" onClick={() => onNudge(-1, 0)} disabled={!nudgeEnabled} />
+        <div className="flex items-center justify-center text-xs tabular-nums text-slate-500 dark:text-slate-400">
           {activeCornerPoint ? `(${Math.round(activeCornerPoint[0])}, ${Math.round(activeCornerPoint[1])})` : "—"}
         </div>
-        <Button label={`→`} variant="secondary" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_right")} icon={<ChevronRight />} variant="secondary" size="icon" onClick={() => onNudge(1, 0)} disabled={!nudgeEnabled} />
         <div />
-        <Button label={`↓`} variant="secondary" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} className="w-full !p-1" />
+        <Button label={t("ext_nudge_down")} icon={<ChevronDown />} variant="secondary" size="icon" onClick={() => onNudge(0, 1)} disabled={!nudgeEnabled} />
         <div />
       </div>
     </div>
@@ -413,7 +411,7 @@ const InlineStatusMessage = ({
       initial={{ opacity: 0, y: -10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 10 }}
-      transition={{ duration: 0.2 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
     >
       <StatusBanner data-testid={testId} tone={tone}>
         {message}
@@ -828,16 +826,10 @@ export default function GradientCardExtractPanel() {
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="gradient-card-extract-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <PanelIntro
-        eyebrow={t("tab.materialManagement")}
-        title={t("mat_gradient_extract_title")}
-        description={t("mat_gradient_extract_desc")}
-      />
-
       {isVerificationMode ? (
         <StatusBanner
           data-testid="gradient-card-verification-mode-banner"
@@ -988,7 +980,7 @@ export default function GradientCardExtractPanel() {
           </section>
 </div>
 
-        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
               <div className="flex flex-col gap-1">
@@ -1056,7 +1048,7 @@ export default function GradientCardExtractPanel() {
               />
             </div>
           </div>
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col xl:[&>section]:flex-1 xl:[&>section]:min-h-0 xl:[&>section>div:last-child]:flex-1">
             <GradientCardCornerSelector
               title={t("mat_gradient_white_canvas_title")}
               hint={buildCornerHint(whiteCornerPoints.length)}
@@ -1074,7 +1066,7 @@ export default function GradientCardExtractPanel() {
           </div>
         </section>
 
-        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-start`}>
+        <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
             <div className={`${mutedSectionCardClass} flex flex-col gap-3`}>
               <div className="flex flex-col gap-1">
@@ -1142,7 +1134,7 @@ export default function GradientCardExtractPanel() {
               />
             </div>
           </div>
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col xl:[&>section]:flex-1 xl:[&>section]:min-h-0 xl:[&>section>div:last-child]:flex-1">
             <GradientCardCornerSelector
               title={t("mat_gradient_black_canvas_title")}
               hint={buildCornerHint(blackCornerPoints.length)}

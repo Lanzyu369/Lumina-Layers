@@ -3,10 +3,18 @@
  * Widget 面板组件，支持拖拽、折叠动画和毛玻璃效果。
  *
  * Uses ResizeObserver on the content area to measure expanded height.
- * Content is always in the DOM but hidden via height:0 when collapsed,
- * allowing scrollHeight measurement without double-instantiating children.
+ * Content is always in the DOM but hidden via height:0 + contentVisibility:hidden
+ * when collapsed, allowing scrollHeight measurement without double-instantiating
+ * children while letting the browser skip layout for hidden content.
+ * The outer motion.div animates its own height with overflow:hidden to clip,
+ * so the content reveal is driven by a single animation source and stays in
+ * sync with sibling position shifts (computed from cached expandedHeight).
  * 使用 ResizeObserver 在内容区域测量展开高度。
- * 折叠时内容始终保留在 DOM 中（height:0），避免双重实例化子组件。
+ * 折叠时内容始终保留在 DOM 中（height:0 + contentVisibility:hidden），
+ * 避免 double-instantiating 子组件，同时让浏览器跳过隐藏内容的布局。
+ * 外层 motion.div 通过 height 动画 + overflow:hidden 裁剪来控制内容可见
+ * 区域，展开效果由单一动画源驱动，与同级组件位置避让同步（使用缓存
+ * 的 expandedHeight 计算位置，不依赖动画中间态的 DOM 高度）。
  */
 
 import React, { Component, useCallback, useEffect, useRef, type ReactNode } from 'react';
@@ -14,7 +22,6 @@ import { useDraggable } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
 import { WidgetHeader } from './WidgetHeader';
 import { useWidgetStore } from '../../stores/widgetStore';
-import { useSettingsStore } from '../../stores/settingsStore';
 import { COLLAPSED_HEIGHT, WIDGET_PANEL_RADIUS, WIDGET_WIDTH } from '../../utils/widgetUtils';
 import type { WidgetId } from '../../types/widget';
 import { useI18n } from '../../i18n/context';
@@ -96,7 +103,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   const toggleCollapse = useWidgetStore((s) => s.toggleCollapse);
   const setExpandedHeight = useWidgetStore((s) => s.setExpandedHeight);
   const isActiveDragWidget = useWidgetStore((s) => s.activeWidgetId === widgetId);
-  const enableBlur = useSettingsStore((s) => s.enableBlur);
+  const canvasInteracting = useWidgetStore((s) => s.canvasInteracting);
 
   // Content area ref — used by ResizeObserver to measure expanded height
   const contentRef = useRef<HTMLDivElement>(null);
@@ -114,26 +121,36 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   // Measure content height via ResizeObserver on the visible content area.
   // Content is always in the DOM (hidden via height:0 when collapsed),
   // so scrollHeight remains measurable without a separate hidden div.
+  // Debounced to avoid rapid setExpandedHeight calls that cascade into
+  // full workspace re-renders (each call creates a new widget object ref).
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
 
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const update = () => {
       const h = el.scrollHeight;
       if (h > 0) setExpandedHeight(widgetId, COLLAPSED_HEIGHT + h);
     };
 
-    // Initial measurement
+    // Initial measurement (synchronous, no debounce)
     update();
 
-    const observer = new ResizeObserver(update);
+    const observer = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(update, 80);
+    });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (timer) clearTimeout(timer);
+    };
   }, [widgetId, setExpandedHeight]);
 
   if (!widget.visible) return null;
 
   const isBeingDragged = isActiveDragWidget && !!transform;
+  const shouldPassthrough = isBeingDragged || canvasInteracting;
   const targetHeight = isBeingDragged
     ? COLLAPSED_HEIGHT
     : (widget.collapsed ? COLLAPSED_HEIGHT : widget.expandedHeight);
@@ -152,10 +169,10 @@ export const WidgetPanel = React.memo(function WidgetPanel({
     position: 'absolute',
     width,
     borderRadius: WIDGET_PANEL_RADIUS,
-    pointerEvents: isBeingDragged ? 'none' : 'auto',
+    pointerEvents: shouldPassthrough ? 'none' : 'auto',
     zIndex: isBeingDragged ? 50 : 30,
     overflow: 'hidden',
-    contain: 'layout style',
+    contain: 'content',
     ...(isBeingDragged ? { opacity: 0 } : {}),
   };
 
@@ -193,11 +210,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
         animate={animateTarget}
         transition={transition}
         onAnimationComplete={handleAnimationComplete}
-        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform ${
-          enableBlur
-            ? 'bg-slate-50/92 backdrop-blur-[2px] dark:bg-slate-950/92'
-            : 'bg-slate-50/98 dark:bg-slate-950/98'
-        }`}
+        className={`border border-slate-200/80 shadow-[var(--shadow-control)] will-change-transform bg-slate-50/80 dark:bg-slate-950/80`}
       >
         <WidgetHeader
           widgetId={widgetId}
