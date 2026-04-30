@@ -7,6 +7,7 @@ max_workers defaults, and RuntimeError when pool not started.
 """
 
 import asyncio
+import logging
 import os
 from unittest.mock import patch
 
@@ -281,3 +282,76 @@ class TestRunInWorkerWithContext:
             return a + b
 
         assert _run_in_worker_with_context(_add_local, "rid", "sid", 2, 3) == 5
+
+
+# ---------------------------------------------------------------------------
+# max_tasks_per_child tests (worker recycling for long-running RSS bounds)
+# ---------------------------------------------------------------------------
+
+class TestMaxTasksPerChild:
+    """Test LUMINA_WORKER_MAX_TASKS_PER_CHILD env var resolution and propagation.
+    LUMINA_WORKER_MAX_TASKS_PER_CHILD 环境变量解析与传递测试.
+
+    Validates env-driven worker recycling configuration that bounds
+    long-running RSS growth in production.
+    验证环境变量驱动的 worker 进程回收配置, 用于在生产长跑场景下
+    限制 RSS 单调增长.
+    """
+
+    def test_default_is_20_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        pool = WorkerPoolManager(max_workers=2)
+        assert pool.max_tasks_per_child == 20
+
+    def test_env_var_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", "5")
+        pool = WorkerPoolManager(max_workers=2)
+        assert pool.max_tasks_per_child == 5
+
+    def test_env_zero_disables_recycling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", "0")
+        pool = WorkerPoolManager(max_workers=2)
+        assert pool.max_tasks_per_child is None
+
+    def test_env_invalid_falls_back_to_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", "abc")
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        pool = WorkerPoolManager(max_workers=2)
+
+        assert pool.max_tasks_per_child == 20
+        warnings = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_max_tasks_invalid"
+        ]
+        assert len(warnings) == 1
+        assert getattr(warnings[0], "raw_value", None) == "abc"
+        assert getattr(warnings[0], "fallback", None) == 20
+        assert getattr(warnings[0], "error_type", None) == "ValueError"
+
+    def test_start_passes_param_to_executor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        pool = WorkerPoolManager(max_workers=3)
+        sentinel = object()
+        with patch(
+            "api.worker_pool.ProcessPoolExecutor", return_value=sentinel
+        ) as executor_cls:
+            pool.start()
+        executor_cls.assert_called_once()
+        kwargs = executor_cls.call_args.kwargs
+        assert kwargs["max_workers"] == 3
+        assert kwargs["max_tasks_per_child"] == 20
+        assert "initializer" in kwargs
