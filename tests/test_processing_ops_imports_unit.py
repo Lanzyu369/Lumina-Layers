@@ -65,3 +65,24 @@ def test_retained_processing_ops_module_still_importable(module_path: str) -> No
     continue to be importable — guarding against accidental deletion.
     """
     importlib.import_module(module_path)
+
+
+# 已删除的纯 shim 路径；任何复活都会被这条断言挡住。
+# Deleted pure-shim paths; any accidental resurrection is caught here.
+DELETED_SHIM_MODULES: tuple[str, ...] = (
+    "core.pipeline.processing_ops.hue_aware_matcher",
+    "core.pipeline.processing_ops.isolated_pixel_cleanup",
+)
+
+
+@pytest.mark.parametrize("module_path", DELETED_SHIM_MODULES)
+def test_deleted_shim_module_is_gone(module_path: str) -> None:
+    """已删除的纯 shim 路径不得再被导入。
+    Deleted pure-shim modules must no longer be importable.
+
+    Guards against accidental re-introduction of the zero-logic re-export
+    layer that was removed in Phase 0 Sub-PR A; new callers must use the
+    canonical ``core.*`` paths (see :data:`CANONICAL_SYMBOL_PATHS`).
+    """
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(module_path)

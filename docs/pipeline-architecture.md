@@ -158,10 +158,12 @@ core/image_processing.py     ← 薄编排层（保留原有 API，委托给 p01
 | `kmeans_quantizer.py`       | K-Means 量化：将图像颜色减少到指定数量        |
 | `lut_loader.py`             | LUT 加载器：读取 .npy 格式的 LUT 调色板文件   |
 | `lut_color_matcher.py`      | LUT 颜色匹配：将像素颜色匹配到最近的 LUT 颜色 |
-| `hue_aware_matcher.py`      | 色相感知匹配：基于色相权重的高级颜色匹配算法  |
 | `svg_rasterizer.py`         | SVG 栅格化：将 SVG 矢量图转为位图             |
 | `wireframe_extractor.py`    | 线框提取：从图像中提取线框/轮廓               |
-| `isolated_pixel_cleanup.py` | 孤立像素清理：去除量化后的孤立噪点像素        |
+
+> 备注：色相感知匹配 (`HueAwareColorMatcher`) 与孤立像素清理 (`cleanup_isolated_pixels`) 的实现位于 `core/color_matching_hue_aware.py` 和 `core/isolated_pixel_cleanup.py`；processing_ops 下原有的同名 re-export shim 已于 Phase 0 Sub-PR A 删除。
+>
+> Note: Hue-aware matcher and isolated-pixel cleanup live directly in `core/color_matching_hue_aware.py` and `core/isolated_pixel_cleanup.py`; the zero-logic re-export shims under `processing_ops/` were removed in Phase 0 Sub-PR A.
 
 ---
 
