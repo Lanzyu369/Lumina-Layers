@@ -66,6 +66,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep frontend resource/file URLs as relative paths in state/domain logic; only normalization-focused tests may use absolute localhost inputs
 - Keep components focused on presentation/local interaction; use API clients and Zustand stores for orchestration
 - Preserve `settingsStore` persistence and best-effort backend sync
+- New image-conversion features or parameters must update the share-card recipe schema, export/import adapters, and round-trip tests in the same PR.
 
 ## Architecture & Robustness
 

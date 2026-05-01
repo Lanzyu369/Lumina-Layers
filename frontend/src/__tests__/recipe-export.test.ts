@@ -109,6 +109,40 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.device.nozzle_size).toBe("0.2");
     });
 
+    it("exports converter source parameters for share-card restore", () => {
+      const state = makeState({
+        source_version: "native",
+        selectedNativeBrandKey: "bambulab_pla",
+        selectedNativeDbNames: ["PLA Basic", "PLA Matte"],
+        color_layers: 6,
+        layer_height_mm: 0.08,
+        model_enable: true,
+        model_only: false,
+        model_threshold: 0.42,
+        model_margin: 3,
+        selectedMaterialDirNames: ["brand/red", "brand/white"],
+        materialLayerCount: 10,
+        materialLayerHeightMm: 0.06,
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.source).toEqual({
+        source_version: "native",
+        selected_native_brand_key: "bambulab_pla",
+        selected_native_db_names: ["PLA Basic", "PLA Matte"],
+        color_layers: 6,
+        layer_height_mm: 0.08,
+        model_enable: true,
+        model_only: false,
+        model_threshold: 0.42,
+        model_margin: 3,
+        selected_material_dir_names: ["brand/red", "brand/white"],
+        material_layer_count: 10,
+        material_layer_height_mm: 0.06,
+      });
+    });
+
     it("exports large format parameters", () => {
       const state = makeState({
         largeFormatEnabled: true,

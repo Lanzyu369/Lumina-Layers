@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { sha256Hex, sha256String, fileToBase64, base64ToFile, buildAssetEntry } from "../recipe/utils";
 
 describe("recipe/utils", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("sha256Hex", () => {
     it("computes correct SHA-256 for empty buffer", async () => {
       const hash = await sha256Hex(new ArrayBuffer(0));
@@ -12,6 +16,48 @@ describe("recipe/utils", () => {
       const encoder = new TextEncoder();
       const hash = await sha256Hex(encoder.encode("hello").buffer as ArrayBuffer);
       expect(hash).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    });
+
+    it("falls back when Web Crypto digest is unavailable", async () => {
+      const originalCrypto = globalThis.crypto;
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: {},
+      });
+
+      try {
+        const encoder = new TextEncoder();
+        const hash = await sha256Hex(encoder.encode("hello").buffer as ArrayBuffer);
+        expect(hash).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+      } finally {
+        Object.defineProperty(globalThis, "crypto", {
+          configurable: true,
+          value: originalCrypto,
+        });
+      }
+    });
+
+    it("falls back when Web Crypto digest rejects", async () => {
+      const originalCrypto = globalThis.crypto;
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: {
+          subtle: {
+            digest: vi.fn().mockRejectedValue(new Error("blocked")),
+          },
+        },
+      });
+
+      try {
+        const encoder = new TextEncoder();
+        const hash = await sha256Hex(encoder.encode("hello").buffer as ArrayBuffer);
+        expect(hash).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+      } finally {
+        Object.defineProperty(globalThis, "crypto", {
+          configurable: true,
+          value: originalCrypto,
+        });
+      }
     });
   });
 

@@ -97,6 +97,20 @@ export function exportConverterRecipe(
       hue_enable: state.hue_enable,
       chroma_gate: state.chroma_gate,
     },
+    source: {
+      source_version: state.source_version,
+      selected_native_brand_key: state.selectedNativeBrandKey,
+      selected_native_db_names: [...state.selectedNativeDbNames],
+      color_layers: state.color_layers,
+      layer_height_mm: state.layer_height_mm,
+      model_enable: state.model_enable,
+      model_only: state.model_only,
+      model_threshold: state.model_threshold,
+      model_margin: state.model_margin,
+      selected_material_dir_names: [...state.selectedMaterialDirNames],
+      material_layer_count: state.materialLayerCount,
+      material_layer_height_mm: state.materialLayerHeightMm,
+    },
     geometry: {
       spacer_thick: state.enable_fridge_magnet
         ? state.base_spacer_thick

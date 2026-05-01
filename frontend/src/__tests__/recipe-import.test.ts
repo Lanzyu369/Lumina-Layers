@@ -221,6 +221,39 @@ describe("recipe/importRecipe", () => {
       expect(warnings).toHaveLength(0);
     });
 
+    it("restores converter source parameters used by share cards", () => {
+      const recipe = createTestRecipe();
+      recipe.recipe.converter!.source = {
+        source_version: "native",
+        selected_native_brand_key: "bambulab_pla",
+        selected_native_db_names: ["PLA Basic", "PLA Matte"],
+        color_layers: 6,
+        layer_height_mm: 0.08,
+        model_enable: true,
+        model_only: false,
+        model_threshold: 0.42,
+        model_margin: 3,
+        selected_material_dir_names: ["brand/red", "brand/white"],
+        material_layer_count: 10,
+        material_layer_height_mm: 0.06,
+      };
+
+      const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+
+      expect(state.source_version).toBe("native");
+      expect(state.selectedNativeBrandKey).toBe("bambulab_pla");
+      expect(state.selectedNativeDbNames).toEqual(["PLA Basic", "PLA Matte"]);
+      expect(state.color_layers).toBe(6);
+      expect(state.layer_height_mm).toBe(0.08);
+      expect(state.model_enable).toBe(true);
+      expect(state.model_only).toBe(false);
+      expect(state.model_threshold).toBe(0.42);
+      expect(state.model_margin).toBe(3);
+      expect(state.selectedMaterialDirNames).toEqual(["brand/red", "brand/white"]);
+      expect(state.materialLayerCount).toBe(10);
+      expect(state.materialLayerHeightMm).toBe(0.06);
+    });
+
     it("normalizes puzzle-specific mutually exclusive settings from imported recipes", () => {
       const recipe = createTestRecipe();
       recipe.recipe.converter!.geometry.add_loop = true;
