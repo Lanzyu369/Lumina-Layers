@@ -96,6 +96,22 @@ describe("GradientCardGeneratePanel", () => {
     );
   });
 
+  it("keeps MakerWorld links sized to their content instead of stretching full width", () => {
+    render(<GradientCardGeneratePanel />);
+
+    const onlineModelLink = screen.getByRole("link", {
+      name: /梯度卡在线模型|gradient card online model/i,
+    });
+    const storageBoxLink = screen.getByRole("link", {
+      name: /梯度卡收纳盒在线模型|Gradient Card Parametric Storage Box/i,
+    });
+
+    expect(onlineModelLink).toHaveClass("self-start");
+    expect(storageBoxLink).toHaveClass("self-start");
+    expect(onlineModelLink).toHaveClass("max-w-full");
+    expect(storageBoxLink).toHaveClass("max-w-full");
+  });
+
   it("selecting a dropdown option updates the store with the chosen preset", () => {
     useCalibrationStore.getState().setMaterialDefault("PLA Silk");
 
