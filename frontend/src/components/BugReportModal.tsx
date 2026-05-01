@@ -25,6 +25,44 @@ function interpolateTicket(template: string, ticket: string): string {
   return template.replace("{{ticket}}", ticket);
 }
 
+function copyTextWithSelectionFallback(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Clipboard API unavailable; the ticket text is still selectable in the UI.
+    }
+  }
+
+  return copyTextWithSelectionFallback(text);
+}
+
 export function BugReportModal({
   open,
   onClose,
@@ -143,13 +181,18 @@ export function BugReportModal({
     if (!submittedTicket) {
       return;
     }
-    try {
-      await navigator.clipboard.writeText(submittedTicket.ticket_id);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API unavailable; the ticket text is still selectable in the UI.
+    const copiedToClipboard = await copyTextToClipboard(submittedTicket.ticket_id);
+    if (!copiedToClipboard) {
+      setCopied(false);
+      setNotice({
+        tone: "warning",
+        message: t("bug_report_success_copy_failed"),
+      });
+      return;
     }
+    setNotice(null);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   };
 
   return createPortal(
@@ -193,6 +236,14 @@ export function BugReportModal({
                   submittedTicket.ticket_id,
                 )}
               </StatusBanner>
+              {notice && (
+                <StatusBanner
+                  tone={notice.tone}
+                  role={notice.tone === "success" ? "status" : "alert"}
+                >
+                  {notice.message}
+                </StatusBanner>
+              )}
 
               <div
                 className="flex flex-wrap items-center gap-2 rounded-[18px] border px-4 py-3"

@@ -16,6 +16,14 @@ import { BugReportModal } from "../BugReportModal";
 describe("BugReportModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: undefined,
+    });
     vi.mocked(collectBugReportContext).mockReturnValue({
       url: "http://localhost:5174/",
       user_agent: "vitest-agent",
@@ -163,6 +171,71 @@ describe("BugReportModal", () => {
 
     expect(writeText).toHaveBeenCalledWith("abc12345");
     expect(await screen.findByText("已复制")).toBeInTheDocument();
+  });
+
+  it("falls back to selection copy when clipboard write fails", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "abc12345",
+      emailed: false,
+      dump_path: "feedback/abc12345.json",
+    });
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("not allowed"));
+    const execCommand = vi.fn().mockReturnValueOnce(true);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-ticket-id");
+
+    fireEvent.click(screen.getByTestId("bug-report-copy-ticket"));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("abc12345");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    });
+    expect(await screen.findByText("已复制")).toBeInTheDocument();
+  });
+
+  it("shows a manual-copy warning when all copy strategies fail", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "abc12345",
+      emailed: false,
+      dump_path: "feedback/abc12345.json",
+    });
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("not allowed"));
+    const execCommand = vi.fn().mockReturnValueOnce(false);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-ticket-id");
+
+    fireEvent.click(screen.getByTestId("bug-report-copy-ticket"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "自动复制失败，请手动选中工单号复制。",
+    );
+    expect(screen.getByTestId("bug-report-copy-ticket")).toHaveTextContent("复制");
   });
 
   it("resets the success view back to a fresh form when the modal is reopened", async () => {
