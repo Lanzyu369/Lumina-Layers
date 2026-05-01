@@ -230,6 +230,50 @@ class TestVectorBranchExport:
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
+    def test_vector_branch_sets_processor_coating_options(self, MockVP, mock_bambu_export, tmp_path):
+        from config import ModelingMode
+
+        svg_file = tmp_path / "coating-vector.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<rect x="0" y="0" width="50" height="50" fill="#ffffff"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=[20, 10, 1])
+        mesh.metadata["name"] = "White"
+        fake_scene.add_geometry(mesh, geom_name="White")
+        fake_processor = _build_fake_processor(fake_scene)
+        MockVP.return_value = fake_processor
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-coating-vector.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=30.0,
+            spacer_thick=1.6,
+            structure_mode="Single-sided",
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            enable_coating=True,
+            coating_height_mm=0.12,
+        )
+
+        assert fake_processor.enable_coating is True
+        assert fake_processor.coating_height_mm == 0.12
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
     def test_empty_scene_returns_error(self, MockVP, mock_bambu_export, tmp_path):
         """Empty vector scene should fail before exporter is called."""
         from config import ModelingMode

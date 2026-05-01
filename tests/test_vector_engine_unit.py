@@ -494,6 +494,37 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
 
 
+class TestVectorCoatingBuildMeshRegression:
+
+    def test_build_mesh_adds_coating_when_enabled(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+        processor.enable_coating = True
+        processor.coating_height_mm = PrinterConfig.LAYER_HEIGHT * 2
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[{"geometry": box(0, 0, 20, 20), "color": (255, 0, 0), "draw_order": 0}],
+            matched_shapes=[{"geometry": box(0, 0, 20, 20), "recipe": [1, 1, 1, 1, 1], "color": (255, 0, 0)}],
+            silhouette=box(0, 0, 20, 20),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        coating = scene.geometry["Coating"]
+
+        assert "Coating" in scene.geometry
+        assert coating.bounds[0][2] == pytest.approx(-PrinterConfig.LAYER_HEIGHT * 2)
+        assert coating.bounds[1][2] == pytest.approx(0.0)
+        assert analysis.preview_colors["Coating"] == [200, 200, 200, 80]
+
+
 class TestVectorSingleSidedMirrorRegression:
 
     def test_build_mesh_mirrors_non_5color_single_sided_x_coordinates(self):

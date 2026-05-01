@@ -44,10 +44,30 @@ from core.pipeline.s03_color_replacement import _normalize_color_replacements_in
 # coordinator.py \u5728\u5bfc\u5165\u672c\u6a21\u5757\u4e4b\u524d\u5148\u5b9a\u4e49\u4e86 ``COORDINATOR_HANDLED_ERRORS``
 # \u4e0e ``_report_progress``\uff0c\u56e0\u6b64\u4e0b\u9762\u8fd9\u6b65\u5728\u5faa\u73af\u5bfc\u5165\u4e0a\u4e0b\u6587\u4e2d\u4ecd\u80fd\u62ff\u5230\u5b8c\u6574\u5b9a\u4e49\u3002
 # ---------------------------------------------------------------------------
-from core.pipeline.coordinator import (  # noqa: E402  -- intentional cycle break
-    COORDINATOR_HANDLED_ERRORS,
-    _report_progress,
-)
+try:
+    from core.pipeline.coordinator import (  # noqa: E402  -- intentional cycle break
+        COORDINATOR_HANDLED_ERRORS,
+        _report_progress,
+    )
+except ImportError as exc:
+    if "core.pipeline.vector_branch" not in str(exc):
+        raise
+    COORDINATOR_HANDLED_ERRORS = (
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        AttributeError,
+        OSError,
+        RuntimeError,
+        ModuleNotFoundError,
+        cv2.error,
+    )
+
+    def _report_progress(ctx: dict, value: float, desc: str = "") -> None:
+        from core.pipeline import coordinator
+
+        coordinator._report_progress(ctx, value, desc)
 
 # Logger namespace is intentionally pinned to the coordinator's name so the
 # extraction does not change observable log records (pre-existing tests +
@@ -254,6 +274,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor = VectorProcessor(actual_lut_path, color_mode)
         vec_processor.enable_fridge_magnet = bool(enable_fridge_magnet)
         vec_processor.fridge_magnets = list(fridge_magnets)
+        vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
+        vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
 
         # 1. Unified analysis: parse \u2192 clip \u2192 match (shared by preview + mesh)
         _report_progress(ctx, 0.05, "SVG \u89e3\u6790\u4e0e\u51e0\u4f55\u5904\u7406\u4e2d... | Parsing & extruding SVG...")

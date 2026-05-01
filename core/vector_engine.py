@@ -870,6 +870,8 @@ class VectorProcessor:
         self.parse_warnings: list[str] = []
         self.enable_fridge_magnet = False
         self.fridge_magnets: list = []
+        self.enable_coating = False
+        self.coating_height_mm = 0.08
         self.expand_stroke_to_fill = False
 
         _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
@@ -1736,6 +1738,8 @@ class VectorProcessor:
         preview_colors = analysis.preview_colors
         enable_fridge_magnet = bool(getattr(self, "enable_fridge_magnet", False))
         fridge_magnets = list(getattr(self, "fridge_magnets", []) or [])
+        enable_coating = bool(getattr(self, "enable_coating", False))
+        coating_height_mm = getattr(self, "coating_height_mm", 0.08)
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
 
         # === Stage 5: Run-length extrude per channel ===
@@ -1795,6 +1799,7 @@ class VectorProcessor:
         else:
             backing_z_start = num_layers * layer_h
 
+        backing_sil = None
         if thickness_mm > 0 and silhouette is not None and not silhouette.is_empty:
             _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
             backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
@@ -1842,6 +1847,42 @@ class VectorProcessor:
                 meshes_by_slot[backing_name]["meshes"].extend(backing_meshes)
         stage_timings["backing_s"] = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
+        if enable_coating and silhouette is not None and not silhouette.is_empty:
+            coating_sil = backing_sil
+            if coating_sil is None or coating_sil.is_empty:
+                coating_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
+                if coating_sil is None or coating_sil.is_empty:
+                    coating_sil = silhouette
+                coating_sil = self._filter_backing_holes(coating_sil, min_hole_area_mm2=0.3)
+                try:
+                    coating_sil = coating_sil.buffer(0.15, join_style="mitre", mitre_limit=2.0)
+                except VECTOR_HANDLED_ERRORS:
+                    pass
+            try:
+                requested_coating_height = float(coating_height_mm)
+            except (TypeError, ValueError):
+                requested_coating_height = layer_h
+            if not np.isfinite(requested_coating_height) or requested_coating_height <= 0:
+                requested_coating_height = layer_h
+            coating_layers = max(1, int(round(requested_coating_height / layer_h)))
+            coating_height = coating_layers * layer_h
+            coating_meshes = self._extrude_geometry(
+                coating_sil,
+                height=coating_height,
+                z_offset=-coating_height,
+                scale=scale_factor,
+                extrude_cache=extrude_cache,
+            )
+            if coating_meshes:
+                coating_name = "Coating"
+                meshes_by_slot[coating_name] = {
+                    "meshes": coating_meshes,
+                    "mat_id": max(num_channels, len(slot_names)),
+                }
+                preview_colors[coating_name] = [200, 200, 200, 80]
+        stage_timings["coating_s"] = time.perf_counter() - t0
+
         # === Stage 7: Double-sided structure ===
         t0 = time.perf_counter()
         is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
@@ -1888,7 +1929,7 @@ class VectorProcessor:
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
 
-            color_val = preview_colors.get(mat_id, [255, 255, 255, 255])
+            color_val = preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255]))
             combined.visual.face_colors = color_val
             combined.metadata["name"] = name
             scene.add_geometry(combined, geom_name=name)
