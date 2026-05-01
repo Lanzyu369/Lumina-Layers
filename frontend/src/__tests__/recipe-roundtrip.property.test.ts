@@ -76,7 +76,24 @@ describe("recipe round-trip properties", () => {
 
   it("export → import round-trip preserves key converter parameters", () => {
     const arbState = fc.record({
+      source_version: fc.constantFrom("legacy", "native", "material" as const),
       lut_name: fc.constantFrom("LUT-A", "LUT-B"),
+      selectedNativeBrandKey: fc.constantFrom("", "bambulab_pla", "brand-b"),
+      selectedNativeDbNames: fc.array(fc.constantFrom("PLA Basic", "PLA Matte", "PETG HF"), {
+        maxLength: 3,
+      }),
+      color_layers: fc.option(fc.integer({ min: 1, max: 12 }), { nil: null }),
+      layer_height_mm: fc.option(fc.constantFrom(0.04, 0.06, 0.08, 0.12), { nil: null }),
+      model_enable: fc.boolean(),
+      model_only: fc.boolean(),
+      model_threshold: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+      model_margin: fc.option(fc.integer({ min: 0, max: 8 }), { nil: null }),
+      selectedMaterialDirNames: fc.array(
+        fc.constantFrom("brand/red", "brand/white", "brand/black", "brand/yellow"),
+        { maxLength: 4 },
+      ),
+      materialLayerCount: fc.integer({ min: 1, max: 12 }),
+      materialLayerHeightMm: fc.constantFrom(0.04, 0.06, 0.08, 0.12),
       target_width_mm: fc.integer({ min: 10, max: 400 }),
       target_height_mm: fc.integer({ min: 10, max: 400 }),
       spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
@@ -209,7 +226,19 @@ describe("recipe round-trip properties", () => {
         );
 
         // Key parameters must survive round-trip
+        expect(restored.source_version).toBe(overrides.source_version);
         expect(restored.lut_name).toBe(overrides.lut_name);
+        expect(restored.selectedNativeBrandKey).toBe(overrides.selectedNativeBrandKey);
+        expect(restored.selectedNativeDbNames).toEqual(overrides.selectedNativeDbNames);
+        expect(restored.color_layers).toBe(overrides.color_layers);
+        expect(restored.layer_height_mm).toBe(overrides.layer_height_mm);
+        expect(restored.model_enable).toBe(overrides.model_enable);
+        expect(restored.model_only).toBe(overrides.model_only);
+        expect(restored.model_threshold).toBe(overrides.model_threshold);
+        expect(restored.model_margin).toBe(overrides.model_margin);
+        expect(restored.selectedMaterialDirNames).toEqual(overrides.selectedMaterialDirNames);
+        expect(restored.materialLayerCount).toBe(overrides.materialLayerCount);
+        expect(restored.materialLayerHeightMm).toBe(overrides.materialLayerHeightMm);
         expect(restored.target_width_mm).toBe(overrides.target_width_mm);
         expect(restored.target_height_mm).toBe(overrides.target_height_mm);
         expect(restored.quantize_colors).toBe(overrides.quantize_colors);

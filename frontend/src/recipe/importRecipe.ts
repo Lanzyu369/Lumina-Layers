@@ -201,6 +201,7 @@ export function restoreConverterRecipe(
   } else {
     warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
   }
+  const source = conv.source;
 
   // --- Normalize hex values (strip '#' for store) ---
   const replacementRegions: ColorReplacementItem[] =
@@ -327,6 +328,7 @@ export function restoreConverterRecipe(
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
     // Base
+    source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
     lut_name: lutName,
     color_mode: conv.base.color_mode as ConverterState["color_mode"],
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
@@ -336,6 +338,17 @@ export function restoreConverterRecipe(
     enable_cleanup: conv.base.enable_cleanup,
     hue_enable: conv.base.hue_enable,
     chroma_gate: conv.base.chroma_gate,
+    selectedNativeBrandKey: source?.selected_native_brand_key ?? "",
+    selectedNativeDbNames: [...(source?.selected_native_db_names ?? [])],
+    color_layers: source?.color_layers ?? null,
+    layer_height_mm: source?.layer_height_mm ?? null,
+    model_enable: source?.model_enable ?? false,
+    model_only: source?.model_only ?? false,
+    model_threshold: source?.model_threshold ?? null,
+    model_margin: source?.model_margin ?? null,
+    selectedMaterialDirNames: [...(source?.selected_material_dir_names ?? [])],
+    materialLayerCount: source?.material_layer_count ?? 5,
+    materialLayerHeightMm: source?.material_layer_height_mm ?? 0.08,
 
     // Geometry
     spacer_thick: resolveFridgeMagnetSpacerThick(

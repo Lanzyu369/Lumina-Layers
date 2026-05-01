@@ -149,10 +149,26 @@ export interface ConverterRecipeFridgeMagnet {
   fridge_magnets: FridgeMagnetItem[];
 }
 
+export interface ConverterRecipeSource {
+  source_version: "legacy" | "native" | "material" | string;
+  selected_native_brand_key: string;
+  selected_native_db_names: string[];
+  color_layers: number | null;
+  layer_height_mm: number | null;
+  model_enable: boolean;
+  model_only: boolean;
+  model_threshold: number | null;
+  model_margin: number | null;
+  selected_material_dir_names: string[];
+  material_layer_count: number;
+  material_layer_height_mm: number;
+}
+
 // ========== Converter Recipe (combined) ==========
 
 export interface ConverterRecipe {
   base: ConverterRecipeBase;
+  source?: ConverterRecipeSource;
   geometry: ConverterRecipeGeometry;
   relief: ConverterRecipeRelief;
   outline: ConverterRecipeOutline;
