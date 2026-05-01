@@ -4,8 +4,12 @@ import { createPortal } from "react-dom";
 import type { SavedMaterialLibraryItem } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import Button from "./Button";
-import Checkbox from "./Checkbox";
-import { workstationInputClass } from "./panelPrimitives";
+import {
+  cx,
+  workstationChoiceRowActiveClass,
+  workstationChoiceRowClass,
+  workstationInputClass,
+} from "./panelPrimitives";
 
 interface MaterialPickerDialogProps {
   open: boolean;
@@ -138,16 +142,19 @@ export default function MaterialPickerDialog({
       data-testid="material-picker-dialog-overlay"
     >
       <div
-        className="relative mx-4 flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
+        className="relative mx-4 grid w-full max-w-md overflow-hidden rounded-2xl border shadow-2xl"
         style={{
           borderColor: "var(--surface-outline)",
           background: "var(--surface-panel-strong)",
+          height: "85vh",
+          maxHeight: "42rem",
+          gridTemplateRows: "auto auto minmax(0, 1fr) auto",
         }}
         onClick={(e) => e.stopPropagation()}
         data-testid="material-picker-dialog"
       >
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+        <div className="row-start-1 flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
           <div className="flex flex-col gap-1">
             <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">
               {t("basic_material_picker_dialog_title")}
@@ -168,7 +175,7 @@ export default function MaterialPickerDialog({
 
         {/* Search */}
         {!showEmpty && (
-          <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-700">
+          <div className="row-start-2 border-b border-slate-200 px-5 py-3 dark:border-slate-700">
             <div className="relative">
               <input
                 type="text"
@@ -195,7 +202,10 @@ export default function MaterialPickerDialog({
         )}
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div
+          className="row-start-3 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 [overflow-anchor:none]"
+          data-testid="material-picker-scroll-area"
+        >
           {loading ? (
             <div className="text-xs text-slate-400 dark:text-slate-500">
               {t("basic_material_loading")}
@@ -229,29 +239,47 @@ export default function MaterialPickerDialog({
                         Array.isArray(mat.estimated_rgb) && mat.estimated_rgb.length === 3
                           ? (mat.estimated_rgb as [number, number, number])
                           : null;
+                      const checked = stagedSet.has(mat.directory_name);
                       return (
-                        <Checkbox
+                        <button
+                          type="button"
                           key={mat.directory_name}
-                          label={
-                            <span className="inline-flex items-center gap-1.5">
-                              {rgb && (
-                                <span
-                                  className="inline-block size-3 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20"
-                                  style={{ backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}
-                                />
-                              )}
-                              <span>{mat.material_name}</span>
-                              {mat.mean_delta_e != null && (
-                                <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                                  {"\u0394E "}
-                                  {mat.mean_delta_e.toFixed(1)}
-                                </span>
-                              )}
-                            </span>
-                          }
-                          checked={stagedSet.has(mat.directory_name)}
-                          onChange={() => toggle(mat.directory_name)}
-                        />
+                          role="checkbox"
+                          aria-checked={checked}
+                          onClick={() => toggle(mat.directory_name)}
+                          className={cx(
+                            "flex w-full items-center gap-3 text-left text-sm hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75",
+                            workstationChoiceRowClass,
+                            checked && workstationChoiceRowActiveClass,
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cx(
+                              "flex h-5 w-5 shrink-0 items-center justify-center rounded-xl border transition-all duration-200",
+                              checked
+                                ? "border-blue-500 bg-blue-500"
+                                : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800",
+                            )}
+                          >
+                            <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
+                            {rgb && (
+                              <span
+                                className="inline-block size-3 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/20"
+                                style={{ backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}
+                              />
+                            )}
+                            <span>{mat.material_name}</span>
+                            {mat.mean_delta_e != null && (
+                              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                {"\u0394E "}
+                                {mat.mean_delta_e.toFixed(1)}
+                              </span>
+                            )}
+                          </span>
+                        </button>
                       );
                     })}
                   </div>
@@ -262,7 +290,7 @@ export default function MaterialPickerDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
+        <div className="row-start-4 flex items-center justify-between gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
           <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
             <button
               type="button"

@@ -168,6 +168,68 @@ describe("MaterialPickerDialog", () => {
     fireEvent.click(screen.getByText("完成"));
     expect(onConfirm).toHaveBeenLastCalledWith(["red-pla", "yellow-pla", "blue-pla"]);
   });
+
+  it("keeps the material list as the stable scroll area while toggling cross-brand selections", () => {
+    const materials = [
+      makeMaterial({
+        material_name: "Brand A Red PLA",
+        directory_name: "brand-a/red-pla",
+        brand: "Brand A",
+      }),
+      makeMaterial({
+        material_name: "Brand A Yellow PLA",
+        directory_name: "brand-a/yellow-pla",
+        brand: "Brand A",
+      }),
+      makeMaterial({
+        material_name: "Brand B Blue PLA",
+        directory_name: "brand-b/blue-pla",
+        brand: "Brand B",
+      }),
+      makeMaterial({
+        material_name: "Brand B White PLA",
+        directory_name: "brand-b/white-pla",
+        brand: "Brand B",
+      }),
+    ];
+    render(
+      <MaterialPickerDialog
+        open={true}
+        materials={materials}
+        loading={false}
+        initialSelected={[]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByTestId("material-picker-dialog");
+    const scrollArea = screen.getByTestId("material-picker-scroll-area");
+
+    expect(dialog).toHaveClass("grid");
+    expect(dialog).toHaveStyle({
+      height: "85vh",
+      maxHeight: "42rem",
+      gridTemplateRows: "auto auto minmax(0, 1fr) auto",
+    });
+    expect(scrollArea).toHaveClass("row-start-3");
+    expect(scrollArea).toHaveClass("min-h-0");
+    expect(scrollArea).toHaveClass("overflow-y-auto");
+    expect(scrollArea).toHaveClass("overscroll-contain");
+    expect(scrollArea).toHaveClass("[overflow-anchor:none]");
+
+    fireEvent.click(screen.getByText("Brand A Red PLA"));
+    fireEvent.click(screen.getByText("Brand A Yellow PLA"));
+    fireEvent.click(screen.getByText("Brand B Blue PLA"));
+
+    expect(scrollArea).toHaveClass("min-h-0");
+    expect(scrollArea).toHaveClass("overflow-y-auto");
+    expect(screen.getByText("Brand A Red PLA")).toBeInTheDocument();
+    expect(screen.getByText("Brand A Yellow PLA")).toBeInTheDocument();
+    expect(screen.getByText("Brand B Blue PLA")).toBeInTheDocument();
+    expect(screen.getByText("Brand B White PLA")).toBeInTheDocument();
+    expect(screen.getAllByTestId("material-picker-brand-group")).toHaveLength(2);
+  });
 });
 
 describe("converter store — selectedMaterialDirNames persistence", () => {
