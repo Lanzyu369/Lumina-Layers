@@ -73,6 +73,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "已复制",
     en: "Copied",
   },
+  bug_report_success_copy_failed: {
+    zh: "自动复制失败，请手动选中工单号复制。",
+    en: "Automatic copy failed. Select the ticket id and copy it manually.",
+  },
   bug_report_success_emailed_yes: {
     zh: "报告已通过邮件发送给开发者。",
     en: "Report has been emailed to the developer.",
