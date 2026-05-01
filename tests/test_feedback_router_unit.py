@@ -37,6 +37,12 @@ def _payload(**overrides: Any) -> dict[str, Any]:
             "active_session_ids": {"converter": "session-abcdef", "single_stage": None},
             "color_mode": "4-Color (RYBW)",
             "lut_name": "Test LUT",
+            "source_version": "legacy",
+            "selected_native_brand_key": None,
+            "selected_native_db_names": [],
+            "selected_material_dir_names": [],
+            "material_layer_count": None,
+            "material_layer_height_mm": None,
             "recent_client_logs": [],
         },
         "screenshot_data_url": None,
@@ -91,6 +97,42 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["emailed"] is False
+
+
+def test_submit_bug_report_preserves_material_source_context(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _dump(payload: dict[str, Any]) -> tuple[Path, str]:
+        captured.update(payload)
+        return Path("feedback/material.json"), "material"
+
+    monkeypatch.setattr("api.routers.feedback.dump_bug_report", _dump)
+    monkeypatch.setattr(
+        "api.routers.feedback.to_dump_path_string",
+        lambda path: str(path),
+    )
+    payload = _payload()
+    payload["context"] = {
+        **payload["context"],
+        "color_mode": None,
+        "lut_name": None,
+        "source_version": "material",
+        "selected_material_dir_names": ["Aliz/red", "Wujing/white"],
+        "material_layer_count": 10,
+        "material_layer_height_mm": 0.06,
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    assert captured["context"]["source_version"] == "material"
+    assert captured["context"]["lut_name"] is None
+    assert captured["context"]["selected_material_dir_names"] == ["Aliz/red", "Wujing/white"]
+    assert captured["context"]["material_layer_count"] == 10
+    assert captured["context"]["material_layer_height_mm"] == 0.06
 
 
 @pytest.mark.parametrize(

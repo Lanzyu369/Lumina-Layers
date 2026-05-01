@@ -40,6 +40,12 @@ describe("BugReportModal", () => {
       },
       color_mode: "4-Color (RYBW)",
       lut_name: "Test LUT",
+      source_version: "legacy",
+      selected_native_brand_key: null,
+      selected_native_db_names: [],
+      selected_material_dir_names: [],
+      material_layer_count: null,
+      material_layer_height_mm: null,
       recent_client_logs: [],
     });
   });
@@ -80,6 +86,49 @@ describe("BugReportModal", () => {
       });
     });
     expect(await screen.findByRole("status")).toHaveTextContent("工单号：abc12345");
+  });
+
+  it("submits an attached screenshot data URL", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "abc12345",
+      emailed: false,
+      dump_path: "feedback/abc12345.json",
+    });
+    const screenshot = new File(["fake png"], "preview.png", { type: "image/png" });
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed after generate." },
+    });
+    fireEvent.change(screen.getByLabelText("截图（可选）"), {
+      target: { files: [screenshot] },
+    });
+
+    expect(await screen.findByText("preview.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(submitBugReport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          screenshot_data_url: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
+      );
+    });
+  });
+
+  it("rejects non-image screenshot attachments before submit", async () => {
+    const textFile = new File(["not image"], "notes.txt", { type: "text/plain" });
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("截图（可选）"), {
+      target: { files: [textFile] },
+    });
+
+    expect(await screen.findByText("请选择图片文件作为截图。")).toBeInTheDocument();
+    expect(submitBugReport).not.toHaveBeenCalled();
   });
 
   it("renders a persistent success view with ticket id, dump path, and a manual close button when not emailed", async () => {

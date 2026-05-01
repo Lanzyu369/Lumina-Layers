@@ -50,6 +50,12 @@ class BugReportContext(BaseModel):
     active_session_ids: BugReportSessionIds
     color_mode: str | None = Field(default=None, max_length=64)
     lut_name: str | None = Field(default=None, max_length=256)
+    source_version: Literal["legacy", "native", "material"] | None = None
+    selected_native_brand_key: str | None = Field(default=None, max_length=128)
+    selected_native_db_names: list[str] = Field(default_factory=list, max_length=128)
+    selected_material_dir_names: list[str] = Field(default_factory=list, max_length=128)
+    material_layer_count: int | None = Field(default=None, ge=0, le=1000)
+    material_layer_height_mm: float | None = Field(default=None, ge=0.0, le=10.0)
     recent_client_logs: list[Any] = Field(default_factory=list, max_length=100)
 
 

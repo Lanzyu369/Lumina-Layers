@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FormEvent, JSX } from "react";
+import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
 import { submitBugReport } from "../api/feedback";
 import type { BugReportResponse } from "../api/feedback";
@@ -9,6 +9,7 @@ import Button from "./ui/Button";
 import { StatusBanner, workstationInputClass } from "./ui/panelPrimitives";
 
 const MAX_DESCRIPTION_LENGTH = 10_000;
+const MAX_SCREENSHOT_BYTES = 5_000_000;
 
 interface BugReportModalProps {
   open: boolean;
@@ -63,6 +64,21 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   return copyTextWithSelectionFallback(text);
 }
 
+function readScreenshotAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Invalid file reader result"));
+      }
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("File reader failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function BugReportModal({
   open,
   onClose,
@@ -77,6 +93,9 @@ export function BugReportModal({
   const [contextExpanded, setContextExpanded] = useState(false);
   const [submittedTicket, setSubmittedTicket] = useState<BugReportResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
+  const [screenshotName, setScreenshotName] = useState<string | null>(null);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
 
   const resetForm = useCallback(() => {
     setDescription(presetDescription);
@@ -87,6 +106,9 @@ export function BugReportModal({
     setContextExpanded(false);
     setSubmittedTicket(null);
     setCopied(false);
+    setScreenshotDataUrl(null);
+    setScreenshotName(null);
+    setScreenshotError(null);
   }, [presetDescription]);
 
   useEffect(() => {
@@ -141,6 +163,42 @@ export function BugReportModal({
     }
   };
 
+  const handleScreenshotChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setScreenshotDataUrl(null);
+    setScreenshotName(null);
+    setScreenshotError(null);
+
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setScreenshotError(t("bug_report_validation_screenshot_type"));
+      event.target.value = "";
+      return;
+    }
+    if (file.size > MAX_SCREENSHOT_BYTES) {
+      setScreenshotError(t("bug_report_validation_screenshot_size"));
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      const dataUrl = await readScreenshotAsDataUrl(file);
+      setScreenshotDataUrl(dataUrl);
+      setScreenshotName(file.name);
+    } catch {
+      setScreenshotError(t("bug_report_validation_screenshot_read_failed"));
+      event.target.value = "";
+    }
+  };
+
+  const handleRemoveScreenshot = () => {
+    setScreenshotDataUrl(null);
+    setScreenshotName(null);
+    setScreenshotError(null);
+  };
+
   const handleCancel = () => {
     resetForm();
     onClose();
@@ -163,7 +221,7 @@ export function BugReportModal({
         description: trimmedDescription,
         user_email: email.trim() ? email.trim() : null,
         context,
-        screenshot_data_url: null,
+        screenshot_data_url: screenshotDataUrl,
       });
       setSubmittedTicket(response);
       setSubmitting(false);
@@ -371,6 +429,52 @@ export function BugReportModal({
                   onChange={(event) => setEmail(event.target.value)}
                   className={workstationInputClass}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label
+                  htmlFor="bug-report-screenshot"
+                  className="text-sm font-medium text-slate-700 dark:text-slate-200"
+                >
+                  {t("bug_report_modal_screenshot_label")}
+                </label>
+                <input
+                  id="bug-report-screenshot"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={handleScreenshotChange}
+                  className={workstationInputClass}
+                />
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {t("bug_report_modal_screenshot_hint")}
+                </p>
+                {screenshotError && (
+                  <p className="text-sm text-[var(--error-fg)]">{screenshotError}</p>
+                )}
+                {screenshotName && (
+                  <div
+                    className="flex flex-wrap items-center gap-2 rounded-[18px] border px-3 py-2"
+                    style={{
+                      borderColor: "var(--surface-outline)",
+                      background:
+                        "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
+                    }}
+                  >
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {t("bug_report_modal_screenshot_attached_label")}:
+                    </span>
+                    <span className="break-all text-sm text-slate-700 dark:text-slate-200">
+                      {screenshotName}
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded-lg px-2 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      onClick={handleRemoveScreenshot}
+                    >
+                      {t("bug_report_modal_screenshot_remove")}
+                    </button>
+                  </div>
+                )}
               </div>
 
               <details

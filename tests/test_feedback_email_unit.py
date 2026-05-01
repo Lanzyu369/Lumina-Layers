@@ -18,6 +18,9 @@ def _payload() -> dict[str, Any]:
             "active_tab": "converter",
             "color_mode": "4-Color (RYBW)",
             "lut_name": "Test LUT",
+            "source_version": "legacy",
+            "selected_native_db_names": [],
+            "selected_material_dir_names": [],
             "active_session_ids": {"converter": "abc12345", "single_stage": None},
             "user_agent": "pytest",
             "url": "http://localhost:5174/",
@@ -148,7 +151,10 @@ def test_build_email_message_uses_plain_text_body_and_json_attachment() -> None:
     assert msg["From"] == "from@example.com"
     assert msg["To"] == "to@example.com"
     assert msg.get_body(preferencelist=("plain",)) is not None
-    assert "User email:  user@example.com" in msg.get_body(preferencelist=("plain",)).get_content()
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "User email:  user@example.com" in body
+    assert "Source:      legacy" in body
+    assert "Materials:   []" in body
     attachments = list(msg.iter_attachments())
     assert len(attachments) == 1
     assert attachments[0].get_filename() == "abc12345.json"

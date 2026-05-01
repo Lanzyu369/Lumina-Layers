@@ -287,6 +287,8 @@ pip install -r requirements.txt
 
 Lumina Studio reads optional local environment overrides from `.env.local`. Use `.env.example` as the template for SMTP-backed bug-report delivery, and never commit real secrets. Store your real SMTP password only in `.env.local`.
 
+For deployment examples covering `.env.local`, QQ Mail, Gmail, systemd, and Docker, see [Bug Report Email Configuration](docs/feedback-email-configuration.md).
+
 ---
 
 ## Usage Guide

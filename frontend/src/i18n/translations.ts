@@ -37,6 +37,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "你的邮箱（可选，方便我们回复你）",
     en: "Your email (optional, so we can follow up)",
   },
+  bug_report_modal_screenshot_label: {
+    zh: "截图（可选）",
+    en: "Screenshot (optional)",
+  },
+  bug_report_modal_screenshot_hint: {
+    zh: "支持 PNG、JPG、WebP 或 GIF，最大 5 MB。",
+    en: "PNG, JPG, WebP, or GIF up to 5 MB.",
+  },
+  bug_report_modal_screenshot_attached_label: {
+    zh: "已附加截图",
+    en: "Attached screenshot",
+  },
+  bug_report_modal_screenshot_remove: {
+    zh: "移除截图",
+    en: "Remove screenshot",
+  },
   bug_report_modal_context_disclosure: {
     zh: "已自动收集的信息（点击展开）",
     en: "Automatically collected info (click to expand)",
@@ -100,6 +116,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_validation_description_truncated: {
     zh: "问题描述已截断到 10000 个字符。",
     en: "The description was truncated to 10,000 characters.",
+  },
+  bug_report_validation_screenshot_type: {
+    zh: "请选择图片文件作为截图。",
+    en: "Choose an image file for the screenshot.",
+  },
+  bug_report_validation_screenshot_size: {
+    zh: "截图不能超过 5 MB。",
+    en: "Screenshot must be no larger than 5 MB.",
+  },
+  bug_report_validation_screenshot_read_failed: {
+    zh: "读取截图失败，请重试。",
+    en: "Could not read the screenshot. Please try again.",
   },
   lang_btn_zh: {
     zh: "🌐 中文",

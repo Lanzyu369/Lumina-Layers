@@ -28,11 +28,14 @@ export function collectBugReportContext(): BugReportContextPayload {
   // "converter" 时直接读 converter store；单阶段工作流不维护这两个字段，
   // 回落到 settings 偏好以保持向后兼容。
   const isConverterActive = widget.activeTab === "converter";
+  const sourceVersion = isConverterActive ? converter.source_version ?? null : null;
+  const isMaterialSource = sourceVersion === "material";
+  const isNativeSource = sourceVersion === "native";
   const colorMode = isConverterActive
-    ? converter.color_mode || null
+    ? (isMaterialSource ? null : converter.color_mode || null)
     : settings.lastColorMode || null;
   const lutName = isConverterActive
-    ? converter.lut_name || null
+    ? (isMaterialSource ? null : converter.lut_name || null)
     : settings.lastLutName || null;
 
   return {
@@ -51,6 +54,12 @@ export function collectBugReportContext(): BugReportContextPayload {
     },
     color_mode: colorMode,
     lut_name: lutName,
+    source_version: sourceVersion,
+    selected_native_brand_key: isNativeSource ? converter.selectedNativeBrandKey || null : null,
+    selected_native_db_names: isNativeSource ? converter.selectedNativeDbNames : [],
+    selected_material_dir_names: isMaterialSource ? converter.selectedMaterialDirNames : [],
+    material_layer_count: isMaterialSource ? converter.materialLayerCount : null,
+    material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
     recent_client_logs: [],
   };
 }

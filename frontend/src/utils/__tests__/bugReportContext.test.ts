@@ -14,7 +14,15 @@ describe("collectBugReportContext", () => {
   const originalNavigator = globalThis.navigator;
 
   beforeEach(() => {
-    useConverterStore.setState({ sessionId: "converter-session" });
+    useConverterStore.setState({
+      sessionId: "converter-session",
+      source_version: "legacy",
+      selectedNativeBrandKey: "",
+      selectedNativeDbNames: [],
+      selectedMaterialDirNames: [],
+      materialLayerCount: 5,
+      materialLayerHeightMm: 0.08,
+    });
     useSingleStageStore.setState({ sessionId: "single-session" });
     useSettingsStore.setState({
       language: "en",
@@ -75,6 +83,12 @@ describe("collectBugReportContext", () => {
       },
       color_mode: "8-Color Max",
       lut_name: "My LUT",
+      source_version: null,
+      selected_native_brand_key: null,
+      selected_native_db_names: [],
+      selected_material_dir_names: [],
+      material_layer_count: null,
+      material_layer_height_mm: null,
       recent_client_logs: [],
     });
   });
@@ -103,6 +117,54 @@ describe("collectBugReportContext", () => {
     expect(context.active_tab).toBe("converter");
     expect(context.color_mode).toBe("8-Color Max");
     expect(context.lut_name).toBe("active-converter-lut");
+    expect(context.source_version).toBe("legacy");
+  });
+
+  it("collects material archive source details instead of stale LUT details", () => {
+    useConverterStore.setState({
+      sessionId: "converter-session",
+      source_version: "material",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      lut_name: "stale-lut",
+      selectedMaterialDirNames: ["Aliz/red", "Wujing/white"],
+      materialLayerCount: 10,
+      materialLayerHeightMm: 0.06,
+    });
+    useSettingsStore.setState({
+      language: "en",
+      theme: "dark",
+      lastColorMode: "8-Color Max",
+      lastLutName: "settings-lut",
+    });
+    useWidgetStore.setState({ activeTab: "converter" });
+
+    const context = collectBugReportContext();
+
+    expect(context.source_version).toBe("material");
+    expect(context.color_mode).toBeNull();
+    expect(context.lut_name).toBeNull();
+    expect(context.selected_material_dir_names).toEqual(["Aliz/red", "Wujing/white"]);
+    expect(context.material_layer_count).toBe(10);
+    expect(context.material_layer_height_mm).toBe(0.06);
+  });
+
+  it("collects native LUT source details on converter tab", () => {
+    useConverterStore.setState({
+      sessionId: "converter-session",
+      source_version: "native",
+      selectedNativeBrandKey: "bambu",
+      selectedNativeDbNames: ["PLA Basic", "PETG Translucent"],
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      lut_name: "native-summary",
+    });
+    useWidgetStore.setState({ activeTab: "converter" });
+
+    const context = collectBugReportContext();
+
+    expect(context.source_version).toBe("native");
+    expect(context.selected_native_brand_key).toBe("bambu");
+    expect(context.selected_native_db_names).toEqual(["PLA Basic", "PETG Translucent"]);
+    expect(context.selected_material_dir_names).toEqual([]);
   });
 
   it("returns null color_mode and lut_name when converter store has empty values on converter tab", () => {

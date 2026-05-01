@@ -269,6 +269,12 @@ cd Lumina-Layers
 pip install -r requirements.txt
 ```
 
+### 配置
+
+Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项。反馈邮件的 SMTP 配置请以 `.env.example` 为模板，真实密码或授权码只能放在 `.env.local` 或服务器 Secret 中，不能提交到 GitHub。
+
+包含 `.env.local`、QQ 邮箱、Gmail、systemd 和 Docker 的部署示例，请查看 [反馈邮件配置](docs/feedback-email-configuration.md)。
+
 ---
 
 ## 使用指南

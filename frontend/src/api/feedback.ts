@@ -16,6 +16,12 @@ export interface BugReportContextPayload {
   };
   color_mode: string | null;
   lut_name: string | null;
+  source_version: "legacy" | "native" | "material" | null;
+  selected_native_brand_key: string | null;
+  selected_native_db_names: string[];
+  selected_material_dir_names: string[];
+  material_layer_count: number | null;
+  material_layer_height_mm: number | null;
   recent_client_logs: ReadonlyArray<unknown>;
 }
 
