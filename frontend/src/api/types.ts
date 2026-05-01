@@ -1289,6 +1289,8 @@ export interface BatchConvertParams {
   structure_mode: string;
   color_mode: string;
   modeling_mode: string;
+  color_layers?: number;
+  layer_height_mm?: number;
   quantize_colors: number;
   enable_cleanup: boolean;
   hue_weight: number;

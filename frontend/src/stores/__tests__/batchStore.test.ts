@@ -38,6 +38,8 @@ function resetStore(): void {
     structure_mode: StructureMode.DOUBLE_SIDED,
     color_mode: ColorMode.FOUR_COLOR_RYBW,
     modeling_mode: ModelingMode.HIGH_FIDELITY,
+    color_layers: 5,
+    layer_height_mm: 0.08,
     quantize_colors: 48,
     enable_cleanup: true,
   });
@@ -80,6 +82,8 @@ describe("submitBatch API 调用和状态管理", () => {
       structure_mode: StructureMode.DOUBLE_SIDED,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
+      color_layers: 5,
+      layer_height_mm: 0.08,
       quantize_colors: 48,
       enable_cleanup: true,
       hue_weight: 0,

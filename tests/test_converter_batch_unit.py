@@ -320,7 +320,16 @@ class TestBatchWorkerPoolSubmit:
                 data={
                     "lut_name": "test_lut",
                     "target_width_mm": "80.0",
+                    "spacer_thick": "1.4",
+                    "structure_mode": "Single-sided",
+                    "color_mode": "8-Color Max",
                     "modeling_mode": "high-fidelity",
+                    "color_layers": "10",
+                    "layer_height_mm": "0.08",
+                    "quantize_colors": "64",
+                    "enable_cleanup": "false",
+                    "hue_weight": "0.5",
+                    "chroma_gate": "12",
                 },
             )
 
@@ -339,6 +348,16 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][1] == "/tmp/uploaded.png"  # image_path
         assert call_args[0][2] == "/tmp/fake.npy"  # lut_path
         assert call_args[0][3] == 80.0  # target_width_mm
+        assert call_args[0][4] == 1.4
+        assert call_args[0][5] == "Single-sided"
+        assert call_args[0][6] == "8-Color Max"
+        assert call_args[0][7] == "high-fidelity"
+        assert call_args[0][8] == 10
+        assert call_args[0][9] == 0.08
+        assert call_args[0][10] == 64
+        assert call_args[0][11] is False
+        assert call_args[0][12] == 0.5
+        assert call_args[0][13] == 12
 
 
 class TestBatchCleanup:

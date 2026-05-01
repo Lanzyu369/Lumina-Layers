@@ -5922,6 +5922,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           structure_mode: state.structure_mode,
           color_mode: state.color_mode,
           modeling_mode: state.modeling_mode,
+          color_layers: state.color_layers ?? undefined,
+          layer_height_mm: state.layer_height_mm ?? undefined,
           quantize_colors: state.quantize_colors,
           enable_cleanup: state.enable_cleanup,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
