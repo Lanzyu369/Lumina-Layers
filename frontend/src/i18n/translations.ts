@@ -406,11 +406,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   conv_coating_enable: {
     zh: "启用透明镀层",
-    en: "Enable Coating",
+    en: "Enable Transparent Coating",
   },
   conv_coating_height: {
-    zh: "镀层厚度(mm)",
-    en: "Coating Height(mm)",
+    zh: "透明镀层厚度(mm)",
+    en: "Transparent Coating Height(mm)",
   },
   conv_status: {
     zh: "状态",
@@ -1048,8 +1048,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Cloisonné Settings",
   },
   "widget.coatingSettings": {
-    zh: "涂层设置",
-    en: "Coating Settings",
+    zh: "透明镀层设置",
+    en: "Transparent Coating Settings",
   },
   "widget.keychainLoop": {
     zh: "挂件环设置",
@@ -3171,15 +3171,15 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Coating Settings ====================
   coating_enable: {
-    zh: "启用涂层",
-    en: "Enable Coating",
+    zh: "启用透明镀层",
+    en: "Enable Transparent Coating",
   },
   coating_height: {
-    zh: "涂层高度",
-    en: "Coating Height",
+    zh: "透明镀层高度",
+    en: "Transparent Coating Height",
   },
   coating_height_hint: {
-    zh: "透明涂层覆盖层的高度（毫米）。值越大涂层凸起越高，表面越光滑。",
+    zh: "透明镀层覆盖层的高度（毫米）。值越大镀层凸起越高，表面越光滑。",
     en: "Height of the transparent coating layer (in mm). Larger values produce taller coating protrusion and a smoother surface.",
   },
 

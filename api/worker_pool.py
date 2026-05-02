@@ -22,6 +22,11 @@ _log = get_logger(__name__)
 
 _ENV_MAX_TASKS_PER_CHILD = "LUMINA_WORKER_MAX_TASKS_PER_CHILD"
 _DEFAULT_MAX_TASKS_PER_CHILD = 20
+_DARWIN_DEFAULT_MAX_TASKS_PER_CHILD = 1
+
+
+def _default_max_tasks_per_child() -> int:
+    return _DARWIN_DEFAULT_MAX_TASKS_PER_CHILD if sys.platform == "darwin" else _DEFAULT_MAX_TASKS_PER_CHILD
 
 
 def _resolve_max_tasks_per_child() -> int | None:
@@ -29,13 +34,13 @@ def _resolve_max_tasks_per_child() -> int | None:
     解析 LUMINA_WORKER_MAX_TASKS_PER_CHILD 环境变量为 ProcessPoolExecutor 参数.
 
     Behavior:
-        - Unset / empty: returns ``_DEFAULT_MAX_TASKS_PER_CHILD`` (20).
+        - Unset / empty: returns the platform default.
         - Positive int: returns that value (custom recycle threshold).
         - 0 or negative: returns ``None`` (disable recycling, preserve old behavior).
         - Invalid (non-int): emits a structured WARNING and returns the default.
 
     行为:
-        - 未设置或为空: 返回默认值 20.
+        - 未设置或为空: 返回平台默认值.
         - 正整数: 返回该值 (自定义回收阈值).
         - 0 或负数: 返回 None (禁用回收, 保留旧行为).
         - 非法值 (非整数): 打结构化 WARNING 后回退到默认值.
@@ -45,8 +50,9 @@ def _resolve_max_tasks_per_child() -> int | None:
                     (传给 ``ProcessPoolExecutor`` 的 ``max_tasks_per_child`` 参数)
     """
     raw = os.environ.get(_ENV_MAX_TASKS_PER_CHILD)
+    fallback = _default_max_tasks_per_child()
     if raw is None or raw == "":
-        return _DEFAULT_MAX_TASKS_PER_CHILD
+        return fallback
     try:
         value = int(raw)
     except ValueError:
@@ -56,10 +62,10 @@ def _resolve_max_tasks_per_child() -> int | None:
                 "event": "worker_pool_max_tasks_invalid",
                 "raw_value": raw,
                 "error_type": "ValueError",
-                "fallback": _DEFAULT_MAX_TASKS_PER_CHILD,
+                "fallback": fallback,
             },
         )
-        return _DEFAULT_MAX_TASKS_PER_CHILD
+        return fallback
     if value <= 0:
         return None
     return value

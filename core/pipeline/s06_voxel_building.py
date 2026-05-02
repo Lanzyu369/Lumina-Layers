@@ -46,7 +46,15 @@ def _update_bambu_base_layer_ctx_from_voxels(
     layer_h = PrinterConfig.LAYER_HEIGHT
     backing_layer_count = max(1, int(round(float(thickness_mm) / layer_h)))
     base_height_mm = backing_layer_count * layer_h
-    color_height_mm = max(0, int(num_layers)) * layer_h
+    coating_layers = 0
+    if bool(ctx.get("enable_coating", False)):
+        try:
+            coating_height_mm = float(ctx.get("coating_height_mm", layer_h))
+        except (TypeError, ValueError):
+            coating_height_mm = layer_h
+        if np.isfinite(coating_height_mm) and coating_height_mm > 0:
+            coating_layers = max(1, int(round(coating_height_mm / layer_h)))
+    color_height_mm = (max(0, int(num_layers)) + coating_layers) * layer_h
 
     structure_mode_text = str(structure_mode or "")
     color_mode_text = str(color_mode or "")

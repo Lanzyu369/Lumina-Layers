@@ -524,6 +524,78 @@ class TestVectorCoatingBuildMeshRegression:
         assert coating.bounds[1][2] == pytest.approx(0.0)
         assert analysis.preview_colors["Coating"] == [200, 200, 200, 80]
 
+    def test_image_vectorizer_bounds_make_board_and_coating_complete(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+        processor.enable_coating = True
+        left = box(0, 0, 4, 20)
+        right = box(16, 0, 20, 20)
+        visible_silhouette = left.union(right)
+        full_bounds = box(0, 0, 20, 20)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": left, "color": (255, 0, 0), "draw_order": 0},
+                {"geometry": right, "color": (0, 255, 255), "draw_order": 1},
+            ],
+            matched_shapes=[
+                {"geometry": left, "recipe": [1, 1, 1, 1, 1], "color": (255, 0, 0)},
+                {"geometry": right, "recipe": [1, 1, 1, 1, 1], "color": (0, 255, 255)},
+            ],
+            silhouette=visible_silhouette,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+            image_vectorizer_bounds=full_bounds,
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        board = scene.geometry["Board"]
+        coating = scene.geometry["Coating"]
+
+        assert board.bounds[0][:2] == pytest.approx([-0.15, -0.15])
+        assert board.bounds[1][:2] == pytest.approx([20.15, 20.15])
+        assert coating.bounds[0][:2] == pytest.approx([-0.15, -0.15])
+        assert coating.bounds[1][:2] == pytest.approx([20.15, 20.15])
+        assert board.volume > 450
+
+    def test_regular_svg_keeps_visible_silhouette_for_board(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+        left = box(0, 0, 4, 20)
+        right = box(16, 0, 20, 20)
+        visible_silhouette = left.union(right)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": left, "color": (255, 0, 0), "draw_order": 0},
+                {"geometry": right, "color": (0, 255, 255), "draw_order": 1},
+            ],
+            matched_shapes=[
+                {"geometry": left, "recipe": [1, 1, 1, 1, 1], "color": (255, 0, 0)},
+                {"geometry": right, "recipe": [1, 1, 1, 1, 1], "color": (0, 255, 255)},
+            ],
+            silhouette=visible_silhouette,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        board = scene.geometry["Board"]
+
+        assert board.volume < 250
+
 
 class TestVectorSingleSidedMirrorRegression:
 

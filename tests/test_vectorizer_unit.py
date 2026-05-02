@@ -219,7 +219,7 @@ class TestWorkerVectorize:
         # Verify SVG was written
         assert os.path.exists(result["svg_path"])
         with open(result["svg_path"]) as f:
-            assert f.read() == "<svg></svg>"
+            assert f.read() == '<svg data-lumina-origin="image-vectorizer"></svg>'
 
         # Clean up SVG output
         os.unlink(result["svg_path"])

@@ -38,6 +38,7 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
             - palette (list[str]): Hex color strings of the palette.
     """
     import os
+    import re
     import tempfile
 
     import neroued_vectorizer as nv
@@ -64,10 +65,20 @@ def worker_vectorize(image_path: str, params: dict) -> dict:
 
         from config import TEMP_DIR
 
+        svg_content = result.svg_content
+        if "data-lumina-origin=" not in svg_content:
+            svg_content = re.sub(
+                r"(<svg\b)",
+                r'\1 data-lumina-origin="image-vectorizer"',
+                svg_content,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+
         fd, svg_path = tempfile.mkstemp(suffix=".svg", dir=TEMP_DIR)
         os.close(fd)
         with open(svg_path, "w", encoding="utf-8") as f:
-            f.write(result.svg_content)
+            f.write(svg_content)
 
         palette_hex = []
         for rgb in result.palette:

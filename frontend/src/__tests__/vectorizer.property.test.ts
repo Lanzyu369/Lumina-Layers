@@ -31,7 +31,7 @@ vi.mock("../api/vectorizer", () => ({
 
 vi.mock("../stores/converter", () => ({
   useConverterStore: {
-    getState: vi.fn(() => ({ setImageFile: vi.fn() })),
+    getState: vi.fn(() => ({ setImageFile: vi.fn(), setModelingMode: vi.fn() })),
   },
 }));
 

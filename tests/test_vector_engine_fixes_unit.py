@@ -881,6 +881,41 @@ class TestSameColorStrokeCompensation:
         assert len(base_shapes) == 1
         assert len(stroked_shapes) == 1
         assert stroked_shapes[0]["poly"].area > base_shapes[0]["poly"].area
+
+
+class TestImageVectorizerViewportBounds:
+
+    def _parse_svg(self, origin_attr: str):
+        svg_content = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"{origin_attr}>'
+            '<rect x="0" y="0" width="4" height="20" fill="#ff0000"/>'
+            '<rect x="16" y="0" width="4" height="20" fill="#00ffff"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(svg_content)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+            vp._parse_svg(path, target_width_mm=20.0)
+            return getattr(vp, "_last_image_vectorizer_bounds", None)
+        finally:
+            os.unlink(path)
+
+    def test_marked_vectorizer_svg_records_full_viewport_bounds(self):
+        bounds = self._parse_svg(' data-lumina-origin="image-vectorizer"')
+
+        assert bounds is not None
+        assert bounds.bounds == pytest.approx((0.0, 0.0, 20.0, 20.0))
+
+    def test_regular_svg_does_not_record_full_viewport_bounds(self):
+        bounds = self._parse_svg("")
+
+        assert bounds is None
+
+
 # ---------------------------------------------------------------------------
 # Fix 9: Merged LUT palette override in vector pipeline
 # ---------------------------------------------------------------------------

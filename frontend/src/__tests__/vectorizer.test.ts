@@ -11,10 +11,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useVectorizerStore } from "../stores/vectorizerStore";
 import VectorizerPanel, { buildFileUrl } from "../components/VectorizerPanel";
 import { translations } from "../i18n/translations";
+import { ModelingMode } from "../api/types";
 
 const {
   mockedApiClient,
   setConverterImageFileSpy,
+  setConverterModelingModeSpy,
   setWidgetActiveTabSpy,
 } = vi.hoisted(() => ({
   mockedApiClient: {
@@ -23,6 +25,7 @@ const {
     get: vi.fn(),
   },
   setConverterImageFileSpy: vi.fn(),
+  setConverterModelingModeSpy: vi.fn(),
   setWidgetActiveTabSpy: vi.fn(),
 }));
 
@@ -41,6 +44,7 @@ vi.mock("../stores/converter", () => ({
   useConverterStore: {
     getState: vi.fn(() => ({
       setImageFile: setConverterImageFileSpy,
+      setModelingMode: setConverterModelingModeSpy,
     })),
   },
 }));
@@ -253,6 +257,7 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(fileArg.name).toBe("vectorized.svg");
     expect(fileArg.type).toBe("image/svg+xml");
 
+    expect(setConverterModelingModeSpy).toHaveBeenCalledWith(ModelingMode.VECTOR);
     expect(setWidgetActiveTabSpy).toHaveBeenCalledWith("converter");
   });
 

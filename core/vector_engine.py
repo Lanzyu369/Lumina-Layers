@@ -287,6 +287,7 @@ class VectorAnalysis:
     num_layers: int
     preview_colors: dict
     stage_timings: dict = field(default_factory=dict)
+    image_vectorizer_bounds: object | None = None
 
 
 def apply_recipe_overrides_to_analysis(
@@ -1502,6 +1503,7 @@ class VectorProcessor:
             shape_data = cached_entry["shape_data"]
             clipped_shapes = cached_entry["clipped_shapes"]
             silhouette = cached_entry["silhouette"]
+            image_vectorizer_bounds = cached_entry.get("image_vectorizer_bounds")
             scale_factor = cached_entry["scale_factor"]
             bbox = cached_entry["bbox"]
             stage_timings["parse_s"] = 0.0
@@ -1516,6 +1518,7 @@ class VectorProcessor:
             self._parse_expand_stroke_to_fill = expand_stroke_to_fill
             try:
                 shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
+                image_vectorizer_bounds = getattr(self, "_last_image_vectorizer_bounds", None)
             finally:
                 if had_parse_policy:
                     self._parse_expand_stroke_to_fill = previous_parse_policy
@@ -1578,6 +1581,7 @@ class VectorProcessor:
                     "shape_data": shape_data,
                     "clipped_shapes": clipped_shapes,
                     "silhouette": silhouette,
+                    "image_vectorizer_bounds": image_vectorizer_bounds,
                     "scale_factor": scale_factor,
                     "bbox": bbox,
                 }
@@ -1702,6 +1706,7 @@ class VectorProcessor:
             num_layers=num_layers,
             preview_colors=preview_colors,
             stage_timings=stage_timings,
+            image_vectorizer_bounds=image_vectorizer_bounds,
         )
 
     def build_mesh(
@@ -1788,7 +1793,10 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
-        if silhouette is None and clipped_shapes:
+        image_vectorizer_bounds = getattr(analysis, "image_vectorizer_bounds", None)
+        if image_vectorizer_bounds is not None and not image_vectorizer_bounds.is_empty:
+            silhouette = image_vectorizer_bounds
+        elif silhouette is None and clipped_shapes:
             all_geoms = [
                 s["geometry"] for s in clipped_shapes if s["geometry"] is not None and not s["geometry"].is_empty
             ]
@@ -2576,6 +2584,13 @@ class VectorProcessor:
         except Exception as e:
             raise ValueError(f"Failed to parse SVG: {e}")
 
+        image_vectorizer_origin = False
+        try:
+            root = ET.parse(svg_path).getroot()
+            image_vectorizer_origin = root.get("data-lumina-origin") == "image-vectorizer"
+        except VECTOR_HANDLED_ERRORS:
+            image_vectorizer_origin = False
+        self._last_image_vectorizer_bounds = None
         gradient_defs = VectorProcessor._parse_gradient_defs(svg_path)
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
@@ -3002,6 +3017,7 @@ class VectorProcessor:
         gx0, gy0 = min(min_xs), min(min_ys)
         gx1, gy1 = max(max_xs), max(max_ys)
 
+        svg_viewport_bounds = None
         try:
             vb = getattr(svg, "viewbox", None)
             if vb is not None:
@@ -3010,6 +3026,7 @@ class VectorProcessor:
                 vb_w = float(getattr(vb, "width", 0) or 0)
                 vb_h = float(getattr(vb, "height", 0) or 0)
                 if vb_w > 0 and vb_h > 0:
+                    svg_viewport_bounds = (vb_x, vb_y, vb_w, vb_h)
                     gx0 = min(gx0, vb_x)
                     gy0 = min(gy0, vb_y)
                     gx1 = max(gx1, vb_x + vb_w)
@@ -3024,6 +3041,15 @@ class VectorProcessor:
         _log.debug("Global bounds: x=%.1f, y=%.1f, w=%.1f, h=%.1f", gx0, gy0, real_w, real_h)
         if real_w == 0:
             raise ValueError("Invalid geometry width (0)")
+
+        if image_vectorizer_origin and svg_viewport_bounds is not None:
+            vb_x, vb_y, vb_w, vb_h = svg_viewport_bounds
+            self._last_image_vectorizer_bounds = box(
+                vb_x - gx0,
+                vb_y - gy0,
+                vb_x + vb_w - gx0,
+                vb_y + vb_h - gy0,
+            )
 
         scale_factor = target_width_mm / real_w
         min_area_svg = max(0.0, (self.sampling_precision**2) / max(scale_factor**2, 1e-12) * 0.25)

@@ -52,6 +52,42 @@ def test_vector_pipeline_ctx_formula_matches_expected_mapping(
     assert ctx["enable_base_layer_height_modifier"] is True
 
 
+def test_vector_pipeline_ctx_includes_transparent_coating_height() -> None:
+    ctx: dict[str, object] = {
+        "enable_coating": True,
+        "coating_height_mm": 0.08,
+    }
+
+    coordinator._update_bambu_base_layer_ctx_for_vector(
+        ctx,
+        color_mode="8-Color Max",
+        structure_mode="Double-sided",
+        num_layers=5,
+        thickness_mm=1.2,
+    )
+
+    assert ctx["bambu_color_height_mm"] == pytest.approx(0.48)
+    assert ctx["bambu_face_orientation"] == "double"
+
+
+def test_voxel_pipeline_ctx_includes_transparent_coating_height() -> None:
+    ctx: dict[str, object] = {
+        "enable_coating": True,
+        "coating_height_mm": 0.08,
+    }
+
+    s06_voxel_building._update_bambu_base_layer_ctx_from_voxels(
+        ctx,
+        color_mode="8-Color Max",
+        structure_mode="Double-sided",
+        num_layers=5,
+        thickness_mm=1.2,
+    )
+
+    assert ctx["bambu_color_height_mm"] == pytest.approx(0.48)
+    assert ctx["bambu_face_orientation"] == "double"
+
+
 @pytest.mark.parametrize(
     ("color_mode", "structure_mode", "num_layers", "thickness_mm", "expected_base", "expected_color", "expected_face"),
     _EXPECTED_CASES,
@@ -154,6 +190,8 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
             "printer_id": "bambu-h2d",
             "slicer": "BambuStudio",
             "nozzle_size": "0.4",
+            "enable_coating": True,
+            "coating_height_mm": 0.08,
         }
 
         result = coordinator._run_vector_branch(ctx)
@@ -161,5 +199,5 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
     assert "error" not in result
     assert captured["enable_base_layer_height_modifier"] is True
     assert captured["base_height_mm"] == 1.6
-    assert captured["color_height_mm"] == 15 * PrinterConfig.LAYER_HEIGHT
+    assert captured["color_height_mm"] == 16 * PrinterConfig.LAYER_HEIGHT
     assert captured["face_orientation"] == "up"

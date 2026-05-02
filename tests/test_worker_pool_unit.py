@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+import api.worker_pool as worker_pool
 from api.worker_pool import WorkerPoolManager
 
 
@@ -298,10 +299,27 @@ class TestMaxTasksPerChild:
     限制 RSS 单调增长.
     """
 
-    def test_default_is_20_when_env_unset(
+    def test_default_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        pool = WorkerPoolManager(max_workers=2)
+        expected = 1 if worker_pool.sys.platform == "darwin" else 20
+        assert pool.max_tasks_per_child == expected
+
+    def test_default_is_1_on_darwin_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        monkeypatch.setattr(worker_pool.sys, "platform", "darwin")
+        pool = WorkerPoolManager(max_workers=2)
+        assert pool.max_tasks_per_child == 1
+
+    def test_default_is_20_off_darwin_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        monkeypatch.setattr(worker_pool.sys, "platform", "linux")
         pool = WorkerPoolManager(max_workers=2)
         assert pool.max_tasks_per_child == 20
 
@@ -329,7 +347,8 @@ class TestMaxTasksPerChild:
 
         pool = WorkerPoolManager(max_workers=2)
 
-        assert pool.max_tasks_per_child == 20
+        expected = 1 if worker_pool.sys.platform == "darwin" else 20
+        assert pool.max_tasks_per_child == expected
         warnings = [
             record
             for record in caplog.records
@@ -337,13 +356,14 @@ class TestMaxTasksPerChild:
         ]
         assert len(warnings) == 1
         assert getattr(warnings[0], "raw_value", None) == "abc"
-        assert getattr(warnings[0], "fallback", None) == 20
+        assert getattr(warnings[0], "fallback", None) == expected
         assert getattr(warnings[0], "error_type", None) == "ValueError"
 
     def test_start_passes_param_to_executor(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LUMINA_WORKER_MAX_TASKS_PER_CHILD", raising=False)
+        monkeypatch.setattr(worker_pool.sys, "platform", "linux")
         pool = WorkerPoolManager(max_workers=3)
         sentinel = object()
         with patch(

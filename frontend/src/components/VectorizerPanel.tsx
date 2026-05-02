@@ -8,6 +8,7 @@ import { useWidgetStore } from "../stores/widgetStore";
 import { usePanZoom } from "../hooks/usePanZoom";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import apiClient from "../api/client";
+import { ModelingMode } from "../api/types";
 import ImageUpload from "./ui/ImageUpload";
 import Slider from "./ui/Slider";
 import Checkbox from "./ui/Checkbox";
@@ -155,7 +156,9 @@ export default function VectorizerPanel() {
       });
       const blob = res.data as Blob;
       const file = new File([blob], "vectorized.svg", { type: "image/svg+xml" });
-      useConverterStore.getState().setImageFile(file);
+      const converterStore = useConverterStore.getState();
+      converterStore.setImageFile(file);
+      converterStore.setModelingMode(ModelingMode.VECTOR);
       useWidgetStore.getState().setActiveTab("converter");
     } finally {
       setIsSending(false);
