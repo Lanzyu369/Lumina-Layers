@@ -130,9 +130,19 @@ def run(ctx: dict) -> dict:
     ctx["backing_color_id"] = backing_color_id
 
     # ---- SVG 矢量模式检测 ----
+    # ``material_archive`` previously bailed out of the SVG-native
+    # branch and forced its SVG inputs through the raster ``P03``
+    # path, which rasterised to pixels and snapped each pixel to the
+    # fill palette before the material solver ran. The downside was
+    # hard pixel edges with occasional 1-px misclassified colours
+    # along strokes — visually distinct from the LUT-vector preview.
+    # Material vector mode now reuses the same parse → clip → mesh /
+    # preview pipeline and only swaps the per-fill matcher, so the
+    # gate is widened to cover both ``lut`` and ``material_archive``.
+    # 耗材档案 + 矢量模式过去走的是栅格 P03，2D 预览硬边像素 +
+    # 偶发杂色；现在改为复用同一条矢量管线，只替换颜色匹配器。
     is_svg_vector = (
-        material_source != "material_archive"
-        and modeling_mode == ModelingMode.VECTOR
+        modeling_mode == ModelingMode.VECTOR
         and isinstance(image_path, str)
         and image_path.lower().endswith(".svg")
     )

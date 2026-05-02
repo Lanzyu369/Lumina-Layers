@@ -866,6 +866,21 @@ class VectorProcessor:
 
         ImageProcessor = _get_image_processor_class()
         self.img_processor = ImageProcessor(lut_path, color_mode)
+        self._init_runtime_defaults()
+
+        _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
+
+    def _init_runtime_defaults(self) -> None:
+        """Set the non-color-matching runtime fields shared by both
+        constructors (LUT path and material-archive path).
+
+        Centralised so :meth:`from_img_processor` does not drift if new
+        runtime defaults are added later. ``__init__`` and the factory
+        both call this immediately after wiring ``img_processor``.
+
+        集中初始化与匹配器无关的运行时默认值，避免 LUT/耗材两条
+        构造路径走偏。
+        """
         self.sampling_precision = 0.02  # mm
         self.last_stage_timings = {}
         self.parse_warnings: list[str] = []
@@ -875,7 +890,164 @@ class VectorProcessor:
         self.coating_height_mm = 0.08
         self.expand_stroke_to_fill = False
 
-        _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
+    @classmethod
+    def from_img_processor(
+        cls, img_processor, color_mode: str
+    ) -> "VectorProcessor":
+        """Build a ``VectorProcessor`` around a pre-built color matcher.
+
+        Used by the material-archive branch which constructs a
+        :class:`core.vector_matchers.MaterialVectorMatcher` instead of
+        loading a LUT from disk. The matcher must duck-type the small
+        slice of :class:`core.image_processing.LuminaImageProcessor`
+        that ``analyze_svg`` / ``_match_colors`` consume (see
+        :mod:`core.vector_matchers` module docstring for the full
+        contract).
+
+        从已构造的颜色匹配器构造 VectorProcessor；耗材档案分支用
+        此入口，避免触发 LUT 文件解析。
+
+        Args:
+            img_processor: Object exposing the LuminaImageProcessor
+                duck surface required by the vector pipeline.
+            color_mode: Display string forwarded to logs and exports.
+
+        Returns:
+            A configured ``VectorProcessor`` ready for ``analyze_svg``.
+        """
+        instance = cls.__new__(cls)
+        instance.color_mode = color_mode
+        instance.img_processor = img_processor
+        instance._init_runtime_defaults()
+        _log.debug(
+            "Initialized Vector Engine via injected matcher (%s)",
+            color_mode,
+        )
+        return instance
+
+    def _build_small_shape_match_overrides(self, clipped_shapes, scale_factor):
+        max_area_ratio = float(
+            getattr(VectorConfig, "MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MAX_AREA_RATIO", 0.0)
+        )
+        min_anchor_ratio = float(
+            getattr(VectorConfig, "MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MIN_ANCHOR_AREA_RATIO", 0.0)
+        )
+        delta_e_threshold = float(
+            getattr(VectorConfig, "MATERIAL_VECTOR_SMALL_SHAPE_SNAP_DELTA_E", 0.0)
+        )
+        if not clipped_shapes or max_area_ratio <= 0.0 or delta_e_threshold <= 0.0:
+            return {}
+
+        area_by_color = {}
+        total_area_mm2 = 0.0
+        mm2_scale = float(scale_factor) * float(scale_factor)
+        for item in clipped_shapes:
+            color = item.get("color")
+            geom = item.get("geometry")
+            if color is None or geom is None or geom.is_empty:
+                continue
+            try:
+                key = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                continue
+            area_mm2 = max(0.0, float(geom.area) * mm2_scale)
+            total_area_mm2 += area_mm2
+            area_by_color[key] = area_by_color.get(key, 0.0) + area_mm2
+
+        if total_area_mm2 <= 0.0 or len(area_by_color) < 2:
+            return {}
+
+        source_colors = sorted(area_by_color)
+        src_rgb = np.array(source_colors, dtype=np.uint8)
+        src_lab = self.img_processor._rgb_to_lab(src_rgb).reshape(-1, 3).astype(np.float64)
+        _, lut_indices = self.img_processor.kdtree.query(src_lab)
+        lut_indices = np.asarray(lut_indices).reshape(-1)
+        matched_rgb = self.img_processor.lut_rgb[lut_indices].astype(np.uint8, copy=False)
+        matched_lab = self.img_processor._rgb_to_lab(matched_rgb).reshape(-1, 3).astype(np.float64)
+        delta_e = np.linalg.norm(src_lab - matched_lab, axis=1)
+
+        area_ratio_by_color = {
+            rgb: (float(area_by_color[rgb]) / total_area_mm2)
+            for rgb in source_colors
+        }
+        anchor_colors = [
+            rgb for rgb in source_colors
+            if area_ratio_by_color[rgb] >= min_anchor_ratio
+        ]
+        if not anchor_colors:
+            anchor_colors = [max(source_colors, key=lambda rgb: area_by_color[rgb])]
+
+        lab_by_color = {
+            rgb: src_lab[idx]
+            for idx, rgb in enumerate(source_colors)
+        }
+        matched_by_color = {
+            rgb: tuple(int(c) for c in matched_rgb[idx])
+            for idx, rgb in enumerate(source_colors)
+        }
+
+        overrides = {}
+        snapped_shape_count = 0
+        snapped_source_colors = set()
+        delta_e_by_color = {
+            rgb: float(delta_e[idx])
+            for idx, rgb in enumerate(source_colors)
+        }
+        for shape_idx, item in enumerate(clipped_shapes):
+            color = item.get("color")
+            geom = item.get("geometry")
+            if color is None or geom is None or geom.is_empty:
+                continue
+            try:
+                rgb = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                continue
+            shape_area_ratio = (max(0.0, float(geom.area) * mm2_scale) / total_area_mm2)
+            if shape_area_ratio > max_area_ratio or delta_e_by_color[rgb] <= delta_e_threshold:
+                continue
+            candidate_anchors = [anchor for anchor in anchor_colors if anchor != rgb]
+            if not candidate_anchors:
+                continue
+            src_vec = lab_by_color[rgb]
+            chosen_anchor = min(
+                candidate_anchors,
+                key=lambda anchor: float(np.linalg.norm(src_vec - lab_by_color[anchor])),
+            )
+            if chosen_anchor == rgb:
+                continue
+            overrides[shape_idx] = chosen_anchor
+            snapped_shape_count += 1
+            snapped_source_colors.add(rgb)
+            _log.debug(
+                "Vector small-shape snap: %s -> %s shape_area_ratio=%.4f color_area_ratio=%.4f dE=%.2f matched=%s anchor_matched=%s",
+                _rgb_to_hex(rgb),
+                _rgb_to_hex(chosen_anchor),
+                shape_area_ratio,
+                area_ratio_by_color[rgb],
+                delta_e_by_color[rgb],
+                _rgb_to_hex(matched_by_color[rgb]),
+                _rgb_to_hex(matched_by_color[chosen_anchor]),
+            )
+
+        if overrides:
+            _log.info(
+                "Vector small-shape snap applied: colors=%d shapes=%d max_area_ratio=%.4f min_anchor_ratio=%.4f delta_e=%.1f",
+                len(snapped_source_colors),
+                snapped_shape_count,
+                max_area_ratio,
+                min_anchor_ratio,
+                delta_e_threshold,
+                extra={
+                    "event": "vector_material_small_shape_snap_applied",
+                    "snapped_color_count": len(snapped_source_colors),
+                    "snapped_shape_count": snapped_shape_count,
+                    "max_area_ratio": max_area_ratio,
+                    "min_anchor_area_ratio": min_anchor_ratio,
+                    "delta_e_threshold": delta_e_threshold,
+                },
+            )
+
+        return overrides
 
     # ── Geometry pre-processing helpers ─────────────────────────────────
 
@@ -1589,18 +1761,36 @@ class VectorProcessor:
                     _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
 
         # === Stage 3: Resolve color system config ===
-        is_six_color = len(self.img_processor.lut_rgb) == 1296
-        if is_six_color:
-            _log.debug("Auto-detected 6-Color LUT. Forcing 6-Color mode.")
-            color_conf = ColorSystem.SIX_COLOR
-            self.color_mode = "6-Color"
+        # In material-archive mode the matcher carries a pre-built
+        # ``color_conf`` derived from the materials list. The LUT path
+        # (``LuminaImageProcessor``) does not expose this attribute, so
+        # we fall back to the historical ``ColorSystem.get`` lookup
+        # there. ``num_layers`` from material mode is taken from the
+        # matcher so the recipe length matches the user's configured
+        # layer_count instead of the printer-config default.
+        # 耗材档案 matcher 自带 color_conf；LUT 路径维持原行为。
+        material_color_conf = getattr(self.img_processor, "color_conf", None)
+        if material_color_conf is not None:
+            color_conf = dict(material_color_conf)
+            preview_colors = dict(getattr(self.img_processor, "preview_colors", color_conf.get("preview") or {}))
+            slot_names = list(getattr(self.img_processor, "slot_names", color_conf.get("slots") or []))
+            num_channels = len(slot_names)
+            num_layers = int(
+                getattr(self.img_processor, "layer_count", PrinterConfig.COLOR_LAYERS)
+            )
         else:
-            color_conf = ColorSystem.get(self.color_mode)
+            is_six_color = len(self.img_processor.lut_rgb) == 1296
+            if is_six_color:
+                _log.debug("Auto-detected 6-Color LUT. Forcing 6-Color mode.")
+                color_conf = ColorSystem.SIX_COLOR
+                self.color_mode = "6-Color"
+            else:
+                color_conf = ColorSystem.get(self.color_mode)
 
-        slot_names = color_conf["slots"]
-        preview_colors = dict(color_conf["preview"])
-        num_channels = len(slot_names)
-        num_layers = color_conf.get("layer_count", PrinterConfig.COLOR_LAYERS)
+            slot_names = color_conf["slots"]
+            preview_colors = dict(color_conf["preview"])
+            num_channels = len(slot_names)
+            num_layers = color_conf.get("layer_count", PrinterConfig.COLOR_LAYERS)
 
         # For any LUT that carries explicit palette metadata (Merged JSON,
         # reverse-inferred native_bundle .json / .msgpack, etc.), override
@@ -1659,6 +1849,41 @@ class VectorProcessor:
                         "replacement_count": len(color_replacements or []),
                     },
                 )
+
+        # Material-archive matcher needs to pre-solve every unique fill
+        # colour before ``_match_colors`` runs its KDTree query, so the
+        # KDTree is populated and ``lut_rgb`` / ``ref_stacks`` carry the
+        # solver-derived rows. The hook is opt-in (``solve_for_fills``
+        # is only present on :class:`MaterialVectorMatcher`); the LUT
+        # path skips it transparently.
+        # 耗材档案 matcher 在 _match_colors 之前批量求解填充色，保证
+        # KDTree / lut_rgb / ref_stacks 已就绪；LUT 模式没有该方法，
+        # 透明跳过。
+        solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
+        if solve_for_fills is not None and clipped_shapes:
+            unique_fills_set: set = set()
+            for item in clipped_shapes:
+                color = item.get("color")
+                if color is None:
+                    continue
+                try:
+                    unique_fills_set.add(
+                        (int(color[0]), int(color[1]), int(color[2]))
+                    )
+                except (TypeError, IndexError, ValueError):
+                    continue
+            if unique_fills_set:
+                solve_for_fills(sorted(unique_fills_set))
+                if replacement_manager is None:
+                    small_shape_match_overrides = self._build_small_shape_match_overrides(
+                        clipped_shapes,
+                        scale_factor,
+                    )
+                    if small_shape_match_overrides:
+                        for shape_idx, item in enumerate(clipped_shapes):
+                            match_color = small_shape_match_overrides.get(shape_idx)
+                            if match_color is not None:
+                                item["match_color"] = match_color
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
@@ -2357,14 +2582,19 @@ class VectorProcessor:
 
         for item in clipped_shapes:
             rgb = item["color"]
+            query_rgb = item.get("match_color", rgb)
+            try:
+                query_rgb = (int(query_rgb[0]), int(query_rgb[1]), int(query_rgb[2]))
+            except (TypeError, IndexError, ValueError):
+                query_rgb = rgb
 
-            if rgb in color_cache:
-                cached = color_cache[rgb]
+            if query_rgb in color_cache:
+                cached = color_cache[query_rgb]
                 recipe = cached["recipe"]
                 matched_rgb = cached["matched_rgb"]
                 lut_idx = cached["lut_idx"]
             else:
-                query_lab = self.img_processor._rgb_to_lab(np.array([rgb], dtype=np.uint8))
+                query_lab = self.img_processor._rgb_to_lab(np.array([query_rgb], dtype=np.uint8))
                 _, index = self.img_processor.kdtree.query(query_lab)
                 lut_idx = int(index[0])
                 matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
@@ -2379,24 +2609,32 @@ class VectorProcessor:
 
                 stack = self.img_processor.ref_stacks[lut_idx]
                 recipe = [min(int(stack[z]), num_channels - 1) for z in range(min(num_layers, len(stack)))]
-                color_cache[rgb] = {
+                color_cache[query_rgb] = {
                     "recipe": recipe,
                     "matched_rgb": matched_rgb,
                     "lut_idx": lut_idx,
                 }
 
                 hex_c = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+                query_hex = f"#{query_rgb[0]:02x}{query_rgb[1]:02x}{query_rgb[2]:02x}"
                 matched_hex = f"#{matched_rgb[0]:02x}{matched_rgb[1]:02x}{matched_rgb[2]:02x}"
                 if recipe_log_mode == "full":
-                    _log.debug("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
+                    if query_rgb != rgb:
+                        _log.debug("  %s => %s -> %s -> recipe %s", hex_c, query_hex, matched_hex, recipe)
+                    else:
+                        _log.debug("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
                 elif recipe_log_mode == "summary" and len(sample_logs) < 8:
-                    sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe}")
+                    if query_rgb != rgb:
+                        sample_logs.append(f"{hex_c} => {query_hex} -> {matched_hex} -> {recipe}")
+                    else:
+                        sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe}")
 
             matched.append(
                 {
                     "geometry": item["geometry"],
                     "recipe": recipe,
                     "color": rgb,
+                    "match_color": query_rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
                 }

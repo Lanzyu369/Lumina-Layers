@@ -137,12 +137,232 @@ def _update_bambu_base_layer_ctx_for_vector(
 # ===================================================================
 
 
+def _log_vector_color_drift_diagnostics(analysis, raster_cache) -> None:
+    """Emit DEBUG + INFO diagnostics summarising per-unique-fill color drift.
+
+    For material-archive + SVG + vector mode, users occasionally see
+    "grey speckles" inside a shape that should be solidly coloured.
+    This helper aggregates ``analysis.matched_shapes`` by unique
+    (source fill RGB, matched RGB) pair and logs:
+
+    - DEBUG per pair: shape count, total polygon area, Top2Bottom
+      recipe, approximate Lab ΔE between source and matched.
+    - One INFO line per preview run: worst offender's drift distance
+      so regressions become visible in the INFO-budgeted workflow.
+
+    汇总每个唯一 (源填充色 -> matched RGB) 对，输出 DEBUG 明细和
+    一条 INFO 汇总，帮助定位 "应该是橙色的地方冒出灰色像素" 这
+    类偏色问题。
+
+    Args:
+        analysis: ``VectorAnalysis`` from ``VectorProcessor.analyze_svg``.
+        raster_cache: Dict returned by ``build_preview_cache``.
+    """
+    shapes = list(getattr(analysis, "matched_shapes", []) or [])
+    if not shapes:
+        return
+
+    # Aggregate by (src, matched)
+    buckets: dict = {}
+    for s in shapes:
+        src = tuple(int(c) for c in (s.get("color") or (0, 0, 0)))
+        matched = tuple(int(c) for c in (s.get("matched_rgb") or src))
+        recipe = tuple(int(x) for x in (s.get("recipe") or ()))
+        key = (src, matched, recipe)
+        b = buckets.setdefault(
+            key,
+            {"count": 0, "area": 0.0, "recipe": recipe, "src": src, "matched": matched},
+        )
+        b["count"] += 1
+        geom = s.get("geometry")
+        try:
+            if geom is not None and not geom.is_empty:
+                b["area"] += float(geom.area)
+        except Exception:
+            pass
+
+    # Compute Lab ΔE for src vs matched so grey-drift is quantifiable.
+    src_arr = np.array([b["src"] for b in buckets.values()], dtype=np.uint8)
+    matched_arr = np.array([b["matched"] for b in buckets.values()], dtype=np.uint8)
+    try:
+        lab_src = cv2.cvtColor(src_arr.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float64)
+        lab_m = cv2.cvtColor(matched_arr.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float64)
+        delta_e = np.linalg.norm(lab_src - lab_m, axis=1)
+    except Exception:
+        delta_e = np.zeros((len(buckets),), dtype=np.float64)
+
+    # Attach delta-e and chroma metrics back onto buckets
+    for i, b in enumerate(buckets.values()):
+        b["delta_e_lab"] = float(delta_e[i])
+        # Neutrality = how grey-ish the matched colour is compared to
+        # the source. A grey-ish matched RGB inside a saturated source
+        # is the visible artefact; flag when matched chroma is much
+        # lower than source chroma.
+        src_range = float(max(b["src"]) - min(b["src"]))
+        mat_range = float(max(b["matched"]) - min(b["matched"]))
+        b["src_chroma_range"] = src_range
+        b["matched_chroma_range"] = mat_range
+        b["chroma_drop"] = src_range - mat_range  # >0 = more grey
+
+    # DEBUG per-bucket
+    for b in buckets.values():
+        src = b["src"]; m = b["matched"]
+        log.debug(
+            "vector material fill: src=#%02X%02X%02X -> matched=#%02X%02X%02X "
+            "shapes=%d area=%.3f dE=%.2f chroma_drop=%.1f recipe=%s",
+            src[0], src[1], src[2], m[0], m[1], m[2],
+            b["count"], b["area"], b["delta_e_lab"], b["chroma_drop"], list(b["recipe"]),
+            extra={
+                "event": "vector_material_fill_mapping",
+                "src_rgb": list(src),
+                "matched_rgb": list(m),
+                "shape_count": int(b["count"]),
+                "total_area": float(b["area"]),
+                "delta_e_lab": float(b["delta_e_lab"]),
+                "src_chroma_range": float(b["src_chroma_range"]),
+                "matched_chroma_range": float(b["matched_chroma_range"]),
+                "chroma_drop": float(b["chroma_drop"]),
+                "recipe_top2btm": list(b["recipe"]),
+            },
+        )
+
+    # Preview-space pixel scan: count "greyish" opaque pixels in the
+    # hard-edged matched_rgb map so we can distinguish anti-aliasing
+    # artefacts (which live only in preview_rgba) from real drift
+    # (which shows up in matched_rgb too). If the two counts diverge,
+    # the issue is rasterisation/AA; if they agree, it's solver drift.
+    # 同时扫硬边 matched_rgb 和抗锯齿 preview_rgba 两张图的灰度比例，
+    # 如果前者不灰后者灰 → 抗锯齿边缘问题；如果前者就灰 → 求解器偏色。
+    mrgb = raster_cache.get("matched_rgb")
+    prgba = raster_cache.get("preview_rgba")
+    grey_hard = grey_preview = opaque_hard = opaque_preview = 0
+    if mrgb is not None and prgba is not None:
+        m_int = mrgb.astype(np.int16)
+        nonzero = (m_int.sum(axis=-1) > 0)
+        gh = (
+            nonzero
+            & (np.abs(m_int[..., 0] - m_int[..., 1]) < 20)
+            & (np.abs(m_int[..., 1] - m_int[..., 2]) < 20)
+            & (m_int[..., 0] > 100)
+            & (m_int[..., 0] < 220)
+        )
+        grey_hard = int(gh.sum())
+        opaque_hard = int(nonzero.sum())
+
+        p_int = prgba[..., :3].astype(np.int16)
+        opaque = prgba[..., 3] > 50
+        gp = (
+            opaque
+            & (np.abs(p_int[..., 0] - p_int[..., 1]) < 20)
+            & (np.abs(p_int[..., 1] - p_int[..., 2]) < 20)
+            & (p_int[..., 0] > 100)
+            & (p_int[..., 0] < 220)
+        )
+        grey_preview = int(gp.sum())
+        opaque_preview = int(opaque.sum())
+
+    # INFO summary: one line per preview covers most triage needs.
+    worst = max(buckets.values(), key=lambda b: b["delta_e_lab"]) if buckets else None
+    worst_chroma = max(buckets.values(), key=lambda b: b["chroma_drop"]) if buckets else None
+    log.info(
+        "vector material preview drift: unique_fills=%d worst_dE=%.2f "
+        "worst_chroma_drop=%.1f grey_hard=%d/%d grey_preview=%d/%d",
+        len(buckets),
+        (worst["delta_e_lab"] if worst else 0.0),
+        (worst_chroma["chroma_drop"] if worst_chroma else 0.0),
+        grey_hard, opaque_hard, grey_preview, opaque_preview,
+        extra={
+            "event": "vector_material_preview_drift_summary",
+            "unique_fill_count": len(buckets),
+            "total_shape_count": sum(b["count"] for b in buckets.values()),
+            "worst_src_rgb": list(worst["src"]) if worst else None,
+            "worst_matched_rgb": list(worst["matched"]) if worst else None,
+            "worst_delta_e_lab": float(worst["delta_e_lab"]) if worst else 0.0,
+            "worst_chroma_src_rgb": list(worst_chroma["src"]) if worst_chroma else None,
+            "worst_chroma_matched_rgb": list(worst_chroma["matched"]) if worst_chroma else None,
+            "worst_chroma_drop": float(worst_chroma["chroma_drop"]) if worst_chroma else 0.0,
+            "grey_pixels_hard": grey_hard,
+            "opaque_pixels_hard": opaque_hard,
+            "grey_pixels_preview": grey_preview,
+            "opaque_pixels_preview": opaque_preview,
+        },
+    )
+
+
+def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
+    """Build a ``VectorProcessor`` for the current ctx.
+
+    Routes to the LUT-backed constructor for the historical path and to
+    :class:`core.vector_matchers.MaterialVectorMatcher` for
+    ``material_source == "material_archive"``. Both paths return a
+    fully-configured ``VectorProcessor`` that shares the rest of the
+    pipeline (parse / clip / extrude / preview) verbatim.
+
+    根据 ``material_source`` 选择 LUT 或耗材档案匹配器，把构造细节
+    封装在此处，调用方不再分支两条 import 路径。
+
+    Args:
+        ctx: Pipeline context. Must contain ``actual_lut_path`` for the
+            LUT path or ``_material_params`` (plus the canonical
+            material-archive metadata) for the material-archive path.
+        fallback_color_mode: Color mode string used when the LUT path
+            is taken (already resolved by the caller).
+
+    Returns:
+        ``VectorProcessor`` instance ready for ``analyze_svg``.
+    """
+    from core.vector_engine import VectorProcessor
+
+    material_source = str(ctx.get("material_source") or "lut")
+    if material_source == "material_archive":
+        from core.material_cache import DEFAULT_GRID_RESOLUTION
+        from core.vector_matchers import MaterialVectorMatcher
+
+        materials = ctx.get("_material_params") or []
+        if not materials:
+            raise ValueError(
+                "material_archive vector branch requires non-empty "
+                "_material_params; did P01 / S01 validation run?"
+            )
+        layer_count = int(ctx.get("color_layers") or 5)
+        layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
+        substrate = str(ctx.get("material_substrate") or "white")
+        slot_names = list(ctx.get("slot_names") or [])
+        preview_colors = dict(ctx.get("preview_colors") or {})
+        color_conf = dict(ctx.get("color_conf") or {})
+        hue_weight = float(ctx.get("hue_weight") or 0.0)
+        grid_resolution = int(
+            ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION
+        )
+
+        matcher = MaterialVectorMatcher.from_materials(
+            materials=materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            slot_names=slot_names,
+            preview_colors=preview_colors,
+            color_conf=color_conf,
+            grid_resolution=grid_resolution,
+            hue_weight=hue_weight,
+        )
+        return VectorProcessor.from_img_processor(
+            matcher, "Material Archive"
+        )
+
+    actual_lut_path = ctx["actual_lut_path"]
+    return VectorProcessor(actual_lut_path, fallback_color_mode)
+
+
 def _run_vector_preview_branch(ctx: dict) -> dict:
     """Execute SVG native preview processing for vector mode.
     \u4e3a SVG + vector \u6a21\u5f0f\u6784\u5efa\u4e0e native vector \u751f\u6210\u4e00\u81f4\u7684\u9884\u89c8\u7f13\u5b58\u3002
+
+    Routes through :func:`_build_vector_processor` so both LUT and
+    material-archive sources share a single preview implementation.
+    LUT \u4e0e\u8017\u6750\u6863\u6848\u4e24\u79cd\u6765\u6e90\u5728\u8fd9\u91cc\u5171\u4eab\u540c\u4e00\u4efd\u9884\u89c8\u5b9e\u73b0\uff0c\u53ea\u662f\u989c\u8272\u5339\u914d\u5668\u4e0d\u540c\u3002
     """
     image_path = ctx["image_path"]
-    actual_lut_path = ctx["actual_lut_path"]
     color_mode = ctx["color_mode"]
     target_width_mm = ctx["target_width_mm"]
     is_dark = ctx.get("is_dark", True)
@@ -151,9 +371,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
 
     try:
-        from core.vector_engine import VectorProcessor
+        from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
 
-        vec_processor = VectorProcessor(actual_lut_path, color_mode)
+        vec_processor = _build_vector_processor(ctx, fallback_color_mode=color_mode)
         analysis = vec_processor.analyze_svg(
             svg_path=image_path,
             target_width_mm=target_width_mm,
@@ -164,6 +384,16 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             analysis,
             pixels_per_mm=10.0,
         )
+
+        # Diagnostic: material-archive vector + preview-colour-drift
+        # triage helper. Logs, per unique (source fill -> matched RGB)
+        # pair, the shape count / total area / recipe / Lab delta-E so
+        # "why do I see grey pixels inside an orange shape" can be
+        # answered from a single preview run.
+        # 矢量 + 耗材档案模式下按唯一 (源色 -> matched RGB) 聚合
+        # 形状数、总面积、配方和 Lab ΔE，方便一次预览就能定位偏色。
+        if str(ctx.get("material_source") or "lut") == "material_archive":
+            _log_vector_color_drift_diagnostics(analysis, raster_cache)
 
         cache = {
             "target_w": raster_cache["target_w"],
@@ -233,7 +463,6 @@ def _run_vector_branch(ctx: dict) -> dict:
     from utils import Stats
 
     image_path = ctx["image_path"]
-    actual_lut_path = ctx["actual_lut_path"]
     color_mode = ctx["color_mode"]
     modeling_mode = ctx["modeling_mode"]
     target_width_mm = ctx["target_width_mm"]
@@ -279,7 +508,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             apply_recipe_overrides_to_analysis,
         )
 
-        vec_processor = VectorProcessor(actual_lut_path, color_mode)
+        vec_processor = _build_vector_processor(
+            ctx, fallback_color_mode=color_mode
+        )
         vec_processor.enable_fridge_magnet = bool(enable_fridge_magnet)
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))

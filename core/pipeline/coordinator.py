@@ -233,10 +233,15 @@ def run_preview_pipeline(ctx: dict) -> dict:
     modeling_mode = ctx.get("modeling_mode")
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
     image_path = str(ctx.get("image_path", "") or "")
-    material_source = str(ctx.get("material_source") or "lut")
+    # NOTE: ``material_source == "material_archive"`` is now allowed to
+    # take the SVG-native vector branch as well — the branch resolves
+    # the right colour matcher (LUT KDTree or material-archive solver)
+    # internally based on ``material_source`` so both modes share one
+    # parse → clip → preview pipeline.
+    # 耗材档案 + 矢量模式现在也走原生矢量分支，分支内部按 material
+    # source 路由不同的颜色匹配器，预览/几何完全共线。
     is_svg_vector = (
-        material_source != "material_archive"
-        and modeling_mode_value == "vector"
+        modeling_mode_value == "vector"
         and image_path.lower().endswith(".svg")
     )
     if is_svg_vector:

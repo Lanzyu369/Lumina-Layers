@@ -113,7 +113,20 @@ class TestS01InputValidation:
 
         assert result["is_svg_vector"] is True
 
-    def test_material_archive_svg_vector_mode_does_not_enter_native_vector_branch(self):
+    def test_material_archive_svg_vector_mode_enters_native_vector_branch(self):
+        """material_archive + SVG + vector now shares the native vector branch.
+
+        Historically this combination forced the input through the
+        raster ``P03`` material-archive path, which produced hard-edged
+        pixel previews with occasional 1-px misclassified colours along
+        strokes. The branch now reuses
+        :class:`core.vector_engine.VectorProcessor` and only swaps the
+        per-fill colour matcher (LUT KDTree → material solver), so the
+        gate is widened. This test pins the new contract.
+
+        耗材档案 + SVG + 矢量现在与 LUT 矢量共用解析/裁剪/挤出/预览
+        管线，仅替换颜色匹配器；本测试锁定该新合同。
+        """
         from core.pipeline.s01_input_validation import run
 
         ctx = self._make_valid_ctx()
@@ -140,7 +153,7 @@ class TestS01InputValidation:
         ):
             result = run(ctx)
 
-        assert result["is_svg_vector"] is False
+        assert result["is_svg_vector"] is True
 
     def test_material_archive_uses_inferred_white_channel_for_backing(self):
         from core.pipeline.s01_input_validation import run

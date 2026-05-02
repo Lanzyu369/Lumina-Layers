@@ -203,6 +203,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "SVG + 梯度卡模式不再走 K-Means 量化预算，改为用频次直方图取覆盖 99% 可见像素的真实填充色板，再 KDTree 把剩余像素吸附到最近填充色：以前 256 量化预算会给抗锯齿过渡带开簇产生「不沿走线」的杂色配方，现在 SVG 真实有几个填充色就只生成几条配方。",
             en: "SVG + gradient-card material-archive mode no longer feeds the rasterized image to K-Means with a 256-cluster budget. Instead it picks the smallest top-K colors covering 99% of visible pixels as the real fill palette and KDTree-snaps every visible pixel to its nearest fill. The old path spent clusters on anti-aliased edge blends and produced 'noise pixels off the strokes'; now the SVG yields exactly its true fill count of recipes.",
           },
+          {
+            zh: "耗材档案 + SVG + 矢量现在与 LUT 矢量共用同一条原生矢量管线（解析 → 遮挡裁剪 → 网格挤出 → 抗锯齿预览光栅化），只在颜色匹配那一步用 Beer-Lambert 求解器替代 LUT KDTree：之前耗材档案会先把 SVG 光栅化再做像素吸附 + 逐像素材料映射，2D 预览出来的是硬边像素图、走线边缘还会有 1px 邻色杂点；现在矢量预览的边缘抗锯齿和填充色边界都和 LUT 矢量保持一致，配方仍然由耗材求解器逐唯一色输出。",
+            en: "Material archive + SVG + vector now shares the same native vector pipeline as LUT vector mode (parse → occlusion clip → mesh extrude → anti-aliased preview rasterisation); only the per-fill colour matching step is swapped — the LUT KDTree is replaced by the Beer-Lambert solver. The old path rasterised the SVG first, snapped pixels to a fill palette, then ran a per-pixel material mapping, which produced hard-edged pixel previews and the occasional 1-pixel off-colour speck along strokes; the new path keeps anti-aliased fill edges identical to LUT vector mode while still routing recipes through the material solver per unique colour.",
+          },
         ],
       },
       {

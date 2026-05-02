@@ -188,7 +188,22 @@ class TestProperty7CoordinatorExceptionCapture:
         assert "error" in result
         assert error_msg in result["error"]
 
-    def test_preview_pipeline_material_archive_svg_vector_skips_native_vector_preview(self):
+    def test_preview_pipeline_material_archive_svg_vector_routes_to_native_vector_preview(self):
+        """material_archive + SVG + vector now routes to the native vector preview.
+
+        Previously the coordinator forced this combination through the
+        raster ``P02–P06`` chain (which rasterised the SVG and ran the
+        material solver per-pixel, producing hard-edged previews with
+        occasional 1-px misclassified colours along strokes). The
+        coordinator now routes both LUT and material-archive sources
+        through ``_run_vector_preview_branch``; the branch internally
+        builds the right matcher (LUT KDTree vs material solver) so
+        parse / clip / preview rasterisation are shared.
+
+        耗材档案 + SVG + 矢量现在与 LUT 矢量共享原生矢量预览分支，
+        分支内部按 ``material_source`` 构造对应匹配器，预览管线
+        完全共线。本测试锁定该路由切换。
+        """
         from config import ModelingMode
         from core.pipeline.coordinator import run_preview_pipeline
 
@@ -199,34 +214,53 @@ class TestProperty7CoordinatorExceptionCapture:
             ctx["image_path"] = "/tmp/test.svg"
             return ctx
 
+        vector_preview_calls: list = []
+
+        def vector_preview_stub(ctx):
+            vector_preview_calls.append(dict(ctx))
+            return ctx
+
         def passthrough(ctx):
             return ctx
+
+        # Each raster preview step must NOT be reached when the new
+        # vector branch handles material-archive SVG inputs. We attach
+        # an AssertionError side_effect so an accidental fallback is
+        # caught immediately.
+        # 走到任意 P02–P06 都说明路由失败，立即抛错以暴露回退。
+        raster_step_should_not_run = AssertionError(
+            "raster preview steps must not run for material_archive + svg + vector"
+        )
 
         with patch(
             "core.pipeline.coordinator.p01_preview_validation.run",
             side_effect=p01_material_archive,
         ), patch(
             "core.pipeline.coordinator._run_vector_preview_branch",
-            side_effect=AssertionError("native vector preview branch should not run"),
+            side_effect=vector_preview_stub,
         ), patch(
             "core.pipeline.coordinator.p02_lut_metadata.run",
-            side_effect=passthrough,
+            side_effect=raster_step_should_not_run,
         ), patch(
             "core.pipeline.coordinator.p03_core_processing.run",
-            side_effect=passthrough,
+            side_effect=raster_step_should_not_run,
         ), patch(
             "core.pipeline.coordinator.p04_cache_building.run",
-            side_effect=passthrough,
+            side_effect=raster_step_should_not_run,
         ), patch(
             "core.pipeline.coordinator.p05_palette_extraction.run",
-            side_effect=passthrough,
+            side_effect=raster_step_should_not_run,
         ), patch(
             "core.pipeline.coordinator.p06_bed_rendering.run",
-            side_effect=passthrough,
+            side_effect=raster_step_should_not_run,
         ):
             result = run_preview_pipeline({})
 
         assert "error" not in result
+        assert len(vector_preview_calls) == 1, (
+            "material_archive + svg + vector must route to "
+            "_run_vector_preview_branch exactly once"
+        )
 
 
 # ===========================================================================

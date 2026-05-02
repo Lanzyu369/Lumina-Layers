@@ -1,0 +1,221 @@
+{
+  "param_type": "stage_A",
+  "meta": {
+    "schema_version": "1.0",
+    "generated_at": "2026-05-02T11:06:43.077557+00:00",
+    "source": "lumina_gradient_card_extract",
+    "workflow": "single-stage-kit",
+    "warnings": [
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。",
+      "零厚度白底采样接近纯白（C0_white 均值 0.953 > 0.95），输入图像可能已被自动白平衡或色卡还原处理过。这会让拟合得到的 (E, k) 偏离真实物理值，建议改用未经白平衡 / 还原处理的原图重新校准。"
+    ],
+    "image_source": "raw",
+    "verification_count": 3,
+    "aggregation_method": "refit_combined_samples",
+    "selection": {
+      "selected_indices": [
+        1
+      ],
+      "excluded_runs": [
+        {
+          "index": 0,
+          "reason": "bias_filter",
+          "bias_flags": [
+            "c0_white_avg_gt_0_95",
+            "mean_de_gt_3"
+          ],
+          "structural_flags": [
+            "c0_white_avg_gt_0_95",
+            "mean_de_gt_3"
+          ]
+        },
+        {
+          "index": 2,
+          "reason": "c0_session_outlier",
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "run_white_c0": [
+            0.73791,
+            0.791298,
+            0.783538
+          ],
+          "session_median": [
+            0.838799,
+            0.896269,
+            0.854993
+          ],
+          "max_abs_diff": 0.10497100000000004,
+          "max_rel_diff": 0.1202779211706261,
+          "abs_threshold": 0.05,
+          "rel_threshold": 0.05,
+          "sample_count": 17
+        }
+      ],
+      "selection_strategy": "bias_filter_v1+session_c0",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": false,
+          "bias_flag_count": 2,
+          "bias_flags": [
+            "c0_white_avg_gt_0_95",
+            "mean_de_gt_3"
+          ],
+          "structural_flag_count": 2,
+          "structural_flags": [
+            "c0_white_avg_gt_0_95",
+            "mean_de_gt_3"
+          ],
+          "white_c0_avg": 0.9531459999999999,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        },
+        {
+          "index": 1,
+          "is_fresh": false,
+          "bias_flag_count": 0,
+          "bias_flags": [],
+          "structural_flag_count": 0,
+          "structural_flags": [],
+          "white_c0_avg": 0.866105,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        },
+        {
+          "index": 2,
+          "is_fresh": true,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "white_c0_avg": 0.7709153333333333,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 2
+    }
+  },
+  "parameters": {
+    "channels": [
+      {
+        "channel_index": 0,
+        "color_name": "PLA 绿色",
+        "E": [
+          0.074344,
+          0.490488,
+          0.156058
+        ],
+        "k": [
+          10.457554,
+          2.606573,
+          14.447978
+        ]
+      }
+    ],
+    "substrates": [
+      {
+        "substrate_idx": 0,
+        "substrate_id": "white",
+        "display_name": "White",
+        "C0": [
+          0.83077,
+          0.887923,
+          0.879622
+        ]
+      },
+      {
+        "substrate_idx": 1,
+        "substrate_id": "black",
+        "display_name": "Black",
+        "C0": [
+          0.024158,
+          0.029557,
+          0.029557
+        ]
+      }
+    ]
+  },
+  "fitted_substrates": {
+    "white": {
+      "C0": [
+        0.83077,
+        0.887923,
+        0.879622
+      ]
+    },
+    "black": {
+      "C0": [
+        0.024158,
+        0.029557,
+        0.029557
+      ]
+    }
+  },
+  "validation": {
+    "overall": {
+      "mean_delta_e": 2.682462751708248,
+      "max_delta_e": 8.541263725887186,
+      "rmse_linear": 0.014571379094257606,
+      "channel_rmse": [
+        0.008917653808866456,
+        0.013461718881274535,
+        0.019396722440465274
+      ],
+      "best_run_mean_delta_e": 2.682462751708248,
+      "verification_count": 3,
+      "aggregation_method": "refit_combined_samples",
+      "selected_run_count": 1,
+      "selection_strategy": "bias_filter_v1+session_c0"
+    }
+  },
+  "source": {
+    "spec": {
+      "grid_cols": 6,
+      "grid_rows": 3,
+      "block_mm": 10.0,
+      "gap_mm": 1.0,
+      "margin_mm": 1.0,
+      "pixel_mm": 1.0,
+      "layer_height_mm": 0.08,
+      "base_mm": 1.0,
+      "max_step_layers": 25,
+      "step_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        25
+      ],
+      "shrink_xy_mm": 0.02
+    },
+    "manifest": {
+      "schema_version": "1.0",
+      "workflow": "single-stage-kit",
+      "material_default": "PLA Basic",
+      "substrate_id": "white",
+      "substrate_display_name": "White"
+    }
+  }
+}

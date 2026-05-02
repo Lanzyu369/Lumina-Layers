@@ -2,16 +2,108 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-17T05:43:37.152057+00:00",
+    "generated_at": "2026-04-30T12:26:31.713826+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [
       "Stage A 拟合误差较高，请检查图像方向和角点选择。",
       "方向检测置信度较低，最优与次优方向的 ΔE 差距很小，请确认角点和图片方向。",
-      "黑底采样格颜色变化极小，自动方向检测可能不可靠；如发现拟合误差偏高，请使用 manual_black_orientation 手动指定方向。"
+      "黑底采样格颜色变化极小，自动方向检测可能不可靠；如发现拟合误差偏高，请使用 manual_black_orientation 手动指定方向。",
+      "黑底采样格颜色变化极小，自动方向检测可能不可靠；如发现拟合误差偏高，请使用界面的“纯色块位置”选项手动指定方向。"
     ],
-    "verification_count": 1,
-    "aggregation_method": "mean"
+    "image_source": "raw",
+    "verification_count": 2,
+    "aggregation_method": "mean",
+    "selection": {
+      "selected_indices": [],
+      "excluded_runs": [
+        {
+          "index": 0,
+          "reason": "bias_filter",
+          "bias_flags": [
+            "c0_white_avg_gt_0_95",
+            "black_substrate_flat",
+            "orientation_unreliable",
+            "mean_de_gt_3"
+          ],
+          "structural_flags": [
+            "c0_white_avg_gt_0_95",
+            "black_substrate_flat",
+            "mean_de_gt_3"
+          ]
+        },
+        {
+          "index": 1,
+          "reason": "c0_session_outlier",
+          "bias_flags": [
+            "black_substrate_flat",
+            "orientation_unreliable",
+            "c0_session_outlier"
+          ],
+          "structural_flags": [
+            "black_substrate_flat",
+            "c0_session_outlier"
+          ],
+          "run_white_c0": [
+            0.913099,
+            0.947307,
+            0.904661
+          ],
+          "session_median": [
+            0.879622,
+            0.9005110000000001,
+            0.822786
+          ],
+          "max_abs_diff": 0.08187500000000003,
+          "max_rel_diff": 0.09950947147861051,
+          "abs_threshold": 0.05,
+          "rel_threshold": 0.05,
+          "sample_count": 2
+        }
+      ],
+      "selection_strategy": "bias_filter_v1+session_c0",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": false,
+          "bias_flag_count": 4,
+          "bias_flags": [
+            "c0_white_avg_gt_0_95",
+            "black_substrate_flat",
+            "orientation_unreliable",
+            "mean_de_gt_3"
+          ],
+          "structural_flag_count": 3,
+          "structural_flags": [
+            "c0_white_avg_gt_0_95",
+            "black_substrate_flat",
+            "mean_de_gt_3"
+          ],
+          "white_c0_avg": 0.991102,
+          "image_source": null,
+          "cross_val_rmse": null
+        },
+        {
+          "index": 1,
+          "is_fresh": true,
+          "bias_flag_count": 3,
+          "bias_flags": [
+            "black_substrate_flat",
+            "orientation_unreliable",
+            "c0_session_outlier"
+          ],
+          "structural_flag_count": 2,
+          "structural_flags": [
+            "black_substrate_flat",
+            "c0_session_outlier"
+          ],
+          "white_c0_avg": 0.9216890000000001,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 1
+    }
   },
   "parameters": {
     "channels": [
@@ -19,14 +111,14 @@
         "channel_index": 0,
         "color_name": "瑞贝思 PLA 黑",
         "E": [
-          0.04617,
-          0.051456,
-          0.053671
+          0.030878,
+          0.031612,
+          0.032732
         ],
         "k": [
-          31.092578,
-          33.327881,
-          37.180597
+          32.063474,
+          34.940843,
+          39.085473
         ]
       }
     ],
@@ -36,9 +128,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          0.991102,
-          0.991102,
-          0.991102
+          0.913099,
+          0.947307,
+          0.904661
         ]
       },
       {
@@ -46,9 +138,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.026241,
-          0.028426,
-          0.028426
+          0.0185,
+          0.019382,
+          0.020289
         ]
       }
     ]
@@ -56,31 +148,33 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        0.991102,
-        0.991102,
-        0.991102
+        0.913099,
+        0.947307,
+        0.904661
       ]
     },
     "black": {
       "C0": [
-        0.026241,
-        0.028426,
-        0.028426
+        0.0185,
+        0.019382,
+        0.020289
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 3.4473369405504557,
-      "max_delta_e": 7.842448229121802,
-      "rmse_linear": 0.013561376205270783,
+      "mean_delta_e": 2.28543734525778,
+      "max_delta_e": 5.394090909339963,
+      "rmse_linear": 0.007276564350640957,
       "channel_rmse": [
-        0.01212849347686626,
-        0.013822432622155136,
-        0.014614129331925595
+        0.0068186187870896715,
+        0.007312268832860675,
+        0.0076734821690923796
       ],
-      "best_run_mean_delta_e": 3.4473369405504557,
-      "verification_count": 1
+      "verification_count": 2,
+      "aggregation_method": "mean",
+      "selected_run_count": 0,
+      "selection_strategy": "bias_filter_v1+session_c0"
     }
   },
   "source": {

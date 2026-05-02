@@ -1,0 +1,229 @@
+{
+  "param_type": "stage_A",
+  "meta": {
+    "schema_version": "1.0",
+    "generated_at": "2026-05-02T11:05:46.543550+00:00",
+    "source": "lumina_gradient_card_extract",
+    "workflow": "single-stage-kit",
+    "warnings": [],
+    "image_source": "raw",
+    "verification_count": 3,
+    "aggregation_method": "refit_combined_samples",
+    "selection": {
+      "selected_indices": [
+        0
+      ],
+      "excluded_runs": [
+        {
+          "index": 1,
+          "reason": "c0_session_outlier",
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "run_white_c0": [
+            0.799103,
+            0.854993,
+            0.846873
+          ],
+          "session_median": [
+            0.863157,
+            0.904661,
+            0.879622
+          ],
+          "max_abs_diff": 0.06405399999999994,
+          "max_rel_diff": 0.07420897936296635,
+          "abs_threshold": 0.05,
+          "rel_threshold": 0.05,
+          "sample_count": 15
+        },
+        {
+          "index": 2,
+          "reason": "c0_session_outlier",
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "run_white_c0": [
+            0.701102,
+            0.752942,
+            0.745404
+          ],
+          "session_median": [
+            0.863157,
+            0.904661,
+            0.879622
+          ],
+          "max_abs_diff": 0.16205499999999995,
+          "max_rel_diff": 0.18774684095709118,
+          "abs_threshold": 0.05,
+          "rel_threshold": 0.05,
+          "sample_count": 15
+        }
+      ],
+      "selection_strategy": "bias_filter_v1+session_c0",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": false,
+          "bias_flag_count": 0,
+          "bias_flags": [],
+          "structural_flag_count": 0,
+          "structural_flags": [],
+          "white_c0_avg": 0.9047676666666667,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        },
+        {
+          "index": 1,
+          "is_fresh": false,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "white_c0_avg": 0.8336563333333333,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        },
+        {
+          "index": 2,
+          "is_fresh": true,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "c0_session_outlier"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "white_c0_avg": 0.7331493333333334,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 2
+    }
+  },
+  "parameters": {
+    "channels": [
+      {
+        "channel_index": 0,
+        "color_name": "PLA 青色",
+        "E": [
+          0.070175,
+          0.297906,
+          0.773772
+        ],
+        "k": [
+          14.70914,
+          6.650271,
+          3.029187
+        ]
+      }
+    ],
+    "substrates": [
+      {
+        "substrate_idx": 0,
+        "substrate_id": "white",
+        "display_name": "White",
+        "C0": [
+          0.896269,
+          0.930111,
+          0.887923
+        ]
+      },
+      {
+        "substrate_idx": 1,
+        "substrate_id": "black",
+        "display_name": "Black",
+        "C0": [
+          0.036889,
+          0.038204,
+          0.043735
+        ]
+      }
+    ]
+  },
+  "fitted_substrates": {
+    "white": {
+      "C0": [
+        0.896269,
+        0.930111,
+        0.887923
+      ]
+    },
+    "black": {
+      "C0": [
+        0.036889,
+        0.038204,
+        0.043735
+      ]
+    }
+  },
+  "validation": {
+    "overall": {
+      "mean_delta_e": 2.803038461437485,
+      "max_delta_e": 9.199121922592857,
+      "rmse_linear": 0.029288284187761096,
+      "channel_rmse": [
+        0.008612128351802894,
+        0.022142834669718964,
+        0.04482116564783578
+      ],
+      "best_run_mean_delta_e": 2.803038461437485,
+      "verification_count": 3,
+      "aggregation_method": "refit_combined_samples",
+      "selected_run_count": 1,
+      "selection_strategy": "bias_filter_v1+session_c0"
+    }
+  },
+  "source": {
+    "spec": {
+      "grid_cols": 6,
+      "grid_rows": 3,
+      "block_mm": 10.0,
+      "gap_mm": 1.0,
+      "margin_mm": 1.0,
+      "pixel_mm": 1.0,
+      "layer_height_mm": 0.08,
+      "base_mm": 1.0,
+      "max_step_layers": 25,
+      "step_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        25
+      ],
+      "shrink_xy_mm": 0.02
+    },
+    "manifest": {
+      "schema_version": "1.0",
+      "workflow": "single-stage-kit",
+      "material_default": "PLA Basic",
+      "substrate_id": "white",
+      "substrate_display_name": "White"
+    }
+  }
+}

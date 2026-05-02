@@ -2,14 +2,92 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-17T05:35:07.784807+00:00",
+    "generated_at": "2026-04-30T12:29:32.648825+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [
-      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。",
+      "方向检测置信度较低，最优与次优方向的 ΔE 差距很小，请确认角点和图片方向。"
     ],
-    "verification_count": 1,
-    "aggregation_method": "mean"
+    "image_source": "raw",
+    "verification_count": 2,
+    "aggregation_method": "mean",
+    "selection": {
+      "selected_indices": [],
+      "excluded_runs": [
+        {
+          "index": 0,
+          "reason": "bias_filter",
+          "bias_flags": [
+            "mean_de_gt_3"
+          ],
+          "structural_flags": [
+            "mean_de_gt_3"
+          ]
+        },
+        {
+          "index": 1,
+          "reason": "c0_session_outlier",
+          "bias_flags": [
+            "orientation_unreliable",
+            "c0_session_outlier"
+          ],
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "run_white_c0": [
+            0.955973,
+            0.913099,
+            0.846873
+          ],
+          "session_median": [
+            0.879622,
+            0.9005110000000001,
+            0.826778
+          ],
+          "max_abs_diff": 0.07635099999999995,
+          "max_rel_diff": 0.08679978445286719,
+          "abs_threshold": 0.05,
+          "rel_threshold": 0.05,
+          "sample_count": 6
+        }
+      ],
+      "selection_strategy": "bias_filter_v1+session_c0",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": false,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "mean_de_gt_3"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "mean_de_gt_3"
+          ],
+          "white_c0_avg": 0.8363026666666666,
+          "image_source": null,
+          "cross_val_rmse": null
+        },
+        {
+          "index": 1,
+          "is_fresh": true,
+          "bias_flag_count": 2,
+          "bias_flags": [
+            "orientation_unreliable",
+            "c0_session_outlier"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "c0_session_outlier"
+          ],
+          "white_c0_avg": 0.905315,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 1
+    }
   },
   "parameters": {
     "channels": [
@@ -17,14 +95,14 @@
         "channel_index": 0,
         "color_name": "瑞贝思 PLA 白",
         "E": [
-          0.857911,
-          0.897006,
-          0.895714
+          0.775592,
+          0.803385,
+          0.771611
         ],
         "k": [
-          2.239545,
-          2.725836,
-          3.49947
+          1.519387,
+          1.83332,
+          2.598236
         ]
       }
     ],
@@ -34,9 +112,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          0.806952,
-          0.863157,
-          0.838799
+          0.955973,
+          0.913099,
+          0.846873
         ]
       },
       {
@@ -44,9 +122,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.056128,
-          0.066626,
-          0.068478
+          0.038204,
+          0.042311,
+          0.043735
         ]
       }
     ]
@@ -54,31 +132,33 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        0.806952,
-        0.863157,
-        0.838799
+        0.955973,
+        0.913099,
+        0.846873
       ]
     },
     "black": {
       "C0": [
-        0.056128,
-        0.066626,
-        0.068478
+        0.038204,
+        0.042311,
+        0.043735
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 3.6509071992412467,
-      "max_delta_e": 8.02069241329766,
-      "rmse_linear": 0.08248979486748328,
+      "mean_delta_e": 1.8735148877200767,
+      "max_delta_e": 4.253005928205838,
+      "rmse_linear": 0.03306246908175988,
       "channel_rmse": [
-        0.08367076200384035,
-        0.07984587678741732,
-        0.08389003705794683
+        0.03503188980567614,
+        0.030588795662462552,
+        0.03341366280296223
       ],
-      "best_run_mean_delta_e": 3.6509071992412467,
-      "verification_count": 1
+      "verification_count": 2,
+      "aggregation_method": "mean",
+      "selected_run_count": 0,
+      "selection_strategy": "bias_filter_v1+session_c0"
     }
   },
   "source": {

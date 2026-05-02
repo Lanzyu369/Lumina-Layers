@@ -73,6 +73,12 @@ from core.material_color_solver import (
 
 _log = logging.getLogger(__name__)
 
+# Maximum CIE76 ΔE penalty tolerated when switching from the CIE76-best
+# candidate to a hue-aware candidate.  If the hue pick's ΔE exceeds the
+# CIE76-best by more than this, we fall back to the CIE76-best to avoid
+# major luminance/chroma regressions on deeply out-of-gamut colours.
+# 色相保护允许的最大 CIE76 ΔE 惩罚；超出时回退到 CIE76 最优。
+HUE_RERANK_MAX_DE_PENALTY: float = 5.0
 
 # ---------------------------------------------------------------------------
 # Constants & schema
@@ -295,6 +301,95 @@ def _cache_meta_path_for(npz_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Hue-aware reranking helpers
+# ---------------------------------------------------------------------------
+
+
+def _lab_to_lch(lab: np.ndarray) -> np.ndarray:
+    """Convert standard Lab ``(…, 3)`` to LCH ``(…, 3)``.
+
+    Standard Lab scale: L 0-100, a/b -128..127 (as returned by
+    :func:`rgb_to_lab`).  Output: L unchanged, C = chroma,
+    H = hue angle in degrees [0, 360).
+
+    标准 Lab → LCH；L 不变，C = 彩度，H = 色相角（度）。
+    """
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+    C = np.sqrt(a ** 2 + b ** 2)
+    H = np.degrees(np.arctan2(b, a)) % 360
+    return np.stack([L, C, H], axis=-1)
+
+
+def _hue_aware_rerank(
+    target_lab: np.ndarray,
+    candidate_lab: np.ndarray,
+    candidate_delta_e: np.ndarray,
+    hue_weight: float,
+) -> np.ndarray:
+    """Select the best candidate per target using LCH hue-aware distance.
+
+    Falls back to the CIE76-best candidate when the hue-aware pick
+    would incur a CIE76 ΔE penalty larger than
+    :data:`HUE_RERANK_MAX_DE_PENALTY`.
+
+    对每个目标色用 LCH 加权距离挑选候选；若色相候选的 CIE76 ΔE 超出
+    CIE76 最优太多（超过 ``HUE_RERANK_MAX_DE_PENALTY``）则安全回退。
+
+    Args:
+        target_lab: ``(C, 3)`` float64 target colours in Lab.
+        candidate_lab: ``(C, K, 3)`` float64 candidate colours in Lab.
+        candidate_delta_e: ``(C, K)`` pre-computed CIE76 ΔE.
+        hue_weight: 0.0–1.0 slider value from the UI; mapped to
+            ``w_H`` via the same exponential curve as
+            :class:`core.color_matching_hue_aware.HueAwareColorMatcher`.
+
+    Returns:
+        ``(C,)`` int64 array of per-target best-candidate column indices.
+    """
+    C_count, K = candidate_delta_e.shape
+
+    # Map hue_weight 0–1 → w_H via the same exponential curve used by
+    # HueAwareColorMatcher so the UI slider behaves identically.
+    hw = float(np.clip(hue_weight, 0.0, 1.0))
+    w_H = 0.15 + 0.85 * (1.0 - hw) ** 3
+
+    # Convert to LCH
+    target_lch = _lab_to_lch(target_lab)                       # (C, 3)
+    cand_lch = _lab_to_lch(candidate_lab.reshape(-1, 3))       # (C*K, 3)
+    cand_lch = cand_lch.reshape(C_count, K, 3)
+
+    # Weighted distance components
+    dL = cand_lch[..., 0] - target_lch[:, None, 0]            # (C, K)
+    dC = cand_lch[..., 1] - target_lch[:, None, 1]            # (C, K)
+
+    # ΔH = 2 * min(C_target, C_candidate) * sin(Δh / 2)
+    dh_deg = cand_lch[..., 2] - target_lch[:, None, 2]
+    dh_deg = (dh_deg + 180.0) % 360.0 - 180.0
+    dh_rad = np.radians(dh_deg)
+    delta_H = (
+        2.0
+        * np.minimum(target_lch[:, None, 1], cand_lch[..., 1])
+        * np.sin(dh_rad / 2.0)
+    )
+
+    hue_dist = np.sqrt(dL ** 2 + dC ** 2 + (delta_H / w_H) ** 2)  # (C, K)
+    hue_best_pos = np.argmin(hue_dist, axis=1)                     # (C,)
+
+    # Safety cap: fall back to CIE76-best when ΔE penalty exceeds threshold
+    cie76_best_pos = np.argmin(candidate_delta_e, axis=1)
+    row_idx = np.arange(C_count, dtype=np.int64)
+    cie76_best_de = candidate_delta_e[row_idx, cie76_best_pos]
+    hue_pick_de = candidate_delta_e[row_idx, hue_best_pos]
+    penalty = hue_pick_de - cie76_best_de
+    fallback_mask = penalty > HUE_RERANK_MAX_DE_PENALTY
+    result = hue_best_pos.copy()
+    result[fallback_mask] = cie76_best_pos[fallback_mask]
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Cache data class
 # ---------------------------------------------------------------------------
 
@@ -369,6 +464,8 @@ class MaterialSolverCache:
         self,
         target_srgb: np.ndarray,
         user_materials: list[MaterialParams],
+        *,
+        hue_weight: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Find the best stored recipe for each target color.
         为每个目标颜色查找最优存档配方。
@@ -450,7 +547,17 @@ class MaterialSolverCache:
         candidate_delta_e = np.linalg.norm(
             candidate_lab - target_lab[:, None, :], axis=2
         )
-        best_pos = np.argmin(candidate_delta_e, axis=1)
+        # --- Hue-aware reranking (when hue_weight > 0) ---
+        # Uses LCH weighted distance to prefer same-hue candidates,
+        # with a safety cap that falls back to CIE76-best when the
+        # hue pick causes too large a ΔE penalty.
+        # 色相保护 reranking：偏好同色相候选，但对超色域色设安全阈值。
+        if hue_weight > 0.0:
+            best_pos = _hue_aware_rerank(
+                target_lab, candidate_lab, candidate_delta_e, hue_weight,
+            )
+        else:
+            best_pos = np.argmin(candidate_delta_e, axis=1)
         row_index = np.arange(target_lab.shape[0], dtype=np.int64)
         best_rows = nearest_idx[row_index, best_pos]
         matched_rgb = self.achieved_srgb[best_rows]
