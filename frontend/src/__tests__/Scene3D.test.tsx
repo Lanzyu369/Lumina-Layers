@@ -258,6 +258,17 @@ beforeEach(() => {
   });
 
   describe("fridge magnet proxy wiring", () => {
+    it("passes fridge mode into InteractiveModelViewer for outline preview handling", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        enable_fridge_magnet: true,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.enableFridgeMagnet).toBe(true);
+    });
+
     it("does not render the proxy layer when fridge mode is disabled", () => {
       useConverterStore.setState({
         enable_fridge_magnet: false,

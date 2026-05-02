@@ -251,6 +251,73 @@ describe("OutlineFrame3D — Unit Tests", () => {
     });
   });
 
+  describe("fridge-magnet cavity handling", () => {
+    it("fills enclosed top-face holes before deriving the outline silhouette", () => {
+      const geo = makeGeometry(
+        [
+          0, 0, 0, 6, 0, 0, 6, 6, 0, 0, 6, 0,
+          0, 0, 1, 6, 0, 1, 6, 6, 1, 0, 6, 1,
+          2, 2, 1, 4, 2, 1, 4, 4, 1, 2, 4, 1,
+        ],
+        [
+          0, 2, 1, 0, 3, 2,
+          4, 5, 8, 5, 9, 8,
+          5, 6, 9, 6, 10, 9,
+          6, 7, 10, 7, 11, 10,
+          7, 4, 11, 4, 8, 11,
+          0, 1, 5, 0, 5, 4,
+          1, 2, 6, 1, 6, 5,
+          2, 3, 7, 2, 7, 6,
+          3, 0, 4, 3, 4, 7,
+        ],
+      );
+
+      const result = rasterizeMeshToGrid(geo, { fillInteriorHoles: true });
+
+      expect(result).not.toBeNull();
+      const { grid, gridW, gridH } = result!;
+      for (let y = 1; y < gridH - 1; y++) {
+        for (let x = 1; x < gridW - 1; x++) {
+          expect(grid[y * gridW + x]).toBe(1);
+        }
+      }
+    });
+
+    it("keeps dominant voxel cell size when interior cavity vertices add extra gaps", () => {
+      const geo = makeGeometry(
+        [
+          0.05, 0, 0, 0.95, 0, 0, 1.05, 0, 0, 1.95, 0, 0,
+          2.05, 0, 0, 2.95, 0, 0, 3.05, 0, 0, 3.95, 0, 0,
+          0.05, 2, 0, 0.95, 2, 0, 1.05, 2, 0, 1.95, 2, 0,
+          2.05, 2, 0, 2.95, 2, 0, 3.05, 2, 0, 3.95, 2, 0,
+          1.33, 1, 0, 1.66, 1, 0, 2.22, 1, 0, 2.58, 1, 0,
+          0.05, 0, 1, 0.95, 0, 1, 1.05, 0, 1, 1.95, 0, 1,
+          2.05, 0, 1, 2.95, 0, 1, 3.05, 0, 1, 3.95, 0, 1,
+          0.05, 2, 1, 0.95, 2, 1, 1.05, 2, 1, 1.95, 2, 1,
+          2.05, 2, 1, 2.95, 2, 1, 3.05, 2, 1, 3.95, 2, 1,
+          1.33, 1, 1, 1.66, 1, 1, 2.22, 1, 1, 2.58, 1, 1,
+        ],
+        [
+          20, 21, 28, 21, 29, 28,
+          21, 22, 29, 22, 30, 29,
+          22, 23, 30, 23, 31, 30,
+          23, 24, 31, 24, 32, 31,
+          24, 25, 32, 25, 33, 32,
+          25, 26, 33, 26, 34, 33,
+          26, 27, 34, 27, 35, 34,
+          36, 37, 38, 36, 38, 39,
+          0, 1, 21, 0, 21, 20,
+          8, 28, 29, 8, 29, 9,
+        ],
+      );
+
+      const result = rasterizeMeshToGrid(geo);
+
+      expect(result).not.toBeNull();
+      expect(result!.cellSize).toBeCloseTo(1, 5);
+    });
+  });
+
   // ---- greedyRectMerge ----
 
   describe("greedyRectMerge", () => {

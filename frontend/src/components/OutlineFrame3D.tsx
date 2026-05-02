@@ -12,6 +12,7 @@ const pendingOutlineFrameGeometryDisposals = new Map<
   THREE.BufferGeometry,
   ReturnType<typeof setTimeout>
 >();
+const COORD_PRECISION = 1e4;
 
 function cancelPendingOutlineFrameGeometryDispose(
   geometry: THREE.BufferGeometry | null,
@@ -50,6 +51,41 @@ export function resetOutlineFrameGeometryDisposeForTests(): void {
   pendingOutlineFrameGeometryDisposals.clear();
 }
 
+function inferDominantCellSizeFromCoords(coords: number[]): number | null {
+  const uniqueCoords = Array.from(
+    new Set(coords.map((coord) => Math.round(coord * COORD_PRECISION) / COORD_PRECISION)),
+  ).sort((a, b) => a - b);
+  if (uniqueCoords.length < 2) {
+    return null;
+  }
+
+  const gapCounts = new Map<number, number>();
+  for (let i = 1; i < uniqueCoords.length; i++) {
+    const gap = uniqueCoords[i] - uniqueCoords[i - 1];
+    if (gap > 1e-6) {
+      const roundedGap = Math.round(gap * COORD_PRECISION) / COORD_PRECISION;
+      gapCounts.set(roundedGap, (gapCounts.get(roundedGap) ?? 0) + 1);
+    }
+  }
+  if (gapCounts.size === 0) {
+    return null;
+  }
+
+  const rankedGaps = Array.from(gapCounts.entries());
+  const maxGap = Math.max(...rankedGaps.map(([gap]) => gap));
+  const largeGaps = rankedGaps
+    .filter(([gap]) => gap >= maxGap * 0.5)
+    .sort(([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA);
+  const [dominantGap, dominantCount] = largeGaps[0] ?? rankedGaps.sort(
+    ([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA,
+  )[0];
+  const shrinkGap = rankedGaps
+    .filter(([gap, count]) => gap < dominantGap * 0.35 && count >= Math.max(2, dominantCount * 0.25))
+    .sort(([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA)[0]?.[0];
+
+  return dominantGap + (shrinkGap ?? 0);
+}
+
 // ========== Exported pure utility functions (testable without React) ==========
 
 /**
@@ -60,7 +96,10 @@ export function resetOutlineFrameGeometryDisposeForTests(): void {
  * @param geometry - BufferGeometry of the backing plate mesh. (底板网格的 BufferGeometry)
  * @returns Grid info object, or null if geometry is invalid. (网格信息对象，或 null)
  */
-export function rasterizeMeshToGrid(geometry: THREE.BufferGeometry): {
+export function rasterizeMeshToGrid(
+  geometry: THREE.BufferGeometry,
+  options: { fillInteriorHoles?: boolean } = {},
+): {
   grid: Uint8Array;
   gridW: number;
   gridH: number;
@@ -109,39 +148,46 @@ export function rasterizeMeshToGrid(geometry: THREE.BufferGeometry): {
   // Backend voxels are at [(x+shrink)*ps, (x+1-shrink)*ps] where ps=pixel_scale, shrink=0.05.
   // Sorted unique X coords have alternating gaps: shrink_gap (~0.1*ps) and voxel_width (~0.9*ps).
   // pixel_scale = shrink_gap + voxel_width. We detect this by clustering gaps into two groups.
-  const uniqueXs = Array.from(new Set(topPoints.map(p => Math.round(p[0] * 1e4) / 1e4))).sort((a, b) => a - b);
+  const uniqueXs = Array.from(
+    new Set(topPoints.map(p => Math.round(p[0] * COORD_PRECISION) / COORD_PRECISION)),
+  ).sort((a, b) => a - b);
   let cellSize: number;
   if (uniqueXs.length >= 4) {
-    // Collect all positive gaps between consecutive unique X values
-    const gaps: number[] = [];
-    for (let i = 1; i < uniqueXs.length; i++) {
-      const gap = uniqueXs[i] - uniqueXs[i - 1];
-      if (gap > 1e-6) gaps.push(gap);
-    }
-    if (gaps.length >= 2) {
-      gaps.sort((a, b) => a - b);
-      // Split into two clusters: small gaps (shrink) and large gaps (voxel width).
-      // The boundary is at the largest jump between consecutive sorted gaps.
-      let maxJump = 0, splitIdx = 0;
-      for (let i = 1; i < gaps.length; i++) {
-        const jump = gaps[i] - gaps[i - 1];
-        if (jump > maxJump) { maxJump = jump; splitIdx = i; }
-      }
-      // Average of small cluster + average of large cluster = pixel_scale
-      if (splitIdx > 0 && splitIdx < gaps.length) {
-        let sumSmall = 0;
-        for (let i = 0; i < splitIdx; i++) sumSmall += gaps[i];
-        const avgSmall = sumSmall / splitIdx;
-        let sumLarge = 0;
-        for (let i = splitIdx; i < gaps.length; i++) sumLarge += gaps[i];
-        const avgLarge = sumLarge / (gaps.length - splitIdx);
-        cellSize = avgSmall + avgLarge;
-      } else {
-        // All gaps are similar — likely no shrink gap, use median gap directly
-        cellSize = gaps[Math.floor(gaps.length / 2)];
-      }
+    const dominantCellSize = inferDominantCellSizeFromCoords(topPoints.map((point) => point[0]));
+    if (dominantCellSize !== null && dominantCellSize > 1e-6) {
+      cellSize = dominantCellSize;
     } else {
-      cellSize = gaps.length > 0 ? gaps[0] : rangeX;
+      // Collect all positive gaps between consecutive unique X values
+      const gaps: number[] = [];
+      for (let i = 1; i < uniqueXs.length; i++) {
+        const gap = uniqueXs[i] - uniqueXs[i - 1];
+        if (gap > 1e-6) gaps.push(gap);
+      }
+      if (gaps.length >= 2) {
+        gaps.sort((a, b) => a - b);
+        // Split into two clusters: small gaps (shrink) and large gaps (voxel width).
+        // The boundary is at the largest jump between consecutive sorted gaps.
+        let maxJump = 0, splitIdx = 0;
+        for (let i = 1; i < gaps.length; i++) {
+          const jump = gaps[i] - gaps[i - 1];
+          if (jump > maxJump) { maxJump = jump; splitIdx = i; }
+        }
+        // Average of small cluster + average of large cluster = pixel_scale
+        if (splitIdx > 0 && splitIdx < gaps.length) {
+          let sumSmall = 0;
+          for (let i = 0; i < splitIdx; i++) sumSmall += gaps[i];
+          const avgSmall = sumSmall / splitIdx;
+          let sumLarge = 0;
+          for (let i = splitIdx; i < gaps.length; i++) sumLarge += gaps[i];
+          const avgLarge = sumLarge / (gaps.length - splitIdx);
+          cellSize = avgSmall + avgLarge;
+        } else {
+          // All gaps are similar — likely no shrink gap, use median gap directly
+          cellSize = gaps[Math.floor(gaps.length / 2)];
+        }
+      } else {
+        cellSize = gaps.length > 0 ? gaps[0] : rangeX;
+      }
     }
   } else {
     // Too few unique X values — fallback: cap grid to reasonable resolution
@@ -178,6 +224,9 @@ export function rasterizeMeshToGrid(geometry: THREE.BufferGeometry): {
         grid, gridW, gridH, bMinX, bMinY, cellSize,
       );
     }
+  }
+  if (options.fillInteriorHoles === true) {
+    fillEnclosedGridHoles(grid, gridW, gridH);
   }
 
   return { grid, gridW, gridH, originX: bMinX, originY: bMinY, cellSize, maxZ };
@@ -229,6 +278,44 @@ function pointInTriangle(
   const b = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) / d;
   const c = 1 - a - b;
   return a >= -0.01 && b >= -0.01 && c >= -0.01;
+}
+
+function fillEnclosedGridHoles(grid: Uint8Array, gridW: number, gridH: number): void {
+  const exterior = new Uint8Array(gridW * gridH);
+  const queue: number[] = [];
+  const enqueue = (x: number, y: number) => {
+    const idx = y * gridW + x;
+    if (grid[idx] !== 0 || exterior[idx] !== 0) {
+      return;
+    }
+    exterior[idx] = 1;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < gridW; x++) {
+    enqueue(x, 0);
+    enqueue(x, gridH - 1);
+  }
+  for (let y = 1; y < gridH - 1; y++) {
+    enqueue(0, y);
+    enqueue(gridW - 1, y);
+  }
+
+  for (let head = 0; head < queue.length; head++) {
+    const idx = queue[head];
+    const x = idx % gridW;
+    const y = Math.floor(idx / gridW);
+    if (x > 0) enqueue(x - 1, y);
+    if (x < gridW - 1) enqueue(x + 1, y);
+    if (y > 0) enqueue(x, y - 1);
+    if (y < gridH - 1) enqueue(x, y + 1);
+  }
+
+  for (let idx = 0; idx < grid.length; idx++) {
+    if (grid[idx] === 0 && exterior[idx] === 0) {
+      grid[idx] = 1;
+    }
+  }
 }
 
 /**
@@ -546,6 +633,7 @@ export interface OutlineFrame3DProps {
   outlineWidth: number;
   backingPlateMesh: THREE.Mesh | null;
   modelMaxZ: number;
+  fillInteriorHoles?: boolean;
 }
 
 /**
@@ -559,6 +647,7 @@ export default function OutlineFrame3D({
   outlineWidth,
   backingPlateMesh,
   modelMaxZ,
+  fillInteriorHoles = false,
 }: OutlineFrame3DProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const tmpColor = useRef(new THREE.Color());
@@ -574,7 +663,7 @@ export default function OutlineFrame3D({
     }
 
     // 1. Rasterize backing plate mesh to occupancy grid
-    const rasterResult = rasterizeMeshToGrid(backingPlateMesh.geometry);
+    const rasterResult = rasterizeMeshToGrid(backingPlateMesh.geometry, { fillInteriorHoles });
     if (!rasterResult) return null;
 
     const { grid: originalGrid, gridW: origW, gridH: origH, originX, originY, cellSize } = rasterResult;
@@ -663,7 +752,7 @@ export default function OutlineFrame3D({
     });
 
     return geo;
-  }, [enabled, backingPlateMesh, outlineWidth, modelMaxZ]);
+  }, [enabled, backingPlateMesh, outlineWidth, modelMaxZ, fillInteriorHoles]);
 
   useEffect(() => {
     cancelPendingOutlineFrameGeometryDispose(geometry);

@@ -58,12 +58,36 @@ export interface InteractiveModelViewerProps {
   enableCloisonne?: boolean;   // 是否启用景泰蓝预览，默认 false
   wireWidthMm?: number;        // 金丝宽度 (mm)，默认 0.4
   wireHeightMm?: number;       // 金丝高度 (mm)，默认 0.1
+  enableFridgeMagnet?: boolean;
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
 }
 
 /** Color layer thickness in mm (5 layers × 0.08mm). */
 const COLOR_LAYER_HEIGHT = 0.4;
+
+export function computeOutlinePreviewHeight(
+  spacerThick: number,
+  structureMode: string,
+  enableRelief: boolean,
+  colorHeightMap: Record<string, number>,
+  fallbackModelMaxZ: number,
+): number {
+  const safeSpacerThick = Number.isFinite(spacerThick)
+    ? Math.max(0, spacerThick)
+    : 0;
+  const reliefHeights = Object.values(colorHeightMap).filter(
+    (height) => Number.isFinite(height) && height > 0,
+  );
+  const colorLayerHeight = enableRelief && reliefHeights.length > 0
+    ? Math.max(COLOR_LAYER_HEIGHT, ...reliefHeights)
+    : COLOR_LAYER_HEIGHT * (structureMode.includes("Double") ? 2 : 1);
+  const livePreviewHeight = safeSpacerThick + colorLayerHeight;
+  if (livePreviewHeight > 0) {
+    return livePreviewHeight;
+  }
+  return Number.isFinite(fallbackModelMaxZ) ? Math.max(0, fallbackModelMaxZ) : 0;
+}
 
 function InteractiveModelViewer({
   url,
@@ -80,6 +104,7 @@ function InteractiveModelViewer({
   enableCloisonne = false,
   wireWidthMm = 0.4,
   wireHeightMm = 0.1,
+  enableFridgeMagnet = false,
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
 }: InteractiveModelViewerProps) {
@@ -330,6 +355,14 @@ function InteractiveModelViewer({
     };
   }, [nonColorObject, colorMeshes, backingPlateMesh, url]);
 
+  const outlinePreviewHeight = computeOutlinePreviewHeight(
+    spacerThick,
+    structureMode,
+    enableRelief,
+    colorHeightMap,
+    modelBounds?.maxZ ?? 0,
+  );
+
   // ---- White backing plate mesh ----
   const isDoubleSided = structureMode === "Double-sided";
   const backingMesh = useMemo(() => {
@@ -466,7 +499,8 @@ function InteractiveModelViewer({
         enabled={enableOutline}
         outlineWidth={outlineWidth}
         backingPlateMesh={backingMesh}
-        modelMaxZ={modelBounds?.maxZ ?? 0}
+        modelMaxZ={outlinePreviewHeight}
+        fillInteriorHoles={enableFridgeMagnet}
       />
       {/* 景泰蓝金色线条预览 */}
       <CloisonneWire3D

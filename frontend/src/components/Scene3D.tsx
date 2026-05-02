@@ -571,6 +571,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               enableCloisonne={enableCloisonne}
               wireWidthMm={wireWidthMm}
               wireHeightMm={wireHeightMm}
+              enableFridgeMagnet={enableFridgeMagnet}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
             />
