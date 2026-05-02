@@ -79,6 +79,7 @@ from .async_glb import schedule_glb_build
 router = APIRouter()
 log = get_logger(__name__)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
+_SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
 
 def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes:
@@ -152,6 +153,51 @@ def _schedule_or_run_overridden_glb_build(
     return f"/api/files/{glb_id}"
 
 
+def _select_all_color_mask_for_region_id(
+    session_data: dict,
+    region_id: str,
+) -> np.ndarray | None:
+    if not isinstance(region_id, str):
+        return None
+    if not region_id.startswith(_SELECT_ALL_COLOR_REGION_PREFIX):
+        return None
+
+    color_hex = region_id[len(_SELECT_ALL_COLOR_REGION_PREFIX):].strip().lstrip("#")
+    if len(color_hex) != 6:
+        return None
+    try:
+        target_rgb = np.asarray(
+            [
+                int(color_hex[0:2], 16),
+                int(color_hex[2:4], 16),
+                int(color_hex[4:6], 16),
+            ],
+            dtype=np.uint8,
+        )
+    except ValueError:
+        return None
+
+    cache = session_data.get("preview_cache")
+    if not isinstance(cache, dict):
+        return None
+    matched_rgb = cache.get("matched_rgb")
+    mask_solid = cache.get("mask_solid")
+    if matched_rgb is None or mask_solid is None:
+        return None
+
+    matched_arr = np.asarray(matched_rgb)
+    if matched_arr.ndim != 3 or matched_arr.shape[2] < 3:
+        return None
+    mask_solid_arr = np.asarray(mask_solid, dtype=bool)
+    if mask_solid_arr.shape != matched_arr.shape[:2]:
+        return None
+
+    color_mask = np.all(matched_arr[..., :3] == target_rgb, axis=-1) & mask_solid_arr
+    if not np.any(color_mask):
+        return None
+    return color_mask
+
+
 def _get_region_mask_items_for_ids(
     session_data: dict,
     region_ids: list[str],
@@ -159,11 +205,17 @@ def _get_region_mask_items_for_ids(
     region_masks = session_data.get("selected_region_masks") or {}
     if not isinstance(region_masks, dict):
         region_masks = {}
+    session_data["selected_region_masks"] = region_masks
 
     masks: list[tuple[str, np.ndarray]] = []
     seen_region_ids: set[str] = set()
     for region_id in region_ids:
         mask = region_masks.get(region_id)
+        if not isinstance(mask, np.ndarray):
+            generated_mask = _select_all_color_mask_for_region_id(session_data, region_id)
+            if generated_mask is not None:
+                region_masks[region_id] = generated_mask
+                mask = generated_mask
         if isinstance(region_id, str) and isinstance(mask, np.ndarray) and region_id not in seen_region_ids:
             masks.append((region_id, mask))
             seen_region_ids.add(region_id)

@@ -252,15 +252,32 @@ export default function PalettePanel({
   const toggleFreeColor = useConverterStore((s) => s.toggleFreeColor);
   const clearFreeColors = useConverterStore((s) => s.clearFreeColors);
   const regionReplacementCount = useConverterStore((s) => s.regionReplacementCount);
+  const selectedColorList = Array.from(selectedColors);
+  const selectAllRecipeRegionIds =
+    selectionMode === 'select-all' &&
+    selectedColorList.length > 0 &&
+    gradientSelection?.kind !== 'region'
+      ? selectedColorList.map((hex) => `__select_all_color__:${hex.replace(/^#/, "").toLowerCase()}`)
+      : [];
+  const activeRecipeRegionIds =
+    selectionMode === 'select-all'
+      ? selectAllRecipeRegionIds
+      : selectedRegions.length > 0
+      ? selectedRegions.map((region) => region.regionId)
+      : (regionData?.regionId ? [regionData.regionId] : selectAllRecipeRegionIds);
+  const activeSelectAllColorHex =
+    selectionMode === 'select-all'
+      ? (selectedColor && selectedColors.has(selectedColor)
+        ? selectedColor
+        : selectedColorList[selectedColorList.length - 1] ?? null)
+      : null;
   // Custom recipe lets users manually compose the layer stack for a region;
   // it is LUT-agnostic. Forward-model prediction is an optional add-on that
   // degrades gracefully inside the dialog when the LUT has no predictor.
   // 自定义配方是手动指定区域的叠层耗材，与 LUT 预测能力无关；预测按钮
   // 在无预测模型的 LUT 下会在对话框内优雅降级提示。
-  const hasRegionTarget =
-    selectedRegions.length > 0 || !!regionData?.regionId;
-  const canUseCustomRecipe = hasRegionTarget;
-  const customRecipeDisabledHint = !hasRegionTarget
+  const canUseCustomRecipe = activeRecipeRegionIds.length > 0;
+  const customRecipeDisabledHint = !canUseCustomRecipe
     ? t("recipe_custom_disabled_region")
     : undefined;
 
@@ -564,13 +581,11 @@ export default function PalettePanel({
           material: entry.material,
           hex: entry.hex_color ?? null,
         }))}
-        regionIds={
-          selectedRegions.length > 0
-            ? selectedRegions.map((region) => region.regionId)
-            : (regionData?.regionId ? [regionData.regionId] : [])
-        }
+        regionIds={activeRecipeRegionIds}
         currentRegionColorHex={
-          selectedRegions.length > 0
+          selectionMode === 'select-all'
+            ? (activeSelectAllColorHex ? `#${activeSelectAllColorHex}` : null)
+            : selectedRegions.length > 0
             ? selectedRegions[selectedRegions.length - 1]?.colorHex ?? null
             : regionData?.colorHex ?? null
         }
@@ -580,10 +595,7 @@ export default function PalettePanel({
         baseChannelIdx={selectedLutInfo?.base_channel_idx ?? 0}
         onClose={() => setRecipeDialogOpen(false)}
         onApplied={(response, recipe, nextLayers, nextLayerHeightMm, virtualMaterials) => {
-          const activeRegionIds =
-            selectedRegions.length > 0
-              ? selectedRegions.map((region) => region.regionId)
-              : (regionData?.regionId ? [regionData.regionId] : []);
+          const activeRegionIds = activeRecipeRegionIds;
           // Persist the virtual_materials declared at apply time alongside
           // the recipe. ``submitGenerate`` later forwards
           // ``state.recipe_overrides`` verbatim to ``/generate``; dropping

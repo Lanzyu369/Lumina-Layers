@@ -3,6 +3,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { useConverterStore } from '../stores/converter';
 import type { PaletteEntry, LutColorEntry } from '../api/types';
 
+const customRecipeDialogProps = vi.hoisted(() => ({
+  latest: null as null | {
+    open: boolean;
+    regionIds: string[];
+    currentRegionColorHex?: string | null;
+  },
+}));
+
 // Mock API module to prevent real network calls
 vi.mock('../api/converter', async () => {
   const original = await vi.importActual<typeof import('../api/converter')>('../api/converter');
@@ -12,6 +20,19 @@ vi.mock('../api/converter', async () => {
     replaceColor: vi.fn().mockResolvedValue({ preview_url: '/api/files/mock' }),
   };
 });
+
+vi.mock('../components/ui/CustomRecipeDialog', () => ({
+  default: (props: {
+    open: boolean;
+    regionIds: string[];
+    currentRegionColorHex?: string | null;
+  }) => {
+    customRecipeDialogProps.latest = props;
+    return props.open ? (
+      <div data-testid="custom-recipe-dialog">{props.regionIds.join(',')}</div>
+    ) : null;
+  },
+}));
 
 // ========== Test Data ==========
 
@@ -63,6 +84,7 @@ function resetStore() {
     previewImageUrl: null,
     sessionId: null,
   });
+  customRecipeDialogProps.latest = null;
 }
 
 // ========== Lazy component imports ==========
@@ -327,6 +349,46 @@ describe('PalettePanel 双色显示', () => {
     expect(selectedStrip).not.toHaveClass('flex-wrap');
     expect(selectedStrip).toHaveClass('overflow-hidden');
     expect(selectedStrip?.lastElementChild).toHaveClass('overflow-x-auto');
+  });
+
+  it('全选模式选中颜色后可打开自定义配方', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: 'ee0000',
+      selectedColors: new Set<string>(['ee0000']),
+      selectedRegions: [],
+      regionData: {
+        regionId: 'stale-region',
+        colorHex: '#00ee00',
+        pixelCount: 12,
+        previewUrl: '/api/files/stale-region.png',
+      },
+      gradientSelection: null,
+      selectionMode: 'select-all',
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+      sessionId: 'session-1',
+    });
+
+    render(<PalettePanel />);
+
+    const customRecipeButton = screen.getByRole('button', { name: '自定义配方' });
+    expect(customRecipeButton).toBeEnabled();
+    expect(customRecipeDialogProps.latest?.regionIds).toEqual([
+      '__select_all_color__:ee0000',
+    ]);
+    expect(customRecipeDialogProps.latest?.currentRegionColorHex).toBe('#ee0000');
+
+    fireEvent.click(customRecipeButton);
+
+    expect(screen.getByTestId('custom-recipe-dialog')).toHaveTextContent(
+      '__select_all_color__:ee0000',
+    );
   });
 
   it('选择模式工具组在窄宽度下允许按钮换行且文字保持单行居中', async () => {

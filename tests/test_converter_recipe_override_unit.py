@@ -201,6 +201,133 @@ def test_apply_recipe_override_endpoint_updates_preview_cache(
     assert registry.resolve(file_id) is not None
 
 
+def test_region_recipe_resolves_select_all_color_region_id() -> None:
+    client, store, _registry = _client_with_state()
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[0, 0] = [170, 0, 0]
+    matched_rgb[1, 1] = [170, 0, 0]
+    matched_rgb[2, 2] = [0, 170, 0]
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    material_matrix[0, 0] = [2, 2, 2, 2, 2]
+    material_matrix[1, 1] = [2, 2, 2, 2, 2]
+    preview_cache = {
+        "matched_rgb": matched_rgb.copy(),
+        "material_matrix": material_matrix.copy(),
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+    }
+    store.put(session_id, "preview_cache", preview_cache)
+
+    response = client.post(
+        "/api/convert/region-recipe",
+        json={
+            "session_id": session_id,
+            "region_ids": ["__select_all_color__:aa0000"],
+            "layer_order": "Top2Bottom",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipes"] == [
+        {
+            "region_id": "__select_all_color__:aa0000",
+            "recipe": [2, 2, 2, 2, 2],
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+            "layer_order": "Top2Bottom",
+        }
+    ]
+    session_data = store.get(session_id)
+    assert session_data is not None
+    stored_mask = session_data["selected_region_masks"]["__select_all_color__:aa0000"]
+    assert int(np.count_nonzero(stored_mask)) == 2
+    assert bool(stored_mask[0, 0])
+    assert bool(stored_mask[1, 1])
+    assert not bool(stored_mask[2, 2])
+
+
+def test_apply_recipe_override_resolves_select_all_color_region_id(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[0, 0] = [170, 0, 0]
+    matched_rgb[1, 1] = [170, 0, 0]
+    matched_rgb[2, 2] = [0, 170, 0]
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    preview_cache = {
+        "matched_rgb": matched_rgb.copy(),
+        "material_matrix": material_matrix.copy(),
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+    }
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "preview_cache", preview_cache)
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            np.zeros((0, 3), dtype=np.uint8),
+            None,
+            LUTMetadata(max_color_layers=5, layer_height_mm=0.08, base_channel_idx=0),
+        ),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        lambda metadata, recipe, layer_height_mm, color_layers, layer_order: {
+            "rgb": [200, 100, 50],
+            "lab": [55.0, 2.0, 3.0],
+            "source": "stage_model",
+            "runtime_mode_key": "0.08x5",
+        },
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["__select_all_color__:aa0000"],
+            "recipe": [1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 200
+    session_data = store.get(session_id)
+    assert session_data is not None
+    updated_cache = session_data["preview_cache"]
+    stored_mask = session_data["selected_region_masks"]["__select_all_color__:aa0000"]
+    assert int(np.count_nonzero(stored_mask)) == 2
+    assert np.all(updated_cache["matched_rgb"][stored_mask] == np.array([200, 100, 50], dtype=np.uint8))
+    assert np.all(updated_cache["material_matrix"][stored_mask] == np.array([1, 1, 1, 1, 1], dtype=np.int32))
+    assert np.all(updated_cache["matched_rgb"][2, 2] == np.array([0, 170, 0], dtype=np.uint8))
+    assert session_data["recipe_overrides"] == [
+        {
+            "region_id": "__select_all_color__:aa0000",
+            "recipe": [1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        }
+    ]
+
+
 def test_apply_recipe_override_falls_back_to_pure_stack_when_forward_model_missing(
     monkeypatch,
     tmp_path: Path,
