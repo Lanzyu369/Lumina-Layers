@@ -83,6 +83,19 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - In `core/*`, do not raise `HTTPException`; raise domain/core errors and map at API boundaries
 - Current supported workflows include calibration, extraction/manual correction, LUT merge/inspection, preview/generation, batch conversion, large-format tiled generation, printer/slicer integration, and BW/4-color/6-color/8-color/5-color-extended modes
 
+## Converter Regression Checklist
+
+- LUT changes must validate all supported storage paths: `.npy`, keyed `.json`, `.npz`, and `.msgpack`; verify RGB entries, `metadata`, `palette`, `color_mode`, `base_channel_idx`, `layer_order`, and `stacks` together rather than treating any one field as authoritative
+- Placeholder or all-Air recipe stacks are missing data, not valid custom recipes; standard-size LUTs (`32`, `1024`, `1296`, `2468`, `2738`) must rebuild recipes when stacks are absent or placeholder-only, while preserving any real keyed JSON recipes
+- Color-mode aliases must be canonicalized consistently across `ColorSystem`, API schemas, LUT metadata inference, extractor save paths, public LUT APIs, preview validation, and generation validation
+- Final user downloads such as `.3mf`, `.zip`, exported recipes, and share cards must be TTL/ephemeral artifacts that survive source session close; preview/cache artifacts such as GLB, PNG, and intermediate arrays may remain session-bound
+- Any change touching session cleanup, `FileRegistry`, download URLs, or generate responses must include a regression test where the source session is closed or switched before the download URL is fetched
+- Converter features must cover raster/high-fidelity, vector/native SVG, LUT-backed, and material-archive flows, or explicitly reject unsupported combinations with a deterministic API error and test
+- 3MF export changes must preserve material identity through source selection, mesh metadata, auxiliary meshes, single-stage kits, and slicer template mapping; do not infer every slot from template row 0
+- Material-archive flows must not assume `base_channel_idx === 0` or canonical English palette labels; resolve base channels from selected materials, metadata, Chinese/English names, and hex values where available
+- 3D outline or footprint logic must declare its geometry source; derive irregular/transparent image silhouettes from alpha or color geometry rather than backing meshes modified by fridge-magnet cavities or auxiliary parts
+- User-visible converter changes must update share-card schema/import/export tests, bug-report context, and announcements when the new state affects reproduction, persistence, or release notes
+
 ## Logging Governance
 
 - Always log via `from api.structured_logging import get_logger` and pass `extra={"event": "<snake_case>", ...}`; never use bare `print(...)` for business output, and never start a `message` with a `[TAG]` prefix

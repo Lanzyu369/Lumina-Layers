@@ -16,6 +16,105 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-03",
+    title: {
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
+    },
+    sections: [
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "全选颜色后现在也能打开自定义配方，不用再一个区域一个区域点；应用后只会改你选中的颜色区域。",
+            en: "Custom recipes now open correctly after selecting a whole colour, so you no longer need to click regions one by one; applying the recipe only changes the colour areas you selected.",
+          },
+          {
+            zh: "耗材档案高保真模式下，手动改过的 10 层配方会按真实槽位应用，默认白色层也不会再变成其它材料色。",
+            en: "In high-fidelity material-library mode, edited 10-layer recipes now apply to the real material slots, and untouched white layers no longer turn into another material colour.",
+          },
+        ],
+      },
+      {
+        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        items: [
+          {
+            zh: "6 色 RYBWGK / CMYWGK 的提取和保存更稳定，颜色模式不会再被错误显示成另一套 6 色或 4 色模式。",
+            en: "6-Colour RYBWGK / CMYWGK extraction and saving are more stable, so a LUT is no longer displayed as the wrong 6-Colour or 4-Colour mode.",
+          },
+          {
+            zh: "修复一组 6 色耗材通道顺序不一致导致的颜色错位，选择这类 LUT 时预览和生成会按实际通道顺序来。",
+            en: "Fixed colour shifts from a 6-Colour filament set whose channel order differed from the standard order; previews and generation now follow the LUT's actual channel order.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "导出到 Bambu Studio / OrcaSlicer 时，PETG 槽位会保留 PETG 材料和温度配置，不再每次打开都退回 PLA。",
+            en: "Exports to Bambu Studio / OrcaSlicer now keep PETG material and temperature settings for PETG slots instead of falling back to PLA every time.",
+          },
+          {
+            zh: "材料档案、单阶段标定卡和挂件环会一起传递真实材料名，辅助零件不再偷偷变回默认 PLA。",
+            en: "Material-library exports, single-stage calibration cards, and keychain loops now carry the real material names together, so auxiliary parts no longer silently fall back to default PLA.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "透明 PNG 和不规则图形的 3D 外轮廓更贴近实际图案，耗材档案预览不再把背板或其它颜色混进轮廓里。",
+            en: "3D outlines for transparent PNGs and irregular shapes now follow the actual artwork more closely, and material-library previews no longer mix backing or other colours into the outline.",
+          },
+          {
+            zh: "冰箱贴模式的槽位外轮廓会跟随当前厚度和主体形状，磁铁孔不会再污染轮廓预览。",
+            en: "Fridge-magnet slot outlines now follow the current thickness and main shape, and magnet holes no longer pollute the outline preview.",
+          },
+          {
+            zh: "图像转矢量页面改成更宽的左右布局，上传、基础设置、高级参数和结果区域不再挤成一列。",
+            en: "The Image-to-Vector page now uses a wider split layout, so upload, basic settings, advanced parameters, and results no longer crowd into one column.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式开启涂层后，生成的 3MF 会真正带上完整涂层，不再只在参数里显示已开启。",
+            en: "When coating is enabled in SVG vector mode, the generated 3MF now actually includes the full coating instead of only showing the option as enabled.",
+          },
+          {
+            zh: "矢量预览后的分享卡会保留来源、色层、材料和模型参数，导出再导入不再丢关键设置。",
+            en: "Share cards exported after vector previews now preserve source, layer, material, and model settings, so importing them no longer loses key options.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "Custom 开头的个人 LUT 会正确生成颜色层和分层预览，不再只导出一个底层。",
+            en: "Personal LUTs under Custom now generate colour layers and layer previews correctly instead of exporting only a base layer.",
+          },
+          {
+            zh: "生成完成后切换 LUT 再下载，浏览器不再下载失败的 JSON 错误文件，3MF / ZIP 下载会在会话切换后继续可用一段时间。",
+            en: "After generating and switching LUTs, the browser no longer downloads failed JSON error files; 3MF / ZIP downloads remain available for a while even after the session changes.",
+          },
+          {
+            zh: "反馈问题支持附带截图，并会带上当前来源、LUT、材料和打印参数，开发者更容易复现你遇到的情况。",
+            en: "Bug reports can now include a screenshot and carry the current source, LUT, material, and print settings, making it easier for the developer to reproduce what you saw.",
+          },
+          {
+            zh: "反馈弹窗的复制按钮增加兜底方案，即使浏览器剪贴板权限不稳定，也能手动复制问题信息。",
+            en: "The bug-report copy button now has a fallback path, so you can still copy the report details manually when browser clipboard permissions are unreliable.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-04-30",
     title: {
       zh: "Lumina Layers — 近三天更新速览",
