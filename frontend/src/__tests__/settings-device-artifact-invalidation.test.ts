@@ -6,6 +6,7 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
   beforeEach(() => {
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     useConverterStore.setState({
+      modelUrl: "/api/files/fake-preview-glb",
       threemfDiskPath: "E:/fake/model.3mf",
       downloadUrl: "/api/files/fake-3mf",
     });
@@ -14,6 +15,7 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
   it("clears generated artifacts when printer changes", async () => {
     useSettingsStore.getState().setPrinterModel("bambu-p1s");
 
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().threemfDiskPath).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBeNull();
   });
@@ -21,6 +23,7 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
   it("clears generated artifacts when slicer changes", async () => {
     useSettingsStore.getState().setSlicerSoftware("OrcaSlicer");
 
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().threemfDiskPath).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBeNull();
   });
@@ -28,6 +31,7 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
   it("clears generated artifacts when nozzle size changes", async () => {
     useSettingsStore.getState().setNozzleSize("0.2");
 
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().threemfDiskPath).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBeNull();
   });

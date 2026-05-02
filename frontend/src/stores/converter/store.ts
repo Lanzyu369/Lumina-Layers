@@ -6177,6 +6177,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
 registerGeneratedArtifactInvalidator(() => {
   useConverterStore.setState({
+    modelUrl: null,
     threemfDiskPath: null,
     downloadUrl: null,
   });
