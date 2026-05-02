@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from core.pipeline.s11_glb_preview import _iter_valid_polygons
+from config import PrinterConfig
+from core.pipeline.s11_glb_preview import _build_backing_plate_mesh, _iter_valid_polygons
 
 
 def test_iter_valid_polygons_handles_polygon_and_multipolygon() -> None:
@@ -31,3 +33,28 @@ def test_iter_valid_polygons_filters_empty_and_tiny() -> None:
     out = list(_iter_valid_polygons(valid.buffer(0).union(tiny)))
     assert len(out) >= 1
     assert any(float(getattr(g, "area", 0.0)) > 1e-4 for g in out)
+
+
+def test_build_backing_plate_mesh_uses_mask_shape_not_bounding_box() -> None:
+    mask = np.array(
+        [
+            [True, False, False],
+            [True, False, False],
+            [True, True, True],
+        ],
+        dtype=bool,
+    )
+
+    mesh = _build_backing_plate_mesh(
+        mask_solid=mask,
+        height=mask.shape[0],
+        pixel_scale=1.0,
+        rgba=np.array([245, 245, 245, 255], dtype=np.uint8),
+    )
+
+    assert mesh is not None
+    footprint_area = abs(float(mesh.volume)) / PrinterConfig.LAYER_HEIGHT
+    bounds = mesh.bounds
+    bbox_area = float((bounds[1, 0] - bounds[0, 0]) * (bounds[1, 1] - bounds[0, 1]))
+    assert footprint_area == pytest.approx(float(np.count_nonzero(mask)), rel=0.05)
+    assert footprint_area < bbox_area

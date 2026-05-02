@@ -71,19 +71,20 @@ function inferDominantCellSizeFromCoords(coords: number[]): number | null {
     return null;
   }
 
-  const rankedGaps = Array.from(gapCounts.entries());
-  const maxGap = Math.max(...rankedGaps.map(([gap]) => gap));
-  const largeGaps = rankedGaps
-    .filter(([gap]) => gap >= maxGap * 0.5)
-    .sort(([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA);
-  const [dominantGap, dominantCount] = largeGaps[0] ?? rankedGaps.sort(
-    ([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA,
-  )[0];
-  const shrinkGap = rankedGaps
-    .filter(([gap, count]) => gap < dominantGap * 0.35 && count >= Math.max(2, dominantCount * 0.25))
-    .sort(([gapA, countA], [gapB, countB]) => countB - countA || gapB - gapA)[0]?.[0];
+  const rankedGaps = Array.from(gapCounts.entries()).sort(([gapA], [gapB]) => gapA - gapB);
+  const frequentGaps = rankedGaps.filter(([, count]) => count >= 2);
+  if (frequentGaps.length >= 2) {
+    const [smallGap] = frequentGaps[0];
+    const [largeGap] = frequentGaps[frequentGaps.length - 1];
+    if (largeGap >= smallGap * 3) {
+      return smallGap + largeGap;
+    }
+  }
 
-  return dominantGap + (shrinkGap ?? 0);
+  const [dominantGap] = rankedGaps.sort(
+    ([gapA, countA], [gapB, countB]) => countB - countA || gapA - gapB,
+  )[0];
+  return dominantGap;
 }
 
 // ========== Exported pure utility functions (testable without React) ==========
@@ -98,7 +99,7 @@ function inferDominantCellSizeFromCoords(coords: number[]): number | null {
  */
 export function rasterizeMeshToGrid(
   geometry: THREE.BufferGeometry,
-  options: { fillInteriorHoles?: boolean } = {},
+  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
 ): {
   grid: Uint8Array;
   gridW: number;
@@ -152,7 +153,9 @@ export function rasterizeMeshToGrid(
     new Set(topPoints.map(p => Math.round(p[0] * COORD_PRECISION) / COORD_PRECISION)),
   ).sort((a, b) => a - b);
   let cellSize: number;
-  if (uniqueXs.length >= 4) {
+  if (Number.isFinite(options.cellSize) && (options.cellSize ?? 0) > 1e-6) {
+    cellSize = options.cellSize!;
+  } else if (uniqueXs.length >= 4) {
     const dominantCellSize = inferDominantCellSizeFromCoords(topPoints.map((point) => point[0]));
     if (dominantCellSize !== null && dominantCellSize > 1e-6) {
       cellSize = dominantCellSize;
@@ -194,10 +197,9 @@ export function rasterizeMeshToGrid(
     cellSize = Math.max(rangeX, rangeY) / Math.min(Math.max(rangeX, rangeY), 512);
     if (cellSize < 1e-6) cellSize = 1.0;
   }
-  const gridW = Math.ceil(rangeX / cellSize) + 2; // +2 for padding
-  const gridH = Math.ceil(rangeY / cellSize) + 2;
-
-  // 4. Fill occupancy grid from top-face triangles
+  // Grid origin and size
+  const gridW = Math.ceil((bMaxX - bMinX) / cellSize) + 3;
+  const gridH = Math.ceil((bMaxY - bMinY) / cellSize) + 3;
   const grid = new Uint8Array(gridW * gridH);
 
   // Mark cells that contain top-face vertices
@@ -230,6 +232,93 @@ export function rasterizeMeshToGrid(
   }
 
   return { grid, gridW, gridH, originX: bMinX, originY: bMinY, cellSize, maxZ };
+}
+
+
+function buildRasterGeometryFromMeshes(meshes: THREE.Mesh[]): THREE.BufferGeometry | null {
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  const point = new THREE.Vector3();
+
+  for (const mesh of meshes) {
+    const posAttr = mesh.geometry.getAttribute("position");
+    const index = mesh.geometry.getIndex();
+    if (!posAttr) {
+      continue;
+    }
+
+    mesh.updateMatrix();
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < posAttr.count; i++) {
+      point.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      point.applyMatrix4(mesh.matrix);
+      if (point.z < minZ) minZ = point.z;
+      if (point.z > maxZ) maxZ = point.z;
+    }
+    if (maxZ <= minZ) {
+      continue;
+    }
+
+    const tolerance = (maxZ - minZ) * 0.01 + 1e-6;
+    const baseIdx = vertices.length / 3;
+    for (let i = 0; i < posAttr.count; i++) {
+      point.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      point.applyMatrix4(mesh.matrix);
+      vertices.push(
+        point.x,
+        point.y,
+        Math.abs(point.z - maxZ) < tolerance ? 1 : 0,
+      );
+    }
+    if (index) {
+      for (let i = 0; i < index.count; i++) {
+        indices.push(index.getX(i) + baseIdx);
+      }
+    } else {
+      for (let i = 0; i < posAttr.count; i++) {
+        indices.push(i + baseIdx);
+      }
+    }
+  }
+
+  if (vertices.length === 0 || indices.length === 0) {
+    return null;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+
+export function rasterizeMeshesToGrid(
+  meshes: THREE.Mesh[],
+  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
+): {
+  grid: Uint8Array;
+  gridW: number;
+  gridH: number;
+  originX: number;
+  originY: number;
+  cellSize: number;
+  maxZ: number;
+} | null {
+  if (meshes.length === 0) {
+    return null;
+  }
+
+  const geometry = buildRasterGeometryFromMeshes(meshes);
+  if (!geometry) {
+    return null;
+  }
+
+  try {
+    return rasterizeMeshToGrid(geometry, options);
+  } finally {
+    geometry.dispose();
+  }
 }
 
 
@@ -632,7 +721,9 @@ export interface OutlineFrame3DProps {
   enabled: boolean;
   outlineWidth: number;
   backingPlateMesh: THREE.Mesh | null;
+  sourceMeshes?: THREE.Mesh[];
   modelMaxZ: number;
+  rasterCellSize?: number;
   fillInteriorHoles?: boolean;
 }
 
@@ -646,7 +737,9 @@ export default function OutlineFrame3D({
   enabled,
   outlineWidth,
   backingPlateMesh,
+  sourceMeshes,
   modelMaxZ,
+  rasterCellSize,
   fillInteriorHoles = false,
 }: OutlineFrame3DProps) {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -658,12 +751,25 @@ export default function OutlineFrame3D({
 
   const geometry = useMemo(() => {
     const buildStart = performance.now();
-    if (!enabled || !backingPlateMesh || outlineWidth <= 0 || modelMaxZ <= 0) {
+    const rasterMeshes = sourceMeshes && sourceMeshes.length > 0
+      ? sourceMeshes
+      : backingPlateMesh
+        ? [backingPlateMesh]
+        : [];
+    if (!enabled || rasterMeshes.length === 0 || outlineWidth <= 0 || modelMaxZ <= 0) {
       return null;
     }
 
     // 1. Rasterize backing plate mesh to occupancy grid
-    const rasterResult = rasterizeMeshToGrid(backingPlateMesh.geometry, { fillInteriorHoles });
+    const rasterOptions = {
+      fillInteriorHoles,
+      cellSize: rasterCellSize,
+    };
+    const rasterResult = sourceMeshes && sourceMeshes.length > 0
+      ? rasterizeMeshesToGrid(sourceMeshes, rasterOptions)
+      : backingPlateMesh
+        ? rasterizeMeshToGrid(backingPlateMesh.geometry, rasterOptions)
+        : null;
     if (!rasterResult) return null;
 
     const { grid: originalGrid, gridW: origW, gridH: origH, originX, originY, cellSize } = rasterResult;
@@ -752,7 +858,7 @@ export default function OutlineFrame3D({
     });
 
     return geo;
-  }, [enabled, backingPlateMesh, outlineWidth, modelMaxZ, fillInteriorHoles]);
+  }, [enabled, backingPlateMesh, sourceMeshes, outlineWidth, modelMaxZ, rasterCellSize, fillInteriorHoles]);
 
   useEffect(() => {
     cancelPendingOutlineFrameGeometryDispose(geometry);

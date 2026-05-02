@@ -180,16 +180,20 @@ function CanvasInteractionBridge() {
   const { controls } = useThree();
   useEffect(() => {
     if (!controls) return;
+    const controlsWithEvents = controls as {
+      addEventListener: (type: "start" | "end", listener: () => void) => void;
+      removeEventListener: (type: "start" | "end", listener: () => void) => void;
+    };
 
     const onStart = () => useWidgetStore.getState().setCanvasInteracting(true);
     const onEnd = () => useWidgetStore.getState().setCanvasInteracting(false);
 
-    controls.addEventListener("start", onStart);
-    controls.addEventListener("end", onEnd);
+    controlsWithEvents.addEventListener("start", onStart);
+    controlsWithEvents.addEventListener("end", onEnd);
 
     return () => {
-      controls.removeEventListener("start", onStart);
-      controls.removeEventListener("end", onEnd);
+      controlsWithEvents.removeEventListener("start", onStart);
+      controlsWithEvents.removeEventListener("end", onEnd);
       useWidgetStore.getState().setCanvasInteracting(false);
     };
   }, [controls]);
@@ -232,10 +236,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const targetHeight = useConverterStore((s) => s.target_height_mm);
   const previewWidth = useConverterStore((s) => s.preview_width_mm);
   const previewHeight = useConverterStore((s) => s.preview_height_mm);
+  const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
 
   const { scaleX, scaleY } = computeScaleFactor(
     targetWidth, targetHeight, previewWidth, previewHeight
   );
+  const rasterCellSize = previewWidth && previewPixelWidth && previewPixelWidth > 0
+    ? previewWidth / previewPixelWidth
+    : undefined;
 
   // Keychain ring params
   const addLoop = useConverterStore((s) => s.add_loop);
@@ -572,6 +580,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireWidthMm={wireWidthMm}
               wireHeightMm={wireHeightMm}
               enableFridgeMagnet={enableFridgeMagnet}
+              rasterCellSize={rasterCellSize}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
             />

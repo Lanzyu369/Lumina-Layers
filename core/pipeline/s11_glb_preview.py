@@ -380,76 +380,25 @@ def _build_backing_plate_mesh(
     pixel_scale: float,
     rgba: np.ndarray,
 ) -> Optional[trimesh.Trimesh]:
-    """用 cv2.findContours 轮廓拉伸构建底板，替代逐像素体素方案。
+    """用 RLE/Shapely 像素轮廓拉伸构建底板，替代逐像素体素方案。
     顶点数从 ~3M 降至 <5k，节省约 2.5s。
     """
-    from shapely.geometry import Polygon
-
-    mask_u8 = mask_solid.astype(np.uint8) * 255
-    contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
-    if not contours:
-        return None
-
-    extrude_h = float(PrinterConfig.LAYER_HEIGHT)
-    meshes = []
-    skipped_short = 0
-    skipped_tiny = 0
-    skipped_invalid = 0
-    extrude_fail = 0
-    for cnt in contours:
-        if len(cnt) < 3:
-            skipped_short += 1
-            continue
-        pts = cnt.squeeze(1).astype(np.float64)
-        world_pts = np.column_stack(
-            [
-                pts[:, 0] * pixel_scale,
-                (height - pts[:, 1]) * pixel_scale,
-            ]
-        )
-        try:
-            base_poly = Polygon(world_pts)
-            if not base_poly.is_valid:
-                try:
-                    base_poly = base_poly.buffer(0)
-                except (ValueError, TypeError, RuntimeError):
-                    skipped_invalid += 1
-                    continue
-            if float(getattr(base_poly, "area", 0.0) or 0.0) < 1e-4:
-                skipped_tiny += 1
-                continue
-
-            valid_polygons = list(_iter_valid_polygons(base_poly, min_area=1e-4))
-            if not valid_polygons:
-                skipped_invalid += 1
-                continue
-
-            for poly in valid_polygons:
-                try:
-                    m = trimesh.creation.extrude_polygon(poly, height=extrude_h)
-                    meshes.append(m)
-                except (ValueError, TypeError, RuntimeError, AttributeError):
-                    # Keep pipeline alive on isolated geometry fragments.
-                    extrude_fail += 1
-                    continue
-        except (ValueError, TypeError, RuntimeError, AttributeError):
-            skipped_invalid += 1
-            continue
-
-    if not meshes:
-        _log.warning(
-            f"Backing plate skipped: short={skipped_short}, invalid={skipped_invalid}, "
-            f"tiny={skipped_tiny}, extrude_fail={extrude_fail}"
-        )
-        return None
-
-    result = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
-    result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
-    _log.debug(
-        f"Backing plate contour stats: short={skipped_short}, invalid={skipped_invalid}, "
-        f"tiny={skipped_tiny}, extrude_fail={extrude_fail}, kept={len(meshes)}"
+    mesh = _build_color_extruded_mesh(
+        mask=mask_solid,
+        height=height,
+        total_layers=1,
+        rgba=rgba,
     )
-    return result
+    if mesh is None:
+        _log.warning("Backing plate skipped: mask extrusion returned no mesh")
+        return None
+
+    scale_transform = np.eye(4)
+    scale_transform[0, 0] = pixel_scale
+    scale_transform[1, 1] = pixel_scale
+    scale_transform[2, 2] = PrinterConfig.LAYER_HEIGHT
+    mesh.apply_transform(scale_transform)
+    return mesh
 
 
 def generate_empty_bed_glb(

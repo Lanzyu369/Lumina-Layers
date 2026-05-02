@@ -28,6 +28,7 @@ from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTIO
 from core.material_lut_synthesis import (
     build_material_preview_colors,
     build_material_slot_names,
+    infer_material_archive_base_channel_idx,
     load_multiple_materials,
 )
 
@@ -138,6 +139,11 @@ def _apply_material_archive_branch(
 
     slot_names = build_material_slot_names(materials)
     preview_colors = build_material_preview_colors(materials)
+    base_channel_idx = infer_material_archive_base_channel_idx(
+        selected_materials,
+        slot_names,
+        preview_colors,
+    )
     color_conf = {
         "name": "Material",
         "slots": slot_names,
@@ -153,6 +159,7 @@ def _apply_material_archive_branch(
     ctx["preview_colors"] = preview_colors
     ctx["color_layers"] = material_layer_count
     ctx["layer_height_mm"] = material_layer_height
+    ctx["material_base_channel_idx"] = base_channel_idx
     ctx["_material_params"] = materials
     ctx["material_source"] = "material_archive"
 

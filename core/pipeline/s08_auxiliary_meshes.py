@@ -239,6 +239,33 @@ def _generate_boundary_fill_mesh(
     return mesh
 
 
+def _coerce_preview_rgba(color) -> list[int]:
+    if isinstance(color, (list, tuple, np.ndarray)) and len(color) >= 3:
+        try:
+            alpha = int(color[3]) if len(color) >= 4 else 255
+            return [int(color[0]), int(color[1]), int(color[2]), alpha]
+        except (TypeError, ValueError):
+            pass
+    return [255, 255, 255, 255]
+
+
+def _resolve_material_archive_base_aux_style(ctx: dict, preview_colors: dict) -> tuple[list[int], str | None]:
+    if str(ctx.get("material_source") or "lut") != "material_archive":
+        return _coerce_preview_rgba(preview_colors.get(0) or preview_colors.get("0")), None
+
+    try:
+        base_idx = int(ctx.get("material_base_channel_idx", 0))
+    except (TypeError, ValueError):
+        base_idx = 0
+
+    color = preview_colors.get(base_idx)
+    if color is None:
+        color = preview_colors.get(str(base_idx))
+    slot_names = ctx.get("slot_names") or []
+    material_name = str(slot_names[base_idx]) if 0 <= base_idx < len(slot_names) else None
+    return _coerce_preview_rgba(color), material_name
+
+
 def run(ctx: dict) -> dict:
     """Generate auxiliary meshes: backing, wire, free color, loop, coating, outline.
     生成附加网格：底板、掐丝、自由颜色、挂件环、涂层、描边。
@@ -301,6 +328,7 @@ def run(ctx: dict) -> dict:
 
     loop_added = False
     outline_added = False
+    base_aux_color, base_aux_material_name = _resolve_material_archive_base_aux_style(ctx, preview_colors)
 
     # ========== Separate Backing Mesh ==========
     if separate_backing:
@@ -319,12 +347,12 @@ def run(ctx: dict) -> dict:
             else:
                 backing_mesh.apply_transform(transform)
 
-                # Apply white color (material_id=0)
-                backing_color = preview_colors[0]  # Fixed to white
-                backing_mesh.visual.face_colors = backing_color
-
                 backing_name = "Backing"
+                backing_mesh.visual.face_colors = base_aux_color
                 backing_mesh.metadata["name"] = backing_name
+                if base_aux_material_name:
+                    backing_mesh.metadata["bambu_material_name"] = base_aux_material_name
+                preview_colors[backing_name] = base_aux_color
                 scene.add_geometry(backing_mesh, node_name=backing_name, geom_name=backing_name)
                 valid_slot_names.append(backing_name)
                 _log.debug(f"Added backing mesh as separate object (white)")
@@ -528,10 +556,12 @@ def run(ctx: dict) -> dict:
                 # Shift outline down if coating is enabled
                 if outline_z_offset != 0.0:
                     outline_mesh.vertices[:, 2] += outline_z_offset
-                # Outline is always white (material 0) as a standalone object
-                outline_mesh.visual.face_colors = preview_colors[0]
                 outline_name = "Outline"
+                outline_mesh.visual.face_colors = base_aux_color
                 outline_mesh.metadata["name"] = outline_name
+                if base_aux_material_name:
+                    outline_mesh.metadata["bambu_material_name"] = base_aux_material_name
+                preview_colors[outline_name] = base_aux_color
                 scene.add_geometry(outline_mesh, node_name=outline_name, geom_name=outline_name)
                 valid_slot_names.append(outline_name)
                 _log.debug(f"Outline added as standalone '{outline_name}' object")

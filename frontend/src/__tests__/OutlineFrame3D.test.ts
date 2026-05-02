@@ -8,6 +8,7 @@ vi.mock("@react-three/fiber", () => ({
 import {
   default as OutlineFrame3D,
   rasterizeMeshToGrid,
+  rasterizeMeshesToGrid,
   dilateGrid,
   createRingMask,
   greedyRectMerge,
@@ -171,6 +172,21 @@ describe("OutlineFrame3D — Unit Tests", () => {
       }
       expect(count).toBeGreaterThan(0);
     });
+
+    it("rasterizes multiple color meshes as their union instead of their bounding rectangle", () => {
+      const horizontal = makeBoxMesh(3, 1, 1);
+      const vertical = makeBoxMesh(1, 2, 1);
+      vertical.position.set(0, 1, 0);
+
+      const result = rasterizeMeshesToGrid([horizontal, vertical]);
+
+      expect(result).not.toBeNull();
+      const { grid, gridW } = result!;
+      expect(grid[3 * gridW + 3]).toBe(0);
+      expect(grid[1 * gridW + 1]).toBe(1);
+      expect(grid[3 * gridW + 1]).toBe(1);
+      expect(grid[1 * gridW + 3]).toBe(1);
+    });
   });
 
   // ---- dilateGrid ----
@@ -276,8 +292,8 @@ describe("OutlineFrame3D — Unit Tests", () => {
 
       expect(result).not.toBeNull();
       const { grid, gridW, gridH } = result!;
-      for (let y = 1; y < gridH - 1; y++) {
-        for (let x = 1; x < gridW - 1; x++) {
+      for (let y = 1; y < gridH - 2; y++) {
+        for (let x = 1; x < gridW - 2; x++) {
           expect(grid[y * gridW + x]).toBe(1);
         }
       }
@@ -315,6 +331,28 @@ describe("OutlineFrame3D — Unit Tests", () => {
 
       expect(result).not.toBeNull();
       expect(result!.cellSize).toBeCloseTo(1, 5);
+    });
+
+    it("keeps dominant voxel cell size when separated components add large gaps", () => {
+      const left = makeBoxMesh(2, 2, 1);
+      const right = makeBoxMesh(2, 2, 1);
+      right.position.set(8, 0, 0);
+
+      const result = rasterizeMeshesToGrid([left, right]);
+
+      expect(result).not.toBeNull();
+      expect(result!.cellSize).toBeCloseTo(2, 5);
+    });
+
+    it("uses explicit raster cell size instead of inferring from simplified polygon vertices", () => {
+      const geo = makeBoxGeometry(10, 10, 1);
+
+      const result = rasterizeMeshToGrid(geo, { cellSize: 1 });
+
+      expect(result).not.toBeNull();
+      expect(result!.cellSize).toBeCloseTo(1, 5);
+      expect(result!.gridW).toBe(13);
+      expect(result!.gridH).toBe(13);
     });
   });
 

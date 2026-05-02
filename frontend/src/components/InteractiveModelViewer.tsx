@@ -59,6 +59,7 @@ export interface InteractiveModelViewerProps {
   wireWidthMm?: number;        // 金丝宽度 (mm)，默认 0.4
   wireHeightMm?: number;       // 金丝高度 (mm)，默认 0.1
   enableFridgeMagnet?: boolean;
+  rasterCellSize?: number;
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
 }
@@ -105,6 +106,7 @@ function InteractiveModelViewer({
   wireWidthMm = 0.4,
   wireHeightMm = 0.1,
   enableFridgeMagnet = false,
+  rasterCellSize,
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
 }: InteractiveModelViewerProps) {
@@ -499,7 +501,9 @@ function InteractiveModelViewer({
         enabled={enableOutline}
         outlineWidth={outlineWidth}
         backingPlateMesh={backingMesh}
+        sourceMeshes={colorMeshes.length > 0 ? colorMeshes : undefined}
         modelMaxZ={outlinePreviewHeight}
+        rasterCellSize={rasterCellSize}
         fillInteriorHoles={enableFridgeMagnet}
       />
       {/* 景泰蓝金色线条预览 */}
