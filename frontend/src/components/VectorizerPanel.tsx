@@ -169,9 +169,11 @@ export default function VectorizerPanel() {
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
-      className={`mx-auto h-full w-full overflow-y-auto ${workspace.isCompact ? "max-w-none p-4" : "max-w-4xl p-6"}`}
+      className={cx(resolvePanelSurfaceClass(workspace.mode), "flex flex-col gap-5")}
     >
-      <div className={cx(resolvePanelSurfaceClass(workspace.mode), "flex flex-col gap-5")}>
+      <div className={`mx-auto w-full ${workspace.isCompact ? "max-w-none" : "max-w-[96rem]"}`}>
+        <div className="grid min-h-0 gap-5 xl:grid-cols-[minmax(22rem,30rem)_minmax(0,1fr)] xl:items-start">
+            <div className="flex min-w-0 flex-col gap-5">
 
         {/* Upload */}
         <ImageUpload
@@ -296,6 +298,26 @@ export default function VectorizerPanel() {
             )}
           </div>
         </Accordion>
+
+        {/* Submit Button */}
+        <Button
+          label={isProcessing ? t("vec.processing") : t("vec.submit")}
+          onClick={handleSubmit}
+          loading={isProcessing}
+          disabled={!imagePreviewUrl}
+        />
+
+        {/* Error */}
+        {error && (
+          <div className="rounded-[22px] border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
+            <p className="text-sm text-red-600 dark:text-red-400">
+              {t("vec.error")}: {error}
+            </p>
+          </div>
+        )}
+
+            </div>
+            <div className="flex min-w-0 flex-col gap-5">
 
         {/* ===== Advanced Parameters ===== */}
         <Accordion title={t("vec.advanced_params")}>
@@ -464,23 +486,6 @@ export default function VectorizerPanel() {
           </div>
         </Accordion>
 
-        {/* Submit Button */}
-        <Button
-          label={isProcessing ? t("vec.processing") : t("vec.submit")}
-          onClick={handleSubmit}
-          loading={isProcessing}
-          disabled={!imagePreviewUrl}
-        />
-
-        {/* Error */}
-        {error && (
-          <div className="rounded-[22px] border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
-            <p className="text-sm text-red-600 dark:text-red-400">
-              {t("vec.error")}: {error}
-            </p>
-          </div>
-        )}
-
         {/* Result */}
         {result && (
           <motion.div
@@ -583,6 +588,8 @@ export default function VectorizerPanel() {
             </div>
           </motion.div>
         )}
+            </div>
+          </div>
       </div>
     </motion.div>
   );

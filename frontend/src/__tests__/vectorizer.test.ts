@@ -193,6 +193,28 @@ describe("VectorizerPanel send-to-converter", () => {
     vi.clearAllMocks();
   });
 
+  it("uses a full-width scroll area with a wide split content layout", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 2400 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1200 });
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1 });
+
+    const { container } = render(createElement(VectorizerPanel));
+    const scrollArea = container.firstElementChild as HTMLElement;
+    const contentShell = scrollArea.firstElementChild as HTMLElement;
+    const splitLayout = contentShell.firstElementChild as HTMLElement;
+
+    expect(scrollArea).toHaveClass("panel-surface", "h-full", "w-full", "overflow-auto");
+    expect(scrollArea).not.toHaveClass("mx-auto");
+    expect(scrollArea).not.toHaveClass("max-w-4xl");
+    expect(contentShell).toHaveClass("mx-auto", "w-full", "max-w-[96rem]");
+    expect(splitLayout).toHaveClass(
+      "grid",
+      "min-h-0",
+      "gap-5",
+      "xl:grid-cols-[minmax(22rem,30rem)_minmax(0,1fr)]",
+    );
+  });
+
   it("fetches svg with normalized url and forwards it to converter tab", async () => {
     const svgBlob = new Blob(["<svg/>"], { type: "image/svg+xml" });
     mockedApiClient.get.mockResolvedValueOnce({ data: svgBlob });
