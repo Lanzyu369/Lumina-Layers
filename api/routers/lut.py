@@ -49,6 +49,7 @@ from config import LUTMetadata, get_capabilities, get_schema_version, get_source
 from core.lut_details.service import get_lut_details_service
 from core.lut_card_layout import resolve_lut_layout
 from core.lut_merger import LUTMerger
+from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, resolve_predictive_runtime
 from utils.lut_manager import LUTManager
 
@@ -790,6 +791,11 @@ def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
     raw_slot_names = cache.get("slot_names") or []
     slot_names = raw_slot_names if isinstance(raw_slot_names, list) else []
     preview_colors = cache.get("preview_colors") or {}
+    base_channel_idx = infer_material_archive_base_channel_idx(
+        selected_materials,
+        slot_names,
+        preview_colors,
+    )
 
     palette_schema: list[PaletteEntrySchema] = []
     for idx, dir_name in enumerate(selected_materials):
@@ -819,6 +825,7 @@ def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
         max_color_layers=color_layers,
         layer_height_mm=layer_height_mm,
         color_mode="Material Archive",
+        base_channel_idx=base_channel_idx,
         capabilities=["custom_recipe"],
         extensions={
             "source_kind": "material_archive",

@@ -54,7 +54,11 @@ from core.converter import (
 )
 from core.naming import generate_segmented_glb_filename
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
-from core.material_lut_synthesis import load_multiple_materials, solve_image_colors_optimal
+from core.material_lut_synthesis import (
+    infer_material_archive_base_channel_idx,
+    load_multiple_materials,
+    solve_image_colors_optimal,
+)
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import (
@@ -2201,6 +2205,11 @@ def _resolve_recipe_source_metadata(
         # 已有的 slot_name，退而用目录名，保持日志/错误信息可读。
         slot_names_raw = cache.get("slot_names")
         slot_names = list(slot_names_raw) if isinstance(slot_names_raw, (list, tuple)) else []
+        base_channel_idx = infer_material_archive_base_channel_idx(
+            selected_materials,
+            slot_names,
+            cache.get("preview_colors") or {},
+        )
         palette_entries: list[PaletteEntry] = []
         for idx, dir_name in enumerate(selected_materials):
             raw_slot = slot_names[idx] if idx < len(slot_names) else None
@@ -2224,7 +2233,7 @@ def _resolve_recipe_source_metadata(
             palette=palette_entries,
             max_color_layers=layer_count,
             layer_height_mm=layer_height_mm,
-            base_channel_idx=0,
+            base_channel_idx=base_channel_idx,
             layer_order="Top2Bottom",
         )
         return metadata, None, None
@@ -2265,6 +2274,8 @@ def _cache_preview_rgb(cache: dict, channel_idx: int) -> np.ndarray | None:
         if not isinstance(source, dict):
             continue
         rgba = source.get(channel_idx)
+        if rgba is None:
+            rgba = source.get(str(channel_idx))
         if rgba is None:
             continue
         arr = np.asarray(rgba, dtype=np.uint8)
@@ -2891,6 +2902,7 @@ def apply_recipe_override(
         cache["material_matrix"] = material_matrix
         cache["color_layers"] = int(material_matrix.shape[2])
         cache["layer_height_mm"] = float(request.layer_height_mm)
+        cache["lut_metadata"] = metadata
         cache["lut_match_info"] = {
             "match_mode": match_mode,
             "runtime_mode_key": runtime_mode_key,

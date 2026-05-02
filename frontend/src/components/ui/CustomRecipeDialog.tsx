@@ -143,6 +143,38 @@ const DISPLAY_PRIMARY_ORDER = [
   "Blue",
 ] as const;
 
+const PRIMARY_NAME_ALIASES: Record<string, string[]> = {
+  white: ["white", "w", "白", "白色"],
+  black: ["black", "k", "黑", "黑色"],
+  cyan: ["cyan", "c", "青", "青色", "天蓝", "浅蓝", "湖蓝"],
+  magenta: ["magenta", "m", "品红", "洋红", "玫红", "紫红"],
+  yellow: ["yellow", "y", "黄", "黄色"],
+  red: ["red", "r", "红", "红色", "大红"],
+  green: ["green", "g", "绿", "绿色"],
+  blue: ["blue", "蓝", "蓝色", "克莱因蓝"],
+  orange: ["orange", "橙", "橙色"],
+  purple: ["purple", "紫", "紫色"],
+  pink: ["pink", "粉", "粉色"],
+  gray: ["gray", "grey", "灰", "灰色"],
+  brown: ["brown", "棕", "棕色", "褐", "褐色"],
+};
+
+const PRIMARY_ALIAS_MATCH_ORDER = [
+  "white",
+  "black",
+  "cyan",
+  "magenta",
+  "yellow",
+  "red",
+  "green",
+  "blue",
+  "orange",
+  "purple",
+  "pink",
+  "gray",
+  "brown",
+] as const;
+
 interface DisplayPaletteEntry {
   /** Canonical primary name, e.g. "Cyan". 通道规范名。 */
   color: string;
@@ -164,6 +196,82 @@ function hexToRgbTriple(hex: string): [number, number, number] | null {
   return [(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff];
 }
 
+function normalizeHexValue(hex: string | null | undefined): string | null {
+  if (!hex) return null;
+  const raw = hex.replace("#", "").trim();
+  return /^[0-9a-fA-F]{6}$/.test(raw) ? `#${raw.toUpperCase()}` : null;
+}
+
+function matchesAlias(text: string, alias: string): boolean {
+  if (/^[a-z0-9]+$/i.test(alias)) {
+    return new RegExp(`(^|[^a-z0-9])${alias}([^a-z0-9]|$)`, "i").test(text);
+  }
+  return text.includes(alias);
+}
+
+function nearestCanonicalPrimaryKey(hex: string | null | undefined): string | null {
+  const normalized = normalizeHexValue(hex);
+  if (!normalized) return null;
+  const rgb = hexToRgbTriple(normalized);
+  if (!rgb) return null;
+  let bestKey: string | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const key of PRIMARY_ALIAS_MATCH_ORDER) {
+    const candidateHex = CANONICAL_PRIMARY_HEX[key];
+    if (!candidateHex) continue;
+    const candidate = hexToRgbTriple(candidateHex);
+    if (!candidate) continue;
+    const dr = rgb[0] - candidate[0];
+    const dg = rgb[1] - candidate[1];
+    const db = rgb[2] - candidate[2];
+    const dist = dr * dr + dg * dg + db * db;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestKey = key;
+    }
+  }
+  return bestDist <= 6400 ? bestKey : null;
+}
+
+function inferCanonicalPrimaryKey(entry: PaletteOption | null | undefined): string | null {
+  if (!entry) return null;
+  const text = `${entry.color ?? ""} ${entry.material ?? ""}`.toLowerCase();
+  for (const key of PRIMARY_ALIAS_MATCH_ORDER) {
+    const aliases = PRIMARY_NAME_ALIASES[key] ?? [];
+    if (aliases.some((alias) => matchesAlias(text, alias.toLowerCase()))) {
+      return key;
+    }
+  }
+  return nearestCanonicalPrimaryKey(entry.hex);
+}
+
+function findNativePrimaryIdx(
+  lutPalette: PaletteOption[],
+  primaryName: string,
+  consumedLutIdx: Set<number>,
+): number {
+  const primaryKey = primaryName.toLowerCase();
+  return lutPalette.findIndex(
+    (entry, idx) =>
+      !consumedLutIdx.has(idx) && inferCanonicalPrimaryKey(entry) === primaryKey,
+  );
+}
+
+function inferBaseChannelIdx(
+  lutPalette: PaletteOption[],
+  baseChannelIdx: number,
+  sourceVersion: string,
+): number {
+  if (sourceVersion === "material") {
+    const whiteIdx = lutPalette.findIndex(
+      (entry) => inferCanonicalPrimaryKey(entry) === "white",
+    );
+    if (whiteIdx >= 0) return whiteIdx;
+  }
+  if (lutPalette.length === 0) return Math.max(0, baseChannelIdx);
+  return Math.max(0, Math.min(baseChannelIdx, lutPalette.length - 1));
+}
+
 function nearestLutChannelIdx(
   lutPalette: PaletteOption[],
   targetHex: string,
@@ -180,15 +288,10 @@ function nearestLutChannelIdx(
     const entry = lutPalette[i];
     // Prefer the canonical primary of the LUT channel name when resolving
     // distances; falls through to the LUT-stored hex_color otherwise.
+    const inferredKey = inferCanonicalPrimaryKey(entry);
     const candidateHex =
-      (entry?.color
-        ? CANONICAL_PRIMARY_HEX[entry.color.trim().toLowerCase()]
-        : null) ??
-      (entry?.hex
-        ? entry.hex.startsWith("#")
-          ? entry.hex
-          : `#${entry.hex}`
-        : null);
+      (inferredKey ? CANONICAL_PRIMARY_HEX[inferredKey] : null) ??
+      normalizeHexValue(entry?.hex);
     if (!candidateHex) continue;
     const rgb = hexToRgbTriple(candidateHex);
     if (!rgb) continue;
@@ -225,10 +328,7 @@ function buildDisplayPalette(
   const consumedLutIdx = new Set<number>();
   for (const name of DISPLAY_PRIMARY_ORDER) {
     const canonicalHex = CANONICAL_PRIMARY_HEX[name.toLowerCase()];
-    const nativeIdx = lutPalette.findIndex(
-      (entry) =>
-        (entry?.color ?? "").trim().toLowerCase() === name.toLowerCase(),
-    );
+    const nativeIdx = findNativePrimaryIdx(lutPalette, name, consumedLutIdx);
     if (nativeIdx >= 0) {
       consumedLutIdx.add(nativeIdx);
       entries.push({
@@ -270,12 +370,9 @@ function buildDisplayPalette(
       return;
     }
     const hex =
-      CANONICAL_PRIMARY_HEX[canonicalKey] ??
-      (entry.hex
-        ? entry.hex.startsWith("#")
-          ? entry.hex
-          : `#${entry.hex}`
-        : "#808080");
+      CANONICAL_PRIMARY_HEX[inferCanonicalPrimaryKey(entry) ?? canonicalKey] ??
+      normalizeHexValue(entry.hex) ??
+      "#808080";
     entries.push({
       color: name,
       hex,
@@ -466,9 +563,14 @@ export default function CustomRecipeDialog({
     });
   }, [stablePalette, stableSelectedMaterialDirNames, sourceVersion]);
 
+  const resolvedBaseChannelIdx = useMemo(
+    () => inferBaseChannelIdx(effectivePalette, baseChannelIdx, sourceVersion),
+    [effectivePalette, baseChannelIdx, sourceVersion],
+  );
+
   const displayPalette = useMemo(
-    () => buildDisplayPalette(effectivePalette, baseChannelIdx),
-    [effectivePalette, baseChannelIdx],
+    () => buildDisplayPalette(effectivePalette, resolvedBaseChannelIdx),
+    [effectivePalette, resolvedBaseChannelIdx],
   );
 
   const markDraftEdited = () => {
@@ -503,7 +605,7 @@ export default function CustomRecipeDialog({
     // 立即填一个同步默认（全白/base），避免异步请求进行中下拉是空状态；
     // 后端的真实 recipe 回来后会覆盖它。
     setRecipe(
-      buildDefaultRecipe(colorLayers, displayPalette, baseChannelIdx),
+      buildDefaultRecipe(colorLayers, displayPalette, resolvedBaseChannelIdx),
     );
     setPattern("");
     setPrediction(null);
@@ -587,7 +689,7 @@ export default function CustomRecipeDialog({
         const defaultRecipe = buildDefaultRecipe(
           targetLen,
           displayPalette,
-          baseChannelIdx,
+          resolvedBaseChannelIdx,
         );
         let sized: number[];
         if (translated.length === targetLen) {
@@ -614,7 +716,7 @@ export default function CustomRecipeDialog({
   }, [
     open,
     initializationKey,
-    baseChannelIdx,
+    resolvedBaseChannelIdx,
     colorLayers,
     sessionId,
     layerOrder,
@@ -690,7 +792,7 @@ export default function CustomRecipeDialog({
   const handleAddLayer = () => {
     snapshotBeforeEdit();
     const defaultDisplayIdx = displayPalette.findIndex(
-      (entry) => entry.native && entry.lutIndex === baseChannelIdx,
+      (entry) => entry.native && entry.lutIndex === resolvedBaseChannelIdx,
     );
     const safeIdx = defaultDisplayIdx >= 0 ? defaultDisplayIdx : 0;
     setRecipe((current) => [...current, safeIdx]);
@@ -758,7 +860,7 @@ export default function CustomRecipeDialog({
       for (const displayIdx of displayRecipe) {
         const entry = displayPalette[displayIdx];
         if (!entry) {
-          apiRecipe.push(baseChannelIdx);
+          apiRecipe.push(resolvedBaseChannelIdx);
           continue;
         }
         if (entry.native) {
@@ -777,7 +879,7 @@ export default function CustomRecipeDialog({
       }
       return { apiRecipe, virtualMaterials };
     },
-    [displayPalette, effectivePalette.length, baseChannelIdx],
+    [displayPalette, effectivePalette.length, resolvedBaseChannelIdx],
   );
 
   const handlePredict = async () => {
@@ -977,7 +1079,7 @@ export default function CustomRecipeDialog({
       onClick={onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[28px] border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[28px] border border-slate-200 p-5 shadow-2xl dark:border-slate-700"
         style={{ backgroundColor: "var(--surface-panel-strong)" }}
         onClick={(event) => event.stopPropagation()}
       >

@@ -16,7 +16,7 @@ const applyRecipeOverrideMock = vi.hoisted(() => vi.fn());
 const predictCustomRecipeMock = vi.hoisted(() => vi.fn());
 const fetchRegionRecipeMock = vi.hoisted(() => vi.fn());
 const converterStoreState = vi.hoisted(() => ({
-  customRecipeHistory: [],
+  customRecipeHistory: [] as RecipeHistoryItem[],
   pushCustomRecipeHistory: vi.fn(),
   source_version: "legacy",
   selectedMaterialDirNames: [] as string[],
@@ -359,6 +359,93 @@ describe("CustomRecipeDialog", () => {
         virtual_materials: [{ name: "Black", hex: "#111111" }],
       }),
     );
+  });
+
+  it("defaults material archive recipes to the native white channel when white is not slot zero", async () => {
+    converterStoreState.source_version = "material";
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    renderDialog({
+      palette: [
+        {
+          color: "瑞贝思 PLA 绿",
+          material: "瑞贝思/瑞贝思 PLA 绿",
+          hex: "43A047",
+        },
+        {
+          color: "瑞贝思 PLA 黄",
+          material: "瑞贝思/瑞贝思 PLA 黄",
+          hex: "FFD400",
+        },
+        {
+          color: "瑞贝思 PLA 白",
+          material: "瑞贝思/瑞贝思 PLA 白",
+          hex: "F5F5F5",
+        },
+      ],
+      colorLayers: 3,
+      baseChannelIdx: 0,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
+    expect(payload.recipe).toEqual([2, 2, 2]);
+    expect(payload).not.toHaveProperty("virtual_materials");
+  });
+
+  it("maps Chinese material archive color names to native channels instead of virtual primaries", async () => {
+    converterStoreState.source_version = "material";
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    renderDialog({
+      palette: [
+        {
+          color: "爱丽兹 PETG Basic 品红色",
+          material: "爱丽兹/爱丽兹 PETG Basic 品红色",
+          hex: "E6007E",
+        },
+        {
+          color: "彩多屋 PLA 天蓝色",
+          material: "彩多屋/PLA 天蓝色",
+          hex: "00B7EB",
+        },
+        {
+          color: "爱丽兹 PETG 黄色",
+          material: "爱丽兹/爱丽兹 PETG 黄色",
+          hex: "FFD400",
+        },
+        {
+          color: "爱丽兹 PETG 大红",
+          material: "爱丽兹/爱丽兹 PETG 大红",
+          hex: "E53935",
+        },
+        {
+          color: "爱丽兹 PETG 白色",
+          material: "爱丽兹/爱丽兹 PETG 白色",
+          hex: "F5F5F5",
+        },
+        {
+          color: "爱丽兹 PETG Basic 柠檬绿",
+          material: "爱丽兹/爱丽兹 PETG Basic 柠檬绿",
+          hex: "43A047",
+        },
+      ],
+      colorLayers: 3,
+    });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
+      { target: { value: "MCG" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
+    expect(payload.recipe).toEqual([0, 1, 5]);
+    expect(payload).not.toHaveProperty("virtual_materials");
   });
 
   it("omits virtual_materials when every picked primary is LUT-native", async () => {

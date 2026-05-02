@@ -191,3 +191,77 @@ def build_material_preview_colors(
         rgb = mat.estimated_rgb.tolist()
         preview[idx] = [int(rgb[0]), int(rgb[1]), int(rgb[2]), 255]
     return preview
+
+
+def _looks_like_white_material_label(label: object) -> bool:
+    text = str(label or "").strip().lower()
+    if not text:
+        return False
+    if "白" in text:
+        return True
+    tokens = (
+        text.replace("\\", "/")
+        .replace("/", " ")
+        .replace("-", " ")
+        .replace("_", " ")
+        .split()
+    )
+    return "white" in tokens or "w" in tokens
+
+
+def _preview_color_rgb(preview_colors: object, idx: int) -> np.ndarray | None:
+    if not isinstance(preview_colors, dict):
+        return None
+    raw = preview_colors.get(idx)
+    if raw is None:
+        raw = preview_colors.get(str(idx))
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return None
+    try:
+        rgb = np.asarray([int(raw[0]), int(raw[1]), int(raw[2])], dtype=np.int32)
+    except (TypeError, ValueError):
+        return None
+    if not bool(np.all((0 <= rgb) & (rgb <= 255))):
+        return None
+    return rgb
+
+
+def infer_material_archive_base_channel_idx(
+    selected_materials: list,
+    slot_names: list,
+    preview_colors: object,
+) -> int:
+    """Infer the white/base channel index for a material-archive palette.
+    推断耗材档案 palette 中的白色/底色通道索引。
+
+    Args:
+        selected_materials: Material directory names in user-selected order.
+            (用户选择顺序下的耗材目录名)
+        slot_names: Display slot names aligned with ``selected_materials``.
+            (与耗材顺序对齐的显示槽位名)
+        preview_colors: Optional preview color map keyed by material index.
+            (按材料索引存储的预览颜色映射)
+
+    Returns:
+        Best-effort base channel index, falling back to ``0`` when no white
+        candidate is identifiable. (推断出的底色通道索引；无法识别时回退 0)
+    """
+    for idx, dir_name in enumerate(selected_materials):
+        raw_slot = slot_names[idx] if idx < len(slot_names) else None
+        if (
+            _looks_like_white_material_label(raw_slot)
+            or _looks_like_white_material_label(dir_name)
+        ):
+            return idx
+    target = np.asarray((245, 245, 245), dtype=np.int32)
+    best_idx = 0
+    best_dist: int | None = None
+    for idx in range(len(selected_materials)):
+        rgb = _preview_color_rgb(preview_colors, idx)
+        if rgb is None:
+            continue
+        dist = int(np.sum((rgb - target) ** 2))
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best_idx = idx
+    return best_idx if best_dist is not None and best_dist <= 6400 else 0

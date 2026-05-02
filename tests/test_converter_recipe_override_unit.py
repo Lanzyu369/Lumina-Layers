@@ -1059,6 +1059,76 @@ def test_apply_recipe_override_pads_grown_layers_with_mask_solid_aware_fill(
     assert np.all(updated_matrix[solid_non_override][:, :3] == 0)
 
 
+def test_apply_recipe_override_material_archive_pads_grown_layers_with_white_slot(
+    monkeypatch,
+) -> None:
+    client, store, _registry = _client_with_state()
+
+    session_id = store.create()
+    material_matrix = np.zeros((4, 4, 3), dtype=np.int32)
+    mask_solid = np.zeros((4, 4), dtype=bool)
+    mask_solid[1:3, :] = True
+    material_matrix[~mask_solid] = -1
+    override_mask = np.zeros((4, 4), dtype=bool)
+    override_mask[1:3, 1] = True
+    preview_cache = {
+        "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+        "material_matrix": material_matrix.copy(),
+        "mask_solid": mask_solid.copy(),
+        "color_layers": 3,
+        "layer_height_mm": 0.08,
+        "slot_names": ["PLA Green", "PLA Yellow", "PLA White"],
+        "preview_colors": {
+            0: [67, 160, 71, 255],
+            1: [255, 212, 0, 255],
+            2: [245, 245, 245, 255],
+        },
+    }
+    store.put(session_id, "material_source", "material_archive")
+    store.put(session_id, "selected_materials", [
+        "brand/pla-green",
+        "brand/pla-yellow",
+        "brand/pla-white",
+    ])
+    store.put(session_id, "material_layer_count", 10)
+    store.put(session_id, "material_layer_height_mm", 0.08)
+    store.put(session_id, "preview_cache", preview_cache)
+    store.put(session_id, "selected_region_mask", override_mask)
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_masks", {"region-1": override_mask})
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [1] * 10,
+            "layer_order": "Top2Bottom",
+            "color_layers": 10,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["rgb"] == [255, 212, 0]
+
+    session_data = store.get(session_id)
+    assert session_data is not None
+    cache_after = session_data["preview_cache"]
+    updated_matrix = cache_after["material_matrix"]
+    assert updated_matrix.shape == (4, 4, 10)
+    assert np.all(updated_matrix[override_mask] == 1)
+    assert np.all(updated_matrix[~mask_solid][:, 3:10] == -1)
+    solid_non_override = mask_solid & ~override_mask
+    assert np.all(updated_matrix[solid_non_override][:, 3:10] == 2)
+    assert cache_after["lut_metadata"].base_channel_idx == 2
+
+
 def test_apply_recipe_override_padding_survives_uint8_material_matrix(
     monkeypatch,
     tmp_path: Path,

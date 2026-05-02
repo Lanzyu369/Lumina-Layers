@@ -328,6 +328,46 @@ class TestSessionLutInfo:
         finally:
             self._clear_override()
 
+    def test_material_archive_session_base_channel_uses_white_slot(self) -> None:
+        store = SessionStore(ttl=60)
+        session_id = store.create()
+        store.put(session_id, "lut_path", "__material_archive__")
+        store.put(session_id, "lut_name", "__material_archive__")
+        store.put(session_id, "material_source", "material_archive")
+        store.put(session_id, "selected_materials", [
+            "瑞贝思/瑞贝思 PLA 绿",
+            "瑞贝思/瑞贝思 PLA 黄",
+            "瑞贝思/瑞贝思 PLA 白",
+        ])
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "color_layers": 10,
+                "layer_height_mm": 0.08,
+                "slot_names": [
+                    "瑞贝思 PLA 绿",
+                    "瑞贝思 PLA 黄",
+                    "瑞贝思 PLA 白",
+                ],
+                "preview_colors": {
+                    0: [67, 160, 71, 255],
+                    1: [255, 212, 0, 255],
+                    2: [245, 245, 245, 255],
+                },
+            },
+        )
+
+        self._override_store(store)
+        try:
+            response = client.get(f"/api/lut/session/{session_id}/info")
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["base_channel_idx"] == 2
+            assert data["max_color_layers"] == 10
+        finally:
+            self._clear_override()
+
 
 class TestLutColorsLayout:
     """Verify LUT colors card payloads use flattened LUT rows."""
