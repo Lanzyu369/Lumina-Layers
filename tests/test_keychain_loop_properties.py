@@ -164,6 +164,44 @@ class TestProperty2MeshRotationCorrectness:
             f"faces={len(mesh.faces)}, angle={params['angle_deg']})"
         )
 
+    @pytest.mark.parametrize(
+        ("width", "length", "hole_dia", "thickness"),
+        [(4.0, 8.0, 2.5, 1.6), (5.0, 4.0, 3.0, 1.0)],
+    )
+    def test_cap_faces_match_loop_cross_section_area(self, width, length, hole_dia, thickness):
+        mesh = create_keychain_loop(
+            width_mm=width,
+            length_mm=length,
+            hole_dia_mm=hole_dia,
+            thickness_mm=thickness,
+            attach_x_mm=0.0,
+            attach_y_mm=0.0,
+            angle_deg=0.0,
+        )
+
+        radius = width / 2.0
+        rect_height = max(0.2, length - radius)
+        hole_radius = min(hole_dia / 2.0, radius * 0.8, rect_height * 0.8)
+        expected_area = (
+            width * rect_height
+            + 0.5 * np.pi * radius * radius
+            - np.pi * hole_radius * hole_radius
+        )
+
+        for z_value in (0.0, thickness):
+            cap_area = 0.0
+            for face in mesh.faces:
+                triangle = mesh.vertices[face]
+                if not np.allclose(triangle[:, 2], z_value):
+                    continue
+                xy = triangle[:, :2]
+                cap_area += 0.5 * abs(
+                    (xy[1, 0] - xy[0, 0]) * (xy[2, 1] - xy[0, 1])
+                    - (xy[2, 0] - xy[0, 0]) * (xy[1, 1] - xy[0, 1])
+                )
+
+            assert cap_area == pytest.approx(expected_area, abs=0.1)
+
     @settings(max_examples=100)
     @given(params=valid_loop_params())
     def test_rotation_preserves_vertex_count(self, params):
