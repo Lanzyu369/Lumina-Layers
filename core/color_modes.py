@@ -33,6 +33,10 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
 
+def _normalize_lookup_name(name: str) -> str:
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
 # ---------------------------------------------------------------------------
 # Value object
 # ---------------------------------------------------------------------------
@@ -130,14 +134,39 @@ class ColorMode:
         """
         if name is None:
             return None
+        lookup_name = str(name).strip()
         # Exact-match fast path.
-        mode = _NAME_INDEX.get(name)
+        mode = _NAME_INDEX.get(lookup_name)
         if mode is not None:
             return mode
+        normalized_name = _normalize_lookup_name(lookup_name)
+        for alias, mode in _NAME_INDEX.items():
+            if _normalize_lookup_name(alias) == normalized_name:
+                return mode
+        if normalized_name == "rybwgk":
+            return _NAME_INDEX.get("6-Color (RYBWGK 1296)")
+        if normalized_name == "cmywgk":
+            return _NAME_INDEX.get("6-Color (CMYWGK 1296)")
+        if normalized_name == "merged":
+            return _NAME_INDEX.get("Merged")
+        if "6color" in normalized_name:
+            if "rybw" in normalized_name:
+                return _NAME_INDEX.get("6-Color (RYBWGK 1296)")
+            if "cmyw" in normalized_name:
+                return _NAME_INDEX.get("6-Color (CMYWGK 1296)")
+            return _NAME_INDEX.get("6-Color")
+        if "4color" in normalized_name:
+            if "cmyw" in normalized_name:
+                return _NAME_INDEX.get("4-Color (CMYW)")
+            return _NAME_INDEX.get("4-Color")
+        if "8color" in normalized_name:
+            return _NAME_INDEX.get("8-Color Max")
+        if "5color" in normalized_name and "extended" in normalized_name:
+            return _NAME_INDEX.get("5-Color Extended")
         # Substring fallback to mirror the legacy "X-Color in mode" behaviour.
         for mode in iter_modes():
             for alias in mode.display_names:
-                if alias and alias in name:
+                if alias and alias in lookup_name:
                     return mode
         return None
 

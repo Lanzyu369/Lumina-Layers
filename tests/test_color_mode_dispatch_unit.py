@@ -39,13 +39,21 @@ import pytest
         ("4-Color", "4-Color"),
         ("4-Color (RYBW)", "4-Color"),
         ("RYBW", "4-Color"),
+        ("4-Color RYBW", "4-Color"),
         # 4-Color CMYW
         ("4-Color (CMYW)", "4-Color (CMYW)"),
+        ("4-Color CMYW", "4-Color (CMYW)"),
+        ("4Color CMYW", "4-Color (CMYW)"),
         ("CMYW", "4-Color (CMYW)"),
         # 6-Color CMYW (default 6-color)
         ("6-Color (CMYWGK 1296)", "6-Color (CMYWGK 1296)"),
+        ("6-Color CMYWGK", "6-Color (CMYWGK 1296)"),
+        ("CMYWGK", "6-Color (CMYWGK 1296)"),
         # 6-Color RYBW variant
         ("6-Color (RYBWGK 1296)", "6-Color (RYBWGK 1296)"),
+        ("6-Color (RYBW)", "6-Color (RYBWGK 1296)"),
+        ("6-Color RYBWGK", "6-Color (RYBWGK 1296)"),
+        ("RYBWGK", "6-Color (RYBWGK 1296)"),
         # 8-Color
         ("8-Color Max", "8-Color Max"),
         ("8-Color", "8-Color Max"),
@@ -105,8 +113,13 @@ def test_color_system_get_known_modes_unchanged() -> None:
 
     assert ColorSystem.get("4-Color") is ColorSystem.RYBW
     assert ColorSystem.get("4-Color (CMYW)") is ColorSystem.CMYW
+    assert ColorSystem.get("4-Color CMYW") is ColorSystem.CMYW
+    assert ColorSystem.get("4Color CMYW") is ColorSystem.CMYW
     assert ColorSystem.get("6-Color (CMYWGK 1296)") is ColorSystem.SIX_COLOR
+    assert ColorSystem.get("6-Color CMYWGK") is ColorSystem.SIX_COLOR
     assert ColorSystem.get("6-Color (RYBWGK 1296)") is ColorSystem.SIX_COLOR_RYBW
+    assert ColorSystem.get("6-Color (RYBW)") is ColorSystem.SIX_COLOR_RYBW
+    assert ColorSystem.get("6-Color RYBWGK") is ColorSystem.SIX_COLOR_RYBW
     assert ColorSystem.get("8-Color Max") is ColorSystem.EIGHT_COLOR
     assert ColorSystem.get("BW") is ColorSystem.BW
     assert ColorSystem.get("5-Color Extended") is ColorSystem.FIVE_COLOR_EXTENDED
@@ -114,6 +127,16 @@ def test_color_system_get_known_modes_unchanged() -> None:
     # Default fallback for unknown / None
     assert ColorSystem.get(None) is ColorSystem.RYBW
     assert ColorSystem.get("foo") is ColorSystem.RYBW
+
+
+def test_lut_manager_canonicalizes_legacy_variant_strings() -> None:
+    from utils.lut_manager import LUTManager
+
+    assert LUTManager._canonicalize_legacy_color_mode("4-Color CMYW") == "4-Color (CMYW)"
+    assert LUTManager._canonicalize_legacy_color_mode("4Color CMYW") == "4-Color (CMYW)"
+    assert LUTManager._canonicalize_legacy_color_mode("6-Color (RYBW)") == "6-Color (RYBWGK 1296)"
+    assert LUTManager._canonicalize_legacy_color_mode("6-Color RYBWGK") == "6-Color (RYBWGK 1296)"
+    assert LUTManager._canonicalize_legacy_color_mode("6Color CMYWGK") == "6-Color (CMYWGK 1296)"
 
 
 # ---------------------------------------------------------------------------

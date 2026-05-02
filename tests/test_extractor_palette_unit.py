@@ -14,7 +14,10 @@ RYBWGK → 白/红/黄/蓝/绿/黑，CMYWGK → 白/青/品红/绿/黄/黑。
 
 from __future__ import annotations
 
+import numpy as np
+
 from api.routers.extractor import _build_default_palette
+from utils.lut_manager import LUTManager
 
 
 class TestBuildDefaultPaletteColorMode:
@@ -61,3 +64,37 @@ class TestBuildDefaultPaletteColorMode:
             assert entry["hex_color"] is not None
             assert entry["hex_color"].startswith("#")
             assert len(entry["hex_color"]) == 7
+
+    def test_run_extraction_preserves_rybwgk_metadata(self, tmp_path, monkeypatch):
+        from core import extractor as extractor_core
+
+        lut_path = tmp_path / "lumina_lut.json"
+        monkeypatch.setattr(extractor_core, "LUT_FILE_PATH", str(lut_path))
+        monkeypatch.setattr(extractor_core.Stats, "increment", lambda _name: None)
+
+        img = np.full((1000, 1000, 3), 180, dtype=np.uint8)
+        _vis, _preview, saved_path, _status = extractor_core.run_extraction(
+            img=img,
+            points=[[0, 0], [999, 0], [999, 999], [0, 999]],
+            offset_x=0,
+            offset_y=0,
+            zoom=1.0,
+            barrel=0.0,
+            bright=False,
+            color_mode="6-Color (RYBWGK 1296)",
+            page_choice="Page 1",
+            auto_wb=False,
+            eight_color_full_export=False,
+        )
+
+        assert saved_path == str(lut_path)
+        _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(str(lut_path))
+        assert metadata.color_mode == "6-Color (RYBWGK 1296)"
+        assert [entry.color for entry in metadata.palette] == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Green",
+            "Black",
+        ]

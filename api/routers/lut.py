@@ -66,9 +66,7 @@ def _canonicalize_public_color_mode(color_mode: str | None) -> str | None:
     """
     if not isinstance(color_mode, str):
         return color_mode
-    if color_mode.strip() == "8-Color":
-        return "8-Color Max"
-    return color_mode
+    return LUTManager._canonicalize_legacy_color_mode(color_mode) or color_mode.strip()
 
 
 def _canonicalize_source_catalog_color_modes(catalog: dict) -> dict:

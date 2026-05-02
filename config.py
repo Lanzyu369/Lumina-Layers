@@ -289,39 +289,31 @@ class ColorSystem:
         if mode is None:
             return ColorSystem.RYBW  # Default fallback
 
-        # 4-Color CMYW variant
-        if mode in ("4-Color (CMYW)", "CMYW"):
-            return ColorSystem.CMYW
+        mode_text = str(mode).strip()
+        mode_upper = mode_text.upper()
 
-        # 4-Color RYBW variant (also handles legacy "4-Color" string)
-        if mode in ("4-Color (RYBW)", "4-Color", "RYBW") or "4-Color" in mode:
-            return ColorSystem.RYBW
-
-        # Check specific patterns
-        if "8-Color" in mode:
+        if "8-COLOR" in mode_upper or "8COLOR" in mode_upper:
             return ColorSystem.EIGHT_COLOR
-        if mode in ("6-Color (RYBWGK 1296)",):
-            return ColorSystem.SIX_COLOR_RYBW
-        if "6-Color" in mode:
+        if "6-COLOR" in mode_upper or "6COLOR" in mode_upper or "RYBWGK" in mode_upper or "CMYWGK" in mode_upper:
+            if "RYBW" in mode_upper:
+                return ColorSystem.SIX_COLOR_RYBW
             return ColorSystem.SIX_COLOR
+        if "4-COLOR" in mode_upper or "4COLOR" in mode_upper:
+            if "CMYW" in mode_upper:
+                return ColorSystem.CMYW
+            return ColorSystem.RYBW
+        if ("5-COLOR" in mode_upper or "5COLOR" in mode_upper) and "EXTENDED" in mode_upper:
+            return ColorSystem.FIVE_COLOR_EXTENDED
 
-        # Merged LUT: use 8-Color config (superset of all material IDs 0-7)
-        if mode == "Merged":
+        if mode_upper == "MERGED":
             return ColorSystem.EIGHT_COLOR
 
-        # Legacy support for old mode strings
-        if "RYBW" in mode:
+        if "RYBW" in mode_upper:
             return ColorSystem.RYBW
-        if "CMYW" in mode:
+        if "CMYW" in mode_upper:
             return ColorSystem.CMYW
-
-        # Check BW last to avoid matching RYBW
-        if mode == "BW" or mode == "BW (Black & White)":
+        if mode_upper == "BW" or mode_upper == "BW (BLACK & WHITE)":
             return ColorSystem.BW
-
-        # 5-Color Extended mode
-        if "5-Color Extended" in mode or "5-Color (Extended)" in mode:
-            return ColorSystem.FIVE_COLOR_EXTENDED
 
         return ColorSystem.RYBW  # Default fallback
 

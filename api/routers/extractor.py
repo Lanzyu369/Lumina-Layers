@@ -400,7 +400,8 @@ async def extractor_extract(
             detail=f"corner_points must contain exactly 4 points, got {len(points)}",
         )
 
-    effective_color_mode = _normalize_6color_mode(color_mode)
+    requested_color_mode = LUTManager._canonicalize_legacy_color_mode(color_mode) or color_mode
+    effective_color_mode = _normalize_6color_mode(requested_color_mode)
 
     # Convert UploadFile to ndarray
     try:
@@ -419,7 +420,7 @@ async def extractor_extract(
             zoom=zoom,
             barrel=distortion,
             bright=vignette_correction,
-            color_mode=effective_color_mode,
+            color_mode=requested_color_mode,
             page_choice=page,
             auto_wb=auto_wb,
             eight_color_full_export=eight_color_full_export,
@@ -434,7 +435,7 @@ async def extractor_extract(
     # Create session and store state
     session_id = store.create()
     store.put(session_id, "lut_path", lut_path)
-    store.put(session_id, "color_mode", effective_color_mode)
+    store.put(session_id, "color_mode", requested_color_mode)
     store.put(session_id, "page", page)
     store.put(session_id, "eight_color_full_export", bool(eight_color_full_export))
 
@@ -497,7 +498,7 @@ async def extractor_extract(
     try:
         layout_rgb, _layout_stacks, _layout_metadata = LUTManager.load_lut_with_metadata(lut_path)
         lut_layout = _resolve_session_lut_layout(
-            color_mode=effective_color_mode,
+            color_mode=requested_color_mode,
             total_count=len(layout_rgb),
             page=page,
             eight_color_full_export=bool(eight_color_full_export),
@@ -522,7 +523,7 @@ async def extractor_extract(
         "Extractor extract completed",
         extra={
             "event": "extractor_extract_done",
-            "color_mode": effective_color_mode,
+            "color_mode": requested_color_mode,
             "page": page,
             "eight_color_full_export": bool(eight_color_full_export),
             "lut_path": str(lut_path),
@@ -537,16 +538,7 @@ async def extractor_extract(
         lut_download_url=f"/api/files/{lut_download_id}",
         warp_view_url=f"/api/files/{warp_view_id}" if warp_view_id else "",
         lut_preview_url=f"/api/files/{lut_preview_id}" if lut_preview_id else "",
-        # The extraction pipeline uses ``effective_color_mode`` (CMYW-normalized
-        # for 6-Color variants to share the same processing path). The
-        # user-facing default palette must use the *raw* ``color_mode`` so
-        # RYBWGK keeps its RYBW slot names (White/Red/Yellow/Blue/Green/Black)
-        # instead of being displayed as CMYW (White/Cyan/Magenta/...).
-        # 提取管线使用 ``effective_color_mode``（6 色变体统一归一为 CMYW 共享处理
-        # 路径）。但面向用户的默认调色板必须使用原始 ``color_mode``，这样 RYBWGK
-        # 保持自己的 RYBW 槽位名（白/红/黄/蓝/绿/黑），不会被显示成 CMYW
-        # （白/青/品红/...）。
-        default_palette=_build_default_palette(color_mode),
+        default_palette=_build_default_palette(requested_color_mode),
         lut_layout=lut_layout.to_dict() if lut_layout is not None else None,
     )
 

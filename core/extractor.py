@@ -672,7 +672,7 @@ def run_extraction(
 
     # 保存为 Keyed JSON 格式
     rgb_flat = extracted.reshape(-1, 3)[:total_cells]
-    metadata_mode = _normalize_6color_mode(color_mode)
+    metadata_mode = LUTManager._canonicalize_legacy_color_mode(color_mode) or color_mode
     metadata = LUTManager.infer_default_metadata(
         "lumina_lut",
         LUT_FILE_PATH,

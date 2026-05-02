@@ -163,6 +163,56 @@ class TestLUTManager:
         finally:
             os.unlink(tmp_path)
 
+    def test_biqu_6color_npy_metadata_preserves_channel_order(self):
+        biqu_path = os.path.join(
+            "lut-preset",
+            "BIQU",
+            "必趣&PLAGO&6色RYBWGK.npy",
+        )
+
+        loaded_rgb, stacks, metadata = LUTManager.load_lut_with_metadata(biqu_path)
+
+        assert loaded_rgb.reshape(-1, 3).shape[0] == 1296
+        assert stacks is None
+        assert metadata.color_mode == "6-Color (RYBWGK 1296)"
+        assert [entry.color for entry in metadata.palette] == [
+            "White",
+            "Blue",
+            "Red",
+            "Green",
+            "Yellow",
+            "Black",
+        ]
+
+    def test_pipeline_uses_biqu_npy_metadata_palette(self):
+        from core.pipeline import p01_preview_validation
+
+        biqu_path = os.path.join(
+            "lut-preset",
+            "BIQU",
+            "必趣&PLAGO&6色RYBWGK.npy",
+        )
+        ctx = {
+            "image_path": "dummy.png",
+            "lut_path": biqu_path,
+            "modeling_mode": None,
+            "quantize_colors": 64,
+            "color_mode": "6-Color (RYBWGK 1296)",
+        }
+
+        result = p01_preview_validation.run(ctx)
+
+        assert "error" not in result
+        assert result["slot_names"] == [
+            "White",
+            "Blue",
+            "Red",
+            "Green",
+            "Yellow",
+            "Black",
+        ]
+        assert result["preview_colors"][1][:3] != ColorSystem.SIX_COLOR_RYBW["preview"][1][:3]
+
     def test_load_legacy_npz_no_metadata(self):
         """加载无 metadata_json 的 .npz 文件，验证默认元数据被推断。"""
         with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:

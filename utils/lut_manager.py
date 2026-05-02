@@ -391,14 +391,41 @@ class LUTManager:
             return color_mode
 
         normalized = color_mode.strip()
-        if normalized == "4-Color":
+        normalized_key = re.sub(r"[^a-z0-9]+", "", normalized.lower())
+        if normalized_key == "cmyw":
+            return "4-Color (CMYW)"
+        if normalized_key == "rybw":
+            return "4-Color (RYBW)"
+        if normalized_key == "bw":
+            return "BW (Black & White)"
+        if normalized_key == "merged":
+            return "Merged"
+        if normalized_key == "rybwgk":
+            return "6-Color (RYBWGK 1296)"
+        if normalized_key == "cmywgk":
+            return "6-Color (CMYWGK 1296)"
+        if normalized_key == "4color":
             if isinstance(data, dict):
                 return LUTManager._detect_variant_from_palette(data, "4-Color")
-            return "4-Color (CMYW)"
-        if normalized == "6-Color":
+            return "4-Color (RYBW)"
+        if "4color" in normalized_key:
+            if "cmyw" in normalized_key:
+                return "4-Color (CMYW)"
+            if "rybw" in normalized_key:
+                return "4-Color (RYBW)"
+        if normalized_key == "6color":
             if isinstance(data, dict):
                 return LUTManager._detect_variant_from_palette(data, "6-Color")
             return "6-Color (CMYWGK 1296)"
+        if "6color" in normalized_key:
+            if "rybw" in normalized_key:
+                return "6-Color (RYBWGK 1296)"
+            if "cmyw" in normalized_key:
+                return "6-Color (CMYWGK 1296)"
+        if normalized_key == "8color":
+            return "8-Color Max"
+        if "5color" in normalized_key and "extended" in normalized_key:
+            return "5-Color Extended"
         return normalized
 
     @staticmethod
@@ -1091,9 +1118,20 @@ class LUTManager:
         Returns:
             LUTMetadata: Inferred default metadata. (推断的默认元数据)
         """
-        mode = color_mode or cls.infer_color_mode(display_name, file_path)
+        mode = (
+            cls._canonicalize_legacy_color_mode(color_mode)
+            if color_mode
+            else cls.infer_color_mode(display_name, file_path)
+        )
         color_conf = ColorSystem.get(mode)
         slots = color_conf.get("slots", [])
+        combined_name = f"{display_name} {file_path}".casefold()
+        if (
+            color_count == 1296
+            and mode == "6-Color (RYBWGK 1296)"
+            and ("biqu" in combined_name or "必趣" in combined_name)
+        ):
+            slots = ["White", "Blue", "Red", "Green", "Yellow", "Black"]
 
         palette = [
             PaletteEntry(color=name, material="PLA Basic")
@@ -1143,7 +1181,8 @@ class LUTManager:
                     },
                 )
                 rgb = np.zeros((0, 3), dtype=np.uint8)
-            metadata = cls.infer_default_metadata(display_name, file_path, len(rgb))
+            color_count = int(rgb.reshape(-1, 3).shape[0]) if rgb.size else 0
+            metadata = cls.infer_default_metadata(display_name, file_path, color_count)
             return rgb, None, metadata
 
         # ---- .json (Keyed JSON) format ----

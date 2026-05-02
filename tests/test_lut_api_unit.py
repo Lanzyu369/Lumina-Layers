@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from api.app import app
 from api.dependencies import get_session_store
+from api.routers.lut import _canonicalize_public_color_mode
 from api.schemas.converter import ColorMode, ConvertGenerateRequest, ConvertPreviewRequest
 from api.session_store import SessionStore
 from config import LUTMetadata, PaletteEntry
@@ -26,6 +27,13 @@ from core.native_reference import (
 )
 
 client: TestClient = TestClient(app)
+
+
+def test_public_color_mode_canonicalizes_legacy_variants() -> None:
+    assert _canonicalize_public_color_mode("8-Color") == "8-Color Max"
+    assert _canonicalize_public_color_mode("4-Color CMYW") == "4-Color (CMYW)"
+    assert _canonicalize_public_color_mode("6-Color (RYBW)") == "6-Color (RYBWGK 1296)"
+    assert _canonicalize_public_color_mode("6-Color RYBWGK") == "6-Color (RYBWGK 1296)"
 
 
 def _raw_lut_colors(count: int) -> list[dict]:
