@@ -498,6 +498,59 @@ class TestGenerateParameterCompleteness:
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is False
 
+    def test_generated_download_survives_source_session_close(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        fd_out, out_path = tempfile.mkstemp(suffix=".3mf")
+        try:
+            os.write(fd_img, b"image")
+            os.write(fd_lut, b"lut")
+            os.write(fd_out, b"3mf payload")
+        finally:
+            os.close(fd_img)
+            os.close(fd_lut)
+            os.close(fd_out)
+
+        sid = _test_store.create()
+        _test_store.put(sid, "preview_cache", {"some": "data", "target_w": 10, "target_h": 10})
+        _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "lut_path", lut_path)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+
+        payload = {
+            "session_id": sid,
+            "params": {"lut_name": "test_lut"},
+        }
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+            assert response.status_code == 200
+            download_url = response.json()["download_url"]
+            download_file_id = download_url.rsplit("/", 1)[-1]
+            entry = _test_registry.get_entry(download_file_id)
+            assert entry is not None
+            assert entry["lifecycle"] == "ephemeral"
+            assert entry["session_id"] != sid
+
+            close_response = client.post("/api/session/close", json={"session_id": sid})
+            assert close_response.status_code == 200
+
+            download_response = client.get(download_url)
+            assert download_response.status_code == 200
+            assert download_response.content == b"3mf payload"
+        finally:
+            for path in (image_path, lut_path, out_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     def test_generate_defaults_enable_base_layer_modifier_true_when_field_missing(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
 

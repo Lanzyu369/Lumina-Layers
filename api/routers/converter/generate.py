@@ -749,7 +749,11 @@ async def convert_generate(
 
     # Register output files via FileRegistry
     sid = body.session_id
-    download_id = registry.register_path(sid, threemf_path)
+    download_id = registry.register_path(
+        str(uuid.uuid4()),
+        threemf_path,
+        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+    )
 
     preview_3d_url: str | None = None
     if glb_path and os.path.exists(glb_path):
@@ -1002,8 +1006,11 @@ async def _generate_large_format_svg_native(
     except ROUTER_HANDLED_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
     zip_path = result["zip_path"]
-    store.register_temp_file(sid, zip_path)
-    download_id = registry.register_path(sid, zip_path)
+    download_id = registry.register_path(
+        str(uuid.uuid4()),
+        zip_path,
+        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+    )
     return {
         "status": "ok",
         "message": f"Generated {result['tile_count']}/{result['grid_cols'] * result['grid_rows']} tiles ({result['grid_cols']}×{result['grid_rows']})",
@@ -1181,8 +1188,11 @@ async def _generate_large_format_raster(
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for label, tp in successful_paths:
                 zf.write(tp, f"{label}.3mf")
-        store.register_temp_file(sid, zip_path)
-        download_id = registry.register_path(sid, zip_path)
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            zip_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
         zip_ready = True
 
         msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"

@@ -279,6 +279,61 @@ class TestLUTManager:
         finally:
             os.unlink(tmp_path)
 
+    def test_uploaded_standard_keyed_json_with_empty_recipes_rebuilds_stacks(self):
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((2468, 3), dtype=np.uint8)
+        rgb[:, 0] = np.arange(2468, dtype=np.uint16) % 256
+        metadata = LUTManager.infer_default_metadata(
+            "Custom - JAYO_5color",
+            "JAYO_5color.npy",
+            len(rgb),
+            "5-Color Extended",
+        )
+        stacks = np.zeros((len(rgb), 0), dtype=np.int32)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            LUTManager.save_keyed_json(tmp_path, rgb, stacks, metadata)
+
+            loaded_rgb, loaded_stacks, _metadata = LUTManager.load_lut_with_metadata(tmp_path)
+            assert loaded_rgb.shape == (2468, 3)
+            assert loaded_stacks is None
+
+            lut_data = load_lut(tmp_path, "5-Color Extended")
+            assert lut_data["ref_stacks"].shape == (2468, 6)
+            assert np.any(lut_data["ref_stacks"] >= 0)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_standard_keyed_json_with_valid_recipe_keeps_stacks(self):
+        entries = [
+            {
+                "rgb": [255, 255, 255],
+                "recipe": ["White", "White", "White", "White", "White"],
+            }
+        ]
+        entries.extend({"rgb": [0, 0, 0], "recipe": []} for _ in range(31))
+        data = {
+            "name": "MostlyEmptyButValid",
+            "palette": {"White": {"material": "PLA Basic"}},
+            "entries": entries,
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False, encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            tmp_path = f.name
+
+        try:
+            _loaded_rgb, loaded_stacks, _metadata = LUTManager.load_lut_with_metadata(tmp_path)
+            assert loaded_stacks is not None
+            assert loaded_stacks.shape == (32, 5)
+            assert loaded_stacks[0].tolist() == [0, 0, 0, 0, 0]
+        finally:
+            os.unlink(tmp_path)
+
     def test_keyed_json_missing_palette(self):
         """缺少 palette 的 JSON 文件，验证默认调色板被推断。"""
         data = {

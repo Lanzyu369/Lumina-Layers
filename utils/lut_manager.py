@@ -54,6 +54,17 @@ _lut_preset_cache_at: float | None = None
 _lut_preset_cache_value: dict[str, str] | None = None
 _INT32_MIN = -(2**31)
 _INT32_MAX = 2**31 - 1
+_RECONSTRUCTABLE_LUT_COUNTS = frozenset({32, 1024, 1296, 2468, 2738})
+
+
+def _looks_like_missing_keyed_stacks(stacks: object, color_count: int) -> bool:
+    if color_count not in _RECONSTRUCTABLE_LUT_COUNTS:
+        return False
+    if not isinstance(stacks, np.ndarray):
+        return False
+    if stacks.ndim != 2 or stacks.shape[0] != color_count or stacks.shape[1] <= 0:
+        return False
+    return bool(np.all(stacks < 0))
 
 
 def _resolve_native_base_channel_idx(
@@ -1469,6 +1480,8 @@ class LUTManager:
             stacks = np.array(normalized_stacks, dtype=np.int32)
         else:
             stacks = None
+        if _looks_like_missing_keyed_stacks(stacks, rgb.reshape(-1, 3).shape[0]):
+            stacks = None
 
         return rgb, stacks, metadata
 
@@ -2068,6 +2081,8 @@ class LUTManager:
 
         rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)
         stacks = np.array(stacks_list, dtype=np.int32) if stacks_list else None
+        if _looks_like_missing_keyed_stacks(stacks, rgb.reshape(-1, 3).shape[0]):
+            stacks = None
 
         metadata = LUTMetadata(
             palette=palette,
