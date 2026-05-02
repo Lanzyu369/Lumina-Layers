@@ -107,6 +107,63 @@ class TestAnycubicWriterMetadata:
         ]
         assert part_extruders == ["1", "1", "2"]
 
+    def test_bambu_project_settings_copy_petg_template_row_for_petg_materials(self) -> None:
+        writer = BambuStudio3MFWriter(
+            "petg-materials.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+        writer._set_project_palette(
+            ["爱丽兹 PETG Basic 青色", "PLA Basic White"],
+            {
+                0: (0, 122, 214, 255),
+                1: (255, 255, 255, 255),
+            },
+        )
+
+        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+        assert settings["filament_type"] == ["PETG", "PLA"]
+        assert settings["filament_settings_id"] == [
+            "Bambu PETG Basic @BBL X1C 0.2 nozzle",
+            "Bambu PLA Basic @BBL X1C 0.2 nozzle",
+        ]
+        assert settings["nozzle_temperature"] == ["255", "220"]
+        assert settings["nozzle_temperature_initial_layer"] == ["245", "220"]
+        assert settings["textured_plate_temp"] == ["70", "55"]
+        assert settings["cool_plate_temp"] == ["0", "35"]
+
+    def test_orca_project_settings_derive_petg_metadata_when_template_is_pla_only(self) -> None:
+        writer = BambuStudio3MFWriter(
+            "orca-petg-materials.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="OrcaSlicer",
+            nozzle_size="0.2",
+        )
+        writer._set_project_palette(
+            ["PETG HF Red", "PLA Basic White"],
+            {
+                0: (220, 20, 60, 255),
+                1: (255, 255, 255, 255),
+            },
+        )
+
+        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+        assert settings["filament_type"] == ["PETG", "PLA"]
+        assert settings["filament_settings_id"] == [
+            "Bambu PETG HF @BBL X1C",
+            "Bambu PLA Basic @BBL X1C",
+        ]
+        assert settings["nozzle_temperature"] == ["255", "220"]
+        assert settings["nozzle_temperature_initial_layer"] == ["245", "220"]
+        assert settings["textured_plate_temp"] == ["70", "55"]
+
     def test_anycubic_model_settings_match_sample_shape(self, tmp_path) -> None:
         writer = _make_anycubic_writer(tmp_path)
 

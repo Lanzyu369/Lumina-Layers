@@ -446,6 +446,10 @@ def run(ctx: dict) -> dict:
             if loop_mesh is not None:
                 loop_mesh.visual.face_colors = preview_colors[loop_info["color_id"]]
                 loop_mesh.metadata["name"] = "Keychain_Loop"
+                loop_color_id = int(loop_info.get("color_id", -1))
+                slot_names = ctx.get("slot_names") or []
+                if 0 <= loop_color_id < len(slot_names):
+                    loop_mesh.metadata["bambu_material_name"] = str(slot_names[loop_color_id])
                 scene.add_geometry(loop_mesh, node_name="Keychain_Loop", geom_name="Keychain_Loop")
                 valid_slot_names.append("Keychain_Loop")
                 loop_added = True

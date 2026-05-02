@@ -347,6 +347,8 @@ def _build_stage_scene(
             continue
         mesh.visual.face_colors = preview_colors[name]
         mesh.metadata["name"] = name
+        if material_index == 1:
+            mesh.metadata["bambu_material_name"] = entry.material or name
         scene.add_geometry(mesh, node_name=name, geom_name=name)
 
     _apply_face_down_x_mirror(scene, spec.board_width_mm)

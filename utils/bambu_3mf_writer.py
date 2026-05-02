@@ -77,6 +77,219 @@ class _MeshExportEntry:
     color_rgb: tuple[int, int, int]
 
 
+@dataclass(frozen=True)
+class _FilamentProfile:
+    family: str
+    preset_label: str
+    type_value: str
+
+
+_FILAMENT_RESIZABLE_ARRAY_KEYS = frozenset(
+    [
+        "nozzle_temperature",
+        "nozzle_temperature_initial_layer",
+        "nozzle_temperature_range_low",
+        "nozzle_temperature_range_high",
+        "bed_temperature",
+        "bed_temperature_initial_layer",
+        "activate_air_filtration",
+        "additional_cooling_fan_speed",
+        "chamber_temperatures",
+        "close_fan_the_first_x_layers",
+        "complete_print_exhaust_fan_speed",
+        "cool_plate_temp",
+        "cool_plate_temp_initial_layer",
+        "during_print_exhaust_fan_speed",
+        "eng_plate_temp",
+        "eng_plate_temp_initial_layer",
+        "fan_cooling_layer_time",
+        "fan_max_speed",
+        "fan_min_speed",
+        "hot_plate_temp",
+        "hot_plate_temp_initial_layer",
+        "textured_plate_temp",
+        "textured_plate_temp_initial_layer",
+    ]
+)
+
+
+_PETG_FALLBACK_VALUES = {
+    "nozzle_temperature": "255",
+    "nozzle_temperature_initial_layer": "245",
+    "nozzle_temperature_range_low": "230",
+    "nozzle_temperature_range_high": "270",
+    "bed_temperature": "70",
+    "bed_temperature_initial_layer": "70",
+    "textured_plate_temp": "70",
+    "textured_plate_temp_initial_layer": "70",
+    "hot_plate_temp": "70",
+    "hot_plate_temp_initial_layer": "70",
+    "eng_plate_temp": "70",
+    "eng_plate_temp_initial_layer": "70",
+    "cool_plate_temp": "0",
+    "cool_plate_temp_initial_layer": "0",
+}
+
+
+def _infer_filament_profile(material_name: str) -> _FilamentProfile | None:
+    normalized = str(material_name or "").upper()
+    compact = re.sub(r"[^A-Z0-9]+", "", normalized)
+    if "PETG" not in compact:
+        return None
+    if "PETGCF" in compact:
+        return _FilamentProfile(family="PETG", preset_label="PETG-CF", type_value="PETG-CF")
+    if "PETGHF" in compact:
+        return _FilamentProfile(family="PETG", preset_label="PETG HF", type_value="PETG")
+    if "TRANSLUCENT" in normalized or "TRANSPARENT" in normalized or "透明" in str(material_name or ""):
+        return _FilamentProfile(family="PETG", preset_label="PETG Translucent", type_value="PETG")
+    return _FilamentProfile(family="PETG", preset_label="PETG Basic", type_value="PETG")
+
+
+def _template_filament_count(template_settings: dict) -> int:
+    counts = []
+    for key in ("filament_type", "filament_settings_id", "filament_vendor", "filament_ids"):
+        value = template_settings.get(key)
+        if isinstance(value, list):
+            counts.append(len(value))
+    return max(counts) if counts else 0
+
+
+def _find_template_filament_index(template_settings: dict, profile: _FilamentProfile) -> int | None:
+    for key in ("filament_type", "filament_settings_id"):
+        value = template_settings.get(key)
+        if not isinstance(value, list):
+            continue
+        for index, raw in enumerate(value):
+            if profile.family in str(raw or "").upper():
+                return index
+    return None
+
+
+def _find_template_default_filament_index(template_settings: dict) -> int:
+    for key in ("filament_type", "filament_settings_id"):
+        value = template_settings.get(key)
+        if not isinstance(value, list):
+            continue
+        for index, raw in enumerate(value):
+            normalized = str(raw or "").upper()
+            if "PLA" in normalized and "PETG" not in normalized:
+                return index
+        for index, raw in enumerate(value):
+            if "PETG" not in str(raw or "").upper():
+                return index
+    return 0
+
+
+def _template_list_value(values: list, source_index: int, filament_count: int) -> object | None:
+    if filament_count > 0 and len(values) == filament_count * 2:
+        doubled_index = source_index * 2
+        if doubled_index < len(values):
+            return values[doubled_index]
+    if source_index < len(values):
+        return values[source_index]
+    return None
+
+
+def _template_default_list_value(values: list, template_settings: dict) -> object:
+    source_index = _find_template_default_filament_index(template_settings)
+    resolved = _template_list_value(values, source_index, _template_filament_count(template_settings))
+    if resolved is not None:
+        return resolved
+    return values[0] if values else "0"
+
+
+def _derive_filament_settings_id(existing: object, profile: _FilamentProfile) -> str:
+    text = str(existing or "").strip()
+    if not text:
+        return profile.preset_label
+    for token in (
+        "PLA Basic",
+        "PLA Matte",
+        "PLA Silk",
+        "PLA-CF",
+        "PLA Metal",
+        "PLA Marble",
+        "PLA Wood",
+        "PLA Glow",
+        "PLA Galaxy",
+        "PLA Aero",
+        "PLA",
+    ):
+        if token in text:
+            return text.replace(token, profile.preset_label, 1)
+    return text
+
+
+def _fallback_filament_value(key: str, current: object, profile: _FilamentProfile) -> object | None:
+    if key == "filament_type":
+        return profile.type_value
+    if key == "filament_settings_id":
+        return _derive_filament_settings_id(current, profile)
+    if key == "filament_vendor":
+        return str(current or "Bambu Lab")
+    if key == "filament_ids":
+        text = str(current or "")
+        return "GFG00" if text.startswith("GF") else current
+    if profile.family == "PETG":
+        return _PETG_FALLBACK_VALUES.get(key)
+    return None
+
+
+def _apply_default_filament_profile(settings: dict, profiles: list[_FilamentProfile | None]) -> None:
+    first_profile = next((profile for profile in profiles if profile is not None), None)
+    if first_profile is None:
+        return
+    current = settings.get("default_filament_profile")
+    if isinstance(current, list) and current:
+        current[0] = _derive_filament_settings_id(current[0], first_profile)
+    elif isinstance(current, str) and current.strip():
+        settings["default_filament_profile"] = _derive_filament_settings_id(current, first_profile)
+
+
+def _apply_material_filament_metadata(
+    settings: dict,
+    template_settings: dict,
+    material_palette: list[tuple[str, tuple[int, int, int]]],
+) -> None:
+    profiles = [_infer_filament_profile(material_name) for material_name, _ in material_palette]
+    if not any(profile is not None for profile in profiles):
+        return
+
+    filament_count = _template_filament_count(template_settings)
+    template_indices: dict[_FilamentProfile, int | None] = {}
+    num_colors = len(material_palette)
+    for key in list(settings.keys()):
+        if key == "filament_colour":
+            continue
+        if not (key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS):
+            continue
+        current_values = settings.get(key)
+        if not isinstance(current_values, list):
+            continue
+        values = list(current_values)
+        if len(values) < num_colors:
+            fill_value = values[0] if values else ""
+            values = [fill_value] * num_colors
+        source_values = template_settings.get(key)
+        for index, profile in enumerate(profiles):
+            if profile is None:
+                continue
+            if profile not in template_indices:
+                template_indices[profile] = _find_template_filament_index(template_settings, profile)
+            source_index = template_indices[profile]
+            resolved_value = None
+            if isinstance(source_values, list) and source_index is not None:
+                resolved_value = _template_list_value(source_values, source_index, filament_count)
+            if resolved_value is None:
+                current = values[index] if index < len(values) else ""
+                resolved_value = _fallback_filament_value(key, current, profile)
+            if resolved_value is not None and index < len(values):
+                values[index] = resolved_value
+        settings[key] = values
+
+    _apply_default_filament_profile(settings, profiles)
+
+
 def build_layer_config_ranges_xml(
     *,
     base_height_mm: float,
@@ -716,43 +929,17 @@ class BambuStudio3MFWriter:
         num_colors = len(material_palette)
 
         settings = self._get_base_config_template()
-
-        _RESIZABLE_ARRAY_KEYS = frozenset(
-            [
-                "nozzle_temperature",
-                "nozzle_temperature_initial_layer",
-                "nozzle_temperature_range_low",
-                "nozzle_temperature_range_high",
-                "bed_temperature",
-                "bed_temperature_initial_layer",
-                "activate_air_filtration",
-                "additional_cooling_fan_speed",
-                "chamber_temperatures",
-                "close_fan_the_first_x_layers",
-                "complete_print_exhaust_fan_speed",
-                "cool_plate_temp",
-                "cool_plate_temp_initial_layer",
-                "during_print_exhaust_fan_speed",
-                "eng_plate_temp",
-                "eng_plate_temp_initial_layer",
-                "fan_cooling_layer_time",
-                "fan_max_speed",
-                "fan_min_speed",
-                "hot_plate_temp",
-                "hot_plate_temp_initial_layer",
-                "textured_plate_temp",
-                "textured_plate_temp_initial_layer",
-            ]
-        )
+        template_settings = copy.deepcopy(settings)
 
         for key, value in settings.items():
             if isinstance(value, list) and len(value) > 0:
-                if key.startswith("filament_") or key in _RESIZABLE_ARRAY_KEYS:
+                if key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS:
                     if len(value) != num_colors:
-                        template_value = value[0] if value else "0"
+                        template_value = _template_default_list_value(value, template_settings)
                         settings[key] = [template_value] * num_colors
 
         settings.update(self._build_filament_arrays(material_palette))
+        _apply_material_filament_metadata(settings, template_settings, material_palette)
 
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")

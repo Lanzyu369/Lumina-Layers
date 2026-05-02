@@ -390,6 +390,39 @@ def test_build_stage_scene_applies_face_down_mirror_compensation() -> None:
     assert preview.getpixel((3, 0)) == (255, 255, 255)
 
 
+def test_build_stage_scene_preserves_step_material_name_for_slicer_metadata() -> None:
+    spec = SingleStageSpec(
+        grid_cols=1,
+        grid_rows=1,
+        block_mm=2.0,
+        gap_mm=0.0,
+        margin_mm=0.0,
+        pixel_mm=1.0,
+        layer_height_mm=0.5,
+        base_mm=1.0,
+        max_step_layers=1,
+        step_layers=(1,),
+        shrink_xy_mm=0.0,
+    )
+    entry = PaletteEntry(
+        color="Sample",
+        material="PETG Basic",
+        hex_color="#808080",
+        color_name="Sample",
+    )
+
+    scene, _ = _build_stage_scene(
+        entry,
+        "white",
+        "White",
+        (255, 255, 255),
+        spec,
+    )
+
+    assert scene.geometry["Step - Sample"].metadata["bambu_material_name"] == "PETG Basic"
+    assert "bambu_material_name" not in scene.geometry["Base - White"].metadata
+
+
 def test_generate_single_stage_kit_overrides_layer_height_in_manifest_spec(
     monkeypatch,
     tmp_path: Path,
