@@ -333,7 +333,7 @@ function AppContent() {
           <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
             <SubTabBar
               activeTab={activeTab}
-              onTabChange={setActiveTab}
+              onTabChange={handleTabChange}
               compact={workspace.isCompact}
             />
           </div>

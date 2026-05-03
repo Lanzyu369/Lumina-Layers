@@ -296,6 +296,99 @@ describe("GradientCardExtractPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders verification save actions next to extracted results", () => {
+    useSingleStageStore.setState({
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      sessionId: "sess-verify",
+      materialSummary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        warp_width_px: 1240,
+        warp_height_px: 620,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [100, 120, 140],
+        estimated_k: [1.2, 1.3, 1.4],
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    const resultActions = screen.getByTestId("gradient-card-verification-result-actions");
+    expect(
+      within(resultActions).getByRole("button", { name: /合并结果|merge result/i }),
+    ).toBeEnabled();
+    expect(
+      within(resultActions).getByRole("button", { name: /覆盖结果|override/i }),
+    ).toBeEnabled();
+    expect(
+      screen.getByTestId("estimated-material-color").compareDocumentPosition(resultActions) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("saves merged verification results from the result-area actions", async () => {
+    const saveMock = vi.mocked(saveGradientCardMaterial);
+    saveMock.mockResolvedValueOnce({
+      status: "ok",
+      message: "",
+      material_file_url: "/api/files/material.json",
+      stage_a_params_url: "/api/files/stage-a.json",
+      material_summary: {
+        material_name: "PLA Basic",
+        directory_name: "pla-basic",
+        archive_path: "materials/pla-basic/material.json",
+        stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+        verification_count: 4,
+      },
+    });
+    useSingleStageStore.setState({
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "pla-basic",
+      verificationTargetCount: 3,
+      sessionId: "sess-verify",
+      materialSummary: {
+        sample_count: 36,
+        per_substrate_sample_count: 18,
+        grid_rows: 3,
+        grid_cols: 6,
+        layer_height_mm: 0.04,
+        warp_width_px: 1240,
+        warp_height_px: 620,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [255, 255, 255],
+        black_zero_rgb: [24, 24, 24],
+        estimated_rgb: [100, 120, 140],
+        estimated_k: [1.2, 1.3, 1.4],
+      },
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    const resultActions = screen.getByTestId("gradient-card-verification-result-actions");
+    await act(async () => {
+      fireEvent.click(
+        within(resultActions).getByRole("button", { name: /合并结果|merge result/i }),
+      );
+    });
+
+    expect(saveMock).toHaveBeenCalledWith({
+      sessionId: "sess-verify",
+      materialName: "PLA Basic",
+      targetDirectoryName: "pla-basic",
+      saveMode: "merge",
+      brand: null,
+    });
+  });
+
   it("defaults the anchor-corner dropdowns to auto-detection", () => {
     render(<GradientCardExtractPanel />);
 

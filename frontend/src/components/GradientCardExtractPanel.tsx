@@ -731,6 +731,33 @@ export default function GradientCardExtractPanel() {
     ? t("mat_gradient_save_verification_btn")
     : t("mat_gradient_save_material_btn");
   const hasDetailInfo = !!stageAParamsUrl || !!materialSummary || !!fitSummary || !!savedMaterialSummary;
+  const renderVerificationActions = (testId: string) => (
+    <div data-testid={testId} className="grid gap-3 sm:grid-cols-3">
+      <Button
+        label={t("mat_gradient_save_merge_btn")}
+        variant="primary"
+        onClick={() => void submitSave("merge")}
+        disabled={!sessionId || !materialName.trim() || isSaving}
+        loading={isSaving}
+        className="w-full"
+      />
+      <Button
+        label={t("mat_gradient_save_override_btn")}
+        variant="secondary"
+        onClick={() => void submitSave("override")}
+        disabled={!sessionId || !materialName.trim() || isSaving}
+        loading={isSaving}
+        className="w-full"
+      />
+      <Button
+        label={t("mat_gradient_cancel_verification_btn")}
+        variant="secondary"
+        onClick={clearMaterialVerification}
+        disabled={isSaving}
+        className="w-full"
+      />
+    </div>
+  );
 
   useEffect(() => {
     if (isVerificationMode) {
@@ -942,31 +969,7 @@ export default function GradientCardExtractPanel() {
             </div>
             <div className="mt-auto pt-2">
               {isVerificationMode ? (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Button
-                    label={t("mat_gradient_save_merge_btn")}
-                    variant="primary"
-                    onClick={() => void submitSave("merge")}
-                    disabled={!sessionId || !materialName.trim() || isSaving}
-                    loading={isSaving}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_save_override_btn")}
-                    variant="secondary"
-                    onClick={() => void submitSave("override")}
-                    disabled={!sessionId || !materialName.trim() || isSaving}
-                    loading={isSaving}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_cancel_verification_btn")}
-                    variant="secondary"
-                    onClick={clearMaterialVerification}
-                    disabled={isSaving}
-                    className="w-full"
-                  />
-                </div>
+                renderVerificationActions("gradient-card-verification-top-actions")
               ) : (
                 <Button
                   label={saveButtonLabel}
@@ -1387,6 +1390,17 @@ export default function GradientCardExtractPanel() {
                     onClick={() => setDetailsDialogOpen(true)}
                     className="w-full sm:w-auto"
                   />
+                </div>
+              ) : null}
+              {isVerificationMode ? (
+                <div
+                  data-testid="gradient-card-verification-result-actions-card"
+                  className={`${mutedSectionCardClass} flex flex-col gap-3`}
+                >
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                    {saveButtonLabel}
+                  </h4>
+                  {renderVerificationActions("gradient-card-verification-result-actions")}
                 </div>
               ) : null}
             </section>

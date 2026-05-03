@@ -33,9 +33,9 @@ describe("Widget Workspace Layout", () => {
     useWidgetStore.getState().resetLayout();
   });
 
-  it('preserves "Lumina Studio 2.0" header', () => {
+  it('preserves "Lumina Studio 2" header', () => {
     render(<App />);
-    expect(screen.getByText("Lumina Studio 2.0")).toBeInTheDocument();
+    expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
   });
 
   it("renders widget workspace with Scene3D", () => {
@@ -67,7 +67,7 @@ describe("Widget Workspace Layout", () => {
     render(<App />);
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
-    expect(screen.getByRole("tab", { name: "Calibration Board" })).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-calibration")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-extractor")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-manager")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-lut-details")).toBeInTheDocument();

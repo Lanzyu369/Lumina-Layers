@@ -141,7 +141,10 @@ export default function SubTabBar({ activeTab, onTabChange, compact = false }: S
       : null;
 
   return (
-    <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
+    <nav
+      role="tablist"
+      className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}
+    >
       <div className="flex min-w-max items-center gap-1">
         {showConverterSecondary
           ? CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => {
@@ -149,6 +152,8 @@ export default function SubTabBar({ activeTab, onTabChange, compact = false }: S
               return (
                 <button
                   key={id}
+                  role="tab"
+                  aria-selected={isActive}
                   data-testid={`subtab-converter-${id}`}
                   onClick={() => setActiveConverterSubTab(id)}
                   className={`
@@ -179,6 +184,8 @@ export default function SubTabBar({ activeTab, onTabChange, compact = false }: S
                 return (
                   <button
                     key={id}
+                    role="tab"
+                    aria-selected={isActive}
                     data-testid={`subtab-${id}`}
                     onClick={() => onTabChange(id)}
                     className={`
