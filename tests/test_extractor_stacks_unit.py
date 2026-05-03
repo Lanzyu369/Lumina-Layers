@@ -120,6 +120,22 @@ class TestSixColorStacksReversal:
                 err_msg=f"Stack {i}: expected reversed {raw_stack} = {expected}, got {list(recipes[i])}",
             )
 
+    def test_generate_recipes_uses_cached_6color_stacks(self, monkeypatch) -> None:
+        from core import calibration
+
+        raw = (
+            np.arange(1296 * 5, dtype=np.int32).reshape(1296, 5) % 6
+        ).astype(np.int32)
+        monkeypatch.setattr(
+            calibration,
+            "_load_smart_6color_stacks_bottom_to_top",
+            lambda: raw,
+        )
+
+        recipes = _generate_recipes("6-Color", 3)
+
+        np.testing.assert_array_equal(recipes, raw[:3, ::-1])
+
     def test_shape_and_dtype(self) -> None:
         try:
             from core.calibration import get_top_1296_colors  # noqa: F401

@@ -213,6 +213,22 @@ class TestLUTManager:
         ]
         assert result["preview_colors"][1][:3] != ColorSystem.SIX_COLOR_RYBW["preview"][1][:3]
 
+    def test_smart_6color_stacks_asset_contract(self):
+        from core import calibration
+
+        calibration._load_smart_6color_stacks_bottom_to_top.cache_clear()
+
+        stacks = calibration._load_smart_6color_stacks_bottom_to_top()
+
+        assert stacks.shape == (1296, 5)
+        assert stacks.dtype == np.int32
+        assert int(stacks.min()) >= 0
+        assert int(stacks.max()) <= 5
+        np.testing.assert_array_equal(
+            stacks[:6],
+            np.repeat(np.arange(6, dtype=np.int32)[:, None], 5, axis=1),
+        )
+
     def test_load_legacy_npz_no_metadata(self):
         """加载无 metadata_json 的 .npz 文件，验证默认元数据被推断。"""
         with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
@@ -305,6 +321,50 @@ class TestLUTManager:
             lut_data = load_lut(tmp_path, "5-Color Extended")
             assert lut_data["ref_stacks"].shape == (2468, 6)
             assert np.any(lut_data["ref_stacks"] >= 0)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_uploaded_6color_keyed_json_with_empty_recipes_uses_cached_stacks(
+        self,
+        monkeypatch,
+    ):
+        from core import calibration
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1296, 3), dtype=np.uint8)
+        rgb[:, 0] = np.arange(1296, dtype=np.uint16) % 256
+        cached_stacks = (
+            np.arange(1296 * 5, dtype=np.int32).reshape(1296, 5) % 6
+        ).astype(np.int32)
+        monkeypatch.setattr(
+            calibration,
+            "_load_smart_6color_stacks_bottom_to_top",
+            lambda: cached_stacks,
+        )
+        metadata = LUTManager.infer_default_metadata(
+            "Custom - 6color",
+            "custom_6color.npy",
+            len(rgb),
+            "6-Color (CMYWGK 1296)",
+        )
+        stacks = np.zeros((len(rgb), 0), dtype=np.int32)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            LUTManager.save_keyed_json(tmp_path, rgb, stacks, metadata)
+
+            loaded = load_lut(tmp_path, "6-Color (CMYWGK 1296)")
+            assert loaded["ref_stacks"].shape == (1296, 5)
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][0],
+                cached_stacks[0][::-1],
+            )
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][17],
+                cached_stacks[17][::-1],
+            )
         finally:
             os.unlink(tmp_path)
 
@@ -453,6 +513,36 @@ class TestMergeAndIntegration:
             _loaded_rgb, loaded_stacks = LUTMerger.load_lut_with_stacks(json_path, "6-Color")
 
         np.testing.assert_array_equal(loaded_stacks, np.array([[5, 0, 0, 0, 0]], dtype=np.int32))
+
+    def test_load_6color_legacy_npy_stacks_from_cache(self, monkeypatch):
+        from core import calibration
+
+        rgb = np.zeros((1296, 3), dtype=np.uint8)
+        raw = (
+            np.arange(1296 * 5, dtype=np.int32).reshape(1296, 5) % 6
+        ).astype(np.int32)
+        monkeypatch.setattr(
+            calibration,
+            "_load_smart_6color_stacks_bottom_to_top",
+            lambda: raw,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            _loaded_rgb, loaded_stacks = LUTMerger.load_lut_with_stacks(tmp_path, "6-Color")
+        finally:
+            os.unlink(tmp_path)
+
+        assert loaded_stacks.shape == (1296, 5)
+        expected_remap = {0: 0, 1: 1, 2: 2, 3: 7, 4: 3, 5: 4}
+        expected = np.vectorize(expected_remap.__getitem__)(
+            raw[:, ::-1]
+        ).astype(np.int32)
+        np.testing.assert_array_equal(loaded_stacks[0], expected[0])
+        np.testing.assert_array_equal(loaded_stacks[23], expected[23])
 
     def test_save_merged_json_preserves_recipe_name_after_palette_reindex(self):
         """Merged JSON 导出时应先重建为本地 palette 索引，避免 Red 错写成 Yellow。"""

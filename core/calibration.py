@@ -13,6 +13,7 @@ import math
 from typing import Optional
 import itertools
 import zipfile
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -58,11 +59,34 @@ EIGHT_COLOR_PADDING = 1
 EIGHT_COLOR_TOTAL_DIM = 39
 
 
+@lru_cache(maxsize=1)
+def _load_smart_6color_stacks_bottom_to_top() -> np.ndarray:
+    path = get_asset_path("smart_6color_stacks.npy")
+    stacks = np.load(path)
+    expected_shape = (SmartConfig.TOTAL_BLOCKS, PrinterConfig.COLOR_LAYERS)
+    if stacks.shape != expected_shape:
+        raise ValueError(
+            f"smart_6color_stacks.npy has shape {stacks.shape}, expected {expected_shape}"
+        )
+    if not np.issubdtype(stacks.dtype, np.integer):
+        raise ValueError(f"smart_6color_stacks.npy dtype must be integer, got {stacks.dtype}")
+    if int(stacks.min()) < 0 or int(stacks.max()) >= 6:
+        raise ValueError("smart_6color_stacks.npy material indices must be in [0, 5]")
+    _log.info(
+        "Loaded selected 6-color stacks",
+        extra={
+            "event": "selected_6color_stacks_loaded",
+            "stack_count": int(stacks.shape[0]),
+            "path": str(path),
+        },
+    )
+    return stacks.astype(np.int32, copy=False)
 
 
 def _resolve_backing_layers(backing_thickness_mm: Optional[float] = None) -> int:
     thickness = float(backing_thickness_mm) if backing_thickness_mm is not None else float(PrinterConfig.BACKING_MM)
     return max(1, int(thickness / PrinterConfig.LAYER_HEIGHT))
+
 
 def _generate_layer_previews(full_matrix, preview_colors, h, w, color_layers=5):
     from PIL import Image
@@ -298,6 +322,19 @@ def get_top_1296_colors():
     Returns:
         List of 1296 tuples, each representing a 5-layer color stack
     """
+    try:
+        cached_stacks = _load_smart_6color_stacks_bottom_to_top()
+        return [tuple(row) for row in cached_stacks.tolist()]
+    except (OSError, ValueError) as exc:
+        _log.warning(
+            "Failed to load selected 6-color stacks; recomputing",
+            extra={
+                "event": "selected_6color_stacks_load_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
     _log.info(
         "Simulating Smart 1296 color combinations",
         extra={"event": "smart1296_combinations_started", "combination_count": 7776},
