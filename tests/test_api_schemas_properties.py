@@ -237,7 +237,7 @@ def st_calibration_generate_request(draw: st.DrawFn) -> CalibrationGenerateReque
     """Generate a valid CalibrationGenerateRequest instance."""
     return CalibrationGenerateRequest(
         color_mode=draw(st_calibration_color_mode),
-        block_size=draw(st.integers(min_value=3, max_value=10)),
+        block_size=draw(st.floats(min_value=3, max_value=10, allow_nan=False)),
         gap=draw(st.floats(min_value=0.4, max_value=2.0, allow_nan=False)),
         backing_thickness=draw(st_backing_thickness),
         eight_color_full_export=draw(st.booleans()),

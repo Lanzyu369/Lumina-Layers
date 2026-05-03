@@ -175,6 +175,29 @@ class TestParameterMapping:
             assert isinstance(call_kwargs["block_size_mm"], float)
             assert call_kwargs["backing_color"] == "White"
 
+    def test_fractional_block_size_is_accepted(self) -> None:
+        with patch(
+            "api.routers.calibration.generate_calibration_board",
+            return_value=_mock_return,
+        ) as mock_fn:
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "4-Color (RYBW)",
+                    "block_size": 5.5,
+                    "gap": 0.84,
+                    "backing_thickness": 1.2,
+                },
+            )
+            assert response.status_code == 200
+            mock_fn.assert_called_once_with(
+                color_mode="RYBW",
+                block_size_mm=5.5,
+                gap_mm=0.84,
+                backing_color="White",
+                backing_thickness_mm=1.2,
+            )
+
     def test_backing_thickness_defaults_when_omitted(self) -> None:
         """Omitting backing_thickness in the payload should fall back to the schema default (1.2 mm)."""
         with patch(
