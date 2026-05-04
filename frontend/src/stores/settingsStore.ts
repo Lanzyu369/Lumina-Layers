@@ -49,6 +49,8 @@ export interface SettingsState {
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
+  customSlicerPath: string;
+  customSlicerId: string;
   nozzleSize: "0.2" | "0.4";
   enableBaseLayerHeightModifier: boolean;
   /**
@@ -92,6 +94,8 @@ export interface SettingsActions {
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
+  setCustomSlicerPath: (path: string) => void;
+  setCustomSlicerId: (id: string) => void;
   setNozzleSize: (size: "0.2" | "0.4") => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
@@ -118,6 +122,8 @@ export const DEFAULT_SETTINGS: SettingsState = {
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
+  customSlicerPath: "",
+  customSlicerId: "",
   nozzleSize: "0.4",
   enableBaseLayerHeightModifier: true,
   // Opt-in feature: the density dropdown is hidden by default so the
@@ -178,6 +184,24 @@ export function deriveBackendDeviceSettingsPatch(
     !hasOwnSetting(persistedSnapshot, "slicerSoftware")
   ) {
     patch.slicerSoftware = settings.slicer_software.trim();
+  }
+
+  if (
+    typeof settings.custom_slicer_path === "string" &&
+    settings.custom_slicer_path.trim() &&
+    current.customSlicerPath === DEFAULT_SETTINGS.customSlicerPath &&
+    !hasOwnSetting(persistedSnapshot, "customSlicerPath")
+  ) {
+    patch.customSlicerPath = settings.custom_slicer_path.trim();
+  }
+
+  if (
+    typeof settings.custom_slicer_id === "string" &&
+    settings.custom_slicer_id.trim() &&
+    current.customSlicerId === DEFAULT_SETTINGS.customSlicerId &&
+    !hasOwnSetting(persistedSnapshot, "customSlicerId")
+  ) {
+    patch.customSlicerId = settings.custom_slicer_id.trim();
   }
 
   if (
@@ -253,6 +277,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
+      setCustomSlicerPath: (path: string) => set({ customSlicerPath: path }),
+
+      setCustomSlicerId: (id: string) => set({ customSlicerId: id }),
+
       setNozzleSize: (size: "0.2" | "0.4") => {
         set({ nozzleSize: size });
         invalidateGeneratedArtifacts();
@@ -294,6 +322,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         if (patch.slicerSoftware) {
           actions.setSlicerSoftware(patch.slicerSoftware);
         }
+        if (typeof patch.customSlicerPath === "string") {
+          actions.setCustomSlicerPath(patch.customSlicerPath);
+        }
+        if (typeof patch.customSlicerId === "string") {
+          actions.setCustomSlicerId(patch.customSlicerId);
+        }
         if (patch.nozzleSize) {
           actions.setNozzleSize(patch.nozzleSize);
         }
@@ -316,6 +350,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             enable_crop_modal: state.cropEnabled,
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
+            custom_slicer_path: state.customSlicerPath,
+            custom_slicer_id: state.customSlicerId,
             nozzle_size: state.nozzleSize,
             enable_base_layer_height_modifier:
               state.enableBaseLayerHeightModifier,

@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
 from api.schemas.slicer import (
+    SlicerCustomPathRequest,
+    SlicerCustomPathResponse,
     SlicerDetectResponse,
     SlicerInfo,
     SlicerLaunchRequest,
@@ -22,7 +24,12 @@ from api.schemas.slicer import (
 )
 from api.structured_logging import get_logger
 from config import TEMP_DIR
-from core.slicer import detect_installed_slicers, launch_slicer
+from core.slicer import (
+    DetectedSlicer,
+    detect_installed_slicers,
+    launch_slicer,
+    validate_custom_slicer_path,
+)
 
 router = APIRouter(prefix="/api/slicer", tags=["Slicer"])
 log = get_logger(__name__)
@@ -56,19 +63,41 @@ def _create_launch_copy(file_path: str, registry: FileRegistry) -> str:
     return launch_copy_path
 
 
+def _to_slicer_info(slicer: DetectedSlicer) -> SlicerInfo:
+    return SlicerInfo(
+        id=slicer.id,
+        display_name=slicer.display_name,
+        exe_path=slicer.exe_path,
+        source=slicer.source,
+    )
+
+
 @router.get("/detect")
 def detect_slicers() -> SlicerDetectResponse:
     """扫描系统已安装的切片软件。"""
     slicers = detect_installed_slicers()
-    return SlicerDetectResponse(
-        slicers=[
-            SlicerInfo(
-                id=s.id,
-                display_name=s.display_name,
-                exe_path=s.exe_path,
-            )
-            for s in slicers
-        ]
+    return SlicerDetectResponse(slicers=[_to_slicer_info(s) for s in slicers])
+
+
+@router.post("/custom-path/validate")
+def validate_custom_slicer_path_endpoint(
+    request: SlicerCustomPathRequest,
+) -> SlicerCustomPathResponse:
+    """校验用户手动提供的切片软件路径。"""
+    slicer = validate_custom_slicer_path(request.path)
+    if slicer is None:
+        return JSONResponse(
+            status_code=400,
+            content=SlicerCustomPathResponse(
+                status="error",
+                message="未识别到受支持的切片软件，请确认路径指向 .app 应用包。",
+                slicer=None,
+            ).model_dump(),
+        )
+    return SlicerCustomPathResponse(
+        status="success",
+        message=f"已识别 {slicer.display_name}",
+        slicer=_to_slicer_info(slicer),
     )
 
 
@@ -90,6 +119,14 @@ def launch_slicer_endpoint(
 
     # 2) Get fresh slicer list
     slicers = detect_installed_slicers()
+    if request.slicer_path:
+        custom_slicer = validate_custom_slicer_path(request.slicer_path)
+        if custom_slicer is not None and custom_slicer.id == request.slicer_id:
+            slicers = [custom_slicer] + [
+                slicer
+                for slicer in slicers
+                if slicer.id != custom_slicer.id
+            ]
     if not any(s.id == request.slicer_id for s in slicers):
         return JSONResponse(
             status_code=404,

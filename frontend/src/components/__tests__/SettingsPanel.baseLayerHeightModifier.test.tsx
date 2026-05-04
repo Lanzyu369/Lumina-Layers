@@ -13,6 +13,7 @@ import * as i18nContext from "../../i18n/context";
 import { translations } from "../../i18n/translations";
 import SettingsPanel from "../SettingsPanel";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settingsStore";
+import { useSlicerStore } from "../../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../../api/types";
 import * as systemApi from "../../api/system";
 
@@ -62,6 +63,17 @@ describe("SettingsPanel base-layer-height modifier", () => {
       slicerSoftware: "BambuStudio",
       nozzleSize: "0.4",
       language: "zh",
+    });
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+      isDetecting: false,
+      isLaunching: false,
+      isValidatingCustomPath: false,
+      launchMessage: null,
+      customPathMessage: null,
+      customPathError: null,
+      error: null,
     });
     vi.mocked(systemApi.getPrinters).mockResolvedValue(PRINTERS);
     vi.mocked(systemApi.getSlicers).mockResolvedValue(SLICERS);
@@ -115,6 +127,19 @@ describe("SettingsPanel base-layer-height modifier", () => {
       name: "底板层高修改器",
     });
     expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("renders manual slicer app path controls", async () => {
+    renderPanel();
+
+    expect(
+      await screen.findByLabelText("手动切片软件路径"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("/Applications/Bambu Studio.app"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("校验并保存")).toBeInTheDocument();
+    expect(screen.getByText("清除")).toBeInTheDocument();
   });
 
   it("toggling switch updates store and triggers syncToBackend", async () => {

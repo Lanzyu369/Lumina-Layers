@@ -1609,6 +1609,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "在 3MF 里写入 layer_config_ranges，让底板用喷嘴直径一半的粗层高打印（0.4 → 0.2 mm，0.2 → 0.1 mm），显著缩短底板耗时。仅对 Bambu 系切片器生效；双面模型会自动跳过。",
     en: "Writes layer_config_ranges so the base plate prints at half the nozzle diameter (0.4 → 0.2 mm, 0.2 → 0.1 mm), noticeably reducing base-plate time. Bambu-family slicers only; skipped for double-sided prints.",
   },
+  "settings.custom_slicer_path": {
+    zh: "手动切片软件路径",
+    en: "Manual slicer app path",
+  },
+  "settings.custom_slicer_path_help": {
+    zh: "macOS 可粘贴 .app 路径，例如 /Applications/Bambu Studio.app；保存后会优先用于打开 3MF。",
+    en: "On macOS, paste a .app path such as /Applications/Bambu Studio.app. Saved paths are preferred when opening 3MF files.",
+  },
+  "settings.custom_slicer_path_placeholder": {
+    zh: "/Applications/Bambu Studio.app",
+    en: "/Applications/Bambu Studio.app",
+  },
+  "settings.custom_slicer_save": {
+    zh: "校验并保存",
+    en: "Validate & Save",
+  },
+  "settings.custom_slicer_clear": {
+    zh: "清除",
+    en: "Clear",
+  },
   "settings.nozzle_count": {
     zh: "喷头数量",
     en: "Nozzle Count",

@@ -1252,6 +1252,7 @@ export interface SlicerInfo {
   id: string;
   display_name: string;
   exe_path: string;
+  source?: string;
 }
 
 export interface SlicerDetectResponse {
@@ -1261,11 +1262,22 @@ export interface SlicerDetectResponse {
 export interface SlicerLaunchRequest {
   slicer_id: string;
   file_path: string;
+  slicer_path?: string;
 }
 
 export interface SlicerLaunchResponse {
   status: string;
   message: string;
+}
+
+export interface SlicerCustomPathRequest {
+  path: string;
+}
+
+export interface SlicerCustomPathResponse {
+  status: string;
+  message: string;
+  slicer: SlicerInfo | null;
 }
 
 // ========== Batch Processing Models ==========
@@ -1522,6 +1534,8 @@ export interface UserSettings {
   enable_crop_modal: boolean;
   printer_model: string;
   slicer_software: string;
+  custom_slicer_path: string;
+  custom_slicer_id: string;
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
 }

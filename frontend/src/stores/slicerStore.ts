@@ -3,6 +3,7 @@ import type { SlicerInfo } from "../api/types";
 import {
   detectSlicers as apiDetectSlicers,
   launchSlicer as apiLaunchSlicer,
+  validateCustomSlicerPath as apiValidateCustomSlicerPath,
 } from "../api/slicer";
 import { useSettingsStore } from "./settingsStore";
 import {
@@ -17,7 +18,10 @@ export interface SlicerState {
   selectedSlicerId: string | null;
   isDetecting: boolean;
   isLaunching: boolean;
+  isValidatingCustomPath: boolean;
   launchMessage: string | null;
+  customPathMessage: string | null;
+  customPathError: string | null;
   error: string | null;
 }
 
@@ -26,6 +30,8 @@ export interface SlicerState {
 export interface SlicerActions {
   detectSlicers: () => Promise<void>;
   setSelectedSlicerId: (id: string | null) => void;
+  validateAndSaveCustomSlicerPath: (path: string) => Promise<void>;
+  clearCustomSlicerPath: () => void;
   launchSlicer: (filePath: string) => Promise<void>;
   clearMessage: () => void;
 }
@@ -37,7 +43,10 @@ const DEFAULT_STATE: SlicerState = {
   selectedSlicerId: null,
   isDetecting: false,
   isLaunching: false,
+  isValidatingCustomPath: false,
   launchMessage: null,
+  customPathMessage: null,
+  customPathError: null,
   error: null,
 };
 
@@ -58,6 +67,21 @@ export function resolveSelectedSlicerId(
   return restored ? restored.id : (slicers[0]?.id ?? null);
 }
 
+export function mergeCustomSlicer(
+  slicers: SlicerInfo[],
+  customSlicer: SlicerInfo | null,
+): SlicerInfo[] {
+  if (!customSlicer) {
+    return slicers;
+  }
+  const rest = slicers.filter(
+    (slicer) =>
+      slicer.id !== customSlicer.id &&
+      slicer.exe_path !== customSlicer.exe_path,
+  );
+  return [{ ...customSlicer, source: customSlicer.source ?? "custom" }, ...rest];
+}
+
 // ========== Store ==========
 
 export const useSlicerStore = create<SlicerState & SlicerActions>(
@@ -68,9 +92,21 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       set({ isDetecting: true, error: null });
       try {
         const response = await apiDetectSlicers();
-        const slicers = response.slicers;
-        const lastId = useSettingsStore.getState().lastSlicerId;
-        const slicerSoftware = useSettingsStore.getState().slicerSoftware;
+        const settingsState = useSettingsStore.getState();
+        let slicers = response.slicers;
+        const customPath = settingsState.customSlicerPath.trim();
+        if (customPath) {
+          try {
+            const customResponse = await apiValidateCustomSlicerPath({
+              path: customPath,
+            });
+            slicers = mergeCustomSlicer(slicers, customResponse.slicer);
+          } catch {
+            // Saved custom paths are best-effort; auto-detection should still work.
+          }
+        }
+        const lastId = settingsState.lastSlicerId;
+        const slicerSoftware = settingsState.slicerSoftware;
         const restored = slicers.find((s) => s.id === lastId);
         set({
           slicers,
@@ -102,6 +138,74 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       }
     },
 
+    validateAndSaveCustomSlicerPath: async (path: string) => {
+      const trimmed = path.trim();
+      if (!trimmed) {
+        set({
+          customPathMessage: null,
+          customPathError: "请输入切片软件 .app 路径",
+        });
+        return;
+      }
+      set({
+        isValidatingCustomPath: true,
+        customPathMessage: null,
+        customPathError: null,
+      });
+      try {
+        const response = await apiValidateCustomSlicerPath({ path: trimmed });
+        if (!response.slicer) {
+          throw new Error(response.message || "未识别到切片软件");
+        }
+        const settingsState = useSettingsStore.getState();
+        settingsState.setCustomSlicerPath(response.slicer.exe_path);
+        settingsState.setCustomSlicerId(response.slicer.id);
+        settingsState.setLastSlicerId(response.slicer.id);
+        const softwareId = getSoftwareIdForDetectedSlicerId(response.slicer.id);
+        if (softwareId && settingsState.slicerSoftware !== softwareId) {
+          settingsState.setSlicerSoftware(softwareId);
+        }
+        await settingsState.syncToBackend();
+        set((state) => ({
+          slicers: mergeCustomSlicer(state.slicers, response.slicer),
+          selectedSlicerId: response.slicer?.id ?? state.selectedSlicerId,
+          isValidatingCustomPath: false,
+          customPathMessage: response.message,
+          customPathError: null,
+        }));
+      } catch (err) {
+        set({
+          isValidatingCustomPath: false,
+          customPathMessage: null,
+          customPathError:
+            err instanceof Error ? err.message : "切片软件路径校验失败",
+        });
+      }
+    },
+
+    clearCustomSlicerPath: () => {
+      const settingsState = useSettingsStore.getState();
+      settingsState.setCustomSlicerPath("");
+      settingsState.setCustomSlicerId("");
+      void settingsState.syncToBackend();
+      set((state) => {
+        const slicers = state.slicers.filter(
+          (slicer) => !String(slicer.source ?? "").includes("custom"),
+        );
+        return {
+          slicers,
+          selectedSlicerId:
+            state.selectedSlicerId &&
+            slicers.some((slicer) => slicer.id === state.selectedSlicerId)
+              ? state.selectedSlicerId
+              : (slicers[0]?.id ?? null),
+          customPathMessage: null,
+          customPathError: null,
+        };
+      });
+      void _get().detectSlicers();
+    },
+
     launchSlicer: async (filePath: string) => {
       const state = _get();
       if (!state.selectedSlicerId) {
@@ -110,9 +214,20 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       }
       set({ isLaunching: true, error: null, launchMessage: null });
       try {
+        const settingsState = useSettingsStore.getState();
+        const selectedSlicer = state.slicers.find(
+          (slicer) => slicer.id === state.selectedSlicerId,
+        );
+        const slicerPath =
+          settingsState.customSlicerPath &&
+          settingsState.customSlicerId === state.selectedSlicerId &&
+          String(selectedSlicer?.source ?? "").includes("custom")
+            ? settingsState.customSlicerPath
+            : undefined;
         const response = await apiLaunchSlicer({
           slicer_id: state.selectedSlicerId,
           file_path: filePath,
+          ...(slicerPath ? { slicer_path: slicerPath } : {}),
         });
         set({
           isLaunching: false,
@@ -126,6 +241,12 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       }
     },
 
-    clearMessage: () => set({ launchMessage: null, error: null }),
+    clearMessage: () =>
+      set({
+        launchMessage: null,
+        customPathMessage: null,
+        customPathError: null,
+        error: null,
+      }),
   })
 );

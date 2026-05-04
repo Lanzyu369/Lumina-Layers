@@ -31,6 +31,7 @@ class SlicerInfo(BaseModel):
     id: str = Field(..., min_length=1, description="切片软件标识符")
     display_name: str = Field(..., description="显示名称")
     exe_path: str = Field(..., description="可执行文件路径")
+    source: str = Field(default="auto", description="检测来源")
 
 
 class SlicerDetectResponse(BaseModel):
@@ -58,6 +59,25 @@ class SlicerLaunchRequest(BaseModel):
 
     slicer_id: str = Field(..., description="要启动的切片软件 ID")
     file_path: str = Field(..., min_length=1, description="要打开的 3MF 文件路径")
+    slicer_path: str | None = Field(default=None, description="可选手动切片软件路径")
+
+
+class SlicerCustomPathRequest(BaseModel):
+    """Request model for validating a user-provided slicer path.
+    校验用户手动提供的切片软件路径的请求模型。
+    """
+
+    path: str = Field(..., min_length=1, description="切片软件路径")
+
+
+class SlicerCustomPathResponse(BaseModel):
+    """Response model for validating a user-provided slicer path.
+    校验用户手动提供的切片软件路径的响应模型。
+    """
+
+    status: str = Field(..., description="结果状态 (success / error)")
+    message: str = Field(..., description="描述信息")
+    slicer: SlicerInfo | None = Field(default=None, description="已识别切片软件")
 
 
 class SlicerLaunchResponse(BaseModel):

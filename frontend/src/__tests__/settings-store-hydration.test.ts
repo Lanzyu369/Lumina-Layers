@@ -155,11 +155,13 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(useSettingsStore.getState().solverCacheGridResolution).toBe(256);
   });
 
-  it("syncToBackend includes enable_base_layer_height_modifier payload field", async () => {
+  it("syncToBackend includes device slicer payload fields", async () => {
     const { settingsStoreModule, systemApi } = await loadStores();
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      customSlicerPath: "/Applications/Bambu Studio.app",
+      customSlicerId: "bambu_studio",
     });
 
     await settingsStoreModule.useSettingsStore.getState().syncToBackend();
@@ -167,7 +169,27 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(systemApi.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        custom_slicer_path: "/Applications/Bambu Studio.app",
+        custom_slicer_id: "bambu_studio",
       }),
+    );
+  });
+
+  it("hydrates backend custom slicer path fields into the store", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    settingsStoreModule.useSettingsStore
+      .getState()
+      .hydrateDeviceSettingsFromBackend({
+        custom_slicer_path: "/Applications/OrcaSlicer.app",
+        custom_slicer_id: "orca_slicer",
+      });
+
+    expect(
+      settingsStoreModule.useSettingsStore.getState().customSlicerPath,
+    ).toBe("/Applications/OrcaSlicer.app");
+    expect(settingsStoreModule.useSettingsStore.getState().customSlicerId).toBe(
+      "orca_slicer",
     );
   });
 

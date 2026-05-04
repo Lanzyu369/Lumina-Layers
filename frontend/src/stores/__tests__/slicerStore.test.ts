@@ -11,15 +11,18 @@ import { DEFAULT_SETTINGS, useSettingsStore } from "../settingsStore";
 vi.mock("../../api/slicer", () => ({
   detectSlicers: vi.fn(),
   launchSlicer: vi.fn(),
+  validateCustomSlicerPath: vi.fn(),
 }));
 
 import {
   detectSlicers as apiDetectSlicers,
   launchSlicer as apiLaunchSlicer,
+  validateCustomSlicerPath as apiValidateCustomSlicerPath,
 } from "../../api/slicer";
 
 const mockDetect = vi.mocked(apiDetectSlicers);
 const mockLaunch = vi.mocked(apiLaunchSlicer);
+const mockValidateCustomPath = vi.mocked(apiValidateCustomSlicerPath);
 
 const MOCK_SLICERS: SlicerInfo[] = [
   { id: "bambu_studio", display_name: "Bambu Studio", exe_path: "C:\\bambu.exe" },
@@ -33,7 +36,10 @@ function resetStore(): void {
     selectedSlicerId: null,
     isDetecting: false,
     isLaunching: false,
+    isValidatingCustomPath: false,
     launchMessage: null,
+    customPathMessage: null,
+    customPathError: null,
     error: null,
   });
 }
@@ -98,6 +104,78 @@ describe("detectSlicers", () => {
 
     expect(useSlicerStore.getState().selectedSlicerId).toBe("anycubic_slicer_next");
   });
+
+  it("合并已保存的手动切片软件路径", async () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      customSlicerPath: "/Applications/Bambu Studio.app",
+      customSlicerId: "bambu_studio",
+      lastSlicerId: "bambu_studio",
+    });
+    mockDetect.mockResolvedValue({ slicers: [] });
+    mockValidateCustomPath.mockResolvedValue({
+      status: "success",
+      message: "已识别 Bambu Studio",
+      slicer: {
+        id: "bambu_studio",
+        display_name: "Bambu Studio",
+        exe_path: "/Applications/Bambu Studio.app",
+        source: "custom_macos_app",
+      },
+    });
+
+    await useSlicerStore.getState().detectSlicers();
+
+    expect(useSlicerStore.getState().slicers[0]).toMatchObject({
+      id: "bambu_studio",
+      source: "custom_macos_app",
+    });
+    expect(useSlicerStore.getState().selectedSlicerId).toBe("bambu_studio");
+  });
+});
+
+describe("validateAndSaveCustomSlicerPath", () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+  });
+
+  it("校验成功时保存手动路径并选中切片软件", async () => {
+    mockValidateCustomPath.mockResolvedValue({
+      status: "success",
+      message: "已识别 OrcaSlicer",
+      slicer: {
+        id: "orca_slicer",
+        display_name: "OrcaSlicer",
+        exe_path: "/Applications/OrcaSlicer.app",
+        source: "custom_macos_app",
+      },
+    });
+
+    await useSlicerStore
+      .getState()
+      .validateAndSaveCustomSlicerPath("/Applications/OrcaSlicer.app");
+
+    expect(useSettingsStore.getState().customSlicerPath).toBe(
+      "/Applications/OrcaSlicer.app",
+    );
+    expect(useSettingsStore.getState().customSlicerId).toBe("orca_slicer");
+    expect(useSettingsStore.getState().lastSlicerId).toBe("orca_slicer");
+    expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
+    expect(useSlicerStore.getState().customPathMessage).toBe("已识别 OrcaSlicer");
+  });
+
+  it("校验失败时设置 customPathError", async () => {
+    mockValidateCustomPath.mockRejectedValue(new Error("未识别"));
+
+    await useSlicerStore
+      .getState()
+      .validateAndSaveCustomSlicerPath("/Applications/Notes.app");
+
+    expect(useSlicerStore.getState().customPathError).toBe("未识别");
+    expect(useSettingsStore.getState().customSlicerPath).toBe("");
+  });
 });
 
 describe("setSelectedSlicerId", () => {
@@ -148,6 +226,37 @@ describe("launchSlicer", () => {
     expect(mockLaunch).toHaveBeenCalledWith({
       slicer_id: "bambu_studio",
       file_path: "/output/model.3mf",
+    });
+  });
+
+  it("手动路径选中时随 launch 请求发送 slicer_path", async () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      customSlicerPath: "/Applications/Bambu Studio.app",
+      customSlicerId: "bambu_studio",
+    });
+    useSlicerStore.setState({
+      selectedSlicerId: "bambu_studio",
+      slicers: [
+        {
+          id: "bambu_studio",
+          display_name: "Bambu Studio",
+          exe_path: "/Applications/Bambu Studio.app",
+          source: "custom_macos_app",
+        },
+      ],
+    });
+    mockLaunch.mockResolvedValue({
+      status: "success",
+      message: "已在 Bambu Studio 中打开",
+    });
+
+    await useSlicerStore.getState().launchSlicer("/output/model.3mf");
+
+    expect(mockLaunch).toHaveBeenCalledWith({
+      slicer_id: "bambu_studio",
+      file_path: "/output/model.3mf",
+      slicer_path: "/Applications/Bambu Studio.app",
     });
   });
 

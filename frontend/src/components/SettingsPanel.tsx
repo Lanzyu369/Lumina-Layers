@@ -13,6 +13,7 @@ import {
   useSettingsStore,
   type SolverCacheGridResolution,
 } from "../stores/settingsStore";
+import { useSlicerStore } from "../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
@@ -26,7 +27,13 @@ import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
-import { PanelIntro, StatusBanner, resolvePanelSurfaceClass, resolveSectionCardClass } from "./ui/panelPrimitives";
+import {
+  PanelIntro,
+  StatusBanner,
+  resolvePanelSurfaceClass,
+  resolveSectionCardClass,
+  workstationInputClass,
+} from "./ui/panelPrimitives";
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
@@ -37,6 +44,7 @@ export default function SettingsPanel() {
 
   const [clearing, setClearing] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
+  const [customSlicerPathInput, setCustomSlicerPathInput] = useState("");
 
   // Printer list state (task 5.2)
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
@@ -51,6 +59,7 @@ export default function SettingsPanel() {
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
+  const customSlicerPath = useSettingsStore((s) => s.customSlicerPath);
   const nozzleSize = useSettingsStore((s) => s.nozzleSize);
   const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
   const enableBaseLayerHeightModifier = useSettingsStore(
@@ -81,6 +90,19 @@ export default function SettingsPanel() {
   const setAutoReplaceGradientBanding = useSettingsStore(
     (s) => s.setAutoReplaceGradientBanding,
   );
+  const isValidatingCustomPath = useSlicerStore(
+    (s) => s.isValidatingCustomPath,
+  );
+  const customPathMessage = useSlicerStore((s) => s.customPathMessage);
+  const customPathError = useSlicerStore((s) => s.customPathError);
+  const validateAndSaveCustomSlicerPath = useSlicerStore(
+    (s) => s.validateAndSaveCustomSlicerPath,
+  );
+  const clearCustomSlicerPath = useSlicerStore((s) => s.clearCustomSlicerPath);
+
+  useEffect(() => {
+    setCustomSlicerPathInput(customSlicerPath);
+  }, [customSlicerPath]);
 
   // Load printers and slicers on mount
   useEffect(() => {
@@ -217,6 +239,15 @@ export default function SettingsPanel() {
     void syncToBackend();
   };
 
+  const handleSaveCustomSlicerPath = () => {
+    void validateAndSaveCustomSlicerPath(customSlicerPathInput);
+  };
+
+  const handleClearCustomSlicerPath = () => {
+    setCustomSlicerPathInput("");
+    clearCustomSlicerPath();
+  };
+
   const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
 
   const handleClearCache = async () => {
@@ -311,6 +342,52 @@ export default function SettingsPanel() {
             </span>
           </div>
         )}
+        <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
+          <div>
+            <label
+              htmlFor="custom-slicer-path"
+              className="text-sm font-medium text-slate-900 dark:text-slate-50"
+            >
+              {t("settings.custom_slicer_path")}
+            </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {t("settings.custom_slicer_path_help")}
+            </p>
+          </div>
+          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto_auto]"}`}>
+            <input
+              id="custom-slicer-path"
+              value={customSlicerPathInput}
+              onChange={(event) => setCustomSlicerPathInput(event.target.value)}
+              placeholder={t("settings.custom_slicer_path_placeholder")}
+              className={workstationInputClass}
+            />
+            <Button
+              label={t("settings.custom_slicer_save")}
+              onClick={handleSaveCustomSlicerPath}
+              loading={isValidatingCustomPath}
+              disabled={!customSlicerPathInput.trim()}
+              className={workspace.isCompact ? "w-full" : ""}
+            />
+            <Button
+              label={t("settings.custom_slicer_clear")}
+              onClick={handleClearCustomSlicerPath}
+              variant="secondary"
+              disabled={!customSlicerPath && !customSlicerPathInput}
+              className={workspace.isCompact ? "w-full" : ""}
+            />
+          </div>
+          {customPathMessage && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              {customPathMessage}
+            </p>
+          )}
+          {customPathError && (
+            <p className="text-xs text-red-500 dark:text-red-400">
+              {customPathError}
+            </p>
+          )}
+        </div>
         {isBambuFamilySlicer(resolvedSlicerSoftware) && (
           <div
             data-testid="base-layer-height-modifier-row"
