@@ -20,6 +20,21 @@ interface MaterialPickerDialogProps {
   onCancel: () => void;
 }
 
+const UNASSIGNED_BRAND_GROUP_KEY = "__unassigned__";
+
+const getMaterialBrand = (item: SavedMaterialLibraryItem): string | null => {
+  const brand = item.brand?.trim();
+  return brand ? brand : null;
+};
+
+const getMaterialBrandGroupKey = (brand: string | null): string =>
+  brand ?? UNASSIGNED_BRAND_GROUP_KEY;
+
+type MaterialPickerBrandGroup = {
+  brand: string | null;
+  items: SavedMaterialLibraryItem[];
+};
+
 /**
  * Material selection modal dialog.
  * 耗材选择弹窗。
@@ -39,12 +54,14 @@ export default function MaterialPickerDialog({
   const { t } = useI18n();
   const [staged, setStaged] = useState<string[]>(initialSelected);
   const [query, setQuery] = useState<string>("");
+  const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
 
   // Re-sync staged selection whenever the dialog opens or upstream changes.
   useEffect(() => {
     if (open) {
       setStaged(initialSelected);
       setQuery("");
+      setCollapsedBrandGroupKeys([]);
     }
   }, [open, initialSelected]);
 
@@ -73,13 +90,11 @@ export default function MaterialPickerDialog({
   // ``directory_name`` on the backend). Materials without a brand fall into
   // a single trailing group rendered with a localized "Unassigned" header.
   // 按品牌分组展示，未分组项统一归入末尾的"未分组"分组。
-  const groupedVisibleMaterials = useMemo<
-    { brand: string | null; items: SavedMaterialLibraryItem[] }[]
-  >(() => {
+  const groupedVisibleMaterials = useMemo<MaterialPickerBrandGroup[]>(() => {
     const groups = new Map<string, SavedMaterialLibraryItem[]>();
     const unassigned: SavedMaterialLibraryItem[] = [];
     for (const mat of visibleMaterials) {
-      const brand = mat.brand?.trim();
+      const brand = getMaterialBrand(mat);
       if (brand) {
         const bucket = groups.get(brand);
         if (bucket) {
@@ -91,7 +106,7 @@ export default function MaterialPickerDialog({
         unassigned.push(mat);
       }
     }
-    const result: { brand: string | null; items: SavedMaterialLibraryItem[] }[] = [];
+    const result: MaterialPickerBrandGroup[] = [];
     for (const [brand, items] of groups) {
       result.push({ brand, items });
     }
@@ -109,6 +124,13 @@ export default function MaterialPickerDialog({
       previous.includes(dirName)
         ? previous.filter((n) => n !== dirName)
         : [...previous, dirName],
+    );
+  };
+  const toggleBrandGroupCollapsed = (groupKey: string) => {
+    setCollapsedBrandGroupKeys((previous) =>
+      previous.includes(groupKey)
+        ? previous.filter((item) => item !== groupKey)
+        : [...previous, groupKey],
     );
   };
 
@@ -223,23 +245,58 @@ export default function MaterialPickerDialog({
             </div>
           ) : (
             <div className="grid gap-3">
-              {groupedVisibleMaterials.map(({ brand, items }) => (
-                <section
-                  key={brand ?? "__unassigned__"}
-                  data-testid="material-picker-brand-group"
-                  data-brand={brand ?? ""}
-                  className="flex flex-col gap-1.5"
-                >
-                  <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                    {brand ?? t("basic_material_picker_brand_unassigned")}
-                  </h3>
-                  <div className="grid gap-2">
+              {groupedVisibleMaterials.map(({ brand, items }) => {
+                const groupKey = getMaterialBrandGroupKey(brand);
+                const groupLabel = brand ?? t("basic_material_picker_brand_unassigned");
+                const isCollapsed = collapsedBrandGroupKeys.includes(groupKey);
+                return (
+                  <section
+                    key={groupKey}
+                    data-testid="material-picker-brand-group"
+                    data-brand={brand ?? ""}
+                    className="flex flex-col gap-1.5"
+                  >
+                    <button
+                      type="button"
+                      data-testid="material-picker-brand-group-toggle"
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleBrandGroupCollapsed(groupKey)}
+                      className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200/80 px-2.5 py-1.5 text-left transition-colors hover:border-slate-300 hover:bg-slate-100/70 dark:border-slate-700/80 dark:hover:border-slate-600 dark:hover:bg-slate-800/70"
+                    >
+                      <span className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                          {groupLabel}
+                        </span>
+                        <span className="rounded-full border border-slate-200/80 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
+                          {items.length}
+                        </span>
+                      </span>
+                      <svg
+                        className={cx(
+                          "h-4 w-4 shrink-0 text-slate-500 transition-transform dark:text-slate-400",
+                          !isCollapsed && "rotate-90",
+                        )}
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
+                    {isCollapsed ? null : (
+                      <div className="grid gap-2">
                     {items.map((mat) => {
                       const rgb =
                         Array.isArray(mat.estimated_rgb) && mat.estimated_rgb.length === 3
                           ? (mat.estimated_rgb as [number, number, number])
                           : null;
                       const checked = stagedSet.has(mat.directory_name);
+                      const itemBrand = getMaterialBrand(mat);
+                      const itemBrandLabel = itemBrand ?? t("basic_material_picker_brand_unassigned");
                       return (
                         <button
                           type="button"
@@ -271,6 +328,12 @@ export default function MaterialPickerDialog({
                                 style={{ backgroundColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}
                               />
                             )}
+                            <span
+                              data-testid="material-picker-brand-tag"
+                              className="max-w-24 truncate rounded-full border border-slate-200/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"
+                            >
+                              {itemBrandLabel}
+                            </span>
                             <span>{mat.material_name}</span>
                             {mat.mean_delta_e != null && (
                               <span className="text-[10px] text-slate-400 dark:text-slate-500">
@@ -282,9 +345,11 @@ export default function MaterialPickerDialog({
                         </button>
                       );
                     })}
-                  </div>
-                </section>
-              ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>

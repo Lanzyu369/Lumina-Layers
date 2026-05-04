@@ -22,6 +22,7 @@ export interface BugReportContextPayload {
   selected_material_dir_names: string[];
   material_layer_count: number | null;
   material_layer_height_mm: number | null;
+  material_backing_material_dir_name: string | null;
   recent_client_logs: ReadonlyArray<unknown>;
 }
 

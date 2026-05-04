@@ -109,11 +109,18 @@ def run(ctx: dict) -> dict:
     backing_color_id = ctx.get("backing_color_id", 0)
     if material_source == "material_archive":
         backing_color_id = ctx.get("material_base_channel_idx", backing_color_id)
+    separate_backing_color_id = ctx.get("separate_backing_color_id", backing_color_id)
+    if separate_backing_color_id is None:
+        separate_backing_color_id = backing_color_id
     if separate_backing:
         backing_color_id = -2
         _log.debug(
-            "Backing separation enabled: backing will be a separate object (white)",
-            extra={"event": "s01_backing_separation_resolved", "separate_backing": True},
+            "Backing separation enabled: backing will be a separate object",
+            extra={
+                "event": "s01_backing_separation_resolved",
+                "separate_backing": True,
+                "separate_backing_color_id": separate_backing_color_id,
+            },
         )
     else:
         _log.debug(
@@ -128,6 +135,7 @@ def run(ctx: dict) -> dict:
 
     ctx["separate_backing"] = separate_backing
     ctx["backing_color_id"] = backing_color_id
+    ctx["separate_backing_color_id"] = separate_backing_color_id
 
     # ---- SVG 矢量模式检测 ----
     # ``material_archive`` previously bailed out of the SVG-native

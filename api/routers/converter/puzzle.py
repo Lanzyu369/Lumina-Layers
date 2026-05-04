@@ -49,7 +49,13 @@ from core.puzzle import (
 )
 from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 
-from .common import ROUTER_HANDLED_ERRORS, _handle_core_error, _require_preview_cache, _require_session
+from .common import (
+    ROUTER_HANDLED_ERRORS,
+    _handle_core_error,
+    _require_preview_cache,
+    _require_session,
+    _resolve_material_backing_index,
+)
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -664,9 +670,12 @@ async def generate_puzzle(
 
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
+    session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
-    if not lut_path or not os.path.exists(lut_path):
+    if session_material_source == "material_archive":
+        lut_path = "__material_archive__"
+    elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
 
     try:
@@ -766,6 +775,24 @@ async def generate_puzzle(
             "nozzle_size": generate_params.nozzle_size,
             "relief_global_max_height": relief_global_max_height,
         }
+        if session_material_source == "material_archive":
+            selected_materials = session_data.get("selected_materials") or []
+            worker_params["material_source"] = "material_archive"
+            worker_params["selected_materials"] = selected_materials
+            worker_params["material_layer_count"] = session_data.get("material_layer_count")
+            worker_params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
+            worker_params["material_grid_resolution"] = session_data.get(
+                "material_grid_resolution"
+            )
+            requested_backing_index = (
+                generate_params.material_backing_material_index
+                if generate_params.material_backing_material_index is not None
+                else session_data.get("material_backing_material_index")
+            )
+            worker_params["material_backing_material_index"] = _resolve_material_backing_index(
+                selected_materials,
+                requested_backing_index,
+            )
         log.info(
             "Puzzle hybrid boundary enabled",
             extra={

@@ -349,6 +349,7 @@ export function restoreConverterRecipe(
     selectedMaterialDirNames: [...(source?.selected_material_dir_names ?? [])],
     materialLayerCount: source?.material_layer_count ?? 5,
     materialLayerHeightMm: source?.material_layer_height_mm ?? 0.08,
+    materialBackingMaterialDirName: source?.material_backing_material_dir_name ?? null,
 
     // Geometry
     spacer_thick: resolveFridgeMagnetSpacerThick(

@@ -162,6 +162,7 @@ export interface ConverterRecipeSource {
   selected_material_dir_names: string[];
   material_layer_count: number;
   material_layer_height_mm: number;
+  material_backing_material_dir_name: string | null;
 }
 
 // ========== Converter Recipe (combined) ==========

@@ -92,6 +92,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_layer_count?: number;
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
+  material_backing_material_index?: number;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
@@ -1406,6 +1407,34 @@ export interface RecipeSwatchRequest {
 }
 
 export interface RecipeSwatchResponse {
+  status: string;
+  message: string;
+  download_url: string;
+  preview_url?: string | null;
+  recipe_count: number;
+}
+
+// ========== Material Recipe Swatch Models ==========
+
+export interface MaterialRecipeSwatchItemRequest {
+  directory_names: string[];
+  result_hex: string;
+  layer_height_mm: number;
+  substrate: string;
+}
+
+export interface MaterialRecipeSwatchRequest {
+  recipes: MaterialRecipeSwatchItemRequest[];
+  block_size_mm?: number;
+  gap_mm?: number;
+  cols?: number;
+  structure_mode?: string;
+  printer_id?: string;
+  slicer?: string;
+  nozzle_size?: string;
+}
+
+export interface MaterialRecipeSwatchResponse {
   status: string;
   message: string;
   download_url: string;

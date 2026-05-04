@@ -3,7 +3,7 @@
  * 耗材选择弹窗与选择持久化测试。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import MaterialPickerDialog from "../components/ui/MaterialPickerDialog";
 import { useConverterStore } from "../stores/converter";
@@ -108,7 +108,7 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it("groups materials by brand and puts unassigned entries in a trailing group", () => {
+  it("groups materials by brand, prefixes names with brand tags, and toggles groups", () => {
     const materials = [
       makeMaterial({
         material_name: "Red PLA",
@@ -149,6 +149,26 @@ describe("MaterialPickerDialog", () => {
 
     // Unassigned header + legacy entry at the end
     expect(groups[1].textContent).toContain("Legacy PLA");
+
+    const brandTags = screen.getAllByTestId("material-picker-brand-tag");
+    expect(brandTags.map((tag) => tag.textContent)).toEqual([
+      "瑞贝思",
+      "瑞贝思",
+      expect.stringMatching(/未分组|Unassigned/),
+    ]);
+
+    const firstGroupToggle = within(groups[0]).getByTestId("material-picker-brand-group-toggle");
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(firstGroupToggle);
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(groups[0]).queryByText("Red PLA")).not.toBeInTheDocument();
+    expect(within(groups[0]).queryByText("White PLA")).not.toBeInTheDocument();
+    expect(within(groups[1]).getByText("Legacy PLA")).toBeInTheDocument();
+
+    fireEvent.click(firstGroupToggle);
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(groups[0]).getByText("Red PLA")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("White PLA")).toBeInTheDocument();
   });
 
   it("select-all toggles to clear-all once everything is selected", () => {
@@ -234,10 +254,14 @@ describe("MaterialPickerDialog", () => {
 
 describe("converter store — selectedMaterialDirNames persistence", () => {
   const KEY = "lumina_selectedMaterialDirNames";
+  const BACKING_KEY = "lumina_materialBackingMaterialDirName";
 
   beforeEach(() => {
     localStorage.clear();
-    useConverterStore.setState({ selectedMaterialDirNames: [] });
+    useConverterStore.setState({
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+    });
   });
 
   afterEach(() => {
@@ -259,5 +283,36 @@ describe("converter store — selectedMaterialDirNames persistence", () => {
     useConverterStore.getState().setSelectedMaterialDirNames(["mat-a"]);
     useConverterStore.getState().setSelectedMaterialDirNames([]);
     expect(localStorage.getItem(KEY)).toBe("[]");
+  });
+
+  it("keeps the base plate material inside the selected material list", () => {
+    useConverterStore.getState().setSelectedMaterialDirNames(["mat-a", "mat-b"]);
+    useConverterStore.getState().setMaterialBackingMaterialDirName("mat-b");
+    expect(localStorage.getItem(BACKING_KEY)).toBe("mat-b");
+
+    useConverterStore.getState().setSelectedMaterialDirNames(["mat-c", "mat-d"]);
+
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("mat-c");
+    expect(localStorage.getItem(BACKING_KEY)).toBe("mat-c");
+  });
+
+  it("changing only the base plate material preserves preview state", () => {
+    useConverterStore.setState({
+      sessionId: "session-1",
+      previewImageUrl: "/preview.png",
+      previewGlbUrl: "/preview.glb",
+      downloadUrl: "/old.3mf",
+      threemfDiskPath: "/tmp/old.3mf",
+      selectedMaterialDirNames: ["mat-a", "mat-b"],
+      materialBackingMaterialDirName: "mat-a",
+    });
+
+    useConverterStore.getState().setMaterialBackingMaterialDirName("mat-b");
+
+    expect(useConverterStore.getState().sessionId).toBe("session-1");
+    expect(useConverterStore.getState().previewImageUrl).toBe("/preview.png");
+    expect(useConverterStore.getState().previewGlbUrl).toBe("/preview.glb");
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+    expect(useConverterStore.getState().threemfDiskPath).toBeNull();
   });
 });

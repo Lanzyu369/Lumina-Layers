@@ -123,6 +123,7 @@ describe("recipe/exportRecipe", () => {
         selectedMaterialDirNames: ["brand/red", "brand/white"],
         materialLayerCount: 10,
         materialLayerHeightMm: 0.06,
+        materialBackingMaterialDirName: "brand/white",
       });
 
       const recipe = exportConverterRecipe(state, makeSettings(), "fp");
@@ -140,6 +141,7 @@ describe("recipe/exportRecipe", () => {
         selected_material_dir_names: ["brand/red", "brand/white"],
         material_layer_count: 10,
         material_layer_height_mm: 0.06,
+        material_backing_material_dir_name: "brand/white",
       });
     });
 

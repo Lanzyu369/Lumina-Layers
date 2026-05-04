@@ -107,7 +107,27 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-# ========== Backward-Compatibility Geometry Helper ==========
+def _resolve_material_archive_backing_color_id(
+    selected_materials: Optional[List[str]],
+    material_backing_material_index: Optional[int],
+) -> int:
+    if material_backing_material_index is None:
+        return 0
+    try:
+        backing_color_id = int(material_backing_material_index)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("material_backing_material_index must be an integer") from exc
+    if backing_color_id < 0:
+        raise ValueError("material_backing_material_index must be >= 0")
+    if selected_materials and backing_color_id >= len(selected_materials):
+        raise ValueError(
+            "material_backing_material_index is outside selected_materials range"
+        )
+    if not selected_materials and backing_color_id != 0:
+        raise ValueError(
+            "material_backing_material_index requires selected_materials"
+        )
+    return backing_color_id
 
 
 def _build_color_contour_mesh(mask, height, total_layers, rgba):
@@ -177,6 +197,7 @@ def convert_image_to_3d(
     recipe_overrides=None,
     recipe_override_masks_path: Optional[str] = None,
     backing_color_id=0,
+    separate_backing_color_id: Optional[int] = None,
     separate_backing=False,
     enable_relief=False,
     color_height_map=None,
@@ -342,6 +363,7 @@ def generate_final_model(
     recipe_overrides=None,
     recipe_override_masks_path: Optional[str] = None,
     backing_color_name="White",
+    separate_backing_color_id: Optional[int] = None,
     separate_backing=False,
     enable_relief=False,
     color_height_map=None,
@@ -382,6 +404,7 @@ def generate_final_model(
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
     material_grid_resolution: Optional[int] = None,
+    material_backing_material_index: Optional[int] = None,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -410,17 +433,29 @@ def generate_final_model(
         )
         separate_backing = False
 
+    if material_source == "material_archive":
+        resolved_backing_color_id = _resolve_material_archive_backing_color_id(
+            selected_materials,
+            material_backing_material_index,
+        )
+    else:
+        color_conf = ColorSystem.get(color_mode)
+        resolved_backing_color_id = color_conf["map"].get(backing_color_name, 0)
+
+    if separate_backing_color_id is None:
+        separate_backing_color_id = resolved_backing_color_id
+
     if separate_backing:
         backing_color_id = -2  # Special marker for separate backing
         log.info(
             "Backing will be separated as individual object",
-            extra={"event": "core_converter_backing_separated"},
+            extra={
+                "event": "core_converter_backing_separated",
+                "separate_backing_color_id": int(separate_backing_color_id or 0),
+            },
         )
-    elif material_source == "material_archive":
-        backing_color_id = 0
     else:
-        color_conf = ColorSystem.get(color_mode)
-        backing_color_id = color_conf["map"].get(backing_color_name, 0)
+        backing_color_id = resolved_backing_color_id
         log.info(
             "Resolved backing color",
             extra={
@@ -461,6 +496,7 @@ def generate_final_model(
         recipe_overrides=recipe_overrides,
         recipe_override_masks_path=recipe_override_masks_path,
         backing_color_id=backing_color_id,
+        separate_backing_color_id=separate_backing_color_id,
         separate_backing=separate_backing,
         enable_relief=enable_relief,
         color_height_map=color_height_map,

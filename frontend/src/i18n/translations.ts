@@ -2694,6 +2694,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
   },
+  basic_material_backing_label: {
+    zh: "\u5e95\u677f\u8017\u6750",
+    en: "Base Plate Material",
+  },
+  basic_material_backing_placeholder: {
+    zh: "\u5148\u9009\u62e9\u8017\u6750",
+    en: "Select materials first",
+  },
   basic_material_picker_open: {
     zh: "\u9009\u62e9\u8017\u6750\u2026",
     en: "Choose materials\u2026",
@@ -5827,6 +5835,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "品牌",
     en: "Brand",
   },
+  mat_gradient_library_brand_unassigned: {
+    zh: "未分组",
+    en: "Unassigned",
+  },
   basic_material_picker_brand_unassigned: {
     zh: "未分组",
     en: "Unassigned",
@@ -6194,5 +6206,77 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_recipe_result_meta: {
     zh: "{count} 层 · {height} mm · {substrate}",
     en: "{count} layer(s) · {height} mm · {substrate}",
+  },
+  material_recipe_add_to_collection: {
+    zh: "添加到队列",
+    en: "Add to queue",
+  },
+  material_recipe_already_in_collection: {
+    zh: "已在队列中",
+    en: "Already in queue",
+  },
+  material_recipe_collection_title: {
+    zh: "配方队列",
+    en: "Recipe queue",
+  },
+  material_recipe_collection_count: {
+    zh: "{count} 个配方",
+    en: "{count} recipe(s)",
+  },
+  material_recipe_collection_empty: {
+    zh: "队列为空。计算配方颜色后可添加到队列。",
+    en: "Queue is empty. Compute a recipe color then add it to the queue.",
+  },
+  material_recipe_collection_clear: {
+    zh: "清空队列",
+    en: "Clear queue",
+  },
+  material_recipe_remove_from_collection: {
+    zh: "移除",
+    en: "Remove",
+  },
+  material_recipe_swatch_block_size: {
+    zh: "色块尺寸",
+    en: "Block size",
+  },
+  material_recipe_swatch_gap: {
+    zh: "间距",
+    en: "Gap",
+  },
+  material_recipe_swatch_cols: {
+    zh: "列数",
+    en: "Columns",
+  },
+  material_recipe_swatch_structure: {
+    zh: "结构模式",
+    en: "Structure mode",
+  },
+  material_recipe_swatch_single_sided: {
+    zh: "单面",
+    en: "Single-sided",
+  },
+  material_recipe_swatch_double_sided: {
+    zh: "双面",
+    en: "Double-sided",
+  },
+  material_recipe_generate_swatch: {
+    zh: "生成验证色块",
+    en: "Generate swatch",
+  },
+  material_recipe_generating_swatch: {
+    zh: "生成中...",
+    en: "Generating...",
+  },
+  material_recipe_download_swatch: {
+    zh: "下载 3MF",
+    en: "Download 3MF",
+  },
+  material_recipe_generate_swatch_failed: {
+    zh: "色块生成失败",
+    en: "Swatch generation failed",
+  },
+  material_recipe_swatch_legend_alt: {
+    zh: "色块图例",
+    en: "Swatch legend",
   },
 };

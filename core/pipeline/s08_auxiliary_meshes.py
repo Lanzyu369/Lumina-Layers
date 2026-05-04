@@ -315,6 +315,10 @@ def run(ctx: dict) -> dict:
     transform = ctx["transform"]
     mesher = ctx["mesher"]
     separate_backing = ctx.get("separate_backing", False)
+    separate_backing_color_id = ctx.get(
+        "separate_backing_color_id",
+        ctx.get("backing_color_id", 0),
+    )
     enable_cloisonne = ctx.get("enable_cloisonne", False)
     backing_metadata = ctx["backing_metadata"]
     enable_coating = ctx.get("enable_coating", False)
@@ -329,6 +333,19 @@ def run(ctx: dict) -> dict:
     loop_added = False
     outline_added = False
     base_aux_color, base_aux_material_name = _resolve_material_archive_base_aux_style(ctx, preview_colors)
+    if separate_backing:
+        try:
+            separate_backing_color_idx = int(separate_backing_color_id)
+        except (TypeError, ValueError):
+            separate_backing_color_idx = 0
+        separate_backing_color = preview_colors.get(separate_backing_color_idx)
+        if separate_backing_color is None:
+            separate_backing_color = preview_colors.get(str(separate_backing_color_idx))
+        if separate_backing_color is not None:
+            base_aux_color = _coerce_preview_rgba(separate_backing_color)
+        slot_names = ctx.get("slot_names") or []
+        if 0 <= separate_backing_color_idx < len(slot_names):
+            base_aux_material_name = str(slot_names[separate_backing_color_idx])
 
     # ========== Separate Backing Mesh ==========
     if separate_backing:
@@ -355,7 +372,13 @@ def run(ctx: dict) -> dict:
                 preview_colors[backing_name] = base_aux_color
                 scene.add_geometry(backing_mesh, node_name=backing_name, geom_name=backing_name)
                 valid_slot_names.append(backing_name)
-                _log.debug(f"Added backing mesh as separate object (white)")
+                _log.debug(
+                    "Added backing mesh as separate object",
+                    extra={
+                        "event": "s08_separate_backing_mesh_added",
+                        "separate_backing_color_id": separate_backing_color_id,
+                    },
+                )
                 _log.debug(f"Scene now has {len(scene.geometry)} geometries")
         except S08_HANDLED_ERRORS as e:
             _log.exception(f"Error generating backing mesh: {e}")

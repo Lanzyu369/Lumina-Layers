@@ -19,6 +19,8 @@ from api.schemas.single_stage import (
     GradientCardMaterialUpdateRequest,
     MaterialLibraryBulkExportRequest,
     MaterialRecipePreviewRequest,
+    MaterialRecipeSwatchRequest,
+    MaterialRecipeSwatchResponse,
 )
 from api.schemas.responses import (
     GradientCardMaterialBulkExportResponse,
@@ -82,6 +84,7 @@ router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
 log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
+MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
 
 
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
@@ -958,6 +961,101 @@ async def material_recipe_preview(
         predicted_rgb=predicted_rgb,
         predicted_hex=predicted_hex,
         layers=layers,
+    )
+
+
+@router.post("/generate-material-swatch")
+async def generate_material_swatch(
+    payload: MaterialRecipeSwatchRequest,
+    registry: FileRegistry = Depends(get_file_registry),
+) -> MaterialRecipeSwatchResponse:
+    """Generate a 3MF swatch file from collected material-archive recipes.
+    根据收集的耗材档案配方列表生成 3MF 色块验证文件。
+    """
+    from api.file_bridge import pil_to_png_bytes
+    from api.structured_logging import get_request_id
+    from core.material_recipe_swatch import (
+        MaterialRecipeSwatchItem,
+        generate_material_recipe_swatch,
+    )
+
+    items: list[MaterialRecipeSwatchItem] = []
+    for recipe_req in payload.recipes:
+        materials = _load_palette_or_raise(recipe_req.directory_names)
+        mat_names = [m.name for m in materials]
+        mat_hexes = [
+            "#{:02X}{:02X}{:02X}".format(
+                *[int(c) for c in np.asarray(m.estimated_rgb).reshape(3).tolist()]
+            )
+            for m in materials
+        ]
+        items.append(
+            MaterialRecipeSwatchItem(
+                directory_names=recipe_req.directory_names,
+                material_names=mat_names,
+                material_hexes=mat_hexes,
+                result_hex=recipe_req.result_hex,
+                layer_height_mm=float(recipe_req.layer_height_mm),
+                substrate=recipe_req.substrate,
+            )
+        )
+
+    output_path, legend_img, status_msg = generate_material_recipe_swatch(
+        recipes=items,
+        block_size_mm=payload.block_size_mm,
+        gap_mm=payload.gap_mm,
+        cols=payload.cols,
+        structure_mode=payload.structure_mode,
+        printer_id=payload.printer_id,
+        slicer=payload.slicer,
+        nozzle_size=payload.nozzle_size,
+    )
+
+    if not output_path:
+        raise HTTPException(status_code=500, detail=status_msg or "Material swatch generation failed")
+
+    request_id = get_request_id()
+    unique_suffix = uuid.uuid4().hex
+    sid = (
+        f"material-recipe-swatch:{request_id}:{unique_suffix}"
+        if request_id
+        else f"material-recipe-swatch:{unique_suffix}"
+    )
+    download_id = registry.register_path(
+        sid,
+        output_path,
+        ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
+    )
+
+    preview_url: str | None = None
+    if legend_img is not None:
+        preview_bytes = pil_to_png_bytes(legend_img)
+        preview_id = registry.register_bytes(
+            sid,
+            preview_bytes,
+            "material_swatch_legend.png",
+            ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
+        )
+        preview_url = f"/api/files/{preview_id}"
+
+    log.info(
+        "Material recipe swatch generated",
+        extra={
+            "event": "extractor_material_swatch_done",
+            "recipe_count": len(items),
+            "download_id": download_id,
+            "block_size_mm": payload.block_size_mm,
+            "gap_mm": payload.gap_mm,
+            "cols": payload.cols,
+        },
+    )
+
+    return MaterialRecipeSwatchResponse(
+        status="ok",
+        message=status_msg,
+        download_url=f"/api/files/{download_id}",
+        preview_url=preview_url,
+        recipe_count=len(items),
     )
 
 

@@ -39,6 +39,7 @@ from api.schemas.system import UserSettings
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode as CoreModelingMode
+from core.converter import _resolve_material_archive_backing_color_id
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -1318,7 +1319,10 @@ class TestLargeFormatDimensionsAndRouting:
             assert captured_shapes["heightmap"] == (10, 20)
             assert captured_paths
             assert all(not os.path.exists(path) for path in captured_paths)
-            assert set(store.get_temp_file_paths(sid)) == {zip_path}
+            entry = registry.get_entry(download_id)
+            assert entry is not None
+            assert entry["lifecycle"] == "ephemeral"
+            assert zip_path not in set(store.get_temp_file_paths(sid))
         finally:
             store.clear_all()
             for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
@@ -1684,6 +1688,70 @@ def test_recover_virtual_materials_from_material_archive_preview_cache() -> None
     )
 
     assert recovered == [{"name": "Black", "hex": "#111111"}]
+
+
+def test_material_archive_backing_color_id_uses_requested_index() -> None:
+    assert _resolve_material_archive_backing_color_id(["mat-a", "mat-b", "mat-c"], 2) == 2
+    assert _resolve_material_archive_backing_color_id(["mat-a"], None) == 0
+    with pytest.raises(ValueError, match="outside selected_materials"):
+        _resolve_material_archive_backing_color_id(["mat-a"], 1)
+
+
+def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b", "mat-c"])
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "material_grid_resolution", 64)
+    _test_store.put(session_id, "material_backing_material_index", 1)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "material_backing_material_index": 2,
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["material_source"] == "material_archive"
+    assert submitted_params["selected_materials"] == ["mat-a", "mat-b", "mat-c"]
+    assert submitted_params["material_backing_material_index"] == 2
 
 
 def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> None:

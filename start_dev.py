@@ -127,6 +127,12 @@ def _port_in_use(port):
 
 def _kill_pid_tree(pid):
     """taskkill /T /F 杀整个进程树"""
+    if os.name != "nt":
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        return
     subprocess.run(
         ["taskkill", "/T", "/F", "/PID", str(pid)],
         capture_output=True, creationflags=0x08000000,
@@ -285,7 +291,11 @@ def _wait_port_free(port, timeout=10):
 # ═══════════════════════════════════════════════════════════
 
 def _find_python():
-    for p in (ROOT / "venv" / "Scripts" / "python.exe",
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return sys.executable
+    for p in (ROOT / ".venv" / "bin" / "python",
+              ROOT / "venv" / "bin" / "python",
+              ROOT / "venv" / "Scripts" / "python.exe",
               ROOT / ".venv" / "Scripts" / "python.exe"):
         if p.exists():
             return str(p)

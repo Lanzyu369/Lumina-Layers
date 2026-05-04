@@ -158,6 +158,51 @@ class MaterialRecipePreviewRequest(BaseModel):
         return cleaned
 
 
+class MaterialRecipeSwatchItemRequest(BaseModel):
+    """Single material-archive recipe for swatch generation.
+    单个耗材档案配方，用于色块 3MF 生成。
+    """
+
+    directory_names: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Material directory names in stacking order (substrate → top).",
+    )
+    result_hex: str = Field(..., description="Predicted blended hex color.")
+    layer_height_mm: float = Field(0.08, gt=0.0, le=1.0, description="Layer height (mm).")
+    substrate: str = Field("white", description="Substrate identifier.")
+
+
+class MaterialRecipeSwatchRequest(BaseModel):
+    """Batch request for generating a 3MF swatch file from material-archive recipes.
+    耗材档案配方批量色块 3MF 生成请求。
+    """
+
+    recipes: list[MaterialRecipeSwatchItemRequest] = Field(
+        ..., min_length=1, max_length=100, description="Recipe list."
+    )
+    block_size_mm: float = Field(15.0, ge=5.0, le=50.0, description="Block size (mm).")
+    gap_mm: float = Field(2.0, ge=0.5, le=10.0, description="Grid gap (mm).")
+    cols: int = Field(0, ge=0, le=20, description="Columns per row; 0 = auto.")
+    structure_mode: str = Field("Single-sided", description="Single-sided / Double-sided.")
+    printer_id: str = Field("bambu-h2d", description="Printer profile ID.")
+    slicer: str = Field("BambuStudio", description="Slicer software ID.")
+    nozzle_size: str = Field("0.4", description="Nozzle size.")
+
+
+class MaterialRecipeSwatchResponse(BaseModel):
+    """Response for material-archive swatch generation.
+    耗材档案色块 3MF 生成响应。
+    """
+
+    status: str = Field(..., description="Status.")
+    message: str = Field(..., description="Status message.")
+    download_url: str = Field(..., description="3MF download URL.")
+    preview_url: str | None = Field(None, description="Legend preview URL.")
+    recipe_count: int = Field(..., description="Number of generated recipes.")
+
+
 class MaterialLibraryBulkExportRequest(BaseModel):
     """Request model for exporting multiple saved material archives."""
 

@@ -236,6 +236,7 @@ describe("recipe/importRecipe", () => {
         selected_material_dir_names: ["brand/red", "brand/white"],
         material_layer_count: 10,
         material_layer_height_mm: 0.06,
+        material_backing_material_dir_name: "brand/white",
       };
 
       const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
@@ -252,6 +253,7 @@ describe("recipe/importRecipe", () => {
       expect(state.selectedMaterialDirNames).toEqual(["brand/red", "brand/white"]);
       expect(state.materialLayerCount).toBe(10);
       expect(state.materialLayerHeightMm).toBe(0.06);
+      expect(state.materialBackingMaterialDirName).toBe("brand/white");
     });
 
     it("normalizes puzzle-specific mutually exclusive settings from imported recipes", () => {

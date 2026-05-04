@@ -60,6 +60,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     selected_material_dir_names: isMaterialSource ? converter.selectedMaterialDirNames : [],
     material_layer_count: isMaterialSource ? converter.materialLayerCount : null,
     material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
+    material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
     recent_client_logs: [],
   };
 }

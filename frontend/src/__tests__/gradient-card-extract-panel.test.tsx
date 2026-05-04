@@ -8,6 +8,7 @@ import {
   rotateExtractorImage,
   saveGradientCardMaterial,
 } from "../api/extractor";
+import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
@@ -15,6 +16,10 @@ vi.mock("../api/extractor", () => ({
   listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),
   saveGradientCardMaterial: vi.fn(),
+}));
+
+vi.mock("../api/system", () => ({
+  uploadImagePreview: vi.fn(),
 }));
 
 vi.mock("../components/GradientCardCanvasPreview", () => ({
@@ -33,6 +38,7 @@ vi.mock("../components/GradientCardCanvasPreview", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(uploadImagePreview).mockReset();
   vi.mocked(listGradientCardMaterials).mockImplementation(
     () => new Promise(() => {}),
   );
@@ -432,6 +438,38 @@ describe("GradientCardExtractPanel", () => {
     expect(ccwCall?.[1]).toBe("black.png");
 
     globalThis.fetch = originalFetch;
+  });
+
+  it("uses backend PNG previews for HEIC and HEIF gradient card uploads", async () => {
+    const previewMock = vi.mocked(uploadImagePreview);
+    const whiteFile = new File(["white"], "white.HEIC", { type: "image/heic" });
+    const blackFile = new File(["black"], "black.heif", { type: "" });
+    previewMock
+      .mockResolvedValueOnce({
+        preview_url: "/api/files/white-preview.png",
+        width: 1200,
+        height: 900,
+      })
+      .mockResolvedValueOnce({
+        preview_url: "http://localhost:8000/api/files/black-preview.png",
+        width: 1000,
+        height: 800,
+      });
+
+    await act(async () => {
+      await useSingleStageStore.getState().setWhiteImageFile(whiteFile);
+      await useSingleStageStore.getState().setBlackImageFile(blackFile);
+    });
+
+    const state = useSingleStageStore.getState();
+    expect(previewMock).toHaveBeenNthCalledWith(1, whiteFile);
+    expect(previewMock).toHaveBeenNthCalledWith(2, blackFile);
+    expect(state.whiteImagePreviewUrl).toBe("/api/files/white-preview.png");
+    expect(state.whiteImageNaturalWidth).toBe(1200);
+    expect(state.whiteImageNaturalHeight).toBe(900);
+    expect(state.blackImagePreviewUrl).toBe("/api/files/black-preview.png");
+    expect(state.blackImageNaturalWidth).toBe(1000);
+    expect(state.blackImageNaturalHeight).toBe(800);
   });
 
   it("lets you pick an existing saved brand from the brand selector", async () => {

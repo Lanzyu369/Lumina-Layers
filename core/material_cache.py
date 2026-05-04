@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -67,6 +68,7 @@ from core.material_color_solver import (
     _compute_material_affines,
     _enumerate_cumulative_affines,
     _greedy_lab_spacing_dedup,
+    linear_to_srgb_float,
     linear_to_srgb_uint8,
     rgb_to_lab,
 )
@@ -139,7 +141,7 @@ adapters must reject unknown values with a 4xx error.
 pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
 """
 
-CACHE_SCHEMA_VERSION: str = "1.0"
+CACHE_SCHEMA_VERSION: str = "1.1"
 CACHE_SUBDIR: str = "_solver_cache"
 
 _FINGERPRINT_DECIMALS: int = 6
@@ -409,6 +411,8 @@ class MaterialSolverCache:
         achieved_srgb: (K, 3) uint8 predicted sRGB when the stored recipe is
             applied, used to compute ΔE to targets at lookup time.
             (配方实际达成的 sRGB)
+        achieved_lab: (K, 3) float32 continuous-model Lab for the stored recipe.
+            (配方连续模型 Lab)
         center_delta_e: (K,) float32 ΔE between bucket center and the stored
             recipe's achieved Lab. Diagnostic only — lookup ΔE is recomputed
             against the caller's target. (配方与桶心的 ΔE，仅诊断用)
@@ -419,6 +423,7 @@ class MaterialSolverCache:
     lab_centers: np.ndarray
     recipes: np.ndarray
     achieved_srgb: np.ndarray
+    achieved_lab: np.ndarray
     center_delta_e: np.ndarray
     metadata: dict[str, Any]
 
@@ -532,17 +537,16 @@ class MaterialSolverCache:
                 f"User palette fingerprint {user_fp} does not match cached "
                 f"palette {self.palette_hash}"
             )
-        # Build KDTree over bucket centers (lazily; expected small cost).
-        tree = cKDTree(self.lab_centers.astype(np.float64))
+        # Build KDTree over achieved Lab (lazily; expected small cost).
+        tree = cKDTree(self.achieved_lab.astype(np.float64))
         target_lab = rgb_to_lab(target_srgb).astype(np.float64)
-        query_k = min(64, int(self.grid_resolution), int(self.valid_cell_count))
+        query_k = min(64, int(self.valid_cell_count))
         _, nearest_idx = tree.query(target_lab, k=query_k)
         nearest_idx = np.asarray(nearest_idx)
         if nearest_idx.ndim == 1:
             # cKDTree squeezes the last dim when k == 1.
             nearest_idx = nearest_idx.reshape(-1, 1)
-        candidate_rgb = self.achieved_srgb[nearest_idx]
-        candidate_lab = rgb_to_lab(candidate_rgb.reshape(-1, 3)).astype(np.float64)
+        candidate_lab = self.achieved_lab[nearest_idx].astype(np.float64)
         candidate_lab = candidate_lab.reshape(target_lab.shape[0], nearest_idx.shape[1], 3)
         candidate_delta_e = np.linalg.norm(
             candidate_lab - target_lab[:, None, :], axis=2
@@ -623,19 +627,18 @@ class MaterialSolverCache:
 
         target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0].astype(np.float64)
         oversample = max(1, int(top_k) * 4)
-        query_k = min(oversample, int(self.lab_centers.shape[0]))
-        tree = cKDTree(self.lab_centers.astype(np.float64))
+        query_k = min(oversample, int(self.achieved_lab.shape[0]))
+        tree = cKDTree(self.achieved_lab.astype(np.float64))
         # ``cKDTree.query`` returns ``distances, indices``; when ``k == 1`` the
         # arrays are 0-D scalars so we always normalise to 1-D.
         # k=1 时返回标量，这里统一成一维数组便于下游处理。
         _, nearest_idx = tree.query(target_lab, k=query_k)
         nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
 
-        nearest_lab = self.lab_centers[nearest_idx].astype(np.float64)
         nearest_srgb = self.achieved_srgb[nearest_idx]
         # Recompute ΔE against the achieved (not the bucket centre) for an
         # accurate target-to-prediction error.
-        matched_lab = rgb_to_lab(nearest_srgb).astype(np.float64)
+        matched_lab = self.achieved_lab[nearest_idx].astype(np.float64)
         delta_e = np.linalg.norm(matched_lab - target_lab, axis=1)
 
         # Sort ascending by ΔE before the greedy spacing filter.
@@ -699,6 +702,17 @@ def _lab_to_bucket_index(
     center[:, 1] = a_idx * ab_step + ab_step * 0.5 - 128.0
     center[:, 2] = b_idx * ab_step + ab_step * 0.5 - 128.0
     return flat_idx, center
+
+
+def _linear_to_lab(linear_rgb: np.ndarray) -> np.ndarray:
+    srgb = linear_to_srgb_float(linear_rgb).astype(np.float32, copy=False)
+    lab = cv2.cvtColor(srgb.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB)
+    return lab.reshape(-1, 3).astype(np.float64, copy=False)
+
+
+def _pack_srgb(srgb: np.ndarray) -> np.ndarray:
+    values = srgb.astype(np.uint64, copy=False)
+    return (values[:, 0] << 16) | (values[:, 1] << 8) | values[:, 2]
 
 
 def _groupby_argmin(
@@ -813,7 +827,7 @@ def build_material_solver_cache(
     total_combinations = int(K_top) * int(K_bot)
 
     # Sparse per-bucket state.
-    # ``best`` maps flat_bucket_idx -> (delta, recipe_int8, srgb_u8, center_f64).
+    # ``best`` maps (flat_bucket_idx, srgb_key) -> (delta, recipe_int8, srgb_u8, lab_f64, center_f64).
     # Only buckets that have actually been reached by some recipe consume
     # memory, so the build cost scales with ``min(total_combinations,
     # valid_cell_count)`` instead of ``grid_resolution ** 3``. This is what
@@ -824,7 +838,10 @@ def build_material_solver_cache(
     # 取决于 ``min(总配方数, 有效桶数)`` 而非 ``grid_resolution ** 3``，
     # 这是 1024/2048 档真正可用的关键。
     total_buckets = grid_resolution ** 3
-    best: dict[int, tuple[float, np.ndarray, np.ndarray, np.ndarray]] = {}
+    best: dict[
+        tuple[int, int],
+        tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ] = {}
 
     # Chunk tops so each (chunk × K_bot × 24B) fits the memory budget.
     # 顶/底分桶分块，单块 (sub × K_bot × 24B) 受 _CHUNK_TARGET_BYTES 限制。
@@ -846,18 +863,24 @@ def build_material_solver_cache(
         )
         flat_linear = final_linear.reshape(-1, 3)                  # (sub*K_bot, 3)
         flat_srgb = linear_to_srgb_uint8(flat_linear)
-        flat_lab = rgb_to_lab(flat_srgb)                           # (sub*K_bot, 3)
+        flat_lab = _linear_to_lab(flat_linear)                     # (sub*K_bot, 3)
 
         bucket_idx, bucket_center = _lab_to_bucket_index(flat_lab, grid_resolution)
+        visible_bucket_idx = (
+            bucket_idx.astype(np.uint64) << np.uint64(24)
+        ) | _pack_srgb(flat_srgb)
         delta_to_center = np.linalg.norm(flat_lab - bucket_center, axis=1)
 
         # Find min-delta row per bucket within this chunk.
-        unique_buckets, row_indices = _groupby_argmin(bucket_idx, delta_to_center)
-        if unique_buckets.size == 0:
+        unique_visible_buckets, row_indices = _groupby_argmin(
+            visible_bucket_idx, delta_to_center
+        )
+        if unique_visible_buckets.size == 0:
             continue
 
         chunk_best_deltas = delta_to_center[row_indices]
         chunk_best_srgb = flat_srgb[row_indices]
+        chunk_best_lab = flat_lab[row_indices]
         chunk_best_centers = bucket_center[row_indices]
 
         # Rebuild recipes for these rows. Each row index is a flat index into
@@ -881,10 +904,16 @@ def build_material_solver_cache(
         # Vectorised lookup of previous-best deltas; missing buckets default
         # to +inf so the first hit always wins.
         # 向量化拉出旧最优 delta；未命中桶默认 +inf，保证首发必胜。
+        unique_bucket_idx = bucket_idx[row_indices]
+        unique_srgb_key = _pack_srgb(chunk_best_srgb)
+        unique_keys = [
+            (int(b), int(s))
+            for b, s in zip(unique_bucket_idx, unique_srgb_key)
+        ]
         prev_deltas = np.fromiter(
-            (best[int(b)][0] if int(b) in best else np.inf for b in unique_buckets),
+            (best[key][0] if key in best else np.inf for key in unique_keys),
             dtype=np.float64,
-            count=unique_buckets.size,
+            count=len(unique_keys),
         )
         improved = chunk_best_deltas < prev_deltas
         if not np.any(improved):
@@ -906,11 +935,12 @@ def build_material_solver_cache(
         # negligible vs the chunk-wide vectorised numpy work above.
         # 回写改进项；每条记录非常小，Python 循环开销可忽略。
         for i in np.flatnonzero(improved):
-            b = int(unique_buckets[i])
-            best[b] = (
+            key = unique_keys[i]
+            best[key] = (
                 float(chunk_best_deltas[i]),
                 chunk_recipes[i].copy(),
                 chunk_best_srgb[i].copy(),
+                chunk_best_lab[i].copy(),
                 chunk_best_centers[i].copy(),
             )
 
@@ -934,20 +964,23 @@ def build_material_solver_cache(
     # that depends on row order keep working unchanged.
     # 按桶号升序输出，与原密集路径的 np.isfinite 抽取序列一致，保证旧缓存
     # 与依赖行序的下游代码无需改动。
-    sorted_buckets = sorted(best.keys())
-    valid_count = len(sorted_buckets)
+    sorted_keys = sorted(best.keys())
+    valid_count = len(sorted_keys)
     if valid_count > 0:
         lab_centers = np.stack(
-            [best[b][3] for b in sorted_buckets], axis=0
+            [best[key][4] for key in sorted_keys], axis=0
         ).astype(np.float32, copy=False)
         recipes = np.stack(
-            [best[b][1] for b in sorted_buckets], axis=0
+            [best[key][1] for key in sorted_keys], axis=0
         )
         achieved_srgb = np.stack(
-            [best[b][2] for b in sorted_buckets], axis=0
+            [best[key][2] for key in sorted_keys], axis=0
         )
+        achieved_lab = np.stack(
+            [best[key][3] for key in sorted_keys], axis=0
+        ).astype(np.float32, copy=False)
         center_delta_e = np.fromiter(
-            (best[b][0] for b in sorted_buckets),
+            (best[key][0] for key in sorted_keys),
             dtype=np.float32,
             count=valid_count,
         )
@@ -955,12 +988,14 @@ def build_material_solver_cache(
         lab_centers = np.zeros((0, 3), dtype=np.float32)
         recipes = np.zeros((0, layer_count), dtype=np.int8)
         achieved_srgb = np.zeros((0, 3), dtype=np.uint8)
+        achieved_lab = np.zeros((0, 3), dtype=np.float32)
         center_delta_e = np.zeros(0, dtype=np.float32)
 
     build_time = time.time() - start_time
 
     metadata = {
         "schema_version": CACHE_SCHEMA_VERSION,
+        "color_precision": "continuous_lab",
         "palette_hash": palette_hash,
         "canonical_materials": [
             {
@@ -1016,6 +1051,7 @@ def build_material_solver_cache(
         lab_centers=lab_centers,
         recipes=recipes,
         achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
         center_delta_e=center_delta_e,
         metadata=metadata,
     )
@@ -1056,6 +1092,7 @@ def save_material_solver_cache(
             lab_centers=cache.lab_centers,
             recipes=cache.recipes,
             achieved_srgb=cache.achieved_srgb,
+            achieved_lab=cache.achieved_lab,
             center_delta_e=cache.center_delta_e,
         )
     tmp_npz.replace(npz_path)
@@ -1157,6 +1194,12 @@ def load_material_solver_cache(
             lab_centers = loaded["lab_centers"].astype(np.float32)
             recipes = loaded["recipes"].astype(np.uint8)
             achieved_srgb = loaded["achieved_srgb"].astype(np.uint8)
+            if "achieved_lab" in loaded:
+                has_achieved_lab = True
+                achieved_lab = loaded["achieved_lab"].astype(np.float32)
+            else:
+                has_achieved_lab = False
+                achieved_lab = np.zeros_like(lab_centers, dtype=np.float32)
             center_delta_e = loaded["center_delta_e"].astype(np.float32)
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
@@ -1171,11 +1214,20 @@ def load_material_solver_cache(
         )
         return None
 
+    if (
+        not has_achieved_lab
+        or metadata.get("color_precision") != "continuous_lab"
+    ):
+        return None
+
     # Sanity checks: shapes consistent, fingerprint matches caller's palette,
     # stored grid_resolution matches the caller's expectation.
     if (
         recipes.shape[0] != lab_centers.shape[0]
         or recipes.shape[1] != int(metadata.get("layer_count", -1))
+        or achieved_srgb.shape != lab_centers.shape
+        or achieved_lab.shape != lab_centers.shape
+        or center_delta_e.shape[0] != lab_centers.shape[0]
     ):
         _log.warning(
             "Material solver cache has inconsistent shapes",
@@ -1214,6 +1266,7 @@ def load_material_solver_cache(
         lab_centers=lab_centers,
         recipes=recipes,
         achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
         center_delta_e=center_delta_e,
         metadata=metadata,
     )

@@ -885,22 +885,22 @@ export default function GradientCardExtractPanel() {
       <input
         ref={whiteImageInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.heic,.heif"
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
-          setWhiteImageFile(file);
+          void setWhiteImageFile(file);
           event.target.value = "";
         }}
       />
       <input
         ref={blackImageInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.heic,.heif"
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
-          setBlackImageFile(file);
+          void setBlackImageFile(file);
           event.target.value = "";
         }}
       />

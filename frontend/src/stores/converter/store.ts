@@ -1051,13 +1051,19 @@ function buildLegacySourceParams(lutName: string) {
 function buildMaterialSourceParams(
   state: Pick<
     ConverterState,
-    "selectedMaterialDirNames" | "materialLayerCount" | "materialLayerHeightMm"
+    | "selectedMaterialDirNames"
+    | "materialLayerCount"
+    | "materialLayerHeightMm"
+    | "materialBackingMaterialDirName"
   >,
 ) {
   const settingsState = useSettingsStore.getState();
   const materialGridResolution = settingsState.enableSolverCacheGridSelection
     ? settingsState.solverCacheGridResolution
     : undefined;
+  const backingMaterialIndex = state.materialBackingMaterialDirName
+    ? state.selectedMaterialDirNames.indexOf(state.materialBackingMaterialDirName)
+    : 0;
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
@@ -1066,6 +1072,7 @@ function buildMaterialSourceParams(
     material_layer_count: state.materialLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
     material_grid_resolution: materialGridResolution,
+    material_backing_material_index: backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
   };
 }
 
@@ -1189,6 +1196,7 @@ export interface ConverterState {
   selectedMaterialDirNames: string[];
   materialLayerCount: number;
   materialLayerHeightMm: number;
+  materialBackingMaterialDirName: string | null;
 
   // 高级设置
   quantize_colors: number;
@@ -1718,6 +1726,7 @@ export interface ConverterActions {
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
   setMaterialLayerHeightMm: (height: number) => void;
+  setMaterialBackingMaterialDirName: (name: string | null) => void;
   setNativeBrandKey: (brandKey: string) => void;
   setNativeSupportedMode: (mode: {
     color_layers: number;
@@ -1893,6 +1902,7 @@ function loadLutName(): string {
 }
 
 const SELECTED_MATERIAL_DIR_NAMES_KEY = "lumina_selectedMaterialDirNames";
+const MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY = "lumina_materialBackingMaterialDirName";
 
 function loadSelectedMaterialDirNames(): string[] {
   try {
@@ -1917,6 +1927,27 @@ function persistSelectedMaterialDirNames(names: string[]): void {
     );
   } catch {
     /* localStorage unavailable, ignore */
+  }
+}
+
+function loadMaterialBackingMaterialDirName(): string | null {
+  try {
+    const raw = localStorage.getItem(MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY);
+    return raw && raw.trim().length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistMaterialBackingMaterialDirName(name: string | null): void {
+  try {
+    if (name && name.trim().length > 0) {
+      localStorage.setItem(MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY, name);
+    } else {
+      localStorage.removeItem(MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY);
+    }
+  } catch {
+    return;
   }
 }
 
@@ -1949,6 +1980,7 @@ export const DEFAULT_STATE: ConverterState = {
   selectedMaterialDirNames: loadSelectedMaterialDirNames(),
   materialLayerCount: 5,
   materialLayerHeightMm: 0.08,
+  materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
   quantize_colors: 48,
   quantize_colors_unlocked: false,
   enable_cleanup: true,
@@ -2550,10 +2582,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
     setSelectedMaterialDirNames: (names: string[]) => {
       persistSelectedMaterialDirNames(names);
-      set(() => ({
-        selectedMaterialDirNames: names,
-        ...buildPreviewSessionResetState(),
-      }));
+      set((state) => {
+        const currentBacking = state.materialBackingMaterialDirName;
+        const nextBacking =
+          currentBacking && names.includes(currentBacking)
+            ? currentBacking
+            : (names[0] ?? null);
+        persistMaterialBackingMaterialDirName(nextBacking);
+        return {
+          selectedMaterialDirNames: names,
+          materialBackingMaterialDirName: nextBacking,
+          ...buildPreviewSessionResetState(),
+        };
+      });
     },
     setMaterialLayerCount: (count: number) =>
       set(() => ({
@@ -2565,6 +2606,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         materialLayerHeightMm: height,
         ...buildPreviewSessionResetState(),
       })),
+    setMaterialBackingMaterialDirName: (name: string | null) => {
+      persistMaterialBackingMaterialDirName(name);
+      set({
+        materialBackingMaterialDirName: name,
+        modelUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
+    },
 
     setNativeBrandKey: (brandKey: string) =>
       set((state) => {
@@ -5287,6 +5337,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
         set({ error: "请先预览图片" });
         return null;
       }
+      const sessionId = state.sessionId;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -5323,7 +5374,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
       _clientLog("generate: click", {
         image: summarizeFileForLog(state.imageFile),
-        session_id: state.sessionId,
+        session_id: sessionId,
         source_version: state.source_version,
         target_width_mm: state.target_width_mm,
         color_mode: state.color_mode,
@@ -5463,7 +5514,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
         if (state.puzzleEnabled) {
           const puzzleResponse = await apiConvertGeneratePuzzle(
-            state.sessionId,
+            sessionId,
             {
               ...buildPuzzlePreviewParams(state),
               params: baseParams,
@@ -5495,7 +5546,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
         if (state.largeFormatEnabled) {
           const lfResponse = await apiConvertGenerateLargeFormat(
-            state.sessionId!,
+            sessionId,
             {
               target_height_mm: state.target_height_mm,
               tile_width_mm: state.tileWidthMm,
@@ -5524,13 +5575,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
 
         _logGenerateTimer("request sent");
         _clientLog("generate: request sent", {
-          session_id: state.sessionId,
+          session_id: sessionId,
           source_kind: sourceParams.source_kind,
           replacement_count: mergedReplacements?.length ?? 0,
           recipe_override_count: state.recipe_overrides.length,
           free_color_count: state.free_color_set.size,
         });
-        const response = await apiConvertGenerate(state.sessionId, baseParams);
+        const response = await apiConvertGenerate(sessionId, baseParams);
         _logGenerateTimer("response received");
         _clientLog("generate: response received", {
           preview_3d_url: response.preview_3d_url ?? null,

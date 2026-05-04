@@ -466,6 +466,13 @@ def worker_generate_large_format_svg_native(
         tile_height_mm=tile_height_mm,
     )
 
+    # Resolve the backing material slot once; tiles share the palette.
+    # 底板材质槽在整批 tile 中共用，解析一次即可。
+    try:
+        requested_backing_color_id = int(params.get("backing_color_id", 0) or 0)
+    except (TypeError, ValueError):
+        requested_backing_color_id = 0
+
     successful_paths: list[tuple[str, str]] = []
     tile_cleanup_paths: set[str] = set()
     zip_path: str | None = None
@@ -477,6 +484,7 @@ def worker_generate_large_format_svg_native(
                 analysis=tile.analysis,
                 thickness_mm=float(params["spacer_thick"]),
                 structure_mode=params["structure_mode"],
+                backing_color_id=requested_backing_color_id,
             )
             if len(scene.geometry) == 0:
                 continue
@@ -487,19 +495,29 @@ def worker_generate_large_format_svg_native(
                 if isinstance(material_id, int) and material_id < len(slot_names):
                     preview_colors[slot_names[material_id]] = rgba
 
+            # Clamp the backing slot index for this tile in case the palette
+            # differs (defensive; normally tiles share the same slot list).
+            # 为当前 tile 钳制底板槽位索引；一般情况下所有 tile 调色板一致。
+            tile_backing_slot_index = 0
+            if slot_names and 0 <= requested_backing_color_id < len(slot_names):
+                tile_backing_slot_index = requested_backing_color_id
+            target_slot = slot_names[tile_backing_slot_index] if slot_names else None
+
             separate_backing = bool(params.get("separate_backing", False))
             board_geom = scene.geometry.get("Board")
             if board_geom is not None and not separate_backing:
-                first_slot = slot_names[0] if slot_names else None
-                first_geom = scene.geometry.get(first_slot) if first_slot else None
-                if first_geom is not None:
-                    merged = trimesh.util.concatenate([first_geom, board_geom])
-                    merged.visual.face_colors = first_geom.visual.face_colors
-                    merged.metadata["name"] = first_slot
-                    scene.geometry[first_slot] = merged
+                target_geom = scene.geometry.get(target_slot) if target_slot else None
+                if target_geom is not None:
+                    merged = trimesh.util.concatenate([target_geom, board_geom])
+                    merged.visual.face_colors = target_geom.visual.face_colors
+                    merged.metadata["name"] = target_slot
+                    scene.geometry[target_slot] = merged
                     del scene.geometry["Board"]
             elif board_geom is not None and separate_backing:
-                preview_colors["Board"] = preview_colors.get(0, [255, 255, 255, 255])
+                preview_colors["Board"] = preview_colors.get(
+                    tile_backing_slot_index,
+                    preview_colors.get(0, [255, 255, 255, 255]),
+                )
 
             slot_export_names: list[str] = []
             for geom_name, geom in scene.geometry.items():
@@ -524,7 +542,9 @@ def worker_generate_large_format_svg_native(
                     "initial_layer_height": "0.08",
                     "wall_loops": "1",
                     "top_shell_layers": "0",
-                    "bottom_shell_layers": "0",
+                    "bottom_shell_layers": "1",
+                    "bottom_surface_pattern": "monotonicline",
+                    "elefant_foot_compensation": "0",
                     "sparse_infill_density": "100%",
                     "sparse_infill_pattern": "zig-zag",
                     "nozzle_temperature": ["220"] * 8,

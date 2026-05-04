@@ -550,7 +550,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(
-      screen.getByRole("checkbox", { name: "大画幅模式" }),
+      screen.getByRole("checkbox", { name: /大画幅模式/ }),
     ).toBeDisabled();
     expect(
       screen.getByRole("radio", { name: "单面" }),

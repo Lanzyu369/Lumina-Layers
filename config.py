@@ -1,5 +1,7 @@
 """Lumina Studio configuration: paths, printer/smart config, and legacy i18n data."""
 
+from __future__ import annotations
+
 import os
 import sys
 import platform

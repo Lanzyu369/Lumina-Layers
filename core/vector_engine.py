@@ -1940,6 +1940,7 @@ class VectorProcessor:
         thickness_mm: float,
         structure_mode: str = "Single-sided",
         progress_fn=None,
+        backing_color_id: int = 0,
     ) -> trimesh.Scene:
         """Extrude analyzed vector shapes into a trimesh Scene.
         将分析后的矢量形状挤出为 trimesh Scene。
@@ -1949,6 +1950,14 @@ class VectorProcessor:
             thickness_mm:   Backing (spacer) thickness in mm.
             structure_mode: "Single-sided" or "Double-sided".
             progress_fn:    Optional progress callback.
+            backing_color_id: Material slot index to assign to the ``Board``
+                backing geometry. Defaults to ``0`` to preserve historical
+                behaviour; callers driving material-archive or separate-
+                backing flows pass the user-selected backing slot so the
+                preview/export actually reflects the chosen material.
+                （底板几何体使用的材质槽索引，默认 0 以保持历史行为；
+                耗材档案或分离底板流程会传入用户选择的底板槽位，
+                预览/导出才能反映实际选中的耗材颜色。）
 
         Returns:
             A ``trimesh.Scene`` with one geometry per material slot.
@@ -2075,8 +2084,23 @@ class VectorProcessor:
                 )
             if backing_meshes:
                 backing_name = "Board"
+                # Clamp the backing material slot to a valid index; fall back
+                # to 0 when slot_names is empty (legacy defensive path).
+                # 钳制底板材质槽到合法索引；slot_names 为空时退回 0。
+                slot_count = len(slot_names) if slot_names else 0
+                resolved_backing_mat_id = 0
+                if slot_count > 0:
+                    try:
+                        candidate = int(backing_color_id)
+                    except (TypeError, ValueError):
+                        candidate = 0
+                    if 0 <= candidate < slot_count:
+                        resolved_backing_mat_id = candidate
                 if backing_name not in meshes_by_slot:
-                    meshes_by_slot[backing_name] = {"meshes": [], "mat_id": 0}
+                    meshes_by_slot[backing_name] = {
+                        "meshes": [],
+                        "mat_id": resolved_backing_mat_id,
+                    }
                 meshes_by_slot[backing_name]["meshes"].extend(backing_meshes)
         stage_timings["backing_s"] = time.perf_counter() - t0
 

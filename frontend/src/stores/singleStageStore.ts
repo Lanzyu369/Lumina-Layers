@@ -6,6 +6,7 @@ import {
   saveGradientCardMaterial,
   type ExtractorRotationDirection,
 } from "../api/extractor";
+import { uploadImagePreview } from "../api/system";
 import type {
   GradientCardMaterialSummary,
   OrientationRanking,
@@ -77,8 +78,8 @@ interface SingleStageState {
 interface SingleStageActions {
   setWorkflow: (workflow: ExtractorWorkflow) => void;
   setDatasetFile: (file: File | null) => void;
-  setWhiteImageFile: (file: File | null) => void;
-  setBlackImageFile: (file: File | null) => void;
+  setWhiteImageFile: (file: File | null) => Promise<void>;
+  setBlackImageFile: (file: File | null) => Promise<void>;
   setWhiteImageNaturalSize: (width: number, height: number) => void;
   setBlackImageNaturalSize: (width: number, height: number) => void;
   rotateWhiteImage: (direction: ExtractorRotationDirection) => Promise<void>;
@@ -118,6 +119,25 @@ const createPreviewUrl = (file: File | null): string | null => {
   }
   return URL.createObjectURL(file);
 };
+
+const BACKEND_PREVIEW_EXTENSIONS = new Set([".heic", ".heif"]);
+
+function getLowerFileExtension(file: File): string {
+  const index = file.name.lastIndexOf(".");
+  return index >= 0 ? file.name.slice(index).toLowerCase() : "";
+}
+
+function requiresBackendPreview(file: File | null): boolean {
+  if (!file) {
+    return false;
+  }
+  const mimeType = file.type.toLowerCase();
+  return (
+    BACKEND_PREVIEW_EXTENSIONS.has(getLowerFileExtension(file)) ||
+    mimeType === "image/heic" ||
+    mimeType === "image/heif"
+  );
+}
 
 const revokePreviewUrl = (url: string | null) => {
   if (
@@ -172,6 +192,7 @@ const GRADIENT_CARD_SAVE_TARGET_INVALID_DETAILS = [
 
 const GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX = "无法解码图像文件:";
 const GRADIENT_CARD_HEIC_DETAIL_FRAGMENT = "HEIC/HEIF";
+const GRADIENT_CARD_HEIC_DECODE_DETAIL_PREFIX = "HEIC/HEIF 文件解码失败:";
 
 function extractErrorDetail(err: unknown): string | null {
   const detail = (err as ErrorWithResponseDetail | null)?.response?.data
@@ -200,6 +221,9 @@ function resolveKnownGradientCardDetail(detail: string): string | null {
     return tRuntime("mat_gradient_heic_unsupported_error");
   }
   if (detail.startsWith(GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX)) {
+    return tRuntime("mat_gradient_invalid_image_error");
+  }
+  if (detail.startsWith(GRADIENT_CARD_HEIC_DECODE_DETAIL_PREFIX)) {
     return tRuntime("mat_gradient_invalid_image_error");
   }
   if (matchesAnyPattern(detail, GRADIENT_CARD_CORNER_DETAIL_PATTERNS)) {
@@ -232,6 +256,14 @@ function resolveGradientCardRotationError(
       ? "mat_gradient_rotate_white_failed"
       : "mat_gradient_rotate_black_failed",
   );
+}
+
+function resolveGradientCardPreviewError(err: unknown): string {
+  const detail = extractErrorDetail(err);
+  if (detail) {
+    return resolveKnownGradientCardDetail(detail) ?? detail;
+  }
+  return tRuntime("mat_gradient_invalid_image_error");
 }
 
 function resolveGradientCardSaveError(err: unknown): string {
@@ -339,12 +371,13 @@ export const useSingleStageStore = create<
       ...RESULT_RESET_STATE,
     }),
 
-  setWhiteImageFile: (file: File | null) => {
+  setWhiteImageFile: async (file: File | null) => {
     const previousUrl = get().whiteImagePreviewUrl;
+    const useBackendPreview = requiresBackendPreview(file);
     revokePreviewUrl(previousUrl);
     set({
       whiteImageFile: file,
-      whiteImagePreviewUrl: createPreviewUrl(file),
+      whiteImagePreviewUrl: useBackendPreview ? null : createPreviewUrl(file),
       whiteImageNaturalWidth: null,
       whiteImageNaturalHeight: null,
       whiteCornerPoints: [],
@@ -352,14 +385,44 @@ export const useSingleStageStore = create<
       activeCornerIndex: null,
       ...RESULT_RESET_STATE,
     });
+    if (!file || !useBackendPreview) {
+      return;
+    }
+    try {
+      const response = await uploadImagePreview(file);
+      const previewUrl = normalizeResourceUrl(response.preview_url);
+      if (!previewUrl) {
+        throw new Error("Missing preview URL");
+      }
+      if (get().whiteImageFile !== file) {
+        return;
+      }
+      set({
+        whiteImagePreviewUrl: previewUrl,
+        whiteImageNaturalWidth: response.width,
+        whiteImageNaturalHeight: response.height,
+        extractError: null,
+      });
+    } catch (err) {
+      if (get().whiteImageFile !== file) {
+        return;
+      }
+      set({
+        whiteImagePreviewUrl: null,
+        whiteImageNaturalWidth: null,
+        whiteImageNaturalHeight: null,
+        extractError: resolveGradientCardPreviewError(err),
+      });
+    }
   },
 
-  setBlackImageFile: (file: File | null) => {
+  setBlackImageFile: async (file: File | null) => {
     const previousUrl = get().blackImagePreviewUrl;
+    const useBackendPreview = requiresBackendPreview(file);
     revokePreviewUrl(previousUrl);
     set({
       blackImageFile: file,
-      blackImagePreviewUrl: createPreviewUrl(file),
+      blackImagePreviewUrl: useBackendPreview ? null : createPreviewUrl(file),
       blackImageNaturalWidth: null,
       blackImageNaturalHeight: null,
       blackCornerPoints: [],
@@ -367,6 +430,35 @@ export const useSingleStageStore = create<
       activeCornerIndex: null,
       ...RESULT_RESET_STATE,
     });
+    if (!file || !useBackendPreview) {
+      return;
+    }
+    try {
+      const response = await uploadImagePreview(file);
+      const previewUrl = normalizeResourceUrl(response.preview_url);
+      if (!previewUrl) {
+        throw new Error("Missing preview URL");
+      }
+      if (get().blackImageFile !== file) {
+        return;
+      }
+      set({
+        blackImagePreviewUrl: previewUrl,
+        blackImageNaturalWidth: response.width,
+        blackImageNaturalHeight: response.height,
+        extractError: null,
+      });
+    } catch (err) {
+      if (get().blackImageFile !== file) {
+        return;
+      }
+      set({
+        blackImagePreviewUrl: null,
+        blackImageNaturalWidth: null,
+        blackImageNaturalHeight: null,
+        extractError: resolveGradientCardPreviewError(err),
+      });
+    }
   },
 
   setWhiteImageNaturalSize: (width: number, height: number) =>

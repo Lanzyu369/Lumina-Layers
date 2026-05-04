@@ -52,6 +52,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _require_preview_cache,
     _require_session,
+    _resolve_material_backing_index,
 )
 
 router = APIRouter()
@@ -268,11 +269,27 @@ def _backfill_recipe_override_virtual_materials(
             [int(value) for value in recipe],
         )
         if recovered:
-            item["virtual_materials"] = [dict(entry) for entry in recovered]
+            item["virtual_materials"] = recovered
     return recipe_overrides
 
 
-def _resolve_recipe_overrides(session_data: dict, request: ConvertGenerateRequest) -> list[dict[str, object]] | None:
+def _resolve_session_material_backing_index(
+    session_data: dict,
+    request: ConvertGenerateRequest,
+) -> int:
+    selected_materials = session_data.get("selected_materials") or []
+    requested_index = (
+        request.material_backing_material_index
+        if request.material_backing_material_index is not None
+        else session_data.get("material_backing_material_index")
+    )
+    return _resolve_material_backing_index(selected_materials, requested_index)
+
+
+def _resolve_recipe_overrides(
+    session_data: dict,
+    request: ConvertGenerateRequest,
+) -> list[dict[str, object]] | None:
     """Resolve effective recipe overrides from session state and request body.
 
     When the request body provides non-empty ``recipe_overrides``, it is the
@@ -712,7 +729,8 @@ async def convert_generate(
         "material_source": session_material_source,
     }
     if session_material_source == "material_archive":
-        params["selected_materials"] = session_data.get("selected_materials") or []
+        selected_materials = session_data.get("selected_materials") or []
+        params["selected_materials"] = selected_materials
         params["material_layer_count"] = session_data.get("material_layer_count")
         params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
         # Plumb the opt-in exhaustive-cache grid_resolution from preview time
@@ -722,6 +740,10 @@ async def convert_generate(
         # 在弹窗里实际构建的那份缓存文件。``None`` 表示走低档默认。
         params["material_grid_resolution"] = session_data.get(
             "material_grid_resolution"
+        )
+        params["material_backing_material_index"] = _resolve_session_material_backing_index(
+            session_data,
+            request,
         )
 
     # 3. CPU computation offloaded to process pool (only paths and scalars)
@@ -876,7 +898,7 @@ def _resolve_large_format_shared_params(
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
 
-    return {
+    params = {
         "spacer_thick": request.spacer_thick,
         "structure_mode": request.structure_mode.value,
         "color_mode": request.color_mode.value,
@@ -950,6 +972,26 @@ def _resolve_large_format_shared_params(
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
     }
+    if str(session_data.get("material_source") or "lut") == "material_archive":
+        params["material_source"] = "material_archive"
+        params["selected_materials"] = session_data.get("selected_materials") or []
+        params["material_layer_count"] = session_data.get("material_layer_count")
+        params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
+        params["material_grid_resolution"] = session_data.get(
+            "material_grid_resolution"
+        )
+        resolved_backing_idx = _resolve_session_material_backing_index(
+            session_data,
+            request,
+        )
+        params["material_backing_material_index"] = resolved_backing_idx
+        # Surface the backing slot index as backing_color_id for the tile
+        # worker so the Board geometry is assigned to the user-selected
+        # material slot instead of the hardcoded slot 0.
+        # 将底板槽位索引作为 backing_color_id 透传给 tile worker，
+        # 避免大幅面导出仍把底板硬编码成第一条耗材。
+        params["backing_color_id"] = int(resolved_backing_idx or 0)
+    return params
 
 
 def _resolve_large_format_source_basename(session_data: dict, image_path: str) -> str:
@@ -1258,9 +1300,12 @@ async def convert_generate_large_format(
 
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
+    session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
-    if not lut_path or not os.path.exists(lut_path):
+    if session_material_source == "material_archive":
+        lut_path = "__material_archive__"
+    elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
     _require_heightmap_for_relief(session_data, request)
 
@@ -1281,7 +1326,7 @@ async def convert_generate_large_format(
 
     warnings: list[str] = []
     is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
-    prefer_raster_svg = bool(recipe_overrides)
+    prefer_raster_svg = bool(recipe_overrides) or session_material_source == "material_archive"
     if is_svg_vector:
         policy = session_data.get("svg_large_format_policy")
         if not isinstance(policy, dict) or policy.get("inspection_source") not in {

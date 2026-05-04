@@ -146,6 +146,7 @@ export default function BasicSettings() {
     selectedMaterialDirNames,
     materialLayerCount,
     materialLayerHeightMm,
+    materialBackingMaterialDirName,
     setColorLayers,
     setLayerHeightMm,
     setModelEnable,
@@ -154,6 +155,7 @@ export default function BasicSettings() {
     setSelectedMaterialDirNames,
     setMaterialLayerCount,
     setMaterialLayerHeightMm,
+    setMaterialBackingMaterialDirName,
     setNativeBrandKey,
     setNativeSupportedMode,
     setNativeDbNames,
@@ -202,6 +204,7 @@ export default function BasicSettings() {
     selectedMaterialDirNames: s.selectedMaterialDirNames,
     materialLayerCount: s.materialLayerCount,
     materialLayerHeightMm: s.materialLayerHeightMm,
+    materialBackingMaterialDirName: s.materialBackingMaterialDirName,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
     setModelEnable: s.setModelEnable,
@@ -210,6 +213,7 @@ export default function BasicSettings() {
     setSelectedMaterialDirNames: s.setSelectedMaterialDirNames,
     setMaterialLayerCount: s.setMaterialLayerCount,
     setMaterialLayerHeightMm: s.setMaterialLayerHeightMm,
+    setMaterialBackingMaterialDirName: s.setMaterialBackingMaterialDirName,
     setNativeBrandKey: s.setNativeBrandKey,
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
@@ -416,6 +420,15 @@ export default function BasicSettings() {
         if (changed) {
           setSelectedMaterialDirNames(reconciled);
         }
+        if (materialBackingMaterialDirName) {
+          const backing = reconcileDirectoryNames(
+            [materialBackingMaterialDirName],
+            materials,
+          );
+          if (backing.changed) {
+            setMaterialBackingMaterialDirName(backing.names[0] ?? null);
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) setMaterialLibrary([]);
@@ -455,6 +468,23 @@ export default function BasicSettings() {
       : null;
     return { visible, more };
   }, [selectedMaterialDirNames, materialLibrary]);
+  const materialNameLookup = useMemo(
+    () => new Map(materialLibrary.map((mat) => [mat.directory_name, mat.material_name])),
+    [materialLibrary],
+  );
+  const materialBackingOptions = useMemo(
+    () =>
+      selectedMaterialDirNames.map((dirName, index) => ({
+        label: `${index + 1}. ${materialNameLookup.get(dirName) ?? dirName}`,
+        value: dirName,
+      })),
+    [selectedMaterialDirNames, materialNameLookup],
+  );
+  const resolvedMaterialBackingDirName =
+    materialBackingMaterialDirName &&
+    selectedMaterialDirNames.includes(materialBackingMaterialDirName)
+      ? materialBackingMaterialDirName
+      : (selectedMaterialDirNames[0] ?? "");
 
   const materialLayerHeightOptions = [
     { label: "0.04 mm", value: "0.04" },
@@ -695,6 +725,15 @@ export default function BasicSettings() {
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
+          />
+
+          <Dropdown
+            label={t("basic_material_backing_label")}
+            value={resolvedMaterialBackingDirName}
+            options={materialBackingOptions}
+            onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
+            disabled={selectedMaterialDirNames.length === 0}
+            placeholder={t("basic_material_backing_placeholder")}
           />
 
           <MaterialSolverCacheDialog

@@ -481,7 +481,9 @@ class BambuStudio3MFWriter:
         "initial_layer_height": "0.08",
         "wall_loops": "1",
         "top_shell_layers": "0",
-        "bottom_shell_layers": "0",
+        "bottom_shell_layers": "1",
+        "bottom_surface_pattern": "monotonicline",
+        "elefant_foot_compensation": "0",
         "sparse_infill_density": "100%",
         "sparse_infill_pattern": "zig-zag",
         "nozzle_temperature": ["220", "220", "220", "220"],
@@ -959,6 +961,7 @@ class BambuStudio3MFWriter:
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")
 
+        applied_override_keys: list[str] = []
         if self.settings:
             for key in [
                 "layer_height",
@@ -966,6 +969,8 @@ class BambuStudio3MFWriter:
                 "wall_loops",
                 "top_shell_layers",
                 "bottom_shell_layers",
+                "bottom_surface_pattern",
+                "elefant_foot_compensation",
                 "sparse_infill_density",
                 "sparse_infill_pattern",
                 "print_speed",
@@ -976,6 +981,20 @@ class BambuStudio3MFWriter:
             ]:
                 if key in self.settings:
                     settings[key] = self.settings[key]
+                    applied_override_keys.append(key)
+
+        # Ensure BambuStudio/Orca's "modified-from-system-default" index
+        # includes every key we actually overrode; otherwise the slicer
+        # may silently revert the override to the preset default on open.
+        # 确保切片器的 "与系统默认不同" 索引包含所有被覆盖的 key，
+        # 否则打开 3mf 时切片器可能会静默把覆盖值回退到预设默认值。
+        if applied_override_keys:
+            diffs = settings.get("different_settings_to_system")
+            if isinstance(diffs, list) and diffs and isinstance(diffs[0], str):
+                existing = [s for s in diffs[0].split(";") if s]
+                merged = sorted(set(existing) | set(applied_override_keys))
+                diffs[0] = ";".join(merged)
+                settings["different_settings_to_system"] = diffs
 
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 
@@ -1142,7 +1161,9 @@ class BambuStudio3MFWriter:
             "initial_layer_height": "0.08",
             "wall_loops": "1",
             "top_shell_layers": "0",
-            "bottom_shell_layers": "0",
+            "bottom_shell_layers": "1",
+            "bottom_surface_pattern": "monotonicline",
+            "elefant_foot_compensation": "0",
             "sparse_infill_density": "100%",
             "sparse_infill_pattern": "zig-zag",
             "nozzle_temperature": ["220"] * 8,

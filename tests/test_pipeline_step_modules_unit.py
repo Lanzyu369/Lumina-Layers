@@ -10,6 +10,7 @@ _需求: 9.3_
 
 import numpy as np
 import pytest
+import trimesh
 from unittest.mock import MagicMock, patch
 
 from config import ColorSystem, LUTMetadata, ModelingMode, PaletteEntry, PrinterConfig
@@ -607,6 +608,60 @@ class TestS06VoxelBuilding:
         np.testing.assert_array_equal(result["full_matrix"][:5, center_row, center_col], np.array([1, 2, 3, 4, 5]))
         np.testing.assert_array_equal(result["full_matrix"][5:43, center_row, center_col], np.full(38, -1, dtype=int))
         np.testing.assert_array_equal(result["full_matrix"][43:48, center_row, center_col], np.full(5, 7, dtype=int))
+
+
+# ===========================================================================
+# S08 — s08_auxiliary_meshes 单元测试
+# ===========================================================================
+
+
+class TestS08AuxiliaryMeshes:
+    """S08 auxiliary mesh regression tests."""
+
+    class _FakeMesher:
+        def generate_mesh(self, _matrix, mat_id, height_px=None):
+            if mat_id != -2:
+                return None
+            return trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+
+    def test_separate_backing_mesh_uses_selected_backing_color_id(self):
+        from core.pipeline.s08_auxiliary_meshes import run
+
+        scene = trimesh.Scene()
+        ctx = {
+            "scene": scene,
+            "valid_slot_names": [],
+            "full_matrix": np.full((2, 3, 3), -2, dtype=int),
+            "mask_solid": np.ones((3, 3), dtype=bool),
+            "matched_rgb": np.zeros((3, 3, 3), dtype=np.uint8),
+            "target_h": 3,
+            "target_w": 3,
+            "pixel_scale": 1.0,
+            "total_layers": 2,
+            "preview_colors": {
+                0: [255, 255, 255, 255],
+                1: [0, 255, 255, 255],
+            },
+            "transform": np.eye(4),
+            "mesher": self._FakeMesher(),
+            "separate_backing": True,
+            "backing_color_id": -2,
+            "separate_backing_color_id": 1,
+            "backing_metadata": {},
+            "enable_cloisonne": False,
+            "enable_coating": False,
+            "enable_outline": False,
+            "free_color_set": None,
+            "add_loop": False,
+            "loop_info": None,
+            "boundary_geometry": None,
+        }
+
+        result = run(ctx)
+
+        assert result["valid_slot_names"] == ["Backing"]
+        backing = result["scene"].geometry["Backing"]
+        assert list(backing.visual.face_colors[0]) == [0, 255, 255, 255]
 
 
 # ===========================================================================

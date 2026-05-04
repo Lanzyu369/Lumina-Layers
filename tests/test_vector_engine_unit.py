@@ -432,7 +432,15 @@ class TestVectorPublicApiCompatibility:
 
     def test_build_mesh_signature_remains_backward_compatible(self):
         params = inspect.signature(VectorProcessor.build_mesh).parameters
-        assert list(params) == ["self", "analysis", "thickness_mm", "structure_mode", "progress_fn"]
+        assert list(params) == [
+            "self",
+            "analysis",
+            "thickness_mm",
+            "structure_mode",
+            "progress_fn",
+            "backing_color_id",
+        ]
+        assert params["backing_color_id"].default == 0
 
     def test_svg_to_mesh_signature_remains_backward_compatible(self):
         params = inspect.signature(VectorProcessor.svg_to_mesh).parameters
@@ -492,6 +500,87 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.volume < board_without_cavity.volume
         assert board_with_cavity.bounds[0][0] == pytest.approx(board_without_cavity.bounds[0][0])
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
+
+
+class TestVectorBackingColorIdRegression:
+    """Regression: ``build_mesh(backing_color_id=N)`` must colour Board via slot N.
+
+    Historically the Board geometry was hardcoded to ``mat_id=0``, which made
+    the Material Archive / 耗材管理 mode's "底板颜色" selector a visual no-op —
+    the backing always inherited the first palette entry regardless of the
+    user's choice. The fix threads ``backing_color_id`` through both
+    ``VectorProcessor.build_mesh`` and the pipeline's post-processing so the
+    selected slot actually drives the exported material id and preview colour.
+
+    历史上 Board 的 ``mat_id`` 硬编码为 0，导致耗材管理模式下用户选择的
+    「底板颜色」始终被忽略，底板只会取第一条耗材。此回归保证 ``backing_color_id``
+    真正贯穿 ``build_mesh`` 与后续流程。
+    """
+
+    def _make_analysis(self):
+        return VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": box(0, 0, 20, 20), "color": (255, 0, 0), "draw_order": 0}
+            ],
+            matched_shapes=[
+                {"geometry": box(0, 0, 20, 20), "recipe": [1, 1, 1, 1, 1], "color": (255, 0, 0)}
+            ],
+            silhouette=box(0, 0, 20, 20),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan", "Magenta"],
+            num_channels=3,
+            num_layers=5,
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [0, 255, 255, 255],
+                2: [255, 0, 255, 255],
+            },
+            stage_timings={},
+        )
+
+    def test_board_inherits_default_slot_zero_when_backing_color_id_omitted(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+
+        scene = processor.build_mesh(
+            analysis=self._make_analysis(),
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+        )
+
+        board = scene.geometry["Board"]
+        assert list(board.visual.face_colors[0]) == [255, 255, 255, 255]
+
+    def test_board_uses_requested_backing_color_id(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+
+        scene = processor.build_mesh(
+            analysis=self._make_analysis(),
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            backing_color_id=2,
+        )
+
+        board = scene.geometry["Board"]
+        assert list(board.visual.face_colors[0]) == [255, 0, 255, 255]
+
+    def test_board_clamps_out_of_range_backing_color_id_to_zero(self):
+        processor = _make_parse_only_processor()
+        processor.color_mode = "4-Color"
+
+        scene = processor.build_mesh(
+            analysis=self._make_analysis(),
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            backing_color_id=42,
+        )
+
+        board = scene.geometry["Board"]
+        assert list(board.visual.face_colors[0]) == [255, 255, 255, 255]
 
 
 class TestVectorCoatingBuildMeshRegression:

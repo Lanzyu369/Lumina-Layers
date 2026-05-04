@@ -74,6 +74,42 @@ def _require_preview_cache(session_data: dict) -> dict:
     return cache
 
 
+def _resolve_material_backing_index(
+    selected_materials: object,
+    requested_index: object | None,
+) -> int:
+    materials = list(selected_materials) if isinstance(selected_materials, (list, tuple)) else []
+    if requested_index is None:
+        index = 0
+    else:
+        try:
+            index = int(requested_index)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="material_backing_material_index must be an integer.",
+            ) from exc
+    if index < 0:
+        raise HTTPException(
+            status_code=422,
+            detail="material_backing_material_index must be greater than or equal to 0.",
+        )
+    if materials and index >= len(materials):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "material_backing_material_index is outside the selected_materials "
+                f"range: {index} >= {len(materials)}."
+            ),
+        )
+    if not materials and index != 0:
+        raise HTTPException(
+            status_code=422,
+            detail="material_backing_material_index requires selected_materials.",
+        )
+    return index
+
+
 def _image_to_png_bytes(img: object) -> bytes:
     if isinstance(img, np.ndarray):
         return ndarray_to_png_bytes(img)

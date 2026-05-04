@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialLibraryPanel from "../components/MaterialLibraryPanel";
 import {
@@ -80,6 +80,114 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
     expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("groups saved materials by brand and prefixes names with brand tags", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 4 saved materials",
+      materials: [
+        {
+          material_name: "PLA Red",
+          directory_name: "brand-a-red",
+          brand: "Brand A",
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/brand-a-red/material.json",
+          stage_a_params_path: "materials/brand-a-red/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json-a",
+          stage_a_params_url: "/api/files/stage-a-json-a",
+          estimated_rgb: [200, 30, 40],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+        {
+          material_name: "PLA Blue",
+          directory_name: "brand-b-blue",
+          brand: "Brand B",
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/brand-b-blue/material.json",
+          stage_a_params_path: "materials/brand-b-blue/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json-b",
+          stage_a_params_url: "/api/files/stage-a-json-b",
+          estimated_rgb: [30, 80, 200],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+        {
+          material_name: "PLA Yellow",
+          directory_name: "brand-a-yellow",
+          brand: "Brand A",
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/brand-a-yellow/material.json",
+          stage_a_params_path: "materials/brand-a-yellow/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json-c",
+          stage_a_params_url: "/api/files/stage-a-json-c",
+          estimated_rgb: [220, 180, 30],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+        {
+          material_name: "PLA Natural",
+          directory_name: "unassigned-natural",
+          brand: null,
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/unassigned-natural/material.json",
+          stage_a_params_path: "materials/unassigned-natural/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json-d",
+          stage_a_params_url: "/api/files/stage-a-json-d",
+          estimated_rgb: [220, 220, 210],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("PLA Red")).toBeInTheDocument();
+    });
+
+    const groups = screen.getAllByTestId("material-library-brand-group");
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.getAttribute("data-brand"))).toEqual([
+      "Brand A",
+      "Brand B",
+      "",
+    ]);
+    expect(within(groups[0]).getByText("PLA Red")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("PLA Yellow")).toBeInTheDocument();
+    expect(within(groups[1]).getByText("PLA Blue")).toBeInTheDocument();
+    expect(within(groups[2]).getByText("PLA Natural")).toBeInTheDocument();
+
+    const brandTags = screen.getAllByTestId("material-library-brand-tag");
+    expect(brandTags.map((tag) => tag.textContent)).toEqual([
+      "Brand A",
+      "Brand A",
+      "Brand B",
+      expect.stringMatching(/未分组|Unassigned/),
+    ]);
+
+    const firstGroupToggle = within(groups[0]).getByTestId("material-library-brand-group-toggle");
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(firstGroupToggle);
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(groups[0]).queryByText("PLA Red")).not.toBeInTheDocument();
+    expect(within(groups[0]).queryByText("PLA Yellow")).not.toBeInTheDocument();
+    expect(within(groups[1]).getByText("PLA Blue")).toBeInTheDocument();
+
+    fireEvent.click(firstGroupToggle);
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(groups[0]).getByText("PLA Red")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("PLA Yellow")).toBeInTheDocument();
   });
 
   it("edits a saved material name and brand from the library", async () => {

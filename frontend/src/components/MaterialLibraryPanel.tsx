@@ -89,6 +89,21 @@ const normalizeLibraryItem = (item: SavedMaterialLibraryItem): SavedMaterialLibr
   stage_a_params_url: normalizeResourceUrl(item.stage_a_params_url) ?? item.stage_a_params_url,
 });
 
+const getMaterialBrand = (item: SavedMaterialLibraryItem): string | null => {
+  const brand = item.brand?.trim();
+  return brand ? brand : null;
+};
+
+const UNASSIGNED_BRAND_GROUP_KEY = "__unassigned__";
+
+const getMaterialBrandGroupKey = (brand: string | null): string =>
+  brand ?? UNASSIGNED_BRAND_GROUP_KEY;
+
+type MaterialLibraryBrandGroup = {
+  brand: string | null;
+  items: SavedMaterialLibraryItem[];
+};
+
 export default function MaterialLibraryPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
@@ -106,6 +121,7 @@ export default function MaterialLibraryPanel() {
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
+  const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
@@ -160,6 +176,31 @@ export default function MaterialLibraryPanel() {
 
   const selectedCount = selectedDirectoryNames.length;
   const allSelected = materials.length > 0 && selectedCount === materials.length;
+  const groupedMaterials = useMemo<MaterialLibraryBrandGroup[]>(() => {
+    const groups = new Map<string, SavedMaterialLibraryItem[]>();
+    const unassigned: SavedMaterialLibraryItem[] = [];
+    for (const item of materials) {
+      const brand = getMaterialBrand(item);
+      if (!brand) {
+        unassigned.push(item);
+        continue;
+      }
+      const existing = groups.get(brand);
+      if (existing) {
+        existing.push(item);
+      } else {
+        groups.set(brand, [item]);
+      }
+    }
+    const result: MaterialLibraryBrandGroup[] = Array.from(groups, ([brand, items]) => ({
+      brand,
+      items,
+    }));
+    if (unassigned.length > 0) {
+      result.push({ brand: null, items: unassigned });
+    }
+    return result;
+  }, [materials]);
 
   const handleStartVerification = useCallback((item: SavedMaterialLibraryItem) => {
     startMaterialVerification({
@@ -267,6 +308,14 @@ export default function MaterialLibraryPanel() {
       allSelected ? [] : materials.map((item) => item.directory_name),
     );
   }, [allSelected, materials]);
+
+  const toggleBrandGroupCollapsed = useCallback((groupKey: string) => {
+    setCollapsedBrandGroupKeys((previous) =>
+      previous.includes(groupKey)
+        ? previous.filter((item) => item !== groupKey)
+        : [...previous, groupKey],
+    );
+  }, []);
 
   const handleExportSelected = useCallback(async () => {
     if (selectedDirectoryNames.length === 0) {
@@ -605,44 +654,95 @@ export default function MaterialLibraryPanel() {
           <p className="max-w-lg text-center text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_empty")}</p>
         </section>
       ) : (
-        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
-          {materials.map((item) => {
-            const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
-            const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
+        <div className="grid gap-6">
+          {groupedMaterials.map(({ brand, items }) => {
+            const groupKey = getMaterialBrandGroupKey(brand);
+            const groupLabel = brand ?? t("mat_gradient_library_brand_unassigned");
+            const isCollapsed = collapsedBrandGroupKeys.includes(groupKey);
             return (
               <section
-                key={`${item.directory_name}-${item.material_name}`}
-                data-testid="material-library-item"
-                className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+                key={groupKey}
+                data-testid="material-library-brand-group"
+                data-brand={brand ?? ""}
+                className="grid gap-3"
               >
-                <div className="flex items-start gap-4">
-                  <label className="mt-1 flex shrink-0 items-center">
-                    <input
-                      type="checkbox"
-                      data-testid={`material-library-select-${item.directory_name}`}
-                      aria-label={tRuntime("mat_gradient_library_select_item_label", {
-                        materialName: item.material_name,
-                      })}
-                      checked={selectedDirectoryNames.includes(item.directory_name)}
-                      onChange={() => toggleMaterialSelection(item.directory_name)}
-                      className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
-                    />
-                  </label>
-                  <div className="flex min-w-0 flex-1 items-start gap-4">
-                    <div
-                      className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
-                      style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-base font-semibold text-slate-900 dark:text-slate-50">
-                        {item.material_name}
-                      </h3>
-                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
-                    </div>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  data-testid="material-library-brand-group-toggle"
+                  aria-expanded={!isCollapsed}
+                  onClick={() => toggleBrandGroupCollapsed(groupKey)}
+                  className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200/80 px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-100/70 dark:border-slate-700/80 dark:hover:border-slate-600 dark:hover:bg-slate-800/70"
+                >
+                  <span className="flex min-w-0 flex-wrap items-center gap-3">
+                    <span className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {groupLabel}
+                    </span>
+                    <span className="rounded-full border border-slate-200/80 px-2 py-0.5 text-xs font-semibold text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
+                      {items.length}
+                    </span>
+                  </span>
+                  <motion.svg
+                    animate={{ rotate: isCollapsed ? 0 : 90 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                    className="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </motion.svg>
+                </button>
+                {isCollapsed ? null : (
+                  <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
+                {items.map((item) => {
+                  const estimatedRgb = isRgbTriplet(item.estimated_rgb) ? item.estimated_rgb : null;
+                  const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
+                  const itemBrand = getMaterialBrand(item);
+                  const itemBrandLabel = itemBrand ?? t("mat_gradient_library_brand_unassigned");
+                  return (
+                    <section
+                      key={`${item.directory_name}-${item.material_name}`}
+                      data-testid="material-library-item"
+                      className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+                    >
+                      <div className="flex items-start gap-4">
+                        <label className="mt-1 flex shrink-0 items-center">
+                          <input
+                            type="checkbox"
+                            data-testid={`material-library-select-${item.directory_name}`}
+                            aria-label={tRuntime("mat_gradient_library_select_item_label", {
+                              materialName: item.material_name,
+                            })}
+                            checked={selectedDirectoryNames.includes(item.directory_name)}
+                            onChange={() => toggleMaterialSelection(item.directory_name)}
+                            className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
+                          />
+                        </label>
+                        <div className="flex min-w-0 flex-1 items-start gap-4">
+                          <div
+                            className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
+                            style={estimatedRgb ? { backgroundColor: toRgbCss(estimatedRgb) } : undefined}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+                              <span
+                                data-testid="material-library-brand-tag"
+                                className="max-w-full truncate rounded-full border border-slate-200/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"
+                              >
+                                {itemBrandLabel}
+                              </span>
+                              <span className="min-w-0 truncate">{item.material_name}</span>
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
+                          </div>
+                        </div>
+                      </div>
 
-                <dl className="grid gap-3 sm:grid-cols-2">
+                      <dl className="grid gap-3 sm:grid-cols-2">
                   <div className={`${mutedSectionCardClass} px-4 py-3`}>
                     <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {t("mat_gradient_library_created_at_label")}
@@ -702,9 +802,9 @@ export default function MaterialLibraryPanel() {
                       {typeof item.layer_height_mm === "number" ? `${item.layer_height_mm.toFixed(2)} mm` : "-"}
                     </dd>
                   </div>
-                </dl>
+                      </dl>
 
-                <div className="grid gap-3">
+                      <div className="grid gap-3">
                   <Button
                     label={t("mat_gradient_library_edit_btn")}
                     variant="secondary"
@@ -734,7 +834,12 @@ export default function MaterialLibraryPanel() {
                     loading={pendingDeleteDirectoryName === item.directory_name}
                     className="w-full"
                   />
-                </div>
+                      </div>
+                    </section>
+                  );
+                })}
+                  </div>
+                )}
               </section>
             );
           })}

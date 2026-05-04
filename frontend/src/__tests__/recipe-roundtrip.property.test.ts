@@ -94,6 +94,10 @@ describe("recipe round-trip properties", () => {
       ),
       materialLayerCount: fc.integer({ min: 1, max: 12 }),
       materialLayerHeightMm: fc.constantFrom(0.04, 0.06, 0.08, 0.12),
+      materialBackingMaterialDirName: fc.option(
+        fc.constantFrom("brand/red", "brand/white", "brand/black", "brand/yellow"),
+        { nil: null },
+      ),
       target_width_mm: fc.integer({ min: 10, max: 400 }),
       target_height_mm: fc.integer({ min: 10, max: 400 }),
       spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
@@ -239,6 +243,7 @@ describe("recipe round-trip properties", () => {
         expect(restored.selectedMaterialDirNames).toEqual(overrides.selectedMaterialDirNames);
         expect(restored.materialLayerCount).toBe(overrides.materialLayerCount);
         expect(restored.materialLayerHeightMm).toBe(overrides.materialLayerHeightMm);
+        expect(restored.materialBackingMaterialDirName).toBe(overrides.materialBackingMaterialDirName);
         expect(restored.target_width_mm).toBe(overrides.target_width_mm);
         expect(restored.target_height_mm).toBe(overrides.target_height_mm);
         expect(restored.quantize_colors).toBe(overrides.quantize_colors);

@@ -14,6 +14,8 @@ import type {
   ManualOrientationLabel,
   MaterialRecipePreviewRequest,
   MaterialRecipePreviewResponse,
+  MaterialRecipeSwatchRequest,
+  MaterialRecipeSwatchResponse,
   SingleStageExtractResponse,
   StageAFitResponse,
 } from "./types";
@@ -361,6 +363,18 @@ export async function fitStageA(params: {
   const response = await apiClient.post<StageAFitResponse>(
     "/extractor/fit-stage-a",
     fd,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Generate a 3MF swatch file from collected material-archive recipes. */
+export async function generateMaterialRecipeSwatch(
+  request: MaterialRecipeSwatchRequest,
+): Promise<MaterialRecipeSwatchResponse> {
+  const response = await apiClient.post<MaterialRecipeSwatchResponse>(
+    "/extractor/generate-material-swatch",
+    request,
     { timeout: 3_600_000 },
   );
   return response.data;

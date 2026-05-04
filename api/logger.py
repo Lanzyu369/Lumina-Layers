@@ -5,6 +5,8 @@ Selects the shared JSON Lines log file path for API and worker processes.
 为 API 与 worker 进程选择共享的 JSON Lines 日志文件路径。
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import tempfile

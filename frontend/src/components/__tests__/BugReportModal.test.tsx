@@ -46,6 +46,7 @@ describe("BugReportModal", () => {
       selected_material_dir_names: [],
       material_layer_count: null,
       material_layer_height_mm: null,
+      material_backing_material_dir_name: null,
       recent_client_logs: [],
     });
   });

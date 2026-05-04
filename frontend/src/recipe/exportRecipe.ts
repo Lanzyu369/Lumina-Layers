@@ -110,6 +110,7 @@ export function exportConverterRecipe(
       selected_material_dir_names: [...state.selectedMaterialDirNames],
       material_layer_count: state.materialLayerCount,
       material_layer_height_mm: state.materialLayerHeightMm,
+      material_backing_material_dir_name: state.materialBackingMaterialDirName,
     },
     geometry: {
       spacer_thick: state.enable_fridge_magnet

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialRecipeQueryPanel from "../components/MaterialRecipeQueryPanel";
 import {
+  generateMaterialRecipeSwatch,
   listGradientCardMaterials,
   previewMaterialRecipe,
 } from "../api/extractor";
 
 vi.mock("../api/extractor", () => ({
+  generateMaterialRecipeSwatch: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   previewMaterialRecipe: vi.fn(),
 }));
@@ -35,6 +37,13 @@ const buildLibraryResponse = (count: number) => ({
 describe("MaterialRecipeQueryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(generateMaterialRecipeSwatch).mockResolvedValue({
+      status: "ok",
+      message: "Generated",
+      download_url: "/api/files/material-swatch",
+      preview_url: "/api/files/material-swatch-preview",
+      recipe_count: 1,
+    });
   });
 
   it("renders the empty palette hint when the library has no materials", async () => {

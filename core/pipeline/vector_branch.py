@@ -478,6 +478,16 @@ def _run_vector_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
+    try:
+        backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
+    except (TypeError, ValueError):
+        backing_color_id = 0
+    try:
+        separate_backing_color_id = int(
+            ctx.get("separate_backing_color_id", backing_color_id) or 0
+        )
+    except (TypeError, ValueError):
+        separate_backing_color_id = 0
 
     vector_timing = {}
     vector_total_t0 = time.perf_counter()
@@ -633,6 +643,12 @@ def _run_vector_branch(ctx: dict) -> dict:
                 build_mesh_kwargs["enable_fridge_magnet"] = enable_fridge_magnet
             if accepts_var_kwargs or "fridge_magnets" in parameters:
                 build_mesh_kwargs["fridge_magnets"] = fridge_magnets
+            if accepts_var_kwargs or "backing_color_id" in parameters:
+                build_mesh_kwargs["backing_color_id"] = (
+                    separate_backing_color_id
+                    if ctx.get("separate_backing", False)
+                    else backing_color_id
+                )
 
         scene = vec_processor.build_mesh(**build_mesh_kwargs)
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
@@ -672,39 +688,60 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 1.5b separate_backing handling
         separate_backing = ctx.get("separate_backing", False)
         board_geom = scene.geometry.get("Board")
+        # Resolve the target backing slot from backing_color_id, falling back
+        # to slot 0 when the index is out of range. This keeps the preview
+        # colour, exported material id, and merged geometry consistent with
+        # the user-selected backing material (耗材档案模式的底板选择).
+        backing_slot_index = 0
+        effective_backing_color_id = (
+            separate_backing_color_id if separate_backing else backing_color_id
+        )
+        if vec_slot_list:
+            try:
+                candidate_backing_idx = int(effective_backing_color_id)
+            except (TypeError, ValueError):
+                candidate_backing_idx = 0
+            if 0 <= candidate_backing_idx < len(vec_slot_list):
+                backing_slot_index = candidate_backing_idx
+        target_slot = vec_slot_list[backing_slot_index] if vec_slot_list else None
         if board_geom is not None and not separate_backing:
-            first_slot = vec_slot_list[0] if vec_slot_list else None
-            first_geom = scene.geometry.get(first_slot) if first_slot else None
-            if first_geom is not None:
+            target_geom = scene.geometry.get(target_slot) if target_slot else None
+            if target_geom is not None:
                 import trimesh as _trimesh
 
-                merged = _trimesh.util.concatenate([first_geom, board_geom])
-                merged.visual.face_colors = first_geom.visual.face_colors
-                merged.metadata["name"] = first_slot
-                scene.geometry[first_slot] = merged
+                merged = _trimesh.util.concatenate([target_geom, board_geom])
+                merged.visual.face_colors = target_geom.visual.face_colors
+                merged.metadata["name"] = target_slot
+                scene.geometry[target_slot] = merged
                 del scene.geometry["Board"]
                 log.debug(
-                    "Vector board merged into first material slot",
+                    "Vector board merged into backing material slot",
                     extra={
                         "event": "vector_board_merged",
-                        "slot_name": str(first_slot),
+                        "slot_name": str(target_slot),
+                        "backing_slot_index": backing_slot_index,
                         "separate_backing": False,
                     },
                 )
             else:
                 log.debug(
-                    "Vector board kept because first material slot was not found",
+                    "Vector board kept because backing material slot was not found",
                     extra={
                         "event": "vector_board_kept",
+                        "backing_slot_index": backing_slot_index,
                         "separate_backing": False,
                     },
                 )
         elif board_geom is not None and separate_backing:
-            vec_preview_colors["Board"] = vec_preview_colors.get(0, [255, 255, 255, 255])
+            vec_preview_colors["Board"] = vec_preview_colors.get(
+                backing_slot_index,
+                vec_preview_colors.get(0, [255, 255, 255, 255]),
+            )
             log.debug(
                 "Vector board kept as separate backing",
                 extra={
                     "event": "vector_board_separate",
+                    "backing_slot_index": backing_slot_index,
                     "separate_backing": True,
                 },
             )
@@ -752,7 +789,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             "initial_layer_height": "0.08",
             "wall_loops": "1",
             "top_shell_layers": "0",
-            "bottom_shell_layers": "0",
+            "bottom_shell_layers": "1",
+            "bottom_surface_pattern": "monotonicline",
+            "elefant_foot_compensation": "0",
             "sparse_infill_density": "100%",
             "sparse_infill_pattern": "zig-zag",
             "nozzle_temperature": ["220"] * 8,

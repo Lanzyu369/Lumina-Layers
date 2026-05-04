@@ -294,6 +294,11 @@ class ConvertPreviewRequest(LutSourceSelection):
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
+    material_backing_material_index: int | None = Field(
+        None,
+        ge=0,
+        description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
+    )
 
     @field_validator("color_mode", mode="before")
     @classmethod
@@ -419,6 +424,11 @@ class ConvertGenerateRequest(LutSourceSelection):
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
+    material_backing_material_index: int | None = Field(
+        None,
+        ge=0,
+        description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
+    )
     recipe_overrides: list[RecipeOverrideItem] | None = Field(None, description="区域级自定义配方覆盖")
     separate_backing: bool = Field(False, description="底板作为独立对象")
     add_loop: bool = Field(False, description="启用挂件环")

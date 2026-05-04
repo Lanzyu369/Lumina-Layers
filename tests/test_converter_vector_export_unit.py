@@ -137,6 +137,77 @@ class TestVectorBranchExport:
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
+    def test_backing_color_id_merges_board_into_selected_slot(self, MockVP, mock_bambu_export, tmp_path):
+        from config import ModelingMode
+
+        svg_file = tmp_path / "material-backing.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<circle cx="25" cy="25" r="20" fill="#00ffff"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        white = trimesh.creation.box(extents=[5, 5, 0.5])
+        white.metadata["name"] = "White"
+        white.visual.face_colors = [255, 255, 255, 255]
+        fake_scene.add_geometry(white, geom_name="White")
+
+        cyan = trimesh.creation.box(extents=[5, 5, 0.5])
+        cyan.metadata["name"] = "Cyan"
+        cyan.visual.face_colors = [0, 255, 255, 255]
+        fake_scene.add_geometry(cyan, geom_name="Cyan")
+
+        board = trimesh.creation.box(extents=[7, 7, 0.5])
+        board.metadata["name"] = "Board"
+        board.visual.face_colors = [255, 0, 255, 255]
+        fake_scene.add_geometry(board, geom_name="Board")
+
+        fake_processor = _build_fake_processor(fake_scene)
+        fake_processor.analyze_svg.return_value.slot_names = ["White", "Cyan"]
+        fake_processor.analyze_svg.return_value.preview_colors = {
+            0: [255, 255, 255, 255],
+            1: [0, 255, 255, 255],
+        }
+        MockVP.return_value = fake_processor
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-material-backing.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=30.0,
+            spacer_thick=1.6,
+            structure_mode="Single-sided",
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            backing_color_id=1,
+        )
+
+        _, build_kwargs = fake_processor.build_mesh.call_args
+        assert build_kwargs["backing_color_id"] == 1
+
+        _, export_kwargs = mock_bambu_export.call_args
+        exported_scene = export_kwargs["scene"]
+        assert export_kwargs["slot_names"] == ["White", "Cyan"]
+        assert "Board" not in exported_scene.geometry
+        assert list(exported_scene.geometry["Cyan"].visual.face_colors[0]) == [
+            0,
+            255,
+            255,
+            255,
+        ]
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
     def test_slot_names_keep_board_when_separate_backing_enabled(self, MockVP, mock_bambu_export, tmp_path):
         """When separate_backing=True, Board should remain an exported slot."""
         from config import ModelingMode
@@ -179,6 +250,61 @@ class TestVectorBranchExport:
 
         _, kwargs = mock_bambu_export.call_args
         assert kwargs["slot_names"] == ["White", "Cyan", "Board"]
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_separate_backing_uses_selected_backing_color_id(self, MockVP, mock_bambu_export, tmp_path):
+        from config import ModelingMode
+
+        svg_file = tmp_path / "separate-material-backing.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<circle cx="25" cy="25" r="20" fill="#0000ff"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        for name in ["White", "Cyan", "Board"]:
+            m = trimesh.creation.box(extents=[5, 5, 0.5])
+            m.metadata["name"] = name
+            fake_scene.add_geometry(m, geom_name=name)
+
+        fake_processor = _build_fake_processor(fake_scene)
+        fake_processor.analyze_svg.return_value.slot_names = ["White", "Cyan"]
+        fake_processor.analyze_svg.return_value.preview_colors = {
+            0: [255, 255, 255, 255],
+            1: [0, 255, 255, 255],
+        }
+        MockVP.return_value = fake_processor
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-separate-material-backing.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=30.0,
+            spacer_thick=1.6,
+            structure_mode="Single-sided",
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            backing_color_id=1,
+            separate_backing=True,
+        )
+
+        _, build_kwargs = fake_processor.build_mesh.call_args
+        assert build_kwargs["backing_color_id"] == 1
+
+        _, export_kwargs = mock_bambu_export.call_args
+        assert export_kwargs["slot_names"] == ["White", "Cyan", "Board"]
+        assert export_kwargs["preview_colors"]["Board"] == [0, 255, 255, 255]
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")

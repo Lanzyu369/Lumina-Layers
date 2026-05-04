@@ -166,6 +166,7 @@ class TestBuild:
         assert cache.recipes.shape == (cache.valid_cell_count, 5)
         assert cache.lab_centers.shape == (cache.valid_cell_count, 3)
         assert cache.achieved_srgb.shape == (cache.valid_cell_count, 3)
+        assert cache.achieved_lab.shape == (cache.valid_cell_count, 3)
         assert cache.center_delta_e.shape == (cache.valid_cell_count,)
         # Metadata sanity.
         assert cache.metadata["layer_count"] == 5
@@ -264,7 +265,17 @@ class TestBuild:
         assert cache.recipes.shape == (cache.valid_cell_count, 5)
         assert cache.lab_centers.shape == (cache.valid_cell_count, 3)
         assert cache.achieved_srgb.shape == (cache.valid_cell_count, 3)
+        assert cache.achieved_lab.shape == (cache.valid_cell_count, 3)
         assert cache.center_delta_e.shape == (cache.valid_cell_count,)
+
+    def test_high_resolution_build_keeps_continuous_lab_collisions(self):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=2048,
+        )
+        unique_srgb_count = np.unique(cache.achieved_srgb, axis=0).shape[0]
+        assert cache.valid_cell_count > unique_srgb_count
+        assert cache.metadata["color_precision"] == "continuous_lab"
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +298,7 @@ class TestSaveLoadRoundtrip:
         np.testing.assert_allclose(loaded.lab_centers, cache.lab_centers, atol=1e-3)
         np.testing.assert_array_equal(loaded.recipes, cache.recipes)
         np.testing.assert_array_equal(loaded.achieved_srgb, cache.achieved_srgb)
+        np.testing.assert_allclose(loaded.achieved_lab, cache.achieved_lab, atol=1e-3)
         np.testing.assert_allclose(
             loaded.center_delta_e, cache.center_delta_e, atol=1e-3
         )
@@ -342,6 +354,41 @@ class TestSaveLoadRoundtrip:
             SMALL_PALETTE, 5, 0.08, "white",
             grid_resolution=64, cache_root=tmp_path,
         )
+        assert result is None
+
+    def test_load_returns_none_for_obsolete_precision_cache(self, tmp_path: Path):
+        import json
+
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        npz_path = cache_file_path(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        meta_path = npz_path.with_suffix(".meta.json")
+        with np.load(npz_path) as loaded:
+            arrays = {
+                "lab_centers": loaded["lab_centers"],
+                "recipes": loaded["recipes"],
+                "achieved_srgb": loaded["achieved_srgb"],
+                "center_delta_e": loaded["center_delta_e"],
+            }
+        with npz_path.open("wb") as handle:
+            np.savez_compressed(handle, **arrays)
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        metadata.pop("color_precision", None)
+        meta_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        result = load_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+
         assert result is None
 
     def test_legacy_path_accepted_when_grid_matches(self, tmp_path: Path):
@@ -438,6 +485,7 @@ class TestLookup:
             lab_centers=np.zeros((0, 3), dtype=np.float32),
             recipes=np.zeros((0, 5), dtype=np.uint8),
             achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
+            achieved_lab=np.zeros((0, 3), dtype=np.float32),
             center_delta_e=np.zeros((0,), dtype=np.float32),
             metadata={
                 "palette_hash": fingerprint_palette(SMALL_PALETTE),
@@ -516,6 +564,13 @@ class TestLookup:
                     [168, 168, 168],
                 ],
                 dtype=np.uint8,
+            ),
+            achieved_lab=np.asarray(
+                [
+                    target_lab + np.asarray([5.0, 0.0, 0.0], dtype=np.float32),
+                    target_lab,
+                ],
+                dtype=np.float32,
             ),
             center_delta_e=np.asarray([0.1, 0.9], dtype=np.float32),
             metadata={

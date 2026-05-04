@@ -47,6 +47,7 @@ from .common import (
     _image_to_png_bytes,
     _require_preview_cache,
     _require_session,
+    _resolve_material_backing_index,
     recompute_gradient_groups_into_session,
 )
 
@@ -344,6 +345,10 @@ async def convert_preview(
             "穷举缓存 Lab 网格分辨率，None 时走后端默认。"
         ),
     ),
+    material_backing_material_index: int | None = Form(
+        None,
+        description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
+    ),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -446,8 +451,17 @@ async def convert_preview(
         )
         _t = time.perf_counter()
         _selected_mats: list[str] | None = None
-        if material_source == "material_archive" and selected_materials is not None:
-            _selected_mats = _parse_selected_materials(selected_materials)
+        _material_backing_index = 0
+        if material_source == "material_archive":
+            _selected_mats = (
+                _parse_selected_materials(selected_materials)
+                if selected_materials is not None
+                else []
+            )
+            _material_backing_index = _resolve_material_backing_index(
+                _selected_mats,
+                material_backing_material_index,
+            )
             log.debug(
                 "Material mode parsed: count=%d names=%s",
                 len(_selected_mats or []),
@@ -566,6 +580,11 @@ async def convert_preview(
             session_id,
             "material_grid_resolution",
             material_grid_resolution,
+        )
+        store.put(
+            session_id,
+            "material_backing_material_index",
+            _material_backing_index,
         )
     store.put(session_id, "replacement_regions", [])
     store.put(session_id, "replacement_history", [])
