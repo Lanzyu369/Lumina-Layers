@@ -16,6 +16,177 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-05",
+    title: {
+      zh: "Lumina Layers — 近三天更新速览",
+      en: "Lumina Layers — What's new in the past three days",
+    },
+    sections: [
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "全选颜色后现在也能打开自定义配方，不用再一个区域一个区域点；应用后只会改你选中的颜色区域。",
+            en: "Custom recipes now open correctly after selecting a whole colour, so you no longer need to click regions one by one; applying the recipe only changes the colour areas you selected.",
+          },
+          {
+            zh: "耗材档案高保真模式下，手动改过的 10 层配方会按真实槽位应用，默认白色层也不会再变成其它材料色。",
+            en: "In high-fidelity material-library mode, edited 10-layer recipes now apply to the real material slots, and untouched white layers no longer turn into another material colour.",
+          },
+          {
+            zh: "配方查询新增「配方队列」和验证色块生成：可以把多组材料配方先收进队列，一次导出 3MF 色块样板和图例，方便实物对色。",
+            en: "Recipe lookup now has a recipe queue and validation-swatch export: collect multiple material recipes first, then generate one 3MF swatch board with a legend for real-world colour checks.",
+          },
+          {
+            zh: "耗材选择器会按品牌分组并标出未分组材料；基础设置里也能指定底板耗材，背板和底色不再只能默认跟第一个耗材槽。",
+            en: "Material pickers now group entries by brand and label unassigned materials; Basic Settings can also choose the backing material, so backing and base colours no longer have to follow the first material slot.",
+          },
+          {
+            zh: "材料提取结果旁边现在直接显示合并、覆盖和取消操作，不用再滚回页面顶部处理保存确认。",
+            en: "Material extraction results now show merge, override, and cancel actions right beside the results, so you no longer need to scroll back to the top to finish saving.",
+          },
+          {
+            zh: "主动切到提取页面时会清理旧的确认状态，重新校验材料时仍会保留当前上下文，操作不再串台。",
+            en: "Opening the extraction page now clears stale confirmation state, while material re-verification still keeps the current context, preventing actions from bleeding between workflows.",
+          },
+        ],
+      },
+      {
+        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        items: [
+          {
+            zh: "6 色 RYBWGK / CMYWGK 的提取和保存更稳定，颜色模式不会再被错误显示成另一套 6 色或 4 色模式。",
+            en: "6-Colour RYBWGK / CMYWGK extraction and saving are more stable, so a LUT is no longer displayed as the wrong 6-Colour or 4-Colour mode.",
+          },
+          {
+            zh: "修复一组 6 色耗材通道顺序不一致导致的颜色错位，选择这类 LUT 时预览和生成会按实际通道顺序来。",
+            en: "Fixed colour shifts from a 6-Colour filament set whose channel order differed from the standard order; previews and generation now follow the LUT's actual channel order.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "导出到 Bambu Studio / OrcaSlicer 时，PETG 槽位会保留 PETG 材料和温度配置，不再每次打开都退回 PLA。",
+            en: "Exports to Bambu Studio / OrcaSlicer now keep PETG material and temperature settings for PETG slots instead of falling back to PLA every time.",
+          },
+          {
+            zh: "材料档案、单阶段标定卡和挂件环会一起传递真实材料名，辅助零件不再偷偷变回默认 PLA。",
+            en: "Material-library exports, single-stage calibration cards, and keychain loops now carry the real material names together, so auxiliary parts no longer silently fall back to default PLA.",
+          },
+          {
+            zh: "校准板色块尺寸支持 5.5mm 这类小数输入，仍会保留原来的 3–10mm 安全范围。",
+            en: "Calibration block size now accepts fractional values such as 5.5mm while keeping the existing safe 3–10mm range.",
+          },
+          {
+            zh: "6 色传统 LUT 和 6 色校准板会复用预计算 Smart1296 配方，生成更快，也不再每次现场跑选色。",
+            en: "6-Colour traditional LUTs and 6-Colour calibration boards now reuse a precomputed Smart1296 recipe set, making generation faster without running colour selection every time.",
+          },
+          {
+            zh: "挂件环的几何面片更干净，切片软件预览不再容易出现未知面或闪烁，但仍保持正常切片。",
+            en: "Keychain loop geometry is cleaner, so slicer previews are less likely to show unknown faces or flicker while slicing remains normal.",
+          },
+          {
+            zh: "导出的 Bambu / Orca 项目不再把切料回抽相关的耗材覆盖项写死，避免模板里的长回抽和切料回抽距离影响实际切片参数。",
+            en: "Bambu / Orca exports no longer hard-code filament cut-retraction overrides, preventing template long-retraction and cut-distance values from unexpectedly changing slicer settings.",
+          },
+          {
+            zh: "耗材档案生成的白色底板和描边会继续使用当前底板材料；只有你显式指定独立背板颜色时才会切到另一种材料。",
+            en: "Material-library white backing and outlines now keep using the selected backing material; they switch to another material only when a separate backing colour is explicitly chosen.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览、切片器 & 交互", en: "Preview, Slicers & Interaction" },
+        items: [
+          {
+            zh: "透明 PNG 和不规则图形的 3D 外轮廓更贴近实际图案，耗材档案预览不再把背板或其它颜色混进轮廓里。",
+            en: "3D outlines for transparent PNGs and irregular shapes now follow the actual artwork more closely, and material-library previews no longer mix backing or other colours into the outline.",
+          },
+          {
+            zh: "冰箱贴模式的槽位外轮廓会跟随当前厚度和主体形状，磁铁孔不会再污染轮廓预览。",
+            en: "Fridge-magnet slot outlines now follow the current thickness and main shape, and magnet holes no longer pollute the outline preview.",
+          },
+          {
+            zh: "图像转矢量页面改成更宽的左右布局，上传、基础设置、高级参数和结果区域不再挤成一列。",
+            en: "The Image-to-Vector page now uses a wider split layout, so upload, basic settings, advanced parameters, and results no longer crowd into one column.",
+          },
+          {
+            zh: "切片成功后切换打印机时会清理旧预览模型，重新导入前不再继续显示上一台设备的过期预览。",
+            en: "After slicing, switching printers now clears stale preview models instead of keeping an outdated preview from the previous device.",
+          },
+          {
+            zh: "选择或取消耗材时，耗材列表不再自动折叠变小，靠近列表底部的项目也能稳定点选。",
+            en: "When selecting or unselecting materials, the material list no longer collapses unexpectedly, so items near the bottom stay easy to click.",
+          },
+          {
+            zh: "梯度卡里的链接点击区域收窄到实际文字附近，不再横向占满整块结果区域。",
+            en: "Gradient-card links now keep their clickable area close to the text instead of stretching across the whole result row.",
+          },
+          {
+            zh: "macOS 设置页现在能自动扫描常见 Applications 目录和 Spotlight 里的 `.app` 切片软件，也支持手动指定 `.app` 路径。",
+            en: "On macOS, Settings can now scan common Applications folders and Spotlight for slicer `.app` bundles, and custom `.app` paths can be validated manually.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式开启涂层后，生成的 3MF 会真正带上完整涂层，不再只在参数里显示已开启。",
+            en: "When coating is enabled in SVG vector mode, the generated 3MF now actually includes the full coating instead of only showing the option as enabled.",
+          },
+          {
+            zh: "矢量预览后的分享卡会保留来源、色层、材料和模型参数，导出再导入不再丢关键设置。",
+            en: "Share cards exported after vector previews now preserve source, layer, material, and model settings, so importing them no longer loses key options.",
+          },
+          {
+            zh: "SVG + 梯度卡和小矢量图形的材料匹配更干净，边缘和小色块不再容易冒出杂色。",
+            en: "SVG + gradient-card and small vector artwork now get cleaner material matching, reducing stray colours around edges and tiny shapes.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "Custom 开头的个人 LUT 会正确生成颜色层和分层预览，不再只导出一个底层。",
+            en: "Personal LUTs under Custom now generate colour layers and layer previews correctly instead of exporting only a base layer.",
+          },
+          {
+            zh: "生成完成后切换 LUT 再下载，浏览器不再下载失败的 JSON 错误文件，3MF / ZIP 下载会在会话切换后继续可用一段时间。",
+            en: "After generating and switching LUTs, the browser no longer downloads failed JSON error files; 3MF / ZIP downloads remain available for a while even after the session changes.",
+          },
+          {
+            zh: "矢量预览后的分享卡导出在普通 HTTP 环境下也更可靠，不再因为浏览器加密接口限制直接失败。",
+            en: "Share-card export after vector previews is more reliable on regular HTTP pages and no longer fails outright because of browser crypto restrictions.",
+          },
+          {
+            zh: "批量转换会按当前设置正确传递参数，减少批量生成时出现设置错位的情况。",
+            en: "Batch conversion now forwards the current settings in the correct order, reducing parameter mix-ups during batch generation.",
+          },
+          {
+            zh: "反馈问题支持附带截图，并会带上当前来源、LUT、材料和打印参数，开发者更容易复现你遇到的情况。",
+            en: "Bug reports can now include a screenshot and carry the current source, LUT, material, and print settings, making it easier for the developer to reproduce what you saw.",
+          },
+          {
+            zh: "反馈弹窗的复制按钮增加兜底方案，即使浏览器剪贴板权限不稳定，也能手动复制问题信息。",
+            en: "The bug-report copy button now has a fallback path, so you can still copy the report details manually when browser clipboard permissions are unreliable.",
+          },
+          {
+            zh: "前后端回归测试重新稳定：缺少外部参考资产的环境会明确跳过对应测试，frozen raster 基线也已同步当前转换输出。",
+            en: "Frontend and backend regression suites are stable again: environments without external reference assets now skip those tests explicitly, and frozen raster baselines match the current converter output.",
+          },
+          {
+            zh: "App 启动、健康状态和设置初始化相关测试补齐了后台 hook / API mock，Vitest 不再因为未 mock 的副作用挂住。",
+            en: "App startup, health-status, and settings-bootstrap tests now mock their background hooks and APIs, so Vitest no longer hangs on unmocked side effects.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-03",
     title: {
       zh: "Lumina Layers — 近三天更新速览",
