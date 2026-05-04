@@ -136,6 +136,33 @@ class TestAnycubicWriterMetadata:
         assert settings["textured_plate_temp"] == ["70", "55"]
         assert settings["cool_plate_temp"] == ["0", "35"]
 
+    def test_bambu_project_settings_disable_cut_retraction_filament_overrides(self) -> None:
+        template = load_printer_template("bambu-p1s", slicer="BambuStudio")
+        assert "1" in template["filament_long_retractions_when_cut"]
+        assert "18" in template["filament_retraction_distances_when_cut"]
+
+        writer = BambuStudio3MFWriter(
+            "cut-retraction-overrides.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+        )
+        writer._set_project_palette(
+            ["Bambu PLA Basic White", "Bambu PETG Basic Red"],
+            {
+                0: (255, 255, 255, 255),
+                1: (220, 20, 60, 255),
+            },
+        )
+
+        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+        assert settings["filament_type"] == ["PLA", "PETG"]
+        assert settings["filament_long_retractions_when_cut"] == ["nil", "nil"]
+        assert settings["filament_retraction_distances_when_cut"] == ["nil", "nil"]
+        assert all(value == "0" for value in settings["long_retractions_when_cut"])
+
     def test_orca_project_settings_derive_petg_metadata_when_template_is_pla_only(self) -> None:
         writer = BambuStudio3MFWriter(
             "orca-petg-materials.3mf",

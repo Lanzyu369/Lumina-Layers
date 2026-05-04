@@ -130,6 +130,11 @@ _PETG_FALLBACK_VALUES = {
     "cool_plate_temp_initial_layer": "0",
 }
 
+_CUT_RETRACTION_FILAMENT_OVERRIDE_KEYS = (
+    "filament_long_retractions_when_cut",
+    "filament_retraction_distances_when_cut",
+)
+
 
 def _infer_filament_profile(material_name: str) -> _FilamentProfile | None:
     normalized = str(material_name or "").upper()
@@ -288,6 +293,15 @@ def _apply_material_filament_metadata(
         settings[key] = values
 
     _apply_default_filament_profile(settings, profiles)
+
+
+def _disable_cut_retraction_filament_overrides(settings: dict, num_colors: int) -> None:
+    for key in _CUT_RETRACTION_FILAMENT_OVERRIDE_KEYS:
+        if key in settings:
+            settings[key] = ["nil"] * num_colors
+    long_retractions = settings.get("long_retractions_when_cut")
+    if isinstance(long_retractions, list):
+        settings["long_retractions_when_cut"] = ["0"] * len(long_retractions)
 
 
 def build_layer_config_ranges_xml(
@@ -940,6 +954,7 @@ class BambuStudio3MFWriter:
 
         settings.update(self._build_filament_arrays(material_palette))
         _apply_material_filament_metadata(settings, template_settings, material_palette)
+        _disable_cut_retraction_filament_overrides(settings, num_colors)
 
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")
