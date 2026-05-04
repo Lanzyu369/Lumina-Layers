@@ -451,7 +451,7 @@ describe("GradientCardExtractPanel", () => {
         height: 900,
       })
       .mockResolvedValueOnce({
-        preview_url: "http://localhost:8000/api/files/black-preview.png",
+        preview_url: "/api/files/black-preview.png",
         width: 1000,
         height: 800,
       });

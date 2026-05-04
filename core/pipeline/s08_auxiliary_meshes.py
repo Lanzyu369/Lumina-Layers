@@ -333,7 +333,13 @@ def run(ctx: dict) -> dict:
     loop_added = False
     outline_added = False
     base_aux_color, base_aux_material_name = _resolve_material_archive_base_aux_style(ctx, preview_colors)
-    if separate_backing:
+    has_explicit_backing_color = (
+        "separate_backing_color_id" in ctx
+        and ctx.get("separate_backing_color_id") != ctx.get("material_base_channel_idx")
+    )
+    if separate_backing and (
+        str(ctx.get("material_source") or "lut") != "material_archive" or has_explicit_backing_color
+    ):
         try:
             separate_backing_color_idx = int(separate_backing_color_id)
         except (TypeError, ValueError):

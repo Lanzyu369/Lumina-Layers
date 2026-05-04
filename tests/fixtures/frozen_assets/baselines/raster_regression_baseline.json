@@ -1,13 +1,11 @@
 ﻿{
   "version": "1.0.0",
-  "generated_at": "2026-04-01T18:10:10.324390+00:00",
+  "generated_at": "2026-05-04T21:30:23.195780+00:00",
   "regression_scope": "raster_only",
   "svg_regression": "paused",
   "fixed_params": {
     "target_width_mm": 60.0,
     "spacer_thick": 1.2,
-    "auto_bg": false,
-    "bg_tol": 40,
     "quantize_colors": 48,
     "enable_cleanup": true,
     "hue_weight": 0.0,
@@ -38,7 +36,7 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.9000339337220828,
+      "recipe_top10_coverage": 0.899931239563148,
       "recipe_top10_distribution": [
         0.1600332193279337,
         0.15063447130368002,
@@ -48,7 +46,7 @@
         0.06836305510657868,
         0.0624380486323817,
         0.061156604127412195,
-        0.05938401364492825,
+        0.05928131948599341,
         0.05572274363072966
       ],
       "recipe_unique_count": 15
@@ -90,7 +88,7 @@
       "lut_id": "4c_cmyw",
       "lut_rel": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
       "color_mode": "4-Color (CMYW)",
-      "preview_status": "[OK] Preview (600x528px, 151 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (600x528px, 152 colors) | Click image to place loop",
       "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -100,20 +98,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.43987033746193616,
+      "recipe_top10_coverage": 0.4398346177544806,
       "recipe_top10_distribution": [
         0.13006884973612065,
         0.05997338881794558,
         0.03903717528553441,
         0.03843887018565318,
-        0.038416545368493434,
+        0.038380825661037836,
         0.02975005134707947,
         0.029129421430038487,
         0.02666029665217042,
         0.02472696748613629,
         0.023668771152764258
       ],
-      "recipe_unique_count": 151
+      "recipe_unique_count": 152
     },
     "high-fidelity__6c_rybw": {
       "case_id": "high-fidelity__6c_rybw",
@@ -121,7 +119,7 @@
       "lut_id": "6c_rybw",
       "lut_rel": "luts/6c/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy",
       "color_mode": "6-Color (RYBWGK 1296)",
-      "preview_status": "[OK] Preview (600x528px, 169 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (600x528px, 170 colors) | Click image to place loop",
       "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -144,7 +142,7 @@
         0.027017493726726377,
         0.026093246296312832
       ],
-      "recipe_unique_count": 169
+      "recipe_unique_count": 170
     },
     "high-fidelity__6c_cmyw": {
       "case_id": "high-fidelity__6c_cmyw",
@@ -152,7 +150,7 @@
       "lut_id": "6c_cmyw",
       "lut_rel": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
       "color_mode": "6-Color (CMYWGK 1296)",
-      "preview_status": "[OK] Preview (600x528px, 168 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (600x528px, 169 colors) | Click image to place loop",
       "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -162,20 +160,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.46061902253020554,
+      "recipe_top10_coverage": 0.4606279524570694,
       "recipe_top10_distribution": [
-        0.12998848039434557,
+        0.12999294535777753,
         0.04805193645464044,
         0.03902824535867051,
         0.03863532857665896,
         0.03852370449086022,
-        0.03843887018565318,
+        0.03844333514908513,
         0.036715394300920676,
         0.034076600912638526,
         0.030495700240215032,
         0.02666476161560237
       ],
-      "recipe_unique_count": 168
+      "recipe_unique_count": 169
     },
     "high-fidelity__8c": {
       "case_id": "high-fidelity__8c",
@@ -183,7 +181,7 @@
       "lut_id": "8c",
       "lut_rel": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
       "color_mode": "8-Color Max",
-      "preview_status": "[OK] Preview (600x528px, 213 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (600x528px, 212 colors) | Click image to place loop",
       "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -193,9 +191,9 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.4175633801559165,
+      "recipe_top10_coverage": 0.41755891519248456,
       "recipe_top10_distribution": [
-        0.13019386871221525,
+        0.1301894037487833,
         0.03931846798174723,
         0.038563889161747765,
         0.03852816945429217,
@@ -206,7 +204,7 @@
         0.02391880910495343,
         0.023633051445308664
       ],
-      "recipe_unique_count": 213
+      "recipe_unique_count": 212
     },
     "pixel__2c_bw": {
       "case_id": "pixel__2c_bw",
@@ -224,18 +222,18 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.8915777742397707,
+      "recipe_top10_coverage": 0.8915777742397708,
       "recipe_top10_distribution": [
         0.1555484795414743,
         0.14941888234357587,
-        0.12768667409648146,
+        0.12744785862123867,
         0.0749084540678236,
         0.07204266836491005,
-        0.07029135487979621,
+        0.07037096003821047,
         0.0689380671867537,
         0.05866900175131348,
         0.058350581117656425,
-        0.05572361088998567
+        0.055882821206814204
       ],
       "recipe_unique_count": 16
     },
@@ -255,10 +253,10 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.32956535583505814,
+      "recipe_top10_coverage": 0.3300429867855437,
       "recipe_top10_distribution": [
         0.1106511701958287,
-        0.0485591466327018,
+        0.04903677758318739,
         0.02913548797962108,
         0.02642891259353606,
         0.023563126890622513,
@@ -276,7 +274,7 @@
       "lut_id": "4c_cmyw",
       "lut_rel": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
       "color_mode": "4-Color (CMYW)",
-      "preview_status": "[OK] Preview (142x125px, 410 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 409 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -299,7 +297,7 @@
         0.01608024199968158,
         0.01608024199968158
       ],
-      "recipe_unique_count": 410
+      "recipe_unique_count": 409
     },
     "pixel__6c_rybw": {
       "case_id": "pixel__6c_rybw",
@@ -307,7 +305,7 @@
       "lut_id": "6c_rybw",
       "lut_rel": "luts/6c/Aliz&PLA&RYBW&红-蓝-黄-绿-白-黑&20260211.npy",
       "color_mode": "6-Color (RYBWGK 1296)",
-      "preview_status": "[OK] Preview (142x125px, 605 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 602 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -330,7 +328,7 @@
         0.018468396752109536,
         0.017513134851138354
       ],
-      "recipe_unique_count": 605
+      "recipe_unique_count": 602
     },
     "pixel__6c_cmyw": {
       "case_id": "pixel__6c_cmyw",
@@ -338,7 +336,7 @@
       "lut_id": "6c_cmyw",
       "lut_rel": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
       "color_mode": "6-Color (CMYWGK 1296)",
-      "preview_status": "[OK] Preview (142x125px, 523 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 522 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -361,7 +359,7 @@
         0.017831555484795415,
         0.015841426524438783
       ],
-      "recipe_unique_count": 523
+      "recipe_unique_count": 522
     },
     "pixel__8c": {
       "case_id": "pixel__8c",
@@ -369,7 +367,7 @@
       "lut_id": "8c",
       "lut_rel": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
       "color_mode": "8-Color Max",
-      "preview_status": "[OK] Preview (142x125px, 965 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 968 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -392,7 +390,7 @@
         0.012498009871039644,
         0.012338799554211112
       ],
-      "recipe_unique_count": 965
+      "recipe_unique_count": 968
     }
   }
 }

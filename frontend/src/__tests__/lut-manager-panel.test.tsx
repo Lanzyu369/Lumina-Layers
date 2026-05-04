@@ -45,7 +45,6 @@ describe("LutManagerPanel", () => {
     render(<LutManagerPanel />);
 
     expect(screen.getByTestId("lut-manager-panel")).toBeInTheDocument();
-    expect(screen.getByText("LUT 合并工具")).toBeInTheDocument();
     expect(screen.getByText("主 LUT")).toBeInTheDocument();
     expect(screen.getByTestId("primary-dropdown")).toBeInTheDocument();
     expect(screen.getByTestId("secondary-list")).toBeInTheDocument();

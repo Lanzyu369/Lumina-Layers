@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import fc from "fast-check";
+import type { ReactNode } from "react";
 
 vi.mock("../api/client", () => ({
   default: {
@@ -25,6 +26,7 @@ vi.mock("../api/converter", () => ({
 vi.mock("../api/slicer", () => ({
   detectSlicers: vi.fn().mockResolvedValue({ slicers: [] }),
   launchSlicer: vi.fn(),
+  validateCustomSlicerPath: vi.fn(),
 }));
 
 vi.mock("../api/lut", () => ({
@@ -40,21 +42,60 @@ vi.mock("../api/extractor", () => ({
 
 vi.mock("../i18n/context", () => ({
   useI18n: () => ({ t: (key: string) => key, lang: "zh" as const }),
-  I18nProvider: ({ children }: { children: React.ReactNode }) => children,
+  I18nProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
+vi.mock("../hooks/useAutoPreview", () => ({ useAutoPreview: vi.fn() }));
+vi.mock("../hooks/usePuzzleLayoutPreview", () => ({ usePuzzleLayoutPreview: vi.fn() }));
+vi.mock("../hooks/useSessionLease", () => ({ useSessionLease: vi.fn() }));
+vi.mock("../hooks/useAnnouncement", () => ({
+  useAnnouncement: () => ({
+    visible: false,
+    entry: null,
+    version: "",
+    close: vi.fn(),
+    dismissThisVersion: vi.fn(),
+  }),
+}));
+vi.mock("../hooks/useWorkspaceMode", () => ({
+  useWorkspaceMode: () => ({
+    width: 1440,
+    height: 900,
+    dpr: 1,
+    mode: "standard",
+    isCompact: false,
+    isStandard: true,
+    isWide: false,
+  }),
+}));
 vi.mock("../components/Scene3D", () => ({ default: () => null }));
 vi.mock("../components/CalibrationPanel", () => ({ default: () => null }));
 vi.mock("../components/ExtractorPanel", () => ({ default: () => null }));
 vi.mock("../components/ExtractorCanvas", () => ({ default: () => null }));
+vi.mock("../components/GradientCardGeneratePanel", () => ({ default: () => null }));
+vi.mock("../components/GradientCardExtractPanel", () => ({ default: () => null }));
 vi.mock("../components/LutManagerPanel", () => ({ default: () => null }));
+vi.mock("../components/LutDetailsPanel", () => ({ default: () => null }));
 vi.mock("../components/LutComparePanel", () => ({ default: () => null }));
 vi.mock("../components/MaterialLibraryPanel", () => ({ default: () => null }));
-vi.mock("../components/AboutView", () => ({ default: () => null }));
+vi.mock("../components/MaterialRecipeQueryPanel", () => ({ default: () => null }));
 vi.mock("../components/FiveColorQueryPanel", () => ({ default: () => null }));
+vi.mock("../components/SettingsPanel", () => ({ default: () => null }));
+vi.mock("../components/VectorizerPanel", () => ({ default: () => null }));
 vi.mock("../components/LoadingSpinner", () => ({ default: () => null }));
 vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
+vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
+vi.mock("../components/BugReportModal", () => ({ BugReportModal: () => null }));
+vi.mock("../components/ui/AnnouncementDialog", () => ({ default: () => null }));
+vi.mock("../components/widget/WidgetWorkspace", () => ({
+  WidgetWorkspace: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+vi.mock("../components/widget/TabNavBar", () => ({
+  default: () => null,
+  hasSubTabs: () => false,
+}));
+vi.mock("../components/widget/SubTabBar", () => ({ default: () => null }));
 
 import App from "../App";
 import apiClient from "../api/client";

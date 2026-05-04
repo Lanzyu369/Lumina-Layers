@@ -120,8 +120,8 @@ describe("Feature: free-color-mode — Unit Tests", () => {
   describe("i18n keys", () => {
     it("conv_free_color_btn exists with zh/en", () => {
       expect(translations.conv_free_color_btn).toBeDefined();
-      expect(translations.conv_free_color_btn.zh).toBe("🎯 标记为自由色");
-      expect(translations.conv_free_color_btn.en).toBe("🎯 Mark as Free Color");
+      expect(translations.conv_free_color_btn.zh).toBe("标记为自由色");
+      expect(translations.conv_free_color_btn.en).toBe("Mark as Free Color");
     });
 
     it("conv_free_color_clear_btn exists with zh/en", () => {
@@ -132,8 +132,8 @@ describe("Feature: free-color-mode — Unit Tests", () => {
 
     it("conv_free_color_label exists with zh/en", () => {
       expect(translations.conv_free_color_label).toBeDefined();
-      expect(translations.conv_free_color_label.zh).toBe("🎯 自由色");
-      expect(translations.conv_free_color_label.en).toBe("🎯 Free Colors");
+      expect(translations.conv_free_color_label.zh).toBe("自由色");
+      expect(translations.conv_free_color_label.en).toBe("Free Colors");
     });
 
     it("viewer hover toggle labels exist with zh/en", () => {

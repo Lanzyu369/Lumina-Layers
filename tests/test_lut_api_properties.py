@@ -32,7 +32,12 @@ LOW_MODES = ["BW", "4-Color"]
 
 def _canonical_public_mode(mode: str) -> str:
     """Return the public API color-mode spelling used by LUT endpoints."""
-    return "8-Color Max" if mode == "8-Color" else mode
+    return {
+        "BW": "BW (Black & White)",
+        "4-Color": "4-Color (RYBW)",
+        "6-Color": "6-Color (CMYWGK 1296)",
+        "8-Color": "8-Color Max",
+    }.get(mode, mode)
 
 
 @st.composite

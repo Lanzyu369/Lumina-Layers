@@ -115,7 +115,7 @@ class TestSessionStatePersistence:
         session_data = _isolate_dependency_overrides["store"].get(session_id)
         assert session_data is not None
         assert session_data["lut_path"] == "/tmp/test.npy"
-        assert session_data["color_mode"] == "4-Color"
+        assert session_data["color_mode"] == "4-Color (RYBW)"
 
     def test_extract_endpoint_emits_canary_on_success(
         self,
@@ -164,7 +164,7 @@ class TestSessionStatePersistence:
 
         record = canary_records[0]
         assert record.levelno == logging.INFO
-        assert record.color_mode == "4-Color"
+        assert record.color_mode == "4-Color (RYBW)"
         assert record.page == "Page 2"
         assert record.eight_color_full_export is True
         assert record.lut_path == str(lut_path)

@@ -109,7 +109,10 @@ def test_nonexistent_exe_paths_filtered(num_valid: int, num_invalid: int) -> Non
         )
 
     try:
-        with patch("core.slicer.scan_registry", return_value=mock_slicers):
+        with (
+            patch("core.slicer.platform.system", return_value="Windows"),
+            patch("core.slicer.scan_registry", return_value=mock_slicers),
+        ):
             result = detect_installed_slicers()
 
         # Every returned entry must have an existing exe_path

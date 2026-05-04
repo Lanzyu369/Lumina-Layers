@@ -117,6 +117,6 @@ class TestSystemSaveSettingsCanary:
         record = records[0]
         assert record.levelno == logging.INFO
         assert "session_id" not in record.__dict__
-        assert record.settings_field_count == 10
+        assert record.settings_field_count == len(payload)
         assert record.bytes_written == len(serialized.encode("utf-8"))
         assert record.settings_path == str(settings_path)

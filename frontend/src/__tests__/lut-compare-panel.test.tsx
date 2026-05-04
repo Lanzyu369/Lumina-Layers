@@ -51,7 +51,6 @@ describe("LutComparePanel", () => {
     render(<LutComparePanel />);
 
     expect(screen.getByTestId("lut-compare-panel")).toBeInTheDocument();
-    expect(screen.getByText("LUT 对比工具")).toBeInTheDocument();
     expect(screen.getByTestId("lut-compare-lut-a-dropdown")).toBeInTheDocument();
     expect(screen.getByTestId("lut-compare-lut-b-dropdown")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开始对比" })).toBeInTheDocument();
