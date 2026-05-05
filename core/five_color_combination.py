@@ -762,6 +762,9 @@ def get_color_name_from_rgb(rgb: Tuple[int, int, int]) -> str:
     if r > 255 - threshold and g > 255 - threshold and b > 255 - threshold:
         return "白"
 
+    if r > 150 and b > 120 and g < min(r, b) - 40:
+        return "品红"
+
     # 红色系
     if r > g + threshold and r > b + threshold:
         if g > threshold or b > threshold:
@@ -769,7 +772,7 @@ def get_color_name_from_rgb(rgb: Tuple[int, int, int]) -> str:
         return "红"
 
     # 绿色系
-    if g > r + threshold and g > b + threshold:
+    if g > r + 60 and g > b + 60:
         return "绿"
 
     # 蓝色系

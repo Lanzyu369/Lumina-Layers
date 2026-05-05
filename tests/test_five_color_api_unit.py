@@ -197,6 +197,46 @@ def test_get_base_colors_npz():
     assert first["hex"] == "#FF8040"
 
 
+def test_get_base_colors_npy_labels_bambulab_magenta_and_green():
+    rgb_data = np.zeros((2738, 3), dtype=np.uint8)
+    rgb_data[:8] = np.array(
+        [
+            [237, 241, 242],
+            [74, 155, 243],
+            [223, 96, 163],
+            [243, 239, 47],
+            [54, 54, 54],
+            [224, 85, 79],
+            [60, 89, 209],
+            [110, 202, 98],
+        ],
+        dtype=np.uint8,
+    )
+
+    with (
+        patch(
+            "api.routers.five_color.LUTManager.get_lut_path",
+            return_value="/fake/path/bambulab-8c.npy",
+        ),
+        patch(
+            "api.routers.five_color.StackLUTLoader.load_lut_rgb",
+            return_value=(True, "ok", rgb_data),
+        ),
+        patch(
+            "api.routers.five_color.StackFileManager.find_stack_file",
+            return_value=None,
+        ),
+    ):
+        resp = client.get("/api/five-color/base-colors", params={"lut_name": "bambulab_8c"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["colors"][2]["hex"] == "#DF60A3"
+    assert body["colors"][2]["name"] == "品红"
+    assert body["colors"][7]["hex"] == "#6ECA62"
+    assert body["colors"][7]["name"] == "绿"
+
+
 def test_empty_stack_npz_routes_use_dynamic_matching(tmp_path):
     """Empty-column NPZ stack data is treated like a dynamic LUT."""
     rgb_data = np.zeros((1024, 3), dtype=np.uint8)
