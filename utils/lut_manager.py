@@ -1571,6 +1571,32 @@ class LUTManager:
         return [-1, -1, -1, -1, -1]
 
     @staticmethod
+    def _infer_native_colordb_recipe_layer_count(
+        data: dict[str, Any],
+        entries: list[dict[str, Any]],
+    ) -> int:
+        try:
+            layer_count = int(data.get("max_color_layers", 0))
+        except (TypeError, ValueError):
+            layer_count = 0
+        if layer_count > 0:
+            return layer_count
+        for entry in entries:
+            recipe_raw = entry.get("recipe", [])
+            if isinstance(recipe_raw, (list, tuple)) and recipe_raw:
+                return len(recipe_raw)
+        return 5
+
+    @staticmethod
+    def _normalize_native_colordb_recipe_width(
+        recipe_indices: list[int],
+        target_layer_count: int,
+    ) -> list[int]:
+        if len(recipe_indices) >= target_layer_count:
+            return recipe_indices
+        return recipe_indices + ([-1] * (target_layer_count - len(recipe_indices)))
+
+    @staticmethod
     def _infer_color_count_from_resolved_recipes(
         stacks_list: list[list[int]],
     ) -> int | None:
@@ -1754,36 +1780,57 @@ class LUTManager:
             for item in palette_raw
             if isinstance(item, dict) and str(item.get("color", ""))
         ]
-        entries = data.get("entries", [])
-        stack_rows: list[list[int]] = []
+        entries_raw = data.get("entries", [])
+        entries = [
+            entry
+            for entry in entries_raw
+            if isinstance(entry, dict)
+        ] if isinstance(entries_raw, list) else []
+        native_layer_count = cls._infer_native_colordb_recipe_layer_count(data, entries)
+        raw_stack_rows: list[list[int]] = []
         for entry in entries:
-            if not isinstance(entry, dict):
-                continue
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
-                recipe_indices = [-1, -1, -1, -1, -1]
+                recipe_indices = [-1] * native_layer_count
             else:
                 recipe_indices = [
                     cls._resolve_recipe_member(value, {}, file_path)
                     for value in recipe_raw
                 ]
-            stack_rows.append(cls._normalize_resolved_five_layer_recipe(recipe_indices))
+                if not recipe_indices:
+                    recipe_indices = [-1] * native_layer_count
+            raw_stack_rows.append(recipe_indices)
+        stack_width = max(
+            [native_layer_count] + [len(row) for row in raw_stack_rows],
+            default=native_layer_count,
+        )
+        stack_rows = [
+            cls._normalize_native_colordb_recipe_width(row, stack_width)
+            for row in raw_stack_rows
+        ]
         stacks = (
             np.asarray(stack_rows, dtype=np.int32)
             if stack_rows
-            else np.zeros((0, 5), dtype=np.int32)
+            else np.zeros((0, native_layer_count), dtype=np.int32)
         )
         labs = np.asarray(
-            [entry.get("lab", [0.0, 0.0, 0.0]) for entry in entries if isinstance(entry, dict)],
+            [entry.get("lab", [0.0, 0.0, 0.0]) for entry in entries],
             dtype=np.float32,
         )
         rgb = standard_lab_to_rgb_uint8(labs)
+        try:
+            metadata_layer_count = int(data.get("max_color_layers", 0))
+        except (TypeError, ValueError):
+            metadata_layer_count = 0
         metadata = LUTMetadata(
             palette=palette,
             manufacturer=str(data.get("manufacturer", "") or ""),
             type=str(data.get("type", "") or ""),
             color_mode=derive_color_mode_from_palette_entries(palette, display_name),
-            max_color_layers=int(data.get("max_color_layers", stacks.shape[1] if stacks.ndim == 2 else 0)),
+            max_color_layers=max(
+                metadata_layer_count,
+                stacks.shape[1] if stacks.ndim == 2 else 0,
+            ),
             layer_height_mm=float(data.get("layer_height_mm", 0.08)),
             line_width_mm=float(data.get("line_width_mm", 0.42)),
             base_layers=int(data.get("base_layers", 0)),

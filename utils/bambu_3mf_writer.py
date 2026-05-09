@@ -819,7 +819,11 @@ class BambuStudio3MFWriter:
             parts.extend(
                 [
                     ("Metadata/filament_sequence.json", "application/json", self._build_filament_sequence_bytes()),
-                    ("Metadata/cut_information.xml", "text/xml", self._build_cut_information_bytes()),
+                    (
+                        "Metadata/cut_information.xml",
+                        "text/xml",
+                        self._build_cut_information_bytes(assembly_id),
+                    ),
                 ]
             )
         if self.enable_base_layer_height_modifier:
@@ -828,6 +832,7 @@ class BambuStudio3MFWriter:
                 color_height_mm=self.color_height_mm,
                 nozzle_mm=float(self.nozzle_size),
                 face=self.face_orientation,
+                object_id=assembly_id,
             )
             if lcr_bytes is not None:
                 parts.append(("Metadata/layer_config_ranges.xml", "text/xml", lcr_bytes))
@@ -847,6 +852,39 @@ class BambuStudio3MFWriter:
         builder.add_custom_content_type(_get_n3mf().CustomContentType("json", "application/json"))
         builder.add_custom_content_type(_get_n3mf().CustomContentType("xml", "text/xml"))
         builder.add_custom_content_type(_get_n3mf().CustomContentType("png", "image/png"))
+
+        self._add_bambu_metadata_relationships(builder, [path for path, _, _ in parts])
+
+    def _add_bambu_metadata_relationships(
+        self,
+        builder: _get_n3mf().DocumentBuilder,
+        part_paths: list[str],
+    ) -> None:
+        """Attach Bambu metadata files to the root model relationship set.
+        将 Bambu 私有元数据挂到根模型的关系表上。
+        """
+        if not self._should_emit_bambu_aux_parts():
+            return
+        if not hasattr(builder, "add_custom_relationship"):
+            return
+
+        n3mf = _get_n3mf()
+        relationship_type = "http://schemas.bambulab.com/package/2021/settings"
+        related_paths = [
+            path
+            for path in part_paths
+            if path.startswith("Metadata/")
+            and not path.lower().endswith(".png")
+        ]
+        for index, path in enumerate(related_paths):
+            builder.add_custom_relationship(
+                n3mf.CustomRelationship(
+                    "3D/3dmodel.model",
+                    f"bambuRel{index}",
+                    relationship_type,
+                    f"/{path}",
+                )
+            )
 
     # ------------------------------------------------------------------
     # Individual metadata builders (return bytes, no filesystem I/O)
@@ -1037,12 +1075,12 @@ class BambuStudio3MFWriter:
         return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
     @staticmethod
-    def _build_cut_information_bytes() -> bytes:
+    def _build_cut_information_bytes(object_id: int = 1) -> bytes:
         """Build cut_information.xml as bytes.
         构建 cut_information.xml（字节形式）。
         """
         config = ET.Element("objects")
-        obj = ET.SubElement(config, "object", attrib={"id": "1"})
+        obj = ET.SubElement(config, "object", attrib={"id": str(int(object_id))})
         ET.SubElement(obj, "cut_id", attrib={"id": "0", "check_sum": "1", "connectors_cnt": "0"})
 
         tree = ET.ElementTree(config)

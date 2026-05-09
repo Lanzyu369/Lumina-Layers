@@ -21,11 +21,11 @@ def _call_build_layer_config_ranges_xml(**kwargs) -> bytes | None:
     return builder(**kwargs)
 
 
-def _parse_range(xml_bytes: bytes) -> tuple[float, float, float]:
+def _parse_range(xml_bytes: bytes, expected_object_id: str = "1") -> tuple[float, float, float]:
     root = ET.fromstring(xml_bytes)
     object_elem = root.find("./object")
     assert object_elem is not None
-    assert object_elem.attrib["id"] == "1"
+    assert object_elem.attrib["id"] == expected_object_id
 
     range_elem = object_elem.find("./range")
     assert range_elem is not None
@@ -199,7 +199,29 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     writer.export()
 
     with zipfile.ZipFile(output_path) as package:
+        model_bytes = package.read("3D/3dmodel.model")
         xml_bytes = package.read("Metadata/layer_config_ranges.xml")
+        cut_bytes = package.read("Metadata/cut_information.xml")
+        model_settings_bytes = package.read("Metadata/model_settings.config")
+        rels_bytes = package.read("3D/_rels/3dmodel.model.rels")
+
+    model_root = ET.fromstring(model_bytes)
+    model_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    build_item = model_root.find("./m:build/m:item", model_ns)
+    assert build_item is not None
+    build_object_id = build_item.attrib["objectid"]
+    assert build_object_id != "1"
+
+    model_settings = ET.fromstring(model_settings_bytes)
+    model_object = model_settings.find("./object")
+    assert model_object is not None
+    assembly_id = model_object.attrib["id"]
+    assert assembly_id == build_object_id
+
+    cut_root = ET.fromstring(cut_bytes)
+    cut_object = cut_root.find("./object")
+    assert cut_object is not None
+    assert cut_object.attrib["id"] == assembly_id
 
     root = ET.fromstring(xml_bytes)
     object_elem = root.find("./object")
@@ -207,12 +229,20 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     layer_height_elem = root.find("./object/range/option[@opt_key='layer_height']")
 
     assert object_elem is not None
-    assert object_elem.attrib["id"] == "1"
+    assert object_elem.attrib["id"] == assembly_id
     assert range_elem is not None
     assert range_elem.attrib["min_z"] == "2.3999999999999999"
     assert range_elem.attrib["max_z"] == "3.2000000000000002"
     assert layer_height_elem is not None
     assert (layer_height_elem.text or "") == "0.20000000000000001"
+
+    rels = ET.fromstring(rels_bytes)
+    rel_targets = {
+        rel.attrib["Target"]
+        for rel in rels.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")
+    }
+    assert "/Metadata/cut_information.xml" in rel_targets
+    assert "/Metadata/layer_config_ranges.xml" in rel_targets
 
 
 @given(

@@ -657,6 +657,86 @@ def test_bambulab_native_model_package_resolves_white_base_channel_not_green() -
     assert metadata.base_channel_idx != 0
 
 
+def test_native_colordb_preserves_native_ten_layer_recipes_from_bundled_assets() -> None:
+    """Native CP3D ColorDB rows should keep their source recipe width."""
+    path = os.path.join(
+        "assets",
+        "native_sources",
+        "ChromaPrint3D",
+        "data",
+        "dbs",
+        "PLA",
+        "BambuLab",
+        "RYBWCMKG_004_10L_001.json",
+    )
+    if not os.path.exists(path):
+        pytest.skip(f"requires bundled native ColorDB: {path}")
+
+    expected_recipe = [1, 1, 6, 0, 1, 4, 7, 5, 1, 4]
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    matching_rows = [
+        idx
+        for idx, entry in enumerate(data["entries"])
+        if entry.get("recipe") == expected_recipe
+    ]
+    assert matching_rows
+    row_index = matching_rows[0]
+
+    _rgb, stacks, metadata = LUTManager.load_lut_with_metadata(path)
+
+    assert stacks is not None
+    assert stacks.shape[1] == 10
+    assert metadata.max_color_layers == 10
+    np.testing.assert_array_equal(
+        stacks[row_index],
+        np.asarray(expected_recipe, dtype=np.int32),
+    )
+
+
+def test_native_package_db_first_black_match_keeps_black_recipe_from_bundled_assets() -> None:
+    """DB-first native matching should not replace black DB recipes with all-Air stacks."""
+    path = os.path.join(
+        "assets",
+        "native_sources",
+        "ChromaPrint3D",
+        "data",
+        "model_packs",
+        "bambulab_pla.msgpack",
+    )
+    if not os.path.exists(path):
+        pytest.skip(f"requires bundled native model package: {path}")
+
+    loaded = load_lut(
+        path,
+        "8-Color Max",
+        color_layers=6,
+        layer_height_mm=0.08,
+        model_enable=True,
+        model_only=False,
+    )
+    match = match_colors_to_lut(
+        np.array([[0, 0, 0]], dtype=np.uint8),
+        loaded["lut_rgb"],
+        loaded["lut_lab"],
+        loaded["kdtree"],
+        predictive_runtime=loaded["predictive_runtime"],
+        source_kind=loaded["source_kind"],
+        native_reference_source=loaded["native_reference_source"],
+        model_enable=True,
+        model_only=False,
+        ref_stacks=loaded["ref_stacks"],
+    )
+    recipe = (
+        np.asarray(match["recipes"], dtype=np.int32)[0]
+        if isinstance(match, dict)
+        else loaded["ref_stacks"][int(np.asarray(match, dtype=np.int32)[0])]
+    )
+
+    assert 1 in {int(value) for value in recipe}
+    assert not np.all(recipe < 0)
+
+
 def test_native_model_package_converted_higher_layer_padding_uses_resolved_white_base_channel() -> None:
     """Converted higher-layer native DB stacks should pad with the resolved white base channel index."""
     bundle_path, _display_name = LUTManager.resolve_source_selection(
