@@ -805,7 +805,7 @@ class TestP01PreviewValidation:
             run(ctx)
 
     def test_quantize_colors_clamped_to_range(self):
-        """quantize_colors 应被 clamp 到 [8, 256] 范围。"""
+        """quantize_colors 应被 clamp 到 [8, 8192] 范围。"""
         from core.pipeline.p01_preview_validation import run
 
         # 低于下限
@@ -816,9 +816,9 @@ class TestP01PreviewValidation:
 
         # 高于上限
         ctx2 = self._make_valid_ctx()
-        ctx2["quantize_colors"] = 1000
+        ctx2["quantize_colors"] = 10_000
         result2 = run(ctx2)
-        assert result2["quantize_colors"] <= 256
+        assert result2["quantize_colors"] <= 8192
 
     def test_none_modeling_mode_defaults_to_high_fidelity(self):
         """modeling_mode 为 None 时应默认为 HIGH_FIDELITY。"""

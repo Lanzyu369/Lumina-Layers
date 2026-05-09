@@ -1797,7 +1797,7 @@ class LUTManager:
                     cls._resolve_recipe_member(value, {}, file_path)
                     for value in recipe_raw
                 ]
-                if not recipe_indices:
+                if len(recipe_indices) != native_layer_count:
                     recipe_indices = [-1] * native_layer_count
             raw_stack_rows.append(recipe_indices)
         stack_width = max(
