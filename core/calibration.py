@@ -35,7 +35,15 @@ from colormath.color_objects import sRGBColor, LabColor
 from colormath.color_conversions import convert_color
 from colormath.color_diff import delta_e_cie2000
 
-from config import PrinterConfig, ColorSystem, SmartConfig, MODELS_DIR, get_asset_path
+from config import (
+    DEFAULT_PRINTER_ID,
+    DEFAULT_SLICER_ID,
+    PrinterConfig,
+    ColorSystem,
+    SmartConfig,
+    MODELS_DIR,
+    get_asset_path,
+)
 from core.lut_card_layout import (
     EIGHT_COLOR_PAGE_CAPACITY,
     cell_for_row_index,
@@ -86,6 +94,18 @@ def _load_smart_6color_stacks_bottom_to_top() -> np.ndarray:
 def _resolve_backing_layers(backing_thickness_mm: Optional[float] = None) -> int:
     thickness = float(backing_thickness_mm) if backing_thickness_mm is not None else float(PrinterConfig.BACKING_MM)
     return max(1, int(thickness / PrinterConfig.LAYER_HEIGHT))
+
+
+def _export_device_kwargs(
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+) -> dict:
+    return {
+        "printer_id": printer_id,
+        "slicer": slicer,
+        "nozzle_size": nozzle_size,
+    }
 
 
 def _generate_layer_previews(full_matrix, preview_colors, h, w, color_layers=5):
@@ -188,7 +208,16 @@ def _generate_voxel_mesh(
     return mesh
 
 
-def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: float, backing_color: str, backing_thickness_mm: Optional[float] = None):
+def generate_calibration_board(
+    color_mode: str,
+    block_size_mm: float,
+    gap_mm: float,
+    backing_color: str,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """
     Generate a 1024-color calibration board as 3MF.
 
@@ -294,6 +323,7 @@ def generate_calibration_board(color_mode: str, block_size_mm: float, gap_mm: fl
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode=color_mode,
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
     # Generate preview images
@@ -438,6 +468,9 @@ def generate_smart_board(
     color_conf=None,
     corner_colors=None,
     backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
 ):
     """Generate Lumina Smart 1296 (6-Color) calibration board with 38x38 border layout.
     生成 Lumina Smart 1296（6色）校准板（38×38 边框布局）。
@@ -597,6 +630,7 @@ def generate_smart_board(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode=color_mode_label,
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
     # Generate preview images
@@ -634,7 +668,14 @@ def get_top_1296_colors_rybw():
     return get_top_1296_colors()
 
 
-def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8, backing_thickness_mm: Optional[float] = None):
+def generate_smart_board_rybw(
+    block_size_mm=5.0,
+    gap_mm=0.8,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate RYBW 6-Color Smart1296 board with RYBW slot names and corner markers.
     生成 RYBW 6 色 Smart1296 校准板，使用 RYBW 色槽名和角标。
 
@@ -662,7 +703,10 @@ def generate_smart_board_rybw(block_size_mm=5.0, gap_mm=0.8, backing_thickness_m
         gap_mm=gap_mm,
         color_conf=ColorSystem.SIX_COLOR_RYBW,
         corner_colors=(0, 1, 3, 2),
-        backing_thickness_mm=backing_thickness_mm
+        backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
     )
 
 
@@ -775,6 +819,9 @@ def _generate_8color_board_artifacts(
     backing_thickness_mm: Optional[float],
     calibration_type: str,
     export_variant: str,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
 ):
     page_layout = resolve_extraction_page_layout(
         "8-Color Max",
@@ -832,6 +879,7 @@ def _generate_8color_board_artifacts(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="8-Color",
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
     preview_imgs = _generate_layer_previews(full_matrix, conf["preview"], v_w, v_w)
     json_path = _save_8color_recipe_json(
@@ -848,7 +896,14 @@ def _generate_8color_board_artifacts(
     return out_path, json_path, preview_imgs
 
 
-def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
+def generate_8color_full_batch_zip(
+    block_size_mm: float = 5.0,
+    gap_mm: float = 0.8,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate the exhaustive 8-color calibration set as a multi-page ZIP.
     将全量 8 色校准配方导出为多页 ZIP。
 
@@ -877,6 +932,9 @@ def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0
             backing_thickness_mm=backing_thickness_mm,
             calibration_type=calibration_type,
             export_variant="full",
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
         )
         artifacts.append((out_path, json_path))
         if preview is None:
@@ -889,7 +947,15 @@ def generate_8color_full_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0
     return zip_path, preview, f"[OK] 8-Color Full Kit ({total_pages} Pages + JSON) Generated!"
 
 
-def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
+def generate_8color_board(
+    page_index: int = 0,
+    block_size_mm: float = 5.0,
+    gap_mm: float = 0.8,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate 8-color calibration board page as 3MF.
     生成 8 色校准板单页 3MF 模型。
 
@@ -921,11 +987,21 @@ def generate_8color_board(page_index: int = 0, block_size_mm: float = 5.0, gap_m
         backing_thickness_mm=backing_thickness_mm,
         calibration_type=f"{page_index + 1}号",
         export_variant="selected",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     return out_path, preview, "OK"
 
 
-def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
+def generate_8color_batch_zip(
+    block_size_mm: float = 5.0,
+    gap_mm: float = 0.8,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate both compact 8-color pages and zip them with recipe JSON files.
     生成两页精简 8 色校准板，并连同配方 JSON 一起打包为 ZIP。
 
@@ -936,8 +1012,24 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, b
     Returns:
         tuple: (zip_path, preview_image, status_message). (ZIP 路径、预览图、状态信息)
     """
-    f1, prev, _ = generate_8color_board(0, block_size_mm=block_size_mm, gap_mm=gap_mm, backing_thickness_mm=backing_thickness_mm)
-    f2, _, _ = generate_8color_board(1, block_size_mm=block_size_mm, gap_mm=gap_mm, backing_thickness_mm=backing_thickness_mm)
+    f1, prev, _ = generate_8color_board(
+        0,
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+    )
+    f2, _, _ = generate_8color_board(
+        1,
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+    )
 
     if not f1 or not f2:
         return None, None, "[ERROR] Generation failed"
@@ -957,7 +1049,15 @@ def generate_8color_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, b
     return zip_path, prev, "[OK] 8-Color Kit (Page 1 & 2 + JSON) Generated!"
 
 
-def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="White", backing_thickness_mm: Optional[float] = None):
+def generate_bw_calibration_board(
+    block_size_mm=5.0,
+    gap_mm=0.8,
+    backing_color="White",
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """
     Generate Black & White (2-Color) calibration board with 8x8 border layout.
 
@@ -1111,6 +1211,7 @@ def generate_bw_calibration_board(block_size_mm=5.0, gap_mm=0.8, backing_color="
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="BW",
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
     # Generate preview images
@@ -1458,7 +1559,15 @@ def merge_5color_extended(base_lut_path, extended_lut_path, output_path=None):
     return rgb_array, stacks_array, output_path
 
 
-def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0, backing_thickness_mm: Optional[float] = None):
+def generate_5color_extended_board(
+    block_size_mm=5.0,
+    gap_mm=0.8,
+    page_index=0,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """
     Generate 5-Color Extended calibration board with dual-page support.
 
@@ -1500,13 +1609,40 @@ def generate_5color_extended_board(block_size_mm=5.0, gap_mm=0.8, page_index=0, 
 
     if page_index == 0:
         # Page 1: Base 1024 colors (5-layer, similar to 4-color mode)
-        return _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm)
+        return _generate_5color_base_page(
+            block_size_mm,
+            gap_mm,
+            preview_colors,
+            slot_names,
+            backing_thickness_mm,
+            printer_id,
+            slicer,
+            nozzle_size,
+        )
     else:
         # Page 2: Extended 1444 colors (6-layer)
-        return _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm)
+        return _generate_5color_extended_page(
+            block_size_mm,
+            gap_mm,
+            preview_colors,
+            slot_names,
+            backing_thickness_mm,
+            printer_id,
+            slicer,
+            nozzle_size,
+        )
 
 
-def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm: Optional[float] = None):
+def _generate_5color_base_page(
+    block_size_mm,
+    gap_mm,
+    preview_colors,
+    slot_names,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate Page 1: Base 1024 colors (5-layer RYBW combinations)."""
     _log.info(
         "Generating 5-color extended base page",
@@ -1605,6 +1741,7 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="5-Color Extended",
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
     # Generate preview images
@@ -1619,7 +1756,16 @@ def _generate_5color_base_page(block_size_mm, gap_mm, preview_colors, slot_names
     )
 
 
-def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_names, backing_thickness_mm: Optional[float] = None):
+def _generate_5color_extended_page(
+    block_size_mm,
+    gap_mm,
+    preview_colors,
+    slot_names,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate Page 2: Extended 1444 colors (6-layer with Black).
 
     Features:
@@ -1730,6 +1876,7 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="5-Color Extended",
+        **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
     # Generate preview images
@@ -1744,7 +1891,14 @@ def _generate_5color_extended_page(block_size_mm, gap_mm, preview_colors, slot_n
     )
 
 
-def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float = 0.8, backing_thickness_mm: Optional[float] = None):
+def generate_5color_extended_batch_zip(
+    block_size_mm: float = 5.0,
+    gap_mm: float = 0.8,
+    backing_thickness_mm: Optional[float] = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: Optional[str | float] = None,
+):
     """Generate both 5-color extended pages and zip them.
     生成两页 5 色扩展校准板并打包为 ZIP。
 
@@ -1760,12 +1914,18 @@ def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float
         gap_mm=gap_mm,
         page_index=0,
         backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
     )
     f2, _, _ = generate_5color_extended_board(
         block_size_mm=block_size_mm,
         gap_mm=gap_mm,
         page_index=1,
         backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
     )
 
     if not f1 or not f2:
@@ -1781,5 +1941,8 @@ def generate_5color_extended_batch_zip(block_size_mm: float = 5.0, gap_mm: float
         gap_mm=gap_mm,
         page_index=0,
         backing_thickness_mm=backing_thickness_mm,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
     )  # Show Page 1 as preview
     return zip_path, prev, "✅ 5-Color Extended Kit (Page 1 & 2) Generated!"

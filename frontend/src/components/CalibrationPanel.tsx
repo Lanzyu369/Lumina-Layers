@@ -7,8 +7,8 @@ import LayerMaskViewerDialog from "./ui/LayerMaskViewerDialog";
 import HelpDot from "./ui/HelpDot";
 import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";
-import Button from "./ui/Button";
 import Switch from "./ui/Switch";
+import SlicerSelector from "./sections/SlicerSelector";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   StatusBanner,
@@ -37,6 +37,7 @@ export default function CalibrationPanel() {
     isLoading,
     error,
     downloadUrl,
+    threemfDiskPath,
     previewImageUrl,
     layerImageUrls,
     statusMessage,
@@ -55,6 +56,9 @@ export default function CalibrationPanel() {
   })) ?? [];
 
   const showEightColorFullExport =
+    color_mode === CalibrationColorMode.EIGHT_COLOR;
+  const exportsZipPackage =
+    color_mode === CalibrationColorMode.FIVE_COLOR_EXT ||
     color_mode === CalibrationColorMode.EIGHT_COLOR;
 
   return (
@@ -149,13 +153,22 @@ export default function CalibrationPanel() {
             </div>
 
 
-            <Button
-              label={t("cal_generate_btn_panel")}
-              variant="primary"
-              onClick={() => void submitLegacyGenerate()}
-              disabled={isLoading}
-              loading={isLoading}
-              className="w-full"
+            <SlicerSelector
+              threemfDiskPath={threemfDiskPath}
+              downloadUrl={downloadUrl}
+              canSubmit={!isLoading}
+              largeFormat={exportsZipPackage}
+              onAutoGenerate={async () => {
+                await submitLegacyGenerate();
+                return useCalibrationStore.getState().threemfDiskPath ?? null;
+              }}
+              getLatestDownloadUrl={() =>
+                useCalibrationStore.getState().downloadUrl
+              }
+              getLatestThreemfDiskPath={() =>
+                useCalibrationStore.getState().threemfDiskPath
+              }
+              onArtifactAction={() => undefined}
             />
           </section>
         </div>
@@ -173,7 +186,7 @@ export default function CalibrationPanel() {
             </StatusBanner>
           )}
 
-          {lastSubmittedWorkflow === "legacy" && downloadUrl && (
+          {lastSubmittedWorkflow === "legacy" && downloadUrl && exportsZipPackage && (
             <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
               <div>
                 <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("cal_download")}</h3>

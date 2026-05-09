@@ -8,6 +8,7 @@ import {
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
 } from "../../utils/settingsOptionIds";
+import type { SlicerInfo } from "../../api/types";
 
 /** Brand color style for a slicer button. 切片软件品牌配色样式。 */
 export interface SlicerBrandStyle {
@@ -107,12 +108,33 @@ export function getSlicerLinkHint(
   return null;
 }
 
+function resolveActiveSlicer(
+  slicers: SlicerInfo[],
+  selectedSlicerId: string | null,
+  preferredDetectedSlicerId: string | null,
+): SlicerInfo | null {
+  const preferredInstalledSlicer = preferredDetectedSlicerId
+    ? slicers.find((slicer) => slicer.id === preferredDetectedSlicerId) ?? null
+    : null;
+  if (preferredDetectedSlicerId) {
+    return preferredInstalledSlicer;
+  }
+
+  const selectedSlicer = selectedSlicerId
+    ? slicers.find((slicer) => slicer.id === selectedSlicerId) ?? null
+    : null;
+  return selectedSlicer;
+}
+
 interface SlicerSelectorProps {
   threemfDiskPath: string | null;
   downloadUrl: string | null;
   canSubmit: boolean;
   onAutoGenerate: () => Promise<string | null>;
   largeFormat?: boolean;
+  getLatestDownloadUrl?: () => string | null;
+  getLatestThreemfDiskPath?: () => string | null;
+  onArtifactAction?: () => void;
 }
 
 export default function SlicerSelector({
@@ -121,6 +143,9 @@ export default function SlicerSelector({
   canSubmit,
   onAutoGenerate,
   largeFormat,
+  getLatestDownloadUrl,
+  getLatestThreemfDiskPath,
+  onArtifactAction,
 }: SlicerSelectorProps) {
   const slicers = useSlicerStore((s) => s.slicers);
   const selectedSlicerId = useSlicerStore((s) => s.selectedSlicerId);
@@ -206,8 +231,14 @@ export default function SlicerSelector({
         return left.display_name.localeCompare(right.display_name);
       })
     : slicers;
-  const selectedSlicer = slicers.find((s) => s.id === selectedSlicerId);
-  const brandSlicerId = selectedSlicerId ?? preferredDetectedSlicerId;
+  const activeSlicer = resolveActiveSlicer(
+    slicers,
+    selectedSlicerId,
+    preferredDetectedSlicerId,
+  );
+  const activeSlicerId = activeSlicer?.id ?? null;
+  const canOpenInSlicer = activeSlicer !== null;
+  const brandSlicerId = activeSlicerId;
   const brandStyle = brandSlicerId
     ? getSlicerBrandStyle(brandSlicerId)
     : DEFAULT_BRAND_STYLE;
@@ -218,10 +249,16 @@ export default function SlicerSelector({
     preferredDetectedSlicerId,
     preferredSlicerName,
     preferredInstalledSlicer !== null,
-    selectedSlicerId,
-    selectedSlicer?.display_name ?? null,
+    activeSlicerId ?? null,
+    activeSlicer?.display_name ?? null,
     t,
   );
+  const resolveLatestDownloadUrl =
+    getLatestDownloadUrl ?? (() => useConverterStore.getState().downloadUrl);
+  const resolveLatestThreemfDiskPath =
+    getLatestThreemfDiskPath ?? (() => useConverterStore.getState().threemfDiskPath);
+  const handleArtifactAction =
+    onArtifactAction ?? (() => useConverterStore.getState().cleanupAfterDownload());
 
   useEffect(() => {
     if (!preferredInstalledSlicer) {
@@ -253,7 +290,7 @@ export default function SlicerSelector({
     link.href = url;
     link.download = "";
     link.click();
-    useConverterStore.getState().cleanupAfterDownload();
+    handleArtifactAction();
   };
 
   const handleDownloadOrGenerate = async () => {
@@ -263,7 +300,7 @@ export default function SlicerSelector({
       setIsAutoGenerating(true);
       try {
         await onAutoGenerate();
-        const latestDownloadUrl = useConverterStore.getState().downloadUrl;
+        const latestDownloadUrl = resolveLatestDownloadUrl();
         if (latestDownloadUrl) {
           triggerDownload(latestDownloadUrl);
         }
@@ -276,23 +313,23 @@ export default function SlicerSelector({
   };
 
   const handleMainClick = async () => {
-    if (largeFormat || !hasSlicers) {
+    if (largeFormat || !canOpenInSlicer) {
       await handleDownloadOrGenerate();
       return;
     }
 
     // Has slicers (normal mode)
     if (threemfDiskPath) {
-      void launchSlicer(threemfDiskPath);
-      useConverterStore.getState().cleanupAfterDownload();
+      void launchSlicer(threemfDiskPath, activeSlicerId);
+      handleArtifactAction();
     } else {
       setIsAutoGenerating(true);
       try {
         await onAutoGenerate();
-        const latestPath = useConverterStore.getState().threemfDiskPath;
+        const latestPath = resolveLatestThreemfDiskPath();
         if (latestPath) {
-          void launchSlicer(latestPath);
-          useConverterStore.getState().cleanupAfterDownload();
+          void launchSlicer(latestPath, activeSlicerId);
+          handleArtifactAction();
         }
       } catch {
         // Error state is set by submitGenerate in ConverterStore
@@ -317,9 +354,9 @@ export default function SlicerSelector({
   const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating;
 
   const mainButtonLabel = getButtonLabel(
-    hasSlicers,
+    largeFormat ? hasSlicers : canOpenInSlicer,
     threemfDiskPath,
-    selectedSlicer?.display_name ?? null,
+    activeSlicer?.display_name ?? preferredSlicerName,
     t,
     largeFormat,
   );
@@ -377,7 +414,7 @@ export default function SlicerSelector({
             >
               {orderedSlicers.map((slicer) => {
                 const style = getSlicerBrandStyle(slicer.id);
-                const isSelected = slicer.id === selectedSlicerId;
+                const isSelected = slicer.id === activeSlicerId;
                 return (
                   <button
                     key={slicer.id}

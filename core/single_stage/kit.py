@@ -21,7 +21,14 @@ from typing import Iterable
 import numpy as np
 from PIL import Image, ImageDraw
 
-from config import ColorSystem, MODELS_DIR, PaletteEntry, TEMP_DIR
+from config import (
+    DEFAULT_PRINTER_ID,
+    DEFAULT_SLICER_ID,
+    ColorSystem,
+    MODELS_DIR,
+    PaletteEntry,
+    TEMP_DIR,
+)
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
 _trimesh = None
@@ -421,6 +428,9 @@ def generate_single_stage_kit(
     material_default: str = "PLA Basic",
     spec: SingleStageSpec = SINGLE_STAGE_SPEC,
     layer_height_mm: float | None = None,
+    printer_id: str = DEFAULT_PRINTER_ID,
+    slicer: str = DEFAULT_SLICER_ID,
+    nozzle_size: str | float | None = None,
 ) -> SingleStageKitResult:
     """Generate a ChromaPrint3D-aligned single-stage kit zip."""
     if not palette:
@@ -471,6 +481,9 @@ def generate_single_stage_kit(
                 "sparse_infill_pattern": "zig-zag",
             },
             color_mode="BW (Black & White)",
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
         )
 
         manifest = {

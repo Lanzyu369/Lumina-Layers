@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.lut import PaletteEntrySchema
+from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
 
 class SingleStageKitGenerateRequest(BaseModel):
@@ -30,6 +31,9 @@ class SingleStageKitGenerateRequest(BaseModel):
         le=0.3,
         description="Layer height in millimeters for generated single-stage jobs",
     )
+    printer_id: str = Field(DEFAULT_PRINTER_ID, description="Printer profile ID.")
+    slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
+    nozzle_size: str = Field("0.4", description="Nozzle size.")
 
 
 class StageAFitRequest(BaseModel):

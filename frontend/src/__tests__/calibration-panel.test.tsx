@@ -10,6 +10,28 @@ vi.mock("../api/calibration", () => ({
   generateSingleStageKit: vi.fn(),
 }));
 
+vi.mock("../components/sections/SlicerSelector", () => ({
+  default: ({
+    threemfDiskPath,
+    downloadUrl,
+    canSubmit,
+    largeFormat,
+  }: {
+    threemfDiskPath: string | null;
+    downloadUrl: string | null;
+    canSubmit: boolean;
+    largeFormat?: boolean;
+  }) => (
+    <div
+      data-testid="calibration-slicer-selector"
+      data-threemf-path={threemfDiskPath ?? ""}
+      data-download-url={downloadUrl ?? ""}
+      data-can-submit={canSubmit ? "true" : "false"}
+      data-large-format={largeFormat ? "true" : "false"}
+    />
+  ),
+}));
+
 beforeEach(() => {
   useCalibrationStore.setState({
     workflow: "legacy",
@@ -26,6 +48,7 @@ beforeEach(() => {
     isLoading: false,
     error: null,
     downloadUrl: null,
+    threemfDiskPath: null,
     previewImageUrl: null,
     modelUrl: null,
     statusMessage: null,
@@ -110,11 +133,14 @@ describe("CalibrationPanel", () => {
     expect(slider).toHaveValue("2.4");
   });
 
-  it("disables generate button when isLoading is true", () => {
+  it("passes loading state to the slicer selector action", () => {
     useCalibrationStore.setState({ isLoading: true });
     render(<CalibrationPanel />);
 
-    expect(screen.getByRole("button", { name: "生成校准板" })).toBeDisabled();
+    expect(screen.getByTestId("calibration-slicer-selector")).toHaveAttribute(
+      "data-can-submit",
+      "false",
+    );
   });
 
   it("shows error message when error is set", () => {
@@ -135,14 +161,35 @@ describe("CalibrationPanel", () => {
     expect(statusEl).toHaveTextContent("校准板生成成功");
   });
 
-  it("shows download link when downloadUrl is set", () => {
-    useCalibrationStore.setState({ downloadUrl: "/api/files/test.3mf" });
+  it("passes a generated 3MF disk path to the slicer selector", () => {
+    useCalibrationStore.setState({
+      downloadUrl: "/api/files/test.3mf",
+      threemfDiskPath: "/tmp/test.3mf",
+    });
+    render(<CalibrationPanel />);
+
+    const selector = screen.getByTestId("calibration-slicer-selector");
+    expect(selector).toHaveAttribute("data-threemf-path", "/tmp/test.3mf");
+    expect(selector).toHaveAttribute("data-download-url", "/api/files/test.3mf");
+    expect(selector).toHaveAttribute("data-large-format", "false");
+    expect(screen.queryByTestId("download-link")).not.toBeInTheDocument();
+  });
+
+  it("keeps an explicit download link for ZIP calibration packages", () => {
+    useCalibrationStore.setState({
+      color_mode: CalibrationColorMode.FIVE_COLOR_EXT,
+      downloadUrl: "/api/files/test.zip",
+    });
     render(<CalibrationPanel />);
 
     const link = screen.getByTestId("download-link");
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/api/files/test.3mf");
+    expect(link).toHaveAttribute("href", "/api/files/test.zip");
     expect(link).toHaveAttribute("download");
+    expect(screen.getByTestId("calibration-slicer-selector")).toHaveAttribute(
+      "data-large-format",
+      "true",
+    );
   });
 
   it("shows preview image when previewImageUrl is set", () => {

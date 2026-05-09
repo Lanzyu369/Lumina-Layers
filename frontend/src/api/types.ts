@@ -452,8 +452,11 @@ export interface CalibrationGenerateRequest {
   color_mode: CalibrationColorMode;
   block_size: number;
   gap: number;
-  backing_thickness: number;
-  eight_color_full_export: boolean;
+  backing_thickness?: number;
+  eight_color_full_export?: boolean;
+  printer_id?: string;
+  slicer?: string;
+  nozzle_size?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -464,6 +467,7 @@ export interface CalibrationResponse {
   download_url: string;
   preview_url: string | null;
   layer_urls: string[] | null;
+  threemf_disk_path?: string | null;
 }
 
 export interface SingleStageJobSummary {
@@ -481,6 +485,9 @@ export interface SingleStageKitGenerateRequest {
   substrate_display_name: string;
   material_default: string;
   layer_height_mm: number;
+  printer_id?: string;
+  slicer?: string;
+  nozzle_size?: string;
 }
 
 export interface SingleStageKitResponse {

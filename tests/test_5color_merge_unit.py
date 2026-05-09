@@ -256,7 +256,14 @@ class TestCalibration5ColorExtended:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(block_size_mm=5.0, gap_mm=0.84, backing_thickness_mm=1.2)
+            mock_fn.assert_called_once()
+            kwargs = mock_fn.call_args.kwargs
+            assert kwargs["block_size_mm"] == 5.0
+            assert kwargs["gap_mm"] == 0.84
+            assert kwargs["backing_thickness_mm"] == 1.2
+            assert kwargs["printer_id"] == "bambu-h2d"
+            assert kwargs["slicer"] == "BambuStudio"
+            assert kwargs["nozzle_size"] == "0.4"
 
     def test_5color_extended_response_contains_download_and_preview_urls(self) -> None:
         """Response should contain download_url and preview_url."""
@@ -278,6 +285,7 @@ class TestCalibration5ColorExtended:
             assert data["status"] == "ok"
             assert "/api/files/" in data["download_url"]
             assert "/api/files/" in data["preview_url"]
+            assert data["threemf_disk_path"] is None
             assert data["message"] == "5-Color Extended OK"
 
     def test_5color_extended_core_error_returns_500(self) -> None:

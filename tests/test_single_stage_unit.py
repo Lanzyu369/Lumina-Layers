@@ -159,6 +159,9 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
             "substrate_display_name": "White",
             "material_default": "PLA Basic",
             "layer_height_mm": 0.1,
+            "printer_id": "bambu-p1s",
+            "slicer": "OrcaSlicer",
+            "nozzle_size": "0.2",
         },
     )
 
@@ -170,6 +173,9 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert body["preview_url"].startswith("/api/files/")
     assert body["jobs"] == []
     assert captured["layer_height_mm"] == 0.1
+    assert captured["printer_id"] == "bambu-p1s"
+    assert captured["slicer"] == "OrcaSlicer"
+    assert captured["nozzle_size"] == "0.2"
 
 
 def test_calibration_generate_registers_stateless_outputs_with_ttl(

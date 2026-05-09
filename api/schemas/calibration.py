@@ -14,9 +14,16 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.extractor import CalibrationColorMode
+from config import (
+    DEFAULT_PRINTER_ID,
+    DEFAULT_SLICER_ID,
+    normalize_nozzle_size,
+    normalize_printer_profile_id,
+    normalize_slicer_software_id,
+)
 
 
 # ========== Constants ==========
@@ -105,3 +112,23 @@ class CalibrationGenerateRequest(BaseModel):
         description="底板厚度 (mm)",
     )
     eight_color_full_export: bool = Field(False, description="8 色是否导出全量分页包")
+    printer_id: str = Field(DEFAULT_PRINTER_ID, description="打印机配置 ID")
+    slicer: str = Field(DEFAULT_SLICER_ID, description="切片软件 ID")
+    nozzle_size: str = Field("0.4", description="喷嘴直径")
+
+    @field_validator("printer_id", mode="before")
+    @classmethod
+    def normalize_printer_id(cls, value: object) -> str:
+        normalized = normalize_printer_profile_id(str(value or ""))
+        return normalized or DEFAULT_PRINTER_ID
+
+    @field_validator("slicer", mode="before")
+    @classmethod
+    def normalize_slicer(cls, value: object) -> str:
+        normalized = normalize_slicer_software_id(str(value or ""))
+        return normalized or DEFAULT_SLICER_ID
+
+    @field_validator("nozzle_size", mode="before")
+    @classmethod
+    def normalize_nozzle(cls, value: object) -> str:
+        return normalize_nozzle_size(value) or "0.4"

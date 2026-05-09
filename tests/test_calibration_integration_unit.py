@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
+from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
 client: TestClient = TestClient(app)
 
@@ -21,6 +22,12 @@ _mock_preview: Image.Image = Image.fromarray(
     np.zeros((10, 10, 3), dtype=np.uint8)
 )
 _mock_return = ("/tmp/fake.3mf", _mock_preview, "OK")
+
+
+def _assert_default_device_kwargs(kwargs: dict) -> None:
+    assert kwargs["printer_id"] == DEFAULT_PRINTER_ID
+    assert kwargs["slicer"] == DEFAULT_SLICER_ID
+    assert kwargs["nozzle_size"] == "0.4"
 
 
 # =========================================================================
@@ -46,12 +53,12 @@ class TestColorModeRouting:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_color="White",
-                backing_thickness_mm=1.6,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_color"] == "White"
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.6
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
     def test_four_color_mode_routes_to_generate_calibration_board(self) -> None:
         with patch(
@@ -68,13 +75,13 @@ class TestColorModeRouting:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                color_mode="RYBW",
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_color="White",
-                backing_thickness_mm=1.6,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["color_mode"] == "RYBW"
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_color"] == "White"
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.6
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
     def test_six_color_mode_routes_to_generate_smart_board(self) -> None:
         with patch(
@@ -91,11 +98,11 @@ class TestColorModeRouting:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_thickness_mm=1.6,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.6
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
     def test_eight_color_full_export_routes_to_generate_8color_full_batch_zip(self) -> None:
         with patch(
@@ -113,11 +120,11 @@ class TestColorModeRouting:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_thickness_mm=1.6,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.6
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
     def test_eight_color_mode_routes_to_generate_8color_batch_zip(self) -> None:
         with patch(
@@ -134,11 +141,11 @@ class TestColorModeRouting:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_thickness_mm=1.6,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.6
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
 
 # =========================================================================
@@ -164,12 +171,12 @@ class TestParameterMapping:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                block_size_mm=8.0,
-                gap_mm=1.5,
-                backing_color="White",
-                backing_thickness_mm=2.4,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 8.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 1.5
+            assert mock_fn.call_args.kwargs["backing_color"] == "White"
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 2.4
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
             # Verify block_size is passed as float and backing color is hard-coded.
             call_kwargs = mock_fn.call_args.kwargs
             assert isinstance(call_kwargs["block_size_mm"], float)
@@ -190,13 +197,13 @@ class TestParameterMapping:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                color_mode="RYBW",
-                block_size_mm=5.5,
-                gap_mm=0.84,
-                backing_color="White",
-                backing_thickness_mm=1.2,
-            )
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["color_mode"] == "RYBW"
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.5
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_color"] == "White"
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.2
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
 
     def test_backing_thickness_defaults_when_omitted(self) -> None:
         """Omitting backing_thickness in the payload should fall back to the schema default (1.2 mm)."""
@@ -213,13 +220,39 @@ class TestParameterMapping:
                 },
             )
             assert response.status_code == 200
-            mock_fn.assert_called_once_with(
-                color_mode="RYBW",
-                block_size_mm=5.0,
-                gap_mm=0.84,
-                backing_color="White",
-                backing_thickness_mm=1.2,
+            mock_fn.assert_called_once()
+            assert mock_fn.call_args.kwargs["color_mode"] == "RYBW"
+            assert mock_fn.call_args.kwargs["block_size_mm"] == 5.0
+            assert mock_fn.call_args.kwargs["gap_mm"] == 0.84
+            assert mock_fn.call_args.kwargs["backing_color"] == "White"
+            assert mock_fn.call_args.kwargs["backing_thickness_mm"] == 1.2
+            _assert_default_device_kwargs(mock_fn.call_args.kwargs)
+
+    def test_device_settings_are_forwarded_to_core_generator(self) -> None:
+        with patch(
+            "api.routers.calibration.generate_calibration_board",
+            return_value=_mock_return,
+        ) as mock_fn:
+            response = client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "4-Color (RYBW)",
+                    "block_size": 5,
+                    "gap": 0.84,
+                    "backing_thickness": 1.2,
+                    "printer_id": "bambu-p1s",
+                    "slicer": "OrcaSlicer",
+                    "nozzle_size": "0.2",
+                },
             )
+
+        assert response.status_code == 200
+        assert response.json()["threemf_disk_path"] == "/tmp/fake.3mf"
+        mock_fn.assert_called_once()
+        kwargs = mock_fn.call_args.kwargs
+        assert kwargs["printer_id"] == "bambu-p1s"
+        assert kwargs["slicer"] == "OrcaSlicer"
+        assert kwargs["nozzle_size"] == "0.2"
 
 
 

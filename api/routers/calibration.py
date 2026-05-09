@@ -66,6 +66,11 @@ def calibration_generate(
     """
     mode = request.color_mode.value
     backing_thickness_mm = float(request.backing_thickness)
+    device_kwargs = {
+        "printer_id": request.printer_id,
+        "slicer": request.slicer,
+        "nozzle_size": request.nozzle_size,
+    }
     try:
         if mode == "BW (Black & White)":
             path, preview_imgs, status = generate_bw_calibration_board(
@@ -73,6 +78,7 @@ def calibration_generate(
                 gap_mm=request.gap,
                 backing_color="White",
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         elif mode == "4-Color (RYBW)":
             path, preview_imgs, status = generate_calibration_board(
@@ -81,6 +87,7 @@ def calibration_generate(
                 gap_mm=request.gap,
                 backing_color="White",
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         elif mode == "4-Color (CMYW)":
             path, preview_imgs, status = generate_calibration_board(
@@ -89,18 +96,21 @@ def calibration_generate(
                 gap_mm=request.gap,
                 backing_color="White",
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         elif mode == "6-Color (CMYWGK 1296)":
             path, preview_imgs, status = generate_smart_board(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         elif mode == "6-Color (RYBWGK 1296)":
             path, preview_imgs, status = generate_smart_board_rybw(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         elif mode == "8-Color Max":
             if request.eight_color_full_export:
@@ -108,18 +118,21 @@ def calibration_generate(
                     block_size_mm=float(request.block_size),
                     gap_mm=request.gap,
                     backing_thickness_mm=backing_thickness_mm,
+                    **device_kwargs,
                 )
             else:
                 path, preview_imgs, status = generate_8color_batch_zip(
                     block_size_mm=float(request.block_size),
                     gap_mm=request.gap,
                     backing_thickness_mm=backing_thickness_mm,
+                    **device_kwargs,
                 )
         elif mode == "5-Color Extended (1444)":
             path, preview_imgs, status = generate_5color_extended_batch_zip(
                 block_size_mm=float(request.block_size),
                 gap_mm=request.gap,
                 backing_thickness_mm=backing_thickness_mm,
+                **device_kwargs,
             )
         else:
             raise HTTPException(
@@ -185,6 +198,9 @@ def calibration_generate(
             "block_size_mm": float(request.block_size),
             "gap_mm": request.gap,
             "backing_color": backing_color_for_log,
+            "printer_id": request.printer_id,
+            "slicer": request.slicer,
+            "nozzle_size": request.nozzle_size,
         },
     )
 
@@ -194,6 +210,7 @@ def calibration_generate(
         download_url=f"/api/files/{download_id}",
         preview_url=preview_url,
         layer_urls=layer_urls if layer_urls else None,
+        threemf_disk_path=path if str(path).lower().endswith(".3mf") else None,
     )
 
 
@@ -219,6 +236,9 @@ def calibration_generate_single_stage_kit(
             substrate_display_name=request.substrate_display_name,
             material_default=request.material_default,
             layer_height_mm=request.layer_height_mm,
+            printer_id=request.printer_id,
+            slicer=request.slicer,
+            nozzle_size=request.nozzle_size,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as e:
         _handle_core_error(e, "Single-stage kit generation")

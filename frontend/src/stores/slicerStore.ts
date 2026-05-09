@@ -32,7 +32,7 @@ export interface SlicerActions {
   setSelectedSlicerId: (id: string | null) => void;
   validateAndSaveCustomSlicerPath: (path: string) => Promise<void>;
   clearCustomSlicerPath: () => void;
-  launchSlicer: (filePath: string) => Promise<void>;
+  launchSlicer: (filePath: string, slicerId?: string | null) => Promise<void>;
   clearMessage: () => void;
 }
 
@@ -206,9 +206,10 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       void _get().detectSlicers();
     },
 
-    launchSlicer: async (filePath: string) => {
+    launchSlicer: async (filePath: string, slicerId?: string | null) => {
       const state = _get();
-      if (!state.selectedSlicerId) {
+      const targetSlicerId = slicerId ?? state.selectedSlicerId;
+      if (!targetSlicerId) {
         set({ error: "请先选择切片软件" });
         return;
       }
@@ -216,16 +217,16 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       try {
         const settingsState = useSettingsStore.getState();
         const selectedSlicer = state.slicers.find(
-          (slicer) => slicer.id === state.selectedSlicerId,
+          (slicer) => slicer.id === targetSlicerId,
         );
         const slicerPath =
           settingsState.customSlicerPath &&
-          settingsState.customSlicerId === state.selectedSlicerId &&
+          settingsState.customSlicerId === targetSlicerId &&
           String(selectedSlicer?.source ?? "").includes("custom")
             ? settingsState.customSlicerPath
             : undefined;
         const response = await apiLaunchSlicer({
-          slicer_id: state.selectedSlicerId,
+          slicer_id: targetSlicerId,
           file_path: filePath,
           ...(slicerPath ? { slicer_path: slicerPath } : {}),
         });

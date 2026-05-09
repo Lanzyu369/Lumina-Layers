@@ -6,6 +6,7 @@ import {
   generateSingleStageKit,
 } from "../api/calibration";
 import { clampValue } from "./converter";
+import { useSettingsStore } from "./settingsStore";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
 const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
@@ -51,6 +52,7 @@ export interface CalibrationState {
   isLoading: boolean;
   error: string | null;
   downloadUrl: string | null;
+  threemfDiskPath: string | null;
   previewImageUrl: string | null;
   layerImageUrls: string[] | null;
   modelUrl: string | null;
@@ -99,6 +101,7 @@ const DEFAULT_STATE: CalibrationState = {
   isLoading: false,
   error: null,
   downloadUrl: null,
+  threemfDiskPath: null,
   previewImageUrl: null,
   layerImageUrls: null,
   modelUrl: null,
@@ -116,6 +119,7 @@ export const useCalibrationStore = create<
     set({
       workflow,
       downloadUrl: null,
+      threemfDiskPath: null,
       previewImageUrl: null,
       layerImageUrls: null,
       manifestUrl: null,
@@ -162,15 +166,20 @@ export const useCalibrationStore = create<
     const state = get();
     set({ isLoading: true, error: null, lastSubmittedWorkflow: "legacy" });
     try {
+      const settings = useSettingsStore.getState();
       const response = await calibrationGenerate({
         color_mode: state.color_mode,
         block_size: state.block_size,
         gap: state.gap,
         backing_thickness: state.backing_thickness,
         eight_color_full_export: state.eight_color_full_export,
+        printer_id: settings.printerModel,
+        slicer: settings.slicerSoftware,
+        nozzle_size: settings.nozzleSize,
       });
       set({
         downloadUrl: response.download_url,
+        threemfDiskPath: response.threemf_disk_path ?? null,
         previewImageUrl: response.preview_url ?? null,
         layerImageUrls: response.layer_urls ?? null,
         modelUrl: null,
@@ -196,15 +205,20 @@ export const useCalibrationStore = create<
       lastSubmittedWorkflow: "single-stage",
     });
     try {
+      const settings = useSettingsStore.getState();
       const response = await generateSingleStageKit({
         palette: buildSingleStagePalette(state.materialDefault),
         substrate_id: state.substrateId,
         substrate_display_name: state.substrateDisplayName,
         material_default: state.materialDefault,
         layer_height_mm: state.singleStageLayerHeightMm,
+        printer_id: settings.printerModel,
+        slicer: settings.slicerSoftware,
+        nozzle_size: settings.nozzleSize,
       });
       set({
         downloadUrl: response.kit_download_url,
+        threemfDiskPath: null,
         previewImageUrl: response.preview_url ?? null,
         modelUrl: null,
         manifestUrl: response.manifest_url,

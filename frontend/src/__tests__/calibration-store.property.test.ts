@@ -13,6 +13,7 @@ import {
 } from "../stores/calibrationStore";
 import { clampValue } from "../stores/converter";
 import { useConverterStore } from "../stores/converter";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 // **Validates: Requirements 6.3**
 describe("Feature: calibration-tab-integration, Property 4: clampValue 通用正确性", () => {
@@ -240,6 +241,7 @@ describe("Feature: calibration-tab-integration, Property 1: 双向状态隔离",
           isLoading: false,
           error: null,
           downloadUrl: null,
+          threemfDiskPath: null,
           previewImageUrl: null,
           modelUrl: null,
           statusMessage: null,
@@ -313,6 +315,12 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset store to defaults before each test
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      printerModel: "bambu-p1s",
+      slicerSoftware: "OrcaSlicer",
+      nozzleSize: "0.2",
+    });
     useCalibrationStore.setState({
       workflow: "legacy",
       color_mode: CalibrationColorMode.FOUR_COLOR_RYBW,
@@ -327,6 +335,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       isLoading: false,
       error: null,
       downloadUrl: null,
+      threemfDiskPath: null,
       previewImageUrl: null,
       modelUrl: null,
       statusMessage: null,
@@ -378,7 +387,9 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
           status: "ok",
           message: "success",
           download_url: "/test.3mf",
+          threemf_disk_path: "/tmp/test.3mf",
           preview_url: null,
+          layer_urls: null,
         });
 
         // Call submitGenerate
@@ -397,7 +408,11 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
           callArgs.gap === currentState.gap &&
           callArgs.backing_thickness === currentState.backing_thickness &&
           callArgs.eight_color_full_export ===
-            currentState.eight_color_full_export
+            currentState.eight_color_full_export &&
+          callArgs.printer_id === "bambu-p1s" &&
+          callArgs.slicer === "OrcaSlicer" &&
+          callArgs.nozzle_size === "0.2" &&
+          useCalibrationStore.getState().threemfDiskPath === "/tmp/test.3mf"
         );
       }),
       { numRuns: 100 },
@@ -430,6 +445,9 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
         mockGenerateSingleStageKit.mock.calls.length - 1
       ][0];
     expect(callArgs.layer_height_mm).toBe(0.1);
+    expect(callArgs.printer_id).toBe("bambu-p1s");
+    expect(callArgs.slicer).toBe("OrcaSlicer");
+    expect(callArgs.nozzle_size).toBe("0.2");
     expect(callArgs.palette.map((entry) => entry.color_name)).toEqual([
       "Sample",
     ]);

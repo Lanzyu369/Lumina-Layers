@@ -20,6 +20,7 @@ class CalibrationResponse(BaseModel):
     download_url: str
     preview_url: Optional[str] = None
     layer_urls: Optional[list[str]] = None
+    threemf_disk_path: Optional[str] = None
 
 
 class SingleStageJobResponse(BaseModel):
