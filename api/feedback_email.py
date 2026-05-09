@@ -67,10 +67,10 @@ async def send_bug_report_email_async(
     ticket_id: str,
     request_payload: dict[str, Any],
     dump_path: str,
-) -> None:
-    """Send a bug report email in the background.
+) -> bool:
+    """Send a bug report email and return whether SMTP accepted it.
 
-    在后台发送 Bug 报告邮件。
+    发送 Bug 报告邮件，并返回 SMTP 是否接受投递。
 
     Args:
         ticket_id: Short ticket id shown to the user.
@@ -82,7 +82,7 @@ async def send_bug_report_email_async(
     """
 
     if not is_email_configured():
-        return
+        return False
 
     smtp_host = os.environ["LUMINA_FEEDBACK_SMTP_HOST"]
     smtp_port = int(os.environ.get("LUMINA_FEEDBACK_SMTP_PORT", "587"))
@@ -112,6 +112,7 @@ async def send_bug_report_email_async(
             start_tls=use_tls,
             timeout=timeout_s,
         )
+        return True
     except (getattr(aiosmtplib, "SMTPException", RuntimeError), TimeoutError, OSError) as exc:
         log.error(
             "Bug-report email failed.",
@@ -123,6 +124,7 @@ async def send_bug_report_email_async(
                 "dependency": "aiosmtplib",
             },
         )
+        return False
 
 
 def _build_email_message(

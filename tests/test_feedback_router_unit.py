@@ -55,11 +55,18 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     from api.app import create_app
     import api.feedback_email as feedback_email
+    import api.routers.feedback as feedback_router
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(tmp_path))
     monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
     monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_URL", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_TOKEN", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_TIMEOUT_S", raising=False)
     feedback_email.is_email_configured.cache_clear()
+    feedback_router._clear_feedback_rate_limit_state()
     app = create_app()
     return TestClient(app)
 
@@ -80,6 +87,8 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     data = response.json()
     assert data["ticket_id"] == "session-"
     assert data["emailed"] is False
+    assert data["email_status"] == "unconfigured"
+    assert data["relay_available"] is False
     assert data["dump_path"].endswith(".json")
     canaries = [
         record for record in caplog.records
@@ -97,6 +106,53 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["emailed"] is False
+    assert response.json()["email_status"] == "unconfigured"
+
+
+def test_submit_bug_report_reports_successful_email_and_relay_availability(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _send(**_kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_SMTP_HOST", "localhost")
+    monkeypatch.setenv("LUMINA_FEEDBACK_TO", "dev@example.com")
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setattr("api.routers.feedback.send_bug_report_email_async", _send)
+    import api.feedback_email as feedback_email
+
+    feedback_email.is_email_configured.cache_clear()
+
+    response = client.post("/api/feedback/bug-report", json=_payload(description="Email ok"))
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["emailed"] is True
+    assert data["email_status"] == "sent"
+    assert data["relay_available"] is True
+
+
+def test_submit_bug_report_reports_failed_configured_email(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _send(**_kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_SMTP_HOST", "localhost")
+    monkeypatch.setenv("LUMINA_FEEDBACK_TO", "dev@example.com")
+    monkeypatch.setattr("api.routers.feedback.send_bug_report_email_async", _send)
+    import api.feedback_email as feedback_email
+
+    feedback_email.is_email_configured.cache_clear()
+
+    response = client.post("/api/feedback/bug-report", json=_payload(description="Email fails"))
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["emailed"] is False
+    assert data["email_status"] == "failed"
 
 
 def test_submit_bug_report_preserves_material_source_context(
@@ -175,6 +231,30 @@ def test_submit_bug_report_rejects_oversized_screenshot(
     assert warnings[0].error_type == "PayloadTooLarge"
 
 
+def test_submit_bug_report_rate_limits_repeated_submissions(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", "1")
+    monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", "60")
+    _capture_feedback_logger(caplog, logging.WARNING)
+
+    first = client.post("/api/feedback/bug-report", json=_payload(description="first"))
+    second = client.post("/api/feedback/bug-report", json=_payload(description="second"))
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert 1 <= int(second.headers["Retry-After"]) <= 60
+    warnings = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_bug_report_rate_limited"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].error_type == "RateLimitExceeded"
+    assert warnings[0].max_requests == 1
+
+
 def test_submit_bug_report_returns_500_when_dump_fails(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -196,3 +276,143 @@ def test_submit_bug_report_returns_500_when_dump_fails(
     assert len(failures) == 1
     assert failures[0].error_type == "OSError"
     assert failures[0].path == "<feedback_dump_dir>"
+
+
+def test_relay_bug_report_returns_503_when_unconfigured(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _capture_feedback_logger(caplog, logging.WARNING)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={"ticket_id": "abc12345", "request_payload": _payload()},
+    )
+
+    assert response.status_code == 503
+    warnings = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_bug_report_relay_unconfigured"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].error_type == "RelayUnconfigured"
+
+
+def test_relay_bug_report_forwards_to_configured_relay(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import httpx
+
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        status_code = 202
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": self.timeout,
+            })
+            return _Response()
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_TOKEN", "secret-token")
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_TIMEOUT_S", "3")
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    _capture_feedback_logger(caplog, logging.INFO)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={"ticket_id": "abc12345", "request_payload": _payload(description="Relay me")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"forwarded": True}
+    assert calls == [
+        {
+            "url": "https://relay.example.test/feedback",
+            "json": {
+                "ticket_id": "abc12345",
+                "request_payload": _payload(description="Relay me"),
+            },
+            "headers": {
+                "Content-Type": "application/json",
+                "X-Lumina-Feedback-Ticket": "abc12345",
+                "Authorization": "Bearer secret-token",
+            },
+            "timeout": 3.0,
+        }
+    ]
+    infos = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_bug_report_relay_done"
+    ]
+    assert len(infos) == 1
+    assert infos[0].relay_status_code == 202
+
+
+def test_relay_bug_report_returns_502_when_relay_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import httpx
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            _url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            raise httpx.ConnectError("offline")
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    _capture_feedback_logger(caplog, logging.ERROR)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={"ticket_id": "abc12345", "request_payload": _payload()},
+    )
+
+    assert response.status_code == 502
+    failures = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_bug_report_relay_failed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].dependency == "httpx"

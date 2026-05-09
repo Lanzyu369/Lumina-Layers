@@ -192,6 +192,10 @@ SYSTEM_STRUCTURED_EVENTS = {
     "system_save_settings_done",
 }
 FEEDBACK_STRUCTURED_EVENTS = {
+    "feedback_bug_report_rate_limited",
+    "feedback_bug_report_relay_done",
+    "feedback_bug_report_relay_failed",
+    "feedback_bug_report_relay_unconfigured",
     "feedback_bug_report_submitted",
 }
 SLICER_STRUCTURED_EVENTS = {

@@ -133,10 +133,24 @@ docker run -p 7860:7860 \
 
 1. Restart the backend.
 2. Submit a bug report from the UI.
-3. A successful email-enabled response should not show the "email is not configured" message.
+3. A successful email-enabled response should say that the report was sent to the developer mailbox.
 4. If it still shows that email is unconfigured, check that `LUMINA_FEEDBACK_SMTP_HOST` and `LUMINA_FEEDBACK_TO` are visible to the backend process.
 5. If the UI no longer says unconfigured but no email arrives, check backend logs for `feedback_email_failed` and verify host, port, TLS mode, username, password or app password, and provider SMTP permissions.
 6. For Resend, the domain page must show `Verified`; Gmail may place the first messages under Updates or spam while reputation is new.
+
+## Abuse guard and optional hosted relay
+
+The bug-report endpoint is rate-limited per client address before writing a JSON dump, sending SMTP email, or forwarding to a hosted relay. Public deployments should keep the default `LUMINA_FEEDBACK_RATE_LIMIT_MAX=30` and `LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S=300`, or stricter values.
+
+Hosted relay forwarding is disabled by default. If local SMTP is unconfigured or fails, the UI asks the user for consent before forwarding the same report through the local backend to a trusted relay. Configure it only on deployments that operate the relay service:
+
+```bash
+LUMINA_FEEDBACK_RELAY_URL=https://feedback.example.com/lumina/bug-report
+LUMINA_FEEDBACK_RELAY_TOKEN=replace-with-server-side-token
+LUMINA_FEEDBACK_RELAY_TIMEOUT_S=8
+```
+
+The browser never receives the relay token. If relay forwarding is unavailable or fails, the UI still offers manual copy, default mail app, and QQ Mail fallback options.
 
 # 反馈邮件配置
 
@@ -273,7 +287,21 @@ docker run -p 7860:7860 \
 
 1. 重启后端。
 2. 在界面提交一条 Bug 反馈。
-3. 如果邮件配置生效，成功页不应再显示“邮件未配置”。
+3. 如果邮件配置生效，成功页应提示报告已通过本机邮件发送给开发者。
 4. 如果仍显示未配置，检查后端进程是否能读到 `LUMINA_FEEDBACK_SMTP_HOST` 和 `LUMINA_FEEDBACK_TO`。
 5. 如果不再提示未配置但没有收到邮件，检查后端日志中的 `feedback_email_failed`，并核对 host、端口、TLS、用户名、授权码和邮箱服务商的 SMTP 权限。
 6. 如果使用 Resend，域名页需要显示 `Verified`；Gmail 在新发件域名初期可能会把邮件归到“更新”或垃圾邮件。
+
+## 防滥用保护和可选官方转发
+
+Bug 反馈接口会按客户端地址限流，限流发生在写入 JSON dump、发送 SMTP 邮件或转发到官方 relay 之前。公网部署时应保持默认的 `LUMINA_FEEDBACK_RATE_LIMIT_MAX=30` 和 `LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S=300`，或使用更严格的值。
+
+官方转发默认关闭。如果本机 SMTP 未配置或发送失败，界面会先征得用户同意，再通过本机后端把同一份反馈转发到可信 relay。只有在你维护 relay 服务的部署环境里才配置：
+
+```bash
+LUMINA_FEEDBACK_RELAY_URL=https://feedback.example.com/lumina/bug-report
+LUMINA_FEEDBACK_RELAY_TOKEN=replace-with-server-side-token
+LUMINA_FEEDBACK_RELAY_TIMEOUT_S=8
+```
+
+浏览器不会拿到 relay token。如果官方转发不可用或失败，界面仍会提供复制反馈内容、默认邮箱和 QQ 邮箱等手动兜底方式。

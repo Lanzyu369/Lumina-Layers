@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
-import { submitBugReport } from "../api/feedback";
-import type { BugReportResponse } from "../api/feedback";
+import { relayBugReport, submitBugReport } from "../api/feedback";
+import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
 import { useI18n } from "../i18n/context";
 import { collectBugReportContext } from "../utils/bugReportContext";
 import Button from "./ui/Button";
@@ -21,6 +21,13 @@ interface NoticeState {
   tone: "success" | "error" | "warning";
   message: string;
 }
+
+interface FailedReportState {
+  text: string;
+  copied: boolean;
+}
+
+type RelayState = "idle" | "sending" | "sent" | "failed" | "skipped";
 
 function interpolateTicket(template: string, ticket: string): string {
   return template.replace("{{ticket}}", ticket);
@@ -92,7 +99,11 @@ export function BugReportModal({
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [contextExpanded, setContextExpanded] = useState(false);
   const [submittedTicket, setSubmittedTicket] = useState<BugReportResponse | null>(null);
+  const [submittedPayload, setSubmittedPayload] = useState<BugReportRequestPayload | null>(null);
   const [copied, setCopied] = useState(false);
+  const [submittedReportCopied, setSubmittedReportCopied] = useState(false);
+  const [failedReport, setFailedReport] = useState<FailedReportState | null>(null);
+  const [relayState, setRelayState] = useState<RelayState>("idle");
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [screenshotName, setScreenshotName] = useState<string | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
@@ -105,7 +116,11 @@ export function BugReportModal({
     setNotice(null);
     setContextExpanded(false);
     setSubmittedTicket(null);
+    setSubmittedPayload(null);
     setCopied(false);
+    setSubmittedReportCopied(false);
+    setFailedReport(null);
+    setRelayState("idle");
     setScreenshotDataUrl(null);
     setScreenshotName(null);
     setScreenshotError(null);
@@ -161,6 +176,9 @@ export function BugReportModal({
     if (notice?.tone === "warning") {
       setNotice(null);
     }
+    if (failedReport) {
+      setFailedReport(null);
+    }
   };
 
   const handleScreenshotChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -215,21 +233,30 @@ export function BugReportModal({
     setSubmitting(true);
     setDescriptionError(null);
     setNotice(null);
+    setFailedReport(null);
 
+    const reportPayload: BugReportRequestPayload = {
+      description: trimmedDescription,
+      user_email: email.trim() ? email.trim() : null,
+      context,
+      screenshot_data_url: screenshotDataUrl,
+    };
     try {
-      const response = await submitBugReport({
-        description: trimmedDescription,
-        user_email: email.trim() ? email.trim() : null,
-        context,
-        screenshot_data_url: screenshotDataUrl,
-      });
+      const response = await submitBugReport(reportPayload);
       setSubmittedTicket(response);
+      setSubmittedPayload(reportPayload);
       setSubmitting(false);
       setCopied(false);
+      setSubmittedReportCopied(false);
+      setRelayState("idle");
     } catch {
       setNotice({
         tone: "error",
         message: t("bug_report_toast_error"),
+      });
+      setFailedReport({
+        text: JSON.stringify(reportPayload, null, 2),
+        copied: false,
       });
       setSubmitting(false);
     }
@@ -252,6 +279,103 @@ export function BugReportModal({
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   };
+
+  const submittedReportText = submittedPayload
+    ? JSON.stringify(submittedPayload, null, 2)
+    : "";
+
+  const handleRelayReport = async () => {
+    if (!submittedTicket || !submittedPayload) {
+      return;
+    }
+    setRelayState("sending");
+    setNotice(null);
+    try {
+      await relayBugReport(submittedTicket.ticket_id, submittedPayload);
+      setRelayState("sent");
+      setNotice({
+        tone: "success",
+        message: t("bug_report_relay_success"),
+      });
+    } catch {
+      setRelayState("failed");
+      setNotice({
+        tone: "error",
+        message: t("bug_report_relay_failed"),
+      });
+    }
+  };
+
+  const handleCopySubmittedReport = async () => {
+    if (!submittedReportText) {
+      return;
+    }
+    const copiedToClipboard = await copyTextToClipboard(submittedReportText);
+    if (!copiedToClipboard) {
+      setSubmittedReportCopied(false);
+      setNotice({
+        tone: "warning",
+        message: t("bug_report_fallback_copy_failed"),
+      });
+      return;
+    }
+    setNotice(null);
+    setSubmittedReportCopied(true);
+    window.setTimeout(() => setSubmittedReportCopied(false), 2000);
+  };
+
+  const handleCopyFailedReport = async () => {
+    if (!failedReport) {
+      return;
+    }
+    const copiedToClipboard = await copyTextToClipboard(failedReport.text);
+    if (!copiedToClipboard) {
+      setFailedReport({ ...failedReport, copied: false });
+      setNotice({
+        tone: "warning",
+        message: t("bug_report_fallback_copy_failed"),
+      });
+      return;
+    }
+    setNotice(null);
+    setFailedReport({ ...failedReport, copied: true });
+    window.setTimeout(() => {
+      setFailedReport((current) => current ? { ...current, copied: false } : current);
+    }, 2000);
+  };
+
+  const buildFallbackMailto = (reportText: string, ticketId?: string): string => {
+    const subject = ticketId
+      ? `Lumina Studio bug report ${ticketId}`
+      : "Lumina Studio bug report";
+    return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(reportText)}`;
+  };
+
+  const renderManualFallbackActions = (
+    reportText: string,
+    copyButton: JSX.Element,
+    ticketId?: string,
+  ): JSX.Element => (
+    <div className="flex flex-wrap items-center gap-2">
+      {copyButton}
+      <a
+        href={buildFallbackMailto(reportText, ticketId)}
+        className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+        style={{ color: "var(--surface-text-muted)" }}
+      >
+        {t("bug_report_fallback_mailto")}
+      </a>
+      <a
+        href="https://mail.qq.com/"
+        target="_blank"
+        rel="noreferrer"
+        className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+        style={{ color: "var(--surface-text-muted)" }}
+      >
+        {t("bug_report_fallback_qq_mail")}
+      </a>
+    </div>
+  );
 
   return createPortal(
     <div
@@ -365,6 +489,89 @@ export function BugReportModal({
                   </code>
                 </div>
               )}
+              {!submittedTicket.emailed && submittedTicket.relay_available && relayState !== "sent" && (
+                <div
+                  className="space-y-3 rounded-[18px] border px-4 py-3"
+                  style={{
+                    borderColor: "var(--surface-outline)",
+                    background:
+                      "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
+                  }}
+                >
+                  <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">
+                    {t("bug_report_relay_prompt")}
+                  </p>
+                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    {t("bug_report_relay_privacy")}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="bug-report-relay-send"
+                      onClick={handleRelayReport}
+                      disabled={relayState === "sending"}
+                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      style={{ color: "var(--surface-text-muted)" }}
+                    >
+                      {t("bug_report_relay_send")}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="bug-report-relay-skip"
+                      onClick={() => {
+                        setRelayState("skipped");
+                        setNotice({
+                          tone: "warning",
+                          message: t("bug_report_relay_skipped"),
+                        });
+                      }}
+                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      style={{ color: "var(--surface-text-muted)" }}
+                    >
+                      {t("bug_report_relay_skip")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {!submittedTicket.emailed && submittedReportText && relayState !== "sent" && (
+                <div
+                  className="space-y-3 rounded-[18px] border px-4 py-3"
+                  style={{
+                    borderColor: "var(--surface-outline)",
+                    background:
+                      "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
+                  }}
+                >
+                  <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">
+                    {t("bug_report_fallback_intro")}
+                  </p>
+                  {renderManualFallbackActions(
+                    submittedReportText,
+                    <button
+                      type="button"
+                      data-testid="bug-report-copy-submitted-report"
+                      onClick={handleCopySubmittedReport}
+                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      style={{ color: "var(--surface-text-muted)" }}
+                    >
+                      {submittedReportCopied
+                        ? t("bug_report_fallback_copied")
+                        : t("bug_report_fallback_copy")}
+                    </button>,
+                    submittedTicket.ticket_id,
+                  )}
+                  <pre
+                    data-testid="bug-report-submitted-fallback-text"
+                    className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-2xl px-3 py-3 text-xs leading-5 text-slate-100"
+                    style={{
+                      background:
+                        "color-mix(in srgb, var(--surface-panel-strong) 18%, black)",
+                    }}
+                  >
+                    {submittedReportText}
+                  </pre>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-700">
@@ -386,6 +593,44 @@ export function BugReportModal({
                 >
                   {notice.message}
                 </StatusBanner>
+              )}
+              {failedReport && (
+                <div
+                  className="space-y-3 rounded-[18px] border px-4 py-3"
+                  style={{
+                    borderColor: "var(--surface-outline)",
+                    background:
+                      "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
+                  }}
+                >
+                  <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">
+                    {t("bug_report_fallback_intro")}
+                  </p>
+                  {renderManualFallbackActions(
+                    failedReport.text,
+                    <button
+                      type="button"
+                      data-testid="bug-report-copy-failed-report"
+                      onClick={handleCopyFailedReport}
+                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                      style={{ color: "var(--surface-text-muted)" }}
+                    >
+                      {failedReport.copied
+                        ? t("bug_report_fallback_copied")
+                        : t("bug_report_fallback_copy")}
+                    </button>,
+                  )}
+                  <pre
+                    data-testid="bug-report-fallback-text"
+                    className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-2xl px-3 py-3 text-xs leading-5 text-slate-100"
+                    style={{
+                      background:
+                        "color-mix(in srgb, var(--surface-panel-strong) 18%, black)",
+                    }}
+                  >
+                    {failedReport.text}
+                  </pre>
+                </div>
               )}
 
               <div className="space-y-2">

@@ -37,6 +37,12 @@ export interface BugReportResponse {
   ticket_id: string;
   emailed: boolean;
   dump_path: string;
+  email_status: "sent" | "unconfigured" | "failed";
+  relay_available: boolean;
+}
+
+export interface BugReportRelayResponse {
+  forwarded: boolean;
 }
 
 export async function submitBugReport(
@@ -45,6 +51,20 @@ export async function submitBugReport(
   const { data } = await apiClient.post<BugReportResponse>(
     "/feedback/bug-report",
     payload,
+  );
+  return data;
+}
+
+export async function relayBugReport(
+  ticketId: string,
+  payload: BugReportRequestPayload,
+): Promise<BugReportRelayResponse> {
+  const { data } = await apiClient.post<BugReportRelayResponse>(
+    "/feedback/bug-report/relay",
+    {
+      ticket_id: ticketId,
+      request_payload: payload,
+    },
   );
   return data;
 }

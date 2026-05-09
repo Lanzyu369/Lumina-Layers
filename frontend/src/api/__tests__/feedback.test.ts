@@ -7,7 +7,7 @@ vi.mock("../client", () => ({
 }));
 
 import apiClient from "../client";
-import { submitBugReport } from "../feedback";
+import { relayBugReport, submitBugReport } from "../feedback";
 
 describe("submitBugReport", () => {
   beforeEach(() => {
@@ -19,6 +19,8 @@ describe("submitBugReport", () => {
       data: {
         ticket_id: "abc12345",
         emailed: false,
+        email_status: "unconfigured",
+        relay_available: false,
         dump_path: "feedback/abc12345.json",
       },
     });
@@ -60,8 +62,52 @@ describe("submitBugReport", () => {
     expect(result).toEqual({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
+  });
+
+  it("posts confirmed payloads to /feedback/bug-report/relay", async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      data: { forwarded: true },
+    });
+
+    const payload = {
+      description: "Preview failed",
+      user_email: null,
+      context: {
+        url: "",
+        user_agent: "",
+        screen_width: 0,
+        screen_height: 0,
+        device_pixel_ratio: 1,
+        app_version: "2.0.0",
+        language: "en" as const,
+        theme: "dark" as const,
+        active_tab: "converter",
+        active_session_ids: { converter: null, single_stage: null },
+        color_mode: null,
+        lut_name: null,
+        source_version: null,
+        selected_native_brand_key: null,
+        selected_native_db_names: [],
+        selected_material_dir_names: [],
+        material_layer_count: null,
+        material_layer_height_mm: null,
+        material_backing_material_dir_name: null,
+        recent_client_logs: [],
+      },
+      screenshot_data_url: null,
+    };
+
+    const result = await relayBugReport("abc12345", payload);
+
+    expect(apiClient.post).toHaveBeenCalledWith("/feedback/bug-report/relay", {
+      ticket_id: "abc12345",
+      request_payload: payload,
+    });
+    expect(result).toEqual({ forwarded: true });
   });
 
   it("rethrows non-2xx failures", async () => {

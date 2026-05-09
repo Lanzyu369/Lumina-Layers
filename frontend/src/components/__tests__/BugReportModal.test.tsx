@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../api/feedback", () => ({
+  relayBugReport: vi.fn(),
   submitBugReport: vi.fn(),
 }));
 
@@ -9,7 +10,7 @@ vi.mock("../../utils/bugReportContext", () => ({
   collectBugReportContext: vi.fn(),
 }));
 
-import { submitBugReport } from "../../api/feedback";
+import { relayBugReport, submitBugReport } from "../../api/feedback";
 import { collectBugReportContext } from "../../utils/bugReportContext";
 import { BugReportModal } from "../BugReportModal";
 
@@ -65,6 +66,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
 
@@ -93,6 +96,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const screenshot = new File(["fake png"], "preview.png", { type: "image/png" });
@@ -136,6 +141,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/20260429T162531Z_abc.json",
     });
     const onClose = vi.fn();
@@ -152,7 +159,7 @@ describe("BugReportModal", () => {
     );
     expect(
       screen.getByText(
-        "邮件未配置，报告已保存到本地。请把工单号告知开发者，便于查找原始记录。",
+        "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "完成" })).toBeInTheDocument();
@@ -164,6 +171,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "deadbeef",
       emailed: true,
+      email_status: "sent",
+      relay_available: false,
       dump_path: "feedback/20260429T162531Z_deadbeef.json",
     });
 
@@ -174,14 +183,97 @@ describe("BugReportModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByTestId("bug-report-ticket-id")).toHaveTextContent("deadbeef");
-    expect(screen.getByText("邮件投递已配置，报告已保存并加入发送队列。")).toBeInTheDocument();
+    expect(screen.getByText("报告已通过本机邮件发送给开发者。")).toBeInTheDocument();
     expect(screen.queryByTestId("bug-report-dump-path")).not.toBeInTheDocument();
+  });
+
+  it("asks for consent and relays through the official service when local email fails", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "relay123",
+      emailed: false,
+      email_status: "failed",
+      relay_available: true,
+      dump_path: "feedback/relay123.json",
+    });
+    vi.mocked(relayBugReport).mockResolvedValueOnce({ forwarded: true });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Crash after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText(
+      "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
+    )).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bug-report-relay-send"));
+
+    await waitFor(() => {
+      expect(relayBugReport).toHaveBeenCalledWith(
+        "relay123",
+        expect.objectContaining({ description: "Crash after generate." }),
+      );
+    });
+    expect(await screen.findByText("已转发到官方问题收集服务。")).toBeInTheDocument();
+    expect(screen.queryByTestId("bug-report-copy-submitted-report")).not.toBeInTheDocument();
+  });
+
+  it("shows manual fallback after skipping official relay", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "relayskip",
+      emailed: false,
+      email_status: "unconfigured",
+      relay_available: true,
+      dump_path: "feedback/relayskip.json",
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Crash after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-relay-skip");
+
+    fireEvent.click(screen.getByTestId("bug-report-relay-skip"));
+
+    expect(await screen.findByText("未转发到官方服务，请使用下面的手动方式发送。")).toBeInTheDocument();
+    expect(screen.getByTestId("bug-report-copy-submitted-report")).toBeInTheDocument();
+  });
+
+  it("keeps manual fallback actions visible when official relay fails", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "relayfail",
+      emailed: false,
+      email_status: "failed",
+      relay_available: true,
+      dump_path: "feedback/relayfail.json",
+    });
+    vi.mocked(relayBugReport).mockRejectedValueOnce(new Error("offline"));
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Crash after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-relay-send");
+
+    fireEvent.click(screen.getByTestId("bug-report-relay-send"));
+
+    expect(await screen.findByText("官方转发失败，请使用下面的手动方式发送。")).toBeInTheDocument();
+    expect(screen.getByTestId("bug-report-copy-submitted-report")).toBeInTheDocument();
+    expect(screen.getByText("用默认邮箱发送")).toHaveAttribute(
+      "href",
+      expect.stringContaining("mailto:"),
+    );
+    expect(screen.getByText("打开 QQ 邮箱")).toHaveAttribute("href", "https://mail.qq.com/");
   });
 
   it("invokes onClose only when the success Done button is clicked", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const onClose = vi.fn();
@@ -202,6 +294,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const writeText = vi.fn().mockResolvedValueOnce(undefined);
@@ -227,6 +321,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const writeText = vi.fn().mockRejectedValueOnce(new Error("not allowed"));
@@ -260,6 +356,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const writeText = vi.fn().mockRejectedValueOnce(new Error("not allowed"));
@@ -292,6 +390,8 @@ describe("BugReportModal", () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
       dump_path: "feedback/abc12345.json",
     });
     const onClose = vi.fn();
@@ -322,8 +422,52 @@ describe("BugReportModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("提交失败，请稍后再试。");
+    expect(screen.getByText("如果多次失败，请复制下面的反馈内容，通过邮箱或即时通讯发给开发者。")).toBeInTheDocument();
+    expect(screen.getByTestId("bug-report-fallback-text")).toHaveTextContent(
+      '"description": "Preview failed"',
+    );
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("copies the failed report payload for manual fallback", async () => {
+    vi.mocked(submitBugReport).mockRejectedValueOnce(new Error("boom"));
+    const writeText = vi.fn().mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-fallback-text");
+
+    fireEvent.click(screen.getByTestId("bug-report-copy-failed-report"));
+
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining('"description": "Preview failed"'),
+    );
+    expect(await screen.findByText("反馈内容已复制")).toBeInTheDocument();
+  });
+
+  it("clears the failed report fallback when the description changes", async () => {
+    vi.mocked(submitBugReport).mockRejectedValueOnce(new Error("boom"));
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByTestId("bug-report-fallback-text");
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed again" },
+    });
+
+    expect(screen.queryByTestId("bug-report-fallback-text")).not.toBeInTheDocument();
   });
 
   it("shows inline validation when description is empty", async () => {

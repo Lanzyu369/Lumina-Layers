@@ -77,6 +77,62 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "提交失败，请稍后再试。",
     en: "Submission failed, please retry.",
   },
+  bug_report_fallback_intro: {
+    zh: "如果多次失败，请复制下面的反馈内容，通过邮箱或即时通讯发给开发者。",
+    en: "If submission keeps failing, copy the report below and send it to the developer by email or chat.",
+  },
+  bug_report_fallback_copy: {
+    zh: "复制反馈内容",
+    en: "Copy report",
+  },
+  bug_report_fallback_copied: {
+    zh: "反馈内容已复制",
+    en: "Report copied",
+  },
+  bug_report_fallback_copy_failed: {
+    zh: "自动复制失败，请手动选中文本复制。",
+    en: "Automatic copy failed. Select the report text and copy it manually.",
+  },
+  bug_report_fallback_mailto: {
+    zh: "用默认邮箱发送",
+    en: "Send with default mail app",
+  },
+  bug_report_fallback_qq_mail: {
+    zh: "打开 QQ 邮箱",
+    en: "Open QQ Mail",
+  },
+  bug_report_relay_prompt: {
+    zh: "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
+    en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
+  },
+  bug_report_relay_privacy: {
+    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题。",
+    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context, only for triage and follow-up.",
+  },
+  bug_report_relay_send: {
+    zh: "同意并转发",
+    en: "Agree and forward",
+  },
+  bug_report_relay_skip: {
+    zh: "不转发，手动发送",
+    en: "Do not forward; send manually",
+  },
+  bug_report_relay_success: {
+    zh: "已转发到官方问题收集服务。",
+    en: "Forwarded to the official bug collection service.",
+  },
+  bug_report_relay_failed: {
+    zh: "官方转发失败，请使用下面的手动方式发送。",
+    en: "Official forwarding failed. Use one of the manual options below.",
+  },
+  bug_report_relay_unavailable: {
+    zh: "官方转发未配置，请使用下面的手动方式发送。",
+    en: "Official forwarding is not configured. Use one of the manual options below.",
+  },
+  bug_report_relay_skipped: {
+    zh: "未转发到官方服务，请使用下面的手动方式发送。",
+    en: "Official forwarding was skipped. Use one of the manual options below.",
+  },
   bug_report_success_ticket_label: {
     zh: "工单号",
     en: "Ticket ID",
@@ -94,12 +150,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Automatic copy failed. Select the ticket id and copy it manually.",
   },
   bug_report_success_emailed_yes: {
-    zh: "邮件投递已配置，报告已保存并加入发送队列。",
-    en: "Email delivery is configured; the report was saved and queued for delivery.",
+    zh: "报告已通过本机邮件发送给开发者。",
+    en: "Report was sent to the developer mailbox from this device.",
   },
   bug_report_success_emailed_no: {
-    zh: "邮件未配置，报告已保存到本地。请把工单号告知开发者，便于查找原始记录。",
-    en: "Email is not configured; the report was saved locally. Share the ticket id with the developer so the original record can be located.",
+    zh: "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
+    en: "Local email delivery did not succeed; the report was saved locally. Choose official forwarding or send it manually.",
   },
   bug_report_success_dump_path_label: {
     zh: "本地路径",

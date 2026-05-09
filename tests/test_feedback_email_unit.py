@@ -101,7 +101,7 @@ def test_send_bug_report_email_short_circuits_when_unconfigured(
     monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
     monkeypatch.setattr(feedback_email.aiosmtplib, "send", lambda *args, **kwargs: calls.append(args))
 
-    asyncio.run(
+    result = asyncio.run(
         feedback_email.send_bug_report_email_async(
             ticket_id="abc12345",
             request_payload=_payload(),
@@ -109,6 +109,7 @@ def test_send_bug_report_email_short_circuits_when_unconfigured(
         )
     )
 
+    assert result is False
     assert calls == []
 
 
@@ -126,7 +127,7 @@ def test_send_bug_report_email_passes_all_configured_recipients(
     monkeypatch.setenv("LUMINA_FEEDBACK_TO", "dev@example.com, ops@example.com")
     monkeypatch.setattr(feedback_email.aiosmtplib, "send", _send)
 
-    asyncio.run(
+    result = asyncio.run(
         feedback_email.send_bug_report_email_async(
             ticket_id="abc12345",
             request_payload=_payload(),
@@ -134,6 +135,7 @@ def test_send_bug_report_email_passes_all_configured_recipients(
         )
     )
 
+    assert result is True
     assert calls[0]["recipients"] == ["dev@example.com", "ops@example.com"]
 
 
@@ -153,7 +155,7 @@ def test_send_bug_report_email_logs_failures_without_reraising(
     monkeypatch.setattr(feedback_email.aiosmtplib, "send", _raise)
     _capture_feedback_email_logger(caplog, logging.ERROR)
 
-    asyncio.run(
+    result = asyncio.run(
         feedback_email.send_bug_report_email_async(
             ticket_id="abc12345",
             request_payload=_payload(),
@@ -161,6 +163,7 @@ def test_send_bug_report_email_logs_failures_without_reraising(
         )
     )
 
+    assert result is False
     failures = [
         record for record in caplog.records
         if getattr(record, "event", None) == "feedback_email_failed"
