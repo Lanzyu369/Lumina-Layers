@@ -1,7 +1,17 @@
-"""
-孤立像素清理模块（Isolated Pixel Cleanup）
+"""孤立像素清理模块（Isolated Pixel Cleanup）。
+Isolated pixel cleanup for the material matrix.
 
-严格孤立像素（1px）：与所有 8 邻域均不同，用邻域众数替换
+检测与 8 邻域全部不同的严格孤立像素（盐锡噪点），将其材料堆叠与
+RGB 替换为 8 邻域众数邻居的对应值。新版本不再依赖 LUT 标准化步骤：
+邻居像素本身就是由上游求解器（经典 LUT 匹配 / 预测匹配 / 材料档案
+求解器）写入的合法值，直接复制即可。这让函数同时适用于 LUT 模式、
+预测匹配模式和材料档案模式。
+
+Replace strict 1-pixel isolates (pixels whose material stack differs from all
+8 neighbours) with the corresponding values from the 8-neighbour mode's
+neighbour pixel. The LUT-canonicalisation detour has been removed: neighbour
+pixels carry legal stacks/RGB by construction (they were written by the
+upstream solver), so direct copy is both simpler and pipeline-agnostic.
 """
 
 import numpy as np
@@ -39,27 +49,63 @@ def _detect_isolated(encoded):
     return (dc == nc) & (nc > 0)
 
 
-def _find_neighbor_mode(encoded, isolated_mask):
-    """对每个孤立像素，找 8 邻域众数编码。"""
+def _find_neighbor_mode_with_source(encoded, isolated_mask):
+    """对每个孤立像素返回（众数编码，贡献该编码的邻居坐标）。
+    For each isolated pixel, return (mode_encoding, (ni, nj)) where (ni, nj)
+    is the location of one neighbour carrying that mode encoding. The caller
+    uses (ni, nj) to copy both the material stack and the RGB directly,
+    sidestepping the previous LUT-canonicalisation step.
+    """
     H, W = encoded.shape
-    mode_map = encoded.copy()
     dirs = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+    results: dict[tuple[int, int], tuple[int, tuple[int, int]]] = {}
     for i, j in np.argwhere(isolated_mask):
-        nb = []
+        i_i, j_i = int(i), int(j)
+        neighbour_entries: list[tuple[int, int, int]] = []
         for dy, dx in dirs:
-            ni, nj = i + dy, j + dx
+            ni, nj = i_i + dy, j_i + dx
             if 0 <= ni < H and 0 <= nj < W:
-                nb.append(encoded[ni, nj])
-        if nb:
-            mode_map[i, j] = Counter(nb).most_common(1)[0][0]
-    return mode_map
+                neighbour_entries.append((ni, nj, int(encoded[ni, nj])))
+        if not neighbour_entries:
+            continue
+        counts = Counter(entry[2] for entry in neighbour_entries)
+        mode_enc = counts.most_common(1)[0][0]
+        for ni, nj, enc in neighbour_entries:
+            if enc == mode_enc:
+                results[(i_i, j_i)] = (mode_enc, (ni, nj))
+                break
+    return results
 
 
 def cleanup_isolated_pixels(
-    material_matrix, matched_rgb, lut_rgb, ref_stacks,
-    small_blob_threshold=50,
+    material_matrix,
+    matched_rgb,
+    lut_rgb=None,  # Deprecated no-op; kept for backward compatibility.
+    ref_stacks=None,  # Deprecated no-op; kept for backward compatibility.
 ):
-    """孤立像素清理：与所有8邻域均不同的像素，用邻域众数替换。"""
+    """孤立像素清理：与所有 8 邻域均不同的像素，直接复制邻居众数所在的
+    材料堆叠与 RGB，因此则不会凭空造调色板外的新值。
+    Replace strict 1-pixel isolates by copying the material stack and RGB
+    from the neighbour that contributed the 8-neighbour mode encoding. The
+    operation is palette-preserving by construction (we only ever reuse
+    values already present in the image) and therefore works uniformly in
+    LUT, predictive and material-archive pipelines.
+
+    Args:
+        material_matrix: ``(H, W, N)`` integer material stack tensor.
+        matched_rgb: ``(H, W, 3)`` uint8 RGB image matched upstream.
+        lut_rgb: **Deprecated no-op**. Historical LUT canonicalisation
+            source; the function now copies directly from neighbour pixels,
+            which is valid because neighbour stacks/RGB are already the
+            canonical upstream output.
+        ref_stacks: **Deprecated no-op**. Historical LUT canonicalisation
+            source; retained so legacy positional callers keep working.
+
+    Returns:
+        ``(cleaned_rgb, cleaned_material_matrix)`` tuple with the same
+        shapes/dtypes as the inputs.
+    """
+    del lut_rgb, ref_stacks  # silence unused-arg; kwargs kept for API parity
     import time
 
     cleaned_mat = material_matrix.copy()
@@ -70,37 +116,26 @@ def cleanup_isolated_pixels(
     base = int(material_matrix.max()) + 1 if material_matrix.size > 0 else 1
     encoded = _encode_stacks(material_matrix, base)
 
-    layer_count = ref_stacks.shape[1]
-    lut_encoded = _encode_stacks(ref_stacks.reshape(1, -1, layer_count), base).flatten()
-    encode_to_lut_idx = {}
-    for idx in range(len(lut_encoded)):
-        v = int(lut_encoded[idx])
-        if v not in encode_to_lut_idx:
-            encode_to_lut_idx[v] = idx
-
     t0 = time.time()
     iso = _detect_isolated(encoded)
     iso_count = int(np.sum(iso))
-    rep1 = 0
+    replaced = 0
     if iso_count > 0:
-        mm = _find_neighbor_mode(encoded, iso)
-        for i, j in np.argwhere(iso):
-            ne = int(mm[i, j])
-            if ne in encode_to_lut_idx:
-                li = encode_to_lut_idx[ne]
-                cleaned_mat[i, j] = ref_stacks[li]
-                cleaned_rgb[i, j] = lut_rgb[li]
-                encoded[i, j] = ne
-                rep1 += 1
-    p1 = (rep1 / total_pixels * 100) if total_pixels > 0 else 0
+        mode_sources = _find_neighbor_mode_with_source(encoded, iso)
+        for (i, j), (mode_enc, (ni, nj)) in mode_sources.items():
+            cleaned_mat[i, j] = material_matrix[ni, nj]
+            cleaned_rgb[i, j] = matched_rgb[ni, nj]
+            encoded[i, j] = mode_enc
+            replaced += 1
+    ratio = (replaced / total_pixels * 100) if total_pixels > 0 else 0.0
     extra: dict[str, Any] = {
         "event": "isolated_pixels_cleaned",
         "isolated_count": iso_count,
-        "merge_ratio_percent": round(p1, 3),
+        "merge_ratio_percent": round(ratio, 3),
         "duration_ms": round((time.time() - t0) * 1000, 3),
     }
-    if rep1 != iso_count:
-        extra["merged_count"] = rep1
+    if replaced != iso_count:
+        extra["merged_count"] = replaced
     _log.info("Isolated pixels cleaned", extra=extra)
 
     return cleaned_rgb, cleaned_mat

@@ -41,18 +41,23 @@ __all__ = [
 
 
 def _clamp_quantize_colors(value: int) -> int:
-    """Clamp the K-Means colour count to the supported [8, 256] range.
-    将量化颜色数夹紧到支持的 [8, 256] 范围内。
+    """Clamp the K-Means colour count to the supported [8, 8192] range.
+    将量化颜色数夹紧到支持的 [8, 8192] 范围内。
 
-    Mirrors the existing P01 behaviour exactly (``max(8, min(256, value))``).
+    The ceiling matches ``ConvertPreviewRequest.quantize_colors`` /
+    ``ConvertGenerateRequest.quantize_colors`` (``le=8192``) and the
+    frontend "unlock quantize colors" slider upper bound, so an unlocked
+    request is no longer silently compressed back to 256.
+    上限与 Pydantic 请求模型（``le=8192``）及前端"解锁量化颜色数"滑条
+    对齐，勾选解锁后不会再被静默压回 256。
 
     Args:
         value: Requested K-Means colour count.
 
     Returns:
-        Clamped integer in [8, 256].
+        Clamped integer in [8, 8192].
     """
-    return max(8, min(256, int(value)))
+    return max(8, min(8192, int(value)))
 
 
 def _resolve_lut_path_or_error(

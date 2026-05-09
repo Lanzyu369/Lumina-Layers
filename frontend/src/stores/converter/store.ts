@@ -1203,6 +1203,8 @@ export interface ConverterState {
   quantize_colors_unlocked: boolean;
   enable_cleanup: boolean;
   hue_enable: boolean;
+  use_lut_constrained: boolean;
+  auto_dynamic_range: boolean;
   chroma_gate: number;
   separate_backing: boolean;
 
@@ -1444,7 +1446,9 @@ export interface ConverterActions {
   setQuantizeColorsUnlocked: (unlocked: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
   setHueEnable: (enabled: boolean) => void;
-  setChromaGate: (gate: number) => void;
+  setUseLutConstrained: (enabled: boolean) => void;
+  setAutoDynamicRange: (enabled: boolean) => void;
+  setChromaGate: (threshold: number) => void;
   setSeparateBacking: (enabled: boolean) => void;
   setAddLoop: (enabled: boolean) => void;
   setLoopWidth: (width: number) => void;
@@ -1985,6 +1989,8 @@ export const DEFAULT_STATE: ConverterState = {
   quantize_colors_unlocked: false,
   enable_cleanup: true,
   hue_enable: false,
+  use_lut_constrained: false,
+  auto_dynamic_range: false,
   chroma_gate: 15,
   separate_backing: false,
   add_loop: false,
@@ -2834,6 +2840,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     setHueEnable: (enabled: boolean) =>
       set({
         hue_enable: enabled,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
+    setUseLutConstrained: (enabled: boolean) =>
+      set({ use_lut_constrained: enabled }),
+    setAutoDynamicRange: (enabled: boolean) =>
+      set({
+        auto_dynamic_range: enabled,
         threemfDiskPath: null,
         downloadUrl: null,
       }),
@@ -5167,6 +5181,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           enable_cleanup: state.enable_cleanup,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          use_lut_constrained: state.use_lut_constrained,
+          auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
         };
         _logPreviewTimer("request sent");
@@ -5447,6 +5463,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           enable_cleanup: state.enable_cleanup,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          use_lut_constrained: state.use_lut_constrained,
+          auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
           spacer_thick: state.spacer_thick,
           structure_mode: state.structure_mode,

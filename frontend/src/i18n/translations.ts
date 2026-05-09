@@ -674,8 +674,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Pixel",
   },
   viewer_hover_surface_color: {
-    zh: "表面颜色",
-    en: "Surface Color",
+    zh: "预测颜色",
+    en: "Predicted Color",
   },
   viewer_hover_layers_title: {
     zh: "分层颜色",
@@ -1678,6 +1678,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   app_toggle_theme: {
     zh: "切换主题",
     en: "Toggle theme",
+  },
+  app_quit_confirm_title: {
+    zh: "退出确认",
+    en: "Quit Confirmation",
+  },
+  app_quit_confirm_message: {
+    zh: "确定要退出 Lumina Studio 吗？",
+    en: "Are you sure you want to quit Lumina Studio?",
+  },
+  app_quit_quit: {
+    zh: "退出",
+    en: "Quit",
+  },
+  app_quit_cancel: {
+    zh: "取消",
+    en: "Cancel",
   },
 
   // ==================== LUT Manager Panel ====================
@@ -3151,16 +3167,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Quantize Colors",
   },
   adv_quantize_colors_hint: {
-    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。",
-    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering.",
+    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。仅适用于高保真模式，矢量模式下不进行量化处理，此参数不生效。",
+    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering. Only applies in High-Fidelity mode; this parameter has no effect in Vector mode as quantization is not performed.",
   },
   adv_isolated_pixel_cleanup: {
     zh: "孤立像素清理",
     en: "Isolated Pixel Cleanup",
   },
   adv_isolated_pixel_cleanup_hint: {
-    zh: "将 LUT 匹配后与周围8邻域颜色完全不同的孤立像素替换为邻域众数，使输出更干净。仅在高保真模式且非预测匹配时生效。",
-    en: "Replaces isolated pixels (whose color differs from all 8 neighbors) after LUT matching with the neighborhood mode for a cleaner output. Only active in High-Fidelity mode with non-predictive matching.",
+    zh: "将色彩匹配后与 8 邻域完全不同的孤立像素替换为邻域众数邻居的对应值，不会造调色板外的新颜色。高保真模式下的 LUT 匹配、预测匹配与耗材档案路径均会应用此清理。",
+    en: "Replaces isolated pixels (whose material stack differs from all 8 neighbors) with values copied from the neighborhood-mode neighbor — palette-preserving by construction. Runs in High-Fidelity modeling mode across the legacy LUT, predictive matching, and material-archive pipelines.",
   },
   adv_separate_backing: {
     zh: "分离底板",
@@ -3193,6 +3209,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_chroma_gate_hint: {
     zh: "仅对色度低于此值的暗色区域启用色相保护。设为 0 则对所有暗色生效，设为较高值则仅对非常暗的阴影生效。推荐值: 15。",
     en: "Applies hue protection only to dark areas whose chroma is below this threshold. Set to 0 to apply to all dark colors; higher values restrict it to very dark shadows. Recommended: 15.",
+  },
+  adv_precise_color_matching: {
+    zh: "高精度颜色匹配（实验性功能）",
+    en: "Precise Color Matching (Experimental)",
+  },
+  adv_precise_color_matching_hint: {
+    zh: "将聚类中心约束在打印机可达颜色集合内，减少颜色偏移；性能可能略慢，仅在 LUT 颜色匹配模式生效。",
+    en: "Constrains cluster centers to printer-achievable colors, reducing color shifts. May be slightly slower; only effective in LUT color matching mode.",
+  },
+  adv_hue_protection_disabled_hint: {
+    zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
+    en: "Hue protection is automatically handled when high-precision matching is enabled; no need to enable manually.",
+  },
+  adv_auto_dynamic_range: {
+    zh: "自动动态范围（实验性功能）",
+    en: "Auto Dynamic Range (Experimental)",
+  },
+  adv_auto_dynamic_range_hint: {
+    zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
+    en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
   },
 
   // ==================== Relief Settings ====================

@@ -1310,6 +1310,108 @@ def test_generate_worker_inputs_pads_grown_layers_with_mask_solid_aware_fill(
     assert np.all(written[1, 1, 3:] == 0)
 
 
+def test_generate_worker_inputs_material_archive_pad_uses_inferred_base_channel(
+    tmp_path: Path,
+) -> None:
+    """Material-archive sessions must pad grown layers with the inferred backing channel.
+
+    Material-archive preview never produces an ``LUTMetadata``, so the
+    previous ``getattr(lut_metadata, "base_channel_idx", 0)`` fallback
+    quietly defaulted to channel 0. With a user palette like
+    ``[red, white]``, this filled the user's added layers with red instead
+    of the white backing slot, leaving the slicer with a coloured slab in
+    the deeper layers and contributing to "外观面/底板缺色" reports.
+
+    Regression: when ``session_data["material_source"] == "material_archive"``
+    and ``cache["lut_metadata"]`` is ``None``, the function must derive
+    the backing channel from ``selected_materials`` /
+    ``cache["slot_names"]`` via ``infer_material_archive_base_channel_idx``.
+
+    耗材档案模式不会有 LUTMetadata，旧版回退到 channel 0 会让加层用第一种
+    用户耗材（比如红色）冒充背板色。修复后必须按 selected_materials 推断
+    出真实白色通道，加层填充用该通道。
+    """
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = SessionStore(ttl=1800)
+    session_id = store.create()
+
+    # ``material_matrix`` start: 4-layer, 4x4. Solid interior pixels carry
+    # channel 0 (red), and the white channel index is 1.
+    # material_matrix 起始：4 层 4x4。实体内部像素用 channel 0（红），
+    # 白色（背板）通道索引为 1。
+    material_matrix = np.zeros((4, 4, 4), dtype=np.int32)
+    mask_solid = np.zeros((4, 4), dtype=bool)
+    mask_solid[1:3, :] = True
+    material_matrix[~mask_solid] = -1
+
+    override_mask = np.zeros((4, 4), dtype=bool)
+    override_mask[2, 2] = True
+
+    cache = {
+        "material_matrix": material_matrix,
+        "mask_solid": mask_solid,
+        "lut_metadata": None,
+        "slot_names": ["PLA Red", "PLA White"],
+        "preview_colors": {0: [200, 30, 30, 255], 1: [245, 245, 245, 255]},
+    }
+    session_data = {
+        "material_source": "material_archive",
+        "selected_materials": ["brand/pla-red", "brand/pla-white"],
+        "selected_region_masks": {"region-1": override_mask},
+    }
+
+    # Target 6 layers (user added 2). Override region recipe length 6.
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=6,
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [0, 0, 0, 0, 0, 0],
+                "layer_order": "Top2Bottom",
+            }
+        ],
+    )
+    recipe_overrides = [
+        {
+            "region_id": "region-1",
+            "recipe": [0, 0, 0, 0, 0, 0],
+            "layer_order": "Top2Bottom",
+        }
+    ]
+
+    mm_path, _masks_path = _prepare_recipe_override_worker_inputs(
+        cache=cache,
+        session_data=session_data,
+        recipe_overrides=recipe_overrides,
+        request=request,
+        sid=session_id,
+        store=store,
+    )
+    assert mm_path is not None
+
+    written = np.load(mm_path)
+    assert written.shape == (4, 4, 6)
+
+    # Solid non-override pixel: layers 0..3 keep red (channel 0), grown
+    # layers 4..5 must be the inferred white channel (1) — NOT channel 0.
+    # 实体非 override 像素：原层 0..3 保持红色，扩展层 4..5 必须是推断出
+    # 的白色背板通道（1），而不是错误的 channel 0。
+    assert np.all(written[1, 1, :4] == 0)
+    assert np.all(written[1, 1, 4:] == 1), (
+        "Material-archive grown layers must use the inferred white "
+        f"backing channel (1), got {written[1, 1, 4:].tolist()}"
+    )
+
+    # Transparent pixel grown layers stay -1 (air).
+    # 透明像素扩展层保持 -1。
+    assert np.all(written[0, 0, :] == -1)
+
+
 def test_s03_upgrade_material_matrix_layers_mask_solid_aware_fill() -> None:
     """``_upgrade_material_matrix_layers`` pads according to ``mask_solid``.
 

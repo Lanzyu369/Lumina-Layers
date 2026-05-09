@@ -39,7 +39,7 @@ def run(ctx: dict) -> dict:
     PipelineContext 输出键 / Output keys:
         - actual_lut_path (str): 解析后的实际 LUT 文件路径
         - modeling_mode (ModelingMode): 规范化后的建模模式
-        - quantize_colors (int): clamp 到 [8, 256] 范围后的量化颜色数
+        - quantize_colors (int): clamp 到 [8, 8192] 范围后的量化颜色数
         - preview_colors (dict): 材料ID到RGBA颜色的映射
         - slot_names (list): 材料槽位名称列表
 

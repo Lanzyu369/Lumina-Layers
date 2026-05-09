@@ -36,6 +36,7 @@ import { useSingleStageStore } from "./stores/singleStageStore";
 import { useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
+import { useElectronLanguageSync } from "./integrations/electron";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
@@ -215,6 +216,7 @@ function AppContent() {
   useSessionLease(singleStageSessionId);
   useAutoPreview();
   usePuzzleLayoutPreview();
+  useElectronLanguageSync();
   const workspace = useWorkspaceMode();
 
   const [connected, setConnected] = useState<boolean | null>(null);

@@ -77,7 +77,7 @@
 
 | Gradio Component | Variable Name | Data Type | Default | Range / Choices | Pydantic Field | Pydantic Type | Converter Param | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `gr.Slider` | `slider_conv_quantize_colors` | `int` | `48` | 8–256, step=8 | `quantize_colors` | `int` | `quantize_colors` | K-Means 色彩细节；可通过 auto_color 按钮自动设置 |
+| `gr.Slider` | `slider_conv_quantize_colors` | `int` | `48` | 8–256, step=8 | `quantize_colors` | `int` | `quantize_colors` | K-Means 色彩细节；仅高保真模式生效，矢量模式下不量化 |
 | `gr.Slider` | `slider_conv_tolerance` | `int` | `40` | 0–150, step=1 | `bg_tol` | `int` | `bg_tol` | 背景容差 |
 | `gr.Checkbox` | `checkbox_conv_auto_bg` | `bool` | `False` | — | `auto_bg` | `bool` | `auto_bg` | 自动去背景 |
 | `gr.Checkbox` | `checkbox_conv_cleanup` | `bool` | `True` | — | `enable_cleanup` | `bool` | `enable_cleanup` | 孤立像素清理；Pixel 模式下强制禁用 |
@@ -481,7 +481,7 @@ class ConvertPreviewRequest(BaseModel):
     modeling_mode: ModelingMode = Field(
         ModelingMode.HIGH_FIDELITY, description="建模模式"
     )
-    quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节")
+    quantize_colors: int = Field(48, ge=8, le=256, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
 
 

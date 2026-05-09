@@ -327,10 +327,12 @@ async def convert_preview(
     model_only: bool = Form(False, description="仅使用模型匹配"),
     model_threshold: float | None = Form(None, description="模型回退阈值"),
     model_margin: float | None = Form(None, description="模型回退边距"),
-    quantize_colors: int = Form(48, description="K-Means 色彩细节"),
+    quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
+    use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
+    auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -490,11 +492,13 @@ async def convert_preview(
             model_margin,
             hue_weight,
             chroma_gate,
+            use_lut_constrained,
             material_source,
             _selected_mats,
             material_layer_count,
             material_layer_height_mm,
             material_grid_resolution,
+            auto_dynamic_range,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True

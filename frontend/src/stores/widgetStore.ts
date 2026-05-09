@@ -715,7 +715,6 @@ export const useWidgetStore = create<WidgetStore>()(
       partialize: (state) => ({
         widgets: state.widgets,
         activeTab: state.activeTab,
-        activeConverterSubTab: state.activeConverterSubTab,
       }),
       onRehydrateStorage: () => () => {},
     },

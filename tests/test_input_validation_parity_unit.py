@@ -6,7 +6,8 @@ These tests pin the behaviour of the shared helpers extracted into
 silently drift either S01 or P01 away from the intended common behaviour.
 
 Coverage:
-- ``_clamp_quantize_colors`` clamps to [8, 256] inclusive.
+- ``_clamp_quantize_colors`` clamps to [8, 8192] inclusive (matches the
+  API schema ``le=8192`` and the frontend unlock slider ceiling).
 - ``_resolve_lut_path_or_error`` accepts str / file-like / None and rejects
   the rest with the canonical error message.
 - ``_apply_material_archive_branch`` writes the canonical key set into ctx,
@@ -40,12 +41,15 @@ import pytest
         (8, 8),
         (32, 32),
         (256, 256),
-        (257, 256),
-        (10_000, 256),
+        (257, 257),
+        (1024, 1024),
+        (8192, 8192),
+        (8193, 8192),
+        (10_000, 8192),
     ],
 )
 def test_clamp_quantize_colors_pins_range(value: int, expected: int) -> None:
-    """量化颜色数必须夹紧到 [8, 256]。"""
+    """量化颜色数必须夹紧到 [8, 8192]，与 API schema 及前端解锁滑条上限对齐。"""
     from core.pipeline._input_validation_common import _clamp_quantize_colors
 
     assert _clamp_quantize_colors(value) == expected

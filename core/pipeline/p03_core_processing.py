@@ -178,6 +178,64 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     mask_transparent = alpha_arr < 10
     mask_solid = ~mask_transparent
 
+    # ---- Load solver cache early for auto dynamic range L* targets ----
+    # 在量化前加载求解器缓存，使自动动态范围能用 cache.lab_centers 推断目标 L* 范围；
+    # 后续配方查询直接复用本地变量 ``cache`` / ``actual_grid``，避免重复加载磁盘缓存。
+    # Pre-load the solver cache before quantization so auto dynamic range can
+    # derive target L* from ``cache.lab_centers``; the recipe lookup below
+    # reuses ``cache`` / ``actual_grid`` to avoid a second disk read.
+    cache, actual_grid = load_material_solver_cache_with_fallback(
+        materials=materials,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        grid_resolution=requested_grid,
+    )
+
+    # ---- Auto dynamic range (optional) ----
+    if ctx.get("auto_dynamic_range"):
+        from core.pipeline.processing_ops.dynamic_range_compressor import (
+            apply_auto_dynamic_range,
+            compute_target_l_range,
+        )
+        target_lab = None
+        if cache is not None and getattr(cache, "lab_centers", None) is not None:
+            target_lab = np.asarray(cache.lab_centers, dtype=np.float64)
+        target_range = compute_target_l_range(target_lab) if target_lab is not None else None
+        if target_range is not None:
+            rgb_arr_compressed, dr_info = apply_auto_dynamic_range(
+                rgb_arr, target_range[0], target_range[1]
+            )
+            if dr_info.get("applied"):
+                _log.info(
+                    "Auto dynamic range applied (material archive)",
+                    extra={
+                        "event": "auto_dynamic_range_applied",
+                        "src_l_range": list(dr_info.get("src_l_range") or ()),
+                        "tgt_l_range": list(dr_info.get("tgt_l_range") or ()),
+                        "branch": "material_archive",
+                    },
+                )
+                rgb_arr = rgb_arr_compressed
+            else:
+                _log.debug(
+                    "Auto dynamic range skipped (material archive)",
+                    extra={
+                        "event": "auto_dynamic_range_skipped",
+                        "reason": dr_info.get("reason"),
+                        "branch": "material_archive",
+                    },
+                )
+        else:
+            _log.debug(
+                "Auto dynamic range skipped: no lab_centers in cache",
+                extra={
+                    "event": "auto_dynamic_range_skipped",
+                    "reason": "no_target_range",
+                    "branch": "material_archive",
+                },
+            )
+
     # ---- Quantize ----
     # Two paths:
     #
@@ -207,16 +265,14 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     #    可靠，alpha 阈值无效。)
     #
     # 2. **Raster path** (PNG/JPG/HEIC). Apply edge-preserving smoothing,
-    #    then K-Means. Pass ``skip_post_blur=True``: the material-archive
-    #    solver (and its cache) consumes ``unique_colors`` and relies on
-    #    the quantization contract (``unique RGB count <= quantize_colors_n``).
-    #    Letting ``cv2.medianBlur`` run would inflate unique_colors by
-    #    10-100x and produce visible banding at higher layer counts because
-    #    neighbouring pixels get mapped to distinct recipes for colors that
-    #    were supposed to collapse into the same cluster.
-    #    (耗材档案分支必须关闭后量化模糊：medianBlur 逐通道取中值会把 unique
-    #    RGB 数炸到 10-100 倍，层数越多相邻像素越容易被映射到不同配方，从而
-    #    在预览里表现为肉眼可见的色块/带状化。)
+    #    then K-Means. The K-Means quantizer now always honours the
+    #    ``unique RGB count <= quantize_colors_n`` contract (the per-channel
+    #    post-blur that used to violate it has been removed), so the
+    #    material-archive solver and its cache receive a palette bounded
+    #    by the user's requested colour count.
+    #    (K-Means 量化器已恒定满足调色板契约，之前会把 unique 数炸到
+    #    10-100 倍的后量化 medianBlur 已整块删除，耗材档案分支也不再需要
+    #    显式跳过。)
     if is_svg:
         quantized_image = _snap_svg_to_fill_palette(
             rgb_arr=rgb_arr,
@@ -226,9 +282,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     else:
         rgb_processed = apply_bilateral_filter(rgb_arr, 10)
         rgb_processed = apply_median_filter(rgb_processed, 0)
-        quantized_image = kmeans_quantize(
-            rgb_processed, quantize_colors_n, skip_post_blur=True
-        )
+        quantized_image = kmeans_quantize(rgb_processed, quantize_colors_n)
     unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
     _log.debug(
         "%d unique colors after quantization (svg=%s)",
@@ -237,14 +291,10 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     )
 
     # ---- Resolve recipes: cache lookup or per-image B&B fallback ----
+    # ``cache`` / ``actual_grid`` were pre-loaded above for auto dynamic range;
+    # reuse them here to avoid a second disk read.
+    # 上面已为自动动态范围预先加载 ``cache`` / ``actual_grid``，此处直接复用，避免重复读盘。
     solver_t0 = time.perf_counter()
-    cache, actual_grid = load_material_solver_cache_with_fallback(
-        materials=materials,
-        layer_count=layer_count,
-        layer_height_mm=layer_height_mm,
-        substrate=substrate,
-        grid_resolution=requested_grid,
-    )
     solver_path: str
     solver_meta: dict = {}
     if cache is not None and unique_colors.shape[0] > 0:
@@ -400,6 +450,20 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         target_h, target_w,
     )
 
+    # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
+    # Previously only the LUT pipeline ran cleanup — the material-archive
+    # branch silently ignored the checkbox even when ticked in the UI. The
+    # palette-preserving implementation in ``cleanup_isolated_pixels`` works
+    # in both pipelines (it copies stacks/RGB straight from the neighbour
+    # contributing the 8-neighbour mode), so the same call now serves both.
+    # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
+    # 函数不依赖 LUT，同一调用对两条路径都适用。）
+    if ctx.get("enable_cleanup", True):
+        from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+        matched_rgb, material_matrix = cleanup_isolated_pixels(
+            material_matrix, matched_rgb
+        )
+
     # ---- Transparent pixels → -1 in material_matrix ----
     material_matrix[mask_transparent] = -1
 
@@ -487,6 +551,8 @@ def run(ctx: dict) -> dict:
     model_only = ctx.get('model_only', False)
     model_threshold = ctx.get('model_threshold')
     model_margin = ctx.get('model_margin')
+    use_lut_constrained = ctx.get('use_lut_constrained', False)
+    auto_dynamic_range = ctx.get('auto_dynamic_range', False)
 
     # ---- 核心处理 ----
     processor = LuminaImageProcessor(
@@ -500,6 +566,8 @@ def run(ctx: dict) -> dict:
         model_only=model_only,
         model_threshold=model_threshold,
         model_margin=model_margin,
+        use_lut_constrained=use_lut_constrained,
+        auto_dynamic_range=auto_dynamic_range,
     )
     processor.enable_cleanup = enable_cleanup
 

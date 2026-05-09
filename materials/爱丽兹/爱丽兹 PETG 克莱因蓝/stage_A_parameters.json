@@ -2,12 +2,34 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-25T18:42:36.004857+00:00",
+    "generated_at": "2026-05-02T20:04:16.784555+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [],
+    "image_source": "raw",
     "verification_count": 1,
-    "aggregation_method": "mean"
+    "aggregation_method": "refit_combined_samples",
+    "selection": {
+      "selected_indices": [
+        0
+      ],
+      "excluded_runs": [],
+      "selection_strategy": "bias_filter_v1",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": true,
+          "bias_flag_count": 0,
+          "bias_flags": [],
+          "structural_flag_count": 0,
+          "structural_flags": [],
+          "white_c0_avg": 0.7157523333333334,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 0
+    }
   },
   "parameters": {
     "channels": [
@@ -16,13 +38,13 @@
         "color_name": "爱丽兹 PETG 克莱因蓝",
         "E": [
           0.0,
-          0.023621,
-          0.192488
+          0.027866,
+          0.172719
         ],
         "k": [
-          26.382123,
-          11.957312,
-          3.586038
+          21.138198,
+          10.769567,
+          3.322806
         ]
       }
     ],
@@ -32,9 +54,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          1.0,
-          1.0,
-          1.0
+          0.730461,
+          0.715694,
+          0.701102
         ]
       },
       {
@@ -42,9 +64,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.007499,
-          0.008023,
-          0.009134
+          0.011612,
+          0.012286,
+          0.013702
         ]
       }
     ]
@@ -52,31 +74,34 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        1.0,
-        1.0,
-        1.0
+        0.730461,
+        0.715694,
+        0.701102
       ]
     },
     "black": {
       "C0": [
-        0.007499,
-        0.008023,
-        0.009134
+        0.011612,
+        0.012286,
+        0.013702
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 2.4216345118708515,
-      "max_delta_e": 11.826595900452258,
-      "rmse_linear": 0.00933790534825663,
+      "mean_delta_e": 1.7923432075474552,
+      "max_delta_e": 8.1242356307607,
+      "rmse_linear": 0.007362541584905533,
       "channel_rmse": [
-        0.0026553035160981043,
-        0.001814995551645732,
-        0.01585069661762229
+        0.004749878413519085,
+        0.0019484901142161383,
+        0.011673178534571345
       ],
-      "best_run_mean_delta_e": 2.4216345118708515,
-      "verification_count": 1
+      "best_run_mean_delta_e": 1.7923432075474552,
+      "verification_count": 1,
+      "aggregation_method": "refit_combined_samples",
+      "selected_run_count": 1,
+      "selection_strategy": "bias_filter_v1"
     }
   },
   "source": {

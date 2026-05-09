@@ -411,6 +411,44 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
+    def test_material_archive_vector_forwards_cached_material_matrix_without_region_replace(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        preview_cache = _test_store.get(sid)["preview_cache"]
+        preview_cache["matched_rgb"] = np.zeros((4, 4, 3), dtype=np.uint8)
+        preview_cache["mask_solid"] = np.ones((4, 4), dtype=bool)
+        preview_cache["material_matrix"] = np.ones((4, 4, 5), dtype=np.int32)
+        _test_store.put(sid, "preview_cache", preview_cache)
+        _test_store.put(sid, "material_source", "material_archive")
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": "/tmp/out.3mf",
+                "glb_path": "/tmp/out.glb",
+                "status_msg": "OK",
+            }
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "vector",
+                "use_cached_matched_rgb": False,
+            },
+        }
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 200
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["matched_rgb_path"] is not None
+        assert submitted_params["mask_solid_path"] is not None
+        assert submitted_params["material_matrix_path"] is not None
+        np.testing.assert_array_equal(
+            np.load(submitted_params["material_matrix_path"]),
+            preview_cache["material_matrix"],
+        )
+
     def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         payload = {

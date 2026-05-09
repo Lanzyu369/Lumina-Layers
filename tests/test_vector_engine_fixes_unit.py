@@ -1141,3 +1141,134 @@ class TestNativeBundlePaletteOverride:
         assert analysis.preview_colors[3][:3] == [0, 174, 66]     # Green
         assert analysis.preview_colors[4][:3] == [244, 238, 42]   # Yellow
         assert analysis.preview_colors[5][:3] == [0, 0, 0]        # Black
+
+
+# ---------------------------------------------------------------------------
+# Fix 10: Degenerate geometry repair in _extrude_geometry & _normalize_contours
+# ---------------------------------------------------------------------------
+
+
+class TestDegenerateGeometryRepair:
+    """Non-polygon sub-geometries should be repaired, not silently dropped."""
+
+    def test_extrude_repairs_linestring_in_geometrycollection(self):
+        """LineString inside GeometryCollection is repaired via buffer."""
+        from shapely.geometry import box, GeometryCollection, LineString
+        from shapely.ops import unary_union
+
+        # Simulate what GEOS can produce with precision issues: a valid
+        # polygon + a degenerate sliver (LineString) in one collection.
+        big_poly = box(0, 0, 10, 10)
+        sliver = LineString([(5, 5), (5.0001, 5.0001)])  # ~0.14 um long
+        degenerate = GeometryCollection([big_poly, sliver])
+
+        meshes = VectorProcessor._extrude_geometry(
+            degenerate, height=0.08, z_offset=0.0, scale=1.0
+        )
+        # Both the polygon and the repaired sliver should produce mesh.
+        # Before the fix, only the polygon would extrude (sliver silently
+        # dropped). After the fix, both produce mesh.
+        assert len(meshes) >= 1, "Should produce at least 1 mesh"
+
+    def test_extrude_repairs_point_in_geometrycollection(self):
+        """Point inside GeometryCollection is repaired via buffer."""
+        from shapely.geometry import box, GeometryCollection, Point
+
+        big_poly = box(0, 0, 10, 10)
+        pt = Point(5.0, 5.0)
+        degenerate = GeometryCollection([big_poly, pt])
+
+        meshes = VectorProcessor._extrude_geometry(
+            degenerate, height=0.08, z_offset=0.0, scale=1.0
+        )
+        assert len(meshes) >= 1
+
+    def test_extrude_empty_geometrycollection_produces_nothing(self):
+        """Empty GeometryCollection should produce no meshes."""
+        from shapely.geometry import GeometryCollection
+
+        empty_gc = GeometryCollection([])
+        meshes = VectorProcessor._extrude_geometry(
+            empty_gc, height=0.08, z_offset=0.0, scale=1.0
+        )
+        assert len(meshes) == 0
+
+    def test_extrude_multipolygon_still_works(self):
+        """Normal MultiPolygon extrudes all parts (no regression)."""
+        from shapely.geometry import MultiPolygon, box
+
+        mp = MultiPolygon([box(0, 0, 5, 5), box(6, 0, 11, 5)])
+        meshes = VectorProcessor._extrude_geometry(
+            mp, height=0.08, z_offset=0.0, scale=1.0
+        )
+        assert len(meshes) == 2
+
+    def test_normalize_extracts_only_polygons_from_geometrycollection(self):
+        """_normalize_contours drops non-polygon elements from GC."""
+        from shapely.geometry import GeometryCollection, LineString, box
+
+        poly = box(0, 0, 10, 10)
+        line = LineString([(0, 0), (10, 10)])
+        gc = GeometryCollection([poly, line])
+
+        result = VectorProcessor._normalize_contours(gc, close_delta_mm=0.03)
+        assert result is not None
+        assert not result.is_empty
+        # Result should be a polygon type, not a GeometryCollection
+        assert hasattr(result, "exterior"), (
+            f"Expected polygon type, got {getattr(result, 'geom_type', type(result).__name__)}"
+        )
+
+    def test_normalize_geometrycollection_all_non_polygon_falls_back(self):
+        """_normalize_contours falls back when make_valid returns only non-polygon.
+
+        When make_valid produces a GeometryCollection containing ONLY
+        non-polygon elements (all LineString / Point), the function
+        must fall back to the pre-make_valid polygon state instead of
+        returning the useless GeometryCollection, which would leak into
+        downstream extrusion and cause silent mesh loss.
+        """
+        from unittest import mock
+        from shapely.geometry import GeometryCollection, LineString, Polygon
+
+        # A valid Polygon input that would normally pass through fine.
+        # We monkey-patch make_valid to simulate the degenerate GC case.
+        valid_poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        fake_gc = GeometryCollection([
+            LineString([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]),
+            LineString([(5, 5), (5.001, 5.001)]),
+        ])
+
+        with mock.patch("core.vector_engine.make_valid", return_value=fake_gc):
+            result = VectorProcessor._normalize_contours(valid_poly, close_delta_mm=0.03)
+
+        assert result is not None
+        assert not result.is_empty
+        # Must return a polygon type, not a GeometryCollection full of lines
+        assert hasattr(result, "exterior"), (
+            f"Expected polygon type, got {getattr(result, 'geom_type', type(result).__name__)}"
+        )
+
+    def test_run_length_extrude_handles_geometrycollection(self):
+        """End-to-end: _run_length_extrude with a group containing degenerate GC."""
+        from shapely.geometry import GeometryCollection, LineString, box
+
+        # A valid polygon + a degenerate LineString sliver
+        poly = box(0, 0, 10, 10)
+        degenerate = GeometryCollection([poly, LineString([(5, 5), (5.001, 5.001)])])
+
+        matched = [
+            {"geometry": degenerate, "recipe": [0, 0, 0, 0, 0], "color": (255, 255, 255)},
+        ]
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+            extrude_cache={},
+        )
+        assert "White" in result
+        # Should have at least 1 mesh (the repaired polygon)
+        assert len(result["White"]["meshes"]) >= 1

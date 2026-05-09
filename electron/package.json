@@ -1,0 +1,53 @@
+{
+  "name": "lumina-electron",
+  "version": "2.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "test": "node --test __tests__/main-quit.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.lumina.studio",
+    "productName": "Lumina Studio",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "extraResources": [
+      {
+        "from": "resources/backend",
+        "to": "backend"
+      },
+      {
+        "from": "resources/app/dist",
+        "to": "app/dist"
+      }
+    ],
+    "win": {
+      "icon": "../icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "../icon.ico",
+      "uninstallerIcon": "../icon.ico",
+      "installerHeaderIcon": "../icon.ico"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "splash.html"
+    ]
+  }
+}

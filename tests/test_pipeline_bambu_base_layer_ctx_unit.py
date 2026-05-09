@@ -136,7 +136,7 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
         parse_warnings: list[str] = []
         last_stage_timings: dict[str, float] = {}
 
-        def __init__(self, _lut_path: str, color_mode: str) -> None:
+        def __init__(self, _lut_path: str, color_mode: str, *, img_processor=None) -> None:
             self.color_mode = color_mode
             self.enable_fridge_magnet = False
             self.fridge_magnets = []

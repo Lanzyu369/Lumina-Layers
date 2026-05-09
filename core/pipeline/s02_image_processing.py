@@ -79,6 +79,8 @@ def run(ctx: dict) -> dict:
     model_only = ctx.get('model_only', False)
     model_threshold = ctx.get('model_threshold')
     model_margin = ctx.get('model_margin')
+    use_lut_constrained = ctx.get('use_lut_constrained', False)
+    auto_dynamic_range = ctx.get('auto_dynamic_range', False)
 
     # Load LUT metadata for palette info
     lut_metadata = None
@@ -112,6 +114,8 @@ def run(ctx: dict) -> dict:
             model_only=model_only,
             model_threshold=model_threshold,
             model_margin=model_margin,
+            use_lut_constrained=use_lut_constrained,
+            auto_dynamic_range=auto_dynamic_range,
         )
         processor.enable_cleanup = enable_cleanup
 

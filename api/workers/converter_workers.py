@@ -70,11 +70,13 @@ def worker_generate_preview(
     model_margin: float | None = None,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
+    use_lut_constrained: bool = False,
     material_source: str = "lut",
     selected_materials: list[str] | None = None,
     material_layer_count: int | None = None,
     material_layer_height_mm: float | None = None,
     material_grid_resolution: int | None = None,
+    auto_dynamic_range: bool = False,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -89,7 +91,7 @@ def worker_generate_preview(
         target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
         color_mode (str): Color system mode, e.g. "CMYW". (色彩系统模式)
         modeling_mode (str): Modeling mode string value, e.g. "high-fidelity". (建模模式字符串)
-        quantize_colors (int): Number of K-Means quantization colors. (K-Means 量化颜色数)
+        quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
         is_dark (bool): Dark theme flag for 2D preview bed colors. (深色主题标志)
 
@@ -158,6 +160,8 @@ def worker_generate_preview(
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
+            use_lut_constrained=use_lut_constrained,
+            auto_dynamic_range=auto_dynamic_range,
             material_source=material_source,
             selected_materials=selected_materials,
             material_layer_count=material_layer_count,
@@ -286,7 +290,7 @@ def worker_batch_convert_item(
         structure_mode (str): Print structure mode, e.g. "Double-sided". (打印结构模式)
         color_mode (str): Color system mode, e.g. "4-Color". (色彩系统模式)
         modeling_mode_value (str): Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
-        quantize_colors (int): Number of K-Means quantization colors. (K-Means 量化颜色数)
+        quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
 
     Returns:
@@ -453,6 +457,7 @@ def worker_generate_large_format_svg_native(
     vector_replacements = _normalize_color_replacements_input(replacement_regions)
 
     vector_processor = VectorProcessor(lut_path, params["color_mode"])
+    vector_processor.auto_dynamic_range = bool(params.get("auto_dynamic_range", False))
     analysis = vector_processor.analyze_svg(
         svg_path=image_path,
         target_width_mm=total_width_mm,

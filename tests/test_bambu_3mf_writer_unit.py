@@ -74,6 +74,24 @@ class TestAnycubicWriterMetadata:
         assert settings["nozzle_diameter"] == ["0.2"]
         assert settings["printer_settings_id"] == "Bambu Lab P1S 0.2 nozzle"
 
+    def test_project_settings_allow_line_width_overrides(self) -> None:
+        writer = BambuStudio3MFWriter(
+            "line-width-overrides.3mf",
+            settings={
+                "line_width": "0.22",
+                "initial_layer_line_width": "0.22",
+            },
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+        writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
+
+        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        assert settings["line_width"] == "0.22"
+        assert settings["initial_layer_line_width"] == "0.22"
+
     def test_shared_material_palette_deduplicates_project_filaments(self) -> None:
         writer = BambuStudio3MFWriter(
             "shared-materials.3mf",

@@ -2,14 +2,40 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-04-25T18:38:34.823032+00:00",
+    "generated_at": "2026-05-02T20:05:41.639018+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
     "warnings": [
       "Stage A 拟合误差较高，请检查图像方向和角点选择。"
     ],
+    "image_source": "raw",
     "verification_count": 1,
-    "aggregation_method": "mean"
+    "aggregation_method": "refit_combined_samples",
+    "selection": {
+      "selected_indices": [
+        0
+      ],
+      "excluded_runs": [],
+      "selection_strategy": "bias_filter_v1",
+      "run_scores": [
+        {
+          "index": 0,
+          "is_fresh": true,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "mean_de_gt_3"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "mean_de_gt_3"
+          ],
+          "white_c0_avg": 0.7133423333333333,
+          "image_source": "raw",
+          "cross_val_rmse": null
+        }
+      ],
+      "fresh_index": 0
+    }
   },
   "parameters": {
     "channels": [
@@ -17,14 +43,14 @@
         "channel_index": 0,
         "color_name": "爱丽兹 PETG 黄色",
         "E": [
-          1.0,
-          1.0,
-          0.002748
+          0.963158,
+          0.751767,
+          0.005362
         ],
         "k": [
-          2.126594,
-          3.393296,
-          22.874935
+          1.260295,
+          3.210796,
+          20.272813
         ]
       }
     ],
@@ -34,9 +60,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          1.0,
-          1.0,
-          1.0
+          0.730461,
+          0.715694,
+          0.693872
         ]
       },
       {
@@ -44,9 +70,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.01033,
-          0.01096,
-          0.012286
+          0.014444,
+          0.015996,
+          0.016807
         ]
       }
     ]
@@ -54,31 +80,34 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        1.0,
-        1.0,
-        1.0
+        0.730461,
+        0.715694,
+        0.693872
       ]
     },
     "black": {
       "C0": [
-        0.01033,
-        0.01096,
-        0.012286
+        0.014444,
+        0.015996,
+        0.016807
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 3.705430131404648,
-      "max_delta_e": 38.83125488515148,
-      "rmse_linear": 0.03270571918152805,
+      "mean_delta_e": 4.756218978707869,
+      "max_delta_e": 32.10627607719903,
+      "rmse_linear": 0.04218885287912306,
       "channel_rmse": [
-        0.04839672877565889,
-        0.026882056091892138,
-        0.012004328620568128
+        0.04977958829131685,
+        0.05170085645969635,
+        0.013737246909396922
       ],
-      "best_run_mean_delta_e": 3.705430131404648,
-      "verification_count": 1
+      "best_run_mean_delta_e": 4.756218978707869,
+      "verification_count": 1,
+      "aggregation_method": "refit_combined_samples",
+      "selected_run_count": 1,
+      "selection_strategy": "bias_filter_v1"
     }
   },
   "source": {

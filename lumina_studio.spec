@@ -36,7 +36,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='LuminaStudio',
+    name='lumina-backend',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

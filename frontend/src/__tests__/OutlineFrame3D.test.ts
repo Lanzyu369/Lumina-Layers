@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
 vi.mock("@react-three/fiber", () => ({
   useFrame: vi.fn(),
+  useThree: () => ({ invalidate: vi.fn() }),
 }));
 import {
   default as OutlineFrame3D,

@@ -337,6 +337,7 @@ class Proc:
                 flags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000
             self.p = subprocess.Popen(
                 self.cmd, cwd=str(self.cwd),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 encoding="utf-8", errors="replace", bufsize=1,
                 creationflags=flags,

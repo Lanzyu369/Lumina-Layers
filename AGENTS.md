@@ -4,6 +4,16 @@
 
 Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow built around `api/` + `api_server.py` + `frontend/` (FastAPI `:8000` + Vite `:5174`).
 
+## Communication & Explanation
+
+- 与用户沟通时默认使用中文，除非用户明确要求使用其他语言
+- 默认假设用户不了解项目内部结构、历史背景、模块职责和实现细节；解释时先说明结论，再说明必要背景
+- 默认假设用户技术理解深度较低；避免直接堆叠术语，首次出现关键术语时用简短、直接的文字说明它在当前任务中的作用
+- 解释问题原因、修改方案或测试结果时，优先使用清晰的步骤、因果关系和可验证结果，不要使用比喻
+- 不要只说“已修复”或“改了某文件”；总结时应说明用户能看到的变化、风险点、是否已验证，以及还需要用户做什么
+- 如果需要用户做决定，给出少量明确选项，并说明每个选项的影响；避免让用户先理解完整技术背景才能选择
+- 如果任务涉及风险、限制或不确定性，应直接说明，不要用过度专业化措辞掩盖不确定性
+
 ## Structure
 
 - `core/`: UI-agnostic domain logic and the staged pipeline in `core/pipeline/`
@@ -176,4 +186,4 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - After editing, run `cd frontend && npx tsc --noEmit` plus `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
 - Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) distill each into one bilingual bullet under the right category (write zh first, then mirror in en), (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
 
-你的思考和回复，都用中文！！！
+与用户沟通和回复时使用中文，除非用户明确要求使用其他语言。

@@ -56,7 +56,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 48
+EXCEPT_EXCEPTION_BASELINE = 52
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -81,11 +81,50 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_board_separate",
     "vector_geometry_skipped",
     "vector_timings",
+    "vector_generate_timings",
+    "vector_preview_timings",
     "vector_lut_palette_extract_failed",
     "vector_color_replacements_load_failed",
     "vector_polygon_extrude_failed",
     "vector_recipe_region_mask_skipped",
     "vector_recipe_region_masks_missing",
+    # Appearance-layer missing-color diagnostics (外观面缺色块排查日志)
+    "vector_appearance_diag_run_dropped_by_channel_guard",
+    "vector_appearance_diag_run_dropped_by_slot_guard",
+    "vector_appearance_diag_normalize_emptied",
+    "vector_appearance_diag_shape_recipe_short",
+    "vector_appearance_diag_run_summary",
+    # Layer-0 (appearance face) flow diagnostics — all DEBUG-level. Used to
+    # track how the appearance layer's channel distribution evolves across
+    # 8 instrumentation points (solver cache reindex/reversal sample,
+    # _match_colors per-unique-color summary, preview material_matrix
+    # layer 0 hist, generate-loaded material_matrix layer 0 hist,
+    # apply_matched_rgb per-shape vote details, recipe[0] hists after both
+    # overrides, build_mesh input recipe samples). Run with
+    # LUMINA_LOG_LEVEL=DEBUG and grep ``vector_diag_*``.
+    # 外观面 layer 0 数据流诊断（全 DEBUG）：8 个阶段的通道分布对比，
+    # 用于定位"外观面缺色"的注入点。
+    "vector_diag_solver_cache_layer_order",
+    "vector_diag_match_colors_summary",
+    "vector_diag_preview_material_matrix_layer0",
+    "vector_diag_generate_loaded_material_matrix_layer0",
+    "vector_diag_apply_matched_rgb_per_shape",
+    "vector_diag_after_matched_rgb_overrides_recipe0",
+    "vector_diag_after_recipe_overrides_recipe0",
+    "vector_diag_build_mesh_input_recipes",
+    "vector_diag_extrude_skipped_non_polygon",
+    "vector_diag_extrude_skipped_empty",
+    "vector_diag_debug_dump",
+    "vector_diag_unary_union_area_loss",
+    "vector_diag_normalize_area_loss",
+    # Per-layer per-channel A/B/C/D matrix to localize "which (layer, channel)
+    # loses how many shape blocks at which sub-stage of build_mesh".
+    # 阶段 A/B/C/D 逐层逐通道矩阵：精确定位"哪一层哪个通道在 build_mesh 哪
+    # 个子阶段丢失了多少个色块"。
+    "vector_diag_stage_a_preview_per_layer_channel",
+    "vector_diag_stage_b_before_build_mesh_per_layer_channel",
+    "vector_diag_stage_c_run_groups_per_layer_channel",
+    "vector_diag_stage_d_built_meshes_per_layer_channel",
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",

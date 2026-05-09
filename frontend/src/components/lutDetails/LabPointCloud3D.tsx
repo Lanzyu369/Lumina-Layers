@@ -505,6 +505,7 @@ export default function LabPointCloud3D({
           style={{ height: `${viewportHeight}px` }}
         >
           <Canvas
+            frameloop="demand"
             camera={{
               position: cameraPosition,
               fov: 38,

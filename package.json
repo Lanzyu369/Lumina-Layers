@@ -1,0 +1,8 @@
+{
+  "name": "lumina-layers",
+  "private": true,
+  "scripts": {
+    "dev:electron": "cd electron && npm start",
+    "build:electron": "cd electron && npm run build"
+  }
+}

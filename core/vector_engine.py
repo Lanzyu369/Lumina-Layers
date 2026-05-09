@@ -31,6 +31,7 @@ from shapely import affinity
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
+from shapely import set_precision
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
@@ -300,6 +301,7 @@ def apply_recipe_overrides_to_analysis(
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
     min_overlap_ratio: float = 0.5,
+    img_processor=None,
 ) -> None:
     """Apply user-declared per-region recipe overrides to a ``VectorAnalysis``.
     将用户通过自定义配方对话框声明的 per-region 覆盖回写到 ``VectorAnalysis``。
@@ -601,6 +603,38 @@ def apply_recipe_overrides_to_analysis(
 
     analysis.num_layers = int(effective_target)
 
+    new_preview_colors = dict(analysis.preview_colors)
+    new_slot_names = list(analysis.slot_names)
+    changed_preview = False
+    for shape in analysis.matched_shapes:
+        recipe = shape.get("recipe") or []
+        if not recipe:
+            continue
+        top_ch = int(recipe[0])
+        if top_ch in new_preview_colors:
+            continue
+        if top_ch < lut_palette_length and img_processor is not None and hasattr(img_processor, "lut_rgb"):
+            try:
+                lut_color = img_processor.lut_rgb[top_ch]
+                new_preview_colors[top_ch] = [int(c) for c in lut_color] + [255]
+                changed_preview = True
+            except (IndexError, TypeError, ValueError):
+                pass
+        elif top_ch >= lut_palette_length:
+            vidx = top_ch - lut_palette_length
+            if 0 <= vidx < len(virtual_registry):
+                try:
+                    r, g, b = _hex_to_rgb_tuple(virtual_registry[vidx]["hex"])
+                    new_preview_colors[top_ch] = [int(r), int(g), int(b), 255]
+                    changed_preview = True
+                except (ValueError, TypeError, KeyError):
+                    pass
+        while len(new_slot_names) <= top_ch:
+            new_slot_names.append("Slot_" + str(len(new_slot_names)))
+    if changed_preview:
+        analysis.preview_colors = new_preview_colors
+        analysis.slot_names = new_slot_names
+
     _log.debug(
         "Applied recipe overrides: shapes=%s, overridden=%s, regions=%s, "
         "virtuals=%s, target_layers=%s",
@@ -616,6 +650,7 @@ def apply_matched_rgb_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
+    material_matrix: np.ndarray | None = None,
     mask_solid: np.ndarray,
     img_processor,
     pixels_per_mm: float = 10.0,
@@ -781,9 +816,29 @@ def apply_matched_rgb_overrides_to_analysis(
 
     lut_rgb = img_processor.lut_rgb
     ref_stacks = img_processor.ref_stacks
+    matrix_arr = None
+    if material_matrix is not None:
+        candidate_matrix = np.asarray(material_matrix)
+        if candidate_matrix.ndim == 3 and candidate_matrix.shape[:2] == (h_px, w_px):
+            matrix_arr = candidate_matrix
+        else:
+            _log.warning(
+                "Vector material matrix overrides skipped because cache grid mismatched analysis",
+                extra={
+                    "event": "vector_material_matrix_grid_mismatch",
+                    "error_type": "ValueError",
+                    "error_message": (
+                        f"material_matrix shape {candidate_matrix.shape} "
+                        f"does not match preview grid {(h_px, w_px)}"
+                    ),
+                    "material_matrix_shape": list(candidate_matrix.shape),
+                    "expected_shape": [int(h_px), int(w_px)],
+                },
+            )
 
     changed = 0
-    for shape in analysis.matched_shapes:
+    per_shape_diag: list[dict] = []
+    for shape_idx, shape in enumerate(analysis.matched_shapes):
         geom = shape.get("geometry")
         if geom is None or getattr(geom, "is_empty", False):
             continue
@@ -795,9 +850,6 @@ def apply_matched_rgb_overrides_to_analysis(
             continue
 
         pixels = matched_arr[effective_mask]
-        # Encode each RGB triplet into a uint32 so np.unique can vote on
-        # the dominant colour in a single vectorised pass.
-        # 三通道编码成 uint32，单次 np.unique 即可投票出主导色。
         codes = (
             pixels[:, 0].astype(np.uint32) * np.uint32(65536)
             + pixels[:, 1].astype(np.uint32) * np.uint32(256)
@@ -811,10 +863,6 @@ def apply_matched_rgb_overrides_to_analysis(
             dominant_code & 0xFF,
         )
 
-        prev_rgb = shape.get("matched_rgb")
-        if isinstance(prev_rgb, tuple) and tuple(int(c) for c in prev_rgb) == dominant_rgb:
-            continue
-
         query_lab = img_processor._rgb_to_lab(np.array([dominant_rgb], dtype=np.uint8))
         _, index = img_processor.kdtree.query(query_lab)
         try:
@@ -823,16 +871,73 @@ def apply_matched_rgb_overrides_to_analysis(
             continue
         new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
 
-        stack = ref_stacks[lut_idx]
-        new_recipe = [
-            min(int(stack[z]), num_channels - 1)
-            for z in range(min(num_layers, len(stack)))
-        ]
+        stack_source = "ref_stacks_fallback"
+        stack_top_alternatives: list[list[int]] = []
+        if matrix_arr is not None:
+            stacks = np.asarray(matrix_arr[effective_mask], dtype=np.int32)
+            if stacks.ndim == 2 and stacks.shape[1] > 0:
+                uniq_stacks, stack_counts = np.unique(stacks, axis=0, return_counts=True)
+                stack = uniq_stacks[int(np.argmax(stack_counts))]
+                stack_source = "material_matrix_majority"
+                top_n = min(3, len(stack_counts))
+                top_indices = np.argsort(-stack_counts)[:top_n]
+                for ti in top_indices:
+                    stack_top_alternatives.append(
+                        [int(c) for c in uniq_stacks[ti].tolist()[:6]]
+                        + [int(stack_counts[ti])]
+                    )
+            else:
+                stack = ref_stacks[lut_idx]
+        else:
+            stack = ref_stacks[lut_idx]
+        new_recipe = [min(int(stack[z]), num_channels - 1) for z in range(min(num_layers, len(stack)))]
+
+        prev_rgb = shape.get("matched_rgb")
+        prev_recipe = [int(v) for v in shape.get("recipe", [])]
+
+        if len(per_shape_diag) < 24:
+            try:
+                area = float(geom.area) if geom is not None else 0.0
+            except (AttributeError, TypeError, ValueError):
+                area = 0.0
+            per_shape_diag.append(
+                {
+                    "shape_idx": int(shape_idx),
+                    "area": round(area, 3),
+                    "effective_pixels": int(np.count_nonzero(effective_mask)),
+                    "dominant_rgb": list(dominant_rgb),
+                    "lut_idx": int(lut_idx),
+                    "matched_rgb": list(new_matched_rgb),
+                    "stack_source": stack_source,
+                    "stack_first6": [int(c) for c in stack[:6].tolist()] if hasattr(stack, "tolist") else list(stack[:6]),
+                    "stack_top_alternatives_first6_with_count": stack_top_alternatives,
+                    "new_recipe_first6": new_recipe[:6],
+                    "prev_recipe_first6": prev_recipe[:6],
+                }
+            )
+
+        if (
+            isinstance(prev_rgb, tuple)
+            and tuple(int(c) for c in prev_rgb) == new_matched_rgb
+            and prev_recipe == new_recipe
+        ):
+            continue
 
         shape["matched_rgb"] = new_matched_rgb
         shape["lut_idx"] = lut_idx
         shape["recipe"] = new_recipe
         changed += 1
+
+    # Diagnostic: emit per-shape majority vote details.
+    if per_shape_diag:
+        _log.debug(
+            "Vector per-shape majority vote diagnostics",
+            extra={
+                "event": "vector_diag_apply_matched_rgb_per_shape",
+                "stage": "apply_matched_rgb_overrides_per_shape",
+                "per_shape_diag": per_shape_diag,
+            },
+        )
 
     if changed:
         _log.debug(
@@ -1067,7 +1172,19 @@ class VectorProcessor:
             deflated = inflated.buffer(-close_delta_mm, join_style="mitre", mitre_limit=2.0)
             if deflated.is_empty:
                 return geom
-            return make_valid(deflated)
+            result = make_valid(deflated)
+            # If make_valid returned GeometryCollection with non-polygon
+            # elements only (e.g. LineString, Point from degenerate geometry),
+            # fall back to pre-make_valid state to avoid downstream errors.
+            # 若 make_valid 返回含非多边形退化元素的 GeometryCollection，
+            # 退回 make_valid 之前的状态，避免下游类型错误。
+            if result is not None and result.geom_type == "GeometryCollection":
+                polys = [g for g in result.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                if polys:
+                    result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
+                else:
+                    return deflated
+            return result
         except Exception:
             return geom
 
@@ -2673,6 +2790,27 @@ class VectorProcessor:
             if sample_logs:
                 _log.debug("Recipe samples: %s", "; ".join(sample_logs))
 
+        match_samples = []
+        for item in matched[:8]:
+            match_samples.append(
+                {
+                    "color": [int(c) for c in item.get("color", ())],
+                    "match_color": [int(c) for c in item.get("match_color", ())],
+                    "matched_rgb": [int(c) for c in item.get("matched_rgb", ())],
+                    "recipe": [int(v) for v in item.get("recipe", ())],
+                    "lut_idx": int(item.get("lut_idx", -1)),
+                }
+            )
+        _log.debug(
+            "Vector color match summary",
+            extra={
+                "event": "vector_diag_match_colors_summary",
+                "shape_count": len(clipped_shapes),
+                "matched_shape_count": len(matched),
+                "unique_query_color_count": len(color_cache),
+                "sample_first8": match_samples,
+            },
+        )
         return matched
 
     # ── Stage 5: Run-length extrusion ────────────────────────────────────
@@ -2727,35 +2865,170 @@ class VectorProcessor:
         # --- Fix 7: group shapes by (channel, run) and merge ---
         # Key: (channel_id, run_start, run_end)  Value: list of geometries
         run_groups: dict[tuple, list] = {}
+        skipped_empty = 0
+        invalid_channel_runs = 0
+        invalid_slot_runs = 0
+        short_recipe_shapes = 0
 
         for item in matched_shapes:
             geom = item["geometry"]
             recipe = item["recipe"]
             if geom is None or geom.is_empty:
+                skipped_empty += 1
                 continue
 
             layers_to_use = min(num_layers, len(recipe))
+            if len(recipe) < num_layers:
+                short_recipe_shapes += 1
             runs_by_channel = VectorProcessor._build_channel_runs(recipe, layers_to_use, num_channels)
+            invalid_channels = [
+                int(ch_raw)
+                for ch_raw in recipe[:layers_to_use]
+                if int(ch_raw) < 0 or int(ch_raw) >= num_channels
+            ]
+            if invalid_channels:
+                invalid_channel_runs += len(invalid_channels)
+                _log.debug(
+                    "Vector run dropped by channel guard",
+                    extra={
+                        "event": "vector_appearance_diag_run_dropped_by_channel_guard",
+                        "invalid_channels": invalid_channels[:16],
+                        "num_channels": int(num_channels),
+                        "recipe": [int(v) for v in recipe],
+                    },
+                )
 
             for ch, runs in runs_by_channel.items():
                 if ch >= len(slot_names):
+                    invalid_slot_runs += len(runs)
+                    _log.debug(
+                        "Vector run dropped by slot guard",
+                        extra={
+                            "event": "vector_appearance_diag_run_dropped_by_slot_guard",
+                            "channel": int(ch),
+                            "run_count": len(runs),
+                            "slot_count": len(slot_names),
+                        },
+                    )
                     continue
                 for run_start, run_end in runs:
                     key = (ch, run_start, run_end)
                     run_groups.setdefault(key, []).append(geom)
 
+        if skipped_empty:
+            _log.debug(
+                "Vector empty geometry skipped before extrusion",
+                extra={
+                    "event": "vector_diag_extrude_skipped_empty",
+                    "skipped_count": int(skipped_empty),
+                    "stage": "run_group_build",
+                },
+            )
+        if short_recipe_shapes:
+            _log.debug(
+                "Vector shape recipe shorter than requested layers",
+                extra={
+                    "event": "vector_appearance_diag_shape_recipe_short",
+                    "shape_count": int(short_recipe_shapes),
+                    "num_layers": int(num_layers),
+                },
+            )
+        run_summary = {
+            "run_group_count": len(run_groups),
+            "skipped_empty": int(skipped_empty),
+            "invalid_channel_runs": int(invalid_channel_runs),
+            "invalid_slot_runs": int(invalid_slot_runs),
+        }
+        _log.debug(
+            "Vector run summary",
+            extra={
+                "event": "vector_appearance_diag_run_summary",
+                **run_summary,
+            },
+        )
+        stage_c_hist: dict[int, dict[int, int]] = {}
+        for (ch, run_start, run_end), geoms in run_groups.items():
+            for layer_idx in range(int(run_start), int(run_end) + 1):
+                layer_hist = stage_c_hist.setdefault(int(layer_idx), {})
+                layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + len(geoms)
+        _log.debug(
+            "Vector run groups per layer/channel",
+            extra={
+                "event": "vector_diag_stage_c_run_groups_per_layer_channel",
+                "per_layer_channel_shape_count": stage_c_hist,
+                **run_summary,
+            },
+        )
+
         meshes_by_slot = {}
+        stage_d_hist: dict[int, dict[int, int]] = {}
         for (ch, run_start, run_end), geoms in run_groups.items():
             slot_name = slot_names[ch]
             if slot_name not in meshes_by_slot:
                 meshes_by_slot[slot_name] = {"meshes": [], "mat_id": ch}
 
             if len(geoms) > 1:
+                pre_union_area = 0.0
+                for g in geoms:
+                    try:
+                        pre_union_area += float(g.area)
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                # Normalize vertex coordinates to a fixed precision grid
+                # before unary_union to prevent GEOS floating-point
+                # precision boundary bugs that silently drop geometry.
+                # set_precision 将坐标对齐到规则浮点网格，打破 bezier 展平 +
+                # simplify + inflate/deflate 导致的 GEOS 精度边界（丢几何）。
+                snapped_geoms = []
+                for g in geoms:
+                    if g is not None and not g.is_empty:
+                        g_snapped = set_precision(g, grid_size=0.001)
+                        if g_snapped is not None and not g_snapped.is_empty:
+                            snapped_geoms.append(g_snapped)
+                if snapped_geoms:
+                    geoms = snapped_geoms
                 try:
-                    merged = unary_union(geoms)
-                    merged = VectorProcessor._normalize_contours(merged, close_delta_mm=0.03)
+                    unioned = unary_union(geoms)
+                    union_area = float(unioned.area) if unioned is not None and not unioned.is_empty else 0.0
+                    if pre_union_area > 0 and union_area < pre_union_area * 0.98:
+                        _log.debug(
+                            "Vector unary union area loss",
+                            extra={
+                                "event": "vector_diag_unary_union_area_loss",
+                                "channel": int(ch),
+                                "run_start": int(run_start),
+                                "run_end": int(run_end),
+                                "pre_union_area": round(pre_union_area, 6),
+                                "post_union_area": round(union_area, 6),
+                            },
+                        )
+                    merged = VectorProcessor._normalize_contours(unioned, close_delta_mm=0.03)
                     if merged is None or merged.is_empty:
-                        merged = unary_union(geoms)
+                        _log.debug(
+                            "Vector normalize emptied geometry",
+                            extra={
+                                "event": "vector_appearance_diag_normalize_emptied",
+                                "channel": int(ch),
+                                "run_start": int(run_start),
+                                "run_end": int(run_end),
+                                "pre_normalize_area": round(union_area, 6),
+                            },
+                        )
+                        merged = unioned
+                    else:
+                        normalized_area = float(merged.area)
+                        if union_area > 0 and normalized_area < union_area * 0.98:
+                            _log.debug(
+                                "Vector normalize area loss",
+                                extra={
+                                    "event": "vector_diag_normalize_area_loss",
+                                    "channel": int(ch),
+                                    "run_start": int(run_start),
+                                    "run_end": int(run_end),
+                                    "pre_normalize_area": round(union_area, 6),
+                                    "post_normalize_area": round(normalized_area, 6),
+                                },
+                            )
                 except Exception:
                     merged = unary_union(geoms)
             else:
@@ -2778,7 +3051,28 @@ class VectorProcessor:
                 extrude_cache=extrude_cache,
             )
             meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
+            for layer_idx in range(int(run_start), int(run_end) + 1):
+                layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
+                layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + len(new_meshes)
 
+        _log.debug(
+            "Vector built meshes per layer/channel",
+            extra={
+                "event": "vector_diag_stage_d_built_meshes_per_layer_channel",
+                "per_layer_channel_mesh_count": stage_d_hist,
+                "slot_count": len(meshes_by_slot),
+            },
+        )
+        _log.debug(
+            "Vector diagnostic debug dump",
+            extra={
+                "event": "vector_diag_debug_dump",
+                "run_summary": run_summary,
+                "slot_count": len(meshes_by_slot),
+                "face_up": bool(face_up),
+                "optical_z_base": float(optical_z_base),
+            },
+        )
         return meshes_by_slot
 
     # ── Stage 7: Double-sided helper ─────────────────────────────────────
@@ -3360,15 +3654,70 @@ class VectorProcessor:
         """Extrude 2D Shapely geometry to 3D trimesh objects."""
         meshes = []
         if geometry is None or geometry.is_empty:
+            _log.debug(
+                "Vector extrusion skipped empty geometry",
+                extra={
+                    "event": "vector_diag_extrude_skipped_empty",
+                    "stage": "extrude_geometry",
+                },
+            )
             return meshes
 
         polys = geometry.geoms if hasattr(geometry, "geoms") else [geometry]
 
         for poly in polys:
             if poly.is_empty:
+                _log.debug(
+                    "Vector extrusion skipped empty polygon",
+                    extra={
+                        "event": "vector_diag_extrude_skipped_empty",
+                        "stage": "extrude_geometry_part",
+                    },
+                )
                 continue
             if not hasattr(poly, "exterior"):
-                continue
+                # Repair non-polygon geometry (LineString, Point, etc.)
+                # by buffering into a Polygon before extrusion.
+                # 修复非多边形几何（LineString/Point 等），buffer 成 Polygon 再挤出。
+                try:
+                    repaired = poly.buffer(0.01)
+                    if hasattr(repaired, "geoms"):
+                        for rp in repaired.geoms:
+                            if hasattr(rp, "exterior") and not rp.is_empty:
+                                poly = rp
+                                break
+                        else:
+                            if hasattr(repaired, "exterior") and not repaired.is_empty:
+                                poly = repaired
+                            else:
+                                _log.debug(
+                                    "Vector extrusion skipped non-polygon geometry",
+                                    extra={
+                                        "event": "vector_diag_extrude_skipped_non_polygon",
+                                        "geometry_type": getattr(poly, "geom_type", None),
+                                    },
+                                )
+                                continue
+                    elif hasattr(repaired, "exterior") and not repaired.is_empty:
+                        poly = repaired
+                    else:
+                        _log.debug(
+                            "Vector extrusion skipped non-polygon geometry",
+                            extra={
+                                "event": "vector_diag_extrude_skipped_non_polygon",
+                                "geometry_type": getattr(poly, "geom_type", None),
+                            },
+                        )
+                        continue
+                except Exception:
+                    _log.debug(
+                        "Vector extrusion skipped non-polygon geometry",
+                        extra={
+                            "event": "vector_diag_extrude_skipped_non_polygon",
+                            "geometry_type": getattr(poly, "geom_type", None),
+                        },
+                    )
+                    continue
             try:
                 cache_key = None
                 cached_base = None

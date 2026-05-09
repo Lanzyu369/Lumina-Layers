@@ -270,7 +270,7 @@ class ConvertPreviewRequest(LutSourceSelection):
         modeling_mode: 3D modeling strategy.
             建模模式。
         quantize_colors: Number of K-Means quantization colors.
-            K-Means 色彩细节。
+            K-Means 色彩细节（仅高保真模式生效）。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
 
@@ -290,7 +290,7 @@ class ConvertPreviewRequest(LutSourceSelection):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
-    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
@@ -299,6 +299,8 @@ class ConvertPreviewRequest(LutSourceSelection):
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     )
+    use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
+    auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
 
     @field_validator("color_mode", mode="before")
     @classmethod
@@ -354,7 +356,7 @@ class ConvertGenerateRequest(LutSourceSelection):
         modeling_mode: 3D modeling strategy.
             建模模式。
         quantize_colors: Number of K-Means quantization colors.
-            K-Means 色彩细节。
+            K-Means 色彩细节（仅高保真模式生效）。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
         separate_backing: Whether to export backing plate as separate object.
@@ -420,7 +422,7 @@ class ConvertGenerateRequest(LutSourceSelection):
     model_only: bool = Field(False, description="仅使用模型匹配，跳过 DB 匹配")
     model_threshold: float | None = Field(None, description="模型回退阈值；空值或负数表示使用运行时默认值")
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
-    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节")
+    quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
@@ -429,6 +431,8 @@ class ConvertGenerateRequest(LutSourceSelection):
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     )
+    use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
+    auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
     recipe_overrides: list[RecipeOverrideItem] | None = Field(None, description="区域级自定义配方覆盖")
     separate_backing: bool = Field(False, description="底板作为独立对象")
     add_loop: bool = Field(False, description="启用挂件环")

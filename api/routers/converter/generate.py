@@ -45,6 +45,7 @@ from core.vector_large_format import (
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
 )
+from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -395,7 +396,38 @@ def _prepare_recipe_override_worker_inputs(
     current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
     target_layers = int(request.color_layers or current_layers)
     metadata_order = getattr(lut_metadata, "layer_order", "Top2Bottom")
-    base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+    # Material-archive sessions never carry an ``lut_metadata`` (p02 sets it
+    # to None and ``cache["lut_metadata"]`` is also None). Falling back to
+    # ``base_channel_idx = 0`` would silently pad the grown layers with the
+    # first user material (e.g. a coloured slot like blue) instead of the
+    # genuine backing channel (typically white). Detect material-archive
+    # mode via the session and infer the backing channel from the selected
+    # materials so the padded slab matches the user's backing colour.
+    # 耗材档案会话不会带 LUTMetadata，回退到 0 会用第一种用户耗材（往往是
+    # 某个彩色槽）当作背板色填补加层，外观面/底板逻辑会错乱。检测耗材档案
+    # 会话并按 selected_materials 推断真实背板通道。
+    if (
+        lut_metadata is None
+        and str(session_data.get("material_source") or "lut") == "material_archive"
+    ):
+        selected_materials = session_data.get("selected_materials") or []
+        if isinstance(selected_materials, (list, tuple)) and selected_materials:
+            slot_names_src = cache.get("slot_names") or (cache.get("color_conf") or {}).get("slots") or []
+            slot_names = list(slot_names_src) if isinstance(slot_names_src, (list, tuple)) else []
+            preview_colors = cache.get("preview_colors")
+            if not isinstance(preview_colors, dict):
+                preview_colors = (cache.get("color_conf") or {}).get("preview") or {}
+            base_channel_idx = int(
+                infer_material_archive_base_channel_idx(
+                    list(selected_materials),
+                    slot_names,
+                    preview_colors,
+                )
+            )
+        else:
+            base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
+    else:
+        base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0))
 
     if target_layers > current_layers and material_matrix_override.ndim == 3:
         # Pad the grown layers so that:
@@ -596,6 +628,13 @@ async def convert_generate(
     matched_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    should_forward_cached_analysis = (
+        request.use_cached_matched_rgb
+        or (
+            session_material_source == "material_archive"
+            and core_modeling_mode == CoreModelingMode.VECTOR
+        )
+    )
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -606,7 +645,7 @@ async def convert_generate(
             "has_replacement_regions": bool(replacement_regions),
         },
     )
-    if request.use_cached_matched_rgb:
+    if should_forward_cached_analysis:
         cached_matched_rgb = cache.get("matched_rgb")
         if cached_matched_rgb is not None:
             fd, mr_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
@@ -640,7 +679,15 @@ async def convert_generate(
                 mask_solid_path = ms_temp_path
                 store.register_temp_file(body.session_id, ms_temp_path)
 
-    material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
+            cached_material_matrix = cache.get("material_matrix")
+            if cached_material_matrix is not None:
+                fd, mm_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+                os.close(fd)
+                np.save(mm_temp_path, cached_material_matrix)
+                material_matrix_path = mm_temp_path
+                store.register_temp_file(body.session_id, mm_temp_path)
+
+    override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
         session_data=session_data,
         recipe_overrides=recipe_overrides,
@@ -648,6 +695,8 @@ async def convert_generate(
         sid=body.session_id,
         store=store,
     )
+    if override_material_matrix_path is not None:
+        material_matrix_path = override_material_matrix_path
 
     # 2b. Collect scalar parameters into a dict for the worker
     params: dict = {
@@ -719,6 +768,8 @@ async def convert_generate(
         "coating_height_mm": request.coating_height_mm,
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
+        "use_lut_constrained": request.use_lut_constrained,
+        "auto_dynamic_range": request.auto_dynamic_range,
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
@@ -965,6 +1016,8 @@ def _resolve_large_format_shared_params(
         "coating_height_mm": request.coating_height_mm,
         "hue_weight": request.hue_weight,
         "chroma_gate": request.chroma_gate,
+        "use_lut_constrained": request.use_lut_constrained,
+        "auto_dynamic_range": request.auto_dynamic_range,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
@@ -1444,7 +1497,7 @@ async def convert_batch(
     modeling_mode: str = Form("high-fidelity", description="建模模式"),
     color_layers: int | None = Form(None, ge=1, le=20, description="叠色层数"),
     layer_height_mm: float | None = Form(None, gt=0.0, le=1.0, description="叠色层高 (mm)"),
-    quantize_colors: int = Form(48, description="K-Means 色彩细节"),
+    quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),

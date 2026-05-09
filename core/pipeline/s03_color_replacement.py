@@ -742,11 +742,10 @@ def run(ctx: dict) -> dict:
                 if lut_metadata is not None
                 else "Top2Bottom"
             )
-            base_channel_idx = int(
-                getattr(lut_metadata, "base_channel_idx", 0)
-                if lut_metadata is not None
-                else 0
-            )
+            if lut_metadata is not None:
+                base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
+            else:
+                base_channel_idx = int(ctx.get("material_base_channel_idx", 0) or 0)
             target_layers = max(
                 int(material_matrix.shape[2]),
                 max((len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)), default=0),

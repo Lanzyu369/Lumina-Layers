@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { debugThreeLog, getThreePerfDebugConfig } from "../utils/threeDebug";
 
@@ -748,6 +748,7 @@ export default function OutlineFrame3D({
   const animationTotalMsRef = useRef(0);
   const animationMaxMsRef = useRef(0);
   const animationLastLogAtRef = useRef(performance.now());
+  const { invalidate } = useThree();
 
   const geometry = useMemo(() => {
     const buildStart = performance.now();
@@ -872,6 +873,7 @@ export default function OutlineFrame3D({
   const birthTime = useRef(0);
   useFrame(() => {
     if (!meshRef.current || !geometry) return;
+    invalidate();
     const animationStart = performance.now();
     const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
     const hueParams = geometry.userData.hueParams as Float32Array | undefined;

@@ -59,6 +59,7 @@ from core.material_lut_synthesis import (
     load_multiple_materials,
     solve_image_colors_optimal,
 )
+from core.material_color_solver import forward_model, linear_to_srgb_float
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import (
@@ -84,6 +85,49 @@ router = APIRouter()
 log = get_logger(__name__)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
+
+
+def _recalc_matched_rgb_for_padded_pixels(
+    *,
+    updated_rgb,
+    material_matrix,
+    non_override_mask,
+    session_data: dict,
+    layer_height_mm: float,
+) -> None:
+    from core.material_color_solver import forward_model, linear_to_srgb_float
+    import numpy as np
+    selected_materials = session_data.get('selected_materials') or []
+    try:
+        materials = load_multiple_materials(selected_materials)
+    except Exception:
+        return
+    recipes = material_matrix[non_override_mask, :]
+    if recipes.size == 0:
+        return
+    recipes_i32 = recipes.astype(np.int32)
+    unique_rows, inverse = np.unique(recipes_i32, axis=0, return_inverse=True)
+    flat_y, flat_x = np.where(non_override_mask)
+    cached = {}
+    for u_idx in range(unique_rows.shape[0]):
+        idxs = np.where(inverse == u_idx)[0]
+        if len(idxs) == 0:
+            continue
+        recipe_row = unique_rows[u_idx]
+        if np.any(recipe_row < 0):
+            continue
+        try:
+            # material_matrix Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
+            pred_linear = forward_model(recipe_row[::-1], materials, layer_height_mm=layer_height_mm)
+            pred_srgb = linear_to_srgb_float(pred_linear)
+            pred_u8 = np.clip(pred_srgb * 255, 0, 255).astype(np.uint8)
+        except Exception:
+            continue
+        cached[u_idx] = pred_u8
+    for i in range(len(flat_y)):
+        u = inverse[i]
+        if u in cached:
+            updated_rgb[flat_y[i], flat_x[i]] = cached[u]
 
 
 def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes:
@@ -2311,33 +2355,66 @@ def predict_recipe(
                 layer_order=request.layer_order,
             )
         else:
-            # Material-archive session: no forward model exists, so derive
-            # the display colour from the topmost layer's preview RGB in the
-            # shared cache (populated by P01 from the material archive). If
-            # that misses (e.g. malformed cache), degrade to neutral grey
-            # rather than hard-failing — the dialog's "predict" button is a
-            # preview, not a gate.
-            # 耗材档案没有前向模型，直接用最顶层通道的 preview 色做预测。
-            # 兜底是中性灰，避免因 cache 异常让 predict 按钮直接报错。
-            top_channel = _top_layer_channel(list(request.recipe), request.layer_order)
-            preview_rgb = (
-                _cache_preview_rgb(cache, top_channel)
-                if top_channel is not None
-                else None
-            )
-            if preview_rgb is None:
-                preview_rgb = np.asarray((128, 128, 128), dtype=np.uint8)
-            prediction = {
-                "rgb": [int(v) for v in preview_rgb.tolist()],
-                "lab": [
-                    float(v)
-                    for v in _rgb_to_lab(preview_rgb.reshape(1, 1, 3))
-                    .reshape(3)
-                    .tolist()
-                ],
-                "source": "material_archive_preview",
-                "runtime_mode_key": None,
-            }
+            # Material-archive session: use Beer-Lambert forward model to
+            # compute the true stacked colour from the selected materials'
+            # fitted E/k parameters. This replaces the previous "top layer only"
+            # fallback so multi-layer recipes predict correctly.
+            # 耗材档案会话：使用 Beer-Lambert 前向模型计算多层叠层后的真实颜色，
+            # 替代之前仅返回最顶层颜色的简单兜底。
+            selected_materials = session_data.get("selected_materials") or []
+            try:
+                materials = load_multiple_materials(selected_materials)
+                recipe_np = np.asarray(request.recipe, dtype=np.int32)
+                # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
+                predicted_linear = forward_model(
+                    recipe_np[::-1],
+                    materials,
+                    layer_height_mm=request.layer_height_mm,
+                )
+                predicted_srgb = linear_to_srgb_float(predicted_linear)
+                predicted_rgb_uint8 = np.clip(
+                    predicted_srgb * 255, 0, 255
+                ).astype(np.uint8)
+                prediction = {
+                    "rgb": [int(v) for v in predicted_rgb_uint8.tolist()],
+                    "lab": [
+                        float(v)
+                        for v in _rgb_to_lab(
+                            predicted_rgb_uint8.reshape(1, 1, 3)
+                        )
+                        .reshape(3)
+                        .tolist()
+                    ],
+                    "source": "material_archive_forward_model",
+                    "runtime_mode_key": None,
+                }
+            except (FileNotFoundError, ValueError, OSError) as _exc:
+                # If material params are missing (e.g. test fixtures without
+                # real material archives), degrade to the previous top-layer
+                # preview colour fallback so the endpoint stays usable.
+                # 若材料参数缺失（如测试环境没有真实耗材档案），退化到旧的最
+                # 顶层 preview 色兜底，保证端点仍可用。
+                top_channel = _top_layer_channel(
+                    list(request.recipe), request.layer_order
+                )
+                preview_rgb = (
+                    _cache_preview_rgb(cache, top_channel)
+                    if top_channel is not None
+                    else None
+                )
+                if preview_rgb is None:
+                    preview_rgb = np.asarray((128, 128, 128), dtype=np.uint8)
+                prediction = {
+                    "rgb": [int(v) for v in preview_rgb.tolist()],
+                    "lab": [
+                        float(v)
+                        for v in _rgb_to_lab(preview_rgb.reshape(1, 1, 3))
+                        .reshape(3)
+                        .tolist()
+                    ],
+                    "source": "material_archive_preview",
+                    "runtime_mode_key": None,
+                }
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -2727,30 +2804,59 @@ def apply_recipe_override(
             # LUT loader to return ``stacks=None`` while still wiring the
             # predictive path.
             # 耗材档案会话没有 LUT 文件也没有前向模型 runtime，此处跳过
-            # ``predict_recipe_color``，避免对 stub metadata 做无意义尝试，
-            # 直接走兜底链用 preview_colors 取色。用 session 的
-            # material_source 作为唯一信号——不能靠 _rgb/_stacks 是否为
+            # 在耗材档案模式下先尝试 forward_model 做物理预测，
+            # 与 /predict-recipe 保持一致；失败后才走兜底链。
+            # 用 session 的 material_source 作为唯一信号——不能靠 _rgb/_stacks 是否为
             # None 来推断，老 LUT 测试会合法地 mock stacks=None 但仍然
             # 走预测路径。
             try:
-                if recipe_has_virtual or is_material_archive:
+                if recipe_has_virtual:
                     raise ValueError(
                         "No predictive runtime is available for virtual materials"
                     )
-                prediction = predict_recipe_color(
-                    metadata,
-                    recipe=request.recipe,
-                    layer_height_mm=request.layer_height_mm,
-                    color_layers=request.color_layers,
-                    layer_order=request.layer_order,
-                )
-                predicted_rgb = np.asarray(prediction.get("rgb", []), dtype=np.uint8)
-                if predicted_rgb.shape != (3,):
-                    raise ValueError("Predicted RGB payload is invalid")
-                predicted_lab = [float(v) for v in prediction.get("lab", [])]
-                prediction_source = prediction.get("source")
-                runtime_mode_key = prediction.get("runtime_mode_key")
-                match_mode = "predictive"
+                if is_material_archive:
+                    selected_materials = session_data.get("selected_materials") or []
+                    try:
+                        materials = load_multiple_materials(selected_materials)
+                        recipe_np = np.asarray(request.recipe, dtype=np.int32)
+                        # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
+                        predicted_linear = forward_model(
+                            recipe_np[::-1], materials,
+                            layer_height_mm=request.layer_height_mm,
+                        )
+                        predicted_srgb = linear_to_srgb_float(predicted_linear)
+                        predicted_rgb = np.clip(
+                            predicted_srgb * 255, 0, 255
+                        ).astype(np.uint8)
+                        predicted_lab = [
+                            float(v)
+                            for v in _rgb_to_lab(
+                                predicted_rgb.reshape(1, 1, 3)
+                            ).reshape(3).tolist()
+                        ]
+                        prediction_source = "material_archive_forward_model"
+                        runtime_mode_key = None
+                        match_mode = "predictive"
+                    except (FileNotFoundError, ValueError, OSError) as mat_exc:
+                        raise ValueError(
+                            "No predictive runtime is available for material archive: "
+                            + str(mat_exc)
+                        ) from mat_exc
+                else:
+                    prediction = predict_recipe_color(
+                        metadata,
+                        recipe=request.recipe,
+                        layer_height_mm=request.layer_height_mm,
+                        color_layers=request.color_layers,
+                        layer_order=request.layer_order,
+                    )
+                    predicted_rgb = np.asarray(prediction.get("rgb", []), dtype=np.uint8)
+                    if predicted_rgb.shape != (3,):
+                        raise ValueError("Predicted RGB payload is invalid")
+                    predicted_lab = [float(v) for v in prediction.get("lab", [])]
+                    prediction_source = prediction.get("source")
+                    runtime_mode_key = prediction.get("runtime_mode_key")
+                    match_mode = "predictive"
             except ValueError as predict_exc:
                 if not _recipe_apply_can_fallback_from_prediction_error(
                     predict_exc
@@ -2893,10 +2999,36 @@ def apply_recipe_override(
         )
 
         updated_rgb = matched_rgb.copy()
+        combined_override_mask = np.zeros(updated_rgb.shape[:2], dtype=bool)
         for _region_id, region_mask in region_mask_items:
             effective_mask = np.asarray(region_mask, dtype=bool)
+            if effective_mask.shape != updated_rgb.shape[:2]:
+                log.warning(
+                    "Region mask shape %s does not match matched_rgb shape %s; "
+                    "skipping this region mask to avoid index errors.",
+                    effective_mask.shape, updated_rgb.shape[:2],
+                    extra={
+                        "event": "recipe_override_shape_mismatch",
+                        "region_id": str(_region_id),
+                        "mask_shape": list(effective_mask.shape),
+                        "matched_rgb_shape": list(updated_rgb.shape[:2]),
+                    },
+                )
+                continue
+            combined_override_mask |= effective_mask
             updated_rgb[effective_mask] = predicted_rgb
             material_matrix[effective_mask] = recipe_full
+
+        if target_layers > current_layers and mask_solid_arr is not None:
+            non_override = mask_solid_arr & (~combined_override_mask)
+            if np.any(non_override) and is_material_archive:
+                _recalc_matched_rgb_for_padded_pixels(
+                    updated_rgb=updated_rgb,
+                    material_matrix=material_matrix,
+                    non_override_mask=non_override,
+                    session_data=session_data,
+                    layer_height_mm=float(request.layer_height_mm),
+                )
 
         cache["matched_rgb"] = updated_rgb
         cache["material_matrix"] = material_matrix
@@ -2959,6 +3091,19 @@ def apply_recipe_override(
     except HTTPException:
         raise
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        import traceback
+        log.error(
+            "apply-recipe-override failed with %s: %s\n%s",
+            type(exc).__name__,
+            exc,
+            traceback.format_exc(),
+            extra={
+                "event": "converter_apply_recipe_override_error",
+                "session_id": request.session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     log.info(

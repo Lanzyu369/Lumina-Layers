@@ -323,7 +323,25 @@ function nearestLutChannelIdx(
 function buildDisplayPalette(
   lutPalette: PaletteOption[],
   baseChannelIdx: number,
+  sourceVersion: string,
 ): DisplayPaletteEntry[] {
+  // 耗材档案模式下直接按原始顺序显示，不做 8 原色归类，避免名称重复和归类错误。
+  // In material-archive mode, show materials in original order without
+  // canonical-primary grouping to prevent duplicates and misclassification.
+  if (sourceVersion === "material") {
+    return lutPalette.map((entry, lutIdx) => {
+      const name = (entry?.color ?? "").trim() || `Channel ${lutIdx + 1}`;
+      const hex = normalizeHexValue(entry.hex) ?? "#808080";
+      return {
+        color: name,
+        hex,
+        lutIndex: lutIdx,
+        native: true,
+        material: entry.material ?? null,
+      };
+    });
+  }
+
   const entries: DisplayPaletteEntry[] = [];
   const consumedLutIdx = new Set<number>();
   for (const name of DISPLAY_PRIMARY_ORDER) {
@@ -569,8 +587,8 @@ export default function CustomRecipeDialog({
   );
 
   const displayPalette = useMemo(
-    () => buildDisplayPalette(effectivePalette, resolvedBaseChannelIdx),
-    [effectivePalette, resolvedBaseChannelIdx],
+    () => buildDisplayPalette(effectivePalette, resolvedBaseChannelIdx, sourceVersion),
+    [effectivePalette, resolvedBaseChannelIdx, sourceVersion],
   );
 
   const markDraftEdited = () => {

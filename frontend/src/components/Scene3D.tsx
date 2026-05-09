@@ -46,27 +46,32 @@ interface SceneDiagnosticsSnapshot {
 
 function FrameSampler({
   onFps,
-  onPublish,
 }: {
   onFps: (fps: number) => void;
-  onPublish: () => void;
 }) {
   const frameCountRef = useRef(0);
   const lastFpsAtRef = useRef(performance.now());
 
   useFrame(() => {
     frameCountRef.current += 1;
-    const now = performance.now();
-    const elapsed = now - lastFpsAtRef.current;
-    if (elapsed < 1000) {
-      return;
-    }
-    const fps = Math.round((frameCountRef.current * 10000) / elapsed) / 10;
-    frameCountRef.current = 0;
-    lastFpsAtRef.current = now;
-    onFps(fps);
-    onPublish();
   });
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = now - lastFpsAtRef.current;
+      if (elapsed < 1000) {
+        return;
+      }
+      const fps = Math.round((frameCountRef.current * 10000) / elapsed) / 10;
+      frameCountRef.current = 0;
+      lastFpsAtRef.current = now;
+      onFps(fps);
+    }, 1000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [onFps]);
 
   return null;
 }
@@ -114,7 +119,7 @@ function RendererDiagnosticsBridge({
     return null;
   }
 
-  return <FrameSampler onFps={handleFps} onPublish={publishSnapshot} />;
+  return <FrameSampler onFps={handleFps} />;
 }
 
 /**
@@ -168,11 +173,12 @@ function CameraDebugHelper() {
  * Canvas 内部组件，将清除色与当前主题同步。
  */
 function ThemeUpdater() {
-  const { gl } = useThree();
+  const { gl, invalidate } = useThree();
   const themeColors = useThemeConfig();
   useEffect(() => {
     gl.setClearColor(themeColors.canvasClearColor);
-  }, [gl, themeColors.canvasClearColor]);
+    invalidate();
+  }, [gl, themeColors.canvasClearColor, invalidate]);
   return null;
 }
 
@@ -207,9 +213,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
-  const [diagnosticsVisible, setDiagnosticsVisible] = useState(
-    getThreePerfDebugConfig().enabled,
-  );
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -486,6 +490,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       {/* Loading indicator is now 3D-anchored inside Canvas */}
 
       <Canvas
+        frameloop="demand"
         camera={{ position: [0, -57, 474], fov: 45 }}
         gl={{ preserveDrawingBuffer: true }}
         onPointerMissed={() => {

@@ -324,6 +324,26 @@ class TestApplyMatchedRgbOverrides:
         assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
         assert analysis.matched_shapes[1]["recipe"] == [2, 2, 2, 2, 2]
 
+    def test_material_matrix_recipe_is_used_when_rgb_is_unchanged(self):
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.zeros((h_px, w_px, 5), dtype=np.int32)
+        material_matrix[: h_px // 2, :, :] = np.array([3, 1, 1, 1, 1])
+        material_matrix[h_px // 2 :, :, :] = np.array([2, 2, 2, 2, 2])
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+        )
+
+        assert changed == 1
+        assert analysis.matched_shapes[0]["matched_rgb"] == (255, 0, 0)
+        assert analysis.matched_shapes[0]["recipe"] == [3, 1, 1, 1, 1]
+
     def test_pixels_outside_mask_solid_are_ignored(self):
         """Mutations on background pixels (``mask_solid == False``) must
         not influence the per-shape dominant colour vote.
@@ -461,7 +481,7 @@ class TestRunVectorBranchWiring:
             parse_warnings: list[str] = []
             last_stage_timings: dict[str, float] = {}
 
-            def __init__(self, _lut_path: str, color_mode: str) -> None:
+            def __init__(self, _lut_path: str, color_mode: str, *, img_processor=None) -> None:
                 self.color_mode = color_mode
                 self.enable_fridge_magnet = False
                 self.fridge_magnets = []
@@ -528,8 +548,10 @@ class TestRunVectorBranchWiring:
 
         matched_rgb_path = tmp_path / "matched.npy"
         mask_solid_path = tmp_path / "mask.npy"
+        material_matrix_path = tmp_path / "material.npy"
         np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
         np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
+        np.save(material_matrix_path, np.ones((4, 4, 5), dtype=np.int32))
 
         captured: dict = {}
         helper_calls: list[dict] = []
@@ -552,6 +574,7 @@ class TestRunVectorBranchWiring:
                 "nozzle_size": "0.4",
                 "matched_rgb_path": str(matched_rgb_path),
                 "mask_solid_path": str(mask_solid_path),
+                "material_matrix_path": str(material_matrix_path),
             }
 
             result = coordinator._run_vector_branch(ctx)
@@ -561,6 +584,8 @@ class TestRunVectorBranchWiring:
         kwargs = helper_calls[0]["kwargs"]
         assert "matched_rgb" in kwargs
         assert "mask_solid" in kwargs
+        assert "material_matrix" in kwargs
+        assert kwargs["material_matrix"].shape == (4, 4, 5)
         # img_processor must be the FakeVectorProcessor's stub attribute,
         # not some unrelated object — the helper relies on its KDTree.
         # img_processor 必须是分支构造的处理器持有的对象，否则 helper 会

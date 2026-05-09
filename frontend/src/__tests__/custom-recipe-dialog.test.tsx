@@ -324,13 +324,11 @@ describe("CustomRecipeDialog", () => {
   });
 
   it("uses selected material count for virtual primaries while material archive session palette is loading", async () => {
-    // Material-archive preview fetches the channel palette asynchronously
-    // after /preview. If the dialog opens before that best-effort request
-    // finishes, an empty palette must still reserve the selected material
-    // slots so a non-native primary like Black is sent as index N, not 0.
-    // 耗材档案模式的 session palette 是预览后异步拉取的；弹窗提前打开时，
-    // 即使 palette 还空，也必须用已选耗材数量占位。否则 Black 会被发成
-    // index 0，被后端解释成第一个真实耗材，2D/3D/生成都看起来没生效。
+    // Material-archive mode now shows materials in original order without
+    // canonical-primary grouping. When palette is empty, effectivePalette
+    // falls back to selectedMaterialDirNames, and every entry is native.
+    // 耗材档案模式现在直接按原始顺序显示材料，不做标准原色归类。
+    // palette 为空时回退到 selectedMaterialDirNames，所有条目都是原生的。
     converterStoreState.source_version = "material";
     converterStoreState.selectedMaterialDirNames = [
       "brand/red-pla",
@@ -342,9 +340,12 @@ describe("CustomRecipeDialog", () => {
     applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
     renderDialog({ palette: [], colorLayers: 2 });
 
+    // In material-archive mode with empty palette, the dropdown shows
+    // selectedMaterialDirNames directly (e.g. "red-pla", "green-pla", ...).
+    // Pattern "GG" selects index 1 (green-pla) for both layers by first letter.
     fireEvent.change(
       screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
-      { target: { value: "BB" } },
+      { target: { value: "GG" } },
     );
     fireEvent.click(
       screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
@@ -355,10 +356,11 @@ describe("CustomRecipeDialog", () => {
     const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
     expect(payload).toEqual(
       expect.objectContaining({
-        recipe: [5, 5],
-        virtual_materials: [{ name: "Black", hex: "#111111" }],
+        recipe: [1, 1],
+        color_layers: 2,
       }),
     );
+    expect(payload).not.toHaveProperty("virtual_materials");
   });
 
   it("defaults material archive recipes to the native white channel when white is not slot zero", async () => {
@@ -394,48 +396,53 @@ describe("CustomRecipeDialog", () => {
     expect(payload).not.toHaveProperty("virtual_materials");
   });
 
-  it("maps Chinese material archive color names to native channels instead of virtual primaries", async () => {
+  it("maps material archive color names to native channels instead of virtual primaries", async () => {
+    // Material-archive mode now shows materials in original order without
+    // canonical-primary grouping. Recipe indices map directly to palette order.
+    // 耗材档案模式现在直接按原始顺序显示材料，配方索引直接对应 palette 顺序。
     converterStoreState.source_version = "material";
     applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
     renderDialog({
       palette: [
         {
-          color: "爱丽兹 PETG Basic 品红色",
-          material: "爱丽兹/爱丽兹 PETG Basic 品红色",
+          color: "Magenta PETG",
+          material: "alice/Magenta PETG",
           hex: "E6007E",
         },
         {
-          color: "彩多屋 PLA 天蓝色",
-          material: "彩多屋/PLA 天蓝色",
+          color: "Cyan PLA",
+          material: "bob/Cyan PLA",
           hex: "00B7EB",
         },
         {
-          color: "爱丽兹 PETG 黄色",
-          material: "爱丽兹/爱丽兹 PETG 黄色",
+          color: "Yellow PETG",
+          material: "alice/Yellow PETG",
           hex: "FFD400",
         },
         {
-          color: "爱丽兹 PETG 大红",
-          material: "爱丽兹/爱丽兹 PETG 大红",
+          color: "Red PETG",
+          material: "alice/Red PETG",
           hex: "E53935",
         },
         {
-          color: "爱丽兹 PETG 白色",
-          material: "爱丽兹/爱丽兹 PETG 白色",
+          color: "White PETG",
+          material: "alice/White PETG",
           hex: "F5F5F5",
         },
         {
-          color: "爱丽兹 PETG Basic 柠檬绿",
-          material: "爱丽兹/爱丽兹 PETG Basic 柠檬绿",
+          color: "Green PETG",
+          material: "alice/Green PETG",
           hex: "43A047",
         },
       ],
       colorLayers: 3,
     });
 
+    // Pattern uses first-letter mapping. "C" maps to index 1 (Cyan PLA),
+    // "G" maps to index 5 (Green PETG). We use "?" to keep layer 1 as default.
     fireEvent.change(
       screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
-      { target: { value: "MCG" } },
+      { target: { value: "C?G" } },
     );
     fireEvent.click(
       screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
@@ -444,7 +451,10 @@ describe("CustomRecipeDialog", () => {
 
     await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
     const payload = applyRecipeOverrideMock.mock.calls[0]?.[0];
-    expect(payload.recipe).toEqual([0, 1, 5]);
+    // Default recipe is all base channel (index 4 = white).
+    // Pattern "C?G" sets layer 0 → 1 (Cyan), layer 1 stays default (4),
+    // layer 2 → 5 (Green).
+    expect(payload.recipe).toEqual([1, 4, 5]);
     expect(payload).not.toHaveProperty("virtual_materials");
   });
 

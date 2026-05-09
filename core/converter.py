@@ -238,6 +238,8 @@ def convert_image_to_3d(
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
     material_grid_resolution: Optional[int] = None,
+    use_lut_constrained: bool = False,
+    auto_dynamic_range: bool = False,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -290,6 +292,8 @@ def generate_preview_cached(
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
     material_grid_resolution: Optional[int] = None,
+    use_lut_constrained: bool = False,
+    auto_dynamic_range: bool = False,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -404,6 +408,8 @@ def generate_final_model(
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
     material_grid_resolution: Optional[int] = None,
+    use_lut_constrained: bool = False,
+    auto_dynamic_range: bool = False,
     material_backing_material_index: Optional[int] = None,
 ):
     """Wrapper function for generating final model.
@@ -537,6 +543,8 @@ def generate_final_model(
         material_layer_count=material_layer_count,
         material_layer_height_mm=material_layer_height_mm,
         material_grid_resolution=material_grid_resolution,
+        use_lut_constrained=use_lut_constrained,
+        auto_dynamic_range=auto_dynamic_range,
     )
 
 

@@ -69,6 +69,7 @@ def test_color_layer_hole_filter_removes_small_holes(tmp_path):
     processor.color_mode = "4-Color (RYBW)"
     processor.sampling_precision = 0.02
     processor.expand_stroke_to_fill = False
+    processor.auto_dynamic_range = False
     processor.img_processor = SimpleNamespace(lut_rgb=[(0, 0, 0)], lut_path="direct.npy")
     processor._parse_svg = lambda *_: (
         [{"poly": geom, "color": (0, 128, 255)}],

@@ -32,6 +32,10 @@ from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors as kme
 from core.pipeline.processing_ops.lut_color_matcher import match_colors_to_lut, map_pixels_to_lut
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.processing_ops.wireframe_extractor import extract_wireframe_mask
+from core.pipeline.processing_ops.dynamic_range_compressor import (
+    apply_auto_dynamic_range,
+    compute_target_l_range,
+)
 
 
 class LuminaImageProcessor:
@@ -75,6 +79,8 @@ class LuminaImageProcessor:
         model_only: bool = False,
         model_threshold: float | None = None,
         model_margin: float | None = None,
+        use_lut_constrained: bool = False,
+        auto_dynamic_range: bool = False,
     ):
         """Initialize image processor.
         加载 LUT 文件并初始化图像处理器。
@@ -83,6 +89,8 @@ class LuminaImageProcessor:
             color_mode: 颜色模式字符串 (CMYW/RYBW/6-Color)
             hue_weight: 色相权重 (0.0-1.0)
             chroma_gate: 色度门限 (0-50)
+            use_lut_constrained: 启用 LUT-Constrained K-Means 量化
+            auto_dynamic_range: 启用自动动态范围压缩（实验性，仅作用于 L*）
         """
         self.lut_path = lut_path
         self.color_mode = color_mode
@@ -94,6 +102,8 @@ class LuminaImageProcessor:
         self.model_only = bool(model_only)
         self.model_threshold = float(model_threshold) if model_threshold is not None else None
         self.model_margin = float(model_margin) if model_margin is not None else None
+        self.use_lut_constrained = bool(use_lut_constrained)
+        self.auto_dynamic_range = bool(auto_dynamic_range)
         self.hue_matcher = None
         self.enable_cleanup = True
         self._last_unique_colors = 0
@@ -101,6 +111,13 @@ class LuminaImageProcessor:
         lut_data = self._load_lut_data()
         self._apply_lut_data(lut_data)
         self.last_match_info = self._build_initial_match_info()
+        if self.use_lut_constrained and self.hue_weight > 0:
+            _log.info(
+                "Hue protection ignored (use_lut_constrained=True). "
+                "hue_weight forced from %.2f to 0.0.",
+                self.hue_weight,
+            )
+            self.hue_weight = 0.0
         self._init_hue_matcher()
         self._log_init_summary()
 
@@ -132,6 +149,7 @@ class LuminaImageProcessor:
         self.predictive_threshold = lut_data.get("predictive_threshold")
         self.predictive_margin = lut_data.get("predictive_margin")
         self.native_reference_source = bool(lut_data.get("native_reference_source", False))
+        self.lut_fingerprint = lut_data.get("lut_fingerprint", None)
 
     def _build_initial_match_info(self):
         return {
@@ -215,6 +233,7 @@ class LuminaImageProcessor:
             image_path, target_width_mm, modeling_mode, blur_kernel, smooth_sigma
         )
         rgb_arr, mask_transparent = self._extract_rgba_arrays(img)
+        rgb_arr = self._maybe_apply_auto_dynamic_range(rgb_arr)
         matched_rgb, material_matrix, bg_ref, debug_data = self._run_mode_pipeline(
             modeling_mode, rgb_arr, target_h, target_w, quantize_colors, blur_kernel, smooth_sigma
         )
@@ -289,6 +308,43 @@ class LuminaImageProcessor:
             },
         )
 
+    def _maybe_apply_auto_dynamic_range(self, rgb_arr):
+        """Apply auto dynamic range compression in-place if enabled.
+        若启用自动动态范围，则将输入压缩到 LUT/耗材调色板可达的 L* 区间。
+        """
+        if not self.auto_dynamic_range:
+            return rgb_arr
+        target = compute_target_l_range(getattr(self, "lut_lab", None))
+        if target is None:
+            log.debug(
+                "Auto dynamic range skipped: no target L* range available",
+                extra={
+                    "event": "auto_dynamic_range_skipped",
+                    "reason": "no_target_range",
+                },
+            )
+            return rgb_arr
+        target_lo, target_hi = target
+        rgb_out, info = apply_auto_dynamic_range(rgb_arr, target_lo, target_hi)
+        if info.get("applied"):
+            log.info(
+                "Auto dynamic range applied",
+                extra={
+                    "event": "auto_dynamic_range_applied",
+                    "src_l_range": list(info.get("src_l_range") or ()),
+                    "tgt_l_range": list(info.get("tgt_l_range") or ()),
+                },
+            )
+        else:
+            log.debug(
+                "Auto dynamic range skipped",
+                extra={
+                    "event": "auto_dynamic_range_skipped",
+                    "reason": info.get("reason"),
+                },
+            )
+        return rgb_out
+
     def _extract_rgba_arrays(self, img):
         """Extract RGB data and transparent mask from RGBA image.
         从 RGBA 图像中提取 RGB 数据和透明蒙版。
@@ -356,16 +412,22 @@ class LuminaImageProcessor:
     def _apply_cleanup(self, modeling_mode, matched_rgb, material_matrix):
         """Apply isolated pixel cleanup if enabled.
         如果启用，则应用孤立像素清理。
+
+        Runs in every high-fidelity match mode (legacy LUT lookup *and*
+        predictive model matching). The palette-preserving implementation
+        in :func:`core.isolated_pixel_cleanup.cleanup_isolated_pixels` no
+        longer requires the LUT ``ref_stacks`` to be present, so the
+        predictive-mode silent-skip that used to make this checkbox a
+        no-op has been removed.
+        无论传统 LUT 匹配还是预测匹配路径，只要处于高保真模式且勾选了
+        清理开关就会运行；新版清理函数不再依赖 LUT ``ref_stacks``，
+        因此预测匹配路径下也能生效（原先是静默跳过）。
         """
-        if (
-            modeling_mode == ModelingMode.HIGH_FIDELITY
-            and self.enable_cleanup
-            and self.last_match_info.get("match_mode") != "predictive"
-        ):
+        if modeling_mode == ModelingMode.HIGH_FIDELITY and self.enable_cleanup:
             try:
                 from core.isolated_pixel_cleanup import cleanup_isolated_pixels
 
-                return cleanup_isolated_pixels(material_matrix, matched_rgb, self.lut_rgb, self.ref_stacks)
+                return cleanup_isolated_pixels(material_matrix, matched_rgb)
             except ImportError:
                 log.debug(
                     "Isolated pixel cleanup module unavailable",
@@ -495,7 +557,14 @@ class LuminaImageProcessor:
             "Sharpening skipped",
             extra={"event": "image_sharpening_skipped", "reason": "reduce_noise"},
         )
-        quantized_image = kmeans_quantize(rgb_processed, quantize_colors)
+        quantized_image = kmeans_quantize(
+            rgb_processed, quantize_colors,
+            lut_lab=self.lut_lab if self.use_lut_constrained else None,
+            lut_rgb=self.lut_rgb if self.use_lut_constrained else None,
+            lut_tree=self.kdtree if self.use_lut_constrained else None,
+            use_lut_constrained=self.use_lut_constrained,
+            lut_fingerprint=getattr(self, 'lut_fingerprint', None),
+        )
         t0 = time.perf_counter()
         unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
         self._last_unique_colors = int(len(unique_colors))

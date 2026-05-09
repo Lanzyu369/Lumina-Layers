@@ -31,7 +31,7 @@ import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 
 from api.structured_logging import get_logger
-from config import BedManager
+from config import BedManager, normalize_nozzle_size
 from core.pipeline import p06_bed_rendering, s09_export_3mf
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
@@ -74,6 +74,272 @@ except ImportError as exc:
 # log audits attach handlers to ``lumina.core.pipeline.coordinator``).
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
+
+
+# ---------------------------------------------------------------------------
+# Layer-0 (appearance face) diagnostics
+# 外观面层（layer 0）诊断埋点
+#
+# All diagnostic events are emitted at DEBUG level so they incur zero cost
+# in production / governance budgets. To consume them, run with
+# ``LUMINA_LOG_LEVEL=DEBUG`` and grep the log file for ``vector_diag_*``.
+#
+# Coverage (8 instrumentation points spread across the vector pipeline):
+#   1. ``vector_diag_solver_cache_layer_order`` — solver cache reindex /
+#      Bottom2Top→Top2Bottom reversal, sample stacks
+#   2. ``vector_diag_match_colors_summary`` — per-unique-color KDTree
+#      lookup → ref_stack[0..2] mapping
+#   3. ``vector_diag_preview_material_matrix_layer0`` — preview cache
+#      material_matrix layer 0 channel histogram + shape recipe[0] hist
+#   4. ``vector_diag_generate_loaded_material_matrix_layer0`` — /generate
+#      loaded material_matrix layer 0 (post pad)
+#   5. ``vector_diag_apply_matched_rgb_per_shape`` — per-shape majority
+#      stack vote details (first N shapes)
+#   6. ``vector_diag_after_matched_rgb_overrides_recipe0`` — shape
+#      recipe[0] hist after apply_matched_rgb_overrides
+#   7. ``vector_diag_after_recipe_overrides_recipe0`` — shape recipe[0]
+#      hist after apply_recipe_overrides (final state before build_mesh)
+#   8. ``vector_diag_build_mesh_input_recipes`` — sample of recipes that
+#      build_mesh actually consumes
+#
+# Comparing 1..8 pinpoints which exact stage corrupts the appearance face.
+# 全部 DEBUG 级别，零治理代价。用 ``LUMINA_LOG_LEVEL=DEBUG`` 启用并 grep
+# ``vector_diag_*`` 即可对比 8 个阶段的 layer 0 通道分布，逐段定位"外观面
+# 缺色"的注入点。
+# ---------------------------------------------------------------------------
+
+
+def _layer0_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
+    """Return a (channel_id -> pixel_count) histogram of ``material_matrix[..., 0]``.
+
+    Only counts mask_solid pixels when provided; transparent (mask_solid=False)
+    is reported separately. Channel ids are clamped to a reasonable display
+    range to keep the log payload small.
+
+    返回 ``material_matrix[..., 0]``（外观面层）的通道直方图。仅统计实体像素，
+    透明像素单独报告。
+    """
+    arr = np.asarray(material_matrix)
+    if arr.ndim != 3 or arr.shape[2] == 0:
+        return {"_invalid_shape": list(arr.shape)}
+    layer0 = arr[..., 0]
+    mask = None
+    if mask_solid is not None:
+        mask_arr = np.asarray(mask_solid, dtype=bool)
+        if mask_arr.shape == layer0.shape:
+            mask = mask_arr
+    if mask is not None:
+        solid_pixels = layer0[mask]
+        transparent_pixels = layer0[~mask]
+    else:
+        solid_pixels = layer0.ravel()
+        transparent_pixels = np.empty(0, dtype=layer0.dtype)
+    uniq, counts = np.unique(solid_pixels, return_counts=True)
+    histogram = {int(ch): int(cnt) for ch, cnt in zip(uniq.tolist(), counts.tolist())}
+    return {
+        "shape": list(arr.shape),
+        "solid_pixel_count": int(solid_pixels.size),
+        "transparent_pixel_count": int(transparent_pixels.size),
+        "layer0_channel_histogram": histogram,
+    }
+
+
+def _shape_recipe0_histogram(matched_shapes: list) -> dict:
+    """Return a (channel_id -> shape_count, channel_id -> total_area) histogram of shape.recipe[0].
+
+    Reports both shape count and approximate area weight so downstream analysis
+    can distinguish "many small shapes have channel X" from "a few large shapes
+    have channel X".
+
+    返回 shape.recipe[0] 的两个直方图：按形状数 + 按面积，便于区分"零碎小形状"
+    和"少量大色块"两种分布。
+    """
+    by_shape: dict[int, int] = {}
+    by_area: dict[int, float] = {}
+    no_recipe = 0
+    for shape in matched_shapes or []:
+        recipe = shape.get("recipe") if isinstance(shape, dict) else None
+        if not recipe:
+            no_recipe += 1
+            continue
+        ch = int(recipe[0])
+        by_shape[ch] = by_shape.get(ch, 0) + 1
+        geom = shape.get("geometry") if isinstance(shape, dict) else None
+        try:
+            area = float(geom.area) if geom is not None else 0.0
+        except (AttributeError, TypeError, ValueError):
+            area = 0.0
+        by_area[ch] = by_area.get(ch, 0.0) + area
+    by_area_rounded = {ch: round(area, 3) for ch, area in by_area.items()}
+    return {
+        "shape_count": int(sum(by_shape.values())),
+        "shapes_without_recipe": int(no_recipe),
+        "recipe0_by_shape_count": by_shape,
+        "recipe0_by_area": by_area_rounded,
+    }
+
+
+def _per_layer_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
+    """Return per-layer per-channel pixel histograms over ``material_matrix``.
+
+    返回 ``material_matrix`` 每一层的 (channel -> pixel_count) 直方图。透明
+    像素由 ``mask_solid=False`` 标识，统一不计入任何层的分母。这是阶段 A
+    诊断的核心数据：每层每通道有多少像素。
+
+    Args:
+        material_matrix: ``(H, W, num_layers)`` int array. (材料矩阵)
+        mask_solid: Optional ``(H, W)`` bool mask of solid pixels. (实体掩膜)
+
+    Returns:
+        dict: ``{"shape": [...], "solid_pixel_count": int,
+        "per_layer_channel_histogram": {layer_idx: {channel: pixel_count}}}``.
+    """
+    arr = np.asarray(material_matrix)
+    if arr.ndim != 3 or arr.shape[2] == 0:
+        return {"_invalid_shape": list(arr.shape)}
+    h, w, num_layers = arr.shape
+    mask = None
+    if mask_solid is not None:
+        mask_arr = np.asarray(mask_solid, dtype=bool)
+        if mask_arr.shape == (h, w):
+            mask = mask_arr
+    per_layer: dict[int, dict[int, int]] = {}
+    if mask is not None:
+        flat_mask = mask.ravel()
+        for layer_idx in range(num_layers):
+            layer = arr[..., layer_idx].ravel()[flat_mask]
+            uniq, counts = np.unique(layer, return_counts=True)
+            per_layer[int(layer_idx)] = {
+                int(ch): int(cnt) for ch, cnt in zip(uniq.tolist(), counts.tolist())
+            }
+        solid_count = int(flat_mask.sum())
+    else:
+        for layer_idx in range(num_layers):
+            layer = arr[..., layer_idx].ravel()
+            uniq, counts = np.unique(layer, return_counts=True)
+            per_layer[int(layer_idx)] = {
+                int(ch): int(cnt) for ch, cnt in zip(uniq.tolist(), counts.tolist())
+            }
+        solid_count = int(arr.shape[0] * arr.shape[1])
+    return {
+        "shape": list(arr.shape),
+        "solid_pixel_count": solid_count,
+        "per_layer_channel_histogram": per_layer,
+    }
+
+
+def _shape_per_layer_channel_histogram(matched_shapes: list) -> dict:
+    """Return per-layer per-channel shape-count and total-area histograms.
+
+    返回每个 (layer_idx, channel) 上"有多少 shape 在该层是该通道"以及总面积。
+    用于阶段 B 诊断：与阶段 A（按像素）和阶段 C（按 run）逐层逐通道对比，
+    找出"色块从哪一阶段开始丢失"。
+
+    Args:
+        matched_shapes: List of shape dicts with ``recipe`` (list of channel
+            ids, Top2Bottom) and ``geometry`` (shapely). (匹配 shape 列表)
+
+    Returns:
+        dict with ``per_layer_shape_count`` and ``per_layer_area`` nested
+        dicts keyed by ``layer_idx -> channel -> count/area``.
+    """
+    by_count: dict[int, dict[int, int]] = {}
+    by_area: dict[int, dict[int, float]] = {}
+    max_layers = 0
+    for shape in matched_shapes or []:
+        recipe = shape.get("recipe") if isinstance(shape, dict) else None
+        if not recipe:
+            continue
+        max_layers = max(max_layers, len(recipe))
+        geom = shape.get("geometry") if isinstance(shape, dict) else None
+        try:
+            area = float(geom.area) if geom is not None else 0.0
+        except (AttributeError, TypeError, ValueError):
+            area = 0.0
+        for layer_idx, ch_raw in enumerate(recipe):
+            ch = int(ch_raw)
+            by_count.setdefault(layer_idx, {})
+            by_area.setdefault(layer_idx, {})
+            by_count[layer_idx][ch] = by_count[layer_idx].get(ch, 0) + 1
+            by_area[layer_idx][ch] = by_area[layer_idx].get(ch, 0.0) + area
+    by_area_rounded = {
+        layer_idx: {ch: round(area, 3) for ch, area in inner.items()}
+        for layer_idx, inner in by_area.items()
+    }
+    return {
+        "shape_max_layer_count": int(max_layers),
+        "per_layer_shape_count": by_count,
+        "per_layer_area": by_area_rounded,
+    }
+
+
+def _emit_vector_diag(*, extra: dict) -> None:
+    """Emit a vector diagnostic event at DEBUG level.
+
+    The ``extra`` argument MUST be passed as a keyword named ``extra`` and
+    contain a string literal under the ``event`` key. Both constraints are
+    needed so the structured-logging governance scanner (which walks the
+    AST looking for ``extra={"event": "<literal>", ...}``) detects every
+    diagnostic event.
+
+    DEBUG 级别诊断埋点。``extra`` 必须以关键字参数形式传入，且 ``event``
+    字段为字符串字面量，否则日志治理扫描无法识别。
+    """
+    message = str(extra.get("event") or "vector_diag")
+    log.debug(message, extra=extra)
+
+
+def _log_vector_preview_timings(
+    timings: dict,
+    ctx: dict,
+    analysis: object,
+    raster_cache: dict,
+) -> None:
+    if not timings:
+        return
+    mask_solid = raster_cache.get("mask_solid")
+    material_matrix = raster_cache.get("material_matrix")
+    material_matrix_shape = (
+        list(np.asarray(material_matrix).shape)
+        if material_matrix is not None
+        else None
+    )
+    solid_pixel_count = (
+        int(np.asarray(mask_solid, dtype=bool).sum())
+        if mask_solid is not None
+        else None
+    )
+    log.info(
+        "Vector preview timing breakdown",
+        extra={
+            "event": "vector_preview_timings",
+            "duration_ms": round(float(timings.get("vector_preview_total_s", 0.0)) * 1000, 3),
+            "timings": {str(key): float(value) for key, value in timings.items()},
+            "image_path": str(ctx.get("image_path") or ""),
+            "color_mode": str(ctx.get("color_mode") or ""),
+            "target_width_mm": float(ctx.get("target_width_mm") or 0.0),
+            "is_material_archive": str(ctx.get("material_source") or "lut") == "material_archive",
+            "actual_lut_path": str(ctx.get("actual_lut_path") or ""),
+            "grid_resolution": int(ctx.get("grid_resolution") or 0),
+            "shape_count": len(getattr(analysis, "shape_data", []) or []),
+            "clipped_shape_count": len(getattr(analysis, "clipped_shapes", []) or []),
+            "matched_shape_count": len(getattr(analysis, "matched_shapes", []) or []),
+            "preview_width_px": int(raster_cache.get("target_w") or 0),
+            "preview_height_px": int(raster_cache.get("target_h") or 0),
+            "solid_pixel_count": solid_pixel_count,
+            "material_matrix_shape": material_matrix_shape,
+        },
+    )
+
+
+def _resolve_vector_line_width_mm(nozzle_size: object) -> str:
+    normalized = normalize_nozzle_size(nozzle_size) or "0.4"
+    try:
+        nozzle_mm = float(normalized)
+    except (TypeError, ValueError):
+        nozzle_mm = 0.4
+    line_width = 0.22 if nozzle_mm <= 0.25 else 0.42
+    return f"{line_width:.2f}"
 
 
 def _update_bambu_base_layer_ctx_for_vector(
@@ -346,6 +612,17 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             grid_resolution=grid_resolution,
             hue_weight=hue_weight,
         )
+        _emit_vector_diag(
+            extra={
+                "event": "vector_diag_solver_cache_layer_order",
+                "stage": "material_vector_matcher_init",
+                "layer_count": int(layer_count),
+                "grid_resolution": int(getattr(matcher, "actual_grid_resolution", grid_resolution)),
+                "slot_count": len(slot_names),
+                "material_count": len(materials),
+                "recipe_order": "top_to_bottom",
+            },
+        )
         return VectorProcessor.from_img_processor(
             matcher, "Material Archive"
         )
@@ -369,20 +646,57 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     quantize_colors = ctx.get("quantize_colors", 64)
     backing_color_id = ctx.get("backing_color_id", 0)
     lut_metadata = ctx.get("lut_metadata")
+    preview_timing: dict[str, float] = {}
+    vector_preview_total_t0 = time.perf_counter()
 
     try:
         from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
 
+        t0 = time.perf_counter()
         vec_processor = _build_vector_processor(ctx, fallback_color_mode=color_mode)
+        preview_timing["processor_init_s"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         analysis = vec_processor.analyze_svg(
             svg_path=image_path,
             target_width_mm=target_width_mm,
             color_replacements=None,
         )
+        preview_timing.update(
+            {
+                str(key): float(value)
+                for key, value in getattr(analysis, "stage_timings", {}).items()
+            }
+        )
+        preview_timing["analyze_svg_s"] = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         raster_cache = VectorProcessor.build_preview_cache(
             analysis,
             pixels_per_mm=10.0,
+        )
+        preview_timing["build_preview_cache_s"] = time.perf_counter() - t0
+        _emit_vector_diag(
+            extra={
+                "event": "vector_diag_preview_material_matrix_layer0",
+                "stage": "preview_material_matrix",
+                "material_matrix": _layer0_channel_histogram(
+                    raster_cache.get("material_matrix"),
+                    raster_cache.get("mask_solid"),
+                ),
+                "shape_recipe0": _shape_recipe0_histogram(
+                    getattr(analysis, "matched_shapes", []) or []
+                ),
+            },
+        )
+        _emit_vector_diag(
+            extra={
+                "event": "vector_diag_stage_a_preview_per_layer_channel",
+                "stage": "preview_material_matrix",
+                "material_matrix": _per_layer_channel_histogram(
+                    raster_cache.get("material_matrix"),
+                    raster_cache.get("mask_solid"),
+                ),
+            },
         )
 
         # Diagnostic: material-archive vector + preview-colour-drift
@@ -430,7 +744,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
 
+        t0 = time.perf_counter()
         ctx = p06_bed_rendering.run(ctx)
+        preview_timing["bed_rendering_s"] = time.perf_counter() - t0
+        preview_timing["vector_preview_total_s"] = time.perf_counter() - vector_preview_total_t0
+        _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
@@ -478,16 +796,22 @@ def _run_vector_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
+    material_matrix_path = ctx.get("material_matrix_path")
     try:
         backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
     except (TypeError, ValueError):
         backing_color_id = 0
+    separate_backing = ctx.get("separate_backing", False)
     try:
         separate_backing_color_id = int(
             ctx.get("separate_backing_color_id", backing_color_id) or 0
         )
     except (TypeError, ValueError):
         separate_backing_color_id = 0
+    try:
+        backing_channel_idx = max(0, int(backing_color_id))
+    except (TypeError, ValueError):
+        backing_channel_idx = 0
 
     vector_timing = {}
     vector_total_t0 = time.perf_counter()
@@ -525,6 +849,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
         vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
+        vec_processor.auto_dynamic_range = bool(ctx.get("auto_dynamic_range", False))
+        if hasattr(vec_processor, "backing_color_id"):
+            vec_processor.backing_color_id = backing_channel_idx
 
         # 1. Unified analysis: parse \u2192 clip \u2192 match (shared by preview + mesh)
         _report_progress(ctx, 0.05, "SVG \u89e3\u6790\u4e0e\u51e0\u4f55\u5904\u7406\u4e2d... | Parsing & extruding SVG...")
@@ -547,12 +874,49 @@ def _run_vector_branch(ctx: dict) -> dict:
             try:
                 cached_matched_rgb = np.load(matched_rgb_path)
                 cached_mask_solid = np.load(mask_solid_path).astype(bool)
+                cached_material_matrix = None
+                if material_matrix_path:
+                    cached_material_matrix = np.load(material_matrix_path)
+
+                # Diagnostic 2/4: material_matrix loaded from disk (post pad).
+                if cached_material_matrix is not None:
+                    _emit_vector_diag(
+                        extra={
+                            "event": "vector_diag_generate_loaded_material_matrix_layer0",
+                            "stage": "generate_material_matrix_loaded",
+                            "material_source": str(ctx.get("material_source") or "lut"),
+                            "material_matrix_path": str(material_matrix_path),
+                            "matched_rgb_shape": list(cached_matched_rgb.shape),
+                            "mask_solid_solid_pixel_count": int(np.count_nonzero(cached_mask_solid)),
+                            "material_base_channel_idx": int(ctx.get("material_base_channel_idx", -1)),
+                            **_layer0_channel_histogram(
+                                cached_material_matrix, cached_mask_solid
+                            ),
+                        }
+                    )
+
                 rewritten = apply_matched_rgb_overrides_to_analysis(
                     analysis,
                     matched_rgb=cached_matched_rgb,
+                    material_matrix=cached_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
                 )
+                # Diagnostic 3/4: shape recipe[0] distribution after
+                # apply_matched_rgb_overrides_to_analysis.
+                _emit_vector_diag(
+                    extra={
+                        "event": "vector_diag_after_matched_rgb_overrides_recipe0",
+                        "stage": "after_apply_matched_rgb_overrides",
+                        "shapes_rewritten": int(rewritten),
+                        "analysis_num_layers": int(getattr(analysis, "num_layers", 0) or 0),
+                        "material_base_channel_idx": int(ctx.get("material_base_channel_idx", -1)),
+                        **_shape_recipe0_histogram(
+                            getattr(analysis, "matched_shapes", []) or []
+                        ),
+                    }
+                )
+
                 if rewritten:
                     log.info(
                         "Vector matched RGB overrides applied",
@@ -613,6 +977,23 @@ def _run_vector_branch(ctx: dict) -> dict:
                         region_masks=vector_region_masks,
                         target_layers=requested_color_layers,
                         base_channel_idx=base_channel_idx,
+                        img_processor=vec_processor.img_processor,
+                    )
+
+                    # Diagnostic 4/4: shape recipe[0] distribution after
+                    # apply_recipe_overrides_to_analysis.
+                    _emit_vector_diag(
+                        extra={
+                            "event": "vector_diag_after_recipe_overrides_recipe0",
+                            "stage": "after_apply_recipe_overrides",
+                            "analysis_num_layers": int(getattr(analysis, "num_layers", 0) or 0),
+                            "base_channel_idx": int(base_channel_idx),
+                            "override_region_count": len(vector_region_masks),
+                            "override_count": len(recipe_overrides),
+                            **_shape_recipe0_histogram(
+                                getattr(analysis, "matched_shapes", []) or []
+                            ),
+                        }
                     )
                 except COORDINATOR_HANDLED_ERRORS as exc:
                     log.warning(
@@ -646,9 +1027,49 @@ def _run_vector_branch(ctx: dict) -> dict:
             if accepts_var_kwargs or "backing_color_id" in parameters:
                 build_mesh_kwargs["backing_color_id"] = (
                     separate_backing_color_id
-                    if ctx.get("separate_backing", False)
-                    else backing_color_id
+                    if separate_backing
+                    else backing_channel_idx
                 )
+
+        # Diagnostic 8/8: sample recipes about to enter build_mesh.
+        recipe_samples = []
+        for sample_idx, sample_shape in enumerate(
+            getattr(analysis, "matched_shapes", []) or []
+        ):
+            if len(recipe_samples) >= 24:
+                break
+            sample_geom = sample_shape.get("geometry") if isinstance(sample_shape, dict) else None
+            if sample_geom is None or getattr(sample_geom, "is_empty", False):
+                continue
+            try:
+                sample_area = float(sample_geom.area)
+            except (AttributeError, TypeError, ValueError):
+                sample_area = 0.0
+            sample_recipe = sample_shape.get("recipe") if isinstance(sample_shape, dict) else None
+            recipe_samples.append(
+                {
+                    "shape_idx": int(sample_idx),
+                    "area": round(sample_area, 3),
+                    "recipe": [int(v) for v in sample_recipe] if sample_recipe else None,
+                }
+            )
+        _emit_vector_diag(
+            extra={
+                "event": "vector_diag_build_mesh_input_recipes",
+                "stage": "before_build_mesh",
+                "sample_count": len(recipe_samples),
+                "recipe_sample_first24": recipe_samples,
+            },
+        )
+        _emit_vector_diag(
+            extra={
+                "event": "vector_diag_stage_b_before_build_mesh_per_layer_channel",
+                "stage": "before_build_mesh",
+                "shape_histogram": _shape_per_layer_channel_histogram(
+                    getattr(analysis, "matched_shapes", []) or []
+                ),
+            },
+        )
 
         scene = vec_processor.build_mesh(**build_mesh_kwargs)
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
@@ -734,14 +1155,15 @@ def _run_vector_branch(ctx: dict) -> dict:
                 )
         elif board_geom is not None and separate_backing:
             vec_preview_colors["Board"] = vec_preview_colors.get(
-                backing_slot_index,
-                vec_preview_colors.get(0, [255, 255, 255, 255]),
+                separate_backing_color_id, [255, 255, 255, 255]
             )
+            if "Board" not in vec_slot_list:
+                vec_slot_list = list(vec_slot_list) + ["Board"]
             log.debug(
                 "Vector board kept as separate backing",
                 extra={
                     "event": "vector_board_separate",
-                    "backing_slot_index": backing_slot_index,
+                    "backing_slot_index": separate_backing_color_id,
                     "separate_backing": True,
                 },
             )
@@ -784,6 +1206,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             )
             return ctx
 
+        _lw = _resolve_vector_line_width_mm(ctx.get("nozzle_size", "0.4"))
         vec_print_settings = {
             "layer_height": "0.08",
             "initial_layer_height": "0.08",
@@ -802,6 +1225,8 @@ def _run_vector_branch(ctx: dict) -> dict:
             "enable_support": "0",
             "brim_width": "5",
             "brim_type": "auto_brim",
+            "line_width": _lw,
+            "initial_layer_line_width": _lw,
         }
 
         if bool(ctx.get("center_on_bed", True)):
@@ -818,6 +1243,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             printer_id=ctx.get("printer_id", "bambu-h2d"),
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
+            project_slot_names=vec_slot_list,
             enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
@@ -978,6 +1404,14 @@ def _log_vector_timings(timings: dict) -> None:
         f"total={timings.get('vector_branch_total_s', 0.0):.3f}",
         extra={
             "event": "vector_timings",
+            "timings": {str(key): float(value) for key, value in timings.items()},
+        },
+    )
+    log.info(
+        "Vector generate timing breakdown",
+        extra={
+            "event": "vector_generate_timings",
+            "duration_ms": round(float(timings.get("vector_branch_total_s", 0.0)) * 1000, 3),
             "timings": {str(key): float(value) for key, value in timings.items()},
         },
     )

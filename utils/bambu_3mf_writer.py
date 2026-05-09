@@ -1004,6 +1004,8 @@ class BambuStudio3MFWriter:
             for key in [
                 "layer_height",
                 "initial_layer_height",
+                "line_width",
+                "initial_layer_line_width",
                 "wall_loops",
                 "top_shell_layers",
                 "bottom_shell_layers",

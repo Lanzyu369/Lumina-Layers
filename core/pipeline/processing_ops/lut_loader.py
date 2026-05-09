@@ -10,6 +10,7 @@ Extracted from LuminaImageProcessor._load_lut.
 
 from api.structured_logging import get_logger
 from dataclasses import replace
+import hashlib
 import os
 import numpy as np
 import cv2
@@ -119,15 +120,18 @@ def _finalize_loaded_lut(
     if lut_rgb.size == 0:
         lut_lab = np.zeros((0, 3), dtype=np.float64)
         kdtree = None
+        lut_fingerprint = ""
     else:
         lut_lab = _rgb_to_lab(lut_rgb)
         kdtree = KDTree(lut_lab)
+        lut_fingerprint = hashlib.sha1(lut_lab.tobytes()).hexdigest()[:12]
     result = {
         "lut_rgb": lut_rgb,
         "lut_lab": lut_lab,
         "ref_stacks": ref_stacks,
         "kdtree": kdtree,
         "layer_count": layer_count,
+        "lut_fingerprint": lut_fingerprint,
     }
     result.update(
         _build_predictive_info(

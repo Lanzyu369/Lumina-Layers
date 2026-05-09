@@ -90,6 +90,7 @@ type MockThreeState = {
   scene: { children: THREE.Object3D[] };
   camera: { position: { x: number; y: number; z: number } };
   controls: null;
+  invalidate: ReturnType<typeof vi.fn>;
 };
 let mockThreeState: MockThreeState | null = null;
 function getMockThreeState(): MockThreeState {
@@ -99,6 +100,7 @@ function getMockThreeState(): MockThreeState {
       scene: { children: [] as THREE.Object3D[] },
       camera: { position: { x: 0, y: 0, z: 0 } },
       controls: null,
+      invalidate: vi.fn(),
     };
   }
   return mockThreeState;
