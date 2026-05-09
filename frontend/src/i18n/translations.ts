@@ -58,8 +58,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Automatically collected info (click to expand)",
   },
   bug_report_modal_privacy_note: {
-    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，不经过任何第三方服务。",
-    en: "This report is sent only to the Lumina Studio developer mailbox. No third-party services are involved.",
+    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
+    en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -94,8 +94,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Automatic copy failed. Select the ticket id and copy it manually.",
   },
   bug_report_success_emailed_yes: {
-    zh: "报告已通过邮件发送给开发者。",
-    en: "Report has been emailed to the developer.",
+    zh: "邮件投递已配置，报告已保存并加入发送队列。",
+    en: "Email delivery is configured; the report was saved and queued for delivery.",
   },
   bug_report_success_emailed_no: {
     zh: "邮件未配置，报告已保存到本地。请把工单号告知开发者，便于查找原始记录。",

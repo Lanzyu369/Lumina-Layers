@@ -81,6 +81,16 @@ def test_is_email_configured_returns_true_when_minimum_env_is_present(
     assert is_email_configured() is True
 
 
+def test_parse_recipients_accepts_commas_and_semicolons() -> None:
+    from api.feedback_email import _parse_recipients
+
+    assert _parse_recipients("dev@example.com, ops@example.com; qa@example.com") == [
+        "dev@example.com",
+        "ops@example.com",
+        "qa@example.com",
+    ]
+
+
 def test_send_bug_report_email_short_circuits_when_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,6 +110,31 @@ def test_send_bug_report_email_short_circuits_when_unconfigured(
     )
 
     assert calls == []
+
+
+def test_send_bug_report_email_passes_all_configured_recipients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api.feedback_email as feedback_email
+
+    calls: list[dict[str, Any]] = []
+
+    async def _send(*_args: object, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_SMTP_HOST", "localhost")
+    monkeypatch.setenv("LUMINA_FEEDBACK_TO", "dev@example.com, ops@example.com")
+    monkeypatch.setattr(feedback_email.aiosmtplib, "send", _send)
+
+    asyncio.run(
+        feedback_email.send_bug_report_email_async(
+            ticket_id="abc12345",
+            request_payload=_payload(),
+            dump_path="feedback/report.json",
+        )
+    )
+
+    assert calls[0]["recipients"] == ["dev@example.com", "ops@example.com"]
 
 
 @pytest.mark.parametrize("exc", [TimeoutError("slow"), OSError("offline")])
@@ -144,7 +179,7 @@ def test_build_email_message_uses_plain_text_body_and_json_attachment() -> None:
         request_payload=_payload(),
         dump_path="feedback/report.json",
         smtp_from="from@example.com",
-        smtp_to="to@example.com",
+        smtp_to=["to@example.com"],
     )
 
     assert msg["Subject"].startswith("[Lumina Bug] abc12345 - Preview crashed")

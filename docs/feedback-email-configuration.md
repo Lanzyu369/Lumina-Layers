@@ -25,6 +25,12 @@ LUMINA_FEEDBACK_SMTP_HOST=smtp.example.com
 LUMINA_FEEDBACK_TO=developer@example.com
 ```
 
+`LUMINA_FEEDBACK_TO` accepts one or more recipients separated by commas or semicolons:
+
+```bash
+LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com;dev3@example.com
+```
+
 In most real deployments you should also set the login credentials:
 
 ```bash
@@ -35,6 +41,23 @@ LUMINA_FEEDBACK_SMTP_FROM=developer@example.com
 LUMINA_FEEDBACK_SMTP_USE_TLS=true
 LUMINA_FEEDBACK_SMTP_TIMEOUT_S=5
 ```
+
+## Resend domain sender example
+
+For a shared domain sender such as `bugs@luminastudio.com.cn`, use a transactional SMTP relay and verify the domain in the provider first. Do not commit the generated SMTP password.
+
+```bash
+LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com
+LUMINA_FEEDBACK_SMTP_PORT=587
+LUMINA_FEEDBACK_SMTP_USER=resend
+LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key
+LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn
+LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com
+LUMINA_FEEDBACK_SMTP_USE_TLS=true
+LUMINA_FEEDBACK_SMTP_TIMEOUT_S=5
+```
+
+Resend requires DNS records before a custom sender domain can send mail. Add the DKIM TXT record, the `send` MX record, and the `send` SPF TXT record shown in the Resend domain page. A relaxed DMARC record such as `v=DMARC1; p=none;` on `_dmarc` is useful while the project is still testing delivery.
 
 ## QQ Mail example
 
@@ -74,12 +97,12 @@ If the server is managed by systemd, you can either use `.env.local` or add envi
 
 ```ini
 [Service]
-Environment="LUMINA_FEEDBACK_SMTP_HOST=smtp.qq.com"
+Environment="LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com"
 Environment="LUMINA_FEEDBACK_SMTP_PORT=587"
-Environment="LUMINA_FEEDBACK_SMTP_USER=your@qq.com"
-Environment="LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-qq-smtp-authorization-code"
-Environment="LUMINA_FEEDBACK_SMTP_FROM=your@qq.com"
-Environment="LUMINA_FEEDBACK_TO=your@qq.com"
+Environment="LUMINA_FEEDBACK_SMTP_USER=resend"
+Environment="LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key"
+Environment="LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn"
+Environment="LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com"
 Environment="LUMINA_FEEDBACK_SMTP_USE_TLS=true"
 ```
 
@@ -96,12 +119,12 @@ Pass secrets at container runtime instead of baking them into the image:
 
 ```bash
 docker run -p 7860:7860 \
-  -e LUMINA_FEEDBACK_SMTP_HOST=smtp.qq.com \
+  -e LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com \
   -e LUMINA_FEEDBACK_SMTP_PORT=587 \
-  -e LUMINA_FEEDBACK_SMTP_USER=your@qq.com \
-  -e LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-qq-smtp-authorization-code \
-  -e LUMINA_FEEDBACK_SMTP_FROM=your@qq.com \
-  -e LUMINA_FEEDBACK_TO=your@qq.com \
+  -e LUMINA_FEEDBACK_SMTP_USER=resend \
+  -e LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key \
+  -e LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn \
+  -e LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com \
   -e LUMINA_FEEDBACK_SMTP_USE_TLS=true \
   lumina-layers
 ```
@@ -113,6 +136,7 @@ docker run -p 7860:7860 \
 3. A successful email-enabled response should not show the "email is not configured" message.
 4. If it still shows that email is unconfigured, check that `LUMINA_FEEDBACK_SMTP_HOST` and `LUMINA_FEEDBACK_TO` are visible to the backend process.
 5. If the UI no longer says unconfigured but no email arrives, check backend logs for `feedback_email_failed` and verify host, port, TLS mode, username, password or app password, and provider SMTP permissions.
+6. For Resend, the domain page must show `Verified`; Gmail may place the first messages under Updates or spam while reputation is new.
 
 # 反馈邮件配置
 
@@ -141,6 +165,12 @@ LUMINA_FEEDBACK_SMTP_HOST=smtp.example.com
 LUMINA_FEEDBACK_TO=developer@example.com
 ```
 
+`LUMINA_FEEDBACK_TO` 支持多个收件人，可以用英文逗号或分号分隔：
+
+```bash
+LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com;dev3@example.com
+```
+
 实际部署通常还需要配置登录信息：
 
 ```bash
@@ -151,6 +181,23 @@ LUMINA_FEEDBACK_SMTP_FROM=developer@example.com
 LUMINA_FEEDBACK_SMTP_USE_TLS=true
 LUMINA_FEEDBACK_SMTP_TIMEOUT_S=5
 ```
+
+## Resend 域名发件示例
+
+如果要用 `bugs@luminastudio.com.cn` 作为团队共享发件地址，可以使用事务邮件 SMTP relay，并先在服务商里完成域名验证。生成的 SMTP 密码不要提交进仓库。
+
+```bash
+LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com
+LUMINA_FEEDBACK_SMTP_PORT=587
+LUMINA_FEEDBACK_SMTP_USER=resend
+LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key
+LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn
+LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com
+LUMINA_FEEDBACK_SMTP_USE_TLS=true
+LUMINA_FEEDBACK_SMTP_TIMEOUT_S=5
+```
+
+Resend 的自定义发件域名需要先添加 DNS 记录。按 Resend 域名页显示的内容添加 DKIM TXT、`send` MX、`send` SPF TXT。项目还在测试期时，可以给 `_dmarc` 添加较宽松的 `v=DMARC1; p=none;`，方便观察投递情况。
 
 ## QQ 邮箱示例
 
@@ -190,12 +237,12 @@ LUMINA_FEEDBACK_SMTP_TIMEOUT_S=5
 
 ```ini
 [Service]
-Environment="LUMINA_FEEDBACK_SMTP_HOST=smtp.qq.com"
+Environment="LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com"
 Environment="LUMINA_FEEDBACK_SMTP_PORT=587"
-Environment="LUMINA_FEEDBACK_SMTP_USER=your@qq.com"
-Environment="LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-qq-smtp-authorization-code"
-Environment="LUMINA_FEEDBACK_SMTP_FROM=your@qq.com"
-Environment="LUMINA_FEEDBACK_TO=your@qq.com"
+Environment="LUMINA_FEEDBACK_SMTP_USER=resend"
+Environment="LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key"
+Environment="LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn"
+Environment="LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com"
 Environment="LUMINA_FEEDBACK_SMTP_USE_TLS=true"
 ```
 
@@ -212,12 +259,12 @@ sudo systemctl restart lumina
 
 ```bash
 docker run -p 7860:7860 \
-  -e LUMINA_FEEDBACK_SMTP_HOST=smtp.qq.com \
+  -e LUMINA_FEEDBACK_SMTP_HOST=smtp.resend.com \
   -e LUMINA_FEEDBACK_SMTP_PORT=587 \
-  -e LUMINA_FEEDBACK_SMTP_USER=your@qq.com \
-  -e LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-qq-smtp-authorization-code \
-  -e LUMINA_FEEDBACK_SMTP_FROM=your@qq.com \
-  -e LUMINA_FEEDBACK_TO=your@qq.com \
+  -e LUMINA_FEEDBACK_SMTP_USER=resend \
+  -e LUMINA_FEEDBACK_SMTP_PASSWORD=replace-with-resend-api-key \
+  -e LUMINA_FEEDBACK_SMTP_FROM=bugs@luminastudio.com.cn \
+  -e LUMINA_FEEDBACK_TO=dev1@example.com,dev2@example.com \
   -e LUMINA_FEEDBACK_SMTP_USE_TLS=true \
   lumina-layers
 ```
@@ -229,3 +276,4 @@ docker run -p 7860:7860 \
 3. 如果邮件配置生效，成功页不应再显示“邮件未配置”。
 4. 如果仍显示未配置，检查后端进程是否能读到 `LUMINA_FEEDBACK_SMTP_HOST` 和 `LUMINA_FEEDBACK_TO`。
 5. 如果不再提示未配置但没有收到邮件，检查后端日志中的 `feedback_email_failed`，并核对 host、端口、TLS、用户名、授权码和邮箱服务商的 SMTP 权限。
+6. 如果使用 Resend，域名页需要显示 `Verified`；Gmail 在新发件域名初期可能会把邮件归到“更新”或垃圾邮件。

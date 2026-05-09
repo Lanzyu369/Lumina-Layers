@@ -174,7 +174,7 @@ describe("BugReportModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByTestId("bug-report-ticket-id")).toHaveTextContent("deadbeef");
-    expect(screen.getByText("报告已通过邮件发送给开发者。")).toBeInTheDocument();
+    expect(screen.getByText("邮件投递已配置，报告已保存并加入发送队列。")).toBeInTheDocument();
     expect(screen.queryByTestId("bug-report-dump-path")).not.toBeInTheDocument();
   });
 

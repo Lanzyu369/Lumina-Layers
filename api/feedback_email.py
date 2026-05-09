@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from email.message import EmailMessage
 from functools import lru_cache
 from typing import Any
@@ -32,6 +33,8 @@ from api.structured_logging import get_logger
 
 log = get_logger(__name__)
 
+_RECIPIENT_SPLIT_RE = re.compile(r"[;,]")
+
 
 @lru_cache(maxsize=1)
 def is_email_configured() -> bool:
@@ -45,7 +48,7 @@ def is_email_configured() -> bool:
     """
 
     has_host = bool(os.environ.get("LUMINA_FEEDBACK_SMTP_HOST"))
-    has_to = bool(os.environ.get("LUMINA_FEEDBACK_TO"))
+    has_to = bool(_parse_recipients(os.environ.get("LUMINA_FEEDBACK_TO", "")))
     if not (has_host and has_to):
         log.warning(
             "Bug-report email is unconfigured; reports will be dumped only.",
@@ -86,7 +89,7 @@ async def send_bug_report_email_async(
     smtp_user = os.environ.get("LUMINA_FEEDBACK_SMTP_USER")
     smtp_password = os.environ.get("LUMINA_FEEDBACK_SMTP_PASSWORD")
     smtp_from = os.environ.get("LUMINA_FEEDBACK_SMTP_FROM", smtp_user or "lumina@localhost")
-    smtp_to = os.environ["LUMINA_FEEDBACK_TO"]
+    recipients = _parse_recipients(os.environ["LUMINA_FEEDBACK_TO"])
     use_tls = os.environ.get("LUMINA_FEEDBACK_SMTP_USE_TLS", "true").lower() == "true"
     timeout_s = float(os.environ.get("LUMINA_FEEDBACK_SMTP_TIMEOUT_S", "5"))
 
@@ -95,7 +98,7 @@ async def send_bug_report_email_async(
         request_payload=request_payload,
         dump_path=dump_path,
         smtp_from=smtp_from,
-        smtp_to=smtp_to,
+        smtp_to=recipients,
     )
 
     try:
@@ -105,6 +108,7 @@ async def send_bug_report_email_async(
             port=smtp_port,
             username=smtp_user,
             password=smtp_password,
+            recipients=recipients,
             start_tls=use_tls,
             timeout=timeout_s,
         )
@@ -127,7 +131,7 @@ def _build_email_message(
     request_payload: dict[str, Any],
     dump_path: str,
     smtp_from: str,
-    smtp_to: str,
+    smtp_to: list[str],
 ) -> EmailMessage:
     """Build the bug report email message.
 
@@ -142,8 +146,8 @@ def _build_email_message(
             已落盘 JSON 路径字符串。
         smtp_from: Sender address.
             发件地址。
-        smtp_to: Recipient address.
-            收件地址。
+        smtp_to: Recipient addresses.
+            收件地址列表。
 
     Returns:
         EmailMessage: Plain-text email with JSON attachment.
@@ -179,7 +183,7 @@ def _build_email_message(
     message = EmailMessage()
     message["Subject"] = f"[Lumina Bug] {ticket_id} - {short_desc}"
     message["From"] = smtp_from
-    message["To"] = smtp_to
+    message["To"] = ", ".join(smtp_to)
     message.set_content("\n".join(body_lines))
     message.add_attachment(
         json.dumps(request_payload, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -188,3 +192,27 @@ def _build_email_message(
         filename=f"{ticket_id}.json",
     )
     return message
+
+
+def _parse_recipients(raw_value: str) -> list[str]:
+    """Parse configured recipient addresses from env text.
+
+    从环境变量文本中解析收件地址。
+
+    Args:
+        raw_value: Comma- or semicolon-separated recipient addresses.
+            逗号或分号分隔的收件地址。
+
+    Returns:
+        list[str]: Clean recipient address list, preserving order.
+            清理后的收件地址列表，并保留原有顺序。
+    """
+
+    return [
+        recipient
+        for recipient in (
+            item.strip()
+            for item in _RECIPIENT_SPLIT_RE.split(raw_value)
+        )
+        if recipient
+    ]
