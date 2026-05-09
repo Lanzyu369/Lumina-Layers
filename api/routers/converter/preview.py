@@ -1104,7 +1104,7 @@ async def upload_heightmap(
         avg_gray = float(np.mean(grayscale_resized[color_mask]))
 
         # Map to height range [base_thickness, max_relief_height]
-        height = base_thickness + (avg_gray / 255.0) * (max_relief_height - base_thickness)
+        height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
         color_height_map[hex_key] = round(height, 4)
 
     # 8. Store heightmap data in session

@@ -377,6 +377,7 @@ async def extractor_extract_gradient_card_stage_a(
     try:
         white_rgb = await upload_to_ndarray(white_image)
         black_rgb = await upload_to_ndarray(black_image)
+
         zip_path = await upload_to_tempfile(dataset_zip, suffix=".zip")
         result = extract_stage_a_material_from_gradient_cards(
             white_rgb,

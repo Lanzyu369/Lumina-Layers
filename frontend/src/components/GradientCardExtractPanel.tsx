@@ -4,12 +4,15 @@ import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { listGradientCardMaterials } from "../api/extractor";
 import { useSingleStageStore } from "../stores/singleStageStore";
+import { ACCEPT_EXTRACTOR_FORMATS } from "../stores/extractorStore";
 import Button from "./ui/Button";
 import Slider from "./ui/Slider";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import Dropdown from "./ui/Dropdown";
+import Checkbox from "./ui/Checkbox";
+import { ColorcheckerConfirmDialogInner } from "./ColorcheckerConfirmDialog";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   type AggregationBiasFlag,
@@ -681,6 +684,15 @@ export default function GradientCardExtractPanel() {
     submitSave,
     clearExtractError,
     clearSaveMessages,
+    colorchecker_enabled,
+    colorchecker_phase,
+    calibratedPreviewUrl,
+    originalWhitePreviewUrl,
+    setColorcheckerEnabled,
+    receiveCalibratedFromCC,
+    confirmCalibrated,
+    rejectCalibrated,
+    closeColorcheckerDialog,
   } = useSingleStageStore();
 
   const buildCornerHint = (count: number) =>
@@ -885,7 +897,7 @@ export default function GradientCardExtractPanel() {
       <input
         ref={whiteImageInputRef}
         type="file"
-        accept="image/*,.heic,.heif"
+        accept={ACCEPT_EXTRACTOR_FORMATS}
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
@@ -896,7 +908,7 @@ export default function GradientCardExtractPanel() {
       <input
         ref={blackImageInputRef}
         type="file"
-        accept="image/*,.heic,.heif"
+        accept={ACCEPT_EXTRACTOR_FORMATS}
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
@@ -983,6 +995,10 @@ export default function GradientCardExtractPanel() {
             </div>
           </section>
 </div>
+
+        <section data-testid="gradient-colorchecker-toggle-section" className={resolveSectionCardClass(workspace.mode)}>
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
+        </section>
 
         <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
@@ -1535,6 +1551,16 @@ export default function GradientCardExtractPanel() {
           ) : null}
         </div>
       </div>
+      <ColorcheckerConfirmDialogInner
+        phase={colorchecker_phase}
+        imageFile={whiteImageFile}
+        originalPreviewUrl={originalWhitePreviewUrl}
+        calibratedPreviewUrl={calibratedPreviewUrl}
+        receiveCalibrated={receiveCalibratedFromCC}
+        confirmCalibrated={confirmCalibrated}
+        rejectCalibrated={rejectCalibrated}
+        closeDialog={closeColorcheckerDialog}
+      />
     </motion.aside>
   );
 }

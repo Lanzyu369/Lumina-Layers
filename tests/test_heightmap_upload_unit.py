@@ -149,6 +149,8 @@ class TestValidHeightmapUpload:
         for hex_key, height in body["color_height_map"].items():
             assert 0.08 <= height <= 2.0, f"Height {height} out of range for {hex_key}"
 
+        assert body["color_height_map"]["ff0000"] > body["color_height_map"]["00ff00"]
+
         assert "thumbnail_url" in body
         assert "original_size" in body
         assert body["original_size"] == [100, 100]

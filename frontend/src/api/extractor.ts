@@ -57,6 +57,63 @@ export async function extractColors(
   return response.data;
 }
 
+/** Warp preview response (step 1) */
+export interface ColorcheckerWarpPreviewResponse {
+  preview_url: string;
+  preview_width: number;
+  preview_height: number;
+  auto_patch_points: Array<{ x: number; y: number }>;
+}
+
+/** Warp the ColorChecker region and return preview + auto 24 patch points */
+export async function colorcheckerWarpPreview(
+  image: File,
+  cornerPoints: Array<[number, number]>,
+  patchLayout: string = "4x6",
+): Promise<ColorcheckerWarpPreviewResponse> {
+  const fd = new FormData();
+  fd.append("image", image);
+  fd.append("corner_points", JSON.stringify(cornerPoints));
+  fd.append("patch_layout", patchLayout);
+  const response = await apiClient.post<ColorcheckerWarpPreviewResponse>(
+    "/extractor/colorchecker-warp-preview",
+    fd,
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+/** Calibration response (step 2) */
+export interface ColorcheckerCalibrateResponse {
+  calibrated_url: string;
+  overlay_url: string;
+  width: number;
+  height: number;
+  patch_points: Array<{ x: number; y: number }>;
+}
+
+/** Compute CCM and return calibrated image + overlay */
+export async function colorcheckerCalibrate(
+  image: File,
+  cornerPoints: Array<[number, number]>,
+  patchPoints: Array<{ x: number; y: number }> | null = null,
+  patchLayout: string = "4x6",
+): Promise<ColorcheckerCalibrateResponse> {
+  const fd = new FormData();
+  fd.append("image", image);
+  fd.append("corner_points", JSON.stringify(cornerPoints));
+  if (patchPoints) {
+    fd.append("patch_points", JSON.stringify(patchPoints));
+  }
+  fd.append("patch_layout", patchLayout);
+  const response = await apiClient.post<ColorcheckerCalibrateResponse>(
+    "/extractor/colorchecker-calibrate",
+    fd,
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
 /** Capture-origin tag forwarded as the ``image_source`` form field.
  * 上传给后端的输入图像来源标签。
  */

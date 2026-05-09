@@ -63,6 +63,11 @@ interface SingleStageState {
   manualWhiteAnchor: GradientCardAnchorCorner | null;
   manualBlackAnchor: GradientCardAnchorCorner | null;
   imageSource: GradientCardImageSource;
+  colorchecker_enabled: boolean;
+  colorchecker_phase: "calibrating" | "confirming" | "done" | null;
+  calibratedImageFile: File | null;
+  calibratedPreviewUrl: string | null;
+  originalWhitePreviewUrl: string | null;
   materialName: string;
   materialBrand: string;
   verificationTargetDirectoryName: string | null;
@@ -96,6 +101,12 @@ interface SingleStageActions {
   setManualWhiteAnchor: (value: GradientCardAnchorCorner | null) => void;
   setManualBlackAnchor: (value: GradientCardAnchorCorner | null) => void;
   setImageSource: (value: GradientCardImageSource) => void;
+  setColorcheckerEnabled: (value: boolean) => void;
+  openColorcheckerDialog: () => void;
+  receiveCalibratedFromCC: (dataUrl: string) => void;
+  confirmCalibrated: () => void;
+  rejectCalibrated: () => void;
+  closeColorcheckerDialog: () => void;
   startMaterialVerification: (target: {
     materialName: string;
     directoryName: string;
@@ -120,7 +131,11 @@ const createPreviewUrl = (file: File | null): string | null => {
   return URL.createObjectURL(file);
 };
 
-const BACKEND_PREVIEW_EXTENSIONS = new Set([".heic", ".heif"]);
+const BACKEND_PREVIEW_EXTENSIONS = new Set([
+  ".heic", ".heif",
+  ".dng", ".cr2", ".cr3", ".nef", ".arw",
+  ".orf", ".rw2", ".raf", ".pef", ".srw", ".raw",
+]);
 
 function getLowerFileExtension(file: File): string {
   const index = file.name.lastIndexOf(".");
@@ -340,6 +355,11 @@ const DEFAULT_STATE: SingleStageState = {
   manualWhiteAnchor: null,
   manualBlackAnchor: null,
   imageSource: "raw",
+  colorchecker_enabled: false,
+  colorchecker_phase: null,
+  calibratedImageFile: null,
+  calibratedPreviewUrl: null,
+  originalWhitePreviewUrl: null,
   materialName: "",
   materialBrand: "",
   verificationTargetDirectoryName: null,
@@ -374,7 +394,38 @@ export const useSingleStageStore = create<
   setWhiteImageFile: async (file: File | null) => {
     const previousUrl = get().whiteImagePreviewUrl;
     const useBackendPreview = requiresBackendPreview(file);
+    const ccEnabled = get().colorchecker_enabled;
     revokePreviewUrl(previousUrl);
+
+    if (ccEnabled && file) {
+      // CC mode: hold off on setting the active preview — let calibration
+      // produce the corrected image first.
+      set({
+        whiteImageFile: file,
+        whiteImagePreviewUrl: null,
+        whiteImageNaturalWidth: null,
+        whiteImageNaturalHeight: null,
+        whiteCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
+        colorchecker_phase: "calibrating",
+        calibratedImageFile: null,
+        calibratedPreviewUrl: null,
+        ...RESULT_RESET_STATE,
+      });
+      // Generate originalWhitePreviewUrl for the comparison dialog.
+      if (useBackendPreview) {
+        uploadImagePreview(file)
+          .then(({ preview_url }) => {
+            set({ originalWhitePreviewUrl: normalizeResourceUrl(preview_url) });
+          })
+          .catch(() => {});
+      } else {
+        set({ originalWhitePreviewUrl: createPreviewUrl(file) });
+      }
+      return;
+    }
+
     set({
       whiteImageFile: file,
       whiteImagePreviewUrl: useBackendPreview ? null : createPreviewUrl(file),
@@ -675,6 +726,84 @@ export const useSingleStageStore = create<
 
   setImageSource: (value: GradientCardImageSource) =>
     set({ imageSource: value, extractError: null }),
+
+  setColorcheckerEnabled: (value: boolean) => {
+    set({
+      colorchecker_enabled: value,
+      colorchecker_phase: null,
+      calibratedImageFile: null,
+      calibratedPreviewUrl: null,
+      originalWhitePreviewUrl: null,
+    });
+  },
+
+  openColorcheckerDialog: () => {
+    set({ colorchecker_phase: "calibrating" });
+  },
+
+  receiveCalibratedFromCC: (dataUrl: string) => {
+    fetch(dataUrl)
+      .then((r) => r.blob())
+      .then((blob) => {
+        const calibratedFile = new File([blob], "colorchecker_calibrated.png", {
+          type: "image/png",
+        });
+        const previewUrl = URL.createObjectURL(calibratedFile);
+        set({
+          colorchecker_phase: "confirming",
+          calibratedImageFile: calibratedFile,
+          calibratedPreviewUrl: previewUrl,
+        });
+      })
+      .catch(() => {
+        set({ extractError: "Failed to process calibrated image" });
+      });
+  },
+
+  confirmCalibrated: () => {
+    const { calibratedPreviewUrl, calibratedImageFile } = get();
+    if (!calibratedPreviewUrl || !calibratedImageFile) return;
+    const img = new Image();
+    img.onload = () => {
+      set({
+        colorchecker_phase: "done",
+        whiteImageFile: calibratedImageFile,
+        whiteImagePreviewUrl: calibratedPreviewUrl,
+        whiteImageNaturalWidth: img.naturalWidth,
+        whiteImageNaturalHeight: img.naturalHeight,
+        whiteCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
+      });
+    };
+    img.onerror = () => {
+      set({
+        colorchecker_phase: "done",
+        whiteImageFile: calibratedImageFile,
+        whiteImagePreviewUrl: calibratedPreviewUrl,
+        whiteCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
+      });
+    };
+    img.src = calibratedPreviewUrl;
+  },
+
+  rejectCalibrated: () => {
+    const { calibratedPreviewUrl } = get();
+    if (calibratedPreviewUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(calibratedPreviewUrl);
+    }
+    set({
+      colorchecker_phase: "calibrating",
+      calibratedImageFile: null,
+      calibratedPreviewUrl: null,
+    });
+  },
+
+  closeColorcheckerDialog: () => {
+    set({ colorchecker_phase: get().calibratedImageFile ? "done" : null });
+  },
 
   startMaterialVerification: ({
     materialName,

@@ -156,37 +156,46 @@ const MARKER_TEXT_COLOR = UI_COLOR_TOKENS.extractorMarkerText;
 
 // ========== Helper: draw image + corner markers on canvas ==========
 
+function drawMarkers(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  corners: Array<[number, number]>,
+  fill: string,
+  stroke: string,
+  labelPrefix: string,
+): void {
+  const { width, height } = ctx.canvas;
+  corners.forEach(([ix, iy], idx) => {
+    const cx = (ix / img.naturalWidth) * width;
+    const cy = (iy / img.naturalHeight) * height;
+    ctx.beginPath();
+    ctx.arc(cx, cy, MARKER_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = MARKER_TEXT_COLOR;
+    ctx.font = MARKER_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${labelPrefix}${idx + 1}`, cx, cy);
+  });
+}
+
 function drawCanvas(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
-  corners: Array<[number, number]>
+  corners: Array<[number, number]>,
 ): void {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
   ctx.drawImage(img, 0, 0, width, height);
 
-  // Draw each corner marker
-  corners.forEach(([ix, iy], idx) => {
-    // Convert image coords → canvas coords
-    const cx = (ix / img.naturalWidth) * width;
-    const cy = (iy / img.naturalHeight) * height;
-
-    // Circle
-    ctx.beginPath();
-    ctx.arc(cx, cy, MARKER_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = MARKER_FILL;
-    ctx.fill();
-    ctx.strokeStyle = MARKER_STROKE;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Number label
-    ctx.fillStyle = MARKER_TEXT_COLOR;
-    ctx.font = MARKER_FONT;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(idx + 1), cx, cy);
-  });
+  // Draw extraction corners in blue
+  if (corners.length > 0) {
+    drawMarkers(ctx, img, corners, MARKER_FILL, MARKER_STROKE, "");
+  }
 }
 
 const EXTRACTOR_RESULT_MEDIA_MAX_HEIGHT = "clamp(16rem, 48vh, 56rem)";
@@ -273,8 +282,8 @@ export default function ExtractorCanvas() {
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas || !imageNaturalWidth || !imageNaturalHeight) return;
-      if (corner_points.length >= 4) return;
 
+      if (corner_points.length >= 4) return;
       const [x, y] = canvasClickToImageCoord(
         e,
         canvas,

@@ -96,6 +96,10 @@ export interface ExtractorState {
   distortion: number;
   vignette_correction: boolean;
   auto_wb: boolean;
+  colorchecker_enabled: boolean;
+  colorchecker_phase: "calibrating" | "confirming" | "done" | null;
+  calibratedImageFile: File | null;
+  calibratedPreviewUrl: string | null;
   originalPreviewUrl: string | null;
 
   // API 状态
@@ -152,6 +156,12 @@ export interface ExtractorActions {
   setDistortion: (value: number) => void;
   setVignetteCorrection: (value: boolean) => void;
   setAutoWb: (value: boolean) => Promise<void>;
+  setColorcheckerEnabled: (value: boolean) => void;
+  openColorcheckerDialog: () => void;
+  receiveCalibratedFromCC: (dataUrl: string) => void;
+  confirmCalibrated: () => void;
+  rejectCalibrated: () => void;
+  closeColorcheckerDialog: () => void;
   setManufacturer: (value: string) => void;
   setType: (value: string) => void;
   submitExtract: () => Promise<void>;
@@ -185,6 +195,10 @@ const DEFAULT_STATE: ExtractorState = {
   distortion: 0.0,
   vignette_correction: false,
   auto_wb: false,
+  colorchecker_enabled: false,
+  colorchecker_phase: null,
+  calibratedImageFile: null,
+  calibratedPreviewUrl: null,
   originalPreviewUrl: null,
   isLoading: false,
   error: null,
@@ -248,31 +262,71 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           paletteConfirmed: false,
           paletteConfirmError: null,
           auto_wb: false,
+          colorchecker_enabled: false,
+          colorchecker_phase: null,
+          calibratedImageFile: null,
+          calibratedPreviewUrl: null,
           originalPreviewUrl: null,
           ...correctionDefaults,
         });
         return;
       }
 
+      const ccEnabled = get().colorchecker_enabled;
+
+      // Shared reset fields for both CC-on and CC-off paths
+      const resetFields = {
+        corner_points: [] as Array<[number, number]>,
+        active_corner_index: null,
+        session_id: null,
+        lut_download_url: null,
+        warp_view_url: null,
+        lut_preview_url: null,
+        lut_layout: null,
+        defaultPalette: [] as ExtractorPaletteEntry[],
+        paletteConfirmed: false,
+        paletteConfirmError: null,
+        auto_wb: false,
+        colorchecker_enabled: ccEnabled,
+        calibratedImageFile: null,
+        calibratedPreviewUrl: null,
+        originalPreviewUrl: null,
+        ...correctionDefaults,
+      } as const;
+
+      // --- CC enabled: store file, skip active preview, open dialog ---
+      // We still generate a preview in the background for the before/after
+      // comparison shown after calibration completes.
+      if (ccEnabled) {
+        set({
+          imageFile: file,
+          imagePreviewUrl: null,
+          imageNaturalWidth: null,
+          imageNaturalHeight: null,
+          colorchecker_phase: "calibrating",
+          ...resetFields,
+        });
+        if (isRawFile(file)) {
+          uploadImagePreview(file)
+            .then(({ preview_url }) => {
+              set({ originalPreviewUrl: preview_url });
+            })
+            .catch(() => {});
+        } else {
+          set({ originalPreviewUrl: URL.createObjectURL(file) });
+        }
+        return;
+      }
+
+      // --- Normal flow (CC off) ---
       if (isRawFile(file)) {
         set({
           imageFile: file,
           imagePreviewUrl: null,
           imageNaturalWidth: null,
           imageNaturalHeight: null,
-          corner_points: [],
-          active_corner_index: null,
-          session_id: null,
-          lut_download_url: null,
-          warp_view_url: null,
-          lut_preview_url: null,
-          lut_layout: null,
-          defaultPalette: [],
-          paletteConfirmed: false,
-          paletteConfirmError: null,
-          auto_wb: false,
-          originalPreviewUrl: null,
-          ...correctionDefaults,
+          colorchecker_phase: null,
+          ...resetFields,
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
@@ -305,20 +359,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         imagePreviewUrl: previewUrl,
         imageNaturalWidth: null,
         imageNaturalHeight: null,
-        // Clear previous corner points and extraction results
-        corner_points: [],
-        active_corner_index: null,
-        session_id: null,
-        lut_download_url: null,
-        warp_view_url: null,
-        lut_preview_url: null,
-        lut_layout: null,
-        defaultPalette: [],
-        paletteConfirmed: false,
-        paletteConfirmError: null,
-        auto_wb: false,
-        originalPreviewUrl: null,
-        ...correctionDefaults,
+        colorchecker_phase: null,
+        ...resetFields,
       });
     },
 
@@ -355,6 +397,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           active_corner_index: null,
           isLoading: false,
           auto_wb: false,
+          colorchecker_enabled: false,
+          colorchecker_phase: null,
+          calibratedImageFile: null,
+          calibratedPreviewUrl: null,
           originalPreviewUrl: null,
         });
       } catch (err) {
@@ -516,6 +562,92 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     setVignetteCorrection: (value: boolean) =>
       set({ vignette_correction: value }),
 
+    setColorcheckerEnabled: (value: boolean) => {
+      if (value) {
+        set({
+          colorchecker_enabled: true,
+          colorchecker_phase: null,
+          calibratedImageFile: null,
+          calibratedPreviewUrl: null,
+        });
+      } else {
+        set({
+          colorchecker_enabled: false,
+          colorchecker_phase: null,
+          calibratedImageFile: null,
+          calibratedPreviewUrl: null,
+        });
+      }
+    },
+
+    openColorcheckerDialog: () => {
+      set({ colorchecker_phase: "calibrating" });
+    },
+
+    receiveCalibratedFromCC: (dataUrl: string) => {
+      // Convert data URL to File, then enter "confirming" phase.
+      // originalPreviewUrl was already set during image upload.
+      fetch(dataUrl)
+        .then((r) => r.blob())
+        .then((blob) => {
+          const calibratedFile = new File([blob], "colorchecker_calibrated.png", {
+            type: "image/png",
+          });
+          const previewUrl = URL.createObjectURL(calibratedFile);
+          set({
+            colorchecker_phase: "confirming",
+            calibratedImageFile: calibratedFile,
+            calibratedPreviewUrl: previewUrl,
+          });
+        })
+        .catch(() => {
+          set({ error: "Failed to process calibrated image" });
+        });
+    },
+
+    confirmCalibrated: () => {
+      // User accepts the calibrated image — apply it as the active preview
+      const { calibratedPreviewUrl } = get();
+      if (!calibratedPreviewUrl) return;
+      const img = new Image();
+      img.onload = () => {
+        set({
+          colorchecker_phase: "done",
+          imagePreviewUrl: calibratedPreviewUrl,
+          imageNaturalWidth: img.naturalWidth,
+          imageNaturalHeight: img.naturalHeight,
+          corner_points: [],
+          active_corner_index: null,
+        });
+      };
+      img.onerror = () => {
+        set({
+          colorchecker_phase: "done",
+          imagePreviewUrl: calibratedPreviewUrl,
+          corner_points: [],
+          active_corner_index: null,
+        });
+      };
+      img.src = calibratedPreviewUrl;
+    },
+
+    rejectCalibrated: () => {
+      // User rejects — discard calibrated image, go back to calibrating
+      const { calibratedPreviewUrl } = get();
+      if (calibratedPreviewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(calibratedPreviewUrl);
+      }
+      set({
+        colorchecker_phase: "calibrating",
+        calibratedImageFile: null,
+        calibratedPreviewUrl: null,
+      });
+    },
+
+    closeColorcheckerDialog: () => {
+      set({ colorchecker_phase: get().calibratedImageFile ? "done" : null });
+    },
+
     setAutoWb: async (value: boolean) => {
       const { imageFile, imagePreviewUrl, originalPreviewUrl } = get();
       if (!imageFile) {
@@ -569,11 +701,13 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     submitExtract: async () => {
       const state = get();
-      if (!state.imageFile || state.corner_points.length < 4) return;
+      // Use calibrated image if colorchecker was applied, otherwise original
+      const fileToExtract = state.calibratedImageFile ?? state.imageFile;
+      if (!fileToExtract || state.corner_points.length < 4) return;
 
       set({ isLoading: true, error: null });
       try {
-        const response = await extractColors(state.imageFile, {
+        const response = await extractColors(fileToExtract, {
           corner_points: state.corner_points,
           color_mode: state.color_mode,
           page: state.page,

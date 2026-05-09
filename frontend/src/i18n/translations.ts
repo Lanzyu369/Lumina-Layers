@@ -2430,6 +2430,86 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自动校正图像的白平衡，将白色参考块还原为标准白色，使整体色彩更准确。",
     en: "Automatically corrects the image white balance, restoring the white reference patch to standard white for more accurate overall colors.",
   },
+  ext_colorchecker_label: {
+    zh: "ColorChecker 校色",
+    en: "ColorChecker Calibration",
+  },
+  ext_colorchecker_hint: {
+    zh: "启用后将使用图片中的 ColorChecker 色卡计算颜色校正矩阵 (CCM)，先校正图片颜色再进行提取，适用于照片色温偏差较大的场景。",
+    en: "When enabled, computes a Color Correction Matrix (CCM) from the ColorChecker card in the image, applying color correction before extraction. Useful when photos have significant color temperature deviation.",
+  },
+  ext_cc_step1_title: {
+    zh: "第 1 步：标记 ColorChecker 色卡",
+    en: "Step 1: Mark ColorChecker Card",
+  },
+  ext_cc_step1_hint: {
+    zh: "请在图片上点击 ColorChecker 色卡的 4 个角点",
+    en: "Click the 4 corners of the ColorChecker card in the image",
+  },
+  ext_cc_warp_btn: {
+    zh: "生成预览",
+    en: "Generate Preview",
+  },
+  ext_cc_calibrate_btn: {
+    zh: "执行校色",
+    en: "Calibrate",
+  },
+  ext_cc_clear_corners_btn: {
+    zh: "清除色卡角点",
+    en: "Clear Card Corners",
+  },
+  ext_cc_step_review_title: {
+    zh: "检查采样点",
+    en: "Review Patch Points",
+  },
+  ext_cc_step_review_hint: {
+    zh: "下方为校色卡透视展开预览，标注了 24 个采样点。如有偏差，先选择编号再在图上点击新的位置来修正；确认无误后点击「执行校色」。",
+    en: "Below is the warped ColorChecker preview with 24 sampling points. To adjust, select a patch number then click its correct position on the image. When satisfied, click Calibrate.",
+  },
+  ext_cc_step2_title: {
+    zh: "第 2 步：标记校准板",
+    en: "Step 2: Mark Calibration Board",
+  },
+  ext_cc_step2_hint: {
+    zh: "校色完成，请在校正后的图片上点击校准板的 4 个角点，然后提取",
+    en: "Calibration done. Click the 4 corners of the calibration board on the corrected image, then extract.",
+  },
+  ext_cc_dialog_title: {
+    zh: "ColorChecker 色卡校色",
+    en: "ColorChecker Calibration",
+  },
+  ext_cc_open_dialog_btn: {
+    zh: "打开校色工具",
+    en: "Open Calibration Tool",
+  },
+  ext_cc_calibrated_badge: {
+    zh: "已校色 ✓",
+    en: "Calibrated ✓",
+  },
+  ext_cc_confirm_title: {
+    zh: "校色结果确认",
+    en: "Calibration Result",
+  },
+  ext_cc_confirm_body: {
+    zh: "请检查下方校色后的图片。如果颜色看起来正确，点击「确认使用」将此校色结果用于后续提取；否则点击「重新校色」重新标记角点。",
+    en: "Review the calibrated image below. If colors look correct, click Accept to use it for extraction; otherwise click Retry to re-mark corners.",
+  },
+  ext_cc_compare_original: {
+    zh: "原图",
+    en: "Original",
+  },
+  ext_cc_compare_calibrated: {
+    zh: "校准后",
+    en: "Calibrated",
+  },
+  ext_cc_confirm_accept: {
+    zh: "确认使用",
+    en: "Accept",
+  },
+  ext_cc_confirm_reject: {
+    zh: "重新校色",
+    en: "Retry",
+  },
   ext_extract_btn_label: {
     zh: "提取颜色",
     en: "Extract Colors",

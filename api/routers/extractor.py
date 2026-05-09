@@ -369,6 +369,164 @@ async def extractor_preview_wb(
     }
 
 
+@router.post("/colorchecker-warp-preview")
+async def extractor_colorchecker_warp_preview(
+    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
+    patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Warp the ColorChecker region and return preview + auto 24 patch points.
+
+    Step 1 of the two-step ColorChecker calibration flow. The user marks 4
+    corners of the ColorChecker card. The backend perspective-warps the region
+    and auto-generates 24 sampling points for user review / adjustment.
+    """
+    from core.colorchecker_adapter import (
+        ColorCheckerCalibrationError,
+        ColorCheckerUnavailableError,
+        warp_colorchecker_preview,
+    )
+
+    try:
+        points = json.loads(corner_points)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
+    if not isinstance(points, list) or len(points) != 4:
+        raise HTTPException(
+            status_code=422,
+            detail=f"corner_points must contain exactly 4 points, got {len(points) if isinstance(points, list) else 'non-list'}",
+        )
+
+    try:
+        img_arr = await upload_to_ndarray(image)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        result = warp_colorchecker_preview(img_arr, points, patch_layout=patch_layout)
+    except ColorCheckerUnavailableError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except ColorCheckerCalibrationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    del img_arr
+    file_id = registry.register_bytes(
+        str(uuid.uuid4()),
+        result.preview_png,
+        "colorchecker_warp_preview.png",
+        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+    )
+
+    log.info(
+        "ColorChecker warp preview endpoint completed",
+        extra={
+            "event": "extractor_colorchecker_warp_preview_done",
+            "preview_width": result.preview_width,
+            "preview_height": result.preview_height,
+        },
+    )
+
+    return {
+        "preview_url": f"/api/files/{file_id}",
+        "preview_width": result.preview_width,
+        "preview_height": result.preview_height,
+        "auto_patch_points": result.auto_patch_points,
+    }
+
+
+@router.post("/colorchecker-calibrate")
+async def extractor_colorchecker_calibrate(
+    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
+    patch_points: str = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
+    patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Compute CCM and return calibrated image + overlay preview.
+
+    Step 2 of the two-step ColorChecker calibration flow. Accepts the 4
+    corners and (optionally user-adjusted) 24 patch sampling points,
+    computes the CCM, and returns the calibrated full image plus an overlay
+    preview showing the sampling results.
+    """
+    from core.colorchecker_adapter import (
+        ColorCheckerCalibrationError,
+        ColorCheckerUnavailableError,
+        apply_colorchecker_calibration,
+    )
+
+    try:
+        corners = json.loads(corner_points)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
+    if not isinstance(corners, list) or len(corners) != 4:
+        raise HTTPException(
+            status_code=422,
+            detail=f"corner_points must contain exactly 4 points, got {len(corners) if isinstance(corners, list) else 'non-list'}",
+        )
+
+    pp = None
+    if patch_points is not None:
+        try:
+            pp_raw = json.loads(patch_points)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise HTTPException(status_code=422, detail=f"Invalid patch_points JSON: {e}")
+        if isinstance(pp_raw, list) and len(pp_raw) > 0:
+            pp = [[float(p["x"]), float(p["y"])] if isinstance(p, dict) else p for p in pp_raw]
+
+    try:
+        img_arr = await upload_to_ndarray(image)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    cal_start = time.perf_counter()
+    try:
+        result = apply_colorchecker_calibration(
+            img_arr, corners, patch_points=pp, patch_layout=patch_layout,
+        )
+    except ColorCheckerUnavailableError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except ColorCheckerCalibrationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    del img_arr
+    h, w = result.calibrated_image.shape[:2]
+
+    calibrated_id = registry.register_bytes(
+        str(uuid.uuid4()),
+        result.calibrated_png,
+        "colorchecker_calibrated.png",
+        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+    )
+    overlay_id = registry.register_bytes(
+        str(uuid.uuid4()),
+        result.overlay_png,
+        "colorchecker_overlay.png",
+        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+    )
+
+    cal_ms = (time.perf_counter() - cal_start) * 1000.0
+
+    log.info(
+        "ColorChecker calibration completed",
+        extra={
+            "event": "extractor_colorchecker_calibrate_done",
+            "output_width": int(w),
+            "output_height": int(h),
+            "calibrate_ms": round(cal_ms, 2),
+        },
+    )
+
+    return {
+        "calibrated_url": f"/api/files/{calibrated_id}",
+        "overlay_url": f"/api/files/{overlay_id}",
+        "width": w,
+        "height": h,
+        "patch_points": result.patch_points,
+    }
+
+
 @router.post("/extract")
 async def extractor_extract(
     image: UploadFile = File(..., description="Calibration board image"),

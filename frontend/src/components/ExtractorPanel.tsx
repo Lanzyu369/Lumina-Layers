@@ -16,6 +16,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import HelpDot from "./ui/HelpDot";
+import ColorcheckerConfirmDialog from "./ColorcheckerConfirmDialog";
 import {
   cx,
   StatusBanner,
@@ -63,6 +64,8 @@ export default function ExtractorPanel() {
     distortion,
     vignette_correction,
     auto_wb,
+    colorchecker_enabled,
+    colorchecker_phase,
     isLoading,
     error,
     lut_download_url,
@@ -90,6 +93,8 @@ export default function ExtractorPanel() {
     setDistortion,
     setVignetteCorrection,
     setAutoWb,
+    setColorcheckerEnabled,
+    openColorcheckerDialog,
     setManufacturer,
     setType,
     submitExtract,
@@ -148,7 +153,9 @@ export default function ExtractorPanel() {
     : p1Done && p2Done;
 
   const extractDisabled =
-    imageFile === null || corner_points.length < 4 || isLoading;
+    imageFile === null || corner_points.length < 4 || isLoading ||
+    colorchecker_phase === "calibrating";
+
 
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(true);
@@ -349,6 +356,10 @@ export default function ExtractorPanel() {
           </AnimatePresence>
         </section>
 
+        <section data-testid="colorchecker-toggle-section" className={`${sectionCardClass}`}>
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
+        </section>
+
         <section
           data-testid="corner-nudge-section"
           className={`${sectionCardClass} flex flex-col`}
@@ -489,6 +500,27 @@ export default function ExtractorPanel() {
             </div>
           )}
         </section>
+
+        {colorchecker_enabled && (
+          <section data-testid="colorchecker-step-section" className={`${sectionCardClass} flex flex-col gap-3`}>
+            <div className="flex items-center gap-2">
+              <Button
+                label={t("ext_cc_open_dialog_btn")}
+                variant="primary"
+                onClick={openColorcheckerDialog}
+                disabled={imageFile === null || colorchecker_phase === "calibrating"}
+              />
+              {colorchecker_phase === "done" && (
+                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                  {t("ext_cc_calibrated_badge")}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t("ext_colorchecker_hint")}
+            </p>
+          </section>
+        )}
 
         <section className={`${sectionCardClass} flex flex-col gap-2 lg:flex-row`}>
           <div data-testid="extract-button" className="lg:flex-1 lg:min-w-0">
@@ -688,6 +720,8 @@ export default function ExtractorPanel() {
           </StatusBanner>
         )}
       </div>
+
+      <ColorcheckerConfirmDialog />
     </motion.aside>
   );
 }
