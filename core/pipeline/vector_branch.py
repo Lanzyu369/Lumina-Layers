@@ -623,9 +623,15 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "recipe_order": "top_to_bottom",
             },
         )
-        return VectorProcessor.from_img_processor(
-            matcher, "Material Archive"
-        )
+        processor = VectorProcessor.from_img_processor(matcher, "Material Archive")
+        try:
+            processor.gradient_color_bands = max(
+                16,
+                min(32, int(ctx.get("quantize_colors") or 16)),
+            )
+        except (TypeError, ValueError):
+            processor.gradient_color_bands = 16
+        return processor
 
     actual_lut_path = ctx["actual_lut_path"]
     return VectorProcessor(actual_lut_path, fallback_color_mode)

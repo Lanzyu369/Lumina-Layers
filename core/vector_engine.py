@@ -1604,7 +1604,7 @@ class VectorProcessor:
         return gradients
 
     @staticmethod
-    def _flatten_gradient_shape(grad_info, subpath_polys):
+    def _flatten_gradient_shape(grad_info, subpath_polys, color_bands=None):
         """Convert a gradient-filled SVG element into multiple solid-color shapes.
 
         Algorithm (mirrors ``ChromaPrint3D::FlattenGradientShape``):
@@ -1711,16 +1711,32 @@ class VectorProcessor:
             canvas[:, :, ch] = np.where(below, stops[0][1][ch], canvas[:, :, ch])
             canvas[:, :, ch] = np.where(above, stops[-1][1][ch], canvas[:, :, ch])
 
-        stop_colors = np.array([s[1] for s in stops], dtype=np.int16)
-        flat = canvas.reshape(-1, 3).astype(np.int16)
-        diffs = np.linalg.norm(
-            flat[:, None, :] - stop_colors[None, :, :],
-            axis=2,
-        )
-        quantized_idx = diffs.argmin(axis=1).reshape(img_h, img_w)
+        try:
+            band_count = int(color_bands or 0)
+        except (TypeError, ValueError):
+            band_count = 0
+        if band_count > len(stops):
+            sample_t = np.linspace(0.0, 1.0, max(2, band_count))
+            stop_t = np.array([float(s[0]) for s in stops], dtype=np.float64)
+            sample_t = np.unique(np.concatenate([sample_t, np.clip(stop_t, 0.0, 1.0)]))
+            sampled_colors = [_sample_gradient_stops(stops, float(t)) for t in sample_t]
+            stop_colors = np.unique(np.array(sampled_colors, dtype=np.int16), axis=0)
+        else:
+            stop_colors = np.array([s[1] for s in stops], dtype=np.int16)
+        flat = canvas.reshape(-1, 3).astype(np.int32)
+        best_dist = np.full((flat.shape[0],), np.iinfo(np.int32).max, dtype=np.int32)
+        best_idx = np.zeros((flat.shape[0],), dtype=np.int32)
+        for si, scolor in enumerate(stop_colors.astype(np.int32, copy=False)):
+            diff = flat - scolor
+            dist = np.sum(diff * diff, axis=1, dtype=np.int32)
+            better = dist < best_dist
+            best_dist[better] = dist[better]
+            best_idx[better] = si
+        quantized_idx = best_idx.reshape(img_h, img_w)
 
         result_shapes = []
-        for si, (_, scolor) in enumerate(stops):
+        for si, scolor_arr in enumerate(stop_colors):
+            scolor = tuple(int(c) for c in scolor_arr)
             mask = (quantized_idx == si).astype(np.uint8) * 255
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in contours:
@@ -3428,7 +3444,11 @@ class VectorProcessor:
 
             # --- Fix 4: gradient flattening ---
             if is_gradient:
-                grad_shapes = VectorProcessor._flatten_gradient_shape(grad_info, subpath_polys)
+                grad_shapes = VectorProcessor._flatten_gradient_shape(
+                    grad_info,
+                    subpath_polys,
+                    color_bands=getattr(self, "gradient_color_bands", None),
+                )
                 for gs in grad_shapes:
                     p = gs["poly"]
                     if p is not None and not p.is_empty:

@@ -130,6 +130,17 @@ class TestBuildVectorProcessorRouting:
 
         assert vp.img_processor.hue_weight == pytest.approx(0.5)
 
+    def test_material_archive_source_enables_gradient_color_bands(self):
+        from core.pipeline.vector_branch import _build_vector_processor
+
+        ctx = _material_archive_ctx()
+        ctx["quantize_colors"] = 24
+
+        with _patch_material_cache_resolution():
+            vp = _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
+
+        assert vp.gradient_color_bands == 24
+
     def test_material_archive_without_materials_raises(self):
         from core.pipeline.vector_branch import _build_vector_processor
 
@@ -285,6 +296,71 @@ class TestAnalyzeSvgConsumesMatcherColorConf:
         # the LUT path used the historical ColorSystem.get lookup
         # (otherwise we would see ``slots=["A", "B"]``).
         assert analysis.num_channels == 4
+
+    def test_material_archive_gradient_svg_presolves_mid_green(self, tmp_path):
+        from core.vector_engine import VectorProcessor
+        from core.vector_matchers import _rgb_to_lab_static
+
+        seen: list[tuple[int, int, int]] = []
+
+        class _FakeMatcher:
+            lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
+            color_mode = "Material Archive"
+            color_conf = {
+                "name": "Material",
+                "slots": ["Yellow", "Green", "Cyan"],
+                "preview": {
+                    0: (255, 255, 0, 255),
+                    1: (0, 255, 0, 255),
+                    2: (0, 255, 255, 255),
+                },
+                "map": {"Yellow": 0, "Green": 1, "Cyan": 2},
+            }
+            slot_names = ["Yellow", "Green", "Cyan"]
+            preview_colors = color_conf["preview"]
+            layer_count = 5
+            lut_rgb = np.zeros((0, 3), dtype=np.uint8)
+            ref_stacks = np.zeros((0, 5), dtype=np.int32)
+            kdtree = None
+
+            @staticmethod
+            def _rgb_to_lab(arr):
+                return _rgb_to_lab_static(arr)
+
+            def solve_for_fills(self, rgbs):
+                seen.extend(tuple(int(c) for c in rgb) for rgb in rgbs)
+
+        svg_path = tmp_path / "ticket-ce7721bf-gradient.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            "<defs>"
+            '<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0">'
+            '<stop offset="0" stop-color="#ffff00"/>'
+            '<stop offset="1" stop-color="#00ffff"/>'
+            "</linearGradient>"
+            "</defs>"
+            '<rect x="0" y="0" width="100" height="100" fill="url(#g)"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        vp = VectorProcessor.from_img_processor(_FakeMatcher(), "Material Archive")
+        vp.gradient_color_bands = 17
+        with patch("core.vector_engine._VECTOR_PARSE_CLIP_CACHE", new={}), patch.object(
+            vp,
+            "_build_small_shape_match_overrides",
+            return_value={},
+        ), patch.object(
+            vp,
+            "_match_colors",
+            return_value=[],
+        ):
+            vp.analyze_svg(str(svg_path), target_width_mm=100.0)
+
+        assert any(
+            110 <= red <= 145 and green >= 250 and 110 <= blue <= 145
+            for red, green, blue in seen
+        )
 
 
 class TestAnalyzeSvgMaterialSmallShapeSnap:

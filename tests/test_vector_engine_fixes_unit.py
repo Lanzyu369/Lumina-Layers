@@ -676,6 +676,23 @@ class TestFlattenGradientCoordinates:
         assert (255, 255, 255) in colors
         assert (0, 0, 0) in colors
 
+    def test_material_gradient_bands_preserve_mid_green(self):
+        grad_info = {
+            "type": "linear",
+            "x1": 0, "y1": 0, "x2": 100, "y2": 0,
+            "stops": [(0.0, (255, 255, 0)), (1.0, (0, 255, 255))],
+            "units": "userSpaceOnUse",
+        }
+        poly = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
+        result = VectorProcessor._flatten_gradient_shape(grad_info, [poly], color_bands=17)
+        colors = {item["color"] for item in result}
+
+        assert len(colors) > 2
+        assert any(
+            110 <= red <= 145 and green >= 250 and 110 <= blue <= 145
+            for red, green, blue in colors
+        )
+
 
 # ---------------------------------------------------------------------------
 # Fix 8: fill-rule values fallback + stroke-only element skipping
