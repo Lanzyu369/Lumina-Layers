@@ -47,6 +47,19 @@ const arbBatchConvertParams: fc.Arbitrary<BatchConvertParams> = fc.record({
   enable_cleanup: fc.boolean(),
   hue_weight: fc.double({ min: 0, max: 2 }),
   chroma_gate: fc.integer({ min: 0, max: 50 }),
+  enable_relief: fc.boolean(),
+  height_mode: fc.constantFrom("color", undefined),
+  color_height_map: fc.option(
+    fc.dictionary(
+      fc.constantFrom("#ff0000", "#00ff00", "#0000ff", "#ffffff"),
+      fc.double({ min: 0.08, max: 20, noNaN: true, noDefaultInfinity: true }),
+    ),
+    { nil: undefined },
+  ),
+  heightmap_max_height: fc.option(
+    fc.double({ min: 0.08, max: 20, noNaN: true, noDefaultInfinity: true }),
+    { nil: undefined },
+  ),
 });
 
 // ========== Tests ==========
@@ -76,8 +89,14 @@ describe("Feature: batch-processing-mode, Property 7: FormData 构建完整性",
 
         // Verify each param key exists as a form field with stringified value
         for (const [key, value] of Object.entries(params)) {
+          if (value === null || value === undefined) {
+            expect(fd.has(key)).toBe(false);
+            continue;
+          }
           const formValue = fd.get(key);
-          expect(formValue).toBe(String(value));
+          expect(formValue).toBe(
+            typeof value === "object" ? JSON.stringify(value) : String(value),
+          );
         }
 
         // Verify the endpoint

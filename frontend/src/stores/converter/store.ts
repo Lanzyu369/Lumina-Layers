@@ -1871,14 +1871,31 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
 function buildMissingAutoReliefHeightMap(
   state: Pick<
     ConverterState,
-    "enable_relief" | "autoHeightMode" | "color_height_map" | "heightmap_max_height" | "palette"
+    | "enable_relief"
+    | "autoHeightMode"
+    | "color_height_map"
+    | "heightmap_max_height"
+    | "palette"
+    | "lutColors"
   >,
   paletteOverride?: PaletteEntry[],
 ): Record<string, number> | null {
   if (!state.enable_relief) return null;
   if (state.autoHeightMode === "use-heightmap") return null;
   if (Object.keys(state.color_height_map).length > 0) return null;
-  const palette = paletteOverride ?? state.palette;
+  const palette =
+    paletteOverride ??
+    (state.palette.length > 0
+      ? state.palette
+      : state.lutColors.map((color: LutColorEntry) => {
+          const hex = color.hex.replace(/^#/, "").toLowerCase();
+          return {
+            quantized_hex: hex,
+            matched_hex: hex,
+            pixel_count: 0,
+            percentage: 0,
+          };
+        }));
   if (palette.length === 0) return null;
   return computeAutoHeightMap(
     palette,
@@ -5981,9 +5998,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
     },
 
     submitBatch: async () => {
-      const state = _get();
+      let state = _get();
+      const autoReliefHeightMap = buildMissingAutoReliefHeightMap(state);
+      if (autoReliefHeightMap) {
+        set({ color_height_map: autoReliefHeightMap });
+        state = _get();
+      }
+      if (state.enable_relief && state.autoHeightMode === "use-heightmap") {
+        set({
+          error: "批量生成暂不支持高度图浮雕，请改用按颜色浮雕或单图生成",
+        });
+        return;
+      }
+      if (
+        state.enable_relief &&
+        Object.keys(state.color_height_map).length === 0
+      ) {
+        set({ error: "请先设置颜色高度映射后再批量生成" });
+        return;
+      }
       set({ batchLoading: true, batchResult: null, error: null });
       try {
+        const reliefHeightmapMaxHeight = state.enable_relief
+          ? state.spacer_thick + state.heightmap_max_height
+          : state.heightmap_max_height;
+        const reliefColorHeightMap =
+          state.enable_relief && state.autoHeightMode !== "use-heightmap"
+            ? toAbsoluteReliefHeightMap(
+                state.color_height_map,
+                state.spacer_thick,
+              )
+            : undefined;
         const params = {
           lut_name: state.lut_name,
           target_width_mm: state.target_width_mm,
@@ -5997,6 +6042,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
           enable_cleanup: state.enable_cleanup,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          enable_relief: state.enable_relief,
+          ...(state.enable_relief
+            ? {
+                height_mode: "color",
+                color_height_map: reliefColorHeightMap,
+                heightmap_max_height: reliefHeightmapMaxHeight,
+              }
+            : {}),
         };
         const result = await apiConvertBatch(state.batchFiles, params);
         set({ batchResult: result, batchLoading: false });

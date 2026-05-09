@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import tempfile
 from unittest.mock import AsyncMock, patch
@@ -330,6 +331,12 @@ class TestBatchWorkerPoolSubmit:
                     "enable_cleanup": "false",
                     "hue_weight": "0.5",
                     "chroma_gate": "12",
+                    "enable_relief": "true",
+                    "height_mode": "color",
+                    "color_height_map": json.dumps(
+                        {"#ff0000": 1.7, "#ffffff": 1.3}
+                    ),
+                    "heightmap_max_height": "4.2",
                 },
             )
 
@@ -358,6 +365,33 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][11] is False
         assert call_args[0][12] == 0.5
         assert call_args[0][13] == 12
+        assert call_args[0][14] is True
+        assert call_args[0][15] == "color"
+        assert call_args[0][16] == {"#ff0000": 1.7, "#ffffff": 1.3}
+        assert call_args[0][17] == 4.2
+
+    def test_batch_relief_requires_color_height_map(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            return_value={"threemf_path": _make_fake_3mf(), "status_msg": "OK"},
+        )
+
+        with patch(
+            "api.routers.converter.generate.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.png"))],
+                data={
+                    "lut_name": "test_lut",
+                    "enable_relief": "true",
+                    "height_mode": "color",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "color_height_map" in response.json()["detail"]
+        assert _mock_pool.submit.call_count == 0
 
 
 class TestBatchCleanup:

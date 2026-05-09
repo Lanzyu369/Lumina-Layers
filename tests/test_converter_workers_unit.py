@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from api.workers.converter_workers import (
+    worker_batch_convert_item,
     worker_generate_large_format_svg_native,
     worker_generate_model,
     worker_generate_preview,
@@ -311,6 +312,47 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         lut_path="lut.npy",
         **params,
     )
+
+
+def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
+    """worker_batch_convert_item should pass batch relief params through."""
+
+    color_height_map = {"#ff0000": 1.7, "#ffffff": 1.3}
+
+    with patch(
+        "core.converter.convert_image_to_3d",
+        return_value=("out.3mf", None, None, "OK", None),
+    ) as convert_image_to_3d_mock:
+        result = worker_batch_convert_item(
+            image_path="image.png",
+            lut_path="lut.npy",
+            target_width_mm=80.0,
+            spacer_thick=1.2,
+            structure_mode="Single-sided",
+            color_mode="4-Color (RYBW)",
+            modeling_mode_value="high-fidelity",
+            color_layers=5,
+            layer_height_mm=0.08,
+            quantize_colors=64,
+            enable_cleanup=True,
+            hue_weight=0.5,
+            chroma_gate=12.0,
+            enable_relief=True,
+            height_mode="color",
+            color_height_map=color_height_map,
+            heightmap_max_height=4.2,
+        )
+
+    assert result == {
+        "threemf_path": "out.3mf",
+        "status_msg": "OK",
+    }
+    convert_image_to_3d_mock.assert_called_once()
+    call_kwargs = convert_image_to_3d_mock.call_args.kwargs
+    assert call_kwargs["enable_relief"] is True
+    assert call_kwargs["height_mode"] == "color"
+    assert call_kwargs["color_height_map"] == color_height_map
+    assert call_kwargs["heightmap_max_height"] == 4.2
 
 
 def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:

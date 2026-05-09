@@ -42,6 +42,12 @@ function resetStore(): void {
     layer_height_mm: 0.08,
     quantize_colors: 48,
     enable_cleanup: true,
+    enable_relief: false,
+    color_height_map: {},
+    heightmap_max_height: 3.0,
+    autoHeightMode: "darker-higher",
+    palette: [],
+    lutColors: [],
   });
 }
 
@@ -88,7 +94,61 @@ describe("submitBatch API 调用和状态管理", () => {
       enable_cleanup: true,
       hue_weight: 0,
       chroma_gate: 0,
+      enable_relief: false,
     });
+  });
+
+  it("submitBatch 会把 2.5D 浮雕参数传给批量生成 API", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      enable_relief: true,
+      spacer_thick: 1.2,
+      heightmap_max_height: 3.0,
+      color_height_map: { "#ff0000": 0.5, "#ffffff": 0.1 },
+      autoHeightMode: "darker-higher",
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams).toMatchObject({
+      enable_relief: true,
+      height_mode: "color",
+      heightmap_max_height: 4.2,
+      color_height_map: {
+        "#ff0000": 1.7,
+        "#ffffff": 1.3,
+      },
+    });
+  });
+
+  it("submitBatch 在无预览 palette 时会用 LUT 颜色自动生成浮雕高度", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      enable_relief: true,
+      spacer_thick: 1.2,
+      heightmap_max_height: 2.0,
+      color_height_map: {},
+      palette: [],
+      lutColors: [
+        { hex: "#000000", rgb: [0, 0, 0] },
+        { hex: "#ffffff", rgb: [255, 255, 255] },
+      ],
+      autoHeightMode: "darker-higher",
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams.enable_relief).toBe(true);
+    expect(calledParams.height_mode).toBe("color");
+    expect(calledParams.heightmap_max_height).toBeCloseTo(3.2);
+    expect(calledParams.color_height_map?.["000000"]).toBeCloseTo(3.2);
+    expect(calledParams.color_height_map?.["ffffff"]).toBeCloseTo(1.28);
   });
 
   // Requirement 5.1: batchLoading 在请求期间为 true

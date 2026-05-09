@@ -1315,6 +1315,10 @@ export interface BatchConvertParams {
   enable_cleanup: boolean;
   hue_weight: number;
   chroma_gate: number;
+  enable_relief?: boolean;
+  height_mode?: string;
+  color_height_map?: Record<string, number>;
+  heightmap_max_height?: number;
 }
 
 // ========== Five-Color Query Models ==========

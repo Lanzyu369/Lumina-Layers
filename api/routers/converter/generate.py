@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import pickle
@@ -73,17 +74,37 @@ def _remove_temp_path(path: str | None) -> None:
     if not path:
         return
     try:
-        if os.path.exists(path):
-            os.unlink(path)
+        os.unlink(path)
     except OSError:
         pass
 
 
-def _remove_temp_paths(paths: list[str] | set[str]) -> None:
-    """Best-effort delete for multiple route-owned temporary files."""
-
+def _remove_temp_paths(paths: list[str] | None) -> None:
+    if not paths:
+        return
     for path in paths:
         _remove_temp_path(path)
+
+
+def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
+    if not value:
+        return None
+    try:
+        raw_map = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Invalid color_height_map JSON") from exc
+    if not isinstance(raw_map, dict):
+        raise HTTPException(status_code=422, detail="color_height_map must be a JSON object")
+    parsed: dict[str, float] = {}
+    for key, raw_height in raw_map.items():
+        try:
+            height = float(raw_height)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="color_height_map heights must be numbers") from exc
+        if not math.isfinite(height):
+            raise HTTPException(status_code=422, detail="color_height_map heights must be finite")
+        parsed[str(key)] = height
+    return parsed or None
 
 
 def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[str, object]] | None:
@@ -1501,6 +1522,10 @@ async def convert_batch(
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
+    enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
+    height_mode: str = Form("color", description="浮雕高度模式"),
+    color_height_map: str | None = Form(None, description="颜色高度映射 JSON"),
+    heightmap_max_height: float = Form(5.0, description="最大浮雕模型总高度 (mm)"),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
 ) -> BatchResponse:
@@ -1526,6 +1551,30 @@ async def convert_batch(
         raise HTTPException(
             status_code=422,
             detail=f"Invalid modeling_mode: {modeling_mode}",
+        )
+    resolved_height_mode = height_mode or "color"
+    parsed_color_height_map = (
+        _parse_batch_color_height_map(color_height_map)
+        if enable_relief
+        else None
+    )
+    if enable_relief and resolved_height_mode == "heightmap":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Batch heightmap relief is not supported. "
+                "Use color relief or single-image generation."
+            ),
+        )
+    if enable_relief and resolved_height_mode != "color":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid height_mode: {resolved_height_mode}",
+        )
+    if enable_relief and not parsed_color_height_map:
+        raise HTTPException(
+            status_code=422,
+            detail="Batch relief requires color_height_map",
         )
 
     results: list[BatchItemResult] = []
@@ -1555,6 +1604,10 @@ async def convert_batch(
                 enable_cleanup,
                 hue_weight,
                 chroma_gate,
+                enable_relief,
+                resolved_height_mode,
+                parsed_color_height_map,
+                heightmap_max_height,
             )
 
             # 3. Result processing (main thread)

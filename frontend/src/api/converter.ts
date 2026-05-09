@@ -226,6 +226,10 @@ export async function convertBatch(
     if (value === null || value === undefined) {
       continue;
     }
+    if (typeof value === "object") {
+      fd.append(key, JSON.stringify(value));
+      continue;
+    }
     fd.append(key, String(value));
   }
   const response = await apiClient.post<BatchResponse>("/convert/batch", fd, {

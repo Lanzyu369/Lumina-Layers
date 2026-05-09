@@ -274,6 +274,10 @@ def worker_batch_convert_item(
     enable_cleanup: bool,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
+    enable_relief: bool = False,
+    height_mode: str = "color",
+    color_height_map: dict[str, float] | None = None,
+    heightmap_max_height: float | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -323,6 +327,10 @@ def worker_batch_convert_item(
         enable_cleanup=enable_cleanup,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
+        enable_relief=enable_relief,
+        height_mode=height_mode,
+        color_height_map=color_height_map,
+        heightmap_max_height=heightmap_max_height,
     )
 
     return {
