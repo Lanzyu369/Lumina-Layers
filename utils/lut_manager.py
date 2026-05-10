@@ -241,7 +241,7 @@ class LUTManager:
         stem = Path(rel_path).stem
         if root_label == "Preset":
             if len(parts) > 1:
-                return f"{parts[0]} - {stem}"
+                return " - ".join([*parts[:-1], stem])
             return stem
         if root_label == "ReferenceDB":
             if len(parts) >= 3:
