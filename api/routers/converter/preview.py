@@ -546,6 +546,71 @@ async def convert_preview(
 
     status_msg: str = result["status_msg"]
 
+    # ---- Color-card mode: wholesale cache replacement (main process) ----
+    # 色卡模式：用色卡渲染图整体替换 cache 中的图像/矩阵数据，使
+    # GLB、分层图、调色板等所有下游自然展示色卡而非原图。
+    if modeling_mode == "color-card" and cache_data is not None:
+        _cc_palette = cache_data.get("color_palette") or []
+        _cc_hex_list = [e["hex"] for e in _cc_palette if "hex" in e]
+        if _cc_hex_list:
+            from core.color_card import render_color_card_image
+
+            _old_matched = cache_data.get("matched_rgb")
+            _old_mm = cache_data.get("material_matrix")
+
+            _card_rgba = render_color_card_image(_cc_hex_list)
+            _card_rgb = _card_rgba[:, :, :3].copy()
+            _card_h, _card_w = _card_rgba.shape[:2]
+
+            cache_data["matched_rgb"] = _card_rgb
+            cache_data["mask_solid"] = np.ones((_card_h, _card_w), dtype=bool)
+            cache_data["preview_rgba"] = _card_rgba
+            if "quantized_image" in cache_data:
+                cache_data["quantized_image"] = _card_rgb
+            cache_data["target_w"] = _card_w
+            cache_data["target_h"] = _card_h
+            cache_data["target_width_mm"] = target_width_mm
+
+            # Rebuild material_matrix: sample each colour's per-layer
+            # material assignment from the original image, then map onto
+            # the card pixels of that colour.
+            if _old_mm is not None and _old_matched is not None:
+                _n_layers = _old_mm.shape[2]
+                _new_mm = np.zeros(
+                    (_card_h, _card_w, _n_layers), dtype=_old_mm.dtype,
+                )
+                for _hx in _cc_hex_list:
+                    _h = _hx.lstrip("#")
+                    _r, _g, _b = int(_h[0:2], 16), int(_h[2:4], 16), int(_h[4:6], 16)
+                    _om = (
+                        (_old_matched[:, :, 0] == _r)
+                        & (_old_matched[:, :, 1] == _g)
+                        & (_old_matched[:, :, 2] == _b)
+                    )
+                    if not _om.any():
+                        continue
+                    _yx = np.argwhere(_om)[0]
+                    _ma = _old_mm[_yx[0], _yx[1], :]
+                    _cm = (
+                        (_card_rgb[:, :, 0] == _r)
+                        & (_card_rgb[:, :, 1] == _g)
+                        & (_card_rgb[:, :, 2] == _b)
+                    )
+                    _new_mm[_cm] = _ma
+                cache_data["material_matrix"] = _new_mm
+
+            cache_data["color_card_source_palette"] = [dict(e) for e in _cc_palette]
+            cache_data["color_palette"] = [dict(e) for e in _cc_palette]
+
+            log.info(
+                "Color card cache replaced in main process",
+                extra={
+                    "event": "color_card_cache_replaced",
+                    "color_count": len(_cc_hex_list),
+                    "card_size": [_card_w, _card_h],
+                },
+            )
+
     # Reuse the session_id minted before worker submit so worker logs and the
     # returned session use the same id; SessionStore.create() will fall back to
     # a fresh UUID if the pre-minted id ever collides.
@@ -569,6 +634,7 @@ async def convert_preview(
     store.put(session_id, "lut_vendor", request.vendor)
     store.put(session_id, "lut_db_names", list(request.db_names))
     store.put(session_id, "color_mode", color_mode)
+    store.put(session_id, "modeling_mode", modeling_mode)
     store.put(session_id, "color_layers", color_layers)
     store.put(session_id, "layer_height_mm", layer_height_mm)
     store.put(session_id, "model_enable", model_enable)

@@ -179,6 +179,17 @@ def worker_generate_preview(
         )
         raise
 
+    # ---- Color-card mode: replace the 2D preview image only ----
+    # 色卡模式：worker 只替换 2D 预览图。完整的 cache 替换（matched_rgb、
+    # mask_solid、material_matrix 等）在主进程的 preview 端点中执行，
+    # 避免 subprocess pickle 序列化导致替换丢失。
+    if mode_enum == ModelingMode.COLOR_CARD and cache_data is not None:
+        color_palette = cache_data.get("color_palette") or []
+        hex_list = [entry["hex"] for entry in color_palette if "hex" in entry]
+        if hex_list:
+            from core.color_card import render_color_card_image
+            preview_img = render_color_card_image(hex_list)
+
     preview_array_shape = list(preview_img.shape) if isinstance(preview_img, np.ndarray) else None
     if isinstance(preview_img, np.ndarray):
         if preview_img.ndim >= 2:

@@ -1,0 +1,259 @@
+"""Converter router — colour-card 3MF generation.
+转换器路由 — 验证色卡 3MF 生成。
+
+Generates a printable colour swatch card from the current session's
+palette so the user can physically verify matched colours on their
+printer before committing to a full model print.
+从当前预览 session 的调色板生成一张可打印的色卡 3MF，用户可以先打印
+色卡验证颜色是否准确，再打印完整模型。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.file_registry import FileRegistry
+from api.schemas.responses import GenerateResponse
+from api.session_store import SessionStore
+from api.structured_logging import get_logger
+from api.worker_pool import WorkerPoolManager
+from api.workers.converter_workers import worker_generate_model
+from config import TEMP_DIR, ModelingMode as CoreModelingMode
+
+from .common import (
+    BATCH_DOWNLOAD_TTL_SECONDS,
+    ROUTER_HANDLED_ERRORS,
+    _resolve_material_backing_index,
+    _require_preview_cache,
+    _require_session,
+)
+
+router = APIRouter()
+log = get_logger(__name__)
+
+
+class ColorCardRequest(BaseModel):
+    """Request body for ``POST /api/convert/color-card``."""
+
+    session_id: str
+    target_width_mm: float = Field(
+        default=100.0,
+        description="Physical width (mm) of the colour card. 色卡物理宽度（毫米）。",
+    )
+    spacer_thick: float = Field(
+        default=0.48,
+        description="Backing thickness (mm). 底板厚度（毫米）。",
+    )
+    show_labels: bool = Field(
+        default=True,
+        description="Render hex labels below each swatch. 在色块下方显示十六进制色值。",
+    )
+
+
+@router.post("/color-card", response_model=GenerateResponse)
+async def generate_color_card(
+    body: ColorCardRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+    pool: WorkerPoolManager = Depends(get_worker_pool),
+) -> GenerateResponse:
+    """Generate a printable colour-card 3MF from the session palette.
+    从 session 调色板生成可打印的验证色卡 3MF。
+
+    1. Read ``color_palette`` from preview cache.
+    2. Generate colour-card SVG via ``core.color_card``.
+    3. Run the SVG through the vector pipeline to produce a 3MF.
+    4. Register and return the download URL.
+    """
+    api_t0 = time.perf_counter()
+
+    # 1. Session + cache validation
+    session_data = _require_session(store, body.session_id)
+    cache = _require_preview_cache(session_data)
+
+    lut_path: str | None = session_data.get("lut_path")
+    session_material_source = session_data.get("material_source", "lut")
+    if session_material_source != "material_archive":
+        if not lut_path or not os.path.exists(lut_path):
+            raise HTTPException(
+                status_code=409,
+                detail="LUT file missing. Call POST /api/convert/preview first.",
+            )
+    else:
+        lut_path = "__material_archive__"
+
+    # 2. Extract unique colours from preview cache
+    color_palette = cache.get("color_palette")
+    if not color_palette:
+        raise HTTPException(
+            status_code=409,
+            detail="No color_palette in preview cache. "
+            "Call POST /api/convert/preview first.",
+        )
+
+    hex_colors = [entry["hex"] for entry in color_palette if "hex" in entry]
+    if not hex_colors:
+        raise HTTPException(
+            status_code=409,
+            detail="color_palette contains no hex entries.",
+        )
+
+    log.info(
+        "Color card generation started",
+        extra={
+            "event": "color_card_init",
+            "session_id": body.session_id,
+            "color_count": len(hex_colors),
+            "target_width_mm": body.target_width_mm,
+        },
+    )
+
+    # 3. Generate colour-card SVG
+    from core.color_card import generate_color_card_svg
+
+    svg_path = generate_color_card_svg(
+        hex_colors,
+        show_labels=body.show_labels,
+        output_dir=TEMP_DIR,
+    )
+    store.register_temp_file(body.session_id, svg_path)
+
+    # 4. Build worker params — minimal vector generation
+    color_mode = cache.get("color_mode", "4-Color CMYW")
+    params: dict = {
+        "target_width_mm": body.target_width_mm,
+        "spacer_thick": body.spacer_thick,
+        "structure_mode": "Single-sided",
+        "color_mode": color_mode,
+        "color_layers": cache.get("color_conf", {}).get(
+            "layer_count", None
+        ),
+        "layer_height_mm": None,
+        "model_enable": False,
+        "model_only": False,
+        "model_threshold": None,
+        "model_margin": None,
+        "add_loop": False,
+        "loop_width": 0,
+        "loop_length": 0,
+        "loop_hole": 0,
+        "loop_pos": None,
+        "enable_fridge_magnet": False,
+        "fridge_magnets": [],
+        "loop_angle": 0,
+        "loop_offset_x": 0,
+        "loop_offset_y": 0,
+        "loop_position_preset": None,
+        "modeling_mode": CoreModelingMode.VECTOR,
+        "quantize_colors": len(hex_colors),
+        "replacement_regions": None,
+        "recipe_overrides": None,
+        "recipe_override_masks_path": None,
+        "separate_backing": False,
+        "enable_relief": False,
+        "height_mode": "color",
+        "heightmap_path": None,
+        "color_height_map": None,
+        "heightmap_max_height": None,
+        "enable_cleanup": False,
+        "enable_outline": False,
+        "outline_width": None,
+        "enable_cloisonne": False,
+        "wire_width_mm": None,
+        "wire_height_mm": None,
+        "free_color_set": None,
+        "enable_coating": False,
+        "coating_height_mm": 0.08,
+        "hue_weight": 0.0,
+        "chroma_gate": 0,
+        "use_lut_constrained": False,
+        "auto_dynamic_range": False,
+        "matched_rgb_path": None,
+        "mask_solid_path": None,
+        "material_matrix_path": None,
+        "printer_id": "bambu-h2d",
+        "slicer": "BambuStudio",
+        "nozzle_size": "0.4",
+        "enable_base_layer_height_modifier": False,
+        "material_source": session_material_source,
+    }
+    if session_material_source == "material_archive":
+        selected_materials = session_data.get("selected_materials") or []
+        params["selected_materials"] = selected_materials
+        params["material_layer_count"] = session_data.get("material_layer_count")
+        params["material_layer_height_mm"] = session_data.get("material_layer_height_mm")
+        params["material_grid_resolution"] = session_data.get("material_grid_resolution")
+        params["material_backing_material_index"] = _resolve_material_backing_index(
+            selected_materials,
+            session_data.get("material_backing_material_index"),
+        )
+
+    # 5. Submit to worker pool
+    worker_t0 = time.perf_counter()
+    try:
+        result = await pool.submit(
+            worker_generate_model,
+            svg_path,
+            lut_path,
+            params,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Color card 3MF generation timed out.",
+        )
+    except ROUTER_HANDLED_ERRORS as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Color card generation failed: {e}",
+        )
+    worker_elapsed = time.perf_counter() - worker_t0
+
+    # 6. Register result files
+    threemf_path: str | None = result.get("threemf_path")
+    glb_path: str | None = result.get("glb_path")
+    status_msg: str = result.get("status_msg", "")
+
+    if not threemf_path or not os.path.exists(threemf_path):
+        raise HTTPException(
+            status_code=500,
+            detail=status_msg or "Color card 3MF generation failed.",
+        )
+
+    download_id = registry.register_path(
+        str(uuid.uuid4()),
+        threemf_path,
+        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+    )
+
+    preview_3d_url: str | None = None
+    if glb_path and os.path.exists(glb_path):
+        glb_id = registry.register_path(body.session_id, glb_path)
+        preview_3d_url = f"/api/files/{glb_id}"
+
+    api_total = time.perf_counter() - api_t0
+    log.info(
+        "Color card generation complete",
+        extra={
+            "event": "color_card_done",
+            "session_id": body.session_id,
+            "color_count": len(hex_colors),
+            "duration_ms": round(api_total * 1000, 3),
+            "worker_ms": round(worker_elapsed * 1000, 3),
+        },
+    )
+
+    return GenerateResponse(
+        status="ok",
+        message=status_msg or "Color card generated",
+        download_url=f"/api/files/{download_id}",
+        preview_3d_url=preview_3d_url,
+        threemf_disk_path=threemf_path,
+    )

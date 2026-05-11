@@ -627,6 +627,27 @@ async def convert_generate(
     # Convert API ModelingMode enum to core ModelingMode enum
     core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
 
+    # Color-card mode: generate SVG from cached palette, swap image_path,
+    # and force VECTOR mode so the existing vector branch produces the 3MF.
+    # 色卡模式：从缓存调色板生成 SVG，替换 image_path 并强制走矢量分支。
+    if core_modeling_mode == CoreModelingMode.COLOR_CARD:
+        color_palette = cache.get("color_card_source_palette") or cache.get(
+            "color_palette",
+        )
+        if not color_palette:
+            raise HTTPException(
+                status_code=409,
+                detail="No color_palette in preview cache.",
+            )
+        hex_colors = [e["hex"] for e in color_palette if "hex" in e]
+        if not hex_colors:
+            raise HTTPException(status_code=409, detail="color_palette has no hex entries.")
+        from core.color_card import generate_color_card_svg
+        svg_path = generate_color_card_svg(hex_colors, show_labels=True, output_dir=TEMP_DIR)
+        store.register_temp_file(body.session_id, svg_path)
+        image_path = svg_path
+        core_modeling_mode = CoreModelingMode.VECTOR
+
     # Resolve height_mode for relief branching
     # 解析 height_mode 用于浮雕分支选择
     height_mode = request.height_mode or "color"
@@ -1546,11 +1567,19 @@ async def convert_batch(
 
     # Validate modeling_mode string (main thread)
     try:
-        CoreModelingMode(modeling_mode)
+        resolved_modeling_mode = CoreModelingMode(modeling_mode)
     except ValueError:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid modeling_mode: {modeling_mode}",
+        )
+    if resolved_modeling_mode == CoreModelingMode.COLOR_CARD:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Batch conversion does not support color-card mode. "
+                "Use single-image preview and generate instead."
+            ),
         )
     resolved_height_mode = height_mode or "color"
     parsed_color_height_map = (

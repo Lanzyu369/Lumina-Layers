@@ -411,6 +411,65 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
+    def test_color_card_generate_uses_source_palette(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 120,
+                "target_h": 80,
+                "target_width_mm": 60.0,
+                "color_palette": [
+                    {"hex": "#ffffff", "count": 1000, "percentage": 80.0},
+                    {"hex": "#ff0000", "count": 100, "percentage": 10.0},
+                    {"hex": "#00ff00", "count": 100, "percentage": 10.0},
+                ],
+                "color_card_source_palette": [
+                    {"hex": "#ff0000", "count": 100, "percentage": 50.0},
+                    {"hex": "#00ff00", "count": 100, "percentage": 50.0},
+                ],
+            },
+        )
+        captured: dict[str, object] = {}
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            fd, svg_path = tempfile.mkstemp(suffix=".svg")
+            os.close(fd)
+            with open(svg_path, "w", encoding="utf-8") as svg_file:
+                svg_file.write("<svg></svg>")
+            captured["hex_colors"] = list(hex_colors)
+            captured["svg_path"] = svg_path
+            return svg_path
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": "/tmp/out.3mf",
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "modeling_mode": "color-card",
+            },
+        }
+
+        with (
+            patch("core.color_card.generate_color_card_svg", _fake_generate_color_card_svg),
+            patch("os.path.exists", return_value=True),
+        ):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 200, response.text
+        assert captured["hex_colors"] == ["#ff0000", "#00ff00"]
+        submitted_image_path = _mock_pool.submit.call_args.args[1]
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_image_path == captured["svg_path"]
+        assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
+
     def test_material_archive_vector_forwards_cached_material_matrix_without_region_replace(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         preview_cache = _test_store.get(sid)["preview_cache"]

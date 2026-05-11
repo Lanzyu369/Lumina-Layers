@@ -301,6 +301,18 @@ def test_registry_match_produces_correct_display_name(
     dn_lower = display_name.lower()
     if expected_sid == "cura" and ("cuda" in dn_lower or "nvidia" in dn_lower):
         assume(False)
+    dn_compact = "".join(ch for ch in dn_lower if ch.isalnum())
+    matched_sids = set()
+    for other_keyword, other_sid, _other_display_name in _ALL_MATCH_KEYWORDS:
+        other_lower = other_keyword.lower()
+        other_compact = "".join(ch for ch in other_lower if ch.isalnum())
+        if other_lower in dn_lower or (
+            other_compact and other_compact in dn_compact
+        ):
+            if other_sid == "cura" and ("cuda" in dn_lower or "nvidia" in dn_lower):
+                continue
+            matched_sids.add(other_sid)
+    assume(matched_sids == {expected_sid})
 
     result = _match_slicer_id(display_name)
 

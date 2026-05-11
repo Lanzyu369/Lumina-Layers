@@ -110,10 +110,26 @@ _BRIDGE_SCRIPT = r"""
     try {
       if (typeof state !== 'undefined' && state.resultData && state.resultData !== _lastResultData) {
         _lastResultData = state.resultData;
-        window.parent.postMessage({
-          type: 'colorchecker-calibrated',
-          calibratedImageData: state.resultData
-        }, '*');
+        if (state.resultData.startsWith('/api/') || state.resultData.startsWith('http')) {
+          fetch(state.resultData)
+            .then(function(r) { return r.blob(); })
+            .then(function(blob) {
+              var reader = new FileReader();
+              reader.onloadend = function() {
+                window.parent.postMessage({
+                  type: 'colorchecker-calibrated',
+                  calibratedImageData: reader.result
+                }, '*');
+              };
+              reader.readAsDataURL(blob);
+            })
+            .catch(function(err) { console.warn('[bridge] fetch calibrated image failed:', err); });
+        } else {
+          window.parent.postMessage({
+            type: 'colorchecker-calibrated',
+            calibratedImageData: state.resultData
+          }, '*');
+        }
       }
     } catch(e) {}
   }, 500);
@@ -211,6 +227,18 @@ async def serve_colorchecker_static(filename: str) -> Response:
 
 
 # --------------- CC API endpoints (native) ---------------
+
+@router.get("/api/cc/cached-png/{token}")
+async def cc_cached_png(token: str) -> Response:
+    """Serve a previously cached image (JPEG or PNG) by token."""
+    if (unavail := _require_cc()): return unavail
+    try:
+        img_data = _cc.get_cached_png(token)
+    except (ValueError, KeyError) as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=404)
+    ct = "image/jpeg" if img_data[:3] == b"\xff\xd8\xff" else "image/png"
+    return Response(content=img_data, media_type=ct)
+
 
 @router.get("/api/cc/brands")
 async def cc_brands() -> JSONResponse:
@@ -405,11 +433,15 @@ async def cc_calibrate(request: Request) -> JSONResponse:
             ],
             radius, method,
         )
-        corrected_png = _cc.encode_png_bytes(corrected)
+        corrected_bytes = _cc.encode_jpeg_bytes(corrected, quality=95)
+        del corrected
         overlay_png = _cc.encode_png_bytes(overlay)
+        del overlay
+        corrected_token = _cc.store_cached_png(corrected_bytes)
+        overlay_token = _cc.store_cached_png(overlay_png)
         return {
-            "calibratedImageData": _cc.png_bytes_to_data_url(corrected_png),
-            "previewOverlayImageData": _cc.png_bytes_to_data_url(overlay_png),
+            "calibratedImageToken": corrected_token,
+            "previewOverlayImageToken": overlay_token,
             "report": report,
         }
 

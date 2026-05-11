@@ -115,6 +115,25 @@ class TestBatchLutNotFound:
         assert "LUT" in response.json()["detail"]
 
 
+class TestBatchColorCardRejected:
+    def test_batch_rejects_color_card_mode(self) -> None:
+        _mock_pool.submit = AsyncMock()
+
+        with patch(
+            "api.routers.converter.generate.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("a.png"))],
+                data={"lut_name": "test_lut", "modeling_mode": "color-card"},
+            )
+
+        assert response.status_code == 422
+        assert "color-card" in response.json()["detail"]
+        _mock_pool.submit.assert_not_called()
+
+
 # =========================================================================
 # 2. Partial failure continues processing - Requirement 9.3
 # =========================================================================

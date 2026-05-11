@@ -21,6 +21,7 @@ export enum ModelingMode {
   HIGH_FIDELITY = "high-fidelity",
   PIXEL = "pixel",
   VECTOR = "vector",
+  COLOR_CARD = "color-card",
 }
 
 export enum StructureMode {

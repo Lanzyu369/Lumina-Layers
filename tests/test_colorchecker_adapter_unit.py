@@ -45,7 +45,7 @@ class TestApplyColorcheckerCalibration:
 
     def test_raises_on_wrong_corner_count(self) -> None:
         img = self._make_image()
-        with pytest.raises(ColorCheckerCalibrationError, match="Exactly 4"):
+        with pytest.raises(ColorCheckerCalibrationError, match="(?i)exactly 4"):
             apply_colorchecker_calibration(img, [[0, 0], [1, 1]])
 
     def test_raises_on_invalid_image_shape(self) -> None:
@@ -61,33 +61,11 @@ class TestApplyColorcheckerCalibration:
         fake_result = MagicMock()
         fake_result.calibrated_image = self._make_image()
 
-        mock_calibrate = MagicMock(return_value=fake_result)
-        mock_module = MagicMock()
-        mock_module.calibrate = mock_calibrate
-
-        with patch.dict("sys.modules", {"colorchecker": mock_module}):
-            # Need to clear the cached import so it re-imports
-            import importlib
-            import core.colorchecker_adapter as adapter_mod
-
-            original_fn = adapter_mod.apply_colorchecker_calibration
-
-            # Patch at the point of import inside the function
-            with patch("builtins.__import__", side_effect=lambda name, *a, **kw: mock_module if name == "colorchecker" else __builtins__.__import__(name, *a, **kw)):
-                # Direct test: mock the calibrate call
-                pass
-
-        # Simpler approach: patch the function's internal import
-        with patch(
-            "core.colorchecker_adapter.apply_colorchecker_calibration"
-        ) as _:
-            pass  # Can't easily test the internal import
-
-        # Best approach: test via the actual function with a mock module
         fake_calibrate = MagicMock(return_value=fake_result)
 
         with patch.dict("sys.modules", {"colorchecker": MagicMock(calibrate=fake_calibrate)}):
             result = apply_colorchecker_calibration(img, corners)
+            assert hasattr(result, "calibrated_image")
             assert isinstance(result.calibrated_image, np.ndarray)
             assert result.calibrated_image.shape == fake_result.calibrated_image.shape
 

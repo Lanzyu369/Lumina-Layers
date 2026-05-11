@@ -74,6 +74,7 @@ class ModelingMode(str, Enum):
     HIGH_FIDELITY = "high-fidelity"
     PIXEL = "pixel"
     VECTOR = "vector"
+    COLOR_CARD = "color-card"
 
 
 class StructureMode(str, Enum):

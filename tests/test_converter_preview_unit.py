@@ -243,6 +243,56 @@ class TestSessionContainsPreviewCache:
         assert response.status_code == 200
         assert captured["session_id"] == response.json()["session_id"]
 
+    def test_color_card_preview_preserves_source_palette(self) -> None:
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "color-card",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        session_data = _test_store.get(body["session_id"])
+        assert session_data is not None
+        cache = session_data["preview_cache"]
+
+        cached_hex = {entry["hex"].lower() for entry in cache["color_palette"]}
+        source_hex = {
+            entry["hex"].lower()
+            for entry in cache["color_card_source_palette"]
+        }
+        response_hex = {entry["matched_hex"].lower() for entry in body["palette"]}
+        white_pixels = np.all(cache["matched_rgb"] == [255, 255, 255], axis=-1)
+
+        assert source_hex == {"#00ff00", "#ff0000"}
+        assert cached_hex == source_hex
+        assert response_hex == source_hex
+        assert "#ffffff" not in cached_hex
+        assert bool(white_pixels.any())
+
     def test_preview_passes_model_assisted_controls_to_worker(self) -> None:
         """Preview route should forward model-assisted matching controls to the worker."""
         buf = _make_test_image_buf()

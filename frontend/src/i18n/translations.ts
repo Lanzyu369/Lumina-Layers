@@ -3244,6 +3244,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "矢量模式",
     en: "Vector",
   },
+  "modeling_mode.color-card": {
+    zh: "验证色卡",
+    en: "Color Card",
+  },
 
   // ==================== Advanced Settings ====================
   adv_quantize_colors: {
@@ -3513,6 +3517,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   action_generate: {
     zh: "生成",
     en: "Generate",
+  },
+  action_color_card: {
+    zh: "生成色卡",
+    en: "Color Card",
+  },
+  action_color_card_loading: {
+    zh: "色卡生成中…",
+    en: "Generating Card…",
+  },
+  action_color_card_title: {
+    zh: "验证色卡",
+    en: "Validation Color Card",
+  },
+  action_color_card_desc: {
+    zh: "从当前调色板生成可打印的色卡 3MF，用于在打印机上验证颜色准确性。",
+    en: "Generate a printable colour swatch 3MF from the current palette to verify colour accuracy on your printer.",
   },
   action_batch_generate: {
     zh: "批量生成",

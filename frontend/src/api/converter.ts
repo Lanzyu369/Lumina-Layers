@@ -74,6 +74,26 @@ export async function convertGenerate(
   return response.data;
 }
 
+/** 生成验证色卡 3MF：从当前 session 的调色板生成可打印的色块色卡 */
+export async function generateColorCard(
+  sessionId: string,
+  targetWidthMm: number = 100,
+  spacerThick: number = 0.48,
+  showLabels: boolean = true,
+): Promise<GenerateResponse> {
+  const response = await apiClient.post<GenerateResponse>(
+    "/convert/color-card",
+    {
+      session_id: sessionId,
+      target_width_mm: targetWidthMm,
+      spacer_thick: spacerThick,
+      show_labels: showLabels,
+    },
+    { timeout: 0 },
+  );
+  return response.data;
+}
+
 /** 大画幅模式：切割图片并生成多片 3MF 压缩包 */
 export async function convertGenerateLargeFormat(
   sessionId: string,

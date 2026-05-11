@@ -45,6 +45,9 @@ class TestModelingModeTags:
     def test_vector_maps_to_vector(self):
         assert MODELING_MODE_TAGS[ModelingMode.VECTOR] == "Vector"
 
+    def test_color_card_maps_to_color_card(self):
+        assert MODELING_MODE_TAGS[ModelingMode.COLOR_CARD] == "ColorCard"
+
     def test_all_enum_members_have_mapping(self):
         for mode in ModelingMode:
             assert mode in MODELING_MODE_TAGS, f"{mode} missing from MODELING_MODE_TAGS"
@@ -190,7 +193,7 @@ class TestGeneratedFilenameFormat:
 
     def test_model_filename_matches_regex(self):
         pattern = re.compile(
-            rf"^.+_Lumina_(HiFi|Pixel|Vector)_(4C|6C|8C|BW)_{TS_RE}\.3mf$"
+            rf"^.+_Lumina_(HiFi|Pixel|Vector|ColorCard)_(4C|6C|8C|BW)_{TS_RE}\.3mf$"
         )
         for mode in ModelingMode:
             for color in ["4-Color", "6-Color", "8-Color Max", "BW"]:

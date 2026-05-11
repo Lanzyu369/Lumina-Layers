@@ -151,6 +151,7 @@ class ModelingMode(str, Enum):
     HIGH_FIDELITY = "high-fidelity"  # 高保真模式
     PIXEL = "pixel"  # 像素模式
     VECTOR = "vector"
+    COLOR_CARD = "color-card"  # 验证色卡模式
 
     def get_display_name(self) -> str:
         """获取模式的显示名称"""
@@ -158,6 +159,7 @@ class ModelingMode(str, Enum):
             ModelingMode.HIGH_FIDELITY: "High-Fidelity",
             ModelingMode.PIXEL: "Pixel Art",
             ModelingMode.VECTOR: "Vector",
+            ModelingMode.COLOR_CARD: "Color Card",
         }
         return display_names.get(self, self.value)
 
