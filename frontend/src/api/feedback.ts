@@ -1,4 +1,27 @@
 import apiClient from "./client";
+import type {
+  ActionEntry,
+  SessionRingEntry,
+} from "../types/actionHistory";
+
+export interface FinalArtifactRef {
+  session_id: string | null;
+  /** Backend-provided download URL (often ``/api/files/<file_id>``). */
+  download_url: string | null;
+  /** Artifact classification, best-effort. */
+  artifact_type: "3mf" | "zip" | "share_card" | null;
+  /** Server path on disk if the frontend knows it (e.g. batch output dir). */
+  disk_path: string | null;
+  /** Which workstream originated the artifact. */
+  source: "converter" | "single_stage" | "puzzle" | "vector" | "batch" | null;
+}
+
+export interface OriginalImageRef {
+  session_id: string | null;
+  /** Best-known filename shown to the user when they uploaded the image. */
+  filename: string | null;
+  source: "converter" | "single_stage" | null;
+}
 
 export interface BugReportContextPayload {
   url: string;
@@ -24,6 +47,28 @@ export interface BugReportContextPayload {
   material_layer_height_mm: number | null;
   material_backing_material_dir_name: string | null;
   recent_client_logs: ReadonlyArray<unknown>;
+  /**
+   * Recent user actions with workflow snapshots; populated by the
+   * reproducible-bug-reports pipeline (Req 5.x). Backwards compatible:
+   * omitting the field is legal for older clients.
+   */
+  action_history?: ReadonlyArray<ActionEntry>;
+  /**
+   * Recent session ids seen by the frontend (Req 6.x). Lets developers grep
+   * structured server logs even after the live sessions were cleaned up.
+   */
+  session_history?: ReadonlyArray<SessionRingEntry>;
+  /**
+   * Reference to the user's original uploaded image (Req 2.x). No file bytes
+   * — the backend retrieves the image through the FileRegistry by
+   * ``session_id``.
+   */
+  active_original_image_ref?: OriginalImageRef | null;
+  /**
+   * Reference to the most recent generation artifact (Req 3.x). No file
+   * bytes; the backend resolves the artifact through FileRegistry.
+   */
+  active_final_artifact_ref?: FinalArtifactRef | null;
 }
 
 export interface BugReportRequestPayload {
@@ -37,8 +82,34 @@ export interface BugReportResponse {
   ticket_id: string;
   emailed: boolean;
   dump_path: string;
-  email_status: "sent" | "unconfigured" | "failed";
+  /**
+   * Email delivery state.
+   *
+   * - ``sent``: SMTP accepted the message during synchronous submit.
+   * - ``pending``: email will be sent later in the background task; local
+   *   email is configured but the delivery result is not known yet at the
+   *   moment this response is returned.
+   * - ``failed``: SMTP rejected the message or the background task crashed
+   *   before sending.
+   * - ``unconfigured``: SMTP is not set up; no email will be attempted.
+   *
+   * 邮件投递状态。``sent`` 表示同步提交时 SMTP 已接受；``pending`` 表示
+   * 邮件还在后台任务中排队；``failed`` 表示已尝试但失败；
+   * ``unconfigured`` 表示本机未配置邮件。
+   */
+  email_status: "sent" | "pending" | "unconfigured" | "failed";
   relay_available: boolean;
+  /**
+   * Assembly status of the ticket directory. The synchronous submit path
+   * returns ``in_progress`` so the UI can show a non-blocking status; the
+   * background task later updates ``ticket.json`` to ``done`` or
+   * ``partial_failed``. Optional for backward compatibility with clients
+   * mocking older responses.
+   *
+   * 工单装配状态。同步路径返回 ``in_progress``，后台任务后续写入 ``done``
+   * 或 ``partial_failed``。为旧客户端/测试 mock 兼容留 optional。
+   */
+  assembly_status?: "in_progress" | "done" | "partial_failed" | null;
 }
 
 export interface BugReportRelayResponse {

@@ -11,10 +11,13 @@ background tasks lifecycle.
 """
 
 import asyncio
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from math import isfinite
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -82,6 +85,10 @@ log = get_logger(__name__)
 
 _REQUEST_COMPLETED_SLOW_MS = 1000.0
 _VALIDATION_LOG_MESSAGE_LIMIT = 1200
+_CLIENT_LOG_FIELD_LIMIT = 256
+_CLIENT_LOG_DETAILS_DEPTH = 4
+_CLIENT_LOG_DETAILS_ITEMS = 24
+_CLIENT_LOG_DETAILS_STRING_LIMIT = 1200
 
 
 def _compact_log_extra(extra: dict) -> dict:
@@ -98,6 +105,45 @@ def _truncate_log_message(message: str, limit: int) -> str:
     if len(message) <= limit:
         return message
     return f"{message[:limit]}...<truncated>"
+
+
+def _sanitize_client_log_value(value: Any, *, depth: int = 0) -> Any:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _truncate_log_message(value, _CLIENT_LOG_DETAILS_STRING_LIMIT)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else str(value)
+    if depth >= _CLIENT_LOG_DETAILS_DEPTH:
+        return "<truncated:depth>"
+    if isinstance(value, (list, tuple)):
+        items = [
+            _sanitize_client_log_value(item, depth=depth + 1)
+            for item in list(value)[:_CLIENT_LOG_DETAILS_ITEMS]
+        ]
+        remaining = len(value) - _CLIENT_LOG_DETAILS_ITEMS
+        if remaining > 0:
+            items.append(f"<truncated:{remaining}>")
+        return items
+    if isinstance(value, dict):
+        sanitized = {}
+        items = list(value.items())
+        for raw_key, raw_value in items[:_CLIENT_LOG_DETAILS_ITEMS]:
+            key = _truncate_log_message(str(raw_key), 120)
+            sanitized[key] = _sanitize_client_log_value(raw_value, depth=depth + 1)
+        remaining = len(items) - _CLIENT_LOG_DETAILS_ITEMS
+        if remaining > 0:
+            sanitized["__truncated_keys"] = remaining
+        return sanitized
+    return _truncate_log_message(str(value), _CLIENT_LOG_DETAILS_STRING_LIMIT)
+
+
+def _coerce_client_log_duration(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and isfinite(float(value)):
+        return round(float(value), 3)
+    return None
 
 
 def _run_cleanup_pass(
@@ -130,6 +176,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
           初始化 WorkerPool 进程池。
         - Start the periodic session cleanup background task.
           启动定期会话清理后台任务。
+        - Run feedback startup cleanup to mark interrupted tickets and
+          prune TTL-expired attachments (see
+          :func:`api.feedback_assembler.run_startup_cleanup`).
+          执行反馈工单启动清理，标记中断工单并删除过期大附件。
 
     Shutdown:
         - Gracefully shut down the WorkerPool, waiting for in-flight tasks.
@@ -141,6 +191,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "Worker pool started",
         extra={"event": "worker_pool_started", "max_workers": worker_pool.max_workers},
     )
+
+    # Feedback startup cleanup: best-effort; never blocks app boot.
+    # 反馈启动清理：尽力而为，绝不阻塞应用启动。
+    try:
+        from pathlib import Path as _Path
+        from api.feedback_assembler import run_startup_cleanup
+
+        override = os.environ.get("LUMINA_FEEDBACK_DUMP_DIR")
+        repo_root = _Path(__file__).resolve().parent.parent
+        feedback_root = _Path(override).resolve() if override else (repo_root / "feedback").resolve()
+        run_startup_cleanup(feedback_root)
+    except Exception as exc:  # noqa: BLE001 — cleanup must never crash startup.
+        log.error(
+            "Feedback startup cleanup raised.",
+            extra={
+                "event": "feedback_ticket_assembled_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
 
     async def _cleanup_loop() -> None:
         """Periodically clean up expired sessions and their registered files.
@@ -328,10 +398,10 @@ def create_app() -> FastAPI:
         return file_to_response(path, filename)
 
     @app.post("/api/client-log")
-    async def client_log(payload: dict):
+    async def client_log(payload: dict[str, Any]):
         """Receive frontend timing events and write to server log."""
-        label = payload.get("label", "?")
-        elapsed = payload.get("elapsed_ms", None)
+        label = _truncate_log_message(str(payload.get("label", "?")), _CLIENT_LOG_FIELD_LIMIT)
+        elapsed = _coerce_client_log_duration(payload.get("elapsed_ms"))
         scope = payload.get("scope", None)
         phase = payload.get("phase", None)
         details = payload.get("details", None)
@@ -340,9 +410,21 @@ def create_app() -> FastAPI:
             extra=_compact_log_extra({
                 "event": "client_log",
                 "client_label": label,
-                "client_scope": scope,
-                "client_phase": phase,
-                "client_details": details,
+                "client_scope": (
+                    _truncate_log_message(str(scope), _CLIENT_LOG_FIELD_LIMIT)
+                    if scope is not None
+                    else None
+                ),
+                "client_phase": (
+                    _truncate_log_message(str(phase), _CLIENT_LOG_FIELD_LIMIT)
+                    if phase is not None
+                    else None
+                ),
+                "client_details": (
+                    _sanitize_client_log_value(details)
+                    if details is not None
+                    else None
+                ),
                 "duration_ms": elapsed,
             }),
         )

@@ -6,6 +6,8 @@ import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
+import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
+import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
 import { getSettings } from "./api/system";
 import Scene3D from "./components/Scene3D";
@@ -213,11 +215,13 @@ function AppContent() {
   );
 
   useSessionLease(converterSessionId);
-  useSessionLease(singleStageSessionId);
+  useSessionLease(singleStageSessionId, "single_stage");
+  useActionHistoryBootstrap();
   useAutoPreview();
   usePuzzleLayoutPreview();
   useElectronLanguageSync();
   const workspace = useWorkspaceMode();
+  const reproMode = useReproMode();
 
   const [connected, setConnected] = useState<boolean | null>(null);
   const [announcementReady, setAnnouncementReady] = useState(false);
@@ -299,6 +303,18 @@ function AppContent() {
           <LanguageToggle />
           <ThemeToggle />
           <BugReportButton onClick={() => setBugReportOpen(true)} />
+          {reproMode.enabled && (
+            <span
+              data-testid="repro-mode-badge"
+              className={`inline-flex items-center gap-1.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 ${workspace.isCompact ? "px-2.5 py-1 text-xs" : "px-3 py-1 text-sm"}`}
+              title={`复现模式 / Reproduction mode: ${reproMode.ticketId}`}
+            >
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
+              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>
+                {reproMode.ticketId}
+              </span>
+            </span>
+          )}
           {connected === null ? (
             <span className="text-sm text-slate-500 dark:text-slate-400">{t("app_checking_backend")}</span>
           ) : connected ? (
@@ -390,6 +406,7 @@ function AppContent() {
       </main>
       <AnnouncementDialog
         open={announcementReady && announcement.visible}
+        entries={announcement.entries}
         entry={announcement.entry}
         onClose={announcement.close}
         onDismissVersion={announcement.dismissThisVersion}

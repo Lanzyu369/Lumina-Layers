@@ -57,6 +57,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "已自动收集的信息（点击展开）",
     en: "Automatically collected info (click to expand)",
   },
+  bug_report_modal_context_summary_heading: {
+    zh: "上下文摘要",
+    en: "Context summary",
+  },
+  bug_report_modal_context_summary_none: {
+    zh: "当前没有可用的上下文信息。",
+    en: "No context information available right now.",
+  },
+  bug_report_modal_context_recent_actions: {
+    zh: "近期操作",
+    en: "Recent actions",
+  },
+  bug_report_modal_context_recent_errors: {
+    zh: "近期接口错误",
+    en: "Recent API errors",
+  },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
     en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
@@ -156,6 +172,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_success_emailed_no: {
     zh: "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
     en: "Local email delivery did not succeed; the report was saved locally. Choose official forwarding or send it manually.",
+  },
+  bug_report_success_email_pending: {
+    zh: "报告已收到，邮件正在后台发送。你可以关闭此对话框，结果会在日志中记录。",
+    en: "Report received; the email is being sent in the background. You can close this dialog — the outcome is captured in the logs.",
+  },
+  bug_report_success_email_failed: {
+    zh: "本机邮件发送失败。报告已保存到本地，可以选择官方转发或手动发送。",
+    en: "Local email delivery failed. The report was saved locally; choose official forwarding or send it manually.",
+  },
+  bug_report_success_email_unconfigured: {
+    zh: "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
+    en: "Local email is not configured; the report was saved locally. Choose official forwarding or send it manually.",
   },
   bug_report_success_dump_path_label: {
     zh: "本地路径",

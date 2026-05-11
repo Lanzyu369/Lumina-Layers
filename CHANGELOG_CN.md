@@ -13,6 +13,7 @@ Lumina Studio 所有重要变更记录。
 - **Native Source Bundle 选择** - 增加旧版/新版来源切换、原生品牌 + DB bundle 选择器，以及参考 bundle 的后端目录与请求归一化能力
 - **Single-Stage 工作流** - 增加 single-stage 数据集提取、Stage A 拟合端点、前端 store 接线，以及对应 UI / 测试覆盖
 - **预测式配方工作流** - 增加预测式配方颜色查询/应用、native 自定义配方编辑，以及预测式 / 原生 LUT 所需的运行时元数据支持
+- **可复现 Bug 反馈** - Bug 反馈改为按工单目录（`feedback/<YYYY-MM>/<ticket_id>/`）落地，自动带上用户当时的原图、生成的 3MF / ZIP、LUT 快照、所选耗材档案、近 30 分钟操作历史与 500 条前端日志，附带双语 `index.md` / `summary.txt`。开发者运行 `python scripts/load_bug_repro.py <ticket_id>` 即可在本地重建该会话进行复现。
 
 ### 修复
 - **拼图预览可靠性** - 修复旧失败请求覆盖新成功叠线的问题，并允许同参数在临时失败后继续重试拼图叠线预览

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { subscribeWithSelector } from "zustand/middleware";
 import type {
   ColorMode,
   ModelingMode,
@@ -2354,8 +2355,8 @@ function _startGlbStatusPolling(
 
 // ========== Store ==========
 
-export const useConverterStore = create<ConverterState & ConverterActions>(
-  (set, _get) => ({
+export const useConverterStore = create<ConverterState & ConverterActions>()(
+  subscribeWithSelector((set, _get) => ({
     ...DEFAULT_STATE,
 
     // --- 图片 ---
@@ -6294,7 +6295,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>(
       const keepIds = collectKeepFileIds(urlsToKeep);
       apiCleanupSessionFiles(state.sessionId, keepIds);
     },
-  }),
+  })),
 );
 
 registerGeneratedArtifactInvalidator(() => {

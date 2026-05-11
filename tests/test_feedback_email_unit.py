@@ -21,6 +21,11 @@ def _payload() -> dict[str, Any]:
             "source_version": "legacy",
             "selected_native_db_names": [],
             "selected_material_dir_names": [],
+            "material_backing_material_dir_name": "Wujing/white",
+            "recent_client_logs": [
+                {"label": "preview: request sent"},
+                {"label": "api: request failed"},
+            ],
             "active_session_ids": {"converter": "abc12345", "single_stage": None},
             "user_agent": "pytest",
             "url": "http://localhost:5174/",
@@ -193,7 +198,77 @@ def test_build_email_message_uses_plain_text_body_and_json_attachment() -> None:
     assert "User email:  user@example.com" in body
     assert "Source:      legacy" in body
     assert "Materials:   []" in body
+    assert "Backing:     Wujing/white" in body
+    assert "Recent logs: 2" in body
+    assert "api: request failed" in body
     attachments = list(msg.iter_attachments())
     assert len(attachments) == 1
     assert attachments[0].get_filename() == "abc12345.json"
     assert attachments[0].get_content_type() == "application/json"
+
+
+def test_build_email_message_attaches_small_files_from_attachments_dir(
+    tmp_path,
+) -> None:
+    """Files smaller than the email ceiling are attached to the message.
+
+    单附件小于邮件上限时应被附加。
+    """
+    from api.feedback_email import _build_email_message
+
+    attachments_dir = tmp_path / "LUM-20260511-001"
+    attachments_dir.mkdir()
+    (attachments_dir / "original.png").write_bytes(b"PNGDATA")
+    (attachments_dir / "index.md").write_text("# index", encoding="utf-8")
+
+    msg = _build_email_message(
+        ticket_id="LUM-20260511-001",
+        request_payload=_payload(),
+        dump_path=str(attachments_dir),
+        smtp_from="from@example.com",
+        smtp_to=["to@example.com"],
+        attachments_dir=attachments_dir,
+    )
+
+    attachment_names = {a.get_filename() for a in msg.iter_attachments()}
+    assert "LUM-20260511-001.json" in attachment_names  # the JSON dump
+    assert "original.png" in attachment_names
+    assert "index.md" in attachment_names
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "Oversized attachments" not in body
+
+
+def test_build_email_message_skips_oversized_files(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Files larger than the email ceiling are listed in the body but not attached.
+
+    单附件超过邮件上限时不作为附件，而是以正文提示的形式出现。
+    """
+    monkeypatch.setenv("LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB", "1")  # 1 MB ceiling
+
+    from api.feedback_email import _build_email_message
+
+    attachments_dir = tmp_path / "LUM-20260511-002"
+    attachments_dir.mkdir()
+    big = attachments_dir / "materials.zip"
+    big.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+    small = attachments_dir / "summary.txt"
+    small.write_text("ok", encoding="utf-8")
+
+    msg = _build_email_message(
+        ticket_id="LUM-20260511-002",
+        request_payload=_payload(),
+        dump_path=str(attachments_dir),
+        smtp_from="from@example.com",
+        smtp_to=["to@example.com"],
+        attachments_dir=attachments_dir,
+    )
+
+    attachment_names = {a.get_filename() for a in msg.iter_attachments()}
+    assert "materials.zip" not in attachment_names
+    assert "summary.txt" in attachment_names
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "Oversized attachments" in body
+    assert str(big) in body

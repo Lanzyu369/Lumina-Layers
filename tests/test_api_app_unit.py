@@ -12,6 +12,7 @@ _Requirements: 9.3, 9.4, 9.5_
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import pytest
@@ -208,3 +209,41 @@ class TestRequestIdHeader:
         req_id = "test-request-id-123"
         resp = client.get("/openapi.json", headers={"X-Request-ID": req_id})
         assert resp.headers.get("x-request-id") == req_id
+
+
+class TestClientLogEndpoint:
+    """Verify frontend diagnostic logs are bounded before server logging."""
+
+    def test_client_log_endpoint_sanitizes_large_payloads(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.DEBUG, logger=target_logger.name)
+
+        response = client.post(
+            "/api/client-log",
+            json={
+                "label": "x" * 300,
+                "elapsed_ms": 12.34567,
+                "scope": "preview",
+                "phase": "request-sent",
+                "details": {
+                    "long": "y" * 1300,
+                    **{f"k{index}": index for index in range(30)},
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "client_log"
+        ]
+        assert len(records) == 1
+        assert records[0].client_label.endswith("...<truncated>")
+        assert records[0].duration_ms == 12.346
+        assert records[0].client_details["long"].endswith("...<truncated>")
+        assert records[0].client_details["__truncated_keys"] == 7

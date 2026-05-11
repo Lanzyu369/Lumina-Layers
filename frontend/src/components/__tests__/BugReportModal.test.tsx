@@ -159,7 +159,7 @@ describe("BugReportModal", () => {
     );
     expect(
       screen.getByText(
-        "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
+        "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "完成" })).toBeInTheDocument();
@@ -167,7 +167,7 @@ describe("BugReportModal", () => {
     expect(screen.queryByLabelText("问题描述")).not.toBeInTheDocument();
   });
 
-  it("hides the dump path and shows the emailed message when the report was emailed", async () => {
+  it("keeps the local dump path visible when the report was emailed", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "deadbeef",
       emailed: true,
@@ -184,7 +184,36 @@ describe("BugReportModal", () => {
 
     expect(await screen.findByTestId("bug-report-ticket-id")).toHaveTextContent("deadbeef");
     expect(screen.getByText("报告已通过本机邮件发送给开发者。")).toBeInTheDocument();
-    expect(screen.queryByTestId("bug-report-dump-path")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bug-report-dump-path")).toHaveTextContent(
+      "feedback/20260429T162531Z_deadbeef.json",
+    );
+  });
+
+  it("shows pending email status without relay prompt or manual fallback", async () => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "pending123",
+      emailed: false,
+      email_status: "pending",
+      relay_available: true,
+      dump_path: "feedback/pending123.json",
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Crash after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const emailStatus = await screen.findByTestId("bug-report-email-status");
+    expect(emailStatus).toHaveAttribute("data-status", "pending");
+    expect(emailStatus).toHaveTextContent(
+      "报告已收到，邮件正在后台发送。你可以关闭此对话框，结果会在日志中记录。",
+    );
+    expect(screen.queryByText(
+      "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
+    )).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bug-report-relay-send")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bug-report-copy-submitted-report")).not.toBeInTheDocument();
   });
 
   it("asks for consent and relays through the official service when local email fails", async () => {
@@ -492,14 +521,17 @@ describe("BugReportModal", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("问题描述已截断到 10000 个字符。");
   });
 
-  it("expands the collected context disclosure", () => {
+  it("expands the collected context disclosure", async () => {
     render(<BugReportModal open onClose={() => {}} />);
 
     fireEvent.click(screen.getByText("已自动收集的信息（点击展开）"));
 
-    expect(screen.getByTestId("bug-report-context-json")).toHaveTextContent(
-      '"active_tab": "converter"',
-    );
+    // Full JSON is now serialized lazily on an idle callback; wait for the
+    // text to appear.
+    // JSON 现在通过 idle 回调按需序列化；等待文本出现。
+    await screen.findByText(/"active_tab":\s*"converter"/, undefined, {
+      timeout: 1500,
+    });
   });
 
   it("resets local form state when cancelled", () => {

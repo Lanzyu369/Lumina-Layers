@@ -1,16 +1,93 @@
-import type { BugReportContextPayload } from "../api/feedback";
+import type {
+  BugReportContextPayload,
+  FinalArtifactRef,
+  OriginalImageRef,
+} from "../api/feedback";
+import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { getRecentClientLogs } from "./clientLog";
 
 declare const __LUMINA_VERSION__: string | undefined;
+
+/**
+ * Best-effort shape of the converter generation artifact. The converter
+ * store tracks ``downloadUrl`` (typically ``/api/files/<file_id>``) and
+ * ``threemfDiskPath`` after a successful ``convertGenerate``. When either
+ * is populated we treat it as evidence of a recent artifact.
+ *
+ * 最近一次生成的产物引用：converter store 在生成成功后写入 downloadUrl /
+ * threemfDiskPath；任一存在即视为最近产物。
+ */
+function deriveFinalArtifact(): FinalArtifactRef | null {
+  const converter = useConverterStore.getState();
+  const downloadUrl = converter.downloadUrl ?? null;
+  const diskPath = converter.threemfDiskPath ?? null;
+  if (!downloadUrl && !diskPath) {
+    return null;
+  }
+  const artifactType: FinalArtifactRef["artifact_type"] = diskPath
+    ? diskPath.toLowerCase().endsWith(".zip")
+      ? "zip"
+      : "3mf"
+    : downloadUrl && downloadUrl.toLowerCase().includes(".zip")
+      ? "zip"
+      : "3mf";
+  return {
+    session_id: converter.sessionId ?? null,
+    download_url: downloadUrl,
+    artifact_type: artifactType,
+    disk_path: diskPath,
+    source: "converter",
+  };
+}
+
+/**
+ * Reference to the source image the user uploaded in the currently active
+ * workstream. We only record identifying metadata here; the backend reads
+ * the actual bytes through its own FileRegistry using ``session_id``.
+ *
+ * 指向当前活动工作流中用户上传的原图的引用；只带元信息，真实内容由后端
+ * 通过 session_id 去 FileRegistry 取。
+ */
+function deriveOriginalImageRef(
+  isConverterActive: boolean,
+  converterSessionId: string | null,
+  singleStageSessionId: string | null,
+): OriginalImageRef | null {
+  if (isConverterActive) {
+    if (!converterSessionId) return null;
+    return {
+      session_id: converterSessionId,
+      filename: null,
+      source: "converter",
+    };
+  }
+  if (singleStageSessionId) {
+    return {
+      session_id: singleStageSessionId,
+      filename: null,
+      source: "single_stage",
+    };
+  }
+  return null;
+}
 
 export function collectBugReportContext(): BugReportContextPayload {
   const converter = useConverterStore.getState();
   const singleStage = useSingleStageStore.getState();
   const settings = useSettingsStore.getState();
   const widget = useWidgetStore.getState();
+
+  // Eagerly merge any sessionStorage-persisted entries so a page refresh
+  // between the bug happening and the user clicking "Report" still ships the
+  // complete action history. ``loadPersistedHistory`` is idempotent and
+  // swallow-safe so calling it here is zero-risk.
+  // 在合并上下文前显式加载持久化的历史，确保刷新页面后仍能保留现场。
+  useActionHistoryStore.getState().loadPersistedHistory();
+  const actionExport = useActionHistoryStore.getState().exportForReport();
 
   // Prefer the active workstream's live store value over the persisted
   // ``settings.lastColorMode`` / ``settings.lastLutName`` preference.
@@ -61,6 +138,14 @@ export function collectBugReportContext(): BugReportContextPayload {
     material_layer_count: isMaterialSource ? converter.materialLayerCount : null,
     material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
     material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
-    recent_client_logs: [],
+    recent_client_logs: getRecentClientLogs(),
+    action_history: actionExport.history,
+    session_history: actionExport.session_history,
+    active_original_image_ref: deriveOriginalImageRef(
+      isConverterActive,
+      converter.sessionId ?? null,
+      singleStage.sessionId ?? null,
+    ),
+    active_final_artifact_ref: deriveFinalArtifact(),
   };
 }

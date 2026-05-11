@@ -13,6 +13,7 @@ All notable changes to Lumina Studio are documented in this file.
 - **Native Source Bundle Selection** - Added legacy/native source switching, native brand + DB bundle selection, native predictive source metadata, and backend catalog/normalization for reference bundles
 - **Single-Stage Workflow** - Added single-stage dataset extraction, Stage A fitting endpoints, store wiring, and UI/test coverage for the single-stage calibration flow
 - **Predictive Recipe Workflow** - Added predictive recipe color search/apply flows, native custom recipe editing, and supporting runtime metadata for predictive/native LUT sources
+- **Reproducible Bug Reports** - Bug reports now land as ticket directories (`feedback/<YYYY-MM>/<ticket_id>/`) carrying the user's original image, generated 3MF / ZIP, LUT snapshot, selected materials bundle, 30-minute action history, 500-entry client log buffer, and a bilingual `index.md` / `summary.txt`. Run `python scripts/load_bug_repro.py <ticket_id>` to rebuild the session locally without guessing what the user did.
 
 ### Fixes
 - **Puzzle Preview Reliability** - Fixed stale failure races that could clear a newer successful overlay, and allowed same-parameter puzzle overlay retries after transient failures

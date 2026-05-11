@@ -16,6 +16,28 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-10",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "Bug 反馈会自动带上最近的前端日志、接口失败和材料底板选择，开发者更容易复现问题。",
+            en: "Bug reports now include recent frontend logs, API failures, and the selected backing material, making issues easier to reproduce.",
+          },
+          {
+            zh: "反馈问题时现在会自动带上你当时用的原图、生成的 3MF、所选耗材档案，开发者更容易在本地复现你遇到的情况。",
+            en: "Bug reports now automatically include the original image you used, the generated 3MF, and the selected material archives, so the developer can reproduce the problem locally more easily.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-05",
     title: {
       zh: "Lumina Layers — 近三天更新速览",

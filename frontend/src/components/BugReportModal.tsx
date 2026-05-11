@@ -1,15 +1,129 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
 import { relayBugReport, submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
 import { useI18n } from "../i18n/context";
 import { collectBugReportContext } from "../utils/bugReportContext";
+import { loadPersistedLogs } from "../utils/clientLog";
+import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import Button from "./ui/Button";
 import { StatusBanner, workstationInputClass } from "./ui/panelPrimitives";
 
 const MAX_DESCRIPTION_LENGTH = 10_000;
 const MAX_SCREENSHOT_BYTES = 5_000_000;
+
+/**
+ * Schedule ``callback`` on the idle-callback queue, falling back to
+ * ``setTimeout(..., 0)`` when the browser does not support it (Safari as
+ * of 2026 still lacks ``requestIdleCallback``). Used so the expensive
+ * ``JSON.stringify(context, null, 2)`` only runs when the user opts in
+ * and yields to layout/input in between.
+ * 空闲调度：不支持 ``requestIdleCallback`` 时退回到 ``setTimeout(fn, 0)``。
+ */
+function scheduleIdle(callback: () => void): void {
+  const maybeIdle = (
+    globalThis as { requestIdleCallback?: (cb: () => void) => number }
+  ).requestIdleCallback;
+  if (typeof maybeIdle === "function") {
+    try {
+      maybeIdle(callback);
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  setTimeout(callback, 0);
+}
+
+/**
+ * Minimal 3-line snapshot header + 3 recent action entries + up to 2 recent
+ * API errors. Designed to stay under ~10 DOM nodes so the modal renders in
+ * the SLO 8 budget (< 50 ms at 500 client logs + 100 action entries).
+ * 紧凑摘要：只显示当前工作流关键字段、最近 3 次操作、最近 2 次接口错误，
+ * 避免 modal 一打开就序列化完整 context。
+ */
+type CompactContextSummaryProps = {
+  context: ReturnType<typeof collectBugReportContext>;
+  labelRecentActions: string;
+  labelRecentErrors: string;
+  labelNoData: string;
+};
+
+function CompactContextSummary({
+  context,
+  labelRecentActions,
+  labelRecentErrors,
+  labelNoData,
+}: CompactContextSummaryProps): JSX.Element {
+  const recentActions = (context.action_history ?? []).slice(-3).reverse();
+  const recentLogs = context.recent_client_logs ?? [];
+  const recentApiErrors = recentLogs
+    .filter((log) => log.method === "error" && log.scope === "http")
+    .slice(-2)
+    .reverse();
+
+  const hasAnyContent =
+    context.active_tab != null ||
+    context.color_mode != null ||
+    context.lut_name != null ||
+    recentActions.length > 0 ||
+    recentApiErrors.length > 0;
+
+  if (!hasAnyContent) {
+    return (
+      <p className="text-xs text-slate-500 dark:text-slate-400">{labelNoData}</p>
+    );
+  }
+
+  return (
+    <div
+      data-testid="bug-report-context-summary"
+      className="space-y-2 text-xs leading-5 text-slate-600 dark:text-slate-300"
+    >
+      <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono">
+        {context.active_tab && <span>tab={context.active_tab}</span>}
+        {context.color_mode && <span>mode={context.color_mode}</span>}
+        {context.lut_name && <span>lut={context.lut_name}</span>}
+      </div>
+      {recentActions.length > 0 && (
+        <div>
+          <div className="font-medium">{labelRecentActions}</div>
+          <ul className="ml-4 list-disc font-mono">
+            {recentActions.map((entry, idx) => (
+              <li key={`${entry.timestamp}-${idx}`}>
+                {new Date(entry.timestamp).toISOString()} · {entry.action_type}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {recentApiErrors.length > 0 && (
+        <div>
+          <div className="font-medium">{labelRecentErrors}</div>
+          <ul className="ml-4 list-disc font-mono">
+            {recentApiErrors.map((entry, idx) => {
+              const details = entry.details as
+                | { status_code?: unknown; path?: unknown }
+                | null
+                | undefined;
+              const status =
+                typeof details?.status_code === "number"
+                  ? details.status_code
+                  : "?";
+              const path = typeof details?.path === "string" ? details.path : "";
+              return (
+                <li key={`${entry.timestamp}-${idx}`}>
+                  {status} · {path || entry.label}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface BugReportModalProps {
   open: boolean;
@@ -107,6 +221,13 @@ export function BugReportModal({
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [screenshotName, setScreenshotName] = useState<string | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  /**
+   * Holds the stringified full context once the user has expanded the
+   * context disclosure. Stays ``null`` until requested so a Modal open
+   * with a 500-entry log buffer doesn't pay the serialization cost.
+   * 仅在用户展开「完整上下文」时按需渲染；避免打开 modal 就做昂贵序列化。
+   */
+  const [fullContextJson, setFullContextJson] = useState<string | null>(null);
 
   const resetForm = useCallback(() => {
     setDescription(presetDescription);
@@ -115,6 +236,7 @@ export function BugReportModal({
     setDescriptionError(null);
     setNotice(null);
     setContextExpanded(false);
+    setFullContextJson(null);
     setSubmittedTicket(null);
     setSubmittedPayload(null);
     setCopied(false);
@@ -129,6 +251,20 @@ export function BugReportModal({
   useEffect(() => {
     if (open) {
       setDescription((current) => (current ? current : presetDescription));
+      // Lazy-load persisted buffers when the user actually opens the modal
+      // so regular app usage never pays the sessionStorage read cost. Both
+      // calls are swallow-safe and idempotent.
+      // 打开 modal 时才从 sessionStorage 合并历史缓冲，平时零 I/O。
+      try {
+        useActionHistoryStore.getState().loadPersistedHistory();
+      } catch {
+        // ignore
+      }
+      try {
+        loadPersistedLogs();
+      } catch {
+        // ignore
+      }
       return;
     }
     resetForm();
@@ -152,11 +288,54 @@ export function BugReportModal({
     };
   }, [open, onClose, resetForm]);
 
-  if (!open || typeof document === "undefined") {
+  // Context is expensive to collect (it pulls from four stores + logs).
+  // Memoize the rendered-shallow copy across re-renders within the same
+  // modal session; we only re-collect when the modal opens or the user
+  // attaches/removes a screenshot (both are coarse signals that any cached
+  // context is stale). Must run before any early-return so React Hook
+  // ordering stays stable across open/closed states.
+  // 采集一次上下文：modal 期间通常不会变动剧烈，避免每次输入触发全量重算。
+  // 必须放在任何 early-return 之前，保证 Hook 顺序稳定。
+  const context = useMemo(
+    () => (open ? collectBugReportContext() : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [open, screenshotDataUrl],
+  );
+
+  // Kick off the expensive full-context serialization lazily when the
+  // user opens the disclosure. Run it off the render path via the idle
+  // queue so we never block the modal's frame budget.
+  // 用户展开完整上下文时再序列化；走 idle 回调，不阻塞渲染。
+  useEffect(() => {
+    if (!open || !contextExpanded || context == null) {
+      return;
+    }
+    if (fullContextJson != null) {
+      return;
+    }
+    let cancelled = false;
+    scheduleIdle(() => {
+      if (cancelled) return;
+      try {
+        const serialized = JSON.stringify(context, null, 2);
+        if (!cancelled) {
+          setFullContextJson(serialized);
+        }
+      } catch {
+        if (!cancelled) {
+          setFullContextJson("// failed to serialize context");
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, context, contextExpanded, fullContextJson]);
+
+  if (!open || typeof document === "undefined" || context == null) {
     return null;
   }
 
-  const context = collectBugReportContext();
   const trimmedDescription = description.trim();
   const canSubmit = trimmedDescription.length > 0 && !submitting;
 
@@ -462,13 +641,21 @@ export function BugReportModal({
                 </button>
               </div>
 
-              <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">
-                {submittedTicket.emailed
+              <p
+                data-testid="bug-report-email-status"
+                data-status={submittedTicket.email_status}
+                className="text-sm leading-6 text-slate-700 dark:text-slate-200"
+              >
+                {submittedTicket.email_status === "sent"
                   ? t("bug_report_success_emailed_yes")
-                  : t("bug_report_success_emailed_no")}
+                  : submittedTicket.email_status === "pending"
+                    ? t("bug_report_success_email_pending")
+                    : submittedTicket.email_status === "failed"
+                      ? t("bug_report_success_email_failed")
+                      : t("bug_report_success_email_unconfigured")}
               </p>
 
-              {!submittedTicket.emailed && submittedTicket.dump_path && (
+              {submittedTicket.dump_path && (
                 <div
                   className="rounded-[18px] border px-4 py-3"
                   style={{
@@ -489,7 +676,10 @@ export function BugReportModal({
                   </code>
                 </div>
               )}
-              {!submittedTicket.emailed && submittedTicket.relay_available && relayState !== "sent" && (
+              {(submittedTicket.email_status === "failed" ||
+                submittedTicket.email_status === "unconfigured") &&
+                submittedTicket.relay_available &&
+                relayState !== "sent" && (
                 <div
                   className="space-y-3 rounded-[18px] border px-4 py-3"
                   style={{
@@ -533,7 +723,10 @@ export function BugReportModal({
                   </div>
                 </div>
               )}
-              {!submittedTicket.emailed && submittedReportText && relayState !== "sent" && (
+              {(submittedTicket.email_status === "failed" ||
+                submittedTicket.email_status === "unconfigured") &&
+                submittedReportText &&
+                relayState !== "sent" && (
                 <div
                   className="space-y-3 rounded-[18px] border px-4 py-3"
                   style={{
@@ -722,6 +915,13 @@ export function BugReportModal({
                 )}
               </div>
 
+              <CompactContextSummary
+                context={context}
+                labelRecentActions={t("bug_report_modal_context_recent_actions")}
+                labelRecentErrors={t("bug_report_modal_context_recent_errors")}
+                labelNoData={t("bug_report_modal_context_summary_none")}
+              />
+
               <details
                 open={contextExpanded}
                 onToggle={(event) =>
@@ -745,7 +945,7 @@ export function BugReportModal({
                       "color-mix(in srgb, var(--surface-panel-strong) 18%, black)",
                   }}
                 >
-                  {JSON.stringify(context, null, 2)}
+                  {fullContextJson ?? ""}
                 </pre>
               </details>
 

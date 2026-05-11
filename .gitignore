@@ -343,3 +343,6 @@ progress/round-*-prompt.md
 progress/round-*-pr-body.md
 progress/round-*-patches/
 progress/archive/
+
+# reproducible-bug-reports: local reproduction bundles rebuilt from tickets
+repro_sessions/

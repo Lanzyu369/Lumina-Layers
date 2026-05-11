@@ -134,9 +134,10 @@ docker run -p 7860:7860 \
 1. Restart the backend.
 2. Submit a bug report from the UI.
 3. A successful email-enabled response should say that the report was sent to the developer mailbox.
-4. If it still shows that email is unconfigured, check that `LUMINA_FEEDBACK_SMTP_HOST` and `LUMINA_FEEDBACK_TO` are visible to the backend process.
-5. If the UI no longer says unconfigured but no email arrives, check backend logs for `feedback_email_failed` and verify host, port, TLS mode, username, password or app password, and provider SMTP permissions.
-6. For Resend, the domain page must show `Verified`; Gmail may place the first messages under Updates or spam while reputation is new.
+4. Open the saved JSON dump and confirm `context.recent_client_logs` contains the newest frontend events and API failures; the backend keeps only the newest bounded set and truncates oversized values.
+5. If it still shows that email is unconfigured, check that `LUMINA_FEEDBACK_SMTP_HOST` and `LUMINA_FEEDBACK_TO` are visible to the backend process.
+6. If the UI no longer says unconfigured but no email arrives, check backend logs for `feedback_email_failed` and verify host, port, TLS mode, username, password or app password, and provider SMTP permissions.
+7. For Resend, the domain page must show `Verified`; Gmail may place the first messages under Updates or spam while reputation is new.
 
 ## Abuse guard and optional hosted relay
 
@@ -288,9 +289,10 @@ docker run -p 7860:7860 \
 1. 重启后端。
 2. 在界面提交一条 Bug 反馈。
 3. 如果邮件配置生效，成功页应提示报告已通过本机邮件发送给开发者。
-4. 如果仍显示未配置，检查后端进程是否能读到 `LUMINA_FEEDBACK_SMTP_HOST` 和 `LUMINA_FEEDBACK_TO`。
-5. 如果不再提示未配置但没有收到邮件，检查后端日志中的 `feedback_email_failed`，并核对 host、端口、TLS、用户名、授权码和邮箱服务商的 SMTP 权限。
-6. 如果使用 Resend，域名页需要显示 `Verified`；Gmail 在新发件域名初期可能会把邮件归到“更新”或垃圾邮件。
+4. 打开保存下来的 JSON，确认 `context.recent_client_logs` 包含最新的前端事件和接口失败；后端只保留有上限的最新记录，并会截断过大的值。
+5. 如果仍显示未配置，检查后端进程是否能读到 `LUMINA_FEEDBACK_SMTP_HOST` 和 `LUMINA_FEEDBACK_TO`。
+6. 如果不再提示未配置但没有收到邮件，检查后端日志中的 `feedback_email_failed`，并核对 host、端口、TLS、用户名、授权码和邮箱服务商的 SMTP 权限。
+7. 如果使用 Resend，域名页需要显示 `Verified`；Gmail 在新发件域名初期可能会把邮件归到“更新”或垃圾邮件。
 
 ## 防滥用保护和可选官方转发
 

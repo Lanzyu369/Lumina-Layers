@@ -9,7 +9,7 @@
  */
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, subscribeWithSelector } from "zustand/middleware";
 import { EXPANDED_HEIGHT } from "../utils/widgetUtils";
 import type {
   WidgetId,
@@ -313,8 +313,9 @@ export const WIDGET_REGISTRY: Omit<WidgetConfig, "component">[] = [
 // ===== Store =====
 
 export const useWidgetStore = create<WidgetStore>()(
-  persist(
-    (set) => ({
+  subscribeWithSelector(
+    persist(
+      (set) => ({
       widgets: { ...DEFAULT_LAYOUT },
       isDragging: false,
       activeWidgetId: null,
@@ -718,5 +719,6 @@ export const useWidgetStore = create<WidgetStore>()(
       }),
       onRehydrateStorage: () => () => {},
     },
+    ),
   ),
 );

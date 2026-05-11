@@ -176,14 +176,39 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## In-App Announcement Maintenance
 
 - Source of truth: `frontend/src/data/announcements.ts`; rendered by `AnnouncementDialog` via `useAnnouncement` on first launch
+- **Audience is non-technical end users** (普通消费者 / 打印玩家，基本不写代码，不了解本仓库的模块、术语、内部名词）。Every announcement item must read like a product changelog a friend would send, not like an engineering note
+- **Rendering rule (do NOT silently regress)**: `useAnnouncement` must return every entry within a window of `ANNOUNCEMENT_WINDOW_DAYS` natural days anchored at the **PR-merge date**, which in this file equals `ANNOUNCEMENTS[0].version` (the newest entry). The default window is 3 days and covers `[anchor - 2 days, anchor]` inclusive. `AnnouncementDialog` must render all entries in the window in descending `version` order; it must NOT collapse to a single latest entry. The version badge and dismiss key remain bound to the anchor. This rule is enforced by `selectEntriesWithinWindow` and its tests in `src/__tests__/useAnnouncement.test.ts` — if you change the window semantics, update both the code, the tests, and this bullet together
 - Any PR merged to the default branch that introduces a user-visible change (new feature, behavior change, UX fix, notable stability fix) must be reflected in the announcement file in a follow-up commit or PR
 - Versioning is by **publish date in Beijing time (UTC+8)**, formatted `YYYY-MM-DD`; never use semver here, never backdate, never use a future date
 - If the latest entry's `version` equals today's Beijing date, append new `items` to the appropriate existing `sections[].category`; otherwise prepend a new `AnnouncementEntry` whose `version` is today's Beijing date
 - **Every user-facing string in `announcements.ts` is bilingual**: `title`, each `sections[].category`, and every item must be a `{ zh, en }` `LocalizedText`; both locales are mandatory and must describe the same change
 - Use the canonical category vocabulary (keep order stable): zh `新功能` / en `New`, zh `颜色工作站` / en `Color Workstation`, zh `提取器（校色卡）` / en `Extractor (Calibration Card)`, zh `校准 & 材料` / en `Calibration & Materials`, zh `预览 & 交互` / en `Preview & Interaction`, zh `矢量化` / en `Vectorisation`, zh `稳定性` / en `Stability`; add a new category only when no existing one fits, and when adding, introduce both zh and en at once
-- Writing style: plain language on both sides — Chinese is the product voice first, English mirrors it naturally (not a literal gloss); one sentence per item, explain the user-visible outcome rather than the code path; no emoji, no PR/issue numbers, no internal module names
+- **Writing style (strict, 面向非程序员的大白话)**:
+  - 一句话讲清楚**用户看到什么变化**，而不是代码改了什么
+  - 禁止内部模块名（如 `FileRegistry`、`SessionStore`、`coordinator.py`、`S01` 等）、PR/Issue 号、commit hash、堆栈关键词
+  - 禁止英文技术黑话（pipeline、hook、store、reducer、mock、stub、schema、endpoint 之类）；前端/后端/接口这种面向用户的词也尽量不用，必要时用"打开软件时""生成 3MF 时"这种使用场景语替换
+  - 避免缩写，除非是已经出现在 UI 上的缩写（如 LUT、3MF、RGB、CMYK）；首次出现时在后面用括号加一句人话解释
+  - Chinese 先写，英文自然镜像不是逐字翻译，两边讲的是同一件事但英文也要口语化；不要出现机翻痕迹
+  - 没有 emoji，没有感叹号堆叠，没有自我营销（"强大""震撼""全新升级"这类词）
+  - 正例：zh "之前打开颜色工作站有时会突然白屏，现在修好了。"  en "Fixed a rare white-screen issue when opening the Color Workstation."
+  - 反例：zh "修复了 `ColorWorkstation` 组件在 `usePreviewStore` 初始化时 race condition 导致的白屏。"（内部名词 + 黑话 + 讲实现）
 - Keep `title` stable within a release cycle; only bump it when the marketing framing actually changes (bump both zh and en together)
 - After editing, run `cd frontend && npx tsc --noEmit` plus `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
-- Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) distill each into one bilingual bullet under the right category (write zh first, then mirror in en), (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
+- Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) translate each into one plain-language bullet (no jargon, no internal names) under the right category, Chinese first, English mirroring it naturally, (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
 
 与用户沟通和回复时使用中文，除非用户明确要求使用其他语言。
+
+## Bug Report Reproducibility
+
+- Bug reports submitted via `/api/feedback/bug-report` now land as a **ticket directory** at `feedback/<YYYY-MM>/<ticket_id>/` where `ticket_id` matches `LUM-YYYYMMDD-NNN` (Beijing date; fallback `LUM-YYYYMMDD-<8-char-hex>` when the daily serial exceeds 999)
+- Ticket directory contents:
+  - `ticket.json` — canonical payload (schema_version=3) with user description, workflow snapshot, action history, client logs, attachments manifest, email status, and `assembly_status`
+  - `index.md` — human-readable index generated by the assembler
+  - `summary.txt` — Chinese summary optimized for AI assistants
+  - Optional bulky files: `original.<ext>`, `final.<ext>`, `lut.<ext>`, `materials.zip`, `screenshot.<ext>` (each independently attached when available via `FileRegistry` + copy; missing attachments are explicitly marked in the manifest, never silently dropped)
+- `submit_bug_report` uses the **hybrid assembly model**: synchronous path copies the small attachments (original image / final artifact / LUT) and returns `assembly_status: "in_progress"` under ~2 s; `finalize_ticket_async` runs via `BackgroundTasks` to pack `materials.zip`, render `index.md` / `summary.txt`, and send the email
+- Materials zip excludes `_solver_cache/` (developer can rebuild locally) and has a 30 s wall-clock timeout controlled by `LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`
+- Email attachments over `LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB` (default 40) stay on disk — the email body lists them with absolute paths so the on-call engineer can `scp` them manually
+- `run_startup_cleanup` runs inside the FastAPI lifespan: tickets older than `LUMINA_FEEDBACK_TICKET_TTL_DAYS` (default 30) lose their bulky attachments but keep the small metadata; tickets stuck in `in_progress` past the 10-minute grace window are tagged `interrupted` and logged for follow-up. Set `LUMINA_FEEDBACK_STARTUP_CLEANUP=false` to disable
+- To rebuild a session locally: `python scripts/load_bug_repro.py <ticket_id>` — copies every available attachment to `repro_sessions/<ticket_id>/`, extracts `materials.zip`, and writes a `repro_manifest.md` with the action history. The frontend shows a yellow badge when opened at `http://localhost:5174/?repro_session=<ticket_id>`
+- Structured logging events whitelisted under `FEEDBACK_STRUCTURED_EVENTS` in `tests/test_logging_exception_governance_unit.py`: `feedback_bug_report_submitted`, `feedback_ticket_assembled_init`, `feedback_ticket_assembled_done`, `feedback_attachment_collected`, `feedback_materials_bundle_packed_done` (+ relay / rate-limit events from the existing flow). WARNING / ERROR events (`feedback_ticket_assembly_interrupted`, `feedback_materials_bundle_packed_failed`, etc.) are off the INFO whitelist by design

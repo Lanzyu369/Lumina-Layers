@@ -7,6 +7,12 @@ import Button from "./Button";
 
 export interface AnnouncementDialogProps {
   open: boolean;
+  /**
+   * 窗口内所有 entry（按 version 降序）。传入后会依次渲染多条；
+   * 未传时回退到 `entry` 单条模式以兼容旧调用点/测试。
+   */
+  entries?: AnnouncementEntry[];
+  /** 锚点 entry；用于版本徽章和 dismiss，也作为 entries 缺省时的单条数据源。 */
   entry: AnnouncementEntry | null;
   onClose: () => void;
   onDismissVersion: () => void;
@@ -14,6 +20,7 @@ export interface AnnouncementDialogProps {
 
 export default function AnnouncementDialog({
   open,
+  entries,
   entry,
   onClose,
   onDismissVersion,
@@ -38,11 +45,17 @@ export default function AnnouncementDialog({
     };
   }, [open, onClose]);
 
-  if (!open || !entry || typeof document === "undefined") {
+  const resolvedEntries: AnnouncementEntry[] =
+    entries && entries.length > 0 ? entries : entry ? [entry] : [];
+
+  if (!open || resolvedEntries.length === 0 || typeof document === "undefined") {
     return null;
   }
 
-  const versionLabel = `${t("announcement_version_label")}: ${entry.version}`;
+  // 徽章和 dismiss 语义永远绑定在锚点 entry 上；锚点优先取显式传入的 entry，
+  // 再退回到 entries[0]（已按 version 降序）。
+  const anchorEntry = entry ?? resolvedEntries[0];
+  const versionLabel = `${t("announcement_version_label")}: ${anchorEntry.version}`;
 
   return createPortal(
     <div
@@ -71,7 +84,7 @@ export default function AnnouncementDialog({
               aria-label={versionLabel}
               title={versionLabel}
             >
-              {entry.version}
+              {anchorEntry.version}
             </span>
           </div>
           <button
@@ -85,33 +98,52 @@ export default function AnnouncementDialog({
         </div>
 
         <div className="max-h-[70vh] flex-1 overflow-y-auto px-5 py-4">
-          <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">
-            {localize(entry.title)}
-          </h3>
+          {resolvedEntries.map((currentEntry, entryIndex) => (
+            <article
+              key={currentEntry.version}
+              className={entryIndex === 0 ? "mt-0" : "mt-6"}
+              data-announcement-entry={currentEntry.version}
+            >
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">
+                  {localize(currentEntry.title)}
+                </h3>
+                {/* 多条时给每个子段也带版本小徽章，便于用户区分当天 / 昨天 / 前天 */}
+                {resolvedEntries.length > 1 ? (
+                  <span
+                    className="inline-flex shrink-0 items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                    aria-label={`${t("announcement_version_label")}: ${currentEntry.version}`}
+                  >
+                    {currentEntry.version}
+                  </span>
+                ) : null}
+              </div>
 
-          {entry.sections.map((section, index) => {
-            const categoryText = localize(section.category);
-            return (
-              <section
-                key={`${categoryText}-${index}`}
-                className={index === 0 ? "mt-0" : "mt-4"}
-              >
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  {categoryText}
-                </p>
-                <ul className="mt-2 list-disc space-y-1 pl-5">
-                  {section.items.map((item, itemIndex) => (
-                    <li
-                      key={`${categoryText}-${itemIndex}`}
-                      className="text-sm leading-6 text-slate-600 dark:text-slate-300"
-                    >
-                      {localize(item)}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            );
-          })}
+              {currentEntry.sections.map((section, sectionIndex) => {
+                const categoryText = localize(section.category);
+                return (
+                  <section
+                    key={`${currentEntry.version}-${categoryText}-${sectionIndex}`}
+                    className={sectionIndex === 0 ? "mt-2" : "mt-4"}
+                  >
+                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      {categoryText}
+                    </p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {section.items.map((item, itemIndex) => (
+                        <li
+                          key={`${currentEntry.version}-${categoryText}-${itemIndex}`}
+                          className="text-sm leading-6 text-slate-600 dark:text-slate-300"
+                        >
+                          {localize(item)}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })}
+            </article>
+          ))}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">

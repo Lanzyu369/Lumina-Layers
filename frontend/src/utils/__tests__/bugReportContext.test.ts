@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ColorMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
 import { useWidgetStore } from "../../stores/widgetStore";
+import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
 import { collectBugReportContext } from "../bugReportContext";
 
 declare const __LUMINA_VERSION__: string;
@@ -14,6 +15,10 @@ describe("collectBugReportContext", () => {
   const originalNavigator = globalThis.navigator;
 
   beforeEach(() => {
+    _clearClientLogBufferForTests();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     useConverterStore.setState({
       sessionId: "converter-session",
       source_version: "legacy",
@@ -54,6 +59,8 @@ describe("collectBugReportContext", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    _clearClientLogBufferForTests();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: originalWindow,
@@ -91,6 +98,14 @@ describe("collectBugReportContext", () => {
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
       recent_client_logs: [],
+      action_history: [],
+      session_history: [],
+      active_original_image_ref: {
+        session_id: "single-session",
+        filename: null,
+        source: "single_stage",
+      },
+      active_final_artifact_ref: null,
     });
   });
 
@@ -218,5 +233,28 @@ describe("collectBugReportContext", () => {
       single_stage: null,
     });
     expect(context.recent_client_logs).toEqual([]);
+  });
+
+  it("includes bounded recent client logs for diagnostics", () => {
+    postClientLog("preview: failed", {
+      elapsedMs: 42,
+      method: "warn",
+      scope: "preview",
+      phase: "failed",
+      details: { reason: "timeout" },
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.recent_client_logs).toEqual([
+      expect.objectContaining({
+        method: "warn",
+        label: "preview: failed",
+        elapsed_ms: 42,
+        scope: "preview",
+        phase: "failed",
+        details: { reason: "timeout" },
+      }),
+    ]);
   });
 });

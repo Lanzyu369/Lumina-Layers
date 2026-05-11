@@ -53,6 +53,7 @@ vi.mock("../hooks/useSessionLease", () => ({ useSessionLease: vi.fn() }));
 vi.mock("../hooks/useAnnouncement", () => ({
   useAnnouncement: () => ({
     visible: false,
+    entries: [],
     entry: null,
     version: "",
     close: vi.fn(),
