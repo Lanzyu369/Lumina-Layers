@@ -74,3 +74,37 @@ def test_3mf_template_matrix_matches_selected_template_and_family_rules() -> Non
                     cleanup_paths(Path(output_path))
 
     assert not failures, "\n".join(failures[:20])
+
+
+def test_printer_profile_templates_use_arachne_wall_generator() -> None:
+    failures: list[str] = []
+    profile_map = {profile.id: profile for profile in list_printer_profiles()}
+
+    for printer_id, slicer in supported_printer_slicer_pairs():
+        profile = profile_map[printer_id]
+        for nozzle_size in profile.supported_nozzle_sizes:
+            template = load_expected_template_direct(
+                printer_id=printer_id,
+                slicer=slicer,
+                nozzle_size=nozzle_size,
+            )
+            if template.get("wall_generator") != "arachne":
+                failures.append(
+                    f"{printer_id}/{slicer}/{nozzle_size}: "
+                    f"wall_generator={template.get('wall_generator')!r}"
+                )
+                continue
+
+            different_settings = template.get("different_settings_to_system")
+            first_diff_group = (
+                str(different_settings[0])
+                if isinstance(different_settings, list) and different_settings
+                else ""
+            )
+            if "wall_generator" not in first_diff_group.split(";"):
+                failures.append(
+                    f"{printer_id}/{slicer}/{nozzle_size}: "
+                    "different_settings_to_system missing wall_generator"
+                )
+
+    assert not failures, "\n".join(failures[:20])
