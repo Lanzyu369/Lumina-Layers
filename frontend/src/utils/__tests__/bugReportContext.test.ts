@@ -5,6 +5,7 @@ import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
 import { useWidgetStore } from "../../stores/widgetStore";
+import type { AdvancedParamsFull } from "../../types/actionHistory";
 import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
 import { collectBugReportContext } from "../bugReportContext";
 
@@ -106,6 +107,7 @@ describe("collectBugReportContext", () => {
         source: "single_stage",
       },
       active_final_artifact_ref: null,
+      advanced_params: null,
     });
   });
 
@@ -256,5 +258,136 @@ describe("collectBugReportContext", () => {
         details: { reason: "timeout" },
       }),
     ]);
+  });
+
+  it("populates advanced_params as an AdvancedParamsFull on the converter tab when advanced fields are non-default", () => {
+    // The collector must ship a grouped advanced_params object so the
+    // backend ticket can surface which feature toggles were active when
+    // the user hit "Report". We flip a couple of toggles and check the
+    // corresponding groups carry the live store values instead of the
+    // disabled-toggle null placeholders.
+    // converter Tab 激活、用户打开了浮雕 / 大幅面等高级开关时，反馈上下文
+    // 必须带上 advanced_params 分组对象，让后端工单能看到当时生效的功能
+    // 开关；否则后端只能按默认值推测用户场景。
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "converter-session",
+      target_width_mm: 120,
+      target_height_mm: 90,
+      enable_relief: true,
+      color_height_map: { "#ff0000": 1.5, "#00ff00": 2.0 },
+      heightmap_max_height: 4.0,
+      enable_outline: true,
+      outline_width: 2.5,
+      largeFormatEnabled: true,
+      tileWidthMm: 200,
+      tileHeightMm: 180,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.advanced_params).not.toBeNull();
+    const advanced = context.advanced_params as AdvancedParamsFull;
+
+    // Dimensions group reflects the live store values.
+    expect(advanced.dimensions.target_width_mm).toBe(120);
+    expect(advanced.dimensions.target_height_mm).toBe(90);
+
+    // Enabled-toggle groups carry their detail fields.
+    expect(advanced.relief.enable_relief).toBe(true);
+    expect(advanced.relief.color_height_map).toEqual({
+      "#ff0000": 1.5,
+      "#00ff00": 2.0,
+    });
+    expect(advanced.relief.heightmap_max_height).toBe(4.0);
+
+    expect(advanced.outline.enable_outline).toBe(true);
+    expect(advanced.outline.outline_width).toBe(2.5);
+
+    expect(advanced.large_format.largeFormatEnabled).toBe(true);
+    expect(advanced.large_format.tileWidthMm).toBe(200);
+    expect(advanced.large_format.tileHeightMm).toBe(180);
+
+    // Disabled-toggle groups are still present with their toggles false
+    // and detail fields nulled out (builder contract).
+    expect(advanced.cloisonne.enable_cloisonne).toBe(false);
+    expect(advanced.cloisonne.wire_width_mm).toBeNull();
+    expect(advanced.puzzle.puzzleEnabled).toBe(false);
+  });
+
+  it("returns advanced_params === null when activeTab is not 'converter'", () => {
+    // When the user is reporting from another tab (settings / extractor /
+    // single-stage etc.), advanced_params is not applicable — the
+    // converter-only feature toggles are not the user's current workflow.
+    // 用户在非 converter Tab 提交反馈时，高级参数与当前工作流无关，
+    // 统一置 null，避免给后端带入误导性的历史值。
+    useWidgetStore.setState({ activeTab: "settings" });
+    useConverterStore.setState({
+      // Converter store has advanced fields set but the active tab is
+      // elsewhere — the builder must still return null.
+      enable_relief: true,
+      largeFormatEnabled: true,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.advanced_params).toBeNull();
+  });
+
+  it("preserves every other payload field when advanced_params is added (non-regression)", () => {
+    // Adding advanced_params must not drop, rename, or reorder any
+    // existing bug-report context field. Guard the representative fields
+    // that downstream consumers (frontend uploader, backend index, email
+    // relay) already rely on.
+    // 新增 advanced_params 不能把现有的反馈字段删掉或改名；这里挑选若干
+    // 下游已经在用的字段做兜底断言。
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "converter-session",
+      color_mode: ColorMode.EIGHT_COLOR,
+      lut_name: "non-regression-lut",
+    });
+
+    const context = collectBugReportContext();
+
+    // Representative fields must still exist with their expected shapes.
+    expect(context.url).toBe("http://localhost:5174/settings");
+    expect(context.active_tab).toBe("converter");
+    expect(context.color_mode).toBe("8-Color Max");
+    expect(context.action_history).toEqual([]);
+    expect(context.active_final_artifact_ref).toBeNull();
+
+    // No previously exported key was renamed — each representative key
+    // must still appear on the payload object.
+    const keys = Object.keys(context);
+    for (const key of [
+      "url",
+      "user_agent",
+      "screen_width",
+      "screen_height",
+      "device_pixel_ratio",
+      "app_version",
+      "language",
+      "theme",
+      "active_tab",
+      "active_session_ids",
+      "color_mode",
+      "lut_name",
+      "source_version",
+      "selected_native_brand_key",
+      "selected_native_db_names",
+      "selected_material_dir_names",
+      "material_layer_count",
+      "material_layer_height_mm",
+      "material_backing_material_dir_name",
+      "recent_client_logs",
+      "action_history",
+      "session_history",
+      "active_original_image_ref",
+      "active_final_artifact_ref",
+      "advanced_params",
+    ]) {
+      expect(keys).toContain(key);
+    }
   });
 });

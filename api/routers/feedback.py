@@ -42,6 +42,22 @@ _MAX_CLIENT_LOG_DEPTH = 4
 _MAX_CLIENT_LOG_ARRAY_ITEMS = 20
 _MAX_CLIENT_LOG_OBJECT_KEYS = 24
 _MAX_CLIENT_LOG_STRING_LENGTH = 1200
+
+# Relaxed limits for the grouped ``advanced_params`` capture. They are wider
+# than the generic client-log sanitizer above because the frontend builder
+# already trims the shape (≤11 groups, ≤64 color_height_map entries, ≤20
+# fridge magnets, ≤32 replacement regions) and emits a structured payload
+# rather than an arbitrary log blob.
+#
+# ``advanced_params`` 分组专用的放宽限制。前端 builder 已经裁剪好结构
+# （最多 11 个分组、color_height_map 最多 64 项、冰箱贴最多 20 项、颜色替换
+# 最多 32 项），因此服务端可以比通用客户端日志 sanitizer 放得更宽。
+_ADV_PARAMS_MAX_DEPTH = 6
+_ADV_PARAMS_MAX_ARRAY_ITEMS = 64
+_ADV_PARAMS_MAX_OBJECT_KEYS = 24
+_ADV_PARAMS_COLOR_HEIGHT_MAP_MAX_KEYS = 64
+_ADV_PARAMS_MAX_TOTAL_BYTES = 16_384
+
 _RATE_LIMIT_HITS: dict[str, deque[float]] = {}
 
 
@@ -78,6 +94,96 @@ def _sanitize_feedback_jsonish(value: Any, *, depth: int = 0) -> Any:
             key = _truncate_feedback_text(str(raw_key), 120)
             sanitized[key] = _sanitize_feedback_jsonish(raw_value, depth=depth + 1)
         remaining = len(items) - _MAX_CLIENT_LOG_OBJECT_KEYS
+        if remaining > 0:
+            sanitized["__truncated_keys"] = remaining
+        return sanitized
+    return _truncate_feedback_text(str(value))
+
+
+def _sanitize_advanced_params(
+    value: Any, *, depth: int = 0, path: str = ""
+) -> Any:
+    """Dedicated sanitizer for the grouped ``advanced_params`` payload.
+
+    针对分组 ``advanced_params`` 载荷的专用 sanitizer。
+
+    Mirrors :func:`_sanitize_feedback_jsonish` structurally (same scalar
+    handling, same ``<truncated:depth>`` / ``<truncated:N>`` /
+    ``__truncated_keys`` markers, same reuse of
+    :func:`_truncate_feedback_text`) but uses the relaxed
+    ``advanced_params`` limits: depth ≤ 6, array items ≤ 64, object keys
+    ≤ 24. A path-level exception raises the object-key cap to 64 for the
+    ``relief.color_height_map`` sub-object so a full frontend-trimmed color
+    height map (≤ 64 entries) survives backend sanitization without losing
+    keys.
+
+    与 :func:`_sanitize_feedback_jsonish` 结构一致（相同的标量处理、相同的
+    ``<truncated:depth>`` / ``<truncated:N>`` / ``__truncated_keys`` 标记、
+    同样复用 :func:`_truncate_feedback_text`），但使用 ``advanced_params``
+    的放宽上限：深度 ≤ 6、数组元素 ≤ 64、对象 key ≤ 24。对
+    ``relief.color_height_map`` 这一路径做例外处理，将 object key 上限
+    提升到 64，确保前端裁剪后的完整 color height map（最多 64 项）能被
+    后端原样保留。
+
+    Args:
+        value: The value being sanitized (scalar, list, tuple, dict, or
+            other). Unknown types are coerced via ``str()``.
+            需要清洗的值（标量、list、tuple、dict 或其它类型）。未知类型将
+            通过 ``str()`` 强制转换。
+        depth: Current recursion depth. Callers pass ``0`` for the root.
+            当前递归深度。调用方在根层传 ``0``。
+        path: Dotted path of the current node relative to the root (for
+            example ``"relief.color_height_map"``). Used only to apply the
+            ``relief.color_height_map`` object-key exception.
+            当前节点相对根的点号路径（例如 ``"relief.color_height_map"``），
+            仅用于启用 ``relief.color_height_map`` 的 object-key 例外规则。
+
+    Returns:
+        A JSON-safe value: preserved scalars, truncated strings, or
+        sanitized list/dict substructures with truncation markers when
+        limits are exceeded.
+        返回 JSON 友好的值：保留的标量、截断后的字符串、或者携带截断
+        标记的 list/dict 子结构（超出上限时）。
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _truncate_feedback_text(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else str(value)
+    if depth >= _ADV_PARAMS_MAX_DEPTH:
+        return "<truncated:depth>"
+    if isinstance(value, (list, tuple)):
+        items = [
+            _sanitize_advanced_params(
+                item, depth=depth + 1, path=f"{path}[]"
+            )
+            for item in list(value)[:_ADV_PARAMS_MAX_ARRAY_ITEMS]
+        ]
+        remaining = len(value) - _ADV_PARAMS_MAX_ARRAY_ITEMS
+        if remaining > 0:
+            items.append(f"<truncated:{remaining}>")
+        return items
+    if isinstance(value, dict):
+        # Path-level exception: relief.color_height_map allows 64 keys so
+        # the frontend-trimmed color height map survives intact.
+        # 路径级例外：relief.color_height_map 允许 64 个 key，保留前端
+        # 已裁剪的 color height map。
+        max_keys = _ADV_PARAMS_MAX_OBJECT_KEYS
+        if path == "relief.color_height_map":
+            max_keys = _ADV_PARAMS_COLOR_HEIGHT_MAP_MAX_KEYS
+
+        sanitized: dict[str, Any] = {}
+        items = list(value.items())
+        for raw_key, raw_value in items[:max_keys]:
+            key = _truncate_feedback_text(str(raw_key), 120)
+            child_path = f"{path}.{raw_key}" if path else str(raw_key)
+            sanitized[key] = _sanitize_advanced_params(
+                raw_value, depth=depth + 1, path=child_path
+            )
+        remaining = len(items) - max_keys
         if remaining > 0:
             sanitized["__truncated_keys"] = remaining
         return sanitized
@@ -176,6 +282,15 @@ class BugReportContext(BaseModel):
     active_original_image_ref: BugReportOriginalImageRef | None = None
     active_final_artifact_ref: BugReportFinalArtifactRef | None = None
 
+    # Grouped advanced generation parameters captured from the converter store.
+    # Kept as a free-form dict here; the dedicated sanitizer in
+    # ``submit_bug_report`` enforces depth/size limits before it is persisted
+    # to ticket.json, which keeps this validator cheap and the sanitizer
+    # reusable from the ``action_history`` path.
+    # 采集自 ConverterStore 的分组高级生成参数。此处仅做形状校验（dict 或 null），
+    # 真正的深度/大小裁剪由 submit_bug_report 中的专用 sanitizer 完成，便于复用。
+    advanced_params: dict[str, Any] | None = None
+
     @field_validator("recent_client_logs", mode="before")
     @classmethod
     def _validate_recent_client_logs(cls, value: Any) -> list[dict[str, Any]]:
@@ -197,6 +312,18 @@ class BugReportContext(BaseModel):
         """Bound action history and sanitize every entry.
 
         限制操作历史长度，并对每条记录做安全裁剪。
+
+        Each entry's nested ``snapshot.advanced_params`` (when present) is
+        extracted before the generic sanitizer runs and is then routed
+        through the dedicated :func:`_sanitize_advanced_params` so the
+        relaxed depth/key limits apply there. The original request payload
+        is never mutated — shallow copies of the entry and snapshot are
+        used for extraction.
+
+        嵌套在 ``snapshot.advanced_params`` 下的高级参数会先被取出，避免
+        受限于通用 sanitizer 的严格深度/key 上限，再通过专用
+        :func:`_sanitize_advanced_params` 单独清洗。清洗过程使用 entry
+        与 snapshot 的浅拷贝，原始请求载荷不会被修改。
         """
 
         if not isinstance(value, list):
@@ -206,7 +333,69 @@ class BugReportContext(BaseModel):
         for item in tail:
             if not isinstance(item, dict):
                 continue
-            sanitized.append(_sanitize_feedback_jsonish(item))  # type: ignore[arg-type]
+
+            # Work on shallow copies so the incoming Pydantic payload is
+            # never mutated by this pre-processing step.
+            # 使用浅拷贝处理，避免污染原始请求载荷。
+            item_copy: dict[str, Any] = dict(item)
+            extracted_advanced_params: Any = None
+            had_advanced_params = False
+
+            raw_snapshot = item_copy.get("snapshot")
+            if isinstance(raw_snapshot, dict):
+                snapshot_copy = dict(raw_snapshot)
+                if "advanced_params" in snapshot_copy:
+                    had_advanced_params = True
+                    extracted_advanced_params = snapshot_copy.pop(
+                        "advanced_params"
+                    )
+                    item_copy["snapshot"] = snapshot_copy
+
+            sanitized_item = _sanitize_feedback_jsonish(item_copy)  # type: ignore[arg-type]
+
+            if had_advanced_params:
+                if extracted_advanced_params is None:
+                    sanitized_value: Any = None
+                elif isinstance(extracted_advanced_params, dict):
+                    try:
+                        sanitized_value = _sanitize_advanced_params(
+                            extracted_advanced_params
+                        )
+                    except Exception as exc:  # noqa: BLE001 - boundary guard
+                        log.warning(
+                            "Advanced params sanitization failed for "
+                            "action_history entry.",
+                            extra={
+                                "event": "feedback_advanced_params_failed",
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "surface": "action_history",
+                            },
+                        )
+                        sanitized_value = None
+                else:
+                    log.warning(
+                        "Advanced params sanitization failed for "
+                        "action_history entry.",
+                        extra={
+                            "event": "feedback_advanced_params_failed",
+                            "error_type": "TypeError",
+                            "error_message": (
+                                "advanced_params must be a dict or null; "
+                                f"got {type(extracted_advanced_params).__name__}"
+                            ),
+                            "surface": "action_history",
+                        },
+                    )
+                    sanitized_value = None
+
+                snapshot_out = sanitized_item.get("snapshot")
+                if not isinstance(snapshot_out, dict):
+                    snapshot_out = {}
+                snapshot_out["advanced_params"] = sanitized_value
+                sanitized_item["snapshot"] = snapshot_out
+
+            sanitized.append(sanitized_item)
         return sanitized
 
     @field_validator("session_history", mode="before")
@@ -226,6 +415,31 @@ class BugReportContext(BaseModel):
                 continue
             sanitized.append(_sanitize_feedback_jsonish(item))  # type: ignore[arg-type]
         return sanitized
+
+    @field_validator("advanced_params", mode="before")
+    @classmethod
+    def _validate_advanced_params(cls, value: Any) -> dict[str, Any] | None:
+        """Shape-check ``advanced_params`` cheaply; accept ``dict`` or ``None``.
+
+        仅做形状校验：接受 ``dict`` 或 ``None``，其它类型以 422 拒绝。
+
+        This validator intentionally does not recurse into the payload; the
+        dedicated ``_sanitize_advanced_params`` sanitizer (called from
+        ``submit_bug_report``) enforces depth/size/bytes limits before the
+        value is persisted. Keeping the validator cheap lets Pydantic-time
+        validation stay fast and lets the sanitizer be reused from the
+        ``action_history`` snapshot pre-processing path.
+
+        该校验器只做形状判断，不递归遍历载荷；深度/大小限制由专用
+        ``_sanitize_advanced_params`` sanitizer 在 ``submit_bug_report`` 中执行，
+        同时可被 ``action_history`` 中嵌套 snapshot 的预处理复用。
+        """
+
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        raise ValueError("advanced_params must be a dict or null")
 
 
 class BugReportRequest(BaseModel):
@@ -602,6 +816,41 @@ async def submit_bug_report(
     ticket_dir = ticket_dir_for(feedback_root, ticket_id, now)
 
     context_dump = request.model_dump(mode="json").get("context") or {}
+
+    # Dedicated sanitization for ``advanced_params``. Pydantic's validator only
+    # shape-checks the field (dict-or-null); the real depth/size enforcement
+    # runs here so it can share the same sanitizer used for action_history
+    # snapshots. On overflow we fall back to the *same* shape the frontend
+    # emits for its size fallback (``AdvancedParamsSizeTrimmed``): a two-key
+    # object ``{"_size_trimmed": True, "_original_byte_length": N}``. We do
+    # not introduce a third variant like ``{"_sanitizer_trimmed": True}``.
+    #
+    # 专用的 ``advanced_params`` 深度/大小裁剪。Pydantic 校验器只做 dict/None
+    # 形状校验，真正的裁剪在这里完成，便于与 action_history 中的嵌套
+    # snapshot 复用同一 sanitizer。超限时回落到与前端一致的 size fallback
+    # 形状（``AdvancedParamsSizeTrimmed``），不引入第三种结构。
+    if context_dump.get("advanced_params") is not None:
+        try:
+            sanitized_ap = _sanitize_advanced_params(context_dump["advanced_params"])
+            ap_json = json.dumps(sanitized_ap, ensure_ascii=False)
+            original_byte_length = len(ap_json.encode("utf-8"))
+            if original_byte_length > _ADV_PARAMS_MAX_TOTAL_BYTES:
+                sanitized_ap = {
+                    "_size_trimmed": True,
+                    "_original_byte_length": original_byte_length,
+                }
+            context_dump["advanced_params"] = sanitized_ap
+        except Exception as exc:  # noqa: BLE001 — sanitizer must never crash submit.
+            log.warning(
+                "Advanced params sanitization failed.",
+                extra={
+                    "event": "feedback_advanced_params_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            context_dump["advanced_params"] = None
+
     received_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     request_id = getattr(http_request.state, "request_id", None)
 

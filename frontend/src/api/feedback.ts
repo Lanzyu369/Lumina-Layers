@@ -1,6 +1,7 @@
 import apiClient from "./client";
 import type {
   ActionEntry,
+  AdvancedParams,
   SessionRingEntry,
 } from "../types/actionHistory";
 
@@ -69,6 +70,15 @@ export interface BugReportContextPayload {
    * bytes; the backend resolves the artifact through FileRegistry.
    */
   active_final_artifact_ref?: FinalArtifactRef | null;
+  /**
+   * Advanced generation parameters grouped by feature (Req 3.1). Present
+   * only when the active tab is "converter"; ``null`` otherwise. Optional
+   * for backward compatibility with clients that predate this field.
+   *
+   * 高级生成参数，按特性分组（Req 3.1）。仅在 converter Tab 激活时有值，
+   * 其它情况为 ``null``。为兼容旧客户端保留 optional 语义。
+   */
+  advanced_params?: AdvancedParams | null;
 }
 
 export interface BugReportRequestPayload {

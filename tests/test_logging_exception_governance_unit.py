@@ -56,7 +56,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 52
+EXCEPT_EXCEPTION_BASELINE = 54
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -220,6 +220,7 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_smtp_unconfigured",
     "feedback_email_attachment_skipped",
     "feedback_email_failed",
+    "feedback_advanced_params_failed",
 }
 SLICER_STRUCTURED_EVENTS = {
     "slicer_launch_done",

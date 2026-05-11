@@ -179,3 +179,173 @@ describe("useActionHistoryBootstrap", () => {
     expect(useActionHistoryStore.getState().history).toEqual([]);
   });
 });
+
+/**
+ * Tests for advanced_params snapshot population and the six tracked
+ * feature-toggle subscriptions added by the
+ * feedback-advanced-params-capture spec (tasks 3.3 and 3.4).
+ *
+ * 针对 feedback-advanced-params-capture 规格里新增的 advanced_params 快照
+ * 字段以及 6 个功能开关订阅的集成测试（任务 3.3 / 3.4）。
+ */
+describe("useActionHistoryBootstrap — advanced_params", () => {
+  const TRACKED_TOGGLE_FIELDS = [
+    "enable_relief",
+    "enable_outline",
+    "enable_cloisonne",
+    "enable_fridge_magnet",
+    "puzzleEnabled",
+    "largeFormatEnabled",
+  ] as const;
+
+  function resetTrackedToggles(): void {
+    // resetStores() above does not touch the 6 tracked toggles, so restore
+    // them to their false defaults between tests to avoid cross-test leakage.
+    // resetStores() 不覆盖这 6 个开关，这里显式回到 false 默认值以免串扰。
+    const reset: Record<string, boolean> = {};
+    for (const field of TRACKED_TOGGLE_FIELDS) reset[field] = false;
+    useConverterStore.setState(reset as never);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetStores();
+    resetTrackedToggles();
+    // Clear history again: the toggle reset above may have produced entries
+    // if a prior test left them non-default.
+    // 开关重置可能产生条目，这里再清一次历史。
+    useActionHistoryStore.getState()._resetForTests();
+  });
+
+  afterEach(() => {
+    resetTrackedToggles();
+    vi.useRealTimers();
+    resetStores();
+  });
+
+  it("snapshot on the converter tab includes a non-null full advanced_params", () => {
+    const { unmount } = renderHook(() => useActionHistoryBootstrap());
+    try {
+      act(() => {
+        useConverterStore.setState({ enable_relief: true } as never);
+      });
+      const history = useActionHistoryStore.getState().history;
+      expect(history).toHaveLength(1);
+      const entry = history[0];
+      expect(entry.action_type).toBe("advanced_param_change");
+      expect(entry.snapshot.active_tab).toBe("converter");
+      const ap = entry.snapshot.advanced_params;
+      expect(ap).not.toBeNull();
+      // Full shape: all 11 groups must be present as objects.
+      // 完整形态：11 个分组必须均为对象。
+      expect(ap).toMatchObject({
+        dimensions: expect.any(Object),
+        generation: expect.any(Object),
+        relief: expect.objectContaining({ enable_relief: true }),
+        outline: expect.any(Object),
+        cloisonne: expect.any(Object),
+        coating: expect.any(Object),
+        loop: expect.any(Object),
+        fridge_magnet: expect.any(Object),
+        puzzle: expect.any(Object),
+        large_format: expect.any(Object),
+        color_replacement: expect.any(Object),
+      });
+    } finally {
+      unmount();
+    }
+  });
+
+  it("snapshot on a non-converter tab has advanced_params: null", () => {
+    const { unmount } = renderHook(() => useActionHistoryBootstrap());
+    try {
+      act(() => {
+        useWidgetStore.setState({ activeTab: "extractor" as never } as never);
+      });
+      const switchEntry = useActionHistoryStore
+        .getState()
+        .history.find((e) => e.action_type === "switch_tab");
+      expect(switchEntry).toBeDefined();
+      expect(switchEntry!.snapshot.active_tab).toBe("extractor");
+      expect(switchEntry!.snapshot.advanced_params).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
+  it.each(TRACKED_TOGGLE_FIELDS.map((f) => [f] as const))(
+    "toggling %s produces exactly one advanced_param_change with the correct from/to",
+    (field) => {
+      const { unmount } = renderHook(() => useActionHistoryBootstrap());
+      try {
+        act(() => {
+          useConverterStore.setState({ [field]: true } as never);
+        });
+        const entries = useActionHistoryStore
+          .getState()
+          .history.filter((e) => e.action_type === "advanced_param_change");
+        expect(entries).toHaveLength(1);
+        expect(entries[0].changed_fields).toEqual({
+          [field]: { from: false, to: true },
+        });
+      } finally {
+        unmount();
+      }
+    },
+  );
+
+  it("setting a toggle to its existing value produces zero entries", () => {
+    const { unmount } = renderHook(() => useActionHistoryBootstrap());
+    try {
+      act(() => {
+        // enable_relief is already false after reset; re-setting false is a no-op.
+        // enable_relief 复位后为 false；再次 setState 为 false 不应产生条目。
+        useConverterStore.setState({ enable_relief: false } as never);
+      });
+      const entries = useActionHistoryStore
+        .getState()
+        .history.filter((e) => e.action_type === "advanced_param_change");
+      expect(entries).toEqual([]);
+    } finally {
+      unmount();
+    }
+  });
+
+  it("two toggles flipped in the same setState produce two separate entries", () => {
+    const { unmount } = renderHook(() => useActionHistoryBootstrap());
+    try {
+      act(() => {
+        // subscribeWithSelector fires once per selector whose value changed,
+        // so a single setState with two fields yields two entries.
+        // subscribeWithSelector 按"值真正变化的 selector"逐个触发，因此
+        // 单次 setState 改两个字段会产生两条独立记录。
+        useConverterStore.setState({
+          enable_relief: true,
+          enable_outline: true,
+        } as never);
+      });
+      const entries = useActionHistoryStore
+        .getState()
+        .history.filter((e) => e.action_type === "advanced_param_change");
+      expect(entries).toHaveLength(2);
+      const changedKeys = entries
+        .flatMap((e) => Object.keys(e.changed_fields ?? {}))
+        .sort();
+      expect(changedKeys).toEqual(["enable_outline", "enable_relief"]);
+      const reliefEntry = entries.find(
+        (e) => e.changed_fields && "enable_relief" in e.changed_fields,
+      );
+      const outlineEntry = entries.find(
+        (e) => e.changed_fields && "enable_outline" in e.changed_fields,
+      );
+      expect(reliefEntry?.changed_fields).toEqual({
+        enable_relief: { from: false, to: true },
+      });
+      expect(outlineEntry?.changed_fields).toEqual({
+        enable_outline: { from: false, to: true },
+      });
+    } finally {
+      unmount();
+    }
+  });
+});

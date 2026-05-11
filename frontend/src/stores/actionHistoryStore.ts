@@ -51,6 +51,7 @@ const DEFAULT_SNAPSHOT: WorkflowSnapshot = {
   material_layer_height_mm: null,
   material_backing_material_dir_name: null,
   active_tab: "unknown",
+  advanced_params: null,
 };
 
 let _snapshotReader: () => WorkflowSnapshot = () => DEFAULT_SNAPSHOT;

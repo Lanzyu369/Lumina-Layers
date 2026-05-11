@@ -17,15 +17,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
+from api.structured_logging import get_logger
+
 __all__ = [
     "generate_index_markdown",
     "generate_summary_text",
 ]
 
+log = get_logger(__name__)
+
 
 _MISSING = "(missing)"
 _RECENT_ACTIONS_LIMIT = 10
 _RECENT_API_ERRORS_LIMIT = 5
+
+# Fallback content emitted when ``context.advanced_params`` is missing, not a
+# dict, or when the render path raises. The markdown fallback is used by
+# ``generate_index_markdown``; the summary fallback is reserved for task 7.2.
+# 高级参数渲染的兜底字符串：缺失 / 非 dict / 渲染抛异常时使用。
+_ADVANCED_PARAMS_FALLBACK_MD = "## Advanced Generation Parameters\n\n_(not captured)_\n"
+_ADVANCED_PARAMS_FALLBACK_SUMMARY = "高级参数：(未采集)"
 
 
 def _safe_str(value: Any) -> str:
@@ -223,6 +234,188 @@ def _reproduction_suggestion(
     return lines
 
 
+# Feature toggles surfaced in the index markdown. Each entry maps a top-level
+# ``advanced_params`` group key to the canonical toggle field inside that
+# group. The order is the display order in the rendered section.
+# index.md 中列出的功能开关：组键 -> 组内开关字段名。
+_INDEX_TOGGLE_GROUPS: tuple[tuple[str, str], ...] = (
+    ("relief", "enable_relief"),
+    ("outline", "enable_outline"),
+    ("cloisonne", "enable_cloisonne"),
+    ("coating", "enable_coating"),
+    ("loop", "add_loop"),
+    ("fridge_magnet", "enable_fridge_magnet"),
+    ("puzzle", "puzzleEnabled"),
+    ("large_format", "largeFormatEnabled"),
+)
+
+
+def _format_advanced_params_section(context: dict[str, Any]) -> str:
+    """Render the Advanced Generation Parameters markdown section.
+
+    渲染 "高级生成参数" 的 markdown 段落。
+
+    Returns the fallback text when ``context.advanced_params`` is missing or
+    not a dict. May raise for malformed inner shapes — the caller
+    (``_render_advanced_params_section_safe``) owns the try/except and
+    replaces any failure with the same fallback.
+
+    Args:
+        context: The ticket context dict, i.e. ``payload["context"]``.
+
+    Returns:
+        str: A markdown snippet ending in ``\\n``; either a populated section
+            or ``_ADVANCED_PARAMS_FALLBACK_MD``.
+    """
+    ap = context.get("advanced_params")
+    if not isinstance(ap, dict) or not ap:
+        return _ADVANCED_PARAMS_FALLBACK_MD
+
+    lines: list[str] = ["## Advanced Generation Parameters", ""]
+
+    # Dimensions line.
+    dims = ap.get("dimensions")
+    if isinstance(dims, dict):
+        width = dims.get("target_width_mm", _MISSING)
+        height = dims.get("target_height_mm", _MISSING)
+    else:
+        width = _MISSING
+        height = _MISSING
+    lines.append(f"- Dimensions: {_safe_str(width)} × {_safe_str(height)} mm")
+
+    # Generation mode fields.
+    generation = ap.get("generation")
+    if isinstance(generation, dict):
+        structure_mode = generation.get("structure_mode")
+        modeling_mode = generation.get("modeling_mode")
+    else:
+        structure_mode = None
+        modeling_mode = None
+    lines.append(f"- structure_mode: {_safe_str(structure_mode)}")
+    lines.append(f"- modeling_mode: {_safe_str(modeling_mode)}")
+
+    # Feature toggle states.
+    for group_key, toggle_key in _INDEX_TOGGLE_GROUPS:
+        group = ap.get(group_key)
+        if not isinstance(group, dict):
+            lines.append(f"- {toggle_key}: {_MISSING}")
+            continue
+        value = group.get(toggle_key)
+        if value is True:
+            lines.append(f"- {toggle_key}: enabled")
+        elif value is False:
+            lines.append(f"- {toggle_key}: disabled")
+        else:
+            lines.append(f"- {toggle_key}: {_MISSING}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_advanced_params_section_safe(context: dict[str, Any]) -> str:
+    """Guarded wrapper around :func:`_format_advanced_params_section`.
+
+    局部守卫：高级参数渲染失败不应拖垮整个 index 生成；
+    任何异常都会落到 WARNING 日志并返回兜底文本。
+
+    Args:
+        context: The ticket context dict.
+
+    Returns:
+        str: The rendered section or ``_ADVANCED_PARAMS_FALLBACK_MD`` on failure.
+    """
+    try:
+        return _format_advanced_params_section(context)
+    except Exception as exc:  # noqa: BLE001 - defensive boundary
+        log.warning(
+            "Advanced params index rendering failed.",
+            extra={
+                "event": "feedback_advanced_params_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "surface": "index_markdown",
+            },
+        )
+        return _ADVANCED_PARAMS_FALLBACK_MD
+
+
+# Feature toggles surfaced in the one-line Chinese summary. Each entry maps a
+# top-level ``advanced_params`` group key to the canonical toggle field inside
+# that group and the short Chinese label to display. Order is the display
+# order in the summary line. Note this list has six entries (no coating,
+# no loop) per design; summary keeps only user-facing features that matter
+# for quick triage.
+# summary.txt 里列出的开关：组键 -> 组内开关字段名 -> 中文短标签。
+_SUMMARY_TOGGLE_CHECKS: tuple[tuple[str, str, str], ...] = (
+    ("relief", "enable_relief", "浮雕"),
+    ("outline", "enable_outline", "描边"),
+    ("cloisonne", "enable_cloisonne", "景泰蓝"),
+    ("fridge_magnet", "enable_fridge_magnet", "冰箱贴"),
+    ("puzzle", "puzzleEnabled", "拼图"),
+    ("large_format", "largeFormatEnabled", "大幅面"),
+)
+
+
+def _format_advanced_params_summary_line(context: dict[str, Any]) -> str:
+    """Render a single-line Chinese summary of advanced params.
+
+    产生形如 ``"尺寸 {w}×{h} mm，已开启：{labels or 无}。"`` 的中文单行摘要。
+
+    ``advanced_params`` 缺失、不是 dict、或带有 ``_size_trimmed`` 标记时返回
+    兜底文本 ``_ADVANCED_PARAMS_FALLBACK_SUMMARY``。调用方
+    （``_render_advanced_params_summary_safe``）负责 try/except。
+
+    Args:
+        context: The ticket context dict, i.e. ``payload["context"]``.
+
+    Returns:
+        str: A single line without trailing newline; either the populated
+            summary or ``_ADVANCED_PARAMS_FALLBACK_SUMMARY``.
+    """
+    ap = context.get("advanced_params")
+    if not isinstance(ap, dict) or ap.get("_size_trimmed"):
+        return _ADVANCED_PARAMS_FALLBACK_SUMMARY
+
+    dims = ap.get("dimensions") if isinstance(ap.get("dimensions"), dict) else {}
+    width = dims.get("target_width_mm", "?")
+    height = dims.get("target_height_mm", "?")
+
+    active_labels: list[str] = []
+    for group_key, toggle_key, label in _SUMMARY_TOGGLE_CHECKS:
+        group = ap.get(group_key)
+        if isinstance(group, dict) and group.get(toggle_key) is True:
+            active_labels.append(label)
+    toggles_str = "、".join(active_labels) if active_labels else "无"
+    return f"尺寸 {width}×{height} mm，已开启：{toggles_str}。"
+
+
+def _render_advanced_params_summary_safe(context: dict[str, Any]) -> str:
+    """Guarded wrapper around :func:`_format_advanced_params_summary_line`.
+
+    局部守卫：高级参数摘要渲染失败不应拖垮整个 summary 生成；
+    任何异常都会落到 WARNING 日志并返回兜底文本。
+
+    Args:
+        context: The ticket context dict.
+
+    Returns:
+        str: The rendered one-line summary or
+            ``_ADVANCED_PARAMS_FALLBACK_SUMMARY`` on failure.
+    """
+    try:
+        return _format_advanced_params_summary_line(context)
+    except Exception as exc:  # noqa: BLE001 - defensive boundary
+        log.warning(
+            "Advanced params summary rendering failed.",
+            extra={
+                "event": "feedback_advanced_params_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "surface": "summary_text",
+            },
+        )
+        return _ADVANCED_PARAMS_FALLBACK_SUMMARY
+
+
 def generate_index_markdown(
     ticket_id: str,
     ticket_dir: Path,
@@ -285,6 +478,8 @@ def generate_index_markdown(
         "## Workflow Snapshot (at submit time)",
         "",
         *snapshot_lines,
+        "",
+        _render_advanced_params_section_safe(context).rstrip(),
         "",
         "## Recent Actions (last 10)",
         "",
@@ -373,11 +568,14 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
             f"层数：{layer_count}；层高：{layer_height}mm；底板：{backing}。"
         )
 
+    advanced_line = _render_advanced_params_summary_safe(context)
+
     summary = (
         f"工单 {ticket_id} 于 {received} 受理。用户描述：\n"
         f"\"{description}\"\n\n"
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
+        f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"
         f"最近 API 错误：{' / '.join(error_lines) if error_lines else '(无)'}。\n\n"
         f"复现资源：\n"

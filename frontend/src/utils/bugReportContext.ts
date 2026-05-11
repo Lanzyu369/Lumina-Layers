@@ -8,6 +8,7 @@ import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { buildAdvancedParams } from "./advancedParamsBuilder";
 import { getRecentClientLogs } from "./clientLog";
 
 declare const __LUMINA_VERSION__: string | undefined;
@@ -147,5 +148,8 @@ export function collectBugReportContext(): BugReportContextPayload {
       singleStage.sessionId ?? null,
     ),
     active_final_artifact_ref: deriveFinalArtifact(),
+    advanced_params: buildAdvancedParams(converter, widget.activeTab, {
+      maxBytes: 8192,
+    }),
   };
 }

@@ -68,6 +68,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
             "session_history": [],
             "active_original_image_ref": None,
             "active_final_artifact_ref": None,
+            "advanced_params": None,
         },
         "screenshot_data_url": None,
     }
@@ -617,3 +618,373 @@ def test_submit_bug_report_rejects_svg_screenshot(
     assert len(warnings) == 1
     assert warnings[0].error_type == "UnsupportedMimeType"
     assert warnings[0].mime_type == "image/svg+xml"
+
+
+# ---------------------------------------------------------------------------
+# Task 6.7: advanced_params schema / sanitizer integration tests
+# ---------------------------------------------------------------------------
+
+
+def _full_advanced_params() -> dict[str, Any]:
+    """Return a fully-populated grouped ``advanced_params`` payload.
+
+    构造覆盖全部 11 个分组的 ``advanced_params`` 测试载荷。
+    """
+    return {
+        "dimensions": {
+            "target_width_mm": 120,
+            "target_height_mm": 80,
+            "spacer_thick": 0.06,
+            "base_spacer_thick": 0.12,
+        },
+        "generation": {
+            "structure_mode": "standard",
+            "modeling_mode": "flat",
+            "color_layers": 4,
+            "layer_height_mm": 0.08,
+            "model_enable": False,
+            "model_only": False,
+            "model_threshold": None,
+            "model_margin": None,
+            "quantize_colors": 8,
+            "quantize_colors_unlocked": False,
+            "enable_cleanup": True,
+            "hue_enable": True,
+            "chroma_gate": 0.5,
+            "use_lut_constrained": False,
+            "auto_dynamic_range": True,
+            "separate_backing": False,
+        },
+        "relief": {
+            "enable_relief": True,
+            "color_height_map": {"#ff0000": 0.1, "#00ff00": 0.2},
+            "heightmap_max_height": 0.6,
+            "autoHeightMode": "linear",
+            "heightmapFile": None,
+            "hasHeightmapThumbnail": False,
+        },
+        "outline": {"enable_outline": True, "outline_width": 0.2},
+        "cloisonne": {
+            "enable_cloisonne": False,
+            "wire_width_mm": None,
+            "wire_height_mm": None,
+        },
+        "coating": {"enable_coating": False, "coating_height_mm": None},
+        "loop": {
+            "add_loop": False,
+            "loop_width": None,
+            "loop_length": None,
+            "loop_hole": None,
+            "loop_angle": None,
+            "loop_offset_x": None,
+            "loop_offset_y": None,
+            "loop_position_preset": None,
+        },
+        "fridge_magnet": {
+            "enable_fridge_magnet": False,
+            "selectedFridgeMagnetId": None,
+            "fridge_magnets": None,
+        },
+        "puzzle": {
+            "puzzleEnabled": False,
+            "puzzleStyle": None,
+            "puzzleSizingMode": None,
+            "pieceWidthMm": None,
+            "pieceHeightMm": None,
+            "puzzleRows": None,
+            "puzzleCols": None,
+            "targetPieceCount": None,
+            "connectorStyle": None,
+            "labelsEnabled": None,
+            "engraveBackLabels": None,
+            "irregularityStrength": None,
+            "minNeckWidthMm": None,
+        },
+        "large_format": {
+            "largeFormatEnabled": False,
+            "tileWidthMm": None,
+            "tileHeightMm": None,
+        },
+        "color_replacement": {"replacement_regions": None},
+    }
+
+
+def test_submit_bug_report_accepts_grouped_advanced_params(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Pydantic accepts ``advanced_params`` as a grouped 11-key dict and the
+    router persists it into ``ticket.json``.
+
+    Pydantic 接收包含全部 11 个分组的 ``advanced_params``，路由把它写入
+    ``ticket.json``。
+    """
+    payload = _payload()
+    payload["context"]["advanced_params"] = _full_advanced_params()
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    advanced = ticket_json["context"]["advanced_params"]
+    assert isinstance(advanced, dict)
+    # All 11 group keys are preserved end-to-end (size is far below 16 KB).
+    expected_groups = {
+        "dimensions",
+        "generation",
+        "relief",
+        "outline",
+        "cloisonne",
+        "coating",
+        "loop",
+        "fridge_magnet",
+        "puzzle",
+        "large_format",
+        "color_replacement",
+    }
+    assert expected_groups.issubset(advanced.keys())
+    assert advanced["dimensions"]["target_width_mm"] == 120
+    assert advanced["relief"]["color_height_map"] == {
+        "#ff0000": 0.1,
+        "#00ff00": 0.2,
+    }
+
+
+def test_submit_bug_report_accepts_null_advanced_params(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """``advanced_params: None`` round-trips untouched.
+
+    显式传 ``None`` 时原样写回 ``ticket.json``。
+    """
+    payload = _payload()
+    payload["context"]["advanced_params"] = None
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["context"]["advanced_params"] is None
+
+
+def test_submit_bug_report_accepts_missing_advanced_params(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """Old clients that omit the field still succeed; default is ``None``.
+
+    老客户端不传 ``advanced_params`` 时仍然成功，默认值为 ``None``。
+    """
+    payload = _payload()
+    payload["context"].pop("advanced_params", None)
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["context"]["advanced_params"] is None
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        [],
+        ["not", "a", "dict"],
+        "string-advanced-params",
+        123,
+    ],
+    ids=["empty-list", "list", "string", "number"],
+)
+def test_submit_bug_report_rejects_non_dict_advanced_params(
+    client: TestClient,
+    bad_value: Any,
+) -> None:
+    """Non-dict ``advanced_params`` values are rejected at validation time.
+
+    ``advanced_params`` 不是 dict/None 时，Pydantic 返回 422。
+    """
+    payload = _payload()
+    payload["context"]["advanced_params"] = bad_value
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_submit_bug_report_falls_back_when_sanitizer_raises(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A crashing sanitizer is caught; request succeeds, advanced_params is ``None``.
+
+    sanitizer 抛异常时请求仍然成功，``ticket.json`` 里的
+    ``context.advanced_params`` 被降级为 ``None``。
+    """
+
+    def _raise(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("sanitizer exploded")
+
+    monkeypatch.setattr(
+        "api.routers.feedback._sanitize_advanced_params", _raise
+    )
+    _capture_feedback_logger(caplog, logging.WARNING)
+
+    payload = _payload()
+    payload["context"]["advanced_params"] = _full_advanced_params()
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["context"]["advanced_params"] is None
+
+    warnings = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_advanced_params_failed"
+    ]
+    assert warnings, "Expected a feedback_advanced_params_failed WARNING"
+    assert warnings[0].error_type == "RuntimeError"
+
+
+def test_submit_bug_report_size_overflow_emits_trimmed_shape(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """When the sanitized ``advanced_params`` exceeds 16 KB, ticket.json stores
+    exactly ``{"_size_trimmed": True, "_original_byte_length": N}`` — never a
+    third shape.
+
+    sanitized ``advanced_params`` 超过 16 KB 上限时，``ticket.json`` 里
+    的 advanced_params 固定为 ``{"_size_trimmed": True,
+    "_original_byte_length": N}``，不会出现第三种形态。
+    """
+    # 15 × 1200-char strings sit under the 1200-char per-string cap but
+    # together serialize to ~18 KB, guaranteed to cross the 16 KB total cap.
+    # 每个字符串恰好不触发 _truncate_feedback_text，但总体积会超过 16 KB。
+    payload_advanced: dict[str, Any] = _full_advanced_params()
+    payload_advanced["generation"] = {
+        f"field_{i:02d}": "x" * 1200 for i in range(15)
+    }
+
+    payload = _payload()
+    payload["context"]["advanced_params"] = payload_advanced
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    advanced = ticket_json["context"]["advanced_params"]
+
+    assert isinstance(advanced, dict)
+    # The shape is exactly two keys — no third variant.
+    assert set(advanced.keys()) == {"_size_trimmed", "_original_byte_length"}
+    assert advanced["_size_trimmed"] is True
+    assert isinstance(advanced["_original_byte_length"], int)
+    assert advanced["_original_byte_length"] > 16_384
+
+
+def test_submit_bug_report_preserves_action_history_advanced_params(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """``action_history`` snapshots keep their full ``advanced_params`` (e.g.
+    a 64-key ``relief.color_height_map``) through the generic + dedicated
+    sanitization pipeline.
+
+    ``action_history`` 中的 snapshot 经过通用 + 专用 sanitizer 后，嵌套的
+    ``advanced_params``（例如 64 键的 ``relief.color_height_map``）被完整
+    保留。
+    """
+    snapshot_advanced = _full_advanced_params()
+    snapshot_advanced["relief"] = {
+        "enable_relief": True,
+        "color_height_map": {f"#{i:06x}": float(i) * 0.01 for i in range(64)},
+        "heightmap_max_height": 0.5,
+        "autoHeightMode": "linear",
+        "heightmapFile": None,
+        "hasHeightmapThumbnail": False,
+    }
+
+    payload = _payload()
+    payload["context"]["action_history"] = [
+        {
+            "timestamp": 1747000000000,
+            "action_type": "advanced_param_change",
+            "changed_fields": {
+                "enable_relief": {"from": False, "to": True}
+            },
+            "snapshot": {
+                "active_tab": "converter",
+                "source_version": "legacy",
+                "advanced_params": snapshot_advanced,
+            },
+        }
+    ]
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    history = ticket_json["context"]["action_history"]
+    assert len(history) == 1
+
+    entry_snapshot = history[0]["snapshot"]
+    assert isinstance(entry_snapshot, dict)
+    assert "advanced_params" in entry_snapshot
+    advanced = entry_snapshot["advanced_params"]
+    assert isinstance(advanced, dict)
+    color_map = advanced["relief"]["color_height_map"]
+    assert isinstance(color_map, dict)
+    # All 64 entries survive — the generic sanitizer would have cut to 24.
+    assert len(color_map) == 64
+    assert "__truncated_keys" not in color_map
+
+
+def test_assembler_entry_points_remain_untouched() -> None:
+    """Non-regression: ``collect_sync_attachments`` and ``finalize_ticket_async``
+    are imported into the router with their original signatures — nothing
+    wraps them at import time.
+
+    非回归校验：``collect_sync_attachments`` 和 ``finalize_ticket_async``
+    被路由原样引用，没有被装饰 / 重命名 / 改签名。
+    """
+    import inspect
+
+    import api.feedback_assembler as feedback_assembler
+    import api.routers.feedback as feedback_router
+
+    # Same function object imported in the router as exported by the module.
+    assert (
+        feedback_router.collect_sync_attachments
+        is feedback_assembler.collect_sync_attachments
+    )
+    assert (
+        feedback_router.finalize_ticket_async
+        is feedback_assembler.finalize_ticket_async
+    )
+
+    sync_params = list(
+        inspect.signature(feedback_assembler.collect_sync_attachments).parameters
+    )
+    assert sync_params == [
+        "ticket_dir",
+        "payload",
+        "file_registry",
+        "now",
+        "session_store",
+    ]
+
+    async_params = list(
+        inspect.signature(feedback_assembler.finalize_ticket_async).parameters
+    )
+    assert async_params == ["ticket_dir", "file_registry", "session_store"]
+    assert inspect.iscoroutinefunction(feedback_assembler.finalize_ticket_async)
