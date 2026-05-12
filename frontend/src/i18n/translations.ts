@@ -6348,16 +6348,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Recipe Query",
   },
   material_recipe_desc: {
-    zh: "从耗材库中按顺序选择多层耗材，使用 Beer-Lambert 正向模型直接预测叠层颜色，不依赖任何 LUT。层数不受 5 层限制。",
-    en: "Pick materials from the library in order; the Beer-Lambert forward model predicts the stacked color directly, without any LUT. Layer count is not capped at 5.",
+    zh: "从耗材库中按观赏面朝基底的顺序选择多层耗材，使用 Beer-Lambert 正向模型直接预测叠层颜色，不依赖任何 LUT。层数不受 5 层限制。",
+    en: "Pick materials from the library from the viewing face toward the substrate; the Beer-Lambert forward model predicts the stacked color directly, without any LUT. Layer count is not capped at 5.",
   },
   material_recipe_layers_heading: {
-    zh: "配方层（从基底向外）",
-    en: "Recipe layers (substrate → top)",
+    zh: "配方层（观赏面 → 基底）",
+    en: "Recipe layers (viewing face → substrate)",
   },
   material_recipe_layers_empty: {
-    zh: "尚未添加任何层。点击下方耗材以追加为最外层。",
-    en: "No layers yet. Click a material below to append it as the outermost layer.",
+    zh: "尚未添加任何层。点击下方耗材以追加到靠近基底的一侧。",
+    en: "No layers yet. Click a material below to append it toward the substrate side.",
+  },
+  material_recipe_visible_face: {
+    zh: "观赏面",
+    en: "Viewing face",
+  },
+  material_recipe_substrate_side: {
+    zh: "基底侧",
+    en: "Substrate side",
   },
   material_recipe_layers_count: {
     zh: "已选 {count} 层",

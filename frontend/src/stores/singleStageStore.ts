@@ -65,6 +65,7 @@ interface SingleStageState {
   imageSource: GradientCardImageSource;
   colorchecker_enabled: boolean;
   colorchecker_phase: "calibrating" | "confirming" | "done" | null;
+  colorchecker_target: "white" | "black" | null;
   calibratedImageFile: File | null;
   calibratedPreviewUrl: string | null;
   originalWhitePreviewUrl: string | null;
@@ -357,6 +358,7 @@ const DEFAULT_STATE: SingleStageState = {
   imageSource: "raw",
   colorchecker_enabled: false,
   colorchecker_phase: null,
+  colorchecker_target: null,
   calibratedImageFile: null,
   calibratedPreviewUrl: null,
   originalWhitePreviewUrl: null,
@@ -409,6 +411,7 @@ export const useSingleStageStore = create<
         activeCanvas: null,
         activeCornerIndex: null,
         colorchecker_phase: "calibrating",
+        colorchecker_target: "white",
         calibratedImageFile: null,
         calibratedPreviewUrl: null,
         ...RESULT_RESET_STATE,
@@ -470,7 +473,36 @@ export const useSingleStageStore = create<
   setBlackImageFile: async (file: File | null) => {
     const previousUrl = get().blackImagePreviewUrl;
     const useBackendPreview = requiresBackendPreview(file);
+    const ccEnabled = get().colorchecker_enabled;
     revokePreviewUrl(previousUrl);
+
+    if (ccEnabled && file) {
+      set({
+        blackImageFile: file,
+        blackImagePreviewUrl: null,
+        blackImageNaturalWidth: null,
+        blackImageNaturalHeight: null,
+        blackCornerPoints: [],
+        activeCanvas: null,
+        activeCornerIndex: null,
+        colorchecker_phase: "calibrating",
+        colorchecker_target: "black",
+        calibratedImageFile: null,
+        calibratedPreviewUrl: null,
+        ...RESULT_RESET_STATE,
+      });
+      if (useBackendPreview) {
+        uploadImagePreview(file)
+          .then(({ preview_url }) => {
+            set({ originalWhitePreviewUrl: normalizeResourceUrl(preview_url) });
+          })
+          .catch(() => {});
+      } else {
+        set({ originalWhitePreviewUrl: createPreviewUrl(file) });
+      }
+      return;
+    }
+
     set({
       blackImageFile: file,
       blackImagePreviewUrl: useBackendPreview ? null : createPreviewUrl(file),
@@ -731,6 +763,7 @@ export const useSingleStageStore = create<
     set({
       colorchecker_enabled: value,
       colorchecker_phase: null,
+      colorchecker_target: null,
       calibratedImageFile: null,
       calibratedPreviewUrl: null,
       originalWhitePreviewUrl: null,
@@ -761,17 +794,35 @@ export const useSingleStageStore = create<
   },
 
   confirmCalibrated: () => {
-    const { calibratedPreviewUrl, calibratedImageFile } = get();
+    const { calibratedPreviewUrl, calibratedImageFile, colorchecker_target } = get();
     if (!calibratedPreviewUrl || !calibratedImageFile) return;
+    const imagePatch =
+      colorchecker_target === "black"
+        ? {
+            blackImageFile: calibratedImageFile,
+            blackImagePreviewUrl: calibratedPreviewUrl,
+            blackCornerPoints: [],
+          }
+        : {
+            whiteImageFile: calibratedImageFile,
+            whiteImagePreviewUrl: calibratedPreviewUrl,
+            whiteCornerPoints: [],
+          };
     const img = new Image();
     img.onload = () => {
       set({
         colorchecker_phase: "done",
-        whiteImageFile: calibratedImageFile,
-        whiteImagePreviewUrl: calibratedPreviewUrl,
-        whiteImageNaturalWidth: img.naturalWidth,
-        whiteImageNaturalHeight: img.naturalHeight,
-        whiteCornerPoints: [],
+        ...(colorchecker_target === "black"
+          ? {
+              ...imagePatch,
+              blackImageNaturalWidth: img.naturalWidth,
+              blackImageNaturalHeight: img.naturalHeight,
+            }
+          : {
+              ...imagePatch,
+              whiteImageNaturalWidth: img.naturalWidth,
+              whiteImageNaturalHeight: img.naturalHeight,
+            }),
         activeCanvas: null,
         activeCornerIndex: null,
       });
@@ -779,9 +830,7 @@ export const useSingleStageStore = create<
     img.onerror = () => {
       set({
         colorchecker_phase: "done",
-        whiteImageFile: calibratedImageFile,
-        whiteImagePreviewUrl: calibratedPreviewUrl,
-        whiteCornerPoints: [],
+        ...imagePatch,
         activeCanvas: null,
         activeCornerIndex: null,
       });
