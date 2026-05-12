@@ -4,7 +4,7 @@ import { cx } from "./panelPrimitives";
 
 interface ButtonProps {
   label: string;
-  onClick: () => void;
+  onClick?: () => void;
   type?: "button" | "submit" | "reset";
   disabled?: boolean;
   loading?: boolean;

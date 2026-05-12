@@ -278,6 +278,7 @@ export default function GradientCardCanvasPreview({
       </div>
     );
   }, [
+    activePointIndex,
     cornerPoints,
     dataTestId,
     overlayHeight,

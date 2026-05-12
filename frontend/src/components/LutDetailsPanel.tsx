@@ -85,7 +85,7 @@ function InfoField({
   value: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white/70 px-3 py-2 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-950/55">
+    <div className="panel-section-muted rounded-2xl px-3 py-2">
       <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
         {label}
       </dt>
@@ -795,7 +795,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
     bRange: formatNumberRange(detail.coverage_stats.b_range.min, detail.coverage_stats.b_range.max),
   });
   const labChartViewToggle = (
-    <div className="inline-flex overflow-hidden rounded-full border border-slate-200/80 bg-white/75 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/60">
+    <div className="panel-section-muted inline-flex overflow-hidden rounded-full">
       <button
         type="button"
         className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -834,7 +834,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
           <span className="text-xs text-slate-500 dark:text-slate-400">{replaceTokens(t("lut_details_palette_count"), { count: palette.length })}</span>
         </div>
         {palette.length > 0 ? (
-          <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white/70 dark:border-slate-700/80 dark:bg-slate-950/55">
+          <div className="panel-section overflow-hidden rounded-[24px]">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="border-b border-slate-200/70 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:border-slate-800/70 dark:text-slate-400">
@@ -1021,7 +1021,7 @@ export default function LutDetailsPanel() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("lut_details_query_placeholder")}
-                className="min-h-11 rounded-[22px] border border-slate-200/80 bg-white/82 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-white/90 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
+                className="min-h-11 rounded-[22px] border border-slate-200/80 bg-slate-50 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-slate-100 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
               />
             </div>
 

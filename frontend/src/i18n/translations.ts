@@ -65,6 +65,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "当前没有可用的上下文信息。",
     en: "No context information available right now.",
   },
+  bug_report_modal_context_active_tab: {
+    zh: "标签",
+    en: "Tab",
+  },
+  bug_report_modal_context_color_mode: {
+    zh: "颜色模式",
+    en: "Color mode",
+  },
+  bug_report_modal_context_lut: {
+    zh: "LUT",
+    en: "LUT",
+  },
   bug_report_modal_context_recent_actions: {
     zh: "近期操作",
     en: "Recent actions",

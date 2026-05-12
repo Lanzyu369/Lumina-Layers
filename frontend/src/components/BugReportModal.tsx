@@ -45,6 +45,9 @@ function scheduleIdle(callback: () => void): void {
  */
 type CompactContextSummaryProps = {
   context: ReturnType<typeof collectBugReportContext>;
+  labelActiveTab: string;
+  labelColorMode: string;
+  labelLutName: string;
   labelRecentActions: string;
   labelRecentErrors: string;
   labelNoData: string;
@@ -52,6 +55,9 @@ type CompactContextSummaryProps = {
 
 function CompactContextSummary({
   context,
+  labelActiveTab,
+  labelColorMode,
+  labelLutName,
   labelRecentActions,
   labelRecentErrors,
   labelNoData,
@@ -82,9 +88,9 @@ function CompactContextSummary({
       className="space-y-2 text-xs leading-5 text-slate-600 dark:text-slate-300"
     >
       <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono">
-        {context.active_tab && <span>tab={context.active_tab}</span>}
-        {context.color_mode && <span>mode={context.color_mode}</span>}
-        {context.lut_name && <span>lut={context.lut_name}</span>}
+        {context.active_tab && <span>{labelActiveTab}={context.active_tab}</span>}
+        {context.color_mode && <span>{labelColorMode}={context.color_mode}</span>}
+        {context.lut_name && <span>{labelLutName}={context.lut_name}</span>}
       </div>
       {recentActions.length > 0 && (
         <div>
@@ -917,6 +923,9 @@ export function BugReportModal({
 
               <CompactContextSummary
                 context={context}
+                labelActiveTab={t("bug_report_modal_context_active_tab")}
+                labelColorMode={t("bug_report_modal_context_color_mode")}
+                labelLutName={t("bug_report_modal_context_lut")}
                 labelRecentActions={t("bug_report_modal_context_recent_actions")}
                 labelRecentErrors={t("bug_report_modal_context_recent_errors")}
                 labelNoData={t("bug_report_modal_context_summary_none")}

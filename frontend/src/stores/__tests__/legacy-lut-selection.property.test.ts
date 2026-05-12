@@ -153,7 +153,11 @@ describe("legacy LUT catalog selection helpers", () => {
             manufacturer: nameArb,
             colorMode: fc.constantFrom(...colorModes),
           }),
-          { minLength: 1, maxLength: 30, selector: (row) => row.name },
+          {
+            minLength: 1,
+            maxLength: 30,
+            selector: (row) => normalizeLutPath(`/lut/${row.name}.npy`),
+          },
         ),
         (rows) => {
           const groups = rowsToGroups(rows);

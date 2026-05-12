@@ -209,13 +209,11 @@ export default function FiveColorQueryPanel() {
                   spellCheck={false}
                 />
               </label>
-              <button
+              <Button
                 type="submit"
                 disabled={!lutName || targetHex.trim().length === 0 || isLoading}
-                className="min-h-11 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-[0_12px_24px_rgba(37,99,235,0.22)] transition-all hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {isLoading ? t("five_color_query_loading") : t("five_color_match_button")}
-              </button>
+                label={isLoading ? t("five_color_query_loading") : t("five_color_match_button")}
+              />
             </form>
           </section>
 

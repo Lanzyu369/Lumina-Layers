@@ -220,7 +220,7 @@ export default function CalibrationPanel() {
                 />
                 
                 {activeLayerImages.length > 0 && (
-                  <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80 bg-white/50 dark:bg-slate-800/50">
+                  <div className="panel-section-muted rounded-[24px] p-4">
                     <h4 className="mb-3 text-sm font-medium text-slate-700 dark:text-slate-200">
                       {t("action_layers_title")}
                     </h4>
@@ -231,7 +231,7 @@ export default function CalibrationPanel() {
                           className="group flex cursor-pointer flex-col items-center gap-1.5"
                           onClick={() => setZoomedLayerIdx(idx)}
                         >
-                          <div className="relative w-full overflow-hidden rounded-xl border border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-900">
+                          <div className="panel-section relative w-full overflow-hidden rounded-xl">
                             <img
                               src={layer.url}
                               alt={layer.name}

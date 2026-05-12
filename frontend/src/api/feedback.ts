@@ -4,6 +4,7 @@ import type {
   AdvancedParams,
   SessionRingEntry,
 } from "../types/actionHistory";
+import type { ClientLogEntry } from "../utils/clientLog";
 
 export interface FinalArtifactRef {
   session_id: string | null;
@@ -47,7 +48,7 @@ export interface BugReportContextPayload {
   material_layer_count: number | null;
   material_layer_height_mm: number | null;
   material_backing_material_dir_name: string | null;
-  recent_client_logs: ReadonlyArray<unknown>;
+  recent_client_logs: ReadonlyArray<ClientLogEntry>;
   /**
    * Recent user actions with workflow snapshots; populated by the
    * reproducible-bug-reports pipeline (Req 5.x). Backwards compatible:
