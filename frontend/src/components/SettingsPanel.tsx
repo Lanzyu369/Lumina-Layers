@@ -453,142 +453,144 @@ export default function SettingsPanel() {
       </section>
 
       <section
-        data-testid="settings-solver-cache-density-section"
-        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+        data-testid="settings-advanced-section"
+        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
       >
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
+          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
             {t("settings.advanced")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.solver_cache_density_heading")}
           </h4>
         </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.solver_cache_density_description")}
-        </p>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-            {t("settings.solver_cache_density_enable_label")}
-          </span>
-          <WikiTooltip
-            title={t("settings.solver_cache_density_enable_label")}
-            description={t("settings.solver_cache_density_tip")}
-            placement="left"
-          >
-            <Switch
-              checked={enableSolverCacheGridSelection}
-              onChange={setEnableSolverCacheGridSelection}
-              ariaLabel={t("settings.solver_cache_density_enable_label")}
-            />
-          </WikiTooltip>
-        </div>
-        {enableSolverCacheGridSelection ? (
-          <div
-            data-testid="settings-solver-cache-density-dropdown-row"
-            className="border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
-          >
-            <Dropdown
-              label={t("settings.solver_cache_density_select_label")}
-              value={String(solverCacheGridResolution)}
-              onChange={(value) =>
-                setSolverCacheGridResolution(
-                  Number(value) as SolverCacheGridResolution,
-                )
-              }
-              options={SOLVER_CACHE_GRID_RESOLUTIONS.map((grid) => ({
-                value: String(grid),
-                label: t(`settings.solver_cache_density_option_${grid}`),
-              }))}
-            />
-            <StatusBanner tone="info">
-              {t("settings.solver_cache_density_tip")}
-            </StatusBanner>
+
+        <div
+          data-testid="settings-solver-cache-density-section"
+          className="flex flex-col gap-4"
+        >
+          <div>
+            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("settings.solver_cache_density_heading")}
+            </h5>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("settings.solver_cache_density_description")}
+            </p>
           </div>
-        ) : (
-          <StatusBanner tone="info">
-            {t("settings.solver_cache_density_default_hint")}
-          </StatusBanner>
-        )}
-      </section>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+              {t("settings.solver_cache_density_enable_label")}
+            </span>
+            <WikiTooltip
+              title={t("settings.solver_cache_density_enable_label")}
+              description={t("settings.solver_cache_density_tip")}
+              placement="left"
+            >
+              <Switch
+                checked={enableSolverCacheGridSelection}
+                onChange={setEnableSolverCacheGridSelection}
+                ariaLabel={t("settings.solver_cache_density_enable_label")}
+              />
+            </WikiTooltip>
+          </div>
+          {enableSolverCacheGridSelection ? (
+            <div
+              data-testid="settings-solver-cache-density-dropdown-row"
+              className="border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
+            >
+              <Dropdown
+                label={t("settings.solver_cache_density_select_label")}
+                value={String(solverCacheGridResolution)}
+                onChange={(value) =>
+                  setSolverCacheGridResolution(
+                    Number(value) as SolverCacheGridResolution,
+                  )
+                }
+                options={SOLVER_CACHE_GRID_RESOLUTIONS.map((grid) => ({
+                  value: String(grid),
+                  label: t(`settings.solver_cache_density_option_${grid}`),
+                }))}
+              />
+              <StatusBanner tone="info">
+                {t("settings.solver_cache_density_tip")}
+              </StatusBanner>
+            </div>
+          ) : (
+            <StatusBanner tone="info">
+              {t("settings.solver_cache_density_default_hint")}
+            </StatusBanner>
+          )}
+        </div>
 
-      <section
-        data-testid="settings-svg-raster-density-section"
-        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
-      >
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.advanced")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.svg_pixels_per_mm_heading")}
-          </h4>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.svg_pixels_per_mm_description")}
-        </p>
-        <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
-          <Slider
-            label={t("settings.svg_pixels_per_mm_label")}
-            tooltip={t("settings.svg_pixels_per_mm_tip")}
-            value={svgPixelsPerMm}
-            min={SVG_PIXELS_PER_MM_MIN}
-            max={SVG_PIXELS_PER_MM_MAX}
-            step={SVG_PIXELS_PER_MM_STEP}
-            displayDecimals={1}
-            minInputWidthCh={4}
-            unit={t("common_unit_px_per_mm")}
-            onChange={setSvgPixelsPerMm}
-          />
-          <Button
-            label={t("settings.svg_pixels_per_mm_reset")}
-            onClick={resetSvgPixelsPerMm}
-            variant="secondary"
-            disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
-            className={workspace.isCompact ? "w-full" : "self-end"}
-          />
-        </div>
-        <StatusBanner tone="info">
-          {t("settings.svg_pixels_per_mm_default_hint")}
-        </StatusBanner>
-      </section>
-
-      <section
-        data-testid="settings-auto-replace-gradient-section"
-        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
-      >
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.advanced")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.auto_replace_gradient_heading")}
-          </h4>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.auto_replace_gradient_description")}
-        </p>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-            {t("settings.auto_replace_gradient_label")}
-          </span>
-          <WikiTooltip
-            title={t("settings.auto_replace_gradient_label")}
-            description={t("settings.auto_replace_gradient_tip")}
-            placement="left"
-          >
-            <Switch
-              checked={autoReplaceGradientBanding}
-              onChange={setAutoReplaceGradientBanding}
-              ariaLabel={t("settings.auto_replace_gradient_label")}
+        <div
+          data-testid="settings-svg-raster-density-section"
+          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+        >
+          <div>
+            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("settings.svg_pixels_per_mm_heading")}
+            </h5>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("settings.svg_pixels_per_mm_description")}
+            </p>
+          </div>
+          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
+            <Slider
+              label={t("settings.svg_pixels_per_mm_label")}
+              tooltip={t("settings.svg_pixels_per_mm_tip")}
+              value={svgPixelsPerMm}
+              min={SVG_PIXELS_PER_MM_MIN}
+              max={SVG_PIXELS_PER_MM_MAX}
+              step={SVG_PIXELS_PER_MM_STEP}
+              displayDecimals={1}
+              minInputWidthCh={4}
+              unit={t("common_unit_px_per_mm")}
+              onChange={setSvgPixelsPerMm}
             />
-          </WikiTooltip>
-        </div>
-        {!autoReplaceGradientBanding && (
+            <Button
+              label={t("settings.svg_pixels_per_mm_reset")}
+              onClick={resetSvgPixelsPerMm}
+              variant="secondary"
+              disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
+              className={workspace.isCompact ? "w-full" : "self-end"}
+            />
+          </div>
           <StatusBanner tone="info">
-            {t("settings.auto_replace_gradient_default_hint")}
+            {t("settings.svg_pixels_per_mm_default_hint")}
           </StatusBanner>
-        )}
+        </div>
+
+        <div
+          data-testid="settings-auto-replace-gradient-section"
+          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+        >
+          <div>
+            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("settings.auto_replace_gradient_heading")}
+            </h5>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("settings.auto_replace_gradient_description")}
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+              {t("settings.auto_replace_gradient_label")}
+            </span>
+            <WikiTooltip
+              title={t("settings.auto_replace_gradient_label")}
+              description={t("settings.auto_replace_gradient_tip")}
+              placement="left"
+            >
+              <Switch
+                checked={autoReplaceGradientBanding}
+                onChange={setAutoReplaceGradientBanding}
+                ariaLabel={t("settings.auto_replace_gradient_label")}
+              />
+            </WikiTooltip>
+          </div>
+          {!autoReplaceGradientBanding && (
+            <StatusBanner tone="info">
+              {t("settings.auto_replace_gradient_default_hint")}
+            </StatusBanner>
+          )}
+        </div>
       </section>
 
       <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
