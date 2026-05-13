@@ -314,6 +314,7 @@ materials_backup*/
 .codex/
 .idea/
 *.3mf
+*.svg
 .cursor/
 .windsurf/
 .trae/
