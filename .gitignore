@@ -299,6 +299,7 @@ frontend/.eslint-report.json
 # Temporary assets
 assets/temp_*.npy
 assets/temp_*.json
+assets/temp_*.svg
 
 # Application runtime logs (machine-local, regenerated each run)
 logs/
@@ -314,6 +315,7 @@ materials_backup*/
 .codex/
 .idea/
 *.3mf
+output/temp/*.svg
 .cursor/
 .windsurf/
 .trae/
