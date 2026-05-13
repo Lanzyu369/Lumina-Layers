@@ -531,7 +531,7 @@ export default function SettingsPanel() {
               {t("settings.svg_pixels_per_mm_description")}
             </p>
           </div>
-          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
+          <div className="grid gap-3 min-[960px]:grid-cols-[minmax(0,1fr)_max-content]">
             <Slider
               label={t("settings.svg_pixels_per_mm_label")}
               tooltip={t("settings.svg_pixels_per_mm_tip")}
@@ -549,7 +549,7 @@ export default function SettingsPanel() {
               onClick={resetSvgPixelsPerMm}
               variant="secondary"
               disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
-              className={workspace.isCompact ? "w-full" : "self-end"}
+              className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
             />
           </div>
           <StatusBanner tone="info">
