@@ -9,6 +9,10 @@ import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { clearCache, getPrinters, getSlicers } from "../api/system";
 import {
+  SVG_PIXELS_PER_MM_DEFAULT,
+  SVG_PIXELS_PER_MM_MAX,
+  SVG_PIXELS_PER_MM_MIN,
+  SVG_PIXELS_PER_MM_STEP,
   SOLVER_CACHE_GRID_RESOLUTIONS,
   useSettingsStore,
   type SolverCacheGridResolution,
@@ -25,6 +29,7 @@ import {
 import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
+import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import {
@@ -83,6 +88,11 @@ export default function SettingsPanel() {
   );
   const setSolverCacheGridResolution = useSettingsStore(
     (s) => s.setSolverCacheGridResolution,
+  );
+  const svgPixelsPerMm = useSettingsStore((s) => s.svgPixelsPerMm);
+  const setSvgPixelsPerMm = useSettingsStore((s) => s.setSvgPixelsPerMm);
+  const resetSvgPixelsPerMm = useSettingsStore(
+    (s) => s.resetSvgPixelsPerMm,
   );
   const autoReplaceGradientBanding = useSettingsStore(
     (s) => s.autoReplaceGradientBanding,
@@ -500,6 +510,47 @@ export default function SettingsPanel() {
             {t("settings.solver_cache_density_default_hint")}
           </StatusBanner>
         )}
+      </section>
+
+      <section
+        data-testid="settings-svg-raster-density-section"
+        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+      >
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
+            {t("settings.advanced")}
+          </p>
+          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
+            {t("settings.svg_pixels_per_mm_heading")}
+          </h4>
+        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {t("settings.svg_pixels_per_mm_description")}
+        </p>
+        <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
+          <Slider
+            label={t("settings.svg_pixels_per_mm_label")}
+            tooltip={t("settings.svg_pixels_per_mm_tip")}
+            value={svgPixelsPerMm}
+            min={SVG_PIXELS_PER_MM_MIN}
+            max={SVG_PIXELS_PER_MM_MAX}
+            step={SVG_PIXELS_PER_MM_STEP}
+            displayDecimals={1}
+            minInputWidthCh={4}
+            unit={t("common_unit_px_per_mm")}
+            onChange={setSvgPixelsPerMm}
+          />
+          <Button
+            label={t("settings.svg_pixels_per_mm_reset")}
+            onClick={resetSvgPixelsPerMm}
+            variant="secondary"
+            disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
+            className={workspace.isCompact ? "w-full" : "self-end"}
+          />
+        </div>
+        <StatusBanner tone="info">
+          {t("settings.svg_pixels_per_mm_default_hint")}
+        </StatusBanner>
       </section>
 
       <section

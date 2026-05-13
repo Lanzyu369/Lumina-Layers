@@ -44,6 +44,7 @@ export interface ConverterRecipeBase {
   bg_tol?: number;
   quantize_colors: number;
   enable_cleanup: boolean;
+  svg_pixels_per_mm?: number;
   hue_enable: boolean;
   chroma_gate: number;
 }

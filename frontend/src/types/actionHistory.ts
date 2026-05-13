@@ -82,7 +82,7 @@ export interface AdvancedParamsDimensions {
  * Captures structure/modeling mode plus 14 additional knobs that affect the
  * final 3MF output (color layer count, quantization, hue/chroma gating, LUT
  * constraints, dynamic range, backing separation).
- * 包含结构与建模模式，以及 14 项会影响最终 3MF 输出的开关与阈值。
+ * 包含结构与建模模式，以及会影响最终 3MF 输出的开关与阈值。
  */
 export interface AdvancedParamsGeneration {
   structure_mode: string;
@@ -96,6 +96,7 @@ export interface AdvancedParamsGeneration {
   quantize_colors: number;
   quantize_colors_unlocked: boolean;
   enable_cleanup: boolean;
+  svg_pixels_per_mm: number;
   hue_enable: boolean;
   chroma_gate: number;
   use_lut_constrained: boolean;

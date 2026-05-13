@@ -22,6 +22,7 @@ import type {
   ColorReplacementItem,
   FridgeMagnetItem,
 } from "../api/types";
+import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
 
 /**
  * Hard limits enforced on the advanced_params payload before size
@@ -41,6 +42,7 @@ const MAX_REPLACEMENT_REGIONS = 32;
  */
 export interface BuildAdvancedParamsOptions {
   maxBytes: number;
+  svgPixelsPerMm?: number;
 }
 
 /**
@@ -78,7 +80,7 @@ export function buildAdvancedParams(
     return null;
   }
 
-  const full = buildFullParams(state);
+  const full = buildFullParams(state, options);
   return applyByteLimitTrimming(full, options.maxBytes);
 }
 
@@ -87,10 +89,13 @@ export function buildAdvancedParams(
 // 完整参数组装（未进行字节裁剪）
 // ---------------------------------------------------------------------------
 
-function buildFullParams(state: ConverterState): AdvancedParamsFull {
+function buildFullParams(
+  state: ConverterState,
+  options: BuildAdvancedParamsOptions,
+): AdvancedParamsFull {
   return {
     dimensions: buildDimensions(state),
-    generation: buildGeneration(state),
+    generation: buildGeneration(state, options),
     relief: buildRelief(state),
     outline: buildOutline(state),
     cloisonne: buildCloisonne(state),
@@ -112,7 +117,10 @@ function buildDimensions(state: ConverterState): AdvancedParamsDimensions {
   };
 }
 
-function buildGeneration(state: ConverterState): AdvancedParamsGeneration {
+function buildGeneration(
+  state: ConverterState,
+  options: BuildAdvancedParamsOptions,
+): AdvancedParamsGeneration {
   return {
     structure_mode: state.structure_mode,
     modeling_mode: state.modeling_mode,
@@ -125,6 +133,10 @@ function buildGeneration(state: ConverterState): AdvancedParamsGeneration {
     quantize_colors: state.quantize_colors,
     quantize_colors_unlocked: state.quantize_colors_unlocked,
     enable_cleanup: state.enable_cleanup,
+    svg_pixels_per_mm:
+      typeof options.svgPixelsPerMm === "number"
+        ? options.svgPixelsPerMm
+        : SVG_PIXELS_PER_MM_DEFAULT,
     hue_enable: state.hue_enable,
     chroma_gate: state.chroma_gate,
     use_lut_constrained: state.use_lut_constrained,

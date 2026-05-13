@@ -150,6 +150,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_final_artifact_ref: deriveFinalArtifact(),
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
       maxBytes: 8192,
+      svgPixelsPerMm: settings.svgPixelsPerMm,
     }),
   };
 }

@@ -18,7 +18,16 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Tuple, Optional
 
-from config import PrinterConfig, ColorSystem, ModelingMode, PREVIEW_SCALE, PREVIEW_MARGIN, OUTPUT_DIR, BedManager
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    PrinterConfig,
+    ColorSystem,
+    ModelingMode,
+    PREVIEW_SCALE,
+    PREVIEW_MARGIN,
+    OUTPUT_DIR,
+    BedManager,
+)
 from utils import Stats
 
 # ========== Re-exports from pipeline modules ==========
@@ -240,6 +249,7 @@ def convert_image_to_3d(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -294,6 +304,7 @@ def generate_preview_cached(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -411,6 +422,7 @@ def generate_final_model(
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
     material_backing_material_index: Optional[int] = None,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -495,6 +507,7 @@ def generate_final_model(
         model_threshold,
         model_margin,
         quantize_colors,
+        svg_pixels_per_mm=svg_pixels_per_mm,
         blur_kernel=0,
         smooth_sigma=10,
         color_replacements=color_replacements,

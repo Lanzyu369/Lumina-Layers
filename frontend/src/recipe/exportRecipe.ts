@@ -94,6 +94,7 @@ export function exportConverterRecipe(
       target_height_mm: state.target_height_mm,
       quantize_colors: state.quantize_colors,
       enable_cleanup: state.enable_cleanup,
+      svg_pixels_per_mm: settings.svgPixelsPerMm,
       hue_enable: state.hue_enable,
       chroma_gate: state.chroma_gate,
     },

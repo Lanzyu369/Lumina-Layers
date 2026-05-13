@@ -14,6 +14,8 @@ Design rules:
 - All imports of core modules are lazy (inside function body).
 """
 
+from config import SVG_PIXELS_PER_MM_DEFAULT
+
 _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
 
 
@@ -77,6 +79,7 @@ def worker_generate_preview(
     material_layer_height_mm: float | None = None,
     material_grid_resolution: int | None = None,
     auto_dynamic_range: bool = False,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -93,6 +96,8 @@ def worker_generate_preview(
         modeling_mode (str): Modeling mode string value, e.g. "high-fidelity". (建模模式字符串)
         quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
+        svg_pixels_per_mm (float): High-fidelity SVG raster density in px/mm.
+            (高保真 SVG 光栅化采样密度，单位 px/mm)
         is_dark (bool): Dark theme flag for 2D preview bed colors. (深色主题标志)
 
     Returns:
@@ -135,6 +140,7 @@ def worker_generate_preview(
             "layer_height_mm": layer_height_mm,
             "quantize_colors": quantize_colors,
             "enable_cleanup": enable_cleanup,
+            "svg_pixels_per_mm": svg_pixels_per_mm,
             "material_source": material_source,
             "selected_material_count": len(selected_materials or []),
             "material_grid_resolution": material_grid_resolution,
@@ -157,6 +163,7 @@ def worker_generate_preview(
             model_margin=model_margin,
             quantize_colors=quantize_colors,
             enable_cleanup=enable_cleanup,
+            svg_pixels_per_mm=svg_pixels_per_mm,
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
@@ -289,6 +296,7 @@ def worker_batch_convert_item(
     height_mode: str = "color",
     color_height_map: dict[str, float] | None = None,
     heightmap_max_height: float | None = None,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -307,6 +315,8 @@ def worker_batch_convert_item(
         modeling_mode_value (str): Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
         quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
+        svg_pixels_per_mm (float): High-fidelity SVG raster density in px/mm.
+            (高保真 SVG 光栅化采样密度，单位 px/mm)
 
     Returns:
         dict: Result dictionary with keys: (结果字典，包含以下键)
@@ -336,6 +346,7 @@ def worker_batch_convert_item(
         modeling_mode=core_modeling_mode,
         quantize_colors=quantize_colors,
         enable_cleanup=enable_cleanup,
+        svg_pixels_per_mm=svg_pixels_per_mm,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         enable_relief=enable_relief,

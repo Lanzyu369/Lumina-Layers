@@ -11,6 +11,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import json
 import os
@@ -33,6 +34,7 @@ from api.routers.converter.preview import (
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
+from api.workers.converter_workers import worker_generate_preview
 from config import TEMP_DIR
 
 # Isolated store/registry per test module to avoid cross-test pollution
@@ -331,10 +333,14 @@ class TestSessionContainsPreviewCache:
 
         assert response.status_code == 200
         call_args = _mock_pool.submit.call_args.args
-        assert call_args[11] is True
-        assert call_args[12] is False
-        assert call_args[13] == 6.5
-        assert call_args[14] == 0.9
+        submitted = dict(
+            zip(inspect.signature(worker_generate_preview).parameters, call_args[1:])
+        )
+        assert submitted["svg_pixels_per_mm"] == 10.0
+        assert submitted["model_enable"] is True
+        assert submitted["model_only"] is False
+        assert submitted["model_threshold"] == 6.5
+        assert submitted["model_margin"] == 0.9
 
 
 # =========================================================================
@@ -569,6 +575,7 @@ class TestSvgLargeFormatWarnings:
                     layer_height_mm=None,
                     quantize_colors=48,
                     enable_cleanup=True,
+                    svg_pixels_per_mm=10.0,
                     model_enable=False,
                     model_only=False,
                     model_threshold=None,

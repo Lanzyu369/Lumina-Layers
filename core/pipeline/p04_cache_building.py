@@ -58,6 +58,7 @@ def run(ctx: dict) -> dict:
     color_conf = ctx['color_conf']
     color_mode = ctx['color_mode']
     quantize_colors = ctx['quantize_colors']
+    svg_pixels_per_mm = ctx.get('svg_pixels_per_mm')
     backing_color_id = ctx.get('backing_color_id', 0)
     is_dark = ctx.get('is_dark', True)
     lut_metadata = ctx.get('lut_metadata')
@@ -83,6 +84,7 @@ def run(ctx: dict) -> dict:
         'color_conf': color_conf,
         'color_mode': color_mode,
         'quantize_colors': quantize_colors,
+        'svg_pixels_per_mm': svg_pixels_per_mm,
         'backing_color_id': backing_color_id,
         'is_dark': is_dark,
         'bed_label': BedManager.DEFAULT_BED,

@@ -30,7 +30,16 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
-from config import BedManager, OUTPUT_DIR, PrinterConfig, TEMP_DIR
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    SVG_PIXELS_PER_MM_MAX,
+    SVG_PIXELS_PER_MM_MIN,
+    BedManager,
+    OUTPUT_DIR,
+    PrinterConfig,
+    TEMP_DIR,
+    normalize_svg_pixels_per_mm,
+)
 from core.converter import generate_empty_bed_glb, generate_segmented_glb
 from core.naming import generate_segmented_glb_filename
 from core.heightmap_loader import HeightmapLoader
@@ -329,6 +338,15 @@ async def convert_preview(
     model_margin: float | None = Form(None, description="模型回退边距"),
     quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
+    svg_pixels_per_mm: float = Form(
+        SVG_PIXELS_PER_MM_DEFAULT,
+        ge=SVG_PIXELS_PER_MM_MIN,
+        le=SVG_PIXELS_PER_MM_MAX,
+        description=(
+            "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
+            "直接矢量模式不使用此参数"
+        ),
+    ),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
@@ -369,6 +387,11 @@ async def convert_preview(
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
     svg_large_format_policy = None
+    try:
+        svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
         request = LutSourceSelection.model_validate(
@@ -449,6 +472,7 @@ async def convert_preview(
                 "model_only": model_only,
                 "model_threshold": model_threshold,
                 "model_margin": model_margin,
+                "svg_pixels_per_mm": svg_pixels_per_mm,
             },
         )
         _t = time.perf_counter()
@@ -499,6 +523,7 @@ async def convert_preview(
             material_layer_height_mm,
             material_grid_resolution,
             auto_dynamic_range,
+            svg_pixels_per_mm,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True

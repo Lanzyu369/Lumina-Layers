@@ -320,7 +320,9 @@ def test_valid_data_passes_validation(instance: BaseModel) -> None:
 CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ConvertPreviewRequest, "target_width_mm", 10, 9999),
     (ConvertPreviewRequest, "quantize_colors", 8, 8192),
+    (ConvertPreviewRequest, "svg_pixels_per_mm", 2.0, 50.0),
     (ConvertGenerateRequest, "spacer_thick", 0.2, 3.5),
+    (ConvertGenerateRequest, "svg_pixels_per_mm", 2.0, 50.0),
     (ConvertGenerateRequest, "loop_width", 2, 10),
     (ConvertGenerateRequest, "loop_length", 4, 15),
     (ConvertGenerateRequest, "loop_hole", 1, 5),
@@ -369,6 +371,16 @@ def test_convert_generate_request_rejects_relief_height_above_total_limit() -> N
     """ConvertGenerateRequest should reject total relief heights above the UI maximum."""
     with pytest.raises(ValidationError):
         ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=18.51)
+
+
+@pytest.mark.parametrize("model_cls", [ConvertPreviewRequest, ConvertGenerateRequest])
+def test_svg_pixels_per_mm_requires_tenth_step(model_cls: Type[BaseModel]) -> None:
+    """SVG raster density accepts one decimal place and rejects finer steps."""
+    request = model_cls(lut_name="test_lut", svg_pixels_per_mm=25.5)
+    assert request.svg_pixels_per_mm == 25.5
+
+    with pytest.raises(ValidationError):
+        model_cls(lut_name="test_lut", svg_pixels_per_mm=25.55)
 
 
 # **Validates: Requirements 3.7, 5.3**
@@ -470,8 +482,10 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     (ConvertPreviewRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
     (ConvertPreviewRequest, {"lut_name": "x"}, "quantize_colors", 48),
     (ConvertPreviewRequest, {"lut_name": "x"}, "enable_cleanup", True),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "svg_pixels_per_mm", 10.0),
     # ConvertGenerateRequest
     (ConvertGenerateRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
+    (ConvertGenerateRequest, {"lut_name": "x"}, "svg_pixels_per_mm", 10.0),
     (ConvertGenerateRequest, {"lut_name": "x"}, "spacer_thick", 1.2),
     (ConvertGenerateRequest, {"lut_name": "x"}, "add_loop", False),
     (ConvertGenerateRequest, {"lut_name": "x"}, "loop_width", 4.0),

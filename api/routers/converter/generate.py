@@ -35,7 +35,14 @@ from api.workers.converter_workers import (
     worker_generate_large_format_svg_native,
     worker_generate_model,
 )
-from config import TEMP_DIR, ModelingMode as CoreModelingMode
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    SVG_PIXELS_PER_MM_MAX,
+    SVG_PIXELS_PER_MM_MIN,
+    TEMP_DIR,
+    ModelingMode as CoreModelingMode,
+    normalize_svg_pixels_per_mm,
+)
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
@@ -765,6 +772,7 @@ async def convert_generate(
         "loop_position_preset": request.loop_position_preset,
         "modeling_mode": core_modeling_mode,
         "quantize_colors": request.quantize_colors,
+        "svg_pixels_per_mm": request.svg_pixels_per_mm,
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
@@ -1014,6 +1022,7 @@ def _resolve_large_format_shared_params(
         "loop_position_preset": request.loop_position_preset,
         "modeling_mode": CoreModelingMode(request.modeling_mode.value),
         "quantize_colors": request.quantize_colors,
+        "svg_pixels_per_mm": request.svg_pixels_per_mm,
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
@@ -1541,6 +1550,15 @@ async def convert_batch(
     layer_height_mm: float | None = Form(None, gt=0.0, le=1.0, description="叠色层高 (mm)"),
     quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
+    svg_pixels_per_mm: float = Form(
+        SVG_PIXELS_PER_MM_DEFAULT,
+        ge=SVG_PIXELS_PER_MM_MIN,
+        le=SVG_PIXELS_PER_MM_MAX,
+        description=(
+            "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
+            "直接矢量模式不使用此参数"
+        ),
+    ),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
@@ -1581,6 +1599,10 @@ async def convert_batch(
                 "Use single-image preview and generate instead."
             ),
         )
+    try:
+        svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     resolved_height_mode = height_mode or "color"
     parsed_color_height_map = (
         _parse_batch_color_height_map(color_height_map)
@@ -1637,6 +1659,7 @@ async def convert_batch(
                 resolved_height_mode,
                 parsed_color_height_map,
                 heightmap_max_height,
+                svg_pixels_per_mm,
             )
 
             # 3. Result processing (main thread)

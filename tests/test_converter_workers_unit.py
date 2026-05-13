@@ -153,7 +153,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 23
+        assert len(sig.parameters) == 24
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -171,7 +171,8 @@ class TestParameterAnnotations:
         expected = {
             "image_path", "lut_path", "target_width_mm",
             "color_mode", "modeling_mode", "quantize_colors",
-            "color_layers", "layer_height_mm", "enable_cleanup", "is_dark",
+            "color_layers", "layer_height_mm", "enable_cleanup",
+            "svg_pixels_per_mm", "is_dark",
             "model_enable", "model_only", "model_threshold", "model_margin",
             "hue_weight", "chroma_gate", "use_lut_constrained",
             "material_source", "selected_materials",
