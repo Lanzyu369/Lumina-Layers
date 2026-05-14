@@ -147,7 +147,7 @@ def _generate_legend_image(
         draw.text((tx, ty), recipe.result_hex, fill=(60, 60, 60), font=font)
         ty += 16
 
-        layer_names = [n[:6] for n in recipe.material_names]
+        layer_names = [n[:6] for n in reversed(recipe.material_names)]
         recipe_text = " > ".join(layer_names) if len(layer_names) <= 6 else (
             " > ".join(layer_names[:5]) + f" +{len(layer_names) - 5}"
         )
@@ -155,10 +155,14 @@ def _generate_legend_image(
 
         dot_y = y0 + cell_h - 16
         dot_r = 5
-        max_dots = min(len(recipe.material_hexes), 10)
+        # Render dots in visible→substrate order to match the in-app UI list
+        # (UI shows visible face first; ``material_hexes`` is substrate-first
+        # per API schema, so reverse here for parity with what the user picks).
+        ordered_hexes = list(reversed(recipe.material_hexes))
+        max_dots = min(len(ordered_hexes), 10)
         for li in range(max_dots):
             try:
-                dot_color = _hex_to_rgb(recipe.material_hexes[li])
+                dot_color = _hex_to_rgb(ordered_hexes[li])
             except (ValueError, IndexError):
                 dot_color = (128, 128, 128)
             dx = tx + li * (dot_r * 2 + 4)
@@ -224,6 +228,17 @@ def _add_material_color_layers(
 ) -> None:
     """Stack per-recipe variable-length color layers in grid cells.
     为每个配方在网格单元格中堆叠变长颜色层。
+
+    ``recipe.material_names`` follows the API schema convention:
+    index ``0`` is the substrate-side layer, index ``-1`` is the topmost
+    (viewer-facing) layer. For single-sided cards the print is X-mirrored so
+    the bottom of the cell (``z = 0``) becomes the visible face after the user
+    flips the card; we therefore place ``material_names[-1]`` at ``z = 0`` so
+    the colour the user picked as the visible face shows on the visible face.
+
+    With ``reverse=True`` the substrate→top mapping is inverted, used for the
+    far face of double-sided cards so both faces present the same gradient
+    from outside to substrate.
     """
     for recipe_idx, recipe in enumerate(recipes):
         c = recipe_idx % cols
@@ -235,10 +250,12 @@ def _add_material_color_layers(
         num_layers = len(recipe.material_names)
         for layer_i in range(num_layers):
             mat_name = recipe.material_names[layer_i]
+            # Default: substrate-first input → place top layer at z=0 so it
+            # ends up on the visible face after the X-mirror flip.
             if reverse:
-                inv_i = (num_layers - 1) - layer_i
-            else:
                 inv_i = layer_i
+            else:
+                inv_i = (num_layers - 1) - layer_i
             z_bot = inv_i * layer_h
             z_top = z_bot + layer_h
             material_meshes[mat_name].append(
@@ -351,7 +368,9 @@ def generate_material_recipe_swatch(
             material_meshes, recipes, cols,
             block_size_mm, gap_mm, reverse=False,
         )
-        # For the top side, shift z by color_h + backing_h
+        # Top side mirrors the bottom: ``material_names[-1]`` is the
+        # outward-facing layer of this side, so we place it at the outermost
+        # z (``z_total``) and stack downward toward the central backing.
         for recipe_idx, recipe in enumerate(recipes):
             c = recipe_idx % cols
             r = recipe_idx // cols
@@ -361,8 +380,9 @@ def generate_material_recipe_swatch(
             lh = recipe.layer_height_mm
             for layer_i in range(num_layers):
                 mat_name = recipe.material_names[layer_i]
-                inv_i = (num_layers - 1) - layer_i
-                z_bot = color_h + backing_h + inv_i * lh
+                # Substrate-first input → top side: place index 0 nearest the
+                # central backing and index -1 at the outermost z.
+                z_bot = color_h + backing_h + layer_i * lh
                 z_top = z_bot + lh
                 material_meshes[mat_name].append(
                     _build_box_mesh(
