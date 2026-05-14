@@ -32,6 +32,8 @@ from core.material_cache import (
 )
 from core.material_color_solver import (
     MaterialParams,
+    forward_model,
+    linear_to_srgb_uint8,
     rgb_to_lab,
     solve_image_colors_optimal,
 )
@@ -487,6 +489,8 @@ class TestLookup:
             achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
             achieved_lab=np.zeros((0, 3), dtype=np.float32),
             center_delta_e=np.zeros((0,), dtype=np.float32),
+            uniform_recipes=np.zeros((0, 0), dtype=np.uint8),
+            uniform_achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
             metadata={
                 "palette_hash": fingerprint_palette(SMALL_PALETTE),
                 "layer_count": 5,
@@ -573,6 +577,8 @@ class TestLookup:
                 dtype=np.float32,
             ),
             center_delta_e=np.asarray([0.1, 0.9], dtype=np.float32),
+            uniform_recipes=np.zeros((0, 0), dtype=np.uint8),
+            uniform_achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
             metadata={
                 "palette_hash": fingerprint_palette(SMALL_PALETTE),
                 "layer_count": 5,
@@ -795,3 +801,146 @@ class TestLoadWithFallback:
         )
         assert loaded is None
         assert actual_grid is None
+
+
+# ---------------------------------------------------------------------------
+# Pinned uniform (pure-colour) recipes
+# ---------------------------------------------------------------------------
+
+
+class TestPinnedUniformRecipes:
+    """Verify that pure-colour recipes (all layers the same material) are
+    permanently kept in the cache regardless of bucket collisions."""
+
+    def _expected_uniform_srgb(self, materials, layer_count, layer_height_mm, substrate):
+        """Compute expected pure-recipe sRGB via forward model for each material."""
+        substrate_linear = (
+            np.zeros(3, dtype=np.float64)
+            if substrate == "black"
+            else np.ones(3, dtype=np.float64)
+        )
+        result = np.empty((len(materials), 3), dtype=np.uint8)
+        for i in range(len(materials)):
+            recipe = np.full(layer_count, i, dtype=np.int32)
+            linear = forward_model(recipe, materials, layer_height_mm, substrate_linear)
+            result[i] = linear_to_srgb_uint8(linear.reshape(1, 3))[0]
+        return result
+
+    def test_build_populates_uniform_arrays_in_canonical_order(self):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        M = len(SMALL_PALETTE)
+        N = 5
+        assert cache.uniform_recipes.shape == (M, N)
+        assert cache.uniform_achieved_srgb.shape == (M, 3)
+        assert cache.metadata["uniform_recipe_count"] == M
+        # Each row i is [i, i, i, i, i] in canonical order.
+        for i in range(M):
+            np.testing.assert_array_equal(
+                cache.uniform_recipes[i], np.full(N, i, dtype=np.uint8)
+            )
+        canon_order = canonical_palette_order(SMALL_PALETTE)
+        canon_materials = [SMALL_PALETTE[i] for i in canon_order]
+        expected_srgb = self._expected_uniform_srgb(
+            canon_materials, 5, 0.08, "white",
+        )
+        np.testing.assert_array_equal(cache.uniform_achieved_srgb, expected_srgb)
+
+    def test_lookup_returns_uniform_recipe_for_exact_target(self):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        M = len(SMALL_PALETTE)
+        targets = cache.uniform_achieved_srgb  # (M, 3)
+        matched, recipes, delta_e = cache.lookup(targets, SMALL_PALETTE)
+        assert matched.shape == (M, 3)
+        assert recipes.shape == (M, 5)
+        # Each target should hit its own pure recipe with ΔE ≈ 0.
+        assert float(delta_e.max()) <= 2.0, (
+            f"uniform lookup ΔE too high: max={delta_e.max():.2f}, "
+            f"mean={delta_e.mean():.2f}"
+        )
+        # Recipes returned must be in the caller's palette order.
+        user_order = canonical_palette_order(SMALL_PALETTE)
+        for i in range(M):
+            user_idx = user_order[i]
+            expected = np.full(5, user_idx, dtype=np.int32)
+            # The target colour for canonical material i is in row i.
+            # After re-binding through user_order, the recipe should use
+            # the caller-side index.
+            row_match = np.argmin(
+                np.linalg.norm(
+                    targets.astype(np.float32)
+                    - cache.uniform_achieved_srgb[i].astype(np.float32),
+                    axis=1,
+                )
+            )
+            np.testing.assert_array_equal(recipes[row_match], expected)
+
+    def test_save_load_roundtrip_preserves_uniform_arrays(self, tmp_path: Path):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        loaded = load_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert loaded.uniform_recipes.shape == cache.uniform_recipes.shape
+        assert loaded.uniform_achieved_srgb.shape == cache.uniform_achieved_srgb.shape
+        np.testing.assert_array_equal(loaded.uniform_recipes, cache.uniform_recipes)
+        np.testing.assert_array_equal(
+            loaded.uniform_achieved_srgb, cache.uniform_achieved_srgb
+        )
+        assert loaded.metadata["uniform_recipe_count"] == len(SMALL_PALETTE)
+
+    def test_legacy_cache_without_uniform_fields_loads_with_empty_pinset(
+        self, tmp_path: Path
+    ):
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        npz_path = cache_file_path(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        # Simulate a legacy cache: remove uniform_* arrays from .npz.
+        import json
+        with np.load(npz_path) as loaded:
+            legacy_arrays = {
+                "lab_centers": loaded["lab_centers"],
+                "recipes": loaded["recipes"],
+                "achieved_srgb": loaded["achieved_srgb"],
+                "achieved_lab": loaded["achieved_lab"],
+                "center_delta_e": loaded["center_delta_e"],
+            }
+        with npz_path.open("wb") as handle:
+            np.savez_compressed(handle, **legacy_arrays)
+        meta_path = npz_path.with_suffix(".meta.json")
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        metadata.pop("uniform_recipe_count", None)
+        meta_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        loaded = load_material_solver_cache(
+            SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=32, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        # Legacy cache loads with empty uniform arrays.
+        assert loaded.uniform_recipes.shape == (0, 0)
+        assert loaded.uniform_achieved_srgb.shape == (0, 3)
+        # Lookup should still work (bucket pool only).
+        targets = np.asarray([[200, 100, 50]], dtype=np.uint8)
+        matched, recipes, delta_e = loaded.lookup(targets, SMALL_PALETTE)
+        assert matched.shape == (1, 3)
+        assert recipes.shape == (1, 5)
