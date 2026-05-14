@@ -26,7 +26,18 @@ const POLL_INTERVAL_MS = 500;
 
 const isDev = !app.isPackaged;
 const ROOT_DIR = path.join(__dirname, "..");
-const ICON_PATH = path.join(ROOT_DIR, "icon.ico");
+const IS_WIN = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
+
+// Platform-aware icon paths.
+//   - Windows: 仍用仓库根目录的 icon.ico（任务栏 / 安装包用）
+//   - macOS:   用 electron/build 下生成的 icns（包内）+ png（运行时窗口 + Dock）
+//   - Linux:   复用 mac 的 png
+const ICON_PATH = (() => {
+  if (IS_WIN) return path.join(ROOT_DIR, "icon.ico");
+  return path.join(__dirname, "build", "icon.png");
+})();
+const ICON_ICNS_PATH = path.join(__dirname, "build", "icon.icns");
 
 // ═══════════════════════════════════════════════════════════
 //  Quit dialog i18n
@@ -97,7 +108,9 @@ function spawnChild(name, cmd, args, cwd) {
         cwd,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
-        detached: false,
+        // mac/linux: detach 让子进程拥有独立进程组，退出时一并 kill 整个组，
+        // 避免 vite/uvicorn 的 fork worker 残留占住端口。
+        detached: !IS_WIN,
       });
 
       proc.stdout.on("data", (data) => {
@@ -138,13 +151,19 @@ function spawnChild(name, cmd, args, cwd) {
 function killChild(proc) {
   if (!proc || proc.exitCode !== null) return;
   try {
-    if (process.platform === "win32") {
+    if (IS_WIN) {
       execSync(`taskkill /T /F /PID ${proc.pid}`, {
         windowsHide: true,
         stdio: "ignore",
       });
     } else {
-      proc.kill("SIGTERM");
+      // detached spawn 后 pid === pgid，传负号给 process.kill 杀整个进程组，
+      // 这样 vite worker / uvicorn reload 子进程也会跟着退出。
+      try {
+        process.kill(-proc.pid, "SIGTERM");
+      } catch (_) {
+        proc.kill("SIGTERM");
+      }
     }
   } catch (_) {}
 }
@@ -161,37 +180,67 @@ function killAllChildren() {
 // ═══════════════════════════════════════════════════════════
 
 function killListening(ports) {
-  if (process.platform !== "win32") return;
-  try {
-    const out = execSync("netstat -ano", {
-      windowsHide: true,
-      encoding: "utf-8",
-    });
-    const portPattern = ports.join("|");
-    const re = new RegExp(
-      `\\s+TCP\\s+[\\d.]+:(${portPattern})\\s+\\S+\\s+LISTENING\\s+(\\d+)`,
-    );
-    const killed = new Set();
-    for (const line of out.split("\n")) {
-      const m = line.match(re);
-      if (m) {
-        const pid = parseInt(m[2], 10);
-        const port = m[1];
-        if (killed.has(pid)) continue;
-        try {
-          execSync(`taskkill /T /F /PID ${pid}`, {
-            windowsHide: true,
-            stdio: "ignore",
-          });
-          logSys(`Killed PID ${pid} (port ${port})`);
-          killed.add(pid);
-        } catch (_) {
-          logErr(`Failed to kill PID ${pid} (port ${port})`);
+  if (IS_WIN) {
+    try {
+      const out = execSync("netstat -ano", {
+        windowsHide: true,
+        encoding: "utf-8",
+      });
+      const portPattern = ports.join("|");
+      const re = new RegExp(
+        `\\s+TCP\\s+[\\d.]+:(${portPattern})\\s+\\S+\\s+LISTENING\\s+(\\d+)`,
+      );
+      const killed = new Set();
+      for (const line of out.split("\n")) {
+        const m = line.match(re);
+        if (m) {
+          const pid = parseInt(m[2], 10);
+          const port = m[1];
+          if (killed.has(pid)) continue;
+          try {
+            execSync(`taskkill /T /F /PID ${pid}`, {
+              windowsHide: true,
+              stdio: "ignore",
+            });
+            logSys(`Killed PID ${pid} (port ${port})`);
+            killed.add(pid);
+          } catch (_) {
+            logErr(`Failed to kill PID ${pid} (port ${port})`);
+          }
         }
       }
+    } catch (err) {
+      logErr(`Port cleanup error: ${err.message}`);
     }
-  } catch (err) {
-    logErr(`Port cleanup error: ${err.message}`);
+    return;
+  }
+
+  // macOS / Linux: 用 lsof 拿到 LISTEN 状态的 PID 再 kill。
+  // lsof 在没有匹配进程时退出码为 1,这是正常情况而不是错误,要吞掉。
+  for (const port of ports) {
+    try {
+      const out = execSync(
+        `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`,
+        { encoding: "utf-8" },
+      ).trim();
+      if (!out) continue;
+      const pids = out.split(/\s+/).map((s) => parseInt(s, 10)).filter(Boolean);
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGTERM");
+          logSys(`Killed PID ${pid} (port ${port})`);
+        } catch (err) {
+          // ESRCH = 进程已经不在,忽略;其它错误记一条。
+          if (err.code !== "ESRCH") {
+            logErr(`Failed to kill PID ${pid} (port ${port}): ${err.message}`);
+          }
+        }
+      }
+    } catch (err) {
+      // lsof 没匹配进程时 status=1, stdout/stderr 都为空,直接跳过。
+      if (err.status === 1 && !err.stderr) continue;
+      logErr(`Port ${port} cleanup error: ${err.message}`);
+    }
   }
 }
 
@@ -258,24 +307,34 @@ function waitForPort(port, timeoutMs) {
 // ═══════════════════════════════════════════════════════════
 
 function findPython() {
-  const venvPaths = [
-    path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
-    path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
-  ];
-  for (const p of venvPaths) {
+  // Windows: venv 下的可执行文件叫 python.exe;mac/linux 在 bin/python。
+  const candidates = IS_WIN
+    ? [
+        path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
+        path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+      ]
+    : [
+        path.join(ROOT_DIR, ".venv", "bin", "python"),
+        path.join(ROOT_DIR, "venv", "bin", "python"),
+        path.join(ROOT_DIR, ".venv", "bin", "python3"),
+        path.join(ROOT_DIR, "venv", "bin", "python3"),
+      ];
+  for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }
-  return "python";
+  // PATH 回退:mac 上系统通常只有 python3,Windows 一般是 python。
+  return IS_WIN ? "python" : "python3";
 }
 
 function findNode() {
+  const lookupCmd = IS_WIN ? "where node" : "which node";
   try {
-    const out = execSync("where node", {
+    const out = execSync(lookupCmd, {
       windowsHide: true,
       encoding: "utf-8",
     });
     const lines = out.trim().split("\n");
-    if (lines.length > 0) return lines[0].trim();
+    if (lines.length > 0 && lines[0].trim()) return lines[0].trim();
   } catch (_) {}
   return "node";
 }
@@ -334,6 +393,7 @@ function createWindow() {
   const windowOptions = {
     width: 1440,
     height: 900,
+    title: "Lumina Studio 2",
     icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
       contextIsolation: true,
@@ -444,6 +504,9 @@ app.on("before-quit", () => {
 });
 
 app.on("window-all-closed", () => {
+  // macOS 习惯:关掉所有窗口应用仍驻留 Dock,Cmd+Q 才真正退出。
+  // 但本应用是单窗口工具,而且 close 时已经走了"是否退出"的确认对话框,
+  // 用户选了关闭就是想退出,所以这里和 Windows 一样直接 quit。
   app.quit();
 });
 
@@ -451,6 +514,30 @@ app.whenReady().then(async () => {
   initLog();
   logSys("Lumina Studio Electron starting...");
   logSys(`Mode: ${isDev ? "development" : "production"}`);
+
+  // 让 about 面板 / app.getName() / 部分 macOS 系统提示显示正确的名字。
+  // 注意:dev 模式下 macOS 顶部菜单栏左上角的加粗应用名由 Electron.app 的
+  // Info.plist::CFBundleName 决定,无法在运行期改写;打包后(productName 写进
+  // Info.plist)就会自动变成 "Lumina Studio"。
+  app.setName("Lumina Studio 2");
+  if (IS_MAC) {
+    app.setAboutPanelOptions({
+      applicationName: "Lumina Studio 2",
+      applicationVersion: app.getVersion(),
+      copyright: "© Lumina Studio",
+      iconPath: ICON_PATH,
+    });
+  }
+
+  // macOS: 让 Dock 显示 Lumina 自己的图标而不是默认 Electron 图标。
+  // 仅在 dev/未签名运行时需要;打包后由 .app 包内的 Contents/Resources/icon.icns 接管。
+  if (IS_MAC && app.dock && fs.existsSync(ICON_PATH)) {
+    try {
+      app.dock.setIcon(ICON_PATH);
+    } catch (err) {
+      logErr(`Dock icon set failed: ${err.message}`);
+    }
+  }
 
   createSplash();
 
@@ -474,10 +561,15 @@ app.whenReady().then(async () => {
       return;
     }
   } else {
+    // 生产模式下后端可执行文件按平台命名:
+    //   - Windows: lumina-backend.exe (PyInstaller --onefile)
+    //   - macOS:   lumina-backend (无后缀)
+    //   - Linux:   lumina-backend
+    // mac/linux 的打包脚本目前还没就绪,这里先做好分流,后续接打包不用再动 main.cjs。
     const backendExe = path.join(
       process.resourcesPath,
       "backend",
-      "lumina-backend.exe",
+      IS_WIN ? "lumina-backend.exe" : "lumina-backend",
     );
     logSys(`Starting backend: ${backendExe}`);
     try {

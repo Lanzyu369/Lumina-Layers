@@ -348,3 +348,20 @@ progress/archive/
 
 # reproducible-bug-reports: local reproduction bundles rebuilt from tickets
 repro_sessions/
+
+# ==========================================
+# electron 套壳:必要资源入库,中间产物排除
+# ==========================================
+# 上面 PyInstaller 的 build/ 规则会顺带把 electron/build/ 也屏蔽掉,
+# 但 electron 的 build 里放的是 mac 图标资源和生成脚本,需要随仓库分发。
+!electron/build/
+!electron/build/**
+# 但中间 iconset 目录不入库(每次跑脚本都会重新生成)
+electron/build/icon.iconset/
+electron/dist_electron/
+electron/node_modules/
+
+# ==========================================
+# 本地参考工程(BambuStudio / OrcaSlicer / ChromaPrint3D 等),不入库
+# ==========================================
+reference-projects/
