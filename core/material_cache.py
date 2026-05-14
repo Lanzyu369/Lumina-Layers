@@ -68,6 +68,7 @@ from core.material_color_solver import (
     _compute_material_affines,
     _enumerate_cumulative_affines,
     _greedy_lab_spacing_dedup,
+    forward_model,
     linear_to_srgb_float,
     linear_to_srgb_uint8,
     rgb_to_lab,
@@ -396,7 +397,7 @@ def _hue_aware_rerank(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass
 class MaterialSolverCache:
     """Loaded Lab-grid material-recipe cache (default 128³).
     已加载的 Lab 网格耗材配方缓存（默认 128³）。
@@ -416,6 +417,12 @@ class MaterialSolverCache:
         center_delta_e: (K,) float32 ΔE between bucket center and the stored
             recipe's achieved Lab. Diagnostic only — lookup ΔE is recomputed
             against the caller's target. (配方与桶心的 ΔE，仅诊断用)
+        uniform_recipes: (M, N) uint8 pure-colour recipes (all layers the same
+            material), one per palette entry. Always kept regardless of bucket
+            collisions so every material's identity colour is queryable.
+            (纯色配方，每种耗材一条，不受桶碰撞剔除)
+        uniform_achieved_srgb: (M, 3) uint8 predicted sRGB for each pure-colour
+            recipe. (每条纯色配方的预测 sRGB)
         metadata: JSON-serialisable dictionary with palette fingerprint,
             parameters, build stats, and timestamps. (元数据)
     """
@@ -425,7 +432,19 @@ class MaterialSolverCache:
     achieved_srgb: np.ndarray
     achieved_lab: np.ndarray
     center_delta_e: np.ndarray
+    uniform_recipes: np.ndarray
+    uniform_achieved_srgb: np.ndarray
     metadata: dict[str, Any]
+
+    def __post_init__(self):
+        """Backward-compat: legacy caches lack uniform fields, fill with empties.
+        旧缓存兼容：缺 uniform 字段时回填空数组，下次重建自动升级。"""
+        if self.uniform_recipes.size == 0 and self.uniform_recipes.ndim == 0:
+            object.__setattr__(self, "uniform_recipes",
+                               np.zeros((0, 0), dtype=np.uint8))
+        if self.uniform_achieved_srgb.size == 0 and self.uniform_achieved_srgb.ndim == 0:
+            object.__setattr__(self, "uniform_achieved_srgb",
+                               np.zeros((0, 3), dtype=np.uint8))
 
     @property
     def layer_count(self) -> int:
@@ -551,6 +570,24 @@ class MaterialSolverCache:
         candidate_delta_e = np.linalg.norm(
             candidate_lab - target_lab[:, None, :], axis=2
         )
+        # --- Merge uniform (pure-colour) recipes into candidate pool ---
+        # Pure-colour recipes are always pinned so every material's identity
+        # colour stays queryable even when its recipe would otherwise be
+        # culled by a bucket collision.
+        # 将纯色配方并入候选池，确保每种耗材的本色可被查到。
+        C_count = target_lab.shape[0]
+        bucket_count = nearest_idx.shape[1]
+        uniform_count = int(self.uniform_recipes.shape[0])
+        if uniform_count > 0:
+            uniform_lab = rgb_to_lab(self.uniform_achieved_srgb).astype(np.float64)
+            uniform_lab_tiled = np.broadcast_to(
+                uniform_lab[None, :, :], (C_count, uniform_count, 3)
+            )
+            uniform_de = np.linalg.norm(
+                uniform_lab_tiled - target_lab[:, None, :], axis=2
+            )
+            candidate_lab = np.concatenate([candidate_lab, uniform_lab_tiled], axis=1)
+            candidate_delta_e = np.concatenate([candidate_delta_e, uniform_de], axis=1)
         # --- Hue-aware reranking (when hue_weight > 0) ---
         # Uses LCH weighted distance to prefer same-hue candidates,
         # with a safety cap that falls back to CIE76-best when the
@@ -562,17 +599,33 @@ class MaterialSolverCache:
             )
         else:
             best_pos = np.argmin(candidate_delta_e, axis=1)
-        row_index = np.arange(target_lab.shape[0], dtype=np.int64)
-        best_rows = nearest_idx[row_index, best_pos]
-        matched_rgb = self.achieved_srgb[best_rows]
-        # Re-bind recipe material indices from canonical to caller order.
+        row_index = np.arange(C_count, dtype=np.int64)
+        best_de = candidate_delta_e[row_index, best_pos]
+
+        # Split hits: bucket pool vs uniform (pure-colour) pool.
+        is_uniform = best_pos >= bucket_count
+        uniform_best_idx = best_pos - bucket_count  # valid only when is_uniform True
+        bucket_best_pos = best_pos  # valid when is_uniform False
+
+        matched_rgb = np.empty((C_count, 3), dtype=np.uint8)
+        recipes_canonical = np.zeros((C_count, self.layer_count), dtype=np.uint8)
         user_order = canonical_palette_order(user_materials)
-        canonical_recipes = self.recipes[best_rows]
         mapping = np.asarray(user_order, dtype=np.int32)
-        recipes_user_order = mapping[canonical_recipes].astype(np.int32)
-        # ΔE already measured against the actual achieved colour (not the bucket centre).
-        delta_e = candidate_delta_e[row_index, best_pos]
-        return matched_rgb, recipes_user_order, delta_e
+
+        if np.any(is_uniform):
+            uni_idx = np.where(is_uniform)[0]
+            u_col = uniform_best_idx[uni_idx]
+            matched_rgb[uni_idx] = self.uniform_achieved_srgb[u_col]
+            recipes_canonical[uni_idx] = self.uniform_recipes[u_col]
+        if np.any(~is_uniform):
+            bkt_idx = np.where(~is_uniform)[0]
+            b_pos = bucket_best_pos[bkt_idx]
+            best_rows = nearest_idx[bkt_idx, b_pos]
+            matched_rgb[bkt_idx] = self.achieved_srgb[best_rows]
+            recipes_canonical[bkt_idx] = self.recipes[best_rows]
+
+        recipes_user_order = mapping[recipes_canonical].astype(np.int32)
+        return matched_rgb, recipes_user_order, best_de
 
     def lookup_top_k(
         self,
@@ -622,31 +675,65 @@ class MaterialSolverCache:
                 f"User palette fingerprint {user_fp} does not match cached "
                 f"palette {self.palette_hash}"
             )
-        if self.lab_centers.shape[0] == 0:
+        if self.lab_centers.shape[0] == 0 and self.uniform_recipes.shape[0] == 0:
             return []
 
         target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0].astype(np.float64)
         oversample = max(1, int(top_k) * 4)
         query_k = min(oversample, int(self.achieved_lab.shape[0]))
-        tree = cKDTree(self.achieved_lab.astype(np.float64))
-        # ``cKDTree.query`` returns ``distances, indices``; when ``k == 1`` the
-        # arrays are 0-D scalars so we always normalise to 1-D.
-        # k=1 时返回标量，这里统一成一维数组便于下游处理。
-        _, nearest_idx = tree.query(target_lab, k=query_k)
-        nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
 
-        nearest_srgb = self.achieved_srgb[nearest_idx]
-        # Recompute ΔE against the achieved (not the bucket centre) for an
-        # accurate target-to-prediction error.
-        matched_lab = self.achieved_lab[nearest_idx].astype(np.float64)
-        delta_e = np.linalg.norm(matched_lab - target_lab, axis=1)
+        # --- Bucket pool ---
+        bucket_k = query_k
+        bucket_lab = np.zeros((0, 3), dtype=np.float64)
+        bucket_srgb = np.zeros((0, 3), dtype=np.uint8)
+        bucket_delta_e = np.zeros(0, dtype=np.float64)
+        bucket_cache_rows = np.zeros(0, dtype=np.int64)
+        is_bucket = np.zeros(0, dtype=bool)
+
+        if bucket_k > 0 and self.achieved_lab.shape[0] > 0:
+            tree = cKDTree(self.achieved_lab.astype(np.float64))
+            _, nearest_idx = tree.query(target_lab, k=bucket_k)
+            nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
+            bucket_srgb = self.achieved_srgb[nearest_idx]
+            bucket_lab = self.achieved_lab[nearest_idx].astype(np.float64)
+            bucket_delta_e = np.linalg.norm(bucket_lab - target_lab, axis=1)
+            bucket_cache_rows = nearest_idx
+            is_bucket = np.ones(int(nearest_idx.shape[0]), dtype=bool)
+
+        # --- Uniform (pure-colour) pool ---
+        uniform_count = int(self.uniform_recipes.shape[0])
+        uniform_lab = np.zeros((0, 3), dtype=np.float64)
+        uniform_srgb = np.zeros((0, 3), dtype=np.uint8)
+        uniform_delta_e = np.zeros(0, dtype=np.float64)
+        uniform_rows = np.zeros(0, dtype=np.int64)
+        is_uniform = np.zeros(0, dtype=bool)
+
+        if uniform_count > 0:
+            uniform_srgb = self.uniform_achieved_srgb
+            uniform_lab = rgb_to_lab(uniform_srgb).astype(np.float64)
+            uniform_delta_e = np.linalg.norm(uniform_lab - target_lab, axis=1)
+            uniform_rows = np.arange(uniform_count, dtype=np.int64)
+            is_uniform = np.ones(uniform_count, dtype=bool)
+
+        # --- Merge pools ---
+        all_lab = np.concatenate([bucket_lab, uniform_lab], axis=0)
+        all_srgb = np.concatenate([bucket_srgb, uniform_srgb], axis=0)
+        all_de = np.concatenate([bucket_delta_e, uniform_delta_e], axis=0)
+        all_is_uniform = np.concatenate([is_bucket, is_uniform], axis=0)
 
         # Sort ascending by ΔE before the greedy spacing filter.
-        sort_order = np.argsort(delta_e, kind="stable")
-        sorted_lab = matched_lab[sort_order]
-        sorted_srgb = nearest_srgb[sort_order]
-        sorted_de = delta_e[sort_order]
-        sorted_cache_rows = nearest_idx[sort_order]
+        sort_order = np.argsort(all_de, kind="stable")
+        sorted_lab = all_lab[sort_order]
+        sorted_srgb = all_srgb[sort_order]
+        sorted_de = all_de[sort_order]
+        sorted_is_uniform = all_is_uniform[sort_order]
+        # Row index into either bucket_cache_rows or uniform_rows, keyed by is_uniform.
+        sorted_uni_rows = np.concatenate(
+            [np.zeros_like(bucket_cache_rows, dtype=np.int64), uniform_rows], axis=0
+        )[sort_order]
+        sorted_bkt_rows = np.concatenate(
+            [bucket_cache_rows, np.zeros(uniform_count, dtype=np.int64)], axis=0
+        )[sort_order]
 
         kept_idx = _greedy_lab_spacing_dedup(
             sorted_lab, min_spacing=min_spacing, limit=int(top_k)
@@ -656,16 +743,18 @@ class MaterialSolverCache:
 
         user_order = canonical_palette_order(user_materials)
         mapping = np.asarray(user_order, dtype=np.int32)
-        return [
-            ColorSuggestion(
+        suggestions: list[ColorSuggestion] = []
+        for i in kept_idx:
+            if sorted_is_uniform[i]:
+                recipe = self.uniform_recipes[sorted_uni_rows[i]]
+            else:
+                recipe = self.recipes[sorted_bkt_rows[i]]
+            suggestions.append(ColorSuggestion(
                 matched_rgb=sorted_srgb[i].copy(),
-                recipe=mapping[self.recipes[sorted_cache_rows[i]]].astype(
-                    np.int32, copy=True
-                ),
+                recipe=mapping[recipe].astype(np.int32, copy=True),
                 delta_e=float(sorted_de[i]),
-            )
-            for i in kept_idx
-        ]
+            ))
+        return suggestions
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +831,54 @@ def _groupby_argmin(
     unique_buckets = sorted_buckets[first_mask]
     row_indices = order[first_mask]
     return unique_buckets, row_indices
+
+
+def _compute_uniform_recipes(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute pure-colour recipes (all N layers the same material) for each palette entry.
+    计算调色板每种耗材的纯色配方（N 层全用同一种耗材）和对应的预测 sRGB。
+
+    Uses the Beer-Lambert forward model to predict the final colour of a
+    ``[i, i, ..., i]`` stack for each material index ``i``, keeping the
+    recipes in canonical (fingerprint-sorted) order so they align with the
+    rest of the cache arrays.
+
+    对每种耗材 ``i``，用 Beer-Lambert 前向模型计算 N 层同样耗材叠加后的颜色，
+    配方按规范（指纹序）排列以对齐缓存其它数组。
+
+    Args:
+        materials: Palette in canonical order. (规范序耗材列表)
+        layer_count: Number of layers. (层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+
+    Returns:
+        uniform_recipes: ``(M, N)`` uint8, row ``i`` is ``[i, i, ..., i]``.
+            (纯色配方矩阵)
+        uniform_achieved_srgb: ``(M, 3)`` uint8 predicted sRGB per pure recipe.
+            (纯色配方预测 sRGB)
+    """
+    M = len(materials)
+    uniform_recipes = np.empty((M, layer_count), dtype=np.uint8)
+    for i in range(M):
+        uniform_recipes[i, :] = i  # [i, i, ..., i]
+
+    substrate_linear = (
+        np.zeros(3, dtype=np.float64)
+        if substrate == "black"
+        else np.ones(3, dtype=np.float64)
+    )
+    uniform_achieved_srgb = np.empty((M, 3), dtype=np.uint8)
+    for i in range(M):
+        recipe = np.full(layer_count, i, dtype=np.int32)
+        linear = forward_model(recipe, materials, layer_height_mm, substrate_linear)
+        uniform_achieved_srgb[i] = linear_to_srgb_uint8(linear.reshape(1, 3))[0]
+
+    return uniform_recipes, uniform_achieved_srgb
 
 
 def build_material_solver_cache(
@@ -1047,12 +1184,20 @@ def build_material_solver_cache(
         },
     )
 
+    # ---- Compute and attach pure-colour recipes (pinned, never culled) ----
+    uniform_recipes, uniform_achieved_srgb = _compute_uniform_recipes(
+        canonical_materials, layer_count, layer_height_mm, substrate,
+    )
+    metadata["uniform_recipe_count"] = int(uniform_recipes.shape[0])
+
     return MaterialSolverCache(
         lab_centers=lab_centers,
         recipes=recipes,
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
         center_delta_e=center_delta_e,
+        uniform_recipes=uniform_recipes,
+        uniform_achieved_srgb=uniform_achieved_srgb,
         metadata=metadata,
     )
 
@@ -1094,6 +1239,8 @@ def save_material_solver_cache(
             achieved_srgb=cache.achieved_srgb,
             achieved_lab=cache.achieved_lab,
             center_delta_e=cache.center_delta_e,
+            uniform_recipes=cache.uniform_recipes,
+            uniform_achieved_srgb=cache.uniform_achieved_srgb,
         )
     tmp_npz.replace(npz_path)
 
@@ -1201,6 +1348,11 @@ def load_material_solver_cache(
                 has_achieved_lab = False
                 achieved_lab = np.zeros_like(lab_centers, dtype=np.float32)
             center_delta_e = loaded["center_delta_e"].astype(np.float32)
+            # uniform_* fields are optional — legacy caches lack them.
+            uniform_recipes = loaded.get("uniform_recipes",
+                                         np.zeros((0, 0), dtype=np.uint8))
+            uniform_achieved_srgb = loaded.get("uniform_achieved_srgb",
+                                                np.zeros((0, 3), dtype=np.uint8))
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         _log.warning(
@@ -1268,6 +1420,8 @@ def load_material_solver_cache(
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
         center_delta_e=center_delta_e,
+        uniform_recipes=uniform_recipes,
+        uniform_achieved_srgb=uniform_achieved_srgb,
         metadata=metadata,
     )
 
