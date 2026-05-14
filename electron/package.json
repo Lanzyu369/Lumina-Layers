@@ -47,7 +47,31 @@
     "files": [
       "main.cjs",
       "preload.cjs",
-      "splash.html"
-    ]
+      "splash.html",
+      "build/icon.png",
+      "build/icon.icns"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.graphics-design",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
+      ]
+    },
+    "dmg": {
+      "icon": "build/icon.icns"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "target": ["AppImage"]
+    }
   }
 }
