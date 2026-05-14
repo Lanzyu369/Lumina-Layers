@@ -118,6 +118,12 @@ export function applyImport(restoreResult: RestoreResult): void {
     if (conv.device.nozzle_size && conv.device.nozzle_size !== settingsState.nozzleSize) {
       settingsState.setNozzleSize(conv.device.nozzle_size as "0.2" | "0.4");
     }
+    if (
+      typeof conv.base.svg_pixels_per_mm === "number" &&
+      conv.base.svg_pixels_per_mm !== settingsState.svgPixelsPerMm
+    ) {
+      settingsState.setSvgPixelsPerMm(conv.base.svg_pixels_per_mm);
+    }
   }
 
   // 3. Switch to converter tab

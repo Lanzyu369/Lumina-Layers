@@ -15,10 +15,20 @@ from typing import Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.schemas.lut import LutSourceSelection
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    SVG_PIXELS_PER_MM_MAX,
+    SVG_PIXELS_PER_MM_MIN,
+    normalize_svg_pixels_per_mm,
+)
 
 MAX_BACKING_THICKNESS_MM = 3.5
 MAX_RELIEF_EXTRA_HEIGHT_MM = 15.0
 MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_MM
+SVG_PIXELS_PER_MM_DESCRIPTION = (
+    "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
+    "直接矢量模式不使用此参数"
+)
 
 # ========== Enums ==========
 
@@ -293,6 +303,12 @@ class ConvertPreviewRequest(LutSourceSelection):
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
+    svg_pixels_per_mm: float = Field(
+        SVG_PIXELS_PER_MM_DEFAULT,
+        ge=SVG_PIXELS_PER_MM_MIN,
+        le=SVG_PIXELS_PER_MM_MAX,
+        description=SVG_PIXELS_PER_MM_DESCRIPTION,
+    )
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
     material_backing_material_index: int | None = Field(
@@ -307,6 +323,11 @@ class ConvertPreviewRequest(LutSourceSelection):
     @classmethod
     def normalize_color_mode_alias(cls, value: object) -> object:
         return _normalize_color_mode_alias(value)
+
+    @field_validator("svg_pixels_per_mm")
+    @classmethod
+    def validate_svg_pixels_per_mm(cls, value: float) -> float:
+        return normalize_svg_pixels_per_mm(value)
 
 
 class RecipeOverrideItem(BaseModel):
@@ -425,6 +446,12 @@ class ConvertGenerateRequest(LutSourceSelection):
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
+    svg_pixels_per_mm: float = Field(
+        SVG_PIXELS_PER_MM_DEFAULT,
+        ge=SVG_PIXELS_PER_MM_MIN,
+        le=SVG_PIXELS_PER_MM_MAX,
+        description=SVG_PIXELS_PER_MM_DESCRIPTION,
+    )
     hue_weight: float = Field(0.0, ge=0.0, le=1.0, description="色相保护权重 (0=纯色差, 0.5=推荐, 1.0=最强)")
     chroma_gate: float = Field(15.0, ge=0.0, le=50.0, description="暗色彩度门槛 (0=禁用, 15=默认)")
     material_backing_material_index: int | None = Field(
@@ -488,6 +515,11 @@ class ConvertGenerateRequest(LutSourceSelection):
     @classmethod
     def normalize_color_mode_alias(cls, value: object) -> object:
         return _normalize_color_mode_alias(value)
+
+    @field_validator("svg_pixels_per_mm")
+    @classmethod
+    def validate_svg_pixels_per_mm(cls, value: float) -> float:
+        return normalize_svg_pixels_per_mm(value)
 
 
 class LargeFormatGenerateRequest(BaseModel):

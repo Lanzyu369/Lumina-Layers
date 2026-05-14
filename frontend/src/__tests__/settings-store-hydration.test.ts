@@ -155,6 +155,25 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(useSettingsStore.getState().solverCacheGridResolution).toBe(256);
   });
 
+  it("svgPixelsPerMm defaults to 10.0 and clamps to one decimal", async () => {
+    const { settingsStoreModule, artifactModule } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    expect(settingsStoreModule.DEFAULT_SETTINGS.svgPixelsPerMm).toBe(10);
+
+    useSettingsStore.getState().setSvgPixelsPerMm(25.54);
+    expect(useSettingsStore.getState().svgPixelsPerMm).toBe(25.5);
+
+    useSettingsStore.getState().setSvgPixelsPerMm(99);
+    expect(useSettingsStore.getState().svgPixelsPerMm).toBe(50);
+
+    useSettingsStore.getState().resetSvgPixelsPerMm();
+    expect(useSettingsStore.getState().svgPixelsPerMm).toBe(10);
+    expect(artifactModule.invalidateGeneratedArtifacts).toHaveBeenCalledTimes(
+      3,
+    );
+  });
+
   it("syncToBackend includes device slicer payload fields", async () => {
     const { settingsStoreModule, systemApi } = await loadStores();
 
@@ -248,7 +267,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     ).toBe(true);
   });
 
-  it("submitGenerate includes enable_base_layer_height_modifier from settingsStore", async () => {
+  it("submitGenerate includes device and high-fidelity SVG settings", async () => {
     const { settingsStoreModule, converterStoreModule, converterApi } =
       await loadStores();
 
@@ -262,6 +281,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      svgPixelsPerMm: 18.5,
     });
     converterStoreModule.useConverterStore.setState({
       ...converterStoreModule.DEFAULT_STATE,
@@ -276,6 +296,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       "sess-1",
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        svg_pixels_per_mm: 18.5,
       }),
     );
   });

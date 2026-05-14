@@ -12,7 +12,13 @@ import cv2
 from PIL import Image
 
 from api.structured_logging import get_logger
-from config import PrinterConfig, ModelingMode, ColorSystem
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    PrinterConfig,
+    ModelingMode,
+    ColorSystem,
+    normalize_svg_pixels_per_mm,
+)
 
 # HEIC/HEIF support (optional dependency)
 try:
@@ -81,6 +87,7 @@ class LuminaImageProcessor:
         model_margin: float | None = None,
         use_lut_constrained: bool = False,
         auto_dynamic_range: bool = False,
+        svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     ):
         """Initialize image processor.
         加载 LUT 文件并初始化图像处理器。
@@ -91,6 +98,7 @@ class LuminaImageProcessor:
             chroma_gate: 色度门限 (0-50)
             use_lut_constrained: 启用 LUT-Constrained K-Means 量化
             auto_dynamic_range: 启用自动动态范围压缩（实验性，仅作用于 L*）
+            svg_pixels_per_mm: 高保真 SVG 光栅化采样密度（px/mm）
         """
         self.lut_path = lut_path
         self.color_mode = color_mode
@@ -104,6 +112,7 @@ class LuminaImageProcessor:
         self.model_margin = float(model_margin) if model_margin is not None else None
         self.use_lut_constrained = bool(use_lut_constrained)
         self.auto_dynamic_range = bool(auto_dynamic_range)
+        self.svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
         self.hue_matcher = None
         self.enable_cleanup = True
         self._last_unique_colors = 0
@@ -439,20 +448,35 @@ class LuminaImageProcessor:
         """加载图像并缩放到目标尺寸，对 SVG 自动禁用滤波器。
         Load image and resize to target dimensions. Returns (img, w, h, scale, blur, sigma).
         """
-        SVG_PIXELS_PER_MM = 10.0
         is_svg = image_path.lower().endswith(".svg")
         if is_svg:
+            modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+            svg_pixels_per_mm = (
+                self.svg_pixels_per_mm
+                if modeling_mode_value == ModelingMode.HIGH_FIDELITY.value
+                else SVG_PIXELS_PER_MM_DEFAULT
+            )
             log.debug(
                 "SVG input detected",
-                extra={"event": "svg_input_detected", "pixels_per_mm": SVG_PIXELS_PER_MM},
+                extra={
+                    "event": "svg_input_detected",
+                    "pixels_per_mm": svg_pixels_per_mm,
+                    "mode": str(modeling_mode_value),
+                },
             )
-            img = Image.fromarray(self._load_svg(image_path, target_width_mm, pixels_per_mm=SVG_PIXELS_PER_MM))
+            img = Image.fromarray(
+                self._load_svg(
+                    image_path,
+                    target_width_mm,
+                    pixels_per_mm=svg_pixels_per_mm,
+                )
+            )
             blur_kernel, smooth_sigma = 0, 0
             log.debug(
                 "SVG filters disabled",
                 extra={"event": "svg_filters_disabled", "blur_kernel": blur_kernel, "smooth_sigma": smooth_sigma},
             )
-            target_w, target_h, pixel_scale = img.size[0], img.size[1], 1.0 / SVG_PIXELS_PER_MM
+            target_w, target_h, pixel_scale = img.size[0], img.size[1], 1.0 / svg_pixels_per_mm
         else:
             img = Image.open(image_path).convert("RGBA")
             self._log_image_info(img, image_path)

@@ -45,6 +45,7 @@ describe("convertPreview", () => {
     modeling_mode: ModelingMode.HIGH_FIDELITY,
     quantize_colors: 48,
     enable_cleanup: true,
+    svg_pixels_per_mm: 25.5,
     hue_weight: 0,
     chroma_gate: 0,
     is_dark: false,
@@ -77,6 +78,7 @@ describe("convertPreview", () => {
     expect(fd.get("modeling_mode")).toBe(ModelingMode.HIGH_FIDELITY);
     expect(fd.get("quantize_colors")).toBe("48");
     expect(fd.get("enable_cleanup")).toBe("true");
+    expect(fd.get("svg_pixels_per_mm")).toBe("25.5");
 
     // 不应设置 responseType: blob（后端返回 JSON）
     expect(config).toMatchObject({ timeout: 0 });

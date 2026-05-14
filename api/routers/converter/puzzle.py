@@ -749,6 +749,7 @@ async def generate_puzzle(
             "loop_position_preset": None,
             "modeling_mode": core_modeling_mode,
             "quantize_colors": generate_params.quantize_colors,
+            "svg_pixels_per_mm": generate_params.svg_pixels_per_mm,
             "replacement_regions": None,
             "separate_backing": generate_params.separate_backing,
             "enable_relief": generate_params.enable_relief,

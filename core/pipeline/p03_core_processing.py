@@ -15,6 +15,12 @@ import time
 
 import numpy as np
 
+from config import (
+    SVG_PIXELS_PER_MM_DEFAULT,
+    ModelingMode,
+    normalize_svg_pixels_per_mm,
+)
+
 _log = get_logger(__name__)
 
 
@@ -147,13 +153,16 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     requested_grid = int(ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION)
 
     # ---- Load and resize ----
-    from config import ModelingMode
-
-    PIXELS_PER_MM = 10
+    PIXELS_PER_MM = SVG_PIXELS_PER_MM_DEFAULT
     is_svg = image_path.lower().endswith(".svg")
     if is_svg:
         from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 
+        modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+        if modeling_mode_value == ModelingMode.HIGH_FIDELITY.value:
+            PIXELS_PER_MM = normalize_svg_pixels_per_mm(
+                ctx.get("svg_pixels_per_mm", SVG_PIXELS_PER_MM_DEFAULT)
+            )
         try:
             img = Image.fromarray(rasterize_svg(image_path, target_width_mm, pixels_per_mm=PIXELS_PER_MM))
         except ImportError:
@@ -553,6 +562,7 @@ def run(ctx: dict) -> dict:
     model_margin = ctx.get('model_margin')
     use_lut_constrained = ctx.get('use_lut_constrained', False)
     auto_dynamic_range = ctx.get('auto_dynamic_range', False)
+    svg_pixels_per_mm = ctx.get('svg_pixels_per_mm', SVG_PIXELS_PER_MM_DEFAULT)
 
     # ---- 核心处理 ----
     processor = LuminaImageProcessor(
@@ -568,6 +578,7 @@ def run(ctx: dict) -> dict:
         model_margin=model_margin,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        svg_pixels_per_mm=svg_pixels_per_mm,
     )
     processor.enable_cleanup = enable_cleanup
 

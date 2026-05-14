@@ -288,11 +288,14 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
     if isinstance(generation, dict):
         structure_mode = generation.get("structure_mode")
         modeling_mode = generation.get("modeling_mode")
+        svg_pixels_per_mm = generation.get("svg_pixels_per_mm")
     else:
         structure_mode = None
         modeling_mode = None
+        svg_pixels_per_mm = None
     lines.append(f"- structure_mode: {_safe_str(structure_mode)}")
     lines.append(f"- modeling_mode: {_safe_str(modeling_mode)}")
+    lines.append(f"- svg_pixels_per_mm: {_safe_str(svg_pixels_per_mm)}")
 
     # Feature toggle states.
     for group_key, toggle_key in _INDEX_TOGGLE_GROUPS:

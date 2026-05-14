@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 from api.structured_logging import get_logger
+from config import SVG_PIXELS_PER_MM_DEFAULT
 from core.image_processing import LuminaImageProcessor
 
 _log = get_logger(__name__)
@@ -40,6 +41,7 @@ def run(ctx: dict) -> dict:
         - blur_kernel (int): 中值滤波核大小
         - smooth_sigma (int): 双边滤波 sigma
         - enable_cleanup (bool): 启用孤立像素清理
+        - svg_pixels_per_mm (float): 高保真 SVG 采样密度 (px/mm)
 
     PipelineContext 输出键 / Output keys:
         - matched_rgb (np.ndarray): (H, W, 3) uint8 匹配后的 RGB 图像
@@ -81,6 +83,7 @@ def run(ctx: dict) -> dict:
     model_margin = ctx.get('model_margin')
     use_lut_constrained = ctx.get('use_lut_constrained', False)
     auto_dynamic_range = ctx.get('auto_dynamic_range', False)
+    svg_pixels_per_mm = ctx.get('svg_pixels_per_mm', SVG_PIXELS_PER_MM_DEFAULT)
 
     # Load LUT metadata for palette info
     lut_metadata = None
@@ -116,6 +119,7 @@ def run(ctx: dict) -> dict:
             model_margin=model_margin,
             use_lut_constrained=use_lut_constrained,
             auto_dynamic_range=auto_dynamic_range,
+            svg_pixels_per_mm=svg_pixels_per_mm,
         )
         processor.enable_cleanup = enable_cleanup
 

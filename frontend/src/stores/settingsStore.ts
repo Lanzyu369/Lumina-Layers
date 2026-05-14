@@ -34,6 +34,11 @@ export type SolverCacheGridResolution =
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
   [64, 128, 256, 512, 1024, 2048] as const;
 
+export const SVG_PIXELS_PER_MM_DEFAULT = 10.0;
+export const SVG_PIXELS_PER_MM_MIN = 2.0;
+export const SVG_PIXELS_PER_MM_MAX = 50.0;
+export const SVG_PIXELS_PER_MM_STEP = 0.1;
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -66,6 +71,12 @@ export interface SettingsState {
    * must fall through to the backend default (64).
    */
   solverCacheGridResolution: SolverCacheGridResolution;
+  /**
+   * High-fidelity SVG raster density in pixels per millimeter. This only
+   * affects SVG files processed through High-Fidelity mode; native Vector
+   * mode bypasses rasterization and ignores this value.
+   */
+  svgPixelsPerMm: number;
   /**
    * Advanced: when true, successful previews automatically collapse every
    * gradient-banding group to its representative colour (the material with
@@ -100,6 +111,8 @@ export interface SettingsActions {
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
+  setSvgPixelsPerMm: (value: number) => void;
+  resetSvgPixelsPerMm: () => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
@@ -131,6 +144,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   // toggle is off, builds silently use the low (64) default on the backend.
   enableSolverCacheGridSelection: false,
   solverCacheGridResolution: 64,
+  svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
   autoReplaceGradientBanding: false,
 };
 
@@ -159,6 +173,17 @@ function hasOwnSetting(
   key: keyof SettingsState,
 ): boolean {
   return !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, key);
+}
+
+function normalizeSvgPixelsPerMm(value: number): number {
+  if (!Number.isFinite(value)) {
+    return SVG_PIXELS_PER_MM_DEFAULT;
+  }
+  const clamped = Math.min(
+    SVG_PIXELS_PER_MM_MAX,
+    Math.max(SVG_PIXELS_PER_MM_MIN, value),
+  );
+  return Number(clamped.toFixed(1));
 }
 
 export function deriveBackendDeviceSettingsPatch(
@@ -303,6 +328,16 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           return;
         }
         set({ solverCacheGridResolution: value });
+      },
+
+      setSvgPixelsPerMm: (value: number) => {
+        set({ svgPixelsPerMm: normalizeSvgPixelsPerMm(value) });
+        invalidateGeneratedArtifacts();
+      },
+
+      resetSvgPixelsPerMm: () => {
+        set({ svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT });
+        invalidateGeneratedArtifacts();
       },
 
       setAutoReplaceGradientBanding: (enabled: boolean) =>

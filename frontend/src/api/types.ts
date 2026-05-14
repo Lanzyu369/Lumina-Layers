@@ -85,6 +85,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   enable_cleanup: boolean;
+  svg_pixels_per_mm?: number;
   hue_weight?: number;
   chroma_gate?: number;
   is_dark?: boolean;
@@ -1314,6 +1315,7 @@ export interface BatchConvertParams {
   layer_height_mm?: number;
   quantize_colors: number;
   enable_cleanup: boolean;
+  svg_pixels_per_mm?: number;
   hue_weight: number;
   chroma_gate: number;
   enable_relief?: boolean;

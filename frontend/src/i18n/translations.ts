@@ -1655,6 +1655,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "构建采用稀疏存储，内存只随实际可达配方数增长（与档位无关），极致档也不会爆内存；查找时间会随档位略有增加，但通常仍是毫秒级。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
+  "settings.svg_pixels_per_mm_heading": {
+    zh: "高保真 SVG 采样密度",
+    en: "High-Fidelity SVG sampling density",
+  },
+  "settings.svg_pixels_per_mm_description": {
+    zh: "控制 SVG 图片在高保真模式下先转成像素图时的清晰度。直接使用矢量模式处理 SVG 时不会使用这个设置。",
+    en: "Controls how sharply SVG images are rasterized before High-Fidelity processing. Native Vector mode does not use this setting.",
+  },
+  "settings.svg_pixels_per_mm_label": {
+    zh: "高保真 SVG 采样密度",
+    en: "High-Fidelity SVG sampling density",
+  },
+  "settings.svg_pixels_per_mm_tip": {
+    zh: "仅在“高保真”模式处理 SVG 图片时生效；数值越大边缘越细，处理时间和内存占用也会增加。允许范围 2.0–50.0，步进 0.1。",
+    en: "Only affects SVG images processed in High-Fidelity mode. Higher values preserve finer edges but increase processing time and memory use. Allowed range: 2.0–50.0 in 0.1 steps.",
+  },
+  "settings.svg_pixels_per_mm_reset": {
+    zh: "恢复默认",
+    en: "Reset default",
+  },
+  "settings.svg_pixels_per_mm_default_hint": {
+    zh: "默认值是 10.0 像素/毫米。这个设置不会改变直接矢量模式的 SVG 结果。",
+    en: "Default is 10.0 px/mm. This setting does not change SVG output in native Vector mode.",
+  },
   "settings.auto_replace_gradient_heading": {
     zh: "渐变自动换色",
     en: "Auto replace gradient banding",
@@ -4910,6 +4934,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   common_unit_px: {
     zh: "像素",
     en: "px",
+  },
+  common_unit_px_per_mm: {
+    zh: "像素/毫米",
+    en: "px/mm",
   },
   crop_modal_axis_x: {
     zh: "X 轴",

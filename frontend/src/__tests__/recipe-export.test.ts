@@ -37,6 +37,7 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.base.target_height_mm).toBe(75);
       expect(recipe.base.hue_enable).toBe(true);
       expect(recipe.base.chroma_gate).toBe(20);
+      expect(recipe.base.svg_pixels_per_mm).toBe(10);
     });
 
     it("exports geometry parameters including loop", () => {
@@ -101,12 +102,14 @@ describe("recipe/exportRecipe", () => {
         printerModel: "custom-printer",
         slicerSoftware: "OrcaSlicer",
         nozzleSize: "0.2",
+        svgPixelsPerMm: 18.5,
       });
 
       const recipe = exportConverterRecipe(makeState(), settings, "fp");
       expect(recipe.device.printer_id).toBe("custom-printer");
       expect(recipe.device.slicer).toBe("OrcaSlicer");
       expect(recipe.device.nozzle_size).toBe("0.2");
+      expect(recipe.base.svg_pixels_per_mm).toBe(18.5);
     });
 
     it("exports converter source parameters for share-card restore", () => {

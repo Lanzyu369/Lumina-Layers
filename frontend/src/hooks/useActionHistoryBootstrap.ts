@@ -90,6 +90,7 @@ function readSnapshot(): WorkflowSnapshot {
     active_tab: widget.activeTab ?? "unknown",
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
       maxBytes: 4096,
+      svgPixelsPerMm: settings.svgPixelsPerMm,
     }),
   };
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import platform
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 
 # Handle PyInstaller bundled resources
@@ -70,6 +71,49 @@ class PrinterConfig:
     COLOR_LAYERS: int = 5
     BACKING_MM: float = 1.2
     SHRINK_OFFSET: float = 0.02
+
+
+SVG_PIXELS_PER_MM_DEFAULT: float = 10.0
+SVG_PIXELS_PER_MM_MIN: float = 2.0
+SVG_PIXELS_PER_MM_MAX: float = 50.0
+
+
+def normalize_svg_pixels_per_mm(value: float | int | str | None) -> float:
+    """Validate and normalize high-fidelity SVG raster density.
+    校验并规范化高保真 SVG 光栅化采样密度。
+
+    Args:
+        value: Pixels per millimeter. ``None`` falls back to the default.
+            每毫米像素数；``None`` 使用默认值。
+
+    Returns:
+        float: A value in ``[2.0, 50.0]`` with one decimal place.
+            范围在 ``[2.0, 50.0]`` 内、精确到 0.1 的数值。
+
+    Raises:
+        ValueError: If the value is non-finite, out of range, or not aligned
+            to a 0.1 step. (非有限数、越界或不是 0.1 步进时抛出。)
+    """
+    raw_value = SVG_PIXELS_PER_MM_DEFAULT if value is None else value
+    try:
+        decimal_value = Decimal(str(raw_value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("svg_pixels_per_mm must be a finite number") from exc
+    if not decimal_value.is_finite():
+        raise ValueError("svg_pixels_per_mm must be a finite number")
+
+    minimum = Decimal(str(SVG_PIXELS_PER_MM_MIN))
+    maximum = Decimal(str(SVG_PIXELS_PER_MM_MAX))
+    if decimal_value < minimum or decimal_value > maximum:
+        raise ValueError(
+            "svg_pixels_per_mm must be between "
+            f"{SVG_PIXELS_PER_MM_MIN:g} and {SVG_PIXELS_PER_MM_MAX:g}"
+        )
+
+    quantized = decimal_value.quantize(Decimal("0.1"))
+    if decimal_value != quantized:
+        raise ValueError("svg_pixels_per_mm must use 0.1 increments")
+    return float(quantized)
 
 
 class WorkerPoolConfig:

@@ -92,6 +92,7 @@ describe("submitBatch API 调用和状态管理", () => {
       layer_height_mm: 0.08,
       quantize_colors: 48,
       enable_cleanup: true,
+      svg_pixels_per_mm: 10,
       hue_weight: 0,
       chroma_gate: 0,
       enable_relief: false,
