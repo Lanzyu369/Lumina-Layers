@@ -320,7 +320,27 @@ class LUTManager:
             _lut_preset_cache_at = time.monotonic()
             _lut_preset_cache_value = dict(lut_files)
         return dict(lut_files)
-    
+
+    @classmethod
+    def invalidate_preset_cache(cls) -> None:
+        """Drop the cached LUT preset scan so the next call rescans from disk.
+        立即丢弃 LUT 预设扫描缓存，让下次调用重新扫盘。
+
+        Use this whenever ``LUT_PRESET_DIR`` changes during a process lifetime
+        (e.g. tests that point the manager at a temporary directory) or when
+        on-disk files mutate inside the 30 s TTL window. Without this, callers
+        observe stale results from the previous scan because
+        :meth:`get_all_lut_files` caches at module level for performance.
+
+        在进程生命周期内 ``LUT_PRESET_DIR`` 变更（如测试切到临时目录），
+        或磁盘文件在 30 秒 TTL 内发生变化时调用，避免读到陈旧扫描结果。
+        """
+
+        global _lut_preset_cache_at, _lut_preset_cache_value
+        with _lut_preset_cache_lock:
+            _lut_preset_cache_at = None
+            _lut_preset_cache_value = None
+
     @classmethod
     def get_lut_choices(cls):
         """

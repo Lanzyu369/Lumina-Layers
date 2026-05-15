@@ -166,6 +166,22 @@ class TestBackwardCompatibleLoading:
 class TestGetAllLutFiles:
     """验证 get_all_lut_files() 能扫描到 .json 文件。"""
 
+    @pytest.fixture(autouse=True)
+    def _invalidate_preset_cache(self):
+        """Drop ``get_all_lut_files`` cache around every test in this class.
+
+        Without this, the 30 s module-level cache populated by the first test
+        would be reused by the second one even after we point
+        ``LUT_PRESET_DIR`` at a fresh tmp directory, causing the second test
+        to read stale scan results from the first directory.
+        """
+
+        LUTManager.invalidate_preset_cache()
+        try:
+            yield
+        finally:
+            LUTManager.invalidate_preset_cache()
+
     def test_scan_finds_json_files(self):
         """.json 文件应被 get_all_lut_files() 扫描到。"""
         # 创建临时预设目录
