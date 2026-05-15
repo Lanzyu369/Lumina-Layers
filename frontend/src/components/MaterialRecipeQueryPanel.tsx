@@ -92,6 +92,9 @@ const getPaletteBrand = (entry: PaletteEntry): string | null => {
 const getPaletteBrandGroupKey = (brand: string | null): string =>
   brand ?? UNASSIGNED_BRAND_GROUP_KEY;
 
+const toSubstrateFirstDirectoryNames = (entries: PaletteEntry[]): string[] =>
+  entries.map((entry) => entry.directoryName).reverse();
+
 const matchesQuery = (entry: PaletteEntry, query: string): boolean => {
   if (!query) return true;
   const haystack = `${entry.materialName} ${entry.brand} ${entry.directoryName} ${entry.hex}`.toLowerCase();
@@ -168,7 +171,7 @@ export default function MaterialRecipeQueryPanel() {
       const settings = useSettingsStore.getState();
       const response = await generateMaterialRecipeSwatch({
         recipes: collectedRecipes.map((r) => ({
-          directory_names: r.directoryNames,
+          directory_names: [...r.directoryNames].reverse(),
           result_hex: r.resultHex,
           layer_height_mm: r.layerHeightMm,
           substrate: r.substrate,
@@ -293,7 +296,7 @@ export default function MaterialRecipeQueryPanel() {
     setError(null);
     try {
       const response = await previewMaterialRecipe({
-        directory_names: layers.map((l) => l.directoryName),
+        directory_names: toSubstrateFirstDirectoryNames(layers),
         layer_height_mm: layerHeightMm,
         substrate,
       });
@@ -315,19 +318,20 @@ export default function MaterialRecipeQueryPanel() {
   const predictedRgb: [number, number, number] | null = result
     ? [result.predicted_rgb[0], result.predicted_rgb[1], result.predicted_rgb[2]]
     : null;
+  const visibleResultLayers = result ? [...result.layers].reverse() : [];
 
   return (
     <motion.div
       initial={{ opacity: 0, x: -30 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
-      className="flex h-full w-full min-h-0"
+      className="flex h-full w-full min-h-0 flex-col xl:flex-row"
       data-testid="material-recipe-query-panel"
     >
       <aside
         className={`${resolvePanelSurfaceClass(
           workspace.mode,
-        )} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
+        )} h-auto w-full overflow-y-auto xl:h-full xl:w-[380px] xl:shrink-0 2xl:w-[440px]`}
       >
         <div className="flex flex-col gap-5">
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-2`}>
@@ -396,117 +400,6 @@ export default function MaterialRecipeQueryPanel() {
                   ))}
                 </select>
               </label>
-            </div>
-          </section>
-
-          <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {t("material_recipe_layers_heading")}
-              </h3>
-              <span className="text-xs text-slate-500 dark:text-slate-400">{layerCountLabel}</span>
-            </div>
-
-            {layers.length === 0 ? (
-              <p className="py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                {t("material_recipe_layers_empty")}
-              </p>
-            ) : (
-              <div
-                className="flex flex-col gap-2 max-h-72 overflow-y-auto"
-                data-testid="material-recipe-layer-list"
-              >
-                <AnimatePresence initial={false}>
-                  {layers.map((layer, index) => (
-                    <motion.div
-                      key={`${layer.directoryName}-${index}`}
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.15 }}
-                      className="group flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 p-2 shadow-sm dark:border-slate-700/80 dark:bg-slate-900/70"
-                      data-testid="material-recipe-layer-item"
-                    >
-                      <span className="w-10 shrink-0 text-center font-mono text-[10px] text-slate-500 dark:text-slate-400">
-                        {tRuntime("material_recipe_layer_label", { index: index + 1 })}
-                      </span>
-                      <div
-                        className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm"
-                        style={{ backgroundColor: layer.rgbCss }}
-                      />
-                      <div className="flex flex-1 flex-col min-w-0">
-                        <span className="truncate text-xs font-medium text-slate-700 dark:text-slate-200">
-                          {layer.materialName}
-                        </span>
-                        <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                          {layer.hex}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveLayer(index)}
-                        className="shrink-0 rounded-full p-1 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-500 dark:text-slate-500 dark:hover:text-red-400"
-                        aria-label={t("material_recipe_remove_layer")}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </button>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                onClick={() => void handleCompute()}
-                disabled={layers.length === 0 || isComputing}
-                loading={isComputing}
-                label={
-                  isComputing ? t("material_recipe_query_loading") : t("material_recipe_query")
-                }
-                className="col-span-2"
-              />
-              {canAddToCollection && (
-                <Button
-                  onClick={handleAddToCollection}
-                  disabled={isAlreadyCollected}
-                  label={isAlreadyCollected ? t("material_recipe_already_in_collection") : t("material_recipe_add_to_collection")}
-                  variant={isAlreadyCollected ? "secondary" : "primary"}
-                  className="col-span-2"
-                />
-              )}
-              <Button
-                onClick={handleUndo}
-                disabled={layers.length === 0}
-                label={t("material_recipe_undo")}
-                variant="secondary"
-              />
-              <Button
-                onClick={handleReverse}
-                disabled={layers.length < 2}
-                label={t("material_recipe_reverse")}
-                variant="secondary"
-              />
-              <Button
-                onClick={handleClear}
-                disabled={layers.length === 0}
-                label={t("material_recipe_clear")}
-                variant="secondary"
-                className="col-span-2"
-              />
             </div>
           </section>
 
@@ -831,73 +724,198 @@ export default function MaterialRecipeQueryPanel() {
           </div>
         )}
 
-        <div className="relative flex-1 min-h-0 flex flex-col items-center justify-center overflow-hidden p-4 sm:p-8">
-          <h4 className="mb-4 text-sm font-medium text-slate-500 dark:text-slate-400">
-            {t("material_recipe_result_heading")}
-          </h4>
-
-          {result && predictedRgb ? (
-            <div className="flex flex-col items-center gap-4">
-              <div
-                data-testid="material-recipe-result-swatch"
-                className="h-40 w-40 rounded-3xl border border-slate-200/80 shadow-lg dark:border-slate-700/80"
-                style={{ backgroundColor: toRgbCss(predictedRgb) }}
-              />
-              <div className="flex flex-col items-center gap-1">
-                <span
-                  data-testid="material-recipe-result-hex"
-                  className="font-mono text-lg font-semibold text-slate-900 dark:text-slate-50"
-                >
-                  {result.predicted_hex}
-                </span>
-                <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
-                  {tRuntime("material_recipe_result_rgb_value", {
-                    value: predictedRgb.join(", "),
-                  })}
-                </span>
-                <span className="text-xs text-slate-500 dark:text-slate-400">
-                  {tRuntime("material_recipe_result_meta", {
-                    count: result.layer_count,
-                    height: result.layer_height_mm.toFixed(2),
-                    substrate: t(
-                      result.substrate === "black"
-                        ? "material_recipe_substrate_black"
-                        : "material_recipe_substrate_white",
-                    ),
-                  })}
+        <div className="relative flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <div className="mx-auto grid w-full max-w-6xl gap-5 lg:grid-cols-[minmax(320px,430px)_minmax(0,1fr)]">
+            <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-[420px] flex-col gap-4`}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                  {t("material_recipe_layers_heading")}
+                </h3>
+                <span className="rounded-full border border-slate-200/80 px-2.5 py-1 text-xs font-medium text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
+                  {layerCountLabel}
                 </span>
               </div>
 
-              {result.layers.length > 0 && (
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-slate-200/70 bg-slate-100/60 px-3 py-2 text-[11px] font-medium text-slate-500 dark:border-slate-700/70 dark:bg-slate-900/55 dark:text-slate-400">
+                <span>{t("material_recipe_visible_face")}</span>
+                <span className="text-slate-400 dark:text-slate-500">→</span>
+                <span className="text-right">{t("material_recipe_substrate_side")}</span>
+              </div>
+
+              {layers.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center rounded-[28px] border border-dashed border-slate-300/80 bg-slate-100/50 px-6 py-12 text-center dark:border-slate-700/80 dark:bg-slate-900/40">
+                  <p className="max-w-xs text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("material_recipe_layers_empty")}
+                  </p>
+                </div>
+              ) : (
                 <div
-                  className="grid w-full max-w-md gap-1"
-                  data-testid="material-recipe-result-layers"
-                  style={{
-                    gridTemplateColumns: `repeat(${Math.min(result.layers.length, 8)}, minmax(0, 1fr))`,
-                  }}
+                  className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
+                  data-testid="material-recipe-layer-list"
                 >
-                  {result.layers.map((layer: MaterialRecipeLayer) => (
-                    <div
-                      key={`${layer.directory_name}-${layer.layer_index}`}
-                      className="flex flex-col items-center gap-1 rounded-lg border border-slate-200/70 bg-slate-100/70 p-1.5 dark:border-slate-700/70 dark:bg-slate-950/40"
-                    >
-                      <div
-                        className="h-6 w-full rounded-md border border-slate-200/80 dark:border-slate-700/80"
-                        style={{ backgroundColor: toRgbCss(layer.estimated_rgb) }}
-                      />
-                      <span className="truncate text-[10px] text-slate-500 dark:text-slate-400">
-                        {layer.material_name}
-                      </span>
-                    </div>
-                  ))}
+                  <AnimatePresence initial={false}>
+                    {layers.map((layer, index) => (
+                      <motion.div
+                        key={`${layer.directoryName}-${index}`}
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.15 }}
+                        className="group flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/90 p-2.5 shadow-sm transition-colors hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/75 dark:hover:border-slate-600"
+                        data-testid="material-recipe-layer-item"
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200/70 font-mono text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          {index + 1}
+                        </span>
+                        <div
+                          className="h-10 w-10 shrink-0 rounded-2xl border border-slate-200 shadow-sm dark:border-slate-700"
+                          style={{ backgroundColor: layer.rgbCss }}
+                        />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">
+                            {layer.materialName}
+                          </span>
+                          <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                            {layer.hex}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveLayer(index)}
+                          className="shrink-0 rounded-full p-1.5 text-slate-400 opacity-100 transition-colors hover:bg-red-500/10 hover:text-red-500 dark:text-slate-500 dark:hover:text-red-400 sm:opacity-0 sm:group-hover:opacity-100"
+                          aria-label={t("material_recipe_remove_layer")}
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </div>
               )}
-            </div>
-          ) : (
-            <p className="max-w-md text-center text-sm text-slate-500 dark:text-slate-400">
-              {t("material_recipe_result_pending")}
-            </p>
-          )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  onClick={() => void handleCompute()}
+                  disabled={layers.length === 0 || isComputing}
+                  loading={isComputing}
+                  label={
+                    isComputing ? t("material_recipe_query_loading") : t("material_recipe_query")
+                  }
+                  className="col-span-2"
+                />
+                {canAddToCollection && (
+                  <Button
+                    onClick={handleAddToCollection}
+                    disabled={isAlreadyCollected}
+                    label={isAlreadyCollected ? t("material_recipe_already_in_collection") : t("material_recipe_add_to_collection")}
+                    variant={isAlreadyCollected ? "secondary" : "primary"}
+                    className="col-span-2"
+                  />
+                )}
+                <Button
+                  onClick={handleUndo}
+                  disabled={layers.length === 0}
+                  label={t("material_recipe_undo")}
+                  variant="secondary"
+                />
+                <Button
+                  onClick={handleReverse}
+                  disabled={layers.length < 2}
+                  label={t("material_recipe_reverse")}
+                  variant="secondary"
+                />
+                <Button
+                  onClick={handleClear}
+                  disabled={layers.length === 0}
+                  label={t("material_recipe_clear")}
+                  variant="secondary"
+                  className="col-span-2"
+                />
+              </div>
+            </section>
+
+            <section className={`${resolveSectionCardClass(workspace.mode)} flex min-h-[420px] flex-col items-center justify-center gap-5`}>
+              <h4 className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                {t("material_recipe_result_heading")}
+              </h4>
+
+              {result && predictedRgb ? (
+                <div className="flex w-full flex-col items-center gap-5">
+                  <div
+                    data-testid="material-recipe-result-swatch"
+                    className="h-44 w-44 rounded-[36px] border border-slate-200/80 shadow-lg dark:border-slate-700/80 sm:h-52 sm:w-52"
+                    style={{ backgroundColor: toRgbCss(predictedRgb) }}
+                  />
+                  <div className="flex flex-col items-center gap-1">
+                    <span
+                      data-testid="material-recipe-result-hex"
+                      className="font-mono text-xl font-semibold text-slate-900 dark:text-slate-50"
+                    >
+                      {result.predicted_hex}
+                    </span>
+                    <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                      {tRuntime("material_recipe_result_rgb_value", {
+                        value: predictedRgb.join(", "),
+                      })}
+                    </span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {tRuntime("material_recipe_result_meta", {
+                        count: result.layer_count,
+                        height: result.layer_height_mm.toFixed(2),
+                        substrate: t(
+                          result.substrate === "black"
+                            ? "material_recipe_substrate_black"
+                            : "material_recipe_substrate_white",
+                        ),
+                      })}
+                    </span>
+                  </div>
+
+                  {result.layers.length > 0 && (
+                    <div
+                      className="grid w-full max-w-xl gap-1"
+                      data-testid="material-recipe-result-layers"
+                      style={{
+                        gridTemplateColumns: `repeat(${Math.min(result.layers.length, 8)}, minmax(0, 1fr))`,
+                      }}
+                    >
+                      {visibleResultLayers.map((layer: MaterialRecipeLayer) => (
+                        <div
+                          key={`${layer.directory_name}-${layer.layer_index}`}
+                          className="flex flex-col items-center gap-1 rounded-xl border border-slate-200/70 bg-slate-100/70 p-1.5 dark:border-slate-700/70 dark:bg-slate-950/40"
+                        >
+                          <div
+                            className="h-7 w-full rounded-lg border border-slate-200/80 dark:border-slate-700/80"
+                            style={{ backgroundColor: toRgbCss(layer.estimated_rgb) }}
+                          />
+                          <span className="truncate text-[10px] text-slate-500 dark:text-slate-400">
+                            {layer.material_name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="max-w-md text-center text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {t("material_recipe_result_pending")}
+                </p>
+              )}
+            </section>
+          </div>
         </div>
       </div>
     </motion.div>

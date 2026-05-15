@@ -83,7 +83,7 @@ describe("MaterialRecipeQueryPanel", () => {
     expect(screen.getAllByTestId("material-recipe-layer-item")).toHaveLength(3);
   });
 
-  it("calls the preview API with the recipe in stacking order and renders the result", async () => {
+  it("calls the preview API with the recipe converted from viewing-face order to stacking order", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
     vi.mocked(previewMaterialRecipe).mockResolvedValue({
       status: "ok",
@@ -127,7 +127,7 @@ describe("MaterialRecipeQueryPanel", () => {
     });
 
     expect(previewMaterialRecipe).toHaveBeenCalledWith({
-      directory_names: ["mat-0", "mat-1"],
+      directory_names: ["mat-1", "mat-0"],
       layer_height_mm: 0.08,
       substrate: "white",
     });
@@ -190,7 +190,7 @@ describe("MaterialRecipeQueryPanel", () => {
     });
   });
 
-  it("reverses the recipe layer order when the reverse button is pressed", async () => {
+  it("reverses the visible recipe layer order when the reverse button is pressed", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(3));
     vi.mocked(previewMaterialRecipe).mockResolvedValue({
       status: "ok",
@@ -208,9 +208,9 @@ describe("MaterialRecipeQueryPanel", () => {
     });
 
     const tiles = screen.getAllByTestId("material-recipe-palette-item");
-    fireEvent.click(tiles[0]); // mat-0 (bottom)
+    fireEvent.click(tiles[0]); // mat-0 (visible face)
     fireEvent.click(tiles[1]); // mat-1
-    fireEvent.click(tiles[2]); // mat-2 (top)
+    fireEvent.click(tiles[2]); // mat-2 (substrate side)
 
     fireEvent.click(screen.getByRole("button", { name: /反序|^Reverse$/ }));
     fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
@@ -219,7 +219,42 @@ describe("MaterialRecipeQueryPanel", () => {
       expect(previewMaterialRecipe).toHaveBeenCalled();
     });
     const callArgs = vi.mocked(previewMaterialRecipe).mock.calls[0][0];
-    expect(callArgs.directory_names).toEqual(["mat-2", "mat-1", "mat-0"]);
+    expect(callArgs.directory_names).toEqual(["mat-0", "mat-1", "mat-2"]);
+  });
+
+  it("sends collected swatch recipes in backend stacking order", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 2,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(2);
+    });
+
+    const tiles = screen.getAllByTestId("material-recipe-palette-item");
+    fireEvent.click(tiles[0]);
+    fireEvent.click(tiles[1]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+    await waitFor(() => {
+      expect(generateMaterialRecipeSwatch).toHaveBeenCalled();
+    });
+    const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
+    expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
   });
 
   it("disables reverse button when fewer than two layers are present", async () => {
