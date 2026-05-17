@@ -250,6 +250,8 @@ def convert_image_to_3d(
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    *,
+    cover_source_path: Optional[str] = None,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -260,6 +262,10 @@ def convert_image_to_3d(
             (是否在下游光栅/矢量几何阶段启用可选的冰箱贴磁铁槽处理)
         fridge_magnets: Serialized fridge-magnet item list forwarded through
             the backend contract. (通过后端契约向下游透传的冰箱贴磁铁槽列表)
+        cover_source_path: Optional explicit cover thumbnail source path.
+            Defaults to ``image_path`` so普通模式与大画幅光栅模式下，每张
+            3MF 都使用对应输入图作为封面图源。
+            (可选的封面缩略图源路径；缺省镜像 ``image_path``)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
@@ -269,6 +275,11 @@ def convert_image_to_3d(
     # Intentional: the API layer produces its own GLB preview, so skip the
     # heavy SVG→raster 2D preview inside the vector branch coordinator.
     ctx["need_2d_preview"] = False
+    # Mirror cover source onto a stable ctx key; fall back to image_path so
+    # downstream pipeline stages can pick a sane default without the caller
+    # opting in. 大画幅光栅模式下 image_path 已经是 tile PNG，所以无需 worker
+    # 侧改动即能让每片 3MF 拿到自己的封面图源。
+    ctx["cover_source_path"] = cover_source_path or image_path
 
     ctx = run_raster_pipeline(ctx)
     if ctx.get("error"):
@@ -423,6 +434,8 @@ def generate_final_model(
     auto_dynamic_range: bool = False,
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    *,
+    cover_source_path: Optional[str] = None,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -436,6 +449,10 @@ def generate_final_model(
             启用可选的冰箱贴磁铁槽处理)
         fridge_magnets: Serialized fridge-magnet item list forwarded to the
             main converter entry point. (转发到主转换入口的冰箱贴磁铁槽列表)
+        cover_source_path: Optional explicit cover thumbnail source path.
+            Forwarded to ``convert_image_to_3d`` which mirrors it onto the
+            staged pipeline ctx; defaults to ``image_path``.
+            (可选的封面缩略图源路径，最终透传到 staged pipeline ctx)
     """
     # Convert backing color name to ID or use special marker for separate backing
     try:
@@ -558,6 +575,7 @@ def generate_final_model(
         material_grid_resolution=material_grid_resolution,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        cover_source_path=cover_source_path,
     )
 
 

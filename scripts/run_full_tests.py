@@ -61,6 +61,11 @@ def main() -> int:
     steps: list[tuple[list[str], Path | None, str]] = [
         ([sys.executable, "-m", "pytest", "tests", "-q"], None, "Backend full regression failed"),
         (
+            [sys.executable, "-m", "pytest", "tests", "-m", "release", "-q"],
+            None,
+            "Backend release-marked regression failed",
+        ),
+        (
             [sys.executable, str(vitest_wrapper), "run"],
             ROOT / "frontend",
             "Frontend full regression failed",

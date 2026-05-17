@@ -306,6 +306,7 @@ def generate_calibration_board(
     # Export with BambuStudio metadata
     output_path = os.path.join(MODELS_DIR, generate_calibration_filename(color_mode, "Standard"))
 
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=output_path,
@@ -323,6 +324,7 @@ def generate_calibration_board(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode=color_mode,
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
@@ -613,6 +615,7 @@ def generate_smart_board(
     # Export — derive color_mode label from config name
     color_mode_label = color_conf.get("name", "6-Color")
     output_path = os.path.join(MODELS_DIR, generate_calibration_filename(color_mode_label, "Smart1296"))
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=output_path,
@@ -630,6 +633,7 @@ def generate_smart_board(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode=color_mode_label,
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
@@ -862,6 +866,7 @@ def _generate_8color_board_artifacts(
     page_name = f"{page_index + 1}号"
     out_name = f"{page_name}.3mf"
     out_path = os.path.join(MODELS_DIR, out_name)
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=out_path,
@@ -879,6 +884,7 @@ def _generate_8color_board_artifacts(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="8-Color",
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
     preview_imgs = _generate_layer_previews(full_matrix, conf["preview"], v_w, v_w)
@@ -1194,6 +1200,7 @@ def generate_bw_calibration_board(
 
     # Export
     output_path = os.path.join(MODELS_DIR, generate_calibration_filename("BW", "Standard"))
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=output_path,
@@ -1211,6 +1218,7 @@ def generate_bw_calibration_board(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="BW",
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
@@ -1724,6 +1732,7 @@ def _generate_5color_base_page(
                 scene.add_geometry(mesh, node_name=name, geom_name=name)
 
     output_path = os.path.join(MODELS_DIR, generate_calibration_filename("5-Color Extended", "Page1"))
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=output_path,
@@ -1741,6 +1750,7 @@ def _generate_5color_base_page(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="5-Color Extended",
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 
@@ -1859,6 +1869,7 @@ def _generate_5color_extended_page(
             scene.add_geometry(mesh, node_name=name, geom_name=name)
 
     output_path = os.path.join(MODELS_DIR, generate_calibration_filename("5-Color Extended", "Page2"))
+    # 无原图，封面走静默占位（不发 WARNING）
     export_scene_with_bambu_metadata(
         scene=scene,
         output_path=output_path,
@@ -1876,6 +1887,7 @@ def _generate_5color_extended_page(
             "sparse_infill_pattern": "zig-zag",
         },
         color_mode="5-Color Extended",
+        cover_source=None,
         **_export_device_kwargs(printer_id, slicer, nozzle_size),
     )
 

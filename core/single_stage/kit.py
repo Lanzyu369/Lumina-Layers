@@ -461,6 +461,7 @@ def generate_single_stage_kit(
             substrate_rgb,
             spec,
         )
+        # 无原图，封面走静默占位（不发 WARNING）
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=str(model_path),
@@ -484,6 +485,7 @@ def generate_single_stage_kit(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            cover_source=None,
         )
 
         manifest = {
