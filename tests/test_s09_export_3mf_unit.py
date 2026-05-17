@@ -31,6 +31,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
+        cover_source: object | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -46,6 +47,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["base_height_mm"] = base_height_mm
         captured["color_height_mm"] = color_height_mm
         captured["face_orientation"] = face_orientation
+        captured["cover_source"] = cover_source
         return output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))

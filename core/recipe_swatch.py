@@ -460,6 +460,7 @@ def generate_recipe_swatch(
     output_path = os.path.join(MODELS_DIR, output_filename)
 
     try:
+        # 无原图，封面走静默占位（不发 WARNING）
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=output_path,
@@ -480,6 +481,7 @@ def generate_recipe_swatch(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            cover_source=None,
         )
     except (ValueError, TypeError, RuntimeError, OSError) as e:
         _log.exception(f"Export failed: {e}")

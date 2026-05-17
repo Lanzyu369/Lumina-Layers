@@ -439,6 +439,7 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
         patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
         patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
         patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[fake_tile]),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
         patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export_scene_with_bambu_metadata),
     ):
         result = worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
@@ -530,6 +531,7 @@ def test_worker_generate_large_format_svg_native_cleans_current_tile_file_on_exp
         patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
         patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
         patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=fake_tiles),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
         patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export_scene_with_bambu_metadata),
     ):
         with pytest.raises(RuntimeError, match="tile export failed"):

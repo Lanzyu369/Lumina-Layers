@@ -269,6 +269,7 @@ class TestAnycubicWriterMetadata:
                 slicer: str = "BambuStudio",
                 nozzle_size: str | None = None,
                 watermark: str = "LuminaStudio",
+                **kwargs,
             ) -> None:
                 self.output_path = output_path
 
@@ -323,9 +324,19 @@ class TestAnycubicWriterMetadata:
                 slicer: str = "BambuStudio",
                 nozzle_size: str | None = None,
                 watermark: str = "LuminaStudio",
+                **kwargs,
             ) -> None:
                 captured_color_mode["value"] = color_mode
-                super().__init__(output_path, settings, color_mode, printer_id, slicer, nozzle_size, watermark)
+                super().__init__(
+                    output_path,
+                    settings,
+                    color_mode,
+                    printer_id,
+                    slicer,
+                    nozzle_size,
+                    watermark,
+                    **kwargs,
+                )
 
             def add_mesh(self, mesh, name: str, color_rgb: tuple[int, int, int]) -> None:
                 captured_colors.append((name, color_rgb))

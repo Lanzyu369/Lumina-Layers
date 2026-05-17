@@ -12,8 +12,10 @@ from dataclasses import dataclass
 import io
 import os
 import sys
+import tempfile
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 import json
 import copy
 import re
@@ -22,6 +24,12 @@ import numpy as np
 from PIL import Image
 
 from api.structured_logging import get_logger
+from utils.bambu_3mf_cover import (
+    COVER_PLATE_SPECS,
+    COVER_THUMBNAIL_SPECS,
+    CoverPngBundle,
+    CoverThumbnailBuilder,
+)
 
 
 log = get_logger(__name__)
@@ -510,6 +518,7 @@ class BambuStudio3MFWriter:
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
+        cover_source: "str | bytes | Image.Image | None" = None,
     ):
         """Initialize 3MF writer with printer-specific template support.
         初始化 3MF 写入器，支持机型和切片器专属配置模板。
@@ -531,6 +540,12 @@ class BambuStudio3MFWriter:
                 （用于定位覆盖区间的彩色区域厚度）
             face_orientation (str): Base orientation selector; invalid values fall back to "down".
                 （底板朝向；非法值静默回退到 "down"）
+            cover_source: Cover thumbnail image source. ``None`` uses silent
+                placeholder (calibration / kit / recipe swatch). ``str`` is
+                treated as a filesystem path; ``bytes`` as encoded image bytes;
+                ``PIL.Image.Image`` as a decoded image. Decode failures fall
+                back to placeholder bytes plus one WARNING log per export.
+                （封面缩略图图像源；``None`` 走静默占位）
         """
         from config import normalize_nozzle_size, normalize_slicer_software_id
 
@@ -551,6 +566,8 @@ class BambuStudio3MFWriter:
         self.face_orientation = normalized_face_orientation
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
+        self.cover_source: "str | bytes | Image.Image | None" = cover_source
+        self.cover_bundle: Optional[CoverPngBundle] = None
 
     def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
@@ -723,7 +740,29 @@ class BambuStudio3MFWriter:
                 },
             )
 
-        n3mf.write_to_file(self.output_path, doc, opts)
+        # Two-phase export: n3mf writes to an intermediate path, then we
+        # rewrite _rels/.rels via stdlib zipfile to inject the three cover
+        # thumbnail relationships. n3mf cannot mutate the package-level rels
+        # directly (its add_custom_relationship attaches to part-level rels
+        # like 3D/3dmodel.model). The intermediate file is removed in the
+        # finally block; any IO/XML failure during postprocessing propagates
+        # so callers see a fatal export error, while encoding-time cover
+        # failures are already handled inside _ensure_cover_bundle (silent
+        # placeholder + at most one WARNING).
+        output_dir = os.path.dirname(self.output_path) or None
+        fd, intermediate_path = tempfile.mkstemp(suffix=".3mf", dir=output_dir)
+        os.close(fd)
+        try:
+            n3mf.write_to_file(intermediate_path, doc, opts)
+            self._inject_cover_relationships_postprocess(
+                intermediate_path, self.output_path
+            )
+        finally:
+            try:
+                if os.path.exists(intermediate_path):
+                    os.unlink(intermediate_path)
+            except OSError:
+                pass
 
         log.debug(
             "Bambu 3MF export completed",
@@ -735,7 +774,6 @@ class BambuStudio3MFWriter:
             },
         )
         return self.output_path
-
     # ------------------------------------------------------------------
     # Slicer version string
     # ------------------------------------------------------------------
@@ -836,15 +874,27 @@ class BambuStudio3MFWriter:
             )
             if lcr_bytes is not None:
                 parts.append(("Metadata/layer_config_ranges.xml", "text/xml", lcr_bytes))
-        preview_png = self._build_preview_placeholder_png_bytes()
+        self._ensure_cover_bundle()
+        bundle = self.cover_bundle
+        assert bundle is not None  # _ensure_cover_bundle always assigns
+        placeholder_2x2 = self._build_preview_placeholder_png_bytes()
         parts.extend(
             [
-                ("Metadata/plate_1.png", "image/png", preview_png),
-                ("Metadata/plate_no_light_1.png", "image/png", preview_png),
-                ("Metadata/top_1.png", "image/png", preview_png),
-                ("Metadata/pick_1.png", "image/png", preview_png),
+                ("Metadata/plate_1.png", "image/png", bundle.plate_main),
+                ("Metadata/plate_no_light_1.png", "image/png", bundle.plate_no_light),
+                ("Metadata/top_1.png", "image/png", placeholder_2x2),
+                ("Metadata/pick_1.png", "image/png", placeholder_2x2),
             ]
         )
+        # Auxiliaries/.thumbnails/* — package-level cover thumbnails referenced
+        # from _rels/.rels (post-processed in _inject_cover_relationships_postprocess).
+        cover_part_payloads = (
+            (COVER_THUMBNAIL_SPECS[0], bundle.thumbnail_3mf),
+            (COVER_THUMBNAIL_SPECS[1], bundle.thumbnail_middle),
+            (COVER_THUMBNAIL_SPECS[2], bundle.thumbnail_small),
+        )
+        for spec, png_bytes in cover_part_payloads:
+            parts.append((spec.zip_path, "image/png", png_bytes))
         for path, content_type, data in parts:
             builder.add_custom_part(_get_n3mf().CustomPart(path, content_type, data))
 
@@ -885,6 +935,171 @@ class BambuStudio3MFWriter:
                     f"/{path}",
                 )
             )
+
+    # ------------------------------------------------------------------
+    # Cover thumbnail bundle + package-level relationship post-processing
+    # ------------------------------------------------------------------
+
+    def _ensure_cover_bundle(self) -> None:
+        """Lazily build ``self.cover_bundle`` and emit at most one WARNING.
+
+        惰性构建封面缩略图字节集合；同一次 ``export()`` 内复用。仅当
+        ``cover_source is not None`` 但解码 / 编码失败时才触发结构化
+        WARNING ``bambu_3mf_cover_thumbnail_failed``，正常路径与
+        ``cover_source is None`` 的静默占位场景都不发日志。
+        """
+
+        if self.cover_bundle is not None:
+            return
+
+        self.cover_bundle = CoverThumbnailBuilder().build(self.cover_source)
+        warning = self.cover_bundle.warning
+        if warning is not None:
+            extra = {
+                "event": "bambu_3mf_cover_thumbnail_failed",
+                "path": str(self.output_path)[:1024],
+                "error_type": warning.get("error_type", ""),
+                "error_message": warning.get("error_message", ""),
+                "fallback_action": warning.get(
+                    "fallback_action", "placeholder_written"
+                ),
+            }
+            log.warning(
+                "Bambu 3MF cover thumbnail generation failed; wrote placeholder",
+                extra=extra,
+            )
+
+    def _inject_cover_relationships_postprocess(
+        self,
+        intermediate_path: str,
+        output_path: str,
+    ) -> None:
+        """Rewrite the package-level ``_rels/.rels`` to include cover relationships.
+
+        重写包根 ``_rels/.rels``，在保留既有 ``rel-1`` 的前提下追加三条 cover
+        关系条目，并把中间产物原子搬到 ``output_path``。
+
+        Algorithm:
+        - Iterate the original ZIP entries in order, preserving each entry's
+          ``ZipInfo`` (compress_type, external_attr, date_time, extra) so
+          downstream slicers see byte-identical contents apart from the rels
+          rewrite.
+        - When the entry path is ``_rels/.rels``, parse the XML, append three
+          ``<Relationship>`` elements (Id ``cover-rel-1/2/3``, Type from
+          ``COVER_THUMBNAIL_SPECS``, Target = ``"/" + spec.zip_path``), and
+          write the serialized bytes instead of the original payload.
+        - Use ``ET.register_namespace("", ...)`` to keep the default OPC
+          relationships namespace and avoid ``ns0:`` prefixes in output.
+        - Write to ``output_path + ".tmp"`` and finalize with
+          ``os.replace`` for atomic publication. Any IO / XML failure
+          deletes the partial ``.tmp`` and re-raises so the writer surfaces
+          a fatal export error instead of leaving a half-baked 3MF.
+        """
+
+        rels_path = "_rels/.rels"
+        rels_namespace = (
+            "http://schemas.openxmlformats.org/package/2006/relationships"
+        )
+        ET.register_namespace("", rels_namespace)
+
+        tmp_path = output_path + ".tmp"
+        try:
+            with zipfile.ZipFile(intermediate_path, "r") as src_zip:
+                infos = src_zip.infolist()
+                with zipfile.ZipFile(
+                    tmp_path,
+                    "w",
+                    compression=zipfile.ZIP_DEFLATED,
+                ) as dst_zip:
+                    for info in infos:
+                        # Read original bytes once; ZipInfo carries the
+                        # original compression/extra metadata which we
+                        # re-use for the destination entry.
+                        payload = src_zip.read(info.filename)
+                        dst_info = zipfile.ZipInfo(
+                            filename=info.filename,
+                            date_time=info.date_time,
+                        )
+                        dst_info.compress_type = info.compress_type
+                        dst_info.external_attr = info.external_attr
+                        dst_info.extra = info.extra
+                        dst_info.create_system = info.create_system
+                        dst_info.create_version = info.create_version
+                        dst_info.extract_version = info.extract_version
+                        dst_info.flag_bits = info.flag_bits
+                        dst_info.internal_attr = info.internal_attr
+                        if info.comment:
+                            dst_info.comment = info.comment
+
+                        if info.filename == rels_path:
+                            payload = self._rewrite_rels_xml(payload, rels_namespace)
+
+                        dst_zip.writestr(dst_info, payload)
+
+            os.replace(tmp_path, output_path)
+        except Exception:
+            # Clean up the partial .tmp file before re-raising so callers do
+            # not see a half-written 3MF on disk.
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _rewrite_rels_xml(rels_bytes: bytes, rels_namespace: str) -> bytes:
+        """Append three cover relationships to ``_rels/.rels`` XML payload.
+
+        在 ``_rels/.rels`` XML 中追加三条 cover 关系（保留既有 ``rel-1``）。
+        """
+
+        try:
+            root = ET.fromstring(rels_bytes)
+        except ET.ParseError as exc:
+            raise RuntimeError(f"failed to parse _rels/.rels: {exc}") from exc
+
+        existing_ids: set[str] = set()
+        for rel in root.findall(f"{{{rels_namespace}}}Relationship"):
+            rid = rel.get("Id")
+            if rid:
+                existing_ids.add(rid)
+        # Also handle defensively in case the file omitted the default
+        # namespace (some non-OPC writers do this).
+        for rel in root.findall("Relationship"):
+            rid = rel.get("Id")
+            if rid:
+                existing_ids.add(rid)
+
+        cover_rel_ids: list[str] = []
+        for index, spec in enumerate(COVER_THUMBNAIL_SPECS, start=1):
+            candidate = f"cover-rel-{index}"
+            # Defensive: if the synthetic ID collides with an existing one,
+            # bump until unique. cover-rel-* should never overlap n3mf's
+            # rel-* sequence in practice.
+            suffix = 0
+            while candidate in existing_ids:
+                suffix += 1
+                candidate = f"cover-rel-{index}-{suffix}"
+            existing_ids.add(candidate)
+            cover_rel_ids.append(candidate)
+            ET.SubElement(
+                root,
+                f"{{{rels_namespace}}}Relationship",
+                attrib={
+                    "Id": candidate,
+                    "Type": str(spec.relationship_type or ""),
+                    "Target": "/" + spec.zip_path,
+                },
+            )
+
+        buf = io.BytesIO()
+        # Mirror n3mf-emitted rels: include XML declaration with UTF-8
+        # encoding; ElementTree handles the namespace via register_namespace.
+        ET.ElementTree(root).write(
+            buf, encoding="utf-8", xml_declaration=True
+        )
+        return buf.getvalue()
 
     # ------------------------------------------------------------------
     # Individual metadata builders (return bytes, no filesystem I/O)
@@ -1254,6 +1469,7 @@ def export_scene_with_bambu_metadata(
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
     face_orientation: str = "down",
+    cover_source: "str | bytes | Image.Image | None" = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
@@ -1280,6 +1496,12 @@ def export_scene_with_bambu_metadata(
             （用于定位覆盖区间的彩色区域厚度）
         face_orientation (str): Base orientation selector passed to the writer.
             （透传给写入器的底板朝向）
+        cover_source: Cover thumbnail image source. ``None`` uses silent
+            placeholder (calibration / kit / recipe swatch / 既有调用方默认值);
+            ``str`` is a filesystem path, ``bytes`` is encoded image bytes,
+            ``PIL.Image.Image`` is a decoded image. Decode failures fall back
+            to placeholder bytes plus one WARNING log per export.
+            （封面缩略图图像源；``None`` 走静默占位，保持既有调用方零侵入）
 
     Returns:
         str: Path to the exported 3MF file. (导出的 3MF 文件路径)
@@ -1320,6 +1542,7 @@ def export_scene_with_bambu_metadata(
         "slicer": slicer,
         "nozzle_size": nozzle_size,
         "watermark": watermark,
+        "cover_source": cover_source,
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
     writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)

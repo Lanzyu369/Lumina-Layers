@@ -1239,6 +1239,20 @@ def _run_vector_branch(ctx: dict) -> dict:
             s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
 
         export_t0 = time.perf_counter()
+        # Cover thumbnail source resolution priority:
+        # 1. ``ctx['svg_raster_preview_bytes']`` (rasterized SVG preview bytes,
+        #    if a future stage caches them);
+        # 2. ``ctx['cover_source_path']`` (explicit override mirrored from
+        #    convert_image_to_3d / generate_final_model);
+        # 3. ``ctx['image_path']`` (the original SVG path).
+        # Each entry is checked separately so a falsy intermediate (e.g. an
+        # empty bytes buffer) does not poison the fallback chain.
+        # 封面图源按优先级选择，缺省回退到 image_path 保持安全。
+        vector_cover_source = (
+            ctx.get("svg_raster_preview_bytes")
+            or ctx.get("cover_source_path")
+            or ctx.get("image_path")
+        )
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,
@@ -1254,6 +1268,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
+            cover_source=vector_cover_source,
         )
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(

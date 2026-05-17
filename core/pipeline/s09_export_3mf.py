@@ -167,6 +167,7 @@ def run(ctx: dict) -> dict:
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
+            cover_source=ctx.get("cover_source_path") or ctx.get("image_path"),
         )
         if _bench_enabled and _export_t0 is not None:
             _export_elapsed = time.perf_counter() - _export_t0

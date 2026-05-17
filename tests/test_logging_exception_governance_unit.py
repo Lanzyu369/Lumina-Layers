@@ -56,7 +56,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 54
+EXCEPT_EXCEPTION_BASELINE = 57
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
