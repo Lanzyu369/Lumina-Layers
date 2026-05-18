@@ -454,8 +454,10 @@ class TestAnalyzeSvgMaterialSmallShapeSnap:
             )
 
         by_src = {tuple(item["color"]): item for item in analysis.matched_shapes}
-        assert by_src[dark_brown]["match_color"] == orange
-        assert by_src[dark_brown]["matched_rgb"] == (245, 89, 56)
+        # Small-shape snap is now disabled for material-archive mode
+        # (PR #177 regression fix). Small shapes keep their own fill colour.
+        assert by_src[dark_brown]["match_color"] == dark_brown
+        assert by_src[dark_brown]["matched_rgb"] == (87, 51, 51)
         assert by_src[orange]["match_color"] == orange
 
     def test_large_shape_keeps_own_fill_even_with_high_delta_e(self):
@@ -553,8 +555,10 @@ class TestAnalyzeSvgMaterialSmallShapeSnap:
             if tuple(item["color"]) == dark_brown
         ]
         assert brown_shapes
-        assert all(item["match_color"] == orange for item in brown_shapes)
-        assert all(item["matched_rgb"] == (245, 89, 56) for item in brown_shapes)
+        # Small-shape snap is now disabled for material-archive mode.
+        # Each small shape keeps its own fill and is matched independently.
+        assert all(item["match_color"] == dark_brown for item in brown_shapes)
+        assert all(item["matched_rgb"] == (87, 51, 51) for item in brown_shapes)
 
 
 class _BruteForceLabTree:

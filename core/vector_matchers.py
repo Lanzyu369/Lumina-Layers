@@ -334,6 +334,21 @@ class MaterialVectorMatcher:
 
         if new_keys:
             new_arr = np.array(sorted(set(new_keys)), dtype=np.uint8)
+            _log.debug(
+                "solve_for_fills input: %d new colors (total cached before=%d)",
+                new_arr.shape[0],
+                len(self._cached),
+                extra={
+                    "event": "material_vector_solve_input",
+                    "new_color_count": int(new_arr.shape[0]),
+                    "cached_before": len(self._cached),
+                    "new_colors_hex": [
+                        f"#{int(c[0]):02X}{int(c[1]):02X}{int(c[2]):02X}"
+                        for c in new_arr[:50]  # cap at 50 to avoid log explosion
+                    ],
+                    "truncated": new_arr.shape[0] > 50,
+                },
+            )
             matched_rgb_unique, recipes_b2t, delta_e = self._solver_cache.lookup(
                 new_arr, self.materials, hue_weight=self.hue_weight,
             )
