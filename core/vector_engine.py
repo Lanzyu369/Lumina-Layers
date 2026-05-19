@@ -1894,6 +1894,38 @@ class VectorProcessor:
                     _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
 
         # === Stage 3: Resolve color system config ===
+        # --- Diagnostic: geometry fingerprint for 5-vs-7 layer comparison ---
+        _unique_colors_in_shapes = set()
+        _total_geom_area = 0.0
+        for _item in clipped_shapes:
+            _c = _item.get("color")
+            if _c:
+                try:
+                    _unique_colors_in_shapes.add((int(_c[0]), int(_c[1]), int(_c[2])))
+                except (TypeError, IndexError, ValueError):
+                    pass
+            _g = _item.get("geometry")
+            if _g is not None and not _g.is_empty:
+                _total_geom_area += float(_g.area)
+        _log.info(
+            "analyze_svg geometry fingerprint: shapes=%d unique_colors=%d total_area=%.2f "
+            "gradient_bands=%s layer_count=%s cache_hit=%s",
+            len(clipped_shapes),
+            len(_unique_colors_in_shapes),
+            _total_geom_area,
+            getattr(self, "gradient_color_bands", None),
+            getattr(self.img_processor, "layer_count", "?"),
+            cached_entry is not None,
+            extra={
+                "event": "vector_diag_geometry_fingerprint",
+                "shape_count": len(clipped_shapes),
+                "unique_color_count": len(_unique_colors_in_shapes),
+                "total_area": round(_total_geom_area, 2),
+                "gradient_color_bands": getattr(self, "gradient_color_bands", None),
+                "layer_count": getattr(self.img_processor, "layer_count", None),
+                "cache_hit": cached_entry is not None,
+            },
+        )
         # In material-archive mode the matcher carries a pre-built
         # ``color_conf`` derived from the materials list. The LUT path
         # (``LuminaImageProcessor``) does not expose this attribute, so
@@ -2007,16 +2039,13 @@ class VectorProcessor:
                     continue
             if unique_fills_set:
                 solve_for_fills(sorted(unique_fills_set))
-                if replacement_manager is None:
-                    small_shape_match_overrides = self._build_small_shape_match_overrides(
-                        clipped_shapes,
-                        scale_factor,
-                    )
-                    if small_shape_match_overrides:
-                        for shape_idx, item in enumerate(clipped_shapes):
-                            match_color = small_shape_match_overrides.get(shape_idx)
-                            if match_color is not None:
-                                item["match_color"] = match_color
+                # NOTE: small-shape snap is disabled for material-archive mode.
+                # The delta_e heuristic incorrectly triggers when the material
+                # set cannot physically reproduce dark colours, causing
+                # unrelated small shapes to be snapped to the dominant anchor
+                # colour (e.g. black → skin tone). See PR #177 regression.
+                # 耗材档案模式禁用小 shape 吸附：材料集缺少深色时 delta_e
+                # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
 
         t0 = time.perf_counter()
         matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
@@ -2752,8 +2781,9 @@ class VectorProcessor:
                 lut_idx = cached["lut_idx"]
             else:
                 query_lab = self.img_processor._rgb_to_lab(np.array([query_rgb], dtype=np.uint8))
-                _, index = self.img_processor.kdtree.query(query_lab)
+                dist, index = self.img_processor.kdtree.query(query_lab)
                 lut_idx = int(index[0])
+                lab_dist = float(dist[0]) if hasattr(dist, '__len__') else float(dist)
                 matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
 
                 if replacement_manager is not None:
@@ -2770,21 +2800,38 @@ class VectorProcessor:
                     "recipe": recipe,
                     "matched_rgb": matched_rgb,
                     "lut_idx": lut_idx,
+                    "lab_dist": lab_dist,
                 }
 
                 hex_c = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
                 query_hex = f"#{query_rgb[0]:02x}{query_rgb[1]:02x}{query_rgb[2]:02x}"
                 matched_hex = f"#{matched_rgb[0]:02x}{matched_rgb[1]:02x}{matched_rgb[2]:02x}"
+
+                # Flag suspiciously large Lab distance (>25 is visually very different)
+                if lab_dist > 25.0:
+                    _log.warning(
+                        "Large color distance in match: %s -> %s (Lab dist=%.1f)",
+                        query_hex, matched_hex, lab_dist,
+                        extra={
+                            "event": "vector_match_color_large_distance",
+                            "query_rgb": list(query_rgb),
+                            "matched_rgb": list(matched_rgb),
+                            "lab_distance": round(lab_dist, 2),
+                            "lut_idx": lut_idx,
+                            "kdtree_size": self.img_processor.kdtree.n if hasattr(self.img_processor.kdtree, 'n') else len(self.img_processor.lut_rgb),
+                        },
+                    )
+
                 if recipe_log_mode == "full":
                     if query_rgb != rgb:
-                        _log.debug("  %s => %s -> %s -> recipe %s", hex_c, query_hex, matched_hex, recipe)
+                        _log.debug("  %s => %s -> %s -> recipe %s (dist=%.2f)", hex_c, query_hex, matched_hex, recipe, lab_dist)
                     else:
-                        _log.debug("  %s -> %s -> recipe %s", hex_c, matched_hex, recipe)
+                        _log.debug("  %s -> %s -> recipe %s (dist=%.2f)", hex_c, matched_hex, recipe, lab_dist)
                 elif recipe_log_mode == "summary" and len(sample_logs) < 8:
                     if query_rgb != rgb:
-                        sample_logs.append(f"{hex_c} => {query_hex} -> {matched_hex} -> {recipe}")
+                        sample_logs.append(f"{hex_c} => {query_hex} -> {matched_hex} -> {recipe} (dist={lab_dist:.1f})")
                     else:
-                        sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe}")
+                        sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe} (dist={lab_dist:.1f})")
 
             matched.append(
                 {
