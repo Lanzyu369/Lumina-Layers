@@ -335,8 +335,8 @@ def build_layer_config_ranges_xml(
             （朝向选择器："up"、"down" 或 "double"）
         fine_layer_height_mm (float): Fine printing layer height in millimetres.
             （细层高打印层高，单位为毫米）
-        object_id (int): 3MF object identifier written into the XML payload.
-            （写入 XML 载荷的 3MF 对象 ID）
+        object_id (int): One-based model-object index written into the XML payload.
+            （写入 XML 载荷的模型对象序号，从 1 开始）
 
     Returns:
         bytes | None: UTF-8 XML bytes when a coarse-layer override is required, otherwise `None`.
@@ -865,12 +865,15 @@ class BambuStudio3MFWriter:
                 ]
             )
         if self.enable_base_layer_height_modifier:
+            # Bambu/Orca layer_config_ranges keys are one-based model-object
+            # indexes, not 3MF resource/build object ids. Lumina emits one
+            # assembled model object here; puzzle exports strip this metadata.
             lcr_bytes = build_layer_config_ranges_xml(
                 base_height_mm=self.base_height_mm,
                 color_height_mm=self.color_height_mm,
                 nozzle_mm=float(self.nozzle_size),
                 face=self.face_orientation,
-                object_id=assembly_id,
+                object_id=1,
             )
             if lcr_bytes is not None:
                 parts.append(("Metadata/layer_config_ranges.xml", "text/xml", lcr_bytes))
@@ -910,22 +913,27 @@ class BambuStudio3MFWriter:
         builder: _get_n3mf().DocumentBuilder,
         part_paths: list[str],
     ) -> None:
-        """Attach Bambu metadata files to the root model relationship set.
-        将 Bambu 私有元数据挂到根模型的关系表上。
+        """Attach slicer settings metadata to the root model relationship set.
+        将切片器设置元数据挂到根模型的关系表上。
         """
-        if not self._should_emit_bambu_aux_parts():
-            return
         if not hasattr(builder, "add_custom_relationship"):
             return
 
         n3mf = _get_n3mf()
         relationship_type = "http://schemas.bambulab.com/package/2021/settings"
-        related_paths = [
-            path
-            for path in part_paths
-            if path.startswith("Metadata/")
-            and not path.lower().endswith(".png")
-        ]
+        if self._should_emit_bambu_aux_parts():
+            related_paths = [
+                path
+                for path in part_paths
+                if path.startswith("Metadata/")
+                and not path.lower().endswith(".png")
+            ]
+        else:
+            related_paths = [
+                path
+                for path in part_paths
+                if path == "Metadata/layer_config_ranges.xml"
+            ]
         for index, path in enumerate(related_paths):
             builder.add_custom_relationship(
                 n3mf.CustomRelationship(

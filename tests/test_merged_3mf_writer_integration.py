@@ -34,7 +34,12 @@ _NS_CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 _NS_PROD = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 
 
-def _make_source_3mf(offset_x: float = 0.0, offset_y: float = 0.0) -> Path:
+def _make_source_3mf(
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    *,
+    enable_base_layer_height_modifier: bool = False,
+) -> Path:
     """Create a minimal real Bambu 3MF with one slot."""
     os.makedirs(TEMP_DIR, exist_ok=True)
     scene = trimesh.Scene()
@@ -52,6 +57,10 @@ def _make_source_3mf(offset_x: float = 0.0, offset_y: float = 0.0) -> Path:
         preview_colors={"Bambu PLA Black": (16, 16, 16, 255)},
         settings={},
         color_mode="4-Color",
+        enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        base_height_mm=0.8,
+        color_height_mm=2.4,
+        face_orientation="down",
     )
     return Path(path)
 
@@ -86,7 +95,12 @@ class TestMergedWriterBambuCompatibility:
 
         try:
             writer = MergedBambu3MFWriter()
-            writer.write(items, Path(out_path), plate_width_mm=200.0, plate_depth_mm=200.0)
+            writer.write(
+                items,
+                Path(out_path),
+                plate_width_mm=200.0,
+                plate_depth_mm=200.0,
+            )
 
             with zipfile.ZipFile(out_path, "r") as zf:
                 # 1. Top-level model has requiredextensions="p"
@@ -95,6 +109,13 @@ class TestMergedWriterBambuCompatibility:
                     "Missing requiredextensions attribute"
                 )
                 assert '"p"' in main_xml, "requiredextensions should be 'p'"
+                main_root = ET.fromstring(main_xml)
+                root_metadata = {
+                    node.get("name"): node.text or ""
+                    for node in main_root.findall(f"{{{_NS_CORE}}}metadata")
+                }
+                assert root_metadata.get("Application", "").startswith("BambuStudio-")
+                assert root_metadata.get("BambuStudio:3mfVersion") == "1"
 
                 # 2. No ns0:path in raw XML
                 assert "ns0:path" not in main_xml, (
@@ -113,7 +134,7 @@ class TestMergedWriterBambuCompatibility:
                 )
 
                 # 5. Per-item models have triangles > 0
-                for idx in range(2):
+                for idx in range(1, 3):
                     model_path = f"3D/Objects/object_{idx}.model"
                     assert model_path in zf.namelist(), (
                         f"Missing {model_path}"
@@ -139,14 +160,88 @@ class TestMergedWriterBambuCompatibility:
                 assert plate is not None, "model_settings.config missing <plate>"
                 model_instances = plate.findall("model_instance")
                 assert len(model_instances) == 2
+                config_objects = settings_root.findall("object")
                 assert {
                     md.get("value")
                     for instance in model_instances
                     for md in instance.findall("metadata")
                     if md.get("key") == "object_id"
                 } == {
+                    obj.get("id") for obj in config_objects
+                }
+                assert all(
+                    any(md.tag == "metadata" and "face_count" in md.attrib for md in obj)
+                    for obj in config_objects
+                )
+
+                # 7. Reference Bambu multi-object packages keep
+                # Metadata/*.config files in place, but do not attach them
+                # through 3D/_rels/3dmodel.model.rels.
+                ns_rels = "http://schemas.openxmlformats.org/package/2006/relationships"
+                rels = ET.fromstring(zf.read("3D/_rels/3dmodel.model.rels"))
+                relationships = rels.findall(f"{{{ns_rels}}}Relationship")
+                assert {
+                    (rel.get("Target") or "").lstrip("/")
+                    for rel in relationships
+                    if rel.get("Type")
+                    == "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
+                } == {
+                    "3D/Objects/object_1.model",
+                    "3D/Objects/object_2.model",
+                }
+                assert not [
+                    rel
+                    for rel in relationships
+                    if rel.get("Type")
+                    == "http://schemas.bambulab.com/package/2021/settings"
+                    or (rel.get("Target") or "").lstrip("/").startswith("Metadata/")
+                ]
+
+                # 8. Root relationships carry the main model and any package
+                # cover thumbnails that are present in the ZIP.
+                names = set(zf.namelist())
+                top_rels = ET.fromstring(zf.read("_rels/.rels"))
+                top_relationships = top_rels.findall(f"{{{ns_rels}}}Relationship")
+                top_targets = {
+                    (rel.get("Target") or "").lstrip("/")
+                    for rel in top_relationships
+                }
+                assert "3D/3dmodel.model" in top_targets
+                assert top_targets.issubset(names)
+                thumbnail_names = {
+                    "Metadata/plate_1.png",
+                    "Auxiliaries/.thumbnails/thumbnail_3mf.png",
+                }
+                if names & thumbnail_names:
+                    assert top_targets & thumbnail_names
+
+                # 9. Content types follow the same compact shape as the
+                # trusted reference 3MFs under 元数据分析/.
+                ct_root = ET.fromstring(zf.read("[Content_Types].xml"))
+                ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+                assert {
+                    node.get("Extension")
+                    for node in ct_root.findall(f"{{{ct_ns}}}Default")
+                } == {"gcode", "model", "png", "rels"}
+                assert not ct_root.findall(f"{{{ct_ns}}}Override")
+
+                # 10. These sidecars use model indexes in Bambu reference
+                # packages; using generated assembly ids can make the slicer
+                # drop project/process metadata while importing.
+                cut_root = ET.fromstring(zf.read("Metadata/cut_information.xml"))
+                assert [
                     obj.get("id")
-                    for obj in settings_root.findall("object")
+                    for obj in cut_root.findall("object")
+                ] == ["1", "2"]
+                filament_sequence = json.loads(
+                    zf.read("Metadata/filament_sequence.json").decode("utf-8")
+                )
+                assert filament_sequence == {
+                    "plate_1": {
+                        "nozzle_sequence": [],
+                        "optimal_assignment": [],
+                        "sequence": [],
+                    }
                 }
         finally:
             for p in (src1, src2, Path(out_path)):
@@ -300,7 +395,12 @@ class TestMergedWriterBambuCompatibility:
 
         try:
             writer = MergedBambu3MFWriter()
-            writer.write(items, Path(out_path), plate_width_mm=200.0, plate_depth_mm=200.0)
+            writer.write(
+                items,
+                Path(out_path),
+                plate_width_mm=200.0,
+                plate_depth_mm=200.0,
+            )
 
             with (
                 zipfile.ZipFile(src_path, "r") as src_zip,
@@ -323,6 +423,99 @@ class TestMergedWriterBambuCompatibility:
                     assert merged_project.get(key) == src_project.get(key)
         finally:
             for p in (Path(src_path), Path(out_path)):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def test_layer_config_ranges_use_model_indices_after_merge(self) -> None:
+        """Merged 3MF layer-height modifiers target Bambu model indexes."""
+        src1 = _make_source_3mf(
+            offset_x=0.0,
+            enable_base_layer_height_modifier=True,
+        )
+        src2 = _make_source_3mf(
+            offset_x=15.0,
+            enable_base_layer_height_modifier=True,
+        )
+
+        items = [
+            MergedItem(
+                source_filename="a.png",
+                source_3mf_path=src1,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=0.0,
+                ty_mm=0.0,
+            ),
+            MergedItem(
+                source_filename="b.png",
+                source_3mf_path=src2,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=50.0,
+                ty_mm=20.0,
+            ),
+        ]
+
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_layer_config_",
+        )
+        os.close(fd)
+
+        try:
+            writer = MergedBambu3MFWriter()
+            writer.write(
+                items,
+                Path(out_path),
+                plate_width_mm=200.0,
+                plate_depth_mm=200.0,
+            )
+
+            with zipfile.ZipFile(out_path, "r") as zf:
+                assert "Metadata/layer_config_ranges.xml" in zf.namelist()
+
+                main_root = ET.fromstring(zf.read("3D/3dmodel.model"))
+                build = main_root.find(f"{{{_NS_CORE}}}build")
+                assert build is not None
+                build_ids = [
+                    item.get("objectid")
+                    for item in build.findall(f"{{{_NS_CORE}}}item")
+                ]
+                assert build_ids != ["1", "2"]
+
+                layer_root = ET.fromstring(zf.read("Metadata/layer_config_ranges.xml"))
+                layer_object_ids = [
+                    obj.get("id")
+                    for obj in layer_root.findall("object")
+                ]
+                assert layer_object_ids == ["1", "2"]
+                assert layer_object_ids != build_ids
+
+                cut_root = ET.fromstring(zf.read("Metadata/cut_information.xml"))
+                cut_object_ids = [
+                    obj.get("id")
+                    for obj in cut_root.findall("object")
+                ]
+                assert cut_object_ids == ["1", "2"]
+                assert cut_object_ids != build_ids
+
+                rels = ET.fromstring(zf.read("3D/_rels/3dmodel.model.rels"))
+                relationships = rels.findall(
+                    "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+                )
+                assert "/Metadata/layer_config_ranges.xml" not in {
+                    rel.get("Target")
+                    for rel in relationships
+                }
+                assert not [
+                    rel
+                    for rel in relationships
+                    if rel.get("Type")
+                    == "http://schemas.bambulab.com/package/2021/settings"
+                ]
+        finally:
+            for p in (src1, src2, Path(out_path)):
                 try:
                     p.unlink(missing_ok=True)
                 except OSError:

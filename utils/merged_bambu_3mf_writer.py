@@ -221,9 +221,16 @@ _BAMBU_METADATA_PART_ORDER = (
 
 _BAMBU_THUMBNAIL_PARTS = (
     "Metadata/plate_1.png",
+    "Metadata/plate_1_small.png",
     "Metadata/plate_no_light_1.png",
     "Metadata/top_1.png",
     "Metadata/pick_1.png",
+)
+
+_AUXILIARY_THUMBNAIL_PARTS = (
+    "Auxiliaries/.thumbnails/thumbnail_3mf.png",
+    "Auxiliaries/.thumbnails/thumbnail_middle.png",
+    "Auxiliaries/.thumbnails/thumbnail_small.png",
 )
 
 # Lumina-private metadata key inside Metadata/model_settings.config that
@@ -282,6 +289,7 @@ class _SourceAssembly:
     component_uuids: Per-component p:UUID strings from source.
     metadata_parts: Raw Bambu metadata parts copied from the source 3MF.
     project_settings: Parsed source project settings, if present.
+    root_metadata: Top-level ``3D/3dmodel.model`` metadata from source.
     """
 
     meshes: tuple[_SourceMesh, ...]
@@ -294,6 +302,7 @@ class _SourceAssembly:
     component_uuids: tuple[str, ...]
     metadata_parts: dict[str, bytes]
     project_settings: dict[str, Any] | None
+    root_metadata: dict[str, str]
 
 
 def _qname_core(tag: str) -> str:
@@ -391,6 +400,11 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
                 ) from exc
 
             main_root = _parse_xml_bytes(main_model_bytes)
+            root_metadata = {
+                metadata.get("name") or "": metadata.text or ""
+                for metadata in main_root.findall(_qname_core("metadata"))
+                if metadata.get("name")
+            }
 
             # Identify the build target object id.
             build_elem = main_root.find(_qname_core("build"))
@@ -568,7 +582,11 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
                     source_plate_md = config_root.find("plate")
 
             metadata_parts: dict[str, bytes] = {}
-            for metadata_path in (*_BAMBU_METADATA_PART_ORDER, *_BAMBU_THUMBNAIL_PARTS):
+            for metadata_path in (
+                *_BAMBU_METADATA_PART_ORDER,
+                *_BAMBU_THUMBNAIL_PARTS,
+                *_AUXILIARY_THUMBNAIL_PARTS,
+            ):
                 try:
                     metadata_parts[metadata_path] = zf.read(metadata_path)
                 except KeyError:
@@ -605,6 +623,7 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
                 component_uuids=tuple(component_uuids),
                 metadata_parts=metadata_parts,
                 project_settings=project_settings,
+                root_metadata=root_metadata,
             )
     except MergedWriteError:
         raise
@@ -802,6 +821,25 @@ def _rewrite_object_ids_in_model(
     return buf.getvalue()
 
 
+def _count_triangles_in_model(model_bytes: bytes) -> int:
+    """Count mesh triangles in a per-item model file."""
+
+    try:
+        root = ET.fromstring(model_bytes)
+    except ET.ParseError:
+        return 0
+
+    total = 0
+    for obj in root.iter(_qname_core("object")):
+        mesh = obj.find(_qname_core("mesh"))
+        if mesh is None:
+            continue
+        triangles = mesh.find(_qname_core("triangles"))
+        if triangles is not None:
+            total += len(triangles.findall(_qname_core("triangle")))
+    return total
+
+
 def _parse_hex_color(hex_color: str) -> tuple[int, int, int]:
     """Parse ``#RRGGBB`` into an RGB tuple.
 
@@ -909,6 +947,17 @@ def _build_metadata_writer(
     return writer
 
 
+def _first_source_root_metadata(
+    assemblies: Sequence[_SourceAssembly],
+    key: str,
+) -> str | None:
+    for assembly in assemblies:
+        value = assembly.root_metadata.get(key)
+        if value:
+            return value
+    return None
+
+
 def _first_source_project_settings(
     assemblies: Sequence[_SourceAssembly],
 ) -> dict[str, Any] | None:
@@ -984,26 +1033,33 @@ def _build_project_settings_bytes_for_merge(
     return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 
 
-def _build_objects_xml_from_sources(
+def _build_layer_config_ranges_xml_from_sources(
     assemblies: Sequence[_SourceAssembly],
-    assembly_object_ids: Sequence[int],
-    metadata_path: str,
 ) -> bytes | None:
-    """Merge source object-scoped metadata XML and rewrite object ids."""
+    """Merge source layer-height ranges using Bambu's model-object indexes.
+
+    ``Metadata/layer_config_ranges.xml`` does not use 3MF resource/build
+    object ids. Bambu-family slicers read its ``object id`` as a one-based
+    model-object index, so merged batch output must write 1, 2, 3... in build
+    order instead of the generated assembly ids.
+    """
 
     objects_root = ET.Element("objects")
-    for assembly, assembly_id in zip(assemblies, assembly_object_ids):
-        payload = assembly.metadata_parts.get(metadata_path)
+    for model_index, assembly in enumerate(assemblies, start=1):
+        payload = assembly.metadata_parts.get("Metadata/layer_config_ranges.xml")
         if payload is None:
             continue
         try:
             source_root = ET.fromstring(payload)
         except ET.ParseError:
             continue
-        for obj in source_root.findall("object"):
-            cloned = copy.deepcopy(obj)
-            cloned.set("id", str(assembly_id))
-            objects_root.append(cloned)
+
+        merged_obj = ET.Element("object", attrib={"id": str(model_index)})
+        for source_obj in source_root.findall("object"):
+            for range_elem in source_obj.findall("range"):
+                merged_obj.append(copy.deepcopy(range_elem))
+        if list(merged_obj):
+            objects_root.append(merged_obj)
 
     if not list(objects_root):
         return None
@@ -1012,14 +1068,27 @@ def _build_objects_xml_from_sources(
 
 def _build_default_cut_information_bytes(assembly_object_ids: Sequence[int]) -> bytes:
     objects_root = ET.Element("objects")
-    for assembly_id in assembly_object_ids:
-        obj = ET.SubElement(objects_root, "object", attrib={"id": str(int(assembly_id))})
+    for model_index, _assembly_id in enumerate(assembly_object_ids, start=1):
+        obj = ET.SubElement(objects_root, "object", attrib={"id": str(model_index)})
         ET.SubElement(
             obj,
             "cut_id",
             attrib={"id": "0", "check_sum": "1", "connectors_cnt": "0"},
         )
     return _serialize_xml_plain(objects_root)
+
+
+def _build_filament_sequence_bytes_for_merge() -> bytes:
+    """Build the Bambu multi-object filament sequence sidecar."""
+
+    data = {
+        "plate_1": {
+            "nozzle_sequence": [],
+            "optimal_assignment": [],
+            "sequence": [],
+        }
+    }
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def _first_metadata_part(
@@ -1131,17 +1200,13 @@ def _build_bambu_metadata_files(
         "Metadata/slice_info.config": _first_metadata_part(
             assemblies, "Metadata/slice_info.config"
         ) or meta_writer._build_slice_info_bytes(),
-        "Metadata/filament_sequence.json": _first_metadata_part(
-            assemblies, "Metadata/filament_sequence.json"
-        ) or meta_writer._build_filament_sequence_bytes(),
-        "Metadata/cut_information.xml": _build_objects_xml_from_sources(
-            assemblies, assembly_object_ids, "Metadata/cut_information.xml"
-        ) or _build_default_cut_information_bytes(assembly_object_ids),
+        "Metadata/filament_sequence.json": _build_filament_sequence_bytes_for_merge(),
+        "Metadata/cut_information.xml": _build_default_cut_information_bytes(
+            assembly_object_ids
+        ),
     }
 
-    layer_config = _build_objects_xml_from_sources(
-        assemblies, assembly_object_ids, "Metadata/layer_config_ranges.xml"
-    )
+    layer_config = _build_layer_config_ranges_xml_from_sources(assemblies)
     if layer_config is not None:
         metadata_files["Metadata/layer_config_ranges.xml"] = layer_config
 
@@ -1151,7 +1216,7 @@ def _build_bambu_metadata_files(
 
     # Thumbnails are not essential for slicing, but copying existing ones keeps
     # the merged 3MF closer to packages produced by the single writer.
-    for thumbnail_path in _BAMBU_THUMBNAIL_PARTS:
+    for thumbnail_path in (*_BAMBU_THUMBNAIL_PARTS, *_AUXILIARY_THUMBNAIL_PARTS):
         payload = _first_metadata_part(assemblies, thumbnail_path)
         if payload is not None:
             metadata_files[thumbnail_path] = payload
@@ -1159,77 +1224,91 @@ def _build_bambu_metadata_files(
     return metadata_files
 
 
-def _content_type_for_part(path: str) -> str:
-    suffix = Path(path).suffix.lower()
-    if suffix == ".model":
-        return _CONTENT_TYPE_3DMODEL
-    if suffix == ".rels":
-        return _CONTENT_TYPE_RELS
-    if suffix == ".config":
-        return "text/xml"
-    if suffix == ".json":
-        return "application/json"
-    if suffix == ".xml":
-        return "text/xml"
-    if suffix == ".png":
-        return "image/png"
-    return "application/octet-stream"
-
-
-def _build_content_types_bytes(
-    per_item_model_paths: Sequence[str], metadata_paths: Sequence[str]
-) -> bytes:
-    """Build an OPC content-type table matching the single 3MF writer."""
+def _build_content_types_bytes() -> bytes:
+    """Build an OPC content-type table matching Bambu multi-object samples."""
 
     ct_root = ET.Element(f"{{{_NS_CONTENT_TYPES}}}Types")
     defaults = {
-        "config": "text/xml",
-        "json": "application/json",
         "model": _CONTENT_TYPE_3DMODEL,
         "png": "image/png",
         "rels": _CONTENT_TYPE_RELS,
-        "xml": "text/xml",
+        "gcode": "text/x.gcode",
     }
     for extension, content_type in defaults.items():
         node = ET.SubElement(ct_root, f"{{{_NS_CONTENT_TYPES}}}Default")
         node.set("Extension", extension)
         node.set("ContentType", content_type)
 
-    override_paths = ["3D/3dmodel.model", *per_item_model_paths, *metadata_paths]
-    seen: set[str] = set()
-    for path in override_paths:
-        part_name = "/" + path.lstrip("/")
-        if part_name in seen:
-            continue
-        seen.add(part_name)
-        node = ET.SubElement(ct_root, f"{{{_NS_CONTENT_TYPES}}}Override")
-        node.set("PartName", part_name)
-        node.set("ContentType", _content_type_for_part(path))
-
     return _serialize_xml_for_ns(ct_root, _NS_CONTENT_TYPES)
 
 
-def _build_model_relationships_bytes(
-    per_item_model_paths: Sequence[str], metadata_paths: Sequence[str]
-) -> bytes:
-    """Build ``3D/_rels/3dmodel.model.rels`` with Bambu metadata rels."""
+def _build_model_relationships_bytes(per_item_model_paths: Sequence[str]) -> bytes:
+    """Build ``3D/_rels/3dmodel.model.rels`` with per-item model rels.
+
+    Bambu Studio's multi-object reference 3MFs keep Metadata/*.config files at
+    their canonical package paths and do not attach them through this rels part.
+    Mirroring that shape prevents the slicer from treating merged batch output
+    as a generic 3MF without project/process settings.
+    """
 
     rels_root = ET.Element(f"{{{_NS_RELS}}}Relationships")
-    bambu_idx = 0
-    for path in metadata_paths:
-        if not path.startswith("Metadata/") or path.lower().endswith(".png"):
+
+    for idx, path in enumerate(per_item_model_paths, start=1):
+        rel = ET.SubElement(rels_root, f"{{{_NS_RELS}}}Relationship")
+        rel.set("Target", "/" + path)
+        rel.set("Id", f"rel-{idx}")
+        rel.set("Type", _REL_TYPE_3DMODEL)
+
+    return _serialize_xml_for_ns(rels_root, _NS_RELS)
+
+
+def _build_top_relationships_bytes(metadata_paths: Sequence[str]) -> bytes:
+    """Build package root relationships with Bambu-style cover thumbnails."""
+
+    rels_root = ET.Element(f"{{{_NS_RELS}}}Relationships")
+    top_rel = ET.SubElement(rels_root, f"{{{_NS_RELS}}}Relationship")
+    top_rel.set("Target", "/3D/3dmodel.model")
+    top_rel.set("Id", "rel-1")
+    top_rel.set("Type", _REL_TYPE_3DMODEL)
+
+    metadata_set = set(metadata_paths)
+    if "Auxiliaries/.thumbnails/thumbnail_3mf.png" in metadata_set:
+        thumbnail_target = "/Auxiliaries/.thumbnails/thumbnail_3mf.png"
+        middle_target = "/Auxiliaries/.thumbnails/thumbnail_middle.png"
+        small_target = "/Auxiliaries/.thumbnails/thumbnail_small.png"
+    else:
+        thumbnail_target = "/Metadata/plate_1.png"
+        middle_target = "/Metadata/plate_1.png"
+        small_target = (
+            "/Metadata/plate_1_small.png"
+            if "Metadata/plate_1_small.png" in metadata_set
+            else "/Metadata/plate_1.png"
+        )
+
+    thumbnail_rels = [
+        (
+            "rel-2",
+            thumbnail_target,
+            "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail",
+        ),
+        (
+            "rel-4",
+            middle_target,
+            "http://schemas.bambulab.com/package/2021/cover-thumbnail-middle",
+        ),
+        (
+            "rel-5",
+            small_target,
+            "http://schemas.bambulab.com/package/2021/cover-thumbnail-small",
+        ),
+    ]
+    for rel_id, target, rel_type in thumbnail_rels:
+        if target.lstrip("/") not in metadata_set:
             continue
         rel = ET.SubElement(rels_root, f"{{{_NS_RELS}}}Relationship")
-        rel.set("Target", "/" + path)
-        rel.set("Id", f"bambuRel{bambu_idx}")
-        rel.set("Type", _REL_TYPE_BAMBU_SETTINGS)
-        bambu_idx += 1
-
-    for idx, path in enumerate(per_item_model_paths):
-        rel = ET.SubElement(rels_root, f"{{{_NS_RELS}}}Relationship")
-        rel.set("Target", "/" + path)
-        rel.set("Id", f"rel-obj-{idx}")
-        rel.set("Type", _REL_TYPE_3DMODEL)
+        rel.set("Target", target)
+        rel.set("Id", rel_id)
+        rel.set("Type", rel_type)
 
     return _serialize_xml_for_ns(rels_root, _NS_RELS)
 
@@ -1334,6 +1413,7 @@ class MergedBambu3MFWriter:
         per_item_model_paths: list[str] = []
         assembly_object_ids: list[int] = []
         per_item_mesh_ids: list[list[int]] = []
+        per_item_face_counts: list[int] = []
 
         # Build per-item .model files using neroued_3mf for proper mesh XML.
         per_item_model_bytes_list: list[bytes] = []
@@ -1349,9 +1429,10 @@ class MergedBambu3MFWriter:
                 next_id += 1
 
             per_item_mesh_ids.append(mesh_ids)
-            per_item_model_path = f"3D/Objects/object_{idx}.model"
+            per_item_model_path = f"3D/Objects/object_{idx + 1}.model"
             per_item_model_paths.append(per_item_model_path)
             per_item_model_bytes_list.append(per_item_bytes)
+            per_item_face_counts.append(_count_triangles_in_model(per_item_bytes))
 
         # Allocate assembly object IDs.
         for idx in range(N):
@@ -1364,6 +1445,20 @@ class MergedBambu3MFWriter:
         main_model.set("unit", "millimeter")
         main_model.set("xml:lang", "en-US")
         main_model.set("requiredextensions", "p")
+
+        application = _first_source_root_metadata(assemblies, "Application")
+        if not application:
+            application = _build_metadata_writer(items, output_path)._get_app_version_str()
+        ET.SubElement(
+            main_model,
+            _qname_core("metadata"),
+            attrib={"name": "Application"},
+        ).text = application
+        ET.SubElement(
+            main_model,
+            _qname_core("metadata"),
+            attrib={"name": "BambuStudio:3mfVersion"},
+        ).text = _first_source_root_metadata(assemblies, "BambuStudio:3mfVersion") or "1"
 
         main_resources = ET.SubElement(main_model, _qname_core("resources"))
         for idx in range(N):
@@ -1428,6 +1523,15 @@ class MergedBambu3MFWriter:
                 cfg_obj,
                 assembly.source_assembly_part_metadata,
             )
+            if not any(
+                child.tag == "metadata" and "face_count" in child.attrib
+                for child in cfg_obj
+            ):
+                ET.SubElement(
+                    cfg_obj,
+                    "metadata",
+                    attrib={"face_count": str(per_item_face_counts[idx])},
+                )
 
             # Clone source part elements fully (preserving subtype, metadata,
             # mesh_stat etc.), only rewrite the id to the new mesh id.
@@ -1505,14 +1609,6 @@ class MergedBambu3MFWriter:
 
         config_bytes = _serialize_xml_plain(config_root)
 
-        # Build _rels/.rels.
-        top_rels_root = ET.Element(f"{{{_NS_RELS}}}Relationships")
-        top_rel = ET.SubElement(top_rels_root, f"{{{_NS_RELS}}}Relationship")
-        top_rel.set("Target", "/3D/3dmodel.model")
-        top_rel.set("Id", "rel-3dmodel")
-        top_rel.set("Type", _REL_TYPE_3DMODEL)
-        top_rels_bytes = _serialize_xml_for_ns(top_rels_root, _NS_RELS)
-
         # Generate Bambu vendor metadata by reusing the same metadata builders
         # and source metadata that single-item 3MF export already trusts.
         bambu_metadata_files = _build_bambu_metadata_files(
@@ -1523,12 +1619,9 @@ class MergedBambu3MFWriter:
             config_bytes,
         )
         metadata_paths = list(bambu_metadata_files.keys())
-        rels_bytes = _build_model_relationships_bytes(
-            per_item_model_paths, metadata_paths
-        )
-        ct_bytes = _build_content_types_bytes(
-            per_item_model_paths, metadata_paths
-        )
+        top_rels_bytes = _build_top_relationships_bytes(metadata_paths)
+        rels_bytes = _build_model_relationships_bytes(per_item_model_paths)
+        ct_bytes = _build_content_types_bytes()
 
         # Write the ZIP.
         output_path = Path(output_path)
@@ -1578,15 +1671,31 @@ class MergedBambu3MFWriter:
                         "Sanity check failed: missing Bambu metadata "
                         + ", ".join(missing_metadata)
                     )
+                main_model_root = ET.fromstring(zf.read("3D/3dmodel.model"))
+                root_metadata = {
+                    node.get("name"): node.text or ""
+                    for node in main_model_root.findall(_qname_core("metadata"))
+                }
+                if not root_metadata.get("Application"):
+                    raise MergedWriteError(
+                        "Sanity check failed: 3D/3dmodel.model missing "
+                        "Application metadata"
+                    )
+                if not root_metadata.get("BambuStudio:3mfVersion"):
+                    raise MergedWriteError(
+                        "Sanity check failed: 3D/3dmodel.model missing "
+                        "BambuStudio:3mfVersion metadata"
+                    )
 
-                # Content types must declare the metadata extensions that
-                # Bambu/Orca use to discover project settings.
+                # Match Bambu multi-object package samples: metadata files stay
+                # at canonical paths and rely on the slicer's project parser,
+                # while content types stay minimal.
                 ct_root = ET.fromstring(zf.read("[Content_Types].xml"))
                 default_extensions = {
                     node.get("Extension")
                     for node in ct_root.findall(f"{{{_NS_CONTENT_TYPES}}}Default")
                 }
-                for extension in ("config", "json", "model", "png", "rels", "xml"):
+                for extension in ("gcode", "model", "png", "rels"):
                     if extension not in default_extensions:
                         raise MergedWriteError(
                             f"Sanity check failed: [Content_Types].xml missing "
@@ -1602,11 +1711,31 @@ class MergedBambu3MFWriter:
                         "Sanity check failed: project_settings.config has no "
                         "filament_colour entries"
                     )
-                # Check 3D/_rels targets exist.
+                # Check package root relationships and their targets.
+                top_rels_bytes = zf.read("_rels/.rels")
+                top_rels_root = ET.fromstring(top_rels_bytes)
+                ns_rels = "http://schemas.openxmlformats.org/package/2006/relationships"
+                has_main_model_rel = False
+                for rel in top_rels_root.findall(f"{{{ns_rels}}}Relationship"):
+                    target = rel.get("Target", "").lstrip("/")
+                    if target and target not in zip_names:
+                        raise MergedWriteError(
+                            f"Sanity check failed: root rels Target {target!r} "
+                            "not in ZIP"
+                        )
+                    if target == "3D/3dmodel.model" and rel.get("Type") == _REL_TYPE_3DMODEL:
+                        has_main_model_rel = True
+                if not has_main_model_rel:
+                    raise MergedWriteError(
+                        "Sanity check failed: root rels missing 3D/3dmodel.model"
+                    )
+
+                # Check 3D/_rels targets exist and only point at per-item model
+                # files, matching Bambu's own multi-object package shape.
                 rels_bytes = zf.read("3D/_rels/3dmodel.model.rels")
                 rels_root = ET.fromstring(rels_bytes)
-                ns_rels = "http://schemas.openxmlformats.org/package/2006/relationships"
-                metadata_rel_targets: set[str] = set()
+                expected_model_targets = set(per_item_model_paths)
+                object_rel_targets: set[str] = set()
                 for rel in rels_root.findall(f"{{{ns_rels}}}Relationship"):
                     target = rel.get("Target", "").lstrip("/")
                     if target and target not in zip_names:
@@ -1614,13 +1743,18 @@ class MergedBambu3MFWriter:
                             f"Sanity check failed: rels Target {target!r} not in ZIP"
                         )
                     if rel.get("Type") == _REL_TYPE_BAMBU_SETTINGS:
-                        metadata_rel_targets.add(target)
-                for required in required_metadata:
-                    if required not in metadata_rel_targets:
                         raise MergedWriteError(
-                            f"Sanity check failed: {required!r} is not attached "
-                            "through 3D/_rels/3dmodel.model.rels"
+                            "Sanity check failed: Bambu metadata must not be "
+                            "attached through 3D/_rels/3dmodel.model.rels"
                         )
+                    if rel.get("Type") == _REL_TYPE_3DMODEL:
+                        object_rel_targets.add(target)
+                if object_rel_targets != expected_model_targets:
+                    raise MergedWriteError(
+                        "Sanity check failed: 3D model relationships "
+                        f"{sorted(object_rel_targets)!r} != "
+                        f"{sorted(expected_model_targets)!r}"
+                    )
                 # Count total vertices and triangles.
                 total_vertices = 0
                 total_triangles = 0
