@@ -3481,15 +3481,15 @@ class VectorProcessor:
                     if isinstance(element, Shape) and not isinstance(element, Path):
                         try:
                             element = Path(element)
-                        except Exception:
+                        except (AttributeError, TypeError, ValueError, NotImplementedError):
                             continue
                     try:
                         linecap = str(getattr(element, "stroke_linecap", None) or "round").strip().lower()
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         linecap = "round"
                     try:
                         linejoin = str(getattr(element, "stroke_linejoin", None) or "round").strip().lower()
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         linejoin = "round"
                     cap_style = "flat" if linecap == "butt" else ("square" if linecap == "square" else "round")
                     join_style = "mitre" if linejoin == "miter" else linejoin
