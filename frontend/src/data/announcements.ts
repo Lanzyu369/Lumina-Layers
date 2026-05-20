@@ -38,18 +38,152 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "批量生成完成后，3D 预览会直接在热床上显示多个模型，并在数量太多时只预览能稳定显示的前几件。",
             en: "After batch generation, the 3D preview now shows multiple models on the bed and limits the preview to the first models that can be displayed smoothly when a batch is very large.",
           },
+          {
+            zh: "透明区域会用棋盘格显示，预览和分层图里更容易分清透明和黑色。",
+            en: "Transparent areas now use a checkerboard background, making it easier to tell transparency from black in previews and layer images.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 里的透明背景不再被当成黑色实体，矢量模式打开透明图时不会整片发黑。",
+            en: "Transparent SVG backgrounds are no longer treated as solid black, so vector previews no longer turn the whole artwork black.",
+          },
+          {
+            zh: "SVG 渐变图不分离底板时，底板层高修改器现在也能正常生效。",
+            en: "The base-plate layer-height modifier now also works for SVG gradient artwork when the base plate is not exported separately.",
+          },
         ],
       },
       {
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
-            zh: "SVG 渐变图不分离底板时，底板层高修改器现在也能正常生效。",
-            en: "The base-plate layer-height modifier now also works for SVG gradient artwork when the base plate is not exported separately.",
+            zh: "批量生成的合并 3MF 打开后会保留工艺参数，不再出现切片软件里看不到参数的情况。",
+            en: "Merged batch 3MF files now keep their process settings when opened in slicers instead of appearing with no parameters.",
           },
           {
             zh: "批量生成合并成一个 3MF 时，底板层高修改器会一起保留。",
             en: "Batch generation now preserves the base-plate layer-height modifier inside the merged 3MF.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-05-19",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "耗材档案搭配 SVG 时，深色和受限材料组合不再容易被吸到错误的大面积颜色上。",
+            en: "SVGs in material-library mode are less likely to pull dark or limited-palette colours into the wrong large-area match.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-05-17",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "导出的 3MF 现在会带上封面缩略图，在切片软件和文件管理器里更容易认出是哪张图。",
+            en: "Exported 3MF files now include cover thumbnails, making models easier to recognise in slicers and file managers.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "彩多屋梯度卡材料数据已更新，红色和青色档案会按新的校准结果使用。",
+            en: "Caiduowu gradient-card material data has been refreshed, with red and cyan archives using the latest calibration results.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-05-15",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "配方查询会按观赏面优先显示和生成验证色块，预览里看到的层顺序和导出的色块样板更一致。",
+            en: "Recipe lookup now follows the visible face first, so the preview order and exported swatch boards line up more naturally.",
+          },
+        ],
+      },
+      {
+        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        items: [
+          {
+            zh: "梯度卡提取里的校色卡识别现在能稳定触发，不再偶发点了以后没有反应。",
+            en: "Calibration-card detection in gradient-card extraction now triggers reliably instead of occasionally doing nothing after you click it.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "材料验证色块的层顺序会跟界面里的观赏面设置对齐，实物对色时更不容易看反。",
+            en: "Material validation swatches now follow the visible-face setting from the UI, making real-world colour checks harder to read backwards.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-05-14",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "高保真模式处理 SVG 时，现在可以在设置里调整清晰度；默认值保持不变，想要更细或更快时可以自己调。",
+            en: "High-Fidelity SVG conversion now has a detail setting. The default stays the same, and you can tune it for cleaner detail or faster runs.",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "耗材档案模式会保留每种耗材自己的纯色配方，查询本色时不再容易被相近颜色挤掉。",
+            en: "Material-library matching now keeps each material's own pure-colour recipe, so native filament colours are less likely to be crowded out by nearby matches.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "macOS 桌面版现在能更顺地启动和退出，Dock 里也会显示 Lumina 的彩色图标。",
+            en: "The macOS desktop app now starts and quits more cleanly, and the Dock shows the coloured Lumina icon.",
           },
         ],
       },
