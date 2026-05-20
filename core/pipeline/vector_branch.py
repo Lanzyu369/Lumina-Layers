@@ -1287,8 +1287,93 @@ def _run_vector_branch(ctx: dict) -> dict:
         glb_path = None
         glb_t0 = time.perf_counter()
         try:
+            import trimesh as _trimesh
+
             glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
-            scene.export(glb_path)
+            glb_scene = _trimesh.Scene()
+
+            def _coerce_preview_rgba(value: object) -> np.ndarray | None:
+                """Return a safe uint8 RGBA preview color, or ``None``.
+
+                Convert vector preview colors without touching source mesh
+                visuals. Some vector meshes carry malformed visual arrays
+                whose length does not match faces; GLB preview export rebuilds
+                visuals from the authoritative slot color table instead.
+
+                将矢量预览颜色转换为安全的 uint8 RGBA。这里故意不读取源
+                mesh 的 visual，避免有问题的颜色数组在 GLB 导出时触发维度
+                不匹配。
+                """
+
+                if value is None:
+                    return None
+                try:
+                    rgba = np.asarray(value, dtype=float).reshape(-1)
+                except (TypeError, ValueError):
+                    return None
+                if rgba.size < 3:
+                    return None
+                if rgba.max(initial=0.0) <= 1.0:
+                    rgba = rgba * 255.0
+                if rgba.size < 4:
+                    rgba = np.concatenate([rgba[:3], np.array([255.0])])
+                return np.clip(rgba[:4], 0, 255).astype(np.uint8)
+
+            def _color_for_geometry(geom_name: object) -> np.ndarray:
+                """Resolve preview color from vector slot metadata.
+
+                先按几何名查，再按几何名在 slot 列表里的位置查；都没有时
+                使用稳定的中性灰，保证预览 GLB 至少能导出。
+                """
+
+                for key in (geom_name, str(geom_name)):
+                    if key in vec_preview_colors:
+                        rgba = _coerce_preview_rgba(vec_preview_colors.get(key))
+                        if rgba is not None:
+                            return rgba
+
+                try:
+                    slot_index = list(vec_slot_list).index(str(geom_name))
+                except ValueError:
+                    slot_index = -1
+                if slot_index >= 0:
+                    rgba = _coerce_preview_rgba(vec_preview_colors.get(slot_index))
+                    if rgba is not None:
+                        return rgba
+
+                return np.array([200, 200, 200, 255], dtype=np.uint8)
+
+            for geom_name, source_geom in scene.geometry.items():
+                vertices = getattr(source_geom, "vertices", None)
+                faces = getattr(source_geom, "faces", None)
+                if vertices is None or faces is None:
+                    continue
+                vertices_arr = np.asarray(vertices, dtype=np.float64)
+                faces_arr = np.asarray(faces, dtype=np.int64)
+                if vertices_arr.size == 0 or faces_arr.size == 0:
+                    continue
+                face_count = int(len(faces_arr))
+                if face_count <= 0:
+                    continue
+
+                geom = _trimesh.Trimesh(
+                    vertices=vertices_arr.copy(),
+                    faces=faces_arr.copy(),
+                    process=False,
+                )
+                rgba = _color_for_geometry(geom_name)
+                geom.visual = _trimesh.visual.ColorVisuals(
+                    mesh=geom,
+                    face_colors=np.tile(rgba, (face_count, 1)),
+                )
+                glb_scene.add_geometry(geom, geom_name=str(geom_name))
+
+            exported_glb = glb_scene.export(glb_path, file_type="glb")
+            if isinstance(exported_glb, (bytes, bytearray)):
+                with open(glb_path, "wb") as glb_file:
+                    glb_file.write(exported_glb)
+            if not os.path.exists(glb_path):
+                raise RuntimeError(f"Vector GLB export did not create file: {glb_path}")
             log.debug(
                 "Vector preview GLB exported",
                 extra={
@@ -1297,7 +1382,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                 },
             )
         except COORDINATOR_HANDLED_ERRORS as e:
-            log.debug(
+            glb_path = None
+            log.warning(
                 "Vector preview GLB export skipped",
                 extra={
                     "event": "vector_glb_exported_skipped",

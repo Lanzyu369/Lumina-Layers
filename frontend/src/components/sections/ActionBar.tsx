@@ -129,7 +129,13 @@ export default function ActionBar() {
 
   const canSubmit = !!imageFile && sourceSelection.isReady
   const canGenerate = canSubmit && !!sessionId
-  const canBatchSubmit = batchFiles.length > 0 && sourceVersion === "legacy" && !!lut_name
+  const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
+  const batchUploadHintKey =
+    sourceVersion === "material"
+      ? "action_batch_upload_hint_material"
+      : sourceVersion === "native"
+        ? "action_batch_upload_hint_native"
+        : "action_batch_upload_hint"
   const previewDisplayUrl = puzzleOverlayUrl
     ? (previewBaseImageUrl ?? previewImageUrl)
     : selectionMode === "multi-select"
@@ -646,7 +652,7 @@ export default function ActionBar() {
         <>
           {!canBatchSubmit && (
             <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              {t("action_batch_upload_hint")}
+              {t(batchUploadHintKey)}
             </p>
           )}
 
@@ -831,9 +837,13 @@ export default function ActionBar() {
       <SlicerSelector
         threemfDiskPath={threemfDiskPath}
         downloadUrl={downloadUrl}
-        canSubmit={canSubmit}
-        largeFormat={largeFormatEnabled}
+        canSubmit={batchMode ? canBatchSubmit && !batchLoading : canSubmit}
+        largeFormat={batchMode ? false : largeFormatEnabled}
         onAutoGenerate={async () => {
+          if (batchMode) {
+            await submitBatch()
+            return useConverterStore.getState().threemfDiskPath ?? null
+          }
           await submitFullPipeline()
           return useConverterStore.getState().threemfDiskPath ?? null
         }}

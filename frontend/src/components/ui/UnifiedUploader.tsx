@@ -2,6 +2,8 @@ import { useState, useRef, useCallback } from "react";
 import { useI18n } from "../../i18n/context";
 import { isShareCardFile } from "../../recipe/importFlow";
 
+const VISIBLE_BATCH_FILE_LIMIT = 40;
+
 interface UnifiedUploaderProps {
   /** 当前单图模式的预览 URL */
   singlePreview?: string;
@@ -127,6 +129,9 @@ export default function UnifiedUploader({
 
   // BatchMode: file list + "add more" area
   if (isBatchMode && batchFiles.length > 0) {
+    const visibleBatchFiles = batchFiles.slice(0, VISIBLE_BATCH_FILE_LIMIT);
+    const hiddenBatchFileCount = Math.max(0, batchFiles.length - visibleBatchFiles.length);
+
     return (
       <div className="flex flex-col gap-2">
         {/* File count */}
@@ -136,10 +141,10 @@ export default function UnifiedUploader({
 
         {/* File list */}
         <ul
-          className="flex flex-col gap-1"
+          className="flex max-h-64 flex-col gap-1 overflow-y-auto pr-1"
           aria-label={t("upload_file_list_label")}
         >
-          {batchFiles.map((file, index) => (
+          {visibleBatchFiles.map((file, index) => (
             <li
               key={`${file.name}-${index}`}
               className="flex items-center justify-between rounded-2xl border border-transparent bg-slate-100 px-2 py-1 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
@@ -155,6 +160,14 @@ export default function UnifiedUploader({
               </button>
             </li>
           ))}
+          {hiddenBatchFileCount > 0 && (
+            <li className="rounded-2xl border border-dashed border-slate-300 px-2 py-1 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+              {t("upload_file_list_truncated").replace(
+                "{count}",
+                String(hiddenBatchFileCount),
+              )}
+            </li>
+          )}
         </ul>
 
         {/* Add more area */}

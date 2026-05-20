@@ -18,6 +18,7 @@ import {
   summarizeObjectTree,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { createMatteMaterialFromStandard } from "../utils/threeMatteMaterial";
 import PuzzleOverlay3D from "./PuzzleOverlay3D";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 
@@ -179,7 +180,7 @@ function InteractiveModelViewer({
         const newMats = mats.map((mat: THREE.Material) => {
           if (mat instanceof THREE.MeshStandardMaterial) {
             replacedMaterials.push(mat);
-            return new THREE.MeshLambertMaterial({ color: mat.color });
+            return createMatteMaterialFromStandard(mat);
           }
           return mat;
         });
@@ -234,6 +235,8 @@ function InteractiveModelViewer({
       const previousBackingMaterial = bp.material;
       const backingMat = new THREE.MeshLambertMaterial({
         color: 0xf5f5f5,
+        side: THREE.DoubleSide,
+        toneMapped: false,
       });
       bp.material = backingMat;
       disposeMaterial(previousBackingMaterial);
@@ -382,6 +385,8 @@ function InteractiveModelViewer({
     const geo = new THREE.BoxGeometry(w, h, spacerThick);
     const mat = new THREE.MeshLambertMaterial({
       color: 0xf5f5f5,
+      side: THREE.DoubleSide,
+      toneMapped: false,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = "__backing_plate_fallback";
@@ -449,6 +454,9 @@ function InteractiveModelViewer({
       mat.emissive.set(0x000000);
       mat.opacity = 1.0;
       mat.transparent = false;
+      mat.side = THREE.DoubleSide;
+      mat.toneMapped = false;
+      mat.needsUpdate = true;
 
       // Compute Z scale: map the GLB's native color height to the target height
       // GLB color meshes span [0, nativeH] where nativeH ≈ 2.0mm (25 layers × 0.08)

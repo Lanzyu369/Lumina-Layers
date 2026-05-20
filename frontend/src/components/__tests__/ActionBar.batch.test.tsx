@@ -6,6 +6,7 @@ import { buildLayerImagesSourceKey } from "../../stores/converter/store";
 import ActionBar from "../sections/ActionBar";
 
 let capturedCanvasPreviewSurfaceProps: Record<string, unknown> | null = null;
+let capturedSlicerSelectorProps: Record<string, unknown> | null = null;
 
 // Mock child components with complex dependencies
 vi.mock("../sections/BedSizeSelector", () => ({
@@ -13,7 +14,10 @@ vi.mock("../sections/BedSizeSelector", () => ({
 }));
 
 vi.mock("../sections/SlicerSelector", () => ({
-  default: () => <div data-testid="slicer-selector" />,
+  default: (props: Record<string, unknown>) => {
+    capturedSlicerSelectorProps = props;
+    return <div data-testid="slicer-selector" />;
+  },
 }));
 
 vi.mock("../ui/CanvasPreviewSurface", () => ({
@@ -36,6 +40,7 @@ function makeFile(name: string, type = "image/png"): File {
 describe("ActionBar — auto batch mode", () => {
   beforeEach(() => {
     capturedCanvasPreviewSurfaceProps = null;
+    capturedSlicerSelectorProps = null;
     useConverterStore.setState({
       batchMode: false,
       batchFiles: [],
@@ -58,6 +63,8 @@ describe("ActionBar — auto batch mode", () => {
       layerImagesSourceKey: null,
       fetchLayerImages: vi.fn(),
       modelUrl: null,
+      threemfDiskPath: null,
+      downloadUrl: null,
     });
   });
 
@@ -159,6 +166,107 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).not.toBeDisabled();
   });
 
+  it("enables batch generate button for material archive source without a legacy LUT", () => {
+    useConverterStore.setState({
+      batchMode: true,
+      batchFiles: [makeFile("a.png")],
+      source_version: "material",
+      lut_name: "",
+      selectedMaterialDirNames: ["brand/red", "brand/white"],
+      materialLayerCount: 7,
+      materialLayerHeightMm: 0.06,
+      batchLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    const btn = screen.getByText("批量生成").closest("button")!;
+    expect(btn).not.toBeDisabled();
+  });
+
+  it("enables batch generate button for native reverse LUT source without a legacy LUT", () => {
+    useConverterStore.setState({
+      batchMode: true,
+      batchFiles: [makeFile("a.png")],
+      source_version: "native",
+      lut_name: "",
+      selectedNativeBrandKey: "bambulab_pla",
+      selectedNativeDbNames: ["DB-A", "DB-B"],
+      color_layers: 5,
+      layer_height_mm: 0.08,
+      nativeBrandGroups: [
+        {
+          brand_key: "bambulab_pla",
+          material_type: "PLA",
+          vendor: "Bambu Lab",
+          display_name: "Bambu PLA",
+          db_options: [
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-DB-A" },
+            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max", fingerprint: "fp-DB-B" },
+          ],
+          default_db_names: ["DB-A", "DB-B"],
+          supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
+        },
+      ],
+      batchLoading: false,
+    } as never);
+
+    render(<ActionBar />);
+
+    const btn = screen.getByText("批量生成").closest("button")!;
+    expect(btn).not.toBeDisabled();
+  });
+
+  it("shows source-specific batch hints when material or native source is incomplete", () => {
+    useConverterStore.setState({
+      batchMode: true,
+      batchFiles: [makeFile("a.png")],
+      source_version: "material",
+      lut_name: "",
+      selectedMaterialDirNames: [],
+    });
+    const { rerender } = render(<ActionBar />);
+    expect(screen.getByText("请先添加图片并选择耗材")).toBeInTheDocument();
+
+    useConverterStore.setState({
+      source_version: "native",
+      selectedNativeBrandKey: "",
+      selectedNativeDbNames: [],
+      nativeBrandGroups: [],
+    });
+    rerender(<ActionBar />);
+    expect(screen.getByText("请先添加图片并选择品牌和数据库")).toBeInTheDocument();
+  });
+
+  it("reuses the slicer-open action for batch merged 3MF generation", async () => {
+    const submitBatch = vi.fn(async () => {
+      useConverterStore.setState({ threemfDiskPath: "/tmp/batch-merged.3mf" });
+    });
+    const submitFullPipeline = vi.fn();
+    useConverterStore.setState({
+      batchMode: true,
+      batchFiles: [makeFile("a.png"), makeFile("b.png")],
+      lut_name: "test_lut",
+      batchLoading: false,
+      largeFormatEnabled: true,
+      submitBatch,
+      submitFullPipeline,
+    });
+
+    render(<ActionBar />);
+
+    expect(capturedSlicerSelectorProps?.canSubmit).toBe(true);
+    expect(capturedSlicerSelectorProps?.largeFormat).toBe(false);
+    const onAutoGenerate = capturedSlicerSelectorProps?.onAutoGenerate as
+      | (() => Promise<string | null>)
+      | undefined;
+    expect(onAutoGenerate).toBeTypeOf("function");
+
+    await expect(onAutoGenerate!()).resolves.toBe("/tmp/batch-merged.3mf");
+    expect(submitBatch).toHaveBeenCalledOnce();
+    expect(submitFullPipeline).not.toHaveBeenCalled();
+  });
+
   it("enables preview but keeps generate disabled before a native bundle session exists even when lut_name is empty", () => {
     useConverterStore.setState({
       batchMode: false,
@@ -202,8 +310,11 @@ describe("ActionBar — auto batch mode", () => {
       batchResult: {
         status: "ok",
         message: "done",
-        download_url: "/output/batch.zip",
+        download_url: "/output/batch.3mf",
+        preview_3d_url: null,
+        preview_items: [],
         results: [{ filename: "a.png", status: "success" }],
+        warnings: [],
       },
     });
     const { container } = render(<ActionBar />);
@@ -211,7 +322,7 @@ describe("ActionBar — auto batch mode", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("成功");
     expect(text).toContain("总计");
-    expect(screen.getByLabelText("下载 ZIP 文件")).toBeInTheDocument();
+    expect(screen.getByLabelText("下载批量 3MF")).toBeInTheDocument();
   });
 
   it("does not show BatchResultSummary when batchResult is null", () => {

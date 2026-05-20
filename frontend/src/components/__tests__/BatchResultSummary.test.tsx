@@ -6,33 +6,39 @@ import type { BatchResponse } from "../../api/types";
 const allSuccessResult: BatchResponse = {
   status: "ok",
   message: "batch done",
-  download_url: "/output/batch_123.zip",
+  download_url: "/output/batch_123.3mf",
+  preview_3d_url: null,
   results: [
     { filename: "photo1.png", status: "success" },
     { filename: "photo2.jpg", status: "success" },
     { filename: "photo3.svg", status: "success" },
   ],
+  warnings: [],
 };
 
 const allFailedResult: BatchResponse = {
   status: "failed",
   message: "all failed",
-  download_url: "/output/batch_456.zip",
+  download_url: null,
+  preview_3d_url: null,
   results: [
     { filename: "bad1.png", status: "failed", error: "LUT not found" },
     { filename: "bad2.jpg", status: "failed", error: "Invalid dimensions" },
   ],
+  warnings: [],
 };
 
 const mixedResult: BatchResponse = {
   status: "ok",
   message: "partial success",
-  download_url: "/output/batch_789.zip",
+  download_url: "/output/batch_789.3mf",
+  preview_3d_url: null,
   results: [
     { filename: "good1.png", status: "success" },
     { filename: "good2.jpg", status: "success" },
     { filename: "fail1.svg", status: "failed", error: "Unsupported format" },
   ],
+  warnings: [],
 };
 
 describe("BatchResultSummary", () => {
@@ -46,8 +52,8 @@ describe("BatchResultSummary", () => {
 
     it("renders download button with relative href", () => {
       render(<BatchResultSummary result={allSuccessResult} />);
-      const link = screen.getByRole("link", { name: "下载 ZIP 文件" });
-      expect(link).toHaveAttribute("href", "/output/batch_123.zip");
+      const link = screen.getByRole("link", { name: "下载批量 3MF" });
+      expect(link).toHaveAttribute("href", "/output/batch_123.3mf");
     });
 
     it("does not show failed section", () => {
@@ -66,7 +72,7 @@ describe("BatchResultSummary", () => {
 
     it("does not render download button", () => {
       render(<BatchResultSummary result={allFailedResult} />);
-      expect(screen.queryByRole("link", { name: "下载 ZIP 文件" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "下载批量 3MF" })).not.toBeInTheDocument();
     });
 
     it("shows failed file details", () => {
@@ -88,8 +94,8 @@ describe("BatchResultSummary", () => {
 
     it("renders download button", () => {
       render(<BatchResultSummary result={mixedResult} />);
-      const link = screen.getByRole("link", { name: "下载 ZIP 文件" });
-      expect(link).toHaveAttribute("href", "/output/batch_789.zip");
+      const link = screen.getByRole("link", { name: "下载批量 3MF" });
+      expect(link).toHaveAttribute("href", "/output/batch_789.3mf");
     });
 
     it("shows only failed item in failed list", () => {

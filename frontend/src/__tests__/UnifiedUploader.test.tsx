@@ -92,4 +92,27 @@ describe("UnifiedUploader", () => {
     );
     expect(screen.getByText("upload_add_more")).toBeInTheDocument();
   });
+
+  it("limits the rendered batch file rows for large drops", () => {
+    const files = Array.from(
+      { length: 151 },
+      (_, index) =>
+        new File(["a"], `pokemon-${String(index + 1).padStart(3, "0")}.png`, {
+          type: "image/png",
+        }),
+    );
+
+    render(
+      <UnifiedUploader
+        {...defaultProps}
+        batchFiles={files}
+        isBatchMode={true}
+      />,
+    );
+
+    expect(screen.getByText("pokemon-001.png")).toBeInTheDocument();
+    expect(screen.getByText("pokemon-040.png")).toBeInTheDocument();
+    expect(screen.queryByText("pokemon-041.png")).not.toBeInTheDocument();
+    expect(screen.getByText("upload_file_list_truncated")).toBeInTheDocument();
+  });
 });

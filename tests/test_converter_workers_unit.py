@@ -316,7 +316,14 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
 
 
 def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
-    """worker_batch_convert_item should pass batch relief params through."""
+    """worker_batch_convert_item should pass batch relief params through.
+
+    When ``convert_image_to_3d`` reports a synthetic 3MF path that does not
+    exist on disk, the worker now takes the legacy failure-style early
+    return so the parent process records this item as ``failed``. We
+    assert relief kwargs propagated and the new 5-key result contract is
+    intact (with sentinel values for the 4 file-path / bbox fields).
+    """
 
     color_height_map = {"#ff0000": 1.7, "#ffffff": 1.3}
 
@@ -336,16 +343,23 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
             layer_height_mm=0.08,
             quantize_colors=64,
             enable_cleanup=True,
+            artifact_prefix="batch-test-",
             hue_weight=0.5,
             chroma_gate=12.0,
             enable_relief=True,
             height_mode="color",
             color_height_map=color_height_map,
             heightmap_max_height=4.2,
+            material_source="material_archive",
+            selected_materials=["brand/red", "brand/white"],
+            material_backing_material_index=1,
         )
 
     assert result == {
-        "threemf_path": "out.3mf",
+        "threemf_path": None,
+        "preview_glb_path": None,
+        "metadata_sidecar_path": None,
+        "xy_bbox_mm": (0.0, 0.0),
         "status_msg": "OK",
     }
     convert_image_to_3d_mock.assert_called_once()
@@ -354,6 +368,9 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     assert call_kwargs["height_mode"] == "color"
     assert call_kwargs["color_height_map"] == color_height_map
     assert call_kwargs["heightmap_max_height"] == 4.2
+    assert call_kwargs["material_source"] == "material_archive"
+    assert call_kwargs["selected_materials"] == ["brand/red", "brand/white"]
+    assert call_kwargs["material_backing_material_index"] == 1
 
 
 def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:

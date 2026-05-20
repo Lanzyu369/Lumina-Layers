@@ -2,6 +2,13 @@
 
 Runs a small API workflow, audits the captured structured log file, and
 emits human-readable plus machine-readable governance reports.
+
+Ad-hoc workflow steps (not in the default canonical workflow):
+  - replace_bw / replace_8color / replace_5color_ext: per-mode replace regression.
+  - batch_merge_3mf: batch merge 3MF regression. Triggers a minimal N=2 batch
+    request that exercises batch_merge_3mf_init + batch_merge_3mf_done (and
+    batch_merge_plate_overflow_warning when layout exceeds plate bounds).
+    Invoke via: --workflow batch_merge_3mf
 """
 
 from __future__ import annotations
@@ -74,6 +81,7 @@ WORKFLOW_ORDER = [
     "merge_colors",
     "generate_large_format",
     "batch",
+    "batch_merge_3mf",
     "puzzle_layout_preview",
     "generate_puzzle",
     "auto_detect_colors",
@@ -578,6 +586,10 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                         **kwargs,
                     ),
                 ),
+                patch(
+                    "api.routers.converter.generate.MergedBambu3MFWriter",
+                    side_effect=lambda: _MockMergedBambu3MFWriter(created_paths),
+                ),
             ]
             with ExitStack() as stack:
                 for patch_context in patch_contexts:
@@ -893,6 +905,9 @@ def _workflow_required_event_checks(
         required_events.append("converter_generate_large_format_done")
     if "batch" in workflow:
         required_events.append("converter_batch_done")
+    if "batch_merge_3mf" in workflow:
+        required_events.append("batch_merge_3mf_init")
+        required_events.append("batch_merge_3mf_done")
     if "puzzle_layout_preview" in workflow:
         required_events.append("converter_puzzle_layout_preview_done")
     if "generate_puzzle" in workflow:
@@ -1049,7 +1064,7 @@ def _build_mock_worker_result(
         "worker_batch_convert_item",
         "_submit_puzzle_worker",
     }:
-        return _build_mock_generate_result(created_paths)
+        return _build_mock_generate_result(created_paths, worker_name=name)
     if name == "worker_vectorize":
         svg_path = _make_temp_path(".svg", created_paths)
         svg_path.write_text("<svg/>", encoding="utf-8")
@@ -1203,16 +1218,48 @@ def _mock_material_matrix(
     )
 
 
-def _build_mock_generate_result(created_paths: list[Path]) -> dict[str, Any]:
+def _build_mock_generate_result(created_paths: list[Path], *, worker_name: str = "") -> dict[str, Any]:
     threemf_path = _make_temp_path(".3mf", created_paths)
     threemf_path.write_bytes(b"mock 3mf")
     glb_path = _make_temp_path(".glb", created_paths)
     glb_path.write_bytes(b"mock glb")
-    return {
+    result: dict[str, Any] = {
         "threemf_path": str(threemf_path),
         "glb_path": str(glb_path),
         "status_msg": "Model OK",
     }
+    if worker_name == "worker_batch_convert_item":
+        # Batch merge flow needs additional fields from the worker result.
+        preview_glb_path = _make_temp_path(".glb", created_paths)
+        preview_glb_path.write_bytes(b"mock preview glb")
+        sidecar_path = _make_temp_path(".json", created_paths)
+        sidecar_data = {
+            "schema_version": 1,
+            "source_filename": "mock_batch_item.png",
+            "xy_bbox_mm": {"width_mm": 60.0, "depth_mm": 40.0},
+            "slots": [
+                {
+                    "slot_id": 0,
+                    "slot_name": "White",
+                    "preview_color": "#ffffff",
+                    "material_id": "GFL00",
+                },
+                {
+                    "slot_id": 1,
+                    "slot_name": "Red",
+                    "preview_color": "#ff0000",
+                    "material_id": "GFL01",
+                },
+            ],
+        }
+        sidecar_path.write_text(
+            json.dumps(sidecar_data, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        result["preview_glb_path"] = str(preview_glb_path)
+        result["metadata_sidecar_path"] = str(sidecar_path)
+        result["xy_bbox_mm"] = (60.0, 40.0)
+    return result
 
 
 def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
@@ -1227,6 +1274,21 @@ def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
 
     _Path(output_path).write_bytes(b"mock puzzle 3mf")
     return output_path
+
+
+class _MockMergedBambu3MFWriter:
+    """Fast-mode stub for MergedBambu3MFWriter.
+
+    Writes a placeholder file so the batch merge path can complete without
+    needing real 3MF parsing / OPC packaging.
+    """
+
+    def __init__(self, created_paths: list[Path]) -> None:
+        self._created_paths = created_paths
+
+    def write(self, items: Any, output_path: Any, **_kwargs: Any) -> None:
+        output = Path(output_path) if not isinstance(output_path, Path) else output_path
+        output.write_bytes(b"mock merged 3mf")
 
 
 def _mock_requantize_gradient_regions(
@@ -1983,6 +2045,8 @@ def _execute_workflow(client: Any, workflow: list[str]) -> None:
             _execute_generate_large_format_workflow(client)
         elif step == "batch":
             _execute_batch_workflow(client)
+        elif step == "batch_merge_3mf":
+            _execute_batch_merge_3mf_workflow(client)
         elif step == "puzzle_layout_preview":
             _execute_puzzle_layout_preview_workflow(client)
         elif step == "generate_puzzle":
@@ -2610,6 +2674,64 @@ def _execute_batch_workflow(client: Any) -> None:
     )
     if success_count < 1:
         raise QualityCheckError("Batch response did not include a successful item")
+
+
+def _execute_batch_merge_3mf_workflow(client: Any) -> None:
+    """Run a minimal N=2 batch request to trigger batch_merge_3mf_init + done.
+
+    Uses two small synthetic images so the batch merge path is exercised.
+    The merged 3MF and merged preview GLB are produced; we verify the response
+    contains both download_url and preview_3d_url.
+    """
+
+    # Ensure LUT presets are discovered (needed when running as standalone ad-hoc step).
+    response = client.get("/api/lut/list")
+    _raise_for_status(response.status_code, response.text, "batch_merge_3mf lut_list")
+    lut_name = _select_lut_name(response.json(), fallback=DEFAULT_LUT_NAME)
+
+    image_bytes_a = _synthesize_rgb_png_bytes(32, 32)
+    image_bytes_b = _synthesize_rgb_png_bytes(24, 24)
+    response = client.post(
+        "/api/convert/batch",
+        files=[
+            ("images", ("merge_a.png", image_bytes_a, "image/png")),
+            ("images", ("merge_b.png", image_bytes_b, "image/png")),
+        ],
+        data={
+            "lut_name": lut_name,
+            "color_mode": DEFAULT_COLOR_MODE,
+            "modeling_mode": DEFAULT_MODELING_MODE,
+            "target_width_mm": "60.0",
+            "quantize_colors": "48",
+            "enable_cleanup": "true",
+        },
+    )
+    _raise_for_status(response.status_code, response.text, "batch_merge_3mf")
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise QualityCheckError("Batch merge 3MF response was not an object")
+    if not payload.get("download_url"):
+        raise QualityCheckError(
+            "Batch merge 3MF response did not include download_url"
+        )
+    if not payload.get("preview_3d_url"):
+        raise QualityCheckError(
+            "Batch merge 3MF response did not include preview_3d_url"
+        )
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) < 2:
+        raise QualityCheckError(
+            "Batch merge 3MF response did not include at least 2 item results"
+        )
+    success_count = sum(
+        1
+        for item in results
+        if isinstance(item, Mapping) and item.get("status") == "success"
+    )
+    if success_count < 2:
+        raise QualityCheckError(
+            "Batch merge 3MF response did not include at least 2 successful items"
+        )
 
 
 def _execute_puzzle_layout_preview_workflow(client: Any) -> None:

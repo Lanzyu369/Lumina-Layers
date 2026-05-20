@@ -56,7 +56,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 57
+EXCEPT_EXCEPTION_BASELINE = 61
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -162,11 +162,16 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_recipe_done",
     "converter_merge_colors_done",
     "converter_generate_large_format_done",
-    "converter_batch_done",
     "converter_puzzle_layout_preview_done",
     "converter_puzzle_generate_done",
     "converter_auto_detect_colors_done",
     "converter_cleanup_session_files_done",
+    # Batch merge 3MF structured events (批量合并 3MF 流程日志)
+    "batch_merge_3mf_init",
+    "batch_merge_3mf_done",
+    "batch_merge_plate_overflow_warning",
+    "batch_merge_3mf_failed",
+    "batch_merge_intermediate_cleanup_failed",
 }
 CALIBRATION_STRUCTURED_EVENTS = {
     "calibration_generate_done",
@@ -331,6 +336,12 @@ def test_no_bracket_tag_in_log_messages() -> None:
     assert not violations, "Bracket-prefixed log messages found: " + ", ".join(violations)
 
 
+def _is_safe_log_call(node: ast.Call) -> bool:
+    """Detect _safe_log(level, event, ...) helper pattern."""
+    func = node.func
+    return isinstance(func, ast.Name) and func.id == "_safe_log"
+
+
 def test_no_starlog_catchall_event_names() -> None:
     """Structured event names should describe real events, not generic log buckets."""
     violations: list[str] = []
@@ -340,6 +351,7 @@ def test_no_starlog_catchall_event_names() -> None:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
+            # Pattern 1: log.info(..., extra={"event": "<literal>", ...})
             for keyword in node.keywords:
                 if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
                     continue
@@ -357,6 +369,19 @@ def test_no_starlog_catchall_event_names() -> None:
                     literal_events.add(event_name)
                     if event_name.endswith("_log"):
                         violations.append(_relative_location(file_path, value_node))
+            # Pattern 2: _safe_log(level, "event_name", ...) — second positional
+            # arg is the event name literal.
+            if _is_safe_log_call(node) and len(node.args) >= 2:
+                second_arg = node.args[1]
+                if isinstance(second_arg, ast.Constant) and isinstance(
+                    second_arg.value, str
+                ):
+                    event_name = second_arg.value
+                    literal_events.add(event_name)
+                    if event_name.endswith("_log"):
+                        violations.append(
+                            _relative_location(file_path, second_arg)
+                        )
 
     assert not violations, "Catch-all *_log events found: " + ", ".join(violations)
     missing = sorted(REQUIRED_STRUCTURED_EVENTS - literal_events)

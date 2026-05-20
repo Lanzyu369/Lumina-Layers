@@ -60,6 +60,10 @@ const arbBatchConvertParams: fc.Arbitrary<BatchConvertParams> = fc.record({
     fc.double({ min: 0.08, max: 20, noNaN: true, noDefaultInfinity: true }),
     { nil: undefined },
   ),
+  printer_id: fc.constantFrom("bambu-h2d", "bambu-p1s", "snapmaker-u1"),
+  slicer: fc.constantFrom("BambuStudio", "OrcaSlicer"),
+  nozzle_size: fc.constantFrom("0.2", "0.4"),
+  enable_base_layer_height_modifier: fc.boolean(),
 });
 
 // ========== Tests ==========

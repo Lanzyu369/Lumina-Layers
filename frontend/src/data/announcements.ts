@@ -16,6 +16,33 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-20",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "批量生成现在会把成功的模型打包成一个 3MF 下载，不用再解压后一件件导入切片软件。",
+            en: "Batch generation now downloads successful models as one 3MF, so you no longer need to unzip and import each model into the slicer one by one.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "批量生成完成后，3D 预览会直接在热床上显示多个模型，并在数量太多时只预览能稳定显示的前几件。",
+            en: "After batch generation, the 3D preview now shows multiple models on the bed and limits the preview to the first models that can be displayed smoothly when a batch is very large.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-10",
     title: {
       zh: "Lumina Layers — 近期更新速览",

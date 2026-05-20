@@ -674,6 +674,312 @@ def worker_generate_preview(
     return result
 
 
+def _batch_compute_svg_xy_bbox_mm(
+    image_path: str,
+    target_width_mm: float,
+    svg_pixels_per_mm: float,
+) -> tuple[float, float]:
+    """Compute batch footprint for SVG inputs without using PIL.
+    不通过 PIL 读取 SVG，避免批量 SVG 在占位尺寸计算阶段失败。
+    """
+    import re
+    import xml.etree.ElementTree as ET
+
+    import numpy as np
+
+    def _from_canvas_size(width_px: int, height_px: int, alpha_bbox=None) -> tuple[float, float]:
+        if width_px <= 0 or height_px <= 0:
+            raise ValueError(
+                f"Invalid SVG raster dimensions {width_px}x{height_px} for {image_path}"
+            )
+        if alpha_bbox is None:
+            bbox_w_px = width_px
+            bbox_h_px = height_px
+        else:
+            left, upper, right, lower = alpha_bbox
+            bbox_w_px = max(1, int(right) - int(left))
+            bbox_h_px = max(1, int(lower) - int(upper))
+        px_to_mm = float(target_width_mm) / float(width_px)
+        return (
+            round(bbox_w_px * px_to_mm, 6),
+            round(bbox_h_px * px_to_mm, 6),
+        )
+
+    try:
+        from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+
+        canvas = rasterize_svg(
+            svg_path=image_path,
+            target_width_mm=float(target_width_mm),
+            pixels_per_mm=float(svg_pixels_per_mm),
+            crop_to_content=False,
+        )
+        arr = np.asarray(canvas)
+        if arr.ndim < 2:
+            raise ValueError("SVG rasterizer returned a non-image array")
+        height_px, width_px = int(arr.shape[0]), int(arr.shape[1])
+        alpha_bbox = None
+        if arr.ndim == 3 and arr.shape[2] >= 4:
+            alpha_mask = arr[:, :, 3] > 0
+            if np.any(alpha_mask):
+                ys, xs = np.where(alpha_mask)
+                alpha_bbox = (
+                    int(xs.min()),
+                    int(ys.min()),
+                    int(xs.max()) + 1,
+                    int(ys.max()) + 1,
+                )
+        return _from_canvas_size(width_px, height_px, alpha_bbox)
+    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError, ET.ParseError):
+        pass
+
+    def _parse_svg_length(raw: str | None) -> float | None:
+        if raw is None:
+            return None
+        match = re.match(r"^\s*([0-9]*\.?[0-9]+)", str(raw))
+        if not match:
+            return None
+        value = float(match.group(1))
+        return value if value > 0 else None
+
+    try:
+        root = ET.parse(image_path).getroot()
+        view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+        if view_box:
+            parts = [float(part) for part in re.split(r"[\s,]+", view_box.strip()) if part]
+            if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                return (
+                    round(float(target_width_mm), 6),
+                    round(float(target_width_mm) * parts[3] / parts[2], 6),
+                )
+        width = _parse_svg_length(root.attrib.get("width"))
+        height = _parse_svg_length(root.attrib.get("height"))
+        if width and height:
+            return (
+                round(float(target_width_mm), 6),
+                round(float(target_width_mm) * height / width, 6),
+            )
+    except (OSError, ValueError, ET.ParseError):
+        pass
+
+    # Last-resort deterministic square footprint. This keeps the batch
+    # request successful even when an SVG parser/rasterizer cannot provide
+    # dimensions; the user can still reposition in the slicer.
+    fallback = round(float(target_width_mm), 6)
+    return fallback, fallback
+
+
+def _batch_compute_xy_bbox_mm(
+    image_path: str,
+    target_width_mm: float,
+    svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+) -> tuple[float, float]:
+    """Compute the occupied XY footprint in mm from an input image.
+    根据输入图中实际有内容的区域推算 XY 占位包围盒（毫米）。
+
+    Transparent padding must not count as model width/depth. Batch layout
+    uses this value to place models with a small physical gap, so measuring
+    the full source canvas would make sprite-like PNGs appear far apart.
+    When an image has no transparent pixels, the full canvas is used.
+
+    透明留白不应计入模型宽深。批量排布会用该值控制物理间距；如果把整张
+    画布都算进去，带透明边距的 PNG 看起来会被隔得很远。没有透明区域时，
+    仍按整张画布计算。
+
+    Args:
+        image_path: Path to the input image file. (输入图像文件路径)
+        target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
+
+    Returns:
+        tuple[float, float]: ``(width_mm, depth_mm)`` rounded to 6 decimals.
+            The scale is based on the full source canvas width matching
+            ``target_width_mm``; the measured footprint is the non-transparent
+            alpha bbox under that scale.
+            (``(width_mm, depth_mm)``，按整张源图宽度映射到目标宽度后的
+            非透明区域尺寸，保留 6 位小数)
+    """
+    import os
+
+    from PIL import Image
+
+    if os.path.splitext(image_path)[1].lower() in {".svg", ".svgz"}:
+        return _batch_compute_svg_xy_bbox_mm(
+            image_path,
+            target_width_mm,
+            svg_pixels_per_mm,
+        )
+
+    with Image.open(image_path) as image:
+        img_w = int(image.width)
+        img_h = int(image.height)
+        alpha_bbox = image.convert("RGBA").getchannel("A").getbbox()
+    if img_w <= 0 or img_h <= 0:
+        raise ValueError(
+            f"Invalid image dimensions {img_w}x{img_h} for {image_path}"
+        )
+
+    if alpha_bbox is None:
+        bbox_w_px = img_w
+        bbox_h_px = img_h
+    else:
+        left, upper, right, lower = alpha_bbox
+        bbox_w_px = max(1, right - left)
+        bbox_h_px = max(1, lower - upper)
+
+    px_to_mm = float(target_width_mm) / img_w
+    width_mm = round(bbox_w_px * px_to_mm, 6)
+    depth_mm = round(bbox_h_px * px_to_mm, 6)
+    if width_mm <= 0:
+        width_mm = round(float(target_width_mm), 6)
+    if depth_mm <= 0:
+        depth_mm = round(float(target_width_mm), 6)
+    return width_mm, depth_mm
+
+
+def _batch_extract_slots_from_3mf(threemf_path: str) -> list[dict]:
+    """Extract canonical material slot identities from a per-image 3MF.
+    从 per-image 3MF 中提取规范化的材料 slot 身份信息。
+
+    Reads ``Metadata/project_settings.config`` for ``filament_colour`` /
+    ``filament_ids`` arrays, and ``Metadata/model_settings.config`` for
+    per-part ``name`` ↔ ``extruder`` pairs (Bambu writes slot identity
+    here rather than as ``<basematerial>`` nodes when objects are split
+    across attached part files). Combines them into a list of
+    ``MaterialSlot`` field dicts so the parent process can build a
+    ``PerImageMetadataSidecar`` without re-implementing 3MF parsing.
+
+    读取 ``Metadata/project_settings.config`` 中的 ``filament_colour`` /
+    ``filament_ids`` 数组，以及 ``Metadata/model_settings.config`` 里每个
+    ``<part>`` 的 ``name`` / ``extruder`` 元数据（Bambu 将 slot 名写在
+    这里，而不是 ``<basematerial>`` 节点），组合成 ``MaterialSlot``
+    字段字典列表，供父进程构建 ``PerImageMetadataSidecar``。
+
+    Args:
+        threemf_path: Path to the produced per-image 3MF.
+            (per-image 3MF 文件路径)
+
+    Returns:
+        list[dict]: Each dict has ``slot_id`` (int, 0-based), ``slot_name``
+            (str), ``preview_color`` (str like ``"#101010"``) and
+            ``material_id`` (str). The list length matches the slot count
+            stored in the 3MF and is guaranteed >= 1; otherwise this raises
+            ``RuntimeError`` so the worker surfaces the failure to the
+            parent process.
+            (每个 dict 含 ``slot_id`` / ``slot_name`` / ``preview_color`` /
+            ``material_id``，列表长度 ≥ 1；否则抛 ``RuntimeError``)
+    """
+    import json
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    with zipfile.ZipFile(threemf_path, "r") as archive:
+        try:
+            project_bytes = archive.read("Metadata/project_settings.config")
+        except KeyError as exc:
+            raise RuntimeError(
+                f"3MF missing Metadata/project_settings.config: {threemf_path}"
+            ) from exc
+        try:
+            model_settings_bytes = archive.read("Metadata/model_settings.config")
+        except KeyError as exc:
+            raise RuntimeError(
+                f"3MF missing Metadata/model_settings.config: {threemf_path}"
+            ) from exc
+
+    project_settings = json.loads(project_bytes.decode("utf-8"))
+    filament_colours = list(project_settings.get("filament_colour") or [])
+    filament_ids = list(project_settings.get("filament_ids") or [])
+    filament_settings_ids = list(
+        project_settings.get("filament_settings_id") or []
+    )
+
+    # Walk model_settings.config: each <part> has metadata "name" and
+    # "extruder"; the extruder value is the 1-based slot index. We map it
+    # back to a 0-based slot_id and pick up the canonical slot_name.
+    # 解析 model_settings.config：每个 <part> 携带 name / extruder 元数据；
+    # extruder 是 1-based slot 索引，这里换算成 0-based slot_id 同时取 name。
+    slot_id_to_name: dict[int, str] = {}
+    try:
+        ms_root = ET.fromstring(model_settings_bytes)
+    except ET.ParseError as exc:
+        raise RuntimeError(
+            f"3MF model_settings.config malformed: {threemf_path}: {exc}"
+        ) from exc
+    for part in ms_root.iter("part"):
+        name_value: str | None = None
+        extruder_value: str | None = None
+        for meta in part.findall("metadata"):
+            key = meta.get("key")
+            if key == "name":
+                name_value = meta.get("value")
+            elif key == "extruder":
+                extruder_value = meta.get("value")
+        if name_value is None or extruder_value is None:
+            continue
+        try:
+            extruder_idx_1based = int(extruder_value)
+        except ValueError:
+            continue
+        slot_id = extruder_idx_1based - 1
+        if slot_id < 0:
+            continue
+        # First writer wins so identical extruder slots stay stable across
+        # multiple parts that share a slot (each slot's canonical name
+        # stays the one we saw first).
+        # 同 slot 多个 part 时以首次出现的 name 为准。
+        slot_id_to_name.setdefault(slot_id, name_value)
+
+    slot_count = max(
+        len(filament_colours),
+        max(slot_id_to_name) + 1 if slot_id_to_name else 0,
+        1,
+    )
+
+    slots: list[dict] = []
+    for idx in range(slot_count):
+        slot_name = slot_id_to_name.get(idx)
+        if not slot_name:
+            # Defensive fallback so the sidecar still validates; the
+            # downstream merge writer treats this as an opaque slot.
+            # 兜底命名，确保 sidecar 通过 schema 校验。
+            slot_name = f"Slot {idx + 1}"
+
+        if idx < len(filament_colours) and filament_colours[idx]:
+            raw_color = str(filament_colours[idx]).strip()
+            preview_color = (
+                raw_color if raw_color.startswith("#") else f"#{raw_color}"
+            )
+            preview_color = preview_color.upper()
+            if len(preview_color) != 7:
+                preview_color = "#CCCCCC"
+        else:
+            preview_color = "#CCCCCC"
+
+        material_id = ""
+        if idx < len(filament_ids) and filament_ids[idx]:
+            material_id = str(filament_ids[idx])
+        if not material_id and idx < len(filament_settings_ids):
+            material_id = str(filament_settings_ids[idx])
+        if not material_id:
+            material_id = f"GFA{idx:02d}"
+
+        slots.append(
+            {
+                "slot_id": idx,
+                "slot_name": slot_name,
+                "preview_color": preview_color,
+                "material_id": material_id,
+            }
+        )
+
+    if not slots:
+        raise RuntimeError(
+            f"3MF has no recoverable material slots: {threemf_path}"
+        )
+
+    return slots
+
+
 def worker_batch_convert_item(
     image_path: str,
     lut_path: str,
@@ -686,6 +992,7 @@ def worker_batch_convert_item(
     layer_height_mm: float | None,
     quantize_colors: int,
     enable_cleanup: bool,
+    artifact_prefix: str,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,
     enable_relief: bool = False,
@@ -693,39 +1000,95 @@ def worker_batch_convert_item(
     color_height_map: dict[str, float] | None = None,
     heightmap_max_height: float | None = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    printer_id: str = "bambu-h2d",
+    slicer: str = "BambuStudio",
+    nozzle_size: str = "0.4",
+    enable_base_layer_height_modifier: bool = True,
+    model_enable: bool = False,
+    model_only: bool = False,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
+    material_source: str = "lut",
+    selected_materials: list[str] | None = None,
+    material_layer_count: int | None = None,
+    material_layer_height_mm: float | None = None,
+    material_grid_resolution: int | None = None,
+    material_backing_material_index: int | None = None,
+    use_lut_constrained: bool = False,
+    auto_dynamic_range: bool = False,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
 
     Calls ``core.converter.convert_image_to_3d`` with the supplied
-    scalar parameters and returns a dict containing the output file path
-    and status message.
+    scalar parameters, then renames the produced 3MF / preview GLB into
+    ``TEMP_DIR/<artifact_prefix><stem>.{3mf,glb}`` and writes a
+    structured sidecar JSON next to them so the parent process can build
+    a merged 3MF and register the original per-image preview GLBs for
+    multi-model rendering without re-parsing artifacts inside another
+    process.
+
+    调用 ``core.converter.convert_image_to_3d`` 后，将产出的 per-image 3MF
+    与预览 GLB 重命名到 ``TEMP_DIR/<artifact_prefix><stem>.{3mf,glb}``，
+    并在同目录写出结构化 sidecar JSON，供父进程合并 3MF、注册每个
+    单件预览 GLB 时使用，免得跨进程解析 per-image 产物。
 
     Args:
-        image_path (str): Path to the input image file. (输入图像文件路径)
-        lut_path (str): Path to the LUT calibration file. (LUT 校准文件路径)
-        target_width_mm (float): Target physical width in mm. (目标物理宽度，毫米)
-        spacer_thick (float): Backing plate thickness in mm. (底板厚度，毫米)
-        structure_mode (str): Print structure mode, e.g. "Double-sided". (打印结构模式)
-        color_mode (str): Color system mode, e.g. "4-Color". (色彩系统模式)
-        modeling_mode_value (str): Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
-        quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
-        enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
-        svg_pixels_per_mm (float): High-fidelity SVG raster density in px/mm.
+        image_path: Path to the input image file. (输入图像文件路径)
+        lut_path: Path to the LUT calibration file. (LUT 校准文件路径)
+        target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
+        spacer_thick: Backing plate thickness in mm. (底板厚度，毫米)
+        structure_mode: Print structure mode, e.g. "Double-sided". (打印结构模式)
+        color_mode: Color system mode, e.g. "4-Color". (色彩系统模式)
+        modeling_mode_value: Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
+        color_layers: Optional explicit color layer count. (可选的颜色层数)
+        layer_height_mm: Optional explicit layer height in mm. (可选的层厚)
+        quantize_colors: Number of K-Means quantization colors. (仅高保真模式生效)
+        enable_cleanup: Enable isolated-pixel cleanup. (启用孤立像素清理)
+        artifact_prefix: Filename prefix for per-image intermediate
+            artifacts (3MF / GLB / sidecar JSON). The parent process
+            generates ``f"batch-{batch_run_id}-"`` once per batch request
+            and forwards it as a scalar so cleanup can scan all artifacts
+            for one request via this single prefix. The worker MUST NOT
+            generate its own UUIDs — keeping pickleable + minimal
+            boundary.
+            (per-image 中间产物文件名前缀；父进程每次批量请求生成一次，
+            按标量传入；worker 不要自己生成 UUID)
+        svg_pixels_per_mm: High-fidelity SVG raster density in px/mm.
             (高保真 SVG 光栅化采样密度，单位 px/mm)
+        printer_id / slicer / nozzle_size: Device preset fields forwarded
+            to the canonical single-item 3MF writer. (透传到单件 3MF
+            writer 的设备预设字段)
+        enable_base_layer_height_modifier: Whether to keep the Bambu-family
+            coarse base-layer setting from user settings. (是否沿用设置页
+            的底板粗层高开关)
 
     Returns:
-        dict: Result dictionary with keys: (结果字典，包含以下键)
-            - threemf_path (str | None): Path to the generated .3mf file.
-            - status_msg (str): Status message from the converter.
+        dict: Result dictionary with the following keys:
+            - ``threemf_path`` (str | None): Final per-image 3MF path
+              under ``TEMP_DIR``, prefixed by ``artifact_prefix``.
+            - ``preview_glb_path`` (str | None): Final per-image preview
+              GLB path under ``TEMP_DIR``, prefixed by ``artifact_prefix``.
+            - ``metadata_sidecar_path`` (str | None): JSON sidecar path
+              under ``TEMP_DIR``, prefixed by ``artifact_prefix``.
+              The sidecar validates as ``PerImageMetadataSidecar``.
+            - ``xy_bbox_mm`` (tuple[float, float]): ``(width_mm, depth_mm)``
+              footprint, scalar copy of ``sidecar.xy_bbox_mm``.
+            - ``status_msg`` (str): Status message from the converter.
+            (5 个 key；前 3 个为落盘文件路径或 ``None``，``xy_bbox_mm``
+            为 ``(width_mm, depth_mm)`` 标量，``status_msg`` 沿用旧含义)
     """
     # Lazy imports — executed inside the worker process
-    from config import ModelingMode
+    import json
+    import os
+    import shutil
+
+    from config import ModelingMode, TEMP_DIR
     from core.converter import convert_image_to_3d
 
     core_modeling_mode = ModelingMode(modeling_mode_value)
 
-    threemf_path, _glb_path, _preview_img, status_msg, _recipe = convert_image_to_3d(
+    threemf_path, glb_path, _preview_img, status_msg, _recipe = convert_image_to_3d(
         image_path=image_path,
         lut_path=lut_path,
         target_width_mm=target_width_mm,
@@ -734,6 +1097,10 @@ def worker_batch_convert_item(
         color_mode=color_mode,
         color_layers=color_layers,
         layer_height_mm=layer_height_mm,
+        model_enable=model_enable,
+        model_only=model_only,
+        model_threshold=model_threshold,
+        model_margin=model_margin,
         add_loop=False,
         loop_width=4.0,
         loop_length=8.0,
@@ -749,10 +1116,105 @@ def worker_batch_convert_item(
         height_mode=height_mode,
         color_height_map=color_height_map,
         heightmap_max_height=heightmap_max_height,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        material_source=material_source,
+        selected_materials=selected_materials,
+        material_layer_count=material_layer_count,
+        material_layer_height_mm=material_layer_height_mm,
+        material_grid_resolution=material_grid_resolution,
+        material_backing_material_index=material_backing_material_index,
+        use_lut_constrained=use_lut_constrained,
+        auto_dynamic_range=auto_dynamic_range,
     )
 
+    # Conversion failure surfaces as no 3MF; keep the legacy contract
+    # (``threemf_path=None``) so the parent's existing failure branch
+    # (records BatchItemResult(status="failed")) keeps working.
+    # 转换失败时沿用旧契约：``threemf_path=None``，父进程仍把这一项当
+    # failed 处理；本 worker 不再尝试落盘 sidecar / 重命名 GLB。
+    if not threemf_path or not os.path.exists(threemf_path):
+        return {
+            "threemf_path": None,
+            "preview_glb_path": None,
+            "metadata_sidecar_path": None,
+            "xy_bbox_mm": (0.0, 0.0),
+            "status_msg": status_msg,
+        }
+
+    source_filename = os.path.basename(image_path) or "input.png"
+    base_stem, _ = os.path.splitext(source_filename)
+    if not base_stem:
+        base_stem = "item"
+
+    # Disambiguate via the produced 3MF basename (which already encodes
+    # the timestamp) so sibling worker calls within the same batch do
+    # not clobber each other's intermediates.
+    # 用产出 3MF 的文件名（已带时间戳）做后缀，避免同批多 worker 撞名。
+    threemf_stem, _ = os.path.splitext(os.path.basename(threemf_path))
+
+    target_3mf_name = f"{artifact_prefix}{threemf_stem}.3mf"
+    target_glb_name = f"{artifact_prefix}{threemf_stem}.glb"
+    target_sidecar_name = f"{artifact_prefix}{threemf_stem}.json"
+
+    target_3mf_path = os.path.join(TEMP_DIR, target_3mf_name)
+    target_glb_path = os.path.join(TEMP_DIR, target_glb_name)
+    target_sidecar_path = os.path.join(TEMP_DIR, target_sidecar_name)
+
+    os.makedirs(TEMP_DIR, exist_ok=True)
+
+    # Move the per-image 3MF into TEMP_DIR with the prefixed name. Use
+    # ``shutil.move`` so cross-device moves (e.g. when MODELS_DIR and
+    # TEMP_DIR live on different volumes) still work; ``os.replace`` is
+    # not always available across filesystems.
+    # 用 shutil.move 兼容跨卷场景；os.replace 在不同卷上可能失败。
+    if os.path.exists(target_3mf_path):
+        os.unlink(target_3mf_path)
+    shutil.move(threemf_path, target_3mf_path)
+
+    # Preview GLB is optional in some pipeline configurations (rare).
+    # When absent we still build a sidecar with the 3MF + xy_bbox so the
+    # parent process can produce the merged 3MF; it then skips this item
+    # in the batch preview list. The acceptance for this task only mandates the
+    # presence of the GLB when the underlying pipeline emits one, which
+    # is the default high-fidelity / vector behaviour today.
+    # GLB 只有在底层 pipeline 实际产出时才落盘；缺失时父进程的
+    # preview_items 列表会跳过本项。当前默认 pipeline 总是产出 GLB。
+    final_glb_path: str | None = None
+    if glb_path and os.path.exists(glb_path):
+        if os.path.exists(target_glb_path):
+            os.unlink(target_glb_path)
+        shutil.move(glb_path, target_glb_path)
+        final_glb_path = target_glb_path
+
+    # Build the sidecar from the moved 3MF + occupied image footprint.
+    # ``_batch_extract_slots_from_3mf`` is intentionally tolerant: if a
+    # field is missing it falls back to a deterministic placeholder so
+    # the sidecar still validates as ``PerImageMetadataSidecar``.
+    # 用产出 3MF + 输入图实际占位构建 sidecar；缺失字段走确定性 fallback。
+    width_mm, depth_mm = _batch_compute_xy_bbox_mm(
+        image_path,
+        target_width_mm,
+        svg_pixels_per_mm=svg_pixels_per_mm,
+    )
+    slots = _batch_extract_slots_from_3mf(target_3mf_path)
+    sidecar_payload = {
+        "schema_version": 1,
+        "source_filename": source_filename,
+        "xy_bbox_mm": {"width_mm": width_mm, "depth_mm": depth_mm},
+        "slots": slots,
+    }
+
+    with open(target_sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar_payload, fh, ensure_ascii=False, indent=2)
+
     return {
-        "threemf_path": threemf_path,
+        "threemf_path": target_3mf_path,
+        "preview_glb_path": final_glb_path,
+        "metadata_sidecar_path": target_sidecar_path,
+        "xy_bbox_mm": (width_mm, depth_mm),
         "status_msg": status_msg,
     }
 

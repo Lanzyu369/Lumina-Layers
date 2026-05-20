@@ -5,7 +5,7 @@ All API endpoint response schemas are defined here.
 所有 API 端点的响应 Schema 均在此定义。
 """
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -661,13 +661,54 @@ class BatchItemResult(BaseModel):
     error: Optional[str] = None
 
 
+class WarningEntry(BaseModel):
+    """批量响应警告条目。
+
+    Structured warning entry returned in BatchResponse.warnings.
+
+    `code` 是稳定的机器可读标识（例如 ``"plate-overflow"``），前端 SHALL
+    根据 `code` 选择对应的 i18n key 渲染本地化文案；`message` 仅是后端
+    默认 locale 渲染的可读文本，作为前端 i18n key 缺失时的 fallback，
+    前端不应依赖 `message` 文本判断警告类型。
+
+    `code` is the stable machine-readable identifier; the frontend MUST
+    pick its i18n key by `code`, never by parsing `message`. `message`
+    is only a server-rendered human-readable fallback.
+    """
+
+    code: Literal["plate-overflow"] | str = Field(
+        ..., description="Stable machine-readable warning code"
+    )
+    message: str = Field(..., description="Server-rendered human-readable text")
+
+
+class BatchPreviewItem(BaseModel):
+    """单个批量预览模型条目。
+
+    Batch preview now reuses each per-image GLB instead of baking a new
+    merged GLB. The frontend places these URLs on the same virtual plate
+    using the layout coordinates.
+    """
+
+    url: str
+    filename: str
+    tx_mm: float
+    ty_mm: float
+    width_mm: float
+    depth_mm: float
+
+
 class BatchResponse(BaseModel):
     """批量转换响应。"""
 
     status: str
     message: str
-    download_url: str
+    download_url: str | None = None
+    threemf_disk_path: str | None = None
+    preview_3d_url: str | None = None
+    preview_items: list[BatchPreviewItem] = Field(default_factory=list)
     results: list[BatchItemResult]
+    warnings: list[WarningEntry] = Field(default_factory=list)
 
 
 class LutInfo(BaseModel):

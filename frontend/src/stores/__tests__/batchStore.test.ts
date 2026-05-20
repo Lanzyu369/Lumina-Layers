@@ -16,6 +16,7 @@ vi.mock("../../api/converter", () => ({
 }));
 
 import { useConverterStore } from "../converter";
+import { useSettingsStore } from "../settingsStore";
 import { convertBatch } from "../../api/converter";
 
 const mockedConvertBatch = vi.mocked(convertBatch);
@@ -26,12 +27,20 @@ const mockedConvertBatch = vi.mocked(convertBatch);
  */
 
 function resetStore(): void {
+  useSettingsStore.setState({
+    printerModel: "bambu-p1s",
+    slicerSoftware: "OrcaSlicer",
+    nozzleSize: "0.2",
+    enableBaseLayerHeightModifier: false,
+    svgPixelsPerMm: 10,
+  });
   useConverterStore.setState({
     batchMode: true,
     batchFiles: [],
     batchLoading: false,
     batchResult: null,
     error: null,
+    source_version: "legacy",
     lut_name: "test-lut",
     target_width_mm: 60,
     spacer_thick: 1.2,
@@ -48,17 +57,38 @@ function resetStore(): void {
     autoHeightMode: "darker-higher",
     palette: [],
     lutColors: [],
+    selectedMaterialDirNames: [],
+    materialLayerCount: 5,
+    materialLayerHeightMm: 0.08,
+    materialBackingMaterialDirName: "",
+    nativeBrandGroups: [],
+    selectedNativeBrandKey: "",
+    selectedNativeDbNames: [],
+    model_enable: false,
+    model_only: false,
+    model_threshold: null,
+    model_margin: null,
+    use_lut_constrained: false,
+    auto_dynamic_range: false,
+    modelUrl: null,
+    previewGlbUrl: null,
+    batchPreviewItems: [],
+    threemfDiskPath: null,
+    downloadUrl: null,
   });
 }
 
 const mockBatchResponse: BatchResponse = {
   status: "ok",
   message: "Batch completed",
-  download_url: "/api/files/batch_result.zip",
+  download_url: "/api/files/batch_result.3mf",
+  threemf_disk_path: "/tmp/batch_result.3mf",
+  preview_3d_url: null,
   results: [
     { filename: "img1.png", status: "success" },
     { filename: "img2.jpg", status: "failed", error: "Invalid image" },
   ],
+  warnings: [],
 };
 
 describe("submitBatch API 调用和状态管理", () => {
@@ -82,6 +112,7 @@ describe("submitBatch API 调用和状态管理", () => {
     const [calledFiles, calledParams] = mockedConvertBatch.mock.calls[0];
     expect(calledFiles).toBe(files);
     expect(calledParams).toEqual({
+      source_kind: "legacy_single",
       lut_name: "test-lut",
       target_width_mm: 60,
       spacer_thick: 1.2,
@@ -95,7 +126,13 @@ describe("submitBatch API 调用和状态管理", () => {
       svg_pixels_per_mm: 10,
       hue_weight: 0,
       chroma_gate: 0,
+      use_lut_constrained: false,
+      auto_dynamic_range: false,
       enable_relief: false,
+      printer_id: "bambu-p1s",
+      slicer: "OrcaSlicer",
+      nozzle_size: "0.2",
+      enable_base_layer_height_modifier: false,
     });
   });
 
@@ -122,6 +159,93 @@ describe("submitBatch API 调用和状态管理", () => {
         "#ff0000": 1.7,
         "#ffffff": 1.3,
       },
+    });
+  });
+
+  it("submitBatch 支持耗材档案来源参数", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      source_version: "material",
+      selectedMaterialDirNames: ["brand/red", "brand/white"],
+      materialLayerCount: 7,
+      materialLayerHeightMm: 0.06,
+      materialBackingMaterialDirName: "brand/white",
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      selected_materials: ["brand/red", "brand/white"],
+      material_layer_count: 7,
+      material_layer_height_mm: 0.06,
+      material_backing_material_index: 1,
+      color_layers: 7,
+      layer_height_mm: 0.06,
+    });
+  });
+
+  it("submitBatch 支持反推 LUT 来源参数", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      source_version: "native",
+      selectedNativeBrandKey: "pla-bambu",
+      selectedNativeDbNames: ["red.cdb", "white.cdb"],
+      color_layers: 6,
+      layer_height_mm: 0.08,
+      model_enable: true,
+      model_only: true,
+      model_threshold: 0.3,
+      model_margin: 0.1,
+      nativeBrandGroups: [
+        {
+          brand_key: "pla-bambu",
+          material_type: "PLA",
+          vendor: "Bambu",
+          display_name: "Bambu PLA",
+          db_options: [
+            {
+              name: "red.cdb",
+              path: "/db/red.cdb",
+              color_mode: "native",
+              fingerprint: "",
+            },
+            {
+              name: "white.cdb",
+              path: "/db/white.cdb",
+              color_mode: "native",
+              fingerprint: "",
+            },
+          ],
+          default_db_names: ["red.cdb"],
+          supported_modes: [{ color_layers: 6, layer_height_mm: 0.08 }],
+          model_name: "model.json",
+          package_name: "package.msgpack",
+        },
+      ],
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams).toMatchObject({
+      source_kind: "native_bundle",
+      material_type: "PLA",
+      vendor: "Bambu",
+      db_names: ["red.cdb", "white.cdb"],
+      color_layers: 6,
+      layer_height_mm: 0.08,
+      model_enable: true,
+      model_only: true,
+      model_threshold: 0.3,
+      model_margin: 0.1,
     });
   });
 
@@ -188,6 +312,40 @@ describe("submitBatch API 调用和状态管理", () => {
     expect(state.batchResult).toEqual(mockBatchResponse);
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
+    expect(state.threemfDiskPath).toBe("/tmp/batch_result.3mf");
+    expect(state.downloadUrl).toBe("/api/files/batch_result.3mf");
+  });
+
+  it("submitBatch 成功后存储批量预览条目并清空单模型预览 URL", async () => {
+    const files = [new File(["a"], "img.png", { type: "image/png" })];
+    const response: BatchResponse = {
+      ...mockBatchResponse,
+      preview_3d_url: "/api/files/first.glb",
+      preview_items: [
+        {
+          url: "/api/files/first.glb",
+          filename: "img1.png",
+          tx_mm: 0,
+          ty_mm: 0,
+          width_mm: 30,
+          depth_mm: 20,
+        },
+      ],
+    };
+    useConverterStore.setState({
+      batchFiles: files,
+      modelUrl: "/api/files/old-model.glb",
+      previewGlbUrl: "/api/files/old-preview.glb",
+    });
+    mockedConvertBatch.mockResolvedValueOnce(response);
+
+    await useConverterStore.getState().submitBatch();
+
+    const state = useConverterStore.getState();
+    expect(state.batchPreviewItems).toEqual(response.preview_items);
+    expect(state.modelUrl).toBeNull();
+    expect(state.previewGlbUrl).toBeNull();
+    expect(state.batchLoading).toBe(false);
   });
 
   // Error handling: API 错误时 error 状态设置
@@ -210,13 +368,18 @@ describe("submitBatch API 调用和状态管理", () => {
     const previousResult: BatchResponse = {
       status: "ok",
       message: "Previous",
-      download_url: "/old.zip",
+      download_url: "/old.3mf",
+      threemf_disk_path: "/tmp/old.3mf",
+      preview_3d_url: null,
       results: [{ filename: "old.png", status: "success" }],
+      warnings: [],
     };
     useConverterStore.setState({
       batchFiles: files,
       batchResult: previousResult,
       error: "old error",
+      threemfDiskPath: "/tmp/old.3mf",
+      downloadUrl: "/old.3mf",
     });
 
     let resolveApi!: (value: BatchResponse) => void;
@@ -229,7 +392,10 @@ describe("submitBatch API 调用和状态管理", () => {
 
     // Immediately after calling submitBatch, previous result should be cleared
     expect(useConverterStore.getState().batchResult).toBeNull();
+    expect(useConverterStore.getState().batchPreviewItems).toEqual([]);
     expect(useConverterStore.getState().error).toBeNull();
+    expect(useConverterStore.getState().threemfDiskPath).toBeNull();
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
 
     resolveApi(mockBatchResponse);
     await submitPromise;

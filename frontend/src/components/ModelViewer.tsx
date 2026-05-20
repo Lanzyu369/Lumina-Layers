@@ -13,6 +13,7 @@ import {
   summarizeObjectTree,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
+import { createMatteMaterialFromStandard } from "../utils/threeMatteMaterial";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 
 type LuminaWindow = Window & { __luminaGenerateStart?: number };
@@ -50,9 +51,17 @@ export function computeFitDistance(
 
 interface ModelViewerProps {
   url: string;
+  position?: [number, number, number];
+  autoFitCamera?: boolean;
 }
 
-function ModelViewer({ url }: ModelViewerProps) {
+const DEFAULT_MODEL_POSITION: [number, number, number] = [0, 0, 0];
+
+function ModelViewer({
+  url,
+  position = DEFAULT_MODEL_POSITION,
+  autoFitCamera = true,
+}: ModelViewerProps) {
   const { scene } = useGLTF(url);
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
@@ -120,7 +129,7 @@ function ModelViewer({ url }: ModelViewerProps) {
         const newMats = mats.map((mat: THREE.Material) => {
           if (mat instanceof THREE.MeshStandardMaterial) {
             replacedMaterials.push(mat);
-            return new THREE.MeshLambertMaterial({ color: mat.color });
+            return createMatteMaterialFromStandard(mat);
           }
           return mat;
         });
@@ -144,7 +153,11 @@ function ModelViewer({ url }: ModelViewerProps) {
     // so the model sits on top of the bed platform.
     const center = new THREE.Vector3();
     box.getCenter(center);
-    clone.position.set(-center.x, -center.y, -box.min.z);
+    clone.position.set(
+      position[0] - center.x,
+      position[1] - center.y,
+      position[2] - box.min.z,
+    );
 
     const summary = {
       url,
@@ -165,7 +178,7 @@ function ModelViewer({ url }: ModelViewerProps) {
       preparedScene: clone,
       buildSummary: summary,
     };
-  }, [scene, url]);
+  }, [position, scene, url]);
 
   useEffect(() => {
     console.timeLog('[LUMINA] generate', 'GLB scene processed (useMemo done)');
@@ -190,6 +203,9 @@ function ModelViewer({ url }: ModelViewerProps) {
 
   // Auto-fit camera to model after load
   useEffect(() => {
+    if (!autoFitCamera) {
+      return;
+    }
     preparedScene.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(preparedScene);
     const sphere = new THREE.Sphere();
@@ -229,7 +245,7 @@ function ModelViewer({ url }: ModelViewerProps) {
         bounding_sphere_radius: +sphere.radius.toFixed(3),
       },
     });
-  }, [preparedScene, camera, controls, url]);
+  }, [autoFitCamera, preparedScene, camera, controls, url]);
 
   return <primitive object={preparedScene} />;
 }

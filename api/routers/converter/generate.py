@@ -7,25 +7,30 @@ import json
 import math
 import os
 import pickle
+import shutil
 import tempfile
 import time
 import uuid
 import zipfile
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
 from api.schemas.converter import ConvertGenerateRequest, LargeFormatGenerateRequest
+from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
     BatchItemResult,
+    BatchPreviewItem,
     BatchResponse,
     GenerateResponse,
     LargeFormatGenerateResponse,
+    WarningEntry,
 )
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
@@ -35,12 +40,19 @@ from api.workers.converter_workers import (
     worker_generate_large_format_svg_native,
     worker_generate_model,
 )
+from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
+from utils.merged_bambu_3mf_writer import (
+    MergedBambu3MFWriter,
+    MergedItem,
+    MaterialSlot as WriterMaterialSlot,
+)
 from config import (
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
     TEMP_DIR,
     ModelingMode as CoreModelingMode,
+    get_printer_profile,
     normalize_svg_pixels_per_mm,
 )
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
@@ -66,6 +78,23 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Batch merge constants (not exposed via API / UI / settings)
+# ---------------------------------------------------------------------------
+_BATCH_FALLBACK_PLATE_WIDTH_MM: float = 256.0
+_BATCH_FALLBACK_PLATE_DEPTH_MM: float = 256.0
+_BATCH_PREVIEW_BROWSER_SAFE_LIMIT: int = 96
+BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE: str = (
+    "部分模型可能超出热床范围，请在切片软件中调整 / "
+    "Some models may extend beyond the print bed; please adjust them in the slicer."
+)
+BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
+    "批量 3MF 已包含全部成功模型；3D 预览会按当前热床尺寸自动显示可容纳"
+    "的前若干个模型 / The batch 3MF includes every successful model; the "
+    "3D preview automatically shows the first models that fit on the current "
+    "print bed."
+)
 
 
 class _GenerateBody(BaseModel):
@@ -112,6 +141,40 @@ def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
             raise HTTPException(status_code=422, detail="color_height_map heights must be finite")
         parsed[str(key)] = height
     return parsed or None
+
+
+def _normalize_batch_string_list(value: list[str] | str | None) -> list[str]:
+    """Normalize repeated/JSON/comma-separated form list values.
+
+    规范化 multipart/form-data 中的列表字段，兼容重复字段、JSON 数组和
+    逗号分隔字符串。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in stripped.split(",") if item.strip()]
+
+    normalized = [str(item).strip() for item in value if str(item).strip()]
+    if len(normalized) == 1:
+        stripped = normalized[0]
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+    return normalized
 
 
 def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[str, object]] | None:
@@ -1537,10 +1600,137 @@ async def convert_generate_large_format(
     return LargeFormatGenerateResponse(**result)
 
 
+# ---------------------------------------------------------------------------
+# Batch-mode structured logging helper (R7 §5: log failures must not propagate)
+# ---------------------------------------------------------------------------
+
+def _cleanup_intermediates(paths: list[Path], batch_run_id: str) -> None:
+    """Best-effort delete intermediate per-image files after successful merge.
+
+    Failures are logged as WARNING but never propagate to the response
+    (Requirement 7 §4).
+    """
+    for p in paths:
+        try:
+            if p.exists():
+                p.unlink(missing_ok=True)
+        except Exception as exc:
+            _safe_log(
+                "warning",
+                "batch_merge_intermediate_cleanup_failed",
+                session_id=batch_run_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                path=str(p),
+            )
+
+
+def _safe_log(level: str, event: str, **fields: object) -> None:
+    """Emit a structured log entry; swallow any exception silently.
+
+    Ensures that a logging subsystem failure never propagates to the
+    download / preview response path (Requirement 7 §5).
+
+    Args:
+        level: One of "debug", "info", "warning", "error".
+        event: Structured event name (snake_case).
+        **fields: Extra structured fields forwarded to the logger.
+    """
+    try:
+        log_fn = getattr(log, level, log.info)
+        log_fn(event, extra={"event": event, **fields})
+    except Exception:
+        pass
+
+
+def _resolve_batch_plate_dimensions(printer_id: str) -> tuple[float, float]:
+    """Return the batch layout plate dimensions for the selected printer.
+
+    根据当前打印机配置返回批量排布使用的热床尺寸。
+    """
+    profile = get_printer_profile(printer_id)
+    width_mm = float(profile.bed_width or _BATCH_FALLBACK_PLATE_WIDTH_MM)
+    depth_mm = float(profile.bed_depth or _BATCH_FALLBACK_PLATE_DEPTH_MM)
+    if width_mm <= 0 or depth_mm <= 0:
+        return (_BATCH_FALLBACK_PLATE_WIDTH_MM, _BATCH_FALLBACK_PLATE_DEPTH_MM)
+    return (width_mm, depth_mm)
+
+
+def _xy_bbox_from_worker_result(worker_result: dict) -> XYBBox:
+    """Convert a worker result's scalar bbox tuple into ``XYBBox``.
+
+    将 worker 返回的标量 bbox 转成 ``XYBBox``，供批量排布复用。
+    """
+    xy = worker_result["xy_bbox_mm"]
+    return XYBBox(width_mm=float(xy[0]), depth_mm=float(xy[1]))
+
+
+def _select_batch_preview_subset(
+    successes: list[dict],
+    *,
+    plate_width_mm: float,
+    plate_depth_mm: float,
+) -> tuple[list[dict], LayoutResult]:
+    """Select the largest preview prefix that fits on the selected plate.
+
+    The merged 3MF still receives every successful model. This helper only
+    decides how many per-image GLBs the browser preview should render:
+    first cap by a high browser-safety ceiling, then choose the largest
+    upload-order prefix whose layout stays within the selected printer bed.
+    If even one item is oversized, return that first item so the user still
+    gets a visible preview with the existing plate-overflow warning.
+
+    合并 3MF 仍包含全部成功模型；这里只决定网页 3D 预览渲染多少个。
+    先受浏览器保护上限约束，再取按上传顺序能完整放进当前热床的最长前缀。
+    若单个模型本身就超出热床，仍返回第一个模型用于预览。
+    """
+    if not successes:
+        return ([], layout_shelf_by_row([], plate_width_mm, plate_depth_mm))
+
+    candidate_successes = successes[:_BATCH_PREVIEW_BROWSER_SAFE_LIMIT]
+    candidate_bboxes = [
+        _xy_bbox_from_worker_result(wr)
+        for wr in candidate_successes
+    ]
+
+    best_count = 0
+    best_layout = None
+    for count in range(1, len(candidate_bboxes) + 1):
+        candidate_layout = layout_shelf_by_row(
+            candidate_bboxes[:count],
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+        if candidate_layout.exceeds_plate:
+            break
+        best_count = count
+        best_layout = candidate_layout
+
+    if best_count == 0:
+        best_count = 1
+        best_layout = layout_shelf_by_row(
+            candidate_bboxes[:1],
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+
+    return (candidate_successes[:best_count], best_layout)
+
+
 @router.post("/batch")
 async def convert_batch(
     images: list[UploadFile] = File(..., description="批量图像"),
-    lut_name: str = Form(..., description="LUT 名称"),
+    source_kind: str = Form("legacy_single", description="源类型: legacy_single | native_bundle"),
+    lut_name: str | None = Form(None, description="LUT 名称"),
+    material_type: str | None = Form(None, description="原生材料类型"),
+    vendor: str | None = Form(None, description="原生厂商"),
+    db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
+    material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
+    selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
+    material_layer_count: int | None = Form(None, ge=1, le=20, description="耗材模式叠色层数"),
+    material_layer_height_mm: float | None = Form(None, gt=0.0, le=1.0, description="耗材模式层高 (mm)"),
+    material_grid_resolution: int | None = Form(None, description="耗材穷举缓存网格分辨率"),
+    material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
     spacer_thick: float = Form(1.2, description="底板厚度 (mm)"),
     structure_mode: str = Form("Double-sided", description="打印结构模式"),
@@ -1561,10 +1751,23 @@ async def convert_batch(
     ),
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
+    model_enable: bool = Form(False, description="启用模型辅助匹配"),
+    model_only: bool = Form(False, description="仅使用模型匹配"),
+    model_threshold: float | None = Form(None, description="模型回退阈值"),
+    model_margin: float | None = Form(None, description="模型回退边距"),
+    use_lut_constrained: bool = Form(False, description="高精度 LUT 约束匹配"),
+    auto_dynamic_range: bool = Form(False, description="自动动态范围压缩"),
     enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
     height_mode: str = Form("color", description="浮雕高度模式"),
     color_height_map: str | None = Form(None, description="颜色高度映射 JSON"),
     heightmap_max_height: float = Form(5.0, description="最大浮雕模型总高度 (mm)"),
+    printer_id: str = Form("bambu-h2d", description="打印机配置 ID"),
+    slicer: str = Form("BambuStudio", description="切片器"),
+    nozzle_size: str = Form("0.4", description="喷嘴直径"),
+    enable_base_layer_height_modifier: bool = Form(
+        True,
+        description="启用底板粗层高优化",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
 ) -> BatchResponse:
@@ -1577,11 +1780,62 @@ async def convert_batch(
     文件上传和 FileRegistry 操作在主线程完成。
     每个批量项的 CPU 密集型转换逐个提交到工作进程池。
     """
-    # Resolve LUT path (main thread)
+    # Resolve color source (main thread). Batch must mirror the single-image
+    # preview/generate source selection contract: traditional LUT, native
+    # reverse-LUT bundle, or material archives.
+    # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
+    # 和耗材档案。
     image_count = len(images)
-    lut_path = LUTManager.get_lut_path(lut_name)
-    if lut_path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+    selected_material_names: list[str] = []
+    temp_native_bundle_path: str | None = None
+    if material_source == "material_archive":
+        selected_material_names = _normalize_batch_string_list(selected_materials)
+        if not selected_material_names:
+            raise HTTPException(
+                status_code=422,
+                detail="Batch material archive mode requires selected_materials",
+            )
+        lut_path = "__material_archive__"
+        resolved_lut_name = "__material_archive__"
+        resolved_source_kind = "legacy_single"
+    else:
+        normalized_db_names = _normalize_batch_string_list(db_names)
+        try:
+            source_selection = LutSourceSelection.model_validate(
+                {
+                    "source_kind": source_kind,
+                    "lut_name": lut_name,
+                    "material_type": material_type,
+                    "vendor": vendor,
+                    "db_names": normalized_db_names,
+                }
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=json.loads(exc.json()),
+            ) from exc
+        try:
+            lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
+                source_kind=source_selection.source_kind,
+                lut_name=source_selection.lut_name,
+                material_type=source_selection.material_type,
+                vendor=source_selection.vendor,
+                db_names=source_selection.db_names,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if detail.startswith("LUT not found:") else 422
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        resolved_source_kind = source_selection.source_kind
+        if resolved_source_kind == "native_bundle":
+            resolved_lut_path = os.path.abspath(lut_path)
+            try:
+                Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
+            except ValueError:
+                temp_native_bundle_path = None
+            else:
+                temp_native_bundle_path = resolved_lut_path
 
     # Validate modeling_mode string (main thread)
     try:
@@ -1628,8 +1882,13 @@ async def convert_batch(
             detail="Batch relief requires color_height_map",
         )
 
+    # --- batch_run_id: unique per-request identifier for structured logging
+    # and artifact naming. Independent of request.state.request_id (R9 §1).
+    batch_run_id = uuid.uuid4().hex
+    artifact_prefix = f"batch-{batch_run_id}-"
+
     results: list[BatchItemResult] = []
-    successful_entries: list[tuple[str, str]] = []
+    successful_entries: list[dict] = []
 
     # Submit each batch item sequentially to the process pool
     for upload_file in images:
@@ -1653,6 +1912,7 @@ async def convert_batch(
                 layer_height_mm,
                 quantize_colors,
                 enable_cleanup,
+                artifact_prefix,
                 hue_weight,
                 chroma_gate,
                 enable_relief,
@@ -1660,6 +1920,22 @@ async def convert_batch(
                 parsed_color_height_map,
                 heightmap_max_height,
                 svg_pixels_per_mm,
+                printer_id,
+                slicer,
+                nozzle_size,
+                enable_base_layer_height_modifier,
+                model_enable,
+                model_only,
+                model_threshold,
+                model_margin,
+                material_source,
+                selected_material_names,
+                material_layer_count,
+                material_layer_height_mm,
+                material_grid_resolution,
+                material_backing_material_index,
+                use_lut_constrained,
+                auto_dynamic_range,
             )
 
             # 3. Result processing (main thread)
@@ -1667,7 +1943,7 @@ async def convert_batch(
             status_msg: str = result.get("status_msg", "")
 
             if threemf_path and os.path.exists(threemf_path):
-                successful_entries.append((threemf_path, filename))
+                successful_entries.append(result)
                 results.append(
                     BatchItemResult(
                         filename=filename,
@@ -1701,49 +1977,241 @@ async def convert_batch(
         finally:
             _remove_temp_path(temp_path)
 
-    # Package successful 3MF files into a ZIP (main thread)
-    cleanup_3mf_paths = [path_3mf for path_3mf, _src_filename in successful_entries]
-    zip_path: str | None = None
-    zip_ready = False
-    try:
-        fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
-        os.close(fd)
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for idx, (path_3mf, src_filename) in enumerate(successful_entries, start=1):
-                base_name = os.path.splitext(os.path.basename(src_filename))[0] or "item"
-                arcname = f"{idx:03d}_{base_name}.3mf"
-                zf.write(path_3mf, arcname)
+    # --- Merge phase: layout → writers → FileRegistry → cleanup ---
+    # Build intermediates list from successful worker results
+    intermediates: list[Path] = []
+    for wr in successful_entries:
+        intermediates.append(Path(wr["threemf_path"]))
+        if wr.get("preview_glb_path"):
+            intermediates.append(Path(wr["preview_glb_path"]))
+        if wr.get("metadata_sidecar_path"):
+            intermediates.append(Path(wr["metadata_sidecar_path"]))
 
-        # Register ZIP via FileRegistry (main thread)
-        download_id = registry.register_path(
-            str(uuid.uuid4()),
-            zip_path,
-            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-        )
-        zip_ready = True
+    successes = successful_entries
+    plate_width_mm, plate_depth_mm = _resolve_batch_plate_dimensions(printer_id)
 
-        success_count = sum(1 for r in results if r.status == "success")
-        total_count = len(results)
-
-        log.info(
-            "Batch conversion completed",
-            extra={
-                "event": "converter_batch_done",
-                "image_count": image_count,
-                "success_count": success_count,
-                "total_count": total_count,
-                "lut_name": lut_name,
-                "color_mode": color_mode,
-                "modeling_mode": modeling_mode,
-            },
-        )
+    # Zero successes → return immediately with null URLs
+    if len(successes) == 0:
+        _remove_temp_path(temp_native_bundle_path)
         return BatchResponse(
-            status="ok" if success_count > 0 else "failed",
-            message=f"Batch complete: {success_count}/{total_count} succeeded",
-            download_url=f"/api/files/{download_id}",
+            status="failed",
+            message=f"Batch complete: 0/{len(results)} succeeded",
+            download_url=None,
+            threemf_disk_path=None,
+            preview_3d_url=None,
+            warnings=[],
             results=results,
         )
-    finally:
-        _remove_temp_paths(cleanup_3mf_paths)
-        if zip_path is not None and not zip_ready:
-            _remove_temp_path(zip_path)
+
+    # Log merge init
+    _safe_log(
+        "info",
+        "batch_merge_3mf_init",
+        session_id=batch_run_id,
+        model_count=len(successes),
+        plate_width_mm=plate_width_mm,
+        plate_depth_mm=plate_depth_mm,
+    )
+
+    warnings: list[WarningEntry] = []
+    merged_outputs: list[Path] = []
+    stage = "layout"
+
+    try:
+        # Step 1: Layout
+        stage = "layout"
+        bboxes = [_xy_bbox_from_worker_result(wr) for wr in successes]
+
+        layout_result = layout_shelf_by_row(
+            bboxes,
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+
+        # Step 2: Check plate overflow
+        if layout_result.exceeds_plate:
+            warnings.append(
+                WarningEntry(
+                    code="plate-overflow",
+                    message=BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE,
+                )
+            )
+            _safe_log(
+                "warning",
+                "batch_merge_plate_overflow_warning",
+                session_id=batch_run_id,
+                model_count=len(successes),
+                plate_width_mm=plate_width_mm,
+                plate_depth_mm=plate_depth_mm,
+            )
+
+        # Step 3: Merged 3MF
+        stage = "merge_3mf"
+        merged_items: list[MergedItem] = []
+        for idx, wr in enumerate(successes):
+            # Read sidecar for slots
+            sidecar_path = wr["metadata_sidecar_path"]
+            with open(sidecar_path, "r", encoding="utf-8") as f:
+                sidecar_data = json.load(f)
+
+            slots_raw = sidecar_data.get("slots", [])
+            writer_slots = tuple(
+                WriterMaterialSlot(
+                    slot_id=s["slot_id"],
+                    slot_name=s["slot_name"],
+                    preview_color=s["preview_color"],
+                    material_id=s["material_id"],
+                )
+                for s in slots_raw
+            )
+
+            placement = layout_result.placements[idx]
+            merged_items.append(
+                MergedItem(
+                    source_filename=sidecar_data.get("source_filename", f"item_{idx}"),
+                    source_3mf_path=Path(wr["threemf_path"]),
+                    slots=writer_slots,
+                    tx_mm=placement.tx_mm,
+                    ty_mm=placement.ty_mm,
+                )
+            )
+
+        fd, merged_3mf_path_str = tempfile.mkstemp(
+            suffix=".3mf", dir=TEMP_DIR, prefix=artifact_prefix
+        )
+        os.close(fd)
+        merged_3mf_path = Path(merged_3mf_path_str)
+        merged_outputs.append(merged_3mf_path)
+
+        MergedBambu3MFWriter().write(
+            merged_items,
+            merged_3mf_path,
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+
+        # Step 4: FileRegistry registration
+        stage = "file_registry"
+        download_id = registry.register_path(
+            session_id=f"batch-merge:{batch_run_id}",
+            path=str(merged_3mf_path),
+            filename="batch.3mf",
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        download_url = f"/api/files/{download_id}"
+
+        preview_items: list[BatchPreviewItem] = []
+        preview_3d_url: str | None = None
+        stage = "layout"
+        preview_successes, preview_layout_result = _select_batch_preview_subset(
+            successes,
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+        stage = "file_registry"
+        if len(preview_successes) < len(successes):
+            warnings.append(
+                WarningEntry(
+                    code="preview-limited",
+                    message=BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE,
+                )
+            )
+
+        for idx, wr in enumerate(preview_successes):
+            source_glb = wr.get("preview_glb_path")
+            if not source_glb:
+                continue
+            source_glb_path = Path(source_glb)
+            if not source_glb_path.exists():
+                continue
+
+            fd, preview_copy_str = tempfile.mkstemp(
+                suffix=".glb", dir=TEMP_DIR, prefix=artifact_prefix
+            )
+            os.close(fd)
+            preview_copy_path = Path(preview_copy_str)
+            shutil.copy2(source_glb_path, preview_copy_path)
+            merged_outputs.append(preview_copy_path)
+
+            preview_id = registry.register_path(
+                session_id=f"batch-preview:{batch_run_id}",
+                path=str(preview_copy_path),
+                filename=f"batch_preview_{idx + 1}.glb",
+                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+            if preview_3d_url is None:
+                preview_3d_url = preview_url
+
+            placement = preview_layout_result.placements[idx]
+            xy = wr["xy_bbox_mm"]
+            preview_filename = f"item_{idx}"
+            try:
+                with open(wr["metadata_sidecar_path"], "r", encoding="utf-8") as f:
+                    preview_sidecar = json.load(f)
+                preview_filename = str(
+                    preview_sidecar.get("source_filename") or preview_filename
+                )
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                pass
+            preview_items.append(
+                BatchPreviewItem(
+                    url=preview_url,
+                    filename=preview_filename,
+                    tx_mm=placement.tx_mm,
+                    ty_mm=placement.ty_mm,
+                    width_mm=float(xy[0]),
+                    depth_mm=float(xy[1]),
+                )
+            )
+
+    except Exception as exc:
+        # Failure path: log, cleanup, raise HTTP 500
+        _safe_log(
+            "error",
+            "batch_merge_3mf_failed",
+            session_id=batch_run_id,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            stage=stage,
+        )
+        # Best-effort cleanup of all intermediate + merged temp files
+        for p in intermediates + merged_outputs:
+            try:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        _remove_temp_path(temp_native_bundle_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch merge failed at stage={stage}: {exc}",
+        )
+
+    # Success path: cleanup intermediate files
+    _cleanup_intermediates(intermediates, batch_run_id)
+    _remove_temp_path(temp_native_bundle_path)
+
+    success_count = sum(1 for r in results if r.status == "success")
+    failure_count = len(results) - success_count
+
+    _safe_log(
+        "info",
+        "batch_merge_3mf_done",
+        session_id=batch_run_id,
+        model_count=len(successes),
+        success_count=success_count,
+        failure_count=failure_count,
+        exceeds_plate=layout_result.exceeds_plate,
+    )
+
+    return BatchResponse(
+        status="ok",
+        message=f"Batch complete: {success_count}/{len(results)} succeeded",
+        download_url=download_url,
+        threemf_disk_path=str(merged_3mf_path),
+        preview_3d_url=preview_3d_url,
+        preview_items=preview_items,
+        warnings=warnings,
+        results=results,
+    )

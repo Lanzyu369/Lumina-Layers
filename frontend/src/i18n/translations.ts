@@ -3546,6 +3546,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先添加图片并选择 LUT",
     en: "Please add images and select a LUT first",
   },
+  action_batch_upload_hint_material: {
+    zh: "请先添加图片并选择耗材",
+    en: "Please add images and select materials first",
+  },
+  action_batch_upload_hint_native: {
+    zh: "请先添加图片并选择品牌和数据库",
+    en: "Please add images and select a brand and databases first",
+  },
   action_preview: {
     zh: "预览",
     en: "Preview",
@@ -4208,6 +4216,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除 {name}",
     en: "Delete {name}",
   },
+  upload_file_list_truncated: {
+    zh: "还有 {count} 个文件已加入批量队列，未在这里展开显示。",
+    en: "{count} more files are in the batch queue and are not expanded here.",
+  },
 
   // ==================== Zoomable Image ====================
   zoom_reset: {
@@ -4243,6 +4255,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   batch_failed_list_label: {
     zh: "失败文件列表",
     en: "Failed files list",
+  },
+  // Merged batch 3MF download + plate-overflow warning (batch-mode-merged-3mf).
+  // 批量合并 3MF 下载与超出热床范围的警告文案。
+  "batch.download.mergedThreemf": {
+    zh: "下载批量 3MF",
+    en: "Download batch 3MF",
+  },
+  "batch.warnings.plateOverflow.title": {
+    zh: "部分模型超出热床范围",
+    en: "Some models extend beyond the print bed",
+  },
+  "batch.warnings.plateOverflow.body": {
+    zh: "部分模型可能超出热床范围，请在切片软件中调整。",
+    en: "Some models may extend beyond the print bed; please adjust them in the slicer.",
+  },
+  "batch.warnings.previewLimited.body": {
+    zh: "批量 3MF 已包含全部成功模型；3D 预览会按当前热床尺寸自动显示可容纳的前若干个模型。",
+    en: "The batch 3MF includes every successful model; the 3D preview automatically shows the first models that fit on the current print bed.",
   },
 
   // ==================== Slicer Selector ====================
