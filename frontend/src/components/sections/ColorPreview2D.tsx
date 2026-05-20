@@ -11,6 +11,7 @@
 import { useRef, useCallback, useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceColorPick } from '../../api/converter';
+import { ModelingMode } from '../../api/types';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
 import { useI18n } from '../../i18n/context';
 import CanvasPreviewSurface from '../ui/CanvasPreviewSurface';
@@ -107,6 +108,7 @@ export default function ColorPreview2D({
   const hoverInspectorEnabled = showMagnifier || showLayerDetails;
   const { t } = useI18n();
   const previewAltText = t('converter_preview_2d_alt');
+  const modelingMode = useConverterStore((s) => s.modeling_mode);
 
   // Use previewBaseImageUrl for a stable image that only changes on actual
   // content updates (initial preview, color replacement, undo), not on
@@ -860,7 +862,11 @@ export default function ColorPreview2D({
         src={showOriginal && originalUploadUrl ? originalUploadUrl : displayUrl}
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
-        className="h-full w-full bg-slate-200/60 dark:bg-slate-900/60"
+        className={
+          modelingMode === ModelingMode.VECTOR
+            ? 'h-full w-full checkerboard-bg'
+            : 'h-full w-full bg-slate-200/60 dark:bg-slate-900/60'
+        }
         surfaceClassName="cursor-crosshair"
         renderingQuality="crisp"
         overlay={contourOverlay}

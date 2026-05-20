@@ -830,6 +830,34 @@ class TestVisibleStrokeElementsPreserved:
         assert (255, 0, 0) in colors, "Fill element should produce a red shape"
         assert (0, 0, 255) in colors, "Stroke-only blue line should now produce geometry"
 
+    def test_transparent_rgba_fill_is_skipped(self):
+        """Fully transparent SVG fills must not become black printable shapes."""
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '  <rect x="0" y="0" width="100" height="100" fill="rgba(0,0,0,0)"/>'
+            '  <rect x="10" y="10" width="20" height="20" fill="#ff0000"/>'
+            "</svg>"
+        )
+        shapes = self._parse_shapes(svg)
+        colors = {s["color"] for s in shapes}
+        assert (255, 0, 0) in colors
+        assert (0, 0, 0) not in colors
+
+    def test_transparent_rgba_fill_with_visible_stroke_keeps_stroke(self):
+        """Transparent fill should be ignored while a visible stroke is still printed."""
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '  <rect x="10" y="10" width="80" height="80" '
+            'fill="rgba(0,0,0,0)" stroke="#0000ff" stroke-width="4"/>'
+            "</svg>"
+        )
+        shapes = self._parse_shapes(svg)
+        colors = {s["color"] for s in shapes}
+        assert (0, 0, 255) in colors
+        assert (0, 0, 0) not in colors
+
     def test_stroke_only_is_widened_to_printable_width(self):
         svg = (
             '<?xml version="1.0" encoding="UTF-8"?>'

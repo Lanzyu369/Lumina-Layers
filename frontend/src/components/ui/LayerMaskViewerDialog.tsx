@@ -359,7 +359,7 @@ export default function LayerMaskViewerDialog({
             <CanvasPreviewSurface
               src={activeLayer.url}
               alt={dialogTitle}
-              className="h-full w-full"
+              className="h-full w-full checkerboard-bg"
               surfaceClassName="cursor-grab active:cursor-grabbing"
               resetLabel={t("zoom_reset")}
               onHoverSample={handlePreviewHoverSample}
