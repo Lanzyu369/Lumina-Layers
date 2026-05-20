@@ -177,6 +177,11 @@ def _parse_merged_3mf(path: Path) -> dict:
         main_model = ET.fromstring(zf.read("3D/3dmodel.model"))
         config = ET.fromstring(zf.read("Metadata/model_settings.config"))
         rels = ET.fromstring(zf.read("3D/_rels/3dmodel.model.rels"))
+        top_rels = ET.fromstring(zf.read("_rels/.rels"))
+        root_metadata = {
+            node.get("name"): node.text or ""
+            for node in main_model.findall(f"{{{_NS_CORE}}}metadata")
+        }
 
         # Build items.
         build = main_model.find(f"{{{_NS_CORE}}}build")
@@ -204,18 +209,32 @@ def _parse_merged_3mf(path: Path) -> dict:
             if rel.get("Type")
             == "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
         ]
+        object_relationship_targets = {
+            (rel.get("Target") or "").lstrip("/")
+            for rel in object_relationships
+        }
         metadata_relationship_targets = {
             (rel.get("Target") or "").lstrip("/")
             for rel in relationships
             if rel.get("Type")
             == "http://schemas.bambulab.com/package/2021/settings"
         }
+        top_relationships = top_rels.findall(f"{{{ns_rels}}}Relationship")
+        top_relationship_targets = {
+            (rel.get("Target") or "").lstrip("/")
+            for rel in top_relationships
+        }
+        top_relationship_types = {rel.get("Type") for rel in top_relationships}
 
         content_types = ET.fromstring(zf.read("[Content_Types].xml"))
         ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
         content_type_defaults = {
             node.get("Extension")
             for node in content_types.findall(f"{{{ct_ns}}}Default")
+        }
+        content_type_overrides = {
+            node.get("PartName")
+            for node in content_types.findall(f"{{{ct_ns}}}Override")
         }
         project_settings = json.loads(
             zf.read("Metadata/project_settings.config").decode("utf-8")
@@ -293,6 +312,7 @@ def _parse_merged_3mf(path: Path) -> dict:
 
         return {
             "build_item_count": len(build_items),
+            "root_metadata": root_metadata,
             "object_count": len(objects),
             "config_object_count": len(config_objects),
             "model_instance_count": len(model_instances),
@@ -300,8 +320,12 @@ def _parse_merged_3mf(path: Path) -> dict:
             "assemble_item_count": len(assemble_items),
             "relationship_count": len(relationships),
             "object_relationship_count": len(object_relationships),
+            "object_relationship_targets": object_relationship_targets,
             "metadata_relationship_targets": metadata_relationship_targets,
+            "top_relationship_targets": top_relationship_targets,
+            "top_relationship_types": top_relationship_types,
             "content_type_defaults": content_type_defaults,
+            "content_type_overrides": content_type_overrides,
             "project_settings": project_settings,
             "per_item_data": per_item_data,
             "slots_per_item": slots_per_item,
@@ -365,18 +389,25 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
 
         result = _parse_merged_3mf(Path(out_path))
 
-        # Relationships include N object links plus Bambu metadata links.
+        # 3D relationships include N object links only. Bambu project metadata
+        # remains at canonical Metadata/* paths, matching real multi-object
+        # Bambu exports.
         assert result["object_relationship_count"] == N, (
             f"object_relationship_count={result['object_relationship_count']} != N={N}"
         )
-        assert {
-            "Metadata/model_settings.config",
-            "Metadata/project_settings.config",
-            "Metadata/slice_info.config",
-        }.issubset(result["metadata_relationship_targets"])
-        assert {"config", "json", "model", "png", "rels", "xml"}.issubset(
-            result["content_type_defaults"]
+        assert result["metadata_relationship_targets"] == set()
+        assert result["root_metadata"].get("Application", "").startswith("BambuStudio-")
+        assert result["root_metadata"].get("BambuStudio:3mfVersion") == "1"
+        assert result["object_relationship_targets"] == {
+            f"3D/Objects/object_{idx}.model" for idx in range(1, N + 1)
+        }
+        assert "3D/3dmodel.model" in result["top_relationship_targets"]
+        assert (
+            "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
+            in result["top_relationship_types"]
         )
+        assert result["content_type_defaults"] == {"gcode", "model", "png", "rels"}
+        assert result["content_type_overrides"] == set()
         assert result["project_settings"].get("filament_colour")
         assert result["has_plate"]
 
@@ -390,7 +421,8 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
             assert "Metadata/slice_info.config" in names
             assert "[Content_Types].xml" in names
             assert "_rels/.rels" in names
-            for idx in range(N):
+            assert result["top_relationship_targets"].issubset(names)
+            for idx in range(1, N + 1):
                 assert f"3D/Objects/object_{idx}.model" in names
     finally:
         _cleanup_items(items, out_path)

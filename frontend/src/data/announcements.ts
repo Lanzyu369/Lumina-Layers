@@ -40,6 +40,19 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           },
         ],
       },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "SVG 渐变图不分离底板时，底板层高修改器现在也能正常生效。",
+            en: "The base-plate layer-height modifier now also works for SVG gradient artwork when the base plate is not exported separately.",
+          },
+          {
+            zh: "批量生成合并成一个 3MF 时，底板层高修改器会一起保留。",
+            en: "Batch generation now preserves the base-plate layer-height modifier inside the merged 3MF.",
+          },
+        ],
+      },
     ],
   },
   {

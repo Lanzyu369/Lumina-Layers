@@ -67,6 +67,14 @@ def _make_scene() -> trimesh.Scene:
     return scene
 
 
+def _model_relationship_targets(package: zipfile.ZipFile) -> set[str]:
+    rels = ET.fromstring(package.read("3D/_rels/3dmodel.model.rels"))
+    return {
+        rel.attrib["Target"]
+        for rel in rels.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")
+    }
+
+
 def test_skip_when_toggle_off(tmp_path) -> None:
     output_path = tmp_path / "toggle-off.3mf"
 
@@ -229,7 +237,8 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     layer_height_elem = root.find("./object/range/option[@opt_key='layer_height']")
 
     assert object_elem is not None
-    assert object_elem.attrib["id"] == assembly_id
+    assert object_elem.attrib["id"] == "1"
+    assert object_elem.attrib["id"] != assembly_id
     assert range_elem is not None
     assert range_elem.attrib["min_z"] == "2.3999999999999999"
     assert range_elem.attrib["max_z"] == "3.2000000000000002"
@@ -243,6 +252,43 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     }
     assert "/Metadata/cut_information.xml" in rel_targets
     assert "/Metadata/layer_config_ranges.xml" in rel_targets
+
+
+@pytest.mark.parametrize(
+    ("slicer", "printer_id"),
+    [
+        ("BambuStudio", "bambu-h2d"),
+        ("OrcaSlicer", "bambu-h2d"),
+        ("SnapmakerOrca", "snapmaker-u1"),
+        ("ElegooSlicer", "elegoo-cc2"),
+        ("AnycubicSlicerNext", "anycubic-kobra-s1"),
+    ],
+)
+def test_bambu_family_layer_config_ranges_is_linked(
+    tmp_path,
+    slicer: str,
+    printer_id: str,
+) -> None:
+    output_path = tmp_path / f"{slicer}.3mf"
+
+    export_scene_with_bambu_metadata(
+        scene=_make_scene(),
+        output_path=str(output_path),
+        slot_names=["Slot 1"],
+        preview_colors={"Slot 1": (255, 0, 0)},
+        settings={},
+        color_mode="4-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        enable_base_layer_height_modifier=True,
+        base_height_mm=0.8,
+        color_height_mm=2.4,
+        face_orientation="down",
+    )
+
+    with zipfile.ZipFile(output_path) as package:
+        assert "Metadata/layer_config_ranges.xml" in package.namelist()
+        assert "/Metadata/layer_config_ranges.xml" in _model_relationship_targets(package)
 
 
 @given(
