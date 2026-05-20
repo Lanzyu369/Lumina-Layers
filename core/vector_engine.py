@@ -3462,9 +3462,52 @@ class VectorProcessor:
             if has_fill and not is_gradient:
                 try:
                     rgb = (element.fill.red, element.fill.green, element.fill.blue)
+                    # Skip fully transparent fills (e.g. rgba(0,0,0,0)) — they
+                    # represent "no fill" / transparent background, not a black shape.
+                    # If the element also has a visible stroke, fall through to the
+                    # stroke-expansion path instead of discarding the element entirely.
+                    # 跳过完全透明的填色（如 rgba(0,0,0,0)），它们代表"无填色"
+                    # 而非黑色形状。若元素同时有可见描边，则走描边扩展路径。
+                    fill_alpha = getattr(element.fill, "alpha", None)
+                    if fill_alpha is not None and float(fill_alpha) < 0.01:
+                        rgb = None
+                        has_fill = False  # let stroke-only path handle it
                 except (AttributeError, TypeError, ValueError):
                     rgb = None
             if rgb is None and not is_gradient:
+                # Transparent fill with visible stroke: model as stroke-only geometry
+                # 透明填色 + 可见描边：按仅描边几何处理
+                if has_stroke and parse_expand_stroke_to_fill and stroke_rgb is not None and stroke_width > 0.0:
+                    if isinstance(element, Shape) and not isinstance(element, Path):
+                        try:
+                            element = Path(element)
+                        except Exception:
+                            continue
+                    try:
+                        linecap = str(getattr(element, "stroke_linecap", None) or "round").strip().lower()
+                    except Exception:
+                        linecap = "round"
+                    try:
+                        linejoin = str(getattr(element, "stroke_linejoin", None) or "round").strip().lower()
+                    except Exception:
+                        linejoin = "round"
+                    cap_style = "flat" if linecap == "butt" else ("square" if linecap == "square" else "round")
+                    join_style = "mitre" if linejoin == "miter" else linejoin
+                    stroke_geom = _sample_path_to_stroke_geometry(
+                        element,
+                        stroke_width,
+                        cap_style_name=cap_style,
+                        join_style_name=join_style,
+                    )
+                    if stroke_geom is not None and not stroke_geom.is_empty:
+                        raw_shapes.append(
+                            {
+                                "poly": stroke_geom,
+                                "color": stroke_rgb,
+                                "source_kind": "stroke_only",
+                                "stroke_width_svg": float(stroke_width),
+                            }
+                        )
                 fill_val = getattr(element.fill, "value", None) if element.fill else None
                 eid = getattr(element, "id", None) or f"element#{skipped_gradient_count}"
                 _log.debug(f"Skipping '{eid}' — unresolvable fill: {fill_val}")

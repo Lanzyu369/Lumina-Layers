@@ -976,13 +976,12 @@ def get_layer_images(
         if 0 <= mat_id <= max_mat_id:
             palette_arr[mat_id] = np.asarray(rgba[:3], dtype=np.uint8)
 
-    non_solid_color = np.array([240, 240, 240], dtype=np.uint8)
     non_solid_mask = ~mask_solid
 
     # PNG encode tuned for near-flat layer previews. Default PIL compress_level
     # is 6; dropping to 1 is ~3-5x faster on these images with a negligible
-    # size increase (layers are 2 colours + grey background so entropy is tiny
-    # regardless of level).
+    # size increase (layers are 2 colours + transparent background so entropy
+    # is tiny regardless of level).
     # 层图几乎是纯色，编码级别从 6 降到 1，速度提升 3-5×，体积几乎无差。
     def _encode_fast(arr: np.ndarray) -> bytes:
         import io as _io
@@ -995,11 +994,21 @@ def get_layer_images(
         layer = material_matrix[:, :, layer_idx]
         # np.clip + fancy indexing: out-of-range ids fall back to slot 0 (body grey).
         layer_clipped = np.clip(layer, 0, max_mat_id)
-        layer_img = palette_arr[layer_clipped]
-        # Ensure writable contiguous buffer for the non-solid overwrite below
-        # (advanced indexing already returns a copy, but be explicit).
-        # fancy indexing 已返回 copy；此处显式保证写入连通性。
-        layer_img[non_solid_mask] = non_solid_color
+        layer_rgb = palette_arr[layer_clipped]
+        # Build RGBA: solid shapes get alpha=255, non-solid (background) gets alpha=0.
+        # This lets the frontend render a checkerboard under transparent areas.
+        # RGB for non-solid is kept at (240, 240, 240) for backward compat with
+        # tests that convert("RGB") and assert on the non-solid marker value.
+        # 构建 RGBA：有形状区域 alpha=255，非形状区域 alpha=0（真正透明）。
+        # 非形状区域 RGB 保持 (240,240,240) 兼容直接取 RGB 的下游。
+        layer_img = np.zeros((h, w, 4), dtype=np.uint8)
+        layer_img[..., :3] = layer_rgb
+        layer_img[..., 3] = 255
+        # Non-solid pixels: keep a light-grey RGB (backward compat) but set alpha=0
+        layer_img[non_solid_mask, 0] = 240
+        layer_img[non_solid_mask, 1] = 240
+        layer_img[non_solid_mask, 2] = 240
+        layer_img[non_solid_mask, 3] = 0
         return layer_img
 
     # Parallel PNG encoding: PIL/libpng releases the GIL during compression so
