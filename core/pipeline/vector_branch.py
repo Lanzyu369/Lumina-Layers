@@ -579,6 +579,18 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     """
     from core.vector_engine import VectorProcessor
 
+    has_hue_settings = "hue_weight" in ctx or "chroma_gate" in ctx
+    try:
+        hue_weight = float(ctx.get("hue_weight") or 0.0)
+    except (TypeError, ValueError):
+        hue_weight = 0.0
+    try:
+        chroma_gate = float(
+            ctx.get("chroma_gate") if ctx.get("chroma_gate") is not None else 15.0
+        )
+    except (TypeError, ValueError):
+        chroma_gate = 15.0
+
     material_source = str(ctx.get("material_source") or "lut")
     if material_source == "material_archive":
         from core.material_cache import DEFAULT_GRID_RESOLUTION
@@ -596,7 +608,6 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         slot_names = list(ctx.get("slot_names") or [])
         preview_colors = dict(ctx.get("preview_colors") or {})
         color_conf = dict(ctx.get("color_conf") or {})
-        hue_weight = float(ctx.get("hue_weight") or 0.0)
         grid_resolution = int(
             ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION
         )
@@ -634,7 +645,13 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         return processor
 
     actual_lut_path = ctx["actual_lut_path"]
-    return VectorProcessor(actual_lut_path, fallback_color_mode)
+    processor_kwargs = {}
+    if has_hue_settings:
+        processor_kwargs = {
+            "hue_weight": hue_weight,
+            "chroma_gate": chroma_gate,
+        }
+    return VectorProcessor(actual_lut_path, fallback_color_mode, **processor_kwargs)
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:

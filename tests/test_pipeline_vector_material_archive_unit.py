@@ -106,6 +106,32 @@ class TestBuildVectorProcessorRouting:
         init_mock.assert_called_once_with("/tmp/test.npy", "4-Color (RYBW)")
         factory_mock.assert_not_called()
 
+    def test_lut_source_passes_hue_settings_to_constructor(self):
+        from core.pipeline.vector_branch import _build_vector_processor
+
+        ctx = {
+            "material_source": "lut",
+            "actual_lut_path": "/tmp/test.npy",
+            "hue_weight": "0.45",
+            "chroma_gate": "12.5",
+        }
+
+        with patch(
+            "core.vector_engine.VectorProcessor.__init__",
+            return_value=None,
+        ) as init_mock, patch(
+            "core.vector_engine.VectorProcessor.from_img_processor"
+        ) as factory_mock:
+            _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
+
+        init_mock.assert_called_once_with(
+            "/tmp/test.npy",
+            "4-Color (RYBW)",
+            hue_weight=0.45,
+            chroma_gate=12.5,
+        )
+        factory_mock.assert_not_called()
+
     def test_material_archive_source_uses_matcher(self):
         from core.pipeline.vector_branch import _build_vector_processor
         from core.vector_matchers import MaterialVectorMatcher
