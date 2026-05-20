@@ -116,6 +116,7 @@ class MaterialVectorMatcher:
         solver_cache,
         actual_grid_resolution: int,
         hue_weight: float = 0.0,
+        neighbor_coherence: float = 0.5,
     ):
         """Use :meth:`from_materials` for normal construction.
 
@@ -149,6 +150,7 @@ class MaterialVectorMatcher:
         self._solver_cache = solver_cache
         self.actual_grid_resolution = int(actual_grid_resolution)
         self.hue_weight = float(hue_weight)
+        self.neighbor_coherence = float(neighbor_coherence)
 
         # Duck-typed surface consumed by VectorProcessor
         self.lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
@@ -180,6 +182,7 @@ class MaterialVectorMatcher:
         color_conf: dict,
         grid_resolution: int,
         hue_weight: float = 0.0,
+        neighbor_coherence: float = 0.5,
     ) -> "MaterialVectorMatcher":
         """Resolve / build the solver cache, then return a ready matcher.
 
@@ -247,6 +250,7 @@ class MaterialVectorMatcher:
             solver_cache=cache,
             actual_grid_resolution=int(actual_grid),
             hue_weight=hue_weight,
+            neighbor_coherence=neighbor_coherence,
         )
 
     # ------------------------------------------------------------------
@@ -350,7 +354,9 @@ class MaterialVectorMatcher:
                 },
             )
             matched_rgb_unique, recipes_b2t, delta_e = self._solver_cache.lookup(
-                new_arr, self.materials, hue_weight=self.hue_weight,
+                new_arr, self.materials,
+                hue_weight=self.hue_weight,
+                neighbor_coherence=self.neighbor_coherence,
             )
             recipes_t2b = self._normalise_recipes(recipes_b2t)
             for i in range(new_arr.shape[0]):

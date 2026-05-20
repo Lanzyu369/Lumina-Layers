@@ -320,7 +320,23 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             "built_at": cache.metadata.get("built_at"),
             "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
             "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
+            "cache_mode": cache.mode,
         }
+        _log.info(
+            "Material solver: using %s cache (M=%d, N=%d, recipes=%d)",
+            cache.mode.upper(),
+            len(materials),
+            cache.layer_count,
+            cache.valid_cell_count,
+            extra={
+                "event": "material_solver_cache_used",
+                "cache_mode": cache.mode,
+                "material_count": len(materials),
+                "layer_count": cache.layer_count,
+                "valid_cell_count": cache.valid_cell_count,
+                "unique_color_count": int(unique_colors.shape[0]),
+            },
+        )
     else:
         # No persisted cache found — build a temporary low-res (64³) cache
         # in-memory and use it for lookup.  This avoids the MITM per-pixel

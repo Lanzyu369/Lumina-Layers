@@ -54,6 +54,7 @@ from core.material_cache import (
     fingerprint_palette,
     list_cached_entries,
     load_material_solver_cache,
+    load_material_solver_cache_with_fallback,
     save_material_solver_cache,
 )
 from core.material_color_solver import (
@@ -1131,15 +1132,28 @@ async def material_solver_cache_status(
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
     palette_hash = fingerprint_palette(materials)
-    npz_path = cache_file_path(
-        materials, layer_count, layer_height_mm, substrate,
-        grid_resolution=grid_resolution,
-    )
-    cache = load_material_solver_cache(
+    # Use the fallback loader so exact-mode caches (grid=0) and any-grid
+    # bucketed caches are discoverable regardless of the caller's requested
+    # grid_resolution. Without this, an exact-mode cache (saved as -g000)
+    # would be invisible when the UI requests grid_resolution=256.
+    # 使用 fallback 加载器，确保精确模式缓存（-g000）和其它分辨率的分桶
+    # 缓存都能被发现，不受前端请求的 grid_resolution 限制。
+    cache, actual_grid = load_material_solver_cache_with_fallback(
         materials, layer_count, layer_height_mm, substrate,
         grid_resolution=grid_resolution,
     )
     cached_flag = cache is not None
+    # Resolve the actual npz_path for file size reporting.
+    if cache is not None:
+        npz_path = cache_file_path(
+            materials, layer_count, layer_height_mm, substrate,
+            grid_resolution=actual_grid if actual_grid is not None else grid_resolution,
+        )
+    else:
+        npz_path = cache_file_path(
+            materials, layer_count, layer_height_mm, substrate,
+            grid_resolution=grid_resolution,
+        )
     log.info(
         "Material solver cache status checked",
         extra={
@@ -1151,6 +1165,7 @@ async def material_solver_cache_status(
             "layer_height_mm": layer_height_mm,
             "substrate": substrate,
             "grid_resolution": grid_resolution,
+            "actual_grid_resolution": actual_grid,
         },
     )
     if cache is None:

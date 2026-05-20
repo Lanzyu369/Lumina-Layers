@@ -98,6 +98,10 @@ def _patch_solver_cache_common(
         "api.routers.single_stage.load_material_solver_cache",
         lambda *args, **kwargs: cache,
     )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_solver_cache_with_fallback",
+        lambda *args, **kwargs: (cache, 0 if cache is not None else None),
+    )
     return npz_path
 
 
