@@ -4,9 +4,12 @@ Validates:
 - LUT name resolution failure returns 404 (Requirement 9)
 - Partial failure continues processing remaining images (Requirement 9.3)
 - All images succeed returns correct BatchResponse (Requirement 9.1, 9.2)
-- Empty successful results still returns a valid ZIP (Requirement 9.3)
+- Empty successful results returns null download/preview paths (Requirement 9.3)
 - asyncio.TimeoutError from pool.submit returns timeout error in results (Requirement 2.3)
 - General Exception from pool.submit returns HTTP 500 error in results (Requirement 1.4)
+- Batch merge flow: all-success-fits, all-success-overflows, partial-failure,
+  all-failure, writer-fail-5xx (Requirements 1.1, 1.4, 4.1-4.3, 4.6-4.7,
+  6.1-6.4, 9.4, 10.4; Properties P11, P12)
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import io
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
@@ -27,6 +31,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from utils.merged_bambu_3mf_writer import MergedWriteError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -143,7 +148,6 @@ class TestBatchPartialFailure:
     """Verify that if some images fail, remaining images still process."""
 
     def test_batch_partial_failure_continues(self) -> None:
-        fake_3mf = _make_fake_3mf()
         call_count = 0
 
         async def _mock_submit(fn, *args, **kwargs):
@@ -151,7 +155,7 @@ class TestBatchPartialFailure:
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("Simulated failure")
-            return {"threemf_path": fake_3mf, "status_msg": "OK"}
+            return _make_worker_result("ok.png", 30.0, 20.0)
 
         _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
 
@@ -163,6 +167,10 @@ class TestBatchPartialFailure:
             patch(
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
             ),
         ):
             response = client.post(
@@ -190,6 +198,15 @@ class TestBatchPartialFailure:
 
         # download_url present
         assert body["download_url"].startswith("/api/files/")
+        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["preview_3d_url"].startswith("/api/files/")
+        assert len(body["preview_items"]) == 1
+        assert body["preview_items"][0]["filename"] == "ok.png"
+        assert body["preview_items"][0]["url"] == body["preview_3d_url"]
+        assert body["preview_items"][0]["tx_mm"] == 160.0
+        assert body["preview_items"][0]["ty_mm"] == 150.0
+        assert body["preview_items"][0]["width_mm"] == 30.0
+        assert body["preview_items"][0]["depth_mm"] == 20.0
 
 
 # =========================================================================
@@ -201,11 +218,17 @@ class TestBatchAllSuccess:
     """Verify all images succeed returns correct BatchResponse."""
 
     def test_batch_all_success(self) -> None:
-        fake_3mf = _make_fake_3mf()
-
-        _mock_pool.submit = AsyncMock(
-            return_value={"threemf_path": fake_3mf, "status_msg": "OK"},
+        results_iter = iter(
+            [
+                _make_worker_result("img1.png", 30.0, 20.0),
+                _make_worker_result("img2.png", 30.0, 20.0),
+            ]
         )
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
 
         with (
             patch(
@@ -215,6 +238,10 @@ class TestBatchAllSuccess:
             patch(
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
             ),
         ):
             response = client.post(
@@ -233,6 +260,16 @@ class TestBatchAllSuccess:
         assert len(body["results"]) == 2
         assert all(r["status"] == "success" for r in body["results"])
         assert body["download_url"].startswith("/api/files/")
+        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["preview_3d_url"].startswith("/api/files/")
+        assert [item["filename"] for item in body["preview_items"]] == [
+            "img1.png",
+            "img2.png",
+        ]
+        assert body["preview_items"][0]["url"] == body["preview_3d_url"]
+        assert body["preview_items"][0]["tx_mm"] == 144.0
+        assert body["preview_items"][1]["tx_mm"] == 176.0
+        assert all(item["ty_mm"] == 150.0 for item in body["preview_items"])
 
 
 # =========================================================================
@@ -241,7 +278,7 @@ class TestBatchAllSuccess:
 
 
 class TestBatchAllFailed:
-    """Verify all images failing returns status 'failed' with valid ZIP."""
+    """Verify all images failing returns status 'failed' with null artifacts."""
 
     def test_batch_all_fail(self) -> None:
         _mock_pool.submit = AsyncMock(
@@ -269,7 +306,10 @@ class TestBatchAllFailed:
         assert body["status"] == "failed"
         assert "0/1" in body["message"]
         assert body["results"][0]["status"] == "failed"
-        assert body["download_url"].startswith("/api/files/")
+        assert body["download_url"] is None
+        assert body["threemf_disk_path"] is None
+        assert body["preview_3d_url"] is None
+        assert body["preview_items"] == []
 
 
 # =========================================================================
@@ -317,10 +357,8 @@ class TestBatchWorkerPoolSubmit:
     """Verify pool.submit is called with worker_batch_convert_item and correct args."""
 
     def test_batch_submits_to_pool(self) -> None:
-        fake_3mf = _make_fake_3mf()
-
         _mock_pool.submit = AsyncMock(
-            return_value={"threemf_path": fake_3mf, "status_msg": "OK"},
+            return_value=_make_worker_result("test.png", 30.0, 20.0),
         )
 
         with (
@@ -332,6 +370,10 @@ class TestBatchWorkerPoolSubmit:
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new_callable=AsyncMock,
                 return_value="/tmp/uploaded.png",
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
             ),
         ):
             response = client.post(
@@ -356,6 +398,10 @@ class TestBatchWorkerPoolSubmit:
                         {"#ff0000": 1.7, "#ffffff": 1.3}
                     ),
                     "heightmap_max_height": "4.2",
+                    "printer_id": "bambu-p1s",
+                    "slicer": "OrcaSlicer",
+                    "nozzle_size": "0.2",
+                    "enable_base_layer_height_modifier": "false",
                 },
             )
 
@@ -382,12 +428,223 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][9] == 0.08
         assert call_args[0][10] == 64
         assert call_args[0][11] is False
-        assert call_args[0][12] == 0.5
-        assert call_args[0][13] == 12
-        assert call_args[0][14] is True
-        assert call_args[0][15] == "color"
-        assert call_args[0][16] == {"#ff0000": 1.7, "#ffffff": 1.3}
-        assert call_args[0][17] == 4.2
+        # ``artifact_prefix`` is forwarded as a scalar so per-image
+        # intermediate artifacts share a stable prefix (task 7/14);
+        # the value is f"batch-{batch_run_id}-" where batch_run_id is a uuid4 hex.
+        artifact_prefix = call_args[0][12]
+        assert artifact_prefix.startswith("batch-")
+        assert artifact_prefix.endswith("-")
+        assert len(artifact_prefix) > len("batch--")  # has uuid content
+        assert call_args[0][13] == 0.5
+        assert call_args[0][14] == 12
+        assert call_args[0][15] is True
+        assert call_args[0][16] == "color"
+        assert call_args[0][17] == {"#ff0000": 1.7, "#ffffff": 1.3}
+        assert call_args[0][18] == 4.2
+        assert call_args[0][20] == "bambu-p1s"
+        assert call_args[0][21] == "OrcaSlicer"
+        assert call_args[0][22] == "0.2"
+        assert call_args[0][23] is False
+
+    def test_batch_submits_material_archive_source_to_worker(self) -> None:
+        """Batch endpoint forwards material-archive source params to worker."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("material.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new_callable=AsyncMock,
+                return_value="/tmp/uploaded.png",
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("material.png"))],
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(
+                        ["brand/red", "brand/white"]
+                    ),
+                    "material_layer_count": "7",
+                    "material_layer_height_mm": "0.06",
+                    "material_grid_resolution": "33",
+                    "material_backing_material_index": "1",
+                },
+            )
+
+        assert response.status_code == 200
+        call_args = _mock_pool.submit.call_args
+        assert call_args[0][2] == "__material_archive__"
+        assert call_args[0][8] is None
+        assert call_args[0][9] is None
+        assert call_args[0][28] == "material_archive"
+        assert call_args[0][29] == ["brand/red", "brand/white"]
+        assert call_args[0][30] == 7
+        assert call_args[0][31] == 0.06
+        assert call_args[0][32] == 33
+        assert call_args[0][33] == 1
+
+    def test_batch_submits_native_bundle_source_to_worker(self) -> None:
+        """Batch endpoint resolves reverse-LUT native bundle params."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("native.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.resolve_source_selection",
+                return_value=("/tmp/native-bundle.msgpack", "Native Bundle"),
+            ) as resolve_mock,
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new_callable=AsyncMock,
+                return_value="/tmp/uploaded.png",
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("native.png"))],
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "Bambu",
+                    "db_names": json.dumps(["red.cdb", "white.cdb"]),
+                    "color_layers": "6",
+                    "layer_height_mm": "0.08",
+                    "model_enable": "true",
+                    "model_only": "true",
+                    "model_threshold": "0.3",
+                    "model_margin": "0.1",
+                    "use_lut_constrained": "true",
+                    "auto_dynamic_range": "true",
+                },
+            )
+
+        assert response.status_code == 200
+        resolve_mock.assert_called_once_with(
+            source_kind="native_bundle",
+            lut_name=None,
+            material_type="PLA",
+            vendor="Bambu",
+            db_names=["red.cdb", "white.cdb"],
+        )
+        call_args = _mock_pool.submit.call_args
+        assert call_args[0][2] == "/tmp/native-bundle.msgpack"
+        assert call_args[0][8] == 6
+        assert call_args[0][9] == 0.08
+        assert call_args[0][24] is True
+        assert call_args[0][25] is True
+        assert call_args[0][26] == 0.3
+        assert call_args[0][27] == 0.1
+        assert call_args[0][28] == "lut"
+        assert call_args[0][34] is True
+        assert call_args[0][35] is True
+
+    def test_batch_material_archive_source_reaches_worker(self) -> None:
+        """Material-archive batch source forwards selected materials."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("test.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new_callable=AsyncMock,
+                return_value="/tmp/uploaded.png",
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.png"))],
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["brand/red", "brand/white"]),
+                    "material_layer_count": "7",
+                    "material_layer_height_mm": "0.06",
+                    "material_grid_resolution": "128",
+                    "material_backing_material_index": "1",
+                    "lut_name": "__material_archive__",
+                },
+            )
+
+        assert response.status_code == 200
+        call_args = _mock_pool.submit.call_args
+        assert call_args[0][2] == "__material_archive__"
+        assert call_args[0][28] == "material_archive"
+        assert call_args[0][29] == ["brand/red", "brand/white"]
+        assert call_args[0][30] == 7
+        assert call_args[0][31] == 0.06
+        assert call_args[0][32] == 128
+        assert call_args[0][33] == 1
+
+    def test_batch_native_source_reaches_worker(self) -> None:
+        """Native reverse-LUT batch source resolves and forwards model flags."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("test.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.resolve_source_selection",
+                return_value=("/tmp/native-bundle.msgpack", "Native Bundle"),
+            ) as resolve_mock,
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new_callable=AsyncMock,
+                return_value="/tmp/uploaded.png",
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.png"))],
+                data={
+                    "source_kind": "native_bundle",
+                    "material_type": "PLA",
+                    "vendor": "Bambu",
+                    "db_names": json.dumps(["red.cdb", "white.cdb"]),
+                    "model_enable": "true",
+                    "model_only": "true",
+                    "model_threshold": "0.3",
+                    "model_margin": "0.1",
+                    "use_lut_constrained": "true",
+                    "auto_dynamic_range": "true",
+                },
+            )
+
+        assert response.status_code == 200
+        resolve_mock.assert_called_once_with(
+            source_kind="native_bundle",
+            lut_name=None,
+            material_type="PLA",
+            vendor="Bambu",
+            db_names=["red.cdb", "white.cdb"],
+        )
+        call_args = _mock_pool.submit.call_args
+        assert call_args[0][2] == "/tmp/native-bundle.msgpack"
+        assert call_args[0][24] is True
+        assert call_args[0][25] is True
+        assert call_args[0][26] == 0.3
+        assert call_args[0][27] == 0.1
+        assert call_args[0][34] is True
+        assert call_args[0][35] is True
 
     def test_batch_relief_requires_color_height_map(self) -> None:
         _mock_pool.submit = AsyncMock(
@@ -419,7 +676,6 @@ class TestBatchCleanup:
     def test_batch_deletes_uploaded_png_temps_on_success_and_failure(self) -> None:
         temp_success = _make_fake_3mf(".png")
         temp_failure = _make_fake_3mf(".png")
-        fake_3mf = _make_fake_3mf()
         temp_paths = iter([temp_success, temp_failure])
         call_count = 0
 
@@ -427,7 +683,7 @@ class TestBatchCleanup:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return {"threemf_path": fake_3mf, "status_msg": "OK"}
+                return _make_worker_result("ok.png", 30.0, 20.0)
             raise RuntimeError("boom")
 
         _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
@@ -440,6 +696,10 @@ class TestBatchCleanup:
             patch(
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new=AsyncMock(side_effect=lambda _upload: next(temp_paths)),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
             ),
         ):
             response = client.post(
@@ -454,20 +714,26 @@ class TestBatchCleanup:
         assert response.status_code == 200
         assert not os.path.exists(temp_success)
         assert not os.path.exists(temp_failure)
-        assert not os.path.exists(fake_3mf)
 
-    def test_batch_deletes_all_successful_3mf_files_after_zip_packaging(self) -> None:
+    def test_batch_deletes_all_successful_3mf_files_after_merge(self) -> None:
         temp_one = _make_fake_3mf(".png")
         temp_two = _make_fake_3mf(".png")
-        fake_3mf_one = _make_fake_3mf()
-        fake_3mf_two = _make_fake_3mf()
         temp_paths = iter([temp_one, temp_two])
-        output_paths = iter([fake_3mf_one, fake_3mf_two])
+
+        worker_results = [
+            _make_worker_result("img1.png", 30.0, 20.0),
+            _make_worker_result("img2.png", 30.0, 20.0),
+        ]
+        results_iter = iter(worker_results)
 
         async def _mock_submit(fn, *args, **kwargs):
-            return {"threemf_path": next(output_paths), "status_msg": "OK"}
+            return next(results_iter)
 
         _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        # Collect intermediate file paths to verify cleanup
+        intermediate_3mf_paths = [wr["threemf_path"] for wr in worker_results]
+        intermediate_glb_paths = [wr["preview_glb_path"] for wr in worker_results]
 
         with (
             patch(
@@ -477,6 +743,10 @@ class TestBatchCleanup:
             patch(
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new=AsyncMock(side_effect=lambda _upload: next(temp_paths)),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
             ),
         ):
             response = client.post(
@@ -489,5 +759,565 @@ class TestBatchCleanup:
             )
 
         assert response.status_code == 200
-        assert not os.path.exists(fake_3mf_one)
-        assert not os.path.exists(fake_3mf_two)
+        # Per-image intermediate 3MF and GLB files should be cleaned up
+        for p in intermediate_3mf_paths + intermediate_glb_paths:
+            assert not os.path.exists(p), f"Intermediate file not cleaned: {p}"
+
+
+# =========================================================================
+# 7. Batch Merge Flow — 5 example tests (R10 §4, P11, P12)
+# =========================================================================
+
+
+def _make_sidecar_json(
+    source_filename: str,
+    width_mm: float = 30.0,
+    depth_mm: float = 20.0,
+    num_slots: int = 2,
+) -> str:
+    """Create a temporary sidecar JSON file and return its path."""
+    slots = [
+        {
+            "slot_id": i,
+            "slot_name": f"Slot {i}",
+            "preview_color": f"#{i:02x}{i:02x}{i:02x}",
+            "material_id": f"MAT{i:02d}",
+        }
+        for i in range(num_slots)
+    ]
+    sidecar = {
+        "schema_version": 1,
+        "source_filename": source_filename,
+        "xy_bbox_mm": {"width_mm": width_mm, "depth_mm": depth_mm},
+        "slots": slots,
+    }
+    fd, path = tempfile.mkstemp(suffix=".json", prefix="sidecar-")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(sidecar, f)
+    return path
+
+
+def _make_worker_result(
+    filename: str,
+    width_mm: float = 30.0,
+    depth_mm: float = 20.0,
+) -> dict:
+    """Create a full 5-key worker result with real temp files."""
+    threemf_path = _make_fake_3mf(".3mf")
+    glb_fd, glb_path = tempfile.mkstemp(suffix=".glb")
+    os.write(glb_fd, b"fake-glb-content")
+    os.close(glb_fd)
+    sidecar_path = _make_sidecar_json(filename, width_mm, depth_mm)
+    return {
+        "threemf_path": threemf_path,
+        "preview_glb_path": glb_path,
+        "metadata_sidecar_path": sidecar_path,
+        "xy_bbox_mm": (width_mm, depth_mm),
+        "status_msg": "OK",
+    }
+
+
+def _noop_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+    """No-op replacement for MergedBambu3MFWriter.write that creates an empty file."""
+    Path(output_path).write_bytes(b"fake-merged-3mf")
+
+
+class TestBatchMergeFlow:
+    """Batch merge flow integration tests (R10 §4).
+
+    Validates: Requirements 1.1, 1.4, 4.1, 4.2, 4.3, 4.6, 4.7, 6.1, 6.2, 6.3, 6.4, 9.4, 10.4
+    Properties: P11, P12
+    """
+
+    # ------------------------------------------------------------------
+    # 1. all-success-fits: 3 images succeed, layout fits within plate
+    # ------------------------------------------------------------------
+    def test_selected_printer_bed_drives_batch_layout(self) -> None:
+        """Batch layout uses the selected printer bed dimensions."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("img.png", 30.0, 20.0),
+        )
+        writer_plate_dims: list[tuple[float, float]] = []
+
+        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+            writer_plate_dims.append((plate_width_mm, plate_depth_mm))
+            Path(output_path).write_bytes(b"fake-merged-3mf")
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _tracking_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("img.png"))],
+                data={"lut_name": "test_lut", "printer_id": "snapmaker-u1"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert writer_plate_dims == [(270.0, 270.0)]
+        assert body["preview_items"][0]["tx_mm"] == 120.0
+        assert body["preview_items"][0]["ty_mm"] == 125.0
+
+    def test_all_success_fits(self) -> None:
+        """3 images all succeed + layout fits within plate.
+
+        Asserts: download_url non-null, preview_3d_url non-null,
+        warnings has no plate-overflow, all results are success.
+        """
+        results_iter = iter(
+            [
+                _make_worker_result("img1.png", 30.0, 20.0),
+                _make_worker_result("img2.png", 30.0, 20.0),
+                _make_worker_result("img3.png", 30.0, 20.0),
+            ]
+        )
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("img1.png")),
+                    ("images", _make_test_image_buf("img2.png")),
+                    ("images", _make_test_image_buf("img3.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["download_url"] is not None
+        assert body["download_url"].startswith("/api/files/")
+        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["preview_3d_url"] is not None
+        assert body["preview_3d_url"].startswith("/api/files/")
+        assert body["preview_items"] == [
+            {
+                "url": body["preview_3d_url"],
+                "filename": "img1.png",
+                "tx_mm": 128.0,
+                "ty_mm": 150.0,
+                "width_mm": 30.0,
+                "depth_mm": 20.0,
+            },
+            {
+                "url": body["preview_items"][1]["url"],
+                "filename": "img2.png",
+                "tx_mm": 160.0,
+                "ty_mm": 150.0,
+                "width_mm": 30.0,
+                "depth_mm": 20.0,
+            },
+            {
+                "url": body["preview_items"][2]["url"],
+                "filename": "img3.png",
+                "tx_mm": 192.0,
+                "ty_mm": 150.0,
+                "width_mm": 30.0,
+                "depth_mm": 20.0,
+            },
+        ]
+        # No plate-overflow warning
+        overflow_warnings = [
+            w for w in body["warnings"] if w["code"] == "plate-overflow"
+        ]
+        assert len(overflow_warnings) == 0
+        # All results are success
+        assert len(body["results"]) == 3
+        assert all(r["status"] == "success" for r in body["results"])
+
+    # ------------------------------------------------------------------
+    # 2. all-success-overflows: layout exceeds plate → plate-overflow warning
+    # ------------------------------------------------------------------
+    def test_all_success_overflows(self) -> None:
+        """All images succeed but layout exceeds plate.
+
+        Asserts: download_url non-null, preview_3d_url non-null,
+        warnings contains exactly 1 plate-overflow entry (P11).
+        """
+        results_iter = iter(
+            [
+                _make_worker_result("big1.png", 200.0, 200.0),
+                _make_worker_result("big2.png", 200.0, 200.0),
+                _make_worker_result("big3.png", 200.0, 200.0),
+            ]
+        )
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        # Mock layout_shelf_by_row to return exceeds_plate=True
+        from core.batch_layout.layout_helper import LayoutResult, Placement
+
+        fake_layout = LayoutResult(
+            placements=(
+                Placement(tx_mm=0.0, ty_mm=0.0),
+                Placement(tx_mm=203.0, ty_mm=0.0),
+                Placement(tx_mm=0.0, ty_mm=203.0),
+            ),
+            exceeds_plate=True,
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.generate.layout_shelf_by_row",
+                return_value=fake_layout,
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("big1.png")),
+                    ("images", _make_test_image_buf("big2.png")),
+                    ("images", _make_test_image_buf("big3.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["download_url"] is not None
+        assert body["download_url"].startswith("/api/files/")
+        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["preview_3d_url"] is not None
+        assert body["preview_3d_url"].startswith("/api/files/")
+        assert len(body["preview_items"]) == 1
+        assert [item["filename"] for item in body["preview_items"]] == [
+            "big1.png",
+        ]
+        # Exactly 1 plate-overflow warning (P11)
+        overflow_warnings = [
+            w for w in body["warnings"] if w["code"] == "plate-overflow"
+        ]
+        assert len(overflow_warnings) == 1
+        assert overflow_warnings[0]["code"] == "plate-overflow"
+        assert isinstance(overflow_warnings[0]["message"], str)
+
+    # ------------------------------------------------------------------
+    # 2b. large-success-preview-limited: full 3MF keeps all, preview fits current bed
+    # ------------------------------------------------------------------
+    def test_large_success_preview_limited(self) -> None:
+        """Large batches keep all results but preview only the prefix that fits."""
+        item_count = 44
+        results_iter = iter(
+            [
+                _make_worker_result(f"img{i}.png", 30.0, 80.0)
+                for i in range(item_count)
+            ]
+        )
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        written_item_counts: list[int] = []
+
+        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+            written_item_counts.append(len(items))
+            Path(output_path).write_bytes(b"fake-merged-3mf")
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _tracking_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf(f"img{i}.png"))
+                    for i in range(item_count)
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert len(body["results"]) == item_count
+        assert all(r["status"] == "success" for r in body["results"])
+        assert written_item_counts == [item_count]
+        assert len(body["preview_items"]) == 33
+        assert body["preview_items"][0]["tx_mm"] == 0.0
+        assert body["preview_items"][0]["ty_mm"] == 38.0
+        assert body["preview_items"][10]["tx_mm"] == 320.0
+        assert body["preview_items"][10]["ty_mm"] == 38.0
+        assert body["preview_items"][11]["tx_mm"] == 0.0
+        assert body["preview_items"][11]["ty_mm"] == 120.0
+        assert body["preview_items"][32]["tx_mm"] == 320.0
+        assert body["preview_items"][32]["ty_mm"] == 202.0
+        assert all(
+            0 <= item["tx_mm"]
+            and 0 <= item["ty_mm"]
+            and item["tx_mm"] + item["width_mm"] <= 350
+            and item["ty_mm"] + item["depth_mm"] <= 320
+            for item in body["preview_items"]
+        )
+        preview_limit_warnings = [
+            w for w in body["warnings"] if w["code"] == "preview-limited"
+        ]
+        assert len(preview_limit_warnings) == 1
+
+    # ------------------------------------------------------------------
+    # 3. partial-failure: 3 succeed + 1 fails
+    # ------------------------------------------------------------------
+    def test_partial_failure(self) -> None:
+        """3 images succeed, 1 fails.
+
+        Asserts: failed item in results, merged 3MF/GLB only contain 3 items.
+        """
+        call_count = 0
+
+        async def _mock_submit(fn, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("Simulated conversion failure")
+            filenames = ["ok1.png", "fail.png", "ok2.png", "ok3.png"]
+            return _make_worker_result(filenames[call_count - 1], 30.0, 20.0)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        write_call_items_count = []
+
+        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+            write_call_items_count.append(len(items))
+            Path(output_path).write_bytes(b"fake-merged-3mf")
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _tracking_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("ok1.png")),
+                    ("images", _make_test_image_buf("fail.png")),
+                    ("images", _make_test_image_buf("ok2.png")),
+                    ("images", _make_test_image_buf("ok3.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert len(body["results"]) == 4
+
+        # Failed item is in results
+        failed_items = [r for r in body["results"] if r["status"] == "failed"]
+        assert len(failed_items) == 1
+        assert failed_items[0]["filename"] == "fail.png"
+        assert failed_items[0]["error"] is not None
+
+        # Successful items
+        success_items = [r for r in body["results"] if r["status"] == "success"]
+        assert len(success_items) == 3
+
+        # MergedBambu3MFWriter.write was called with N=3 items
+        assert len(write_call_items_count) == 1
+        assert write_call_items_count[0] == 3
+
+        # download_url and preview_3d_url are present
+        assert body["download_url"] is not None
+        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["preview_3d_url"] is not None
+        assert len(body["preview_items"]) == 3
+        assert [item["filename"] for item in body["preview_items"]] == [
+            "ok1.png",
+            "ok2.png",
+            "ok3.png",
+        ]
+
+    # ------------------------------------------------------------------
+    # 4. all-failure: all images fail
+    # ------------------------------------------------------------------
+    def test_all_failure(self) -> None:
+        """All images fail.
+
+        Asserts: download_url == None, preview_3d_url == None,
+        warnings == [], all results are failed.
+        """
+        _mock_pool.submit = AsyncMock(
+            side_effect=RuntimeError("All items fail"),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("bad1.png")),
+                    ("images", _make_test_image_buf("bad2.png")),
+                    ("images", _make_test_image_buf("bad3.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failed"
+        assert body["download_url"] is None
+        assert body["threemf_disk_path"] is None
+        assert body["preview_3d_url"] is None
+        assert body["preview_items"] == []
+        assert body["warnings"] == []
+        assert len(body["results"]) == 3
+        assert all(r["status"] == "failed" for r in body["results"])
+
+    # ------------------------------------------------------------------
+    # 5. writer-fail-5xx: MergedBambu3MFWriter.write raises MergedWriteError
+    # ------------------------------------------------------------------
+    def test_writer_fail_5xx(self) -> None:
+        """MergedBambu3MFWriter.write raises MergedWriteError.
+
+        Asserts: HTTP 500, log contains batch_merge_3mf_failed with
+        stage=='merge_3mf', no residual temp files (P12).
+        """
+        worker_results = [
+            _make_worker_result("img1.png", 30.0, 20.0),
+            _make_worker_result("img2.png", 30.0, 20.0),
+        ]
+        results_iter = iter(worker_results)
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+
+        # Collect all intermediate file paths for residual check
+        intermediate_paths = []
+        for wr in worker_results:
+            intermediate_paths.append(wr["threemf_path"])
+            intermediate_paths.append(wr["preview_glb_path"])
+            intermediate_paths.append(wr["metadata_sidecar_path"])
+
+        def _failing_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+            raise MergedWriteError("Simulated 3MF write failure")
+
+        # Capture _safe_log calls to verify structured log emission
+        log_calls: list[tuple] = []
+        original_safe_log = None
+
+        def _capturing_safe_log(level, event, **fields):
+            log_calls.append((level, event, fields))
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _failing_3mf_write,
+            ),
+            patch(
+                "api.routers.converter.generate._safe_log",
+                side_effect=_capturing_safe_log,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("img1.png")),
+                    ("images", _make_test_image_buf("img2.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        # HTTP 500
+        assert response.status_code == 500
+
+        # Verify structured log: batch_merge_3mf_failed with stage=="merge_3mf"
+        error_logs = [
+            (level, event, fields)
+            for level, event, fields in log_calls
+            if event == "batch_merge_3mf_failed"
+        ]
+        assert len(error_logs) == 1, (
+            f"Expected exactly 1 batch_merge_3mf_failed log, got {len(error_logs)}. "
+            f"All log calls: {log_calls}"
+        )
+        level, event, fields = error_logs[0]
+        assert level == "error"
+        assert fields["stage"] == "merge_3mf"
+        assert fields["error_type"] == "MergedWriteError"
+
+        # No residual intermediate temp files (P12)
+        for p in intermediate_paths:
+            assert not os.path.exists(p), f"Residual temp file found: {p}"

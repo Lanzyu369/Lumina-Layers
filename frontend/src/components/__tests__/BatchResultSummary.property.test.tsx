@@ -25,8 +25,10 @@ const arbMixedBatchResponse: fc.Arbitrary<BatchResponse> = fc
   .map(([successItems, failedItems]) => ({
     status: failedItems.length === 0 ? "ok" : "failed",
     message: "batch done",
-    download_url: "/output/batch.zip",
+    download_url: successItems.length > 0 ? "/output/batch.3mf" : null,
+    preview_3d_url: null,
     results: [...successItems, ...failedItems],
+    warnings: [],
   }));
 
 const arbWithSuccess: fc.Arbitrary<BatchResponse> = fc
@@ -38,8 +40,10 @@ const arbWithSuccess: fc.Arbitrary<BatchResponse> = fc
   .map(([successItems, failedItems, dlUrl]) => ({
     status: "ok",
     message: "done",
-    download_url: `/output/${dlUrl}.zip`,
+    download_url: `/output/${dlUrl}.3mf`,
+    preview_3d_url: null,
     results: [...successItems, ...failedItems],
+    warnings: [],
   }));
 
 const arbAllFailed: fc.Arbitrary<BatchResponse> = fc
@@ -47,8 +51,10 @@ const arbAllFailed: fc.Arbitrary<BatchResponse> = fc
   .map((failedItems) => ({
     status: "failed",
     message: "all failed",
-    download_url: "/output/batch.zip",
+    download_url: null,
+    preview_3d_url: null,
     results: failedItems,
+    warnings: [],
   }));
 
 afterEach(() => {
@@ -92,7 +98,7 @@ describe("batch result summary properties", () => {
         cleanup();
         render(<BatchResultSummary result={batchResponse} />);
 
-        const downloadLink = screen.getByRole("link", { name: "下载 ZIP 文件" });
+        const downloadLink = screen.getByRole("link", { name: "下载批量 3MF" });
         expect(downloadLink).toHaveAttribute("href", batchResponse.download_url);
       }),
       { numRuns: 100 },
@@ -105,7 +111,7 @@ describe("batch result summary properties", () => {
         cleanup();
         render(<BatchResultSummary result={batchResponse} />);
 
-        const downloadLink = screen.queryByRole("link", { name: "下载 ZIP 文件" });
+        const downloadLink = screen.queryByRole("link", { name: "下载批量 3MF" });
         expect(downloadLink).not.toBeInTheDocument();
       }),
       { numRuns: 100 },

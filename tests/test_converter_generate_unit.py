@@ -2190,3 +2190,12 @@ class TestConverterEntryAcceptsBaseLayerModifierKwarg:
         params = inspect.signature(convert_image_to_3d).parameters
         assert "enable_base_layer_height_modifier" in params
         assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_convert_image_to_3d_signature_accepts_material_backing_index(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d
+
+        params = inspect.signature(convert_image_to_3d).parameters
+        assert "material_backing_material_index" in params
+        assert params["material_backing_material_index"].default is None

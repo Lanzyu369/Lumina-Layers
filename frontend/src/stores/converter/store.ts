@@ -12,6 +12,7 @@ import type {
   PaletteEntry,
   AutoHeightMode,
   BatchResponse,
+  BatchPreviewItem,
   LutInfoResponse,
   FridgeMagnetItem,
   PuzzleConnectorStyle,
@@ -97,6 +98,8 @@ type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
   __luminaPreviewStart?: number;
 };
+
+const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
@@ -1391,6 +1394,7 @@ export interface ConverterState {
   batchFiles: File[];
   batchLoading: boolean;
   batchResult: BatchResponse | null;
+  batchPreviewItems: BatchPreviewItem[];
 
   // 颜色替换预览
   replacePreviewLoading: boolean;
@@ -1840,6 +1844,7 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewBaseImageUrl: null,
     previewGlbUrl: null,
     modelUrl: null,
+    batchPreviewItems: [],
     threemfDiskPath: null,
     downloadUrl: null,
     palette: [],
@@ -2109,6 +2114,7 @@ export const DEFAULT_STATE: ConverterState = {
   batchFiles: [],
   batchLoading: false,
   batchResult: null,
+  batchPreviewItems: [],
   replacePreviewLoading: false,
   originalPreviewUrl: null,
   previewBaseImageUrl: null,
@@ -5561,6 +5567,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           set({
             isGenerating: false,
             modelUrl: null,
+            batchPreviewItems: [],
             threemfDiskPath: puzzleResponse.threemf_disk_path ?? null,
             downloadUrl: puzzleResponse.download_url
               ? `${puzzleResponse.download_url}`
@@ -5595,6 +5602,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           set({
             isGenerating: false,
             modelUrl: null,
+            batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: lfResponse.download_url
               ? `${lfResponse.download_url}`
@@ -5632,6 +5640,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           isGenerating: false,
           modelUrl,
+          batchPreviewItems: [],
           threemfDiskPath: response.threemf_disk_path ?? null,
           downloadUrl: response.download_url
             ? `${response.download_url}`
@@ -5808,6 +5817,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          batchPreviewItems: [],
           ...EMPTY_LUT_MATCH_STATE,
           selectedColor: null,
           selectedColors: new Set<string>(),
@@ -5829,6 +5839,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         puzzleEnabled: false,
         threemfDiskPath: null,
         downloadUrl: null,
+        batchPreviewItems: [],
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -5872,6 +5883,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
             previewWarnings: [],
@@ -5917,6 +5929,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
             previewWarnings: [],
@@ -5947,6 +5960,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
             previewWarnings: [],
@@ -5985,6 +5999,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         sessionId: null,
         previewGlbUrl: null,
         modelUrl: null,
+        batchPreviewItems: [],
         threemfDiskPath: null,
         downloadUrl: null,
         previewWarnings: [],
@@ -6002,6 +6017,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     submitBatch: async () => {
       let state = _get();
+      const sourceSelection = resolveConverterSourceSelection(state);
+      if (!sourceSelection.isReady) {
+        set({
+          error:
+            state.source_version === "material"
+              ? "请先选择耗材"
+              : state.source_version === "native"
+                ? "请先选择品牌和数据库"
+                : "请先选择 LUT",
+        });
+        return;
+      }
       const autoReliefHeightMap = buildMissingAutoReliefHeightMap(state);
       if (autoReliefHeightMap) {
         set({ color_height_map: autoReliefHeightMap });
@@ -6020,7 +6047,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ error: "请先设置颜色高度映射后再批量生成" });
         return;
       }
-      set({ batchLoading: true, batchResult: null, error: null });
+      set({
+        batchLoading: true,
+        batchResult: null,
+        batchPreviewItems: [],
+        modelUrl: null,
+        previewGlbUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+        error: null,
+      });
       try {
         const reliefHeightmapMaxHeight = state.enable_relief
           ? state.spacer_thick + state.heightmap_max_height
@@ -6032,21 +6068,53 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 state.spacer_thick,
               )
             : undefined;
+        const settings = useSettingsStore.getState();
+        const resolvedSourceSelection = resolveConverterSourceSelection(state);
+        const sourceParams =
+          state.source_version === "material"
+            ? buildMaterialSourceParams(state)
+            : state.source_version === "native"
+              ? buildNativeSourceParams(resolvedSourceSelection, state)
+              : buildLegacySourceParams(state.lut_name);
+        if (!sourceParams) {
+          set({
+            batchLoading: false,
+            error: "请先选择品牌和数据库",
+          });
+          return;
+        }
         const params = {
-          lut_name: state.lut_name,
+          ...sourceParams,
           target_width_mm: state.target_width_mm,
           spacer_thick: state.spacer_thick,
           structure_mode: state.structure_mode,
           color_mode: state.color_mode,
           modeling_mode: state.modeling_mode,
-          color_layers: state.color_layers ?? undefined,
-          layer_height_mm: state.layer_height_mm ?? undefined,
+          color_layers:
+            state.source_version === "material"
+              ? state.materialLayerCount
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.color_layers ?? undefined)
+                : (state.color_layers ?? undefined),
+          layer_height_mm:
+            state.source_version === "material"
+              ? state.materialLayerHeightMm
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.layer_height_mm ?? undefined)
+                : (state.layer_height_mm ?? undefined),
           quantize_colors: state.quantize_colors,
           enable_cleanup: state.enable_cleanup,
-          svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
+          svg_pixels_per_mm: settings.svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          use_lut_constrained: state.use_lut_constrained,
+          auto_dynamic_range: state.auto_dynamic_range,
           enable_relief: state.enable_relief,
+          printer_id: settings.printerModel,
+          slicer: settings.slicerSoftware,
+          nozzle_size: settings.nozzleSize,
+          enable_base_layer_height_modifier:
+            settings.enableBaseLayerHeightModifier,
           ...(state.enable_relief
             ? {
                 height_mode: "color",
@@ -6056,7 +6124,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
         };
         const result = await apiConvertBatch(state.batchFiles, params);
-        set({ batchResult: result, batchLoading: false });
+        const previewItems = (result.preview_items ?? [])
+          .slice(0, BATCH_PREVIEW_BROWSER_SAFE_LIMIT)
+          .map((item) => ({
+            ...item,
+            url: normalizeResourceUrl(item.url) ?? item.url,
+          }));
+        set({
+          batchResult: result,
+          batchLoading: false,
+          batchPreviewItems: previewItems,
+          // 批量预览只接受 preview_items。旧的 preview_3d_url 曾经指向
+          // 合并 GLB，颜色与背面显示不可靠，因此不再作为 UI 兜底。
+          modelUrl: null,
+          previewGlbUrl: null,
+          threemfDiskPath: result.threemf_disk_path ?? null,
+          downloadUrl: result.download_url ? `${result.download_url}` : null,
+        });
       } catch (err) {
         set({
           batchLoading: false,
@@ -6291,6 +6375,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state.originalPreviewUrl,
         state.previewGlbUrl,
         state.puzzleOverlayUrl,
+        ...state.batchPreviewItems.map((item) => item.url),
         state.regionData?.previewUrl ?? null,
         ...state.selectedRegions.map((region) => region.previewUrl),
         ...state.layerImages.map((layer) => layer.url),

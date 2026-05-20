@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -74,6 +75,35 @@ def _seed_large_format_session(store: SessionStore, tmp_path) -> str:
 def _fake_3mf(tmp_path, name: str = "tile.3mf") -> str:
     path = tmp_path / name
     path.write_bytes(b"fake-3mf")
+    return str(path)
+
+
+def _fake_glb(tmp_path, name: str = "preview.glb") -> str:
+    path = tmp_path / name
+    path.write_bytes(b"fake-glb")
+    return str(path)
+
+
+def _fake_batch_sidecar(tmp_path, name: str = "batch.json") -> str:
+    path = tmp_path / name
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_filename": "batch.png",
+                "xy_bbox_mm": {"width_mm": 30.0, "depth_mm": 20.0},
+                "slots": [
+                    {
+                        "slot_id": 0,
+                        "slot_name": "White",
+                        "preview_color": "#ffffff",
+                        "material_id": "GFL00",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     return str(path)
 
 
@@ -153,7 +183,7 @@ class TestGenerateLargeFormatCanary:
 
 
 class TestBatchCanary:
-    """Sessionless endpoint canary verifies session_id is NOT in record extras."""
+    """Batch endpoint canary verifies merged-artifact logging contract."""
 
     def test_batch_emits_sessionless_contract_canary(
         self,
@@ -166,6 +196,9 @@ class TestBatchCanary:
         pool.submit = AsyncMock(
             return_value={
                 "threemf_path": _fake_3mf(tmp_path, "batch.3mf"),
+                "preview_glb_path": _fake_glb(tmp_path, "batch.glb"),
+                "metadata_sidecar_path": _fake_batch_sidecar(tmp_path),
+                "xy_bbox_mm": (30.0, 20.0),
                 "status_msg": "ok",
             },
         )
@@ -180,6 +213,12 @@ class TestBatchCanary:
                 patch(
                     "api.routers.converter.generate.ensure_png_tempfile",
                     new=AsyncMock(return_value=str(tmp_path / "uploaded.png")),
+                ),
+                patch(
+                    "api.routers.converter.generate.MergedBambu3MFWriter.write",
+                    side_effect=lambda _items, output_path, **_kwargs: output_path.write_bytes(
+                        b"fake-merged-3mf"
+                    ),
                 ),
             ):
                 response = client.post(
@@ -202,15 +241,14 @@ class TestBatchCanary:
         records = [
             record
             for record in caplog.records
-            if getattr(record, "event", None) == "converter_batch_done"
+            if getattr(record, "event", None) == "batch_merge_3mf_done"
         ]
         assert len(records) == 1
         record = records[0]
         assert record.levelno == logging.INFO
-        assert "session_id" not in record.__dict__
-        assert record.image_count == 1
+        assert isinstance(record.session_id, str)
+        assert len(record.session_id) == 32
+        assert record.model_count == 1
         assert record.success_count == 1
-        assert record.total_count == 1
-        assert record.lut_name == "test_lut"
-        assert record.color_mode == "4-Color (RYBW)"
-        assert record.modeling_mode == "high-fidelity"
+        assert record.failure_count == 0
+        assert record.exceeds_plate is False

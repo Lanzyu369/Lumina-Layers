@@ -1297,15 +1297,56 @@ export interface BatchItemResult {
   error?: string;
 }
 
+/**
+ * Single warning entry attached to BatchResponse.warnings.
+ *
+ * `code` 是稳定的机器可读标识；前端 SHALL 通过 `code` 选择本地化文案，
+ * 不依赖后端 `message` 文本判断。`(string & {})` 这种"开口字符串"写法
+ * 保留扩展位但仍享受 `"plate-overflow"` 字面量的 IDE 提示。
+ */
+export interface WarningEntry {
+  /** Stable machine-readable warning code; routes the i18n key on the frontend. */
+  code: "plate-overflow" | "preview-limited" | (string & {});
+  /** Server-rendered human-readable text; only used as fallback. */
+  message: string;
+}
+
 export interface BatchResponse {
   status: string;
   message: string;
-  download_url: string;
+  /** 合并 3MF 的下载 URL；零成功项时为 null */
+  download_url: string | null;
+  /** 合并 3MF 的后端本地路径；用于复用原有“在切片软件打开”链路 */
+  threemf_disk_path?: string | null;
+  /** 兼容旧客户端的首个批量预览 GLB URL；零成功项时为 null */
+  preview_3d_url: string | null;
+  /** 批量预览条目；前端按坐标同时渲染多个原始单件 GLB */
+  preview_items?: BatchPreviewItem[];
   results: BatchItemResult[];
+  warnings: WarningEntry[];
+}
+
+export interface BatchPreviewItem {
+  url: string;
+  filename: string;
+  tx_mm: number;
+  ty_mm: number;
+  width_mm: number;
+  depth_mm: number;
 }
 
 export interface BatchConvertParams {
-  lut_name: string;
+  source_kind?: "legacy_single" | "native_bundle";
+  lut_name?: string;
+  material_type?: string;
+  vendor?: string;
+  db_names?: string[];
+  material_source?: "lut" | "material_archive";
+  selected_materials?: string[];
+  material_layer_count?: number;
+  material_layer_height_mm?: number;
+  material_grid_resolution?: number;
+  material_backing_material_index?: number;
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;
@@ -1318,10 +1359,20 @@ export interface BatchConvertParams {
   svg_pixels_per_mm?: number;
   hue_weight: number;
   chroma_gate: number;
+  model_enable?: boolean;
+  model_only?: boolean;
+  model_threshold?: number;
+  model_margin?: number;
+  use_lut_constrained?: boolean;
+  auto_dynamic_range?: boolean;
   enable_relief?: boolean;
   height_mode?: string;
   color_height_map?: Record<string, number>;
   heightmap_max_height?: number;
+  printer_id?: string;
+  slicer?: string;
+  nozzle_size?: string;
+  enable_base_layer_height_modifier?: boolean;
 }
 
 // ========== Five-Color Query Models ==========

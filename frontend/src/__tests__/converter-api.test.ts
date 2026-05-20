@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import apiClient from "../api/client";
 import {
+  convertBatch,
   convertPreview,
   convertGenerate,
   convertGenerateLargeFormat,
@@ -13,6 +14,7 @@ import { fetchLutCatalog } from "../api/lut";
 import {
   ColorMode,
   ModelingMode,
+  type BatchConvertParams,
   type PuzzleGenerateRequest,
   type PuzzleLayoutPreviewRequest,
   StructureMode,
@@ -144,6 +146,113 @@ describe("convertPreview", () => {
     expect(formData.has("model_threshold")).toBe(false);
     expect(formData.has("model_margin")).toBe(false);
     expect(result.session_id).toBe("sess-native");
+  });
+});
+
+describe("convertBatch", () => {
+  const baseBatchParams: BatchConvertParams = {
+    source_kind: "legacy_single",
+    lut_name: "test-lut",
+    target_width_mm: 80,
+    spacer_thick: 1.2,
+    structure_mode: StructureMode.DOUBLE_SIDED,
+    color_mode: ColorMode.FOUR_COLOR_RYBW,
+    modeling_mode: ModelingMode.HIGH_FIDELITY,
+    color_layers: 5,
+    layer_height_mm: 0.08,
+    quantize_colors: 48,
+    enable_cleanup: true,
+    hue_weight: 0,
+    chroma_gate: 0,
+    use_lut_constrained: false,
+    auto_dynamic_range: false,
+    enable_relief: false,
+  };
+
+  it("serializes material archive batch fields into FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "Batch generated",
+        download_url: "/api/files/batch.3mf",
+        preview_3d_url: null,
+        preview_items: [],
+        results: [],
+        warnings: [],
+      },
+    });
+
+    await convertBatch([new File(["a"], "a.png", { type: "image/png" })], {
+      ...baseBatchParams,
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      selected_materials: ["brand/red", "brand/white"],
+      material_layer_count: 7,
+      material_layer_height_mm: 0.06,
+      material_grid_resolution: 33,
+      material_backing_material_index: 1,
+      color_layers: 7,
+      layer_height_mm: 0.06,
+    });
+
+    const [url, rawFormData] = mockPost.mock.calls[0];
+    const formData = rawFormData as FormData;
+    expect(url).toBe("/convert/batch");
+    expect(formData.getAll("images")).toHaveLength(1);
+    expect(formData.get("lut_name")).toBe("__material_archive__");
+    expect(formData.get("material_source")).toBe("material_archive");
+    expect(formData.get("selected_materials")).toBe(JSON.stringify(["brand/red", "brand/white"]));
+    expect(formData.get("material_layer_count")).toBe("7");
+    expect(formData.get("material_layer_height_mm")).toBe("0.06");
+    expect(formData.get("material_grid_resolution")).toBe("33");
+    expect(formData.get("material_backing_material_index")).toBe("1");
+  });
+
+  it("serializes native reverse LUT batch fields into FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "Batch generated",
+        download_url: "/api/files/batch.3mf",
+        preview_3d_url: null,
+        preview_items: [],
+        results: [],
+        warnings: [],
+      },
+    });
+
+    await convertBatch([new File(["a"], "a.png", { type: "image/png" })], {
+      ...baseBatchParams,
+      source_kind: "native_bundle",
+      lut_name: undefined,
+      material_type: "PLA",
+      vendor: "Bambu",
+      db_names: ["red.cdb", "white.cdb"],
+      color_layers: 6,
+      layer_height_mm: 0.08,
+      model_enable: true,
+      model_only: true,
+      model_threshold: 0.3,
+      model_margin: 0.1,
+      use_lut_constrained: true,
+      auto_dynamic_range: true,
+    });
+
+    const [url, rawFormData] = mockPost.mock.calls[0];
+    const formData = rawFormData as FormData;
+    expect(url).toBe("/convert/batch");
+    expect(formData.getAll("images")).toHaveLength(1);
+    expect(formData.get("source_kind")).toBe("native_bundle");
+    expect(formData.has("lut_name")).toBe(false);
+    expect(formData.get("material_type")).toBe("PLA");
+    expect(formData.get("vendor")).toBe("Bambu");
+    expect(formData.get("db_names")).toBe(JSON.stringify(["red.cdb", "white.cdb"]));
+    expect(formData.get("model_enable")).toBe("true");
+    expect(formData.get("model_only")).toBe("true");
+    expect(formData.get("model_threshold")).toBe("0.3");
+    expect(formData.get("model_margin")).toBe("0.1");
+    expect(formData.get("use_lut_constrained")).toBe("true");
+    expect(formData.get("auto_dynamic_range")).toBe("true");
   });
 });
 

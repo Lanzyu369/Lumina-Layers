@@ -1,9 +1,9 @@
-import { Suspense, useRef, useState, useEffect, useCallback } from "react";
+import { Suspense, useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
-import ModelViewer from "./ModelViewer";
+import ModelViewer, { computeFitDistance } from "./ModelViewer";
 import InteractiveModelViewer from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
@@ -23,6 +23,7 @@ import {
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
 import { ActivityIcon, MaximizeIcon, MinimizeIcon, CameraIcon } from "./ui/icons";
+import type { BatchPreviewItem } from "../api/types";
 
 declare global {
   interface Window {
@@ -206,6 +207,136 @@ function CanvasInteractionBridge() {
   return null;
 }
 
+interface BatchPreviewModelsProps {
+  items: BatchPreviewItem[];
+  colorRemapMap: Record<string, string>;
+  colorHeightMap: Record<string, number>;
+  baseHeight: number;
+  enableRelief: boolean;
+  spacerThick: number;
+  structureMode: string;
+  enableOutline: boolean;
+  outlineWidth: number;
+  enableCloisonne: boolean;
+  wireWidthMm: number;
+  wireHeightMm: number;
+  enableFridgeMagnet: boolean;
+  rasterCellSize?: number;
+}
+
+function BatchPreviewModels({
+  items,
+  colorRemapMap,
+  colorHeightMap,
+  baseHeight,
+  enableRelief,
+  spacerThick,
+  structureMode,
+  enableOutline,
+  outlineWidth,
+  enableCloisonne,
+  wireWidthMm,
+  wireHeightMm,
+  enableFridgeMagnet,
+  rasterCellSize,
+}: BatchPreviewModelsProps) {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls);
+  const bed_label = useConverterStore((s) => s.bed_label);
+  const bedSizes = useConverterStore((s) => s.bedSizes);
+
+  const bedDims = useMemo(() => {
+    const found = bedSizes.find((b) => b.label === bed_label);
+    return found ? { w: found.width_mm, h: found.height_mm } : { w: 256, h: 256 };
+  }, [bed_label, bedSizes]);
+
+  const positionedItems = useMemo(
+    () =>
+      items.map((item) => ({
+        ...item,
+        position: [
+          item.tx_mm + item.width_mm / 2 - bedDims.w / 2,
+          item.ty_mm + item.depth_mm / 2 - bedDims.h / 2,
+          0,
+        ] as [number, number, number],
+      })),
+    [bedDims.h, bedDims.w, items],
+  );
+
+  useEffect(() => {
+    if (positionedItems.length === 0) {
+      return;
+    }
+    const minX = Math.min(
+      -bedDims.w / 2,
+      ...items.map((item) => item.tx_mm - bedDims.w / 2),
+    );
+    const maxX = Math.max(
+      bedDims.w / 2,
+      ...items.map((item) => item.tx_mm + item.width_mm - bedDims.w / 2),
+    );
+    const minY = Math.min(
+      -bedDims.h / 2,
+      ...items.map((item) => item.ty_mm - bedDims.h / 2),
+    );
+    const maxY = Math.max(
+      bedDims.h / 2,
+      ...items.map((item) => item.ty_mm + item.depth_mm - bedDims.h / 2),
+    );
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const radius = Math.max(maxX - minX, maxY - minY) / 2;
+    const perspCam = camera as THREE.PerspectiveCamera;
+    const dist = computeFitDistance(radius, perspCam.fov) * 1.25;
+
+    camera.position.set(centerX, centerY - 57, dist);
+    camera.lookAt(centerX, centerY, 0);
+    camera.updateProjectionMatrix();
+
+    if (controls) {
+      const oc = controls as unknown as {
+        target: THREE.Vector3;
+        maxDistance: number;
+        minDistance: number;
+        update: () => void;
+      };
+      oc.target.set(centerX, centerY, 0);
+      oc.maxDistance = dist * 5;
+      oc.minDistance = dist * 0.1;
+      oc.update();
+    }
+  }, [bedDims.h, bedDims.w, camera, controls, items, positionedItems.length]);
+
+  return (
+    <>
+      {positionedItems.map((item, index) => (
+        <group key={`${item.url}-${index}`} position={item.position}>
+          <InteractiveModelViewer
+            url={item.url}
+            colorRemapMap={colorRemapMap}
+            colorHeightMap={colorHeightMap}
+            baseHeight={baseHeight}
+            enableRelief={enableRelief}
+            scaleX={1}
+            scaleY={1}
+            spacerThick={spacerThick}
+            structureMode={structureMode}
+            enableOutline={enableOutline}
+            outlineWidth={outlineWidth}
+            enableCloisonne={enableCloisonne}
+            wireWidthMm={wireWidthMm}
+            wireHeightMm={wireHeightMm}
+            enableFridgeMagnet={enableFridgeMagnet}
+            rasterCellSize={rasterCellSize}
+            puzzleOverlayEnabled={false}
+            puzzleOverlayUrl={null}
+          />
+        </group>
+      ))}
+    </>
+  );
+}
+
 function Scene3D({ modelUrl }: Scene3DProps) {
   const { t } = useI18n();
   const themeColors = useThemeConfig();
@@ -220,6 +351,9 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
   const wittyMsg = useWittyMessage(2000, isLoading && enableWittyLoading);
 
+  const storeModelUrl = useConverterStore((s) => s.modelUrl);
+  const effectiveModelUrl = modelUrl ?? storeModelUrl;
+  const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
@@ -266,7 +400,9 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelBounds = useConverterStore((s) => s.modelBounds);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
 
-  const diagnosticsSourceLabel = modelUrl
+  const diagnosticsSourceLabel = batchPreviewItems.length > 0
+    ? t("viewer_diagnostics_source_generate")
+    : effectiveModelUrl
     ? t("viewer_diagnostics_source_generate")
     : previewGlbUrl
       ? t("viewer_diagnostics_source_preview")
@@ -318,10 +454,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       phase: "diagnostics-toggle",
       details: {
         open: next,
-        source: modelUrl ? "generate" : previewGlbUrl ? "preview" : "idle",
+        source: batchPreviewItems.length > 0
+          ? "batch-preview"
+          : effectiveModelUrl
+            ? "generate"
+            : previewGlbUrl
+              ? "preview"
+              : "idle",
       },
     });
-  }, [diagnosticsVisible, modelUrl, previewGlbUrl]);
+  }, [batchPreviewItems.length, diagnosticsVisible, effectiveModelUrl, previewGlbUrl]);
 
   const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
@@ -355,11 +497,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       phase: "source-updated",
       dedupeMs: 250,
       details: {
-        model_url: modelUrl ?? null,
+        model_url: effectiveModelUrl ?? null,
         preview_glb_url: previewGlbUrl ?? null,
       },
     });
-  }, [modelUrl, previewGlbUrl]);
+  }, [effectiveModelUrl, previewGlbUrl]);
 
   // Check if Fullscreen API is available
   const fullscreenSupported = typeof document.fullscreenElement !== "undefined";
@@ -563,9 +705,28 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           maxDistance={2000}
         />
         <BedPlatform />
-        {modelUrl ? (
+        {batchPreviewItems.length > 0 ? (
           <Suspense fallback={null}>
-            <ModelViewer url={modelUrl} />
+            <BatchPreviewModels
+              items={batchPreviewItems}
+              colorRemapMap={colorRemapMap}
+              colorHeightMap={colorHeightMap}
+              baseHeight={baseHeight}
+              enableRelief={enableRelief}
+              spacerThick={spacerThick}
+              structureMode={structureMode}
+              enableOutline={enableOutline}
+              outlineWidth={outlineWidth}
+              enableCloisonne={enableCloisonne}
+              wireWidthMm={wireWidthMm}
+              wireHeightMm={wireHeightMm}
+              enableFridgeMagnet={enableFridgeMagnet}
+              rasterCellSize={rasterCellSize}
+            />
+          </Suspense>
+        ) : effectiveModelUrl ? (
+          <Suspense fallback={null}>
+            <ModelViewer url={effectiveModelUrl} />
           </Suspense>
         ) : previewGlbUrl ? (
           <Suspense fallback={null}>
@@ -591,7 +752,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             />
           </Suspense>
         ) : null}
-        {addLoop && modelBounds && (
+        {batchPreviewItems.length === 0 && addLoop && modelBounds && (
           <KeychainRing3D
             enabled={addLoop}
             width={loopWidth}
@@ -604,7 +765,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             modelBounds={modelBounds}
           />
         )}
-        {enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
+        {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
           <FridgeMagnet3D
             enabled={enableFridgeMagnet}
             magnets={fridgeMagnets}

@@ -127,6 +127,7 @@ export default function BedPlatform() {
   const bedSizes = useConverterStore((s) => s.bedSizes);
   const modelUrl = useConverterStore((s) => s.modelUrl);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
   const themeColors = useThemeConfig();
@@ -155,7 +156,7 @@ export default function BedPlatform() {
 
   // Auto-fit camera when bed changes and no model is loaded
   useEffect(() => {
-    if (modelUrl || previewGlbUrl) return; // Don't override camera when any model is present
+    if (modelUrl || previewGlbUrl || batchPreviewItems.length > 0) return; // Don't override camera when any model is present
 
     const radius = Math.max(bedDims.w, bedDims.h) / 2;
     const perspCam = camera as THREE.PerspectiveCamera;
@@ -177,7 +178,7 @@ export default function BedPlatform() {
       oc.minDistance = dist * 0.1;
       oc.update();
     }
-  }, [bedDims, modelUrl, previewGlbUrl, camera, controls]);
+  }, [bedDims, modelUrl, previewGlbUrl, batchPreviewItems.length, camera, controls]);
 
   return <primitive object={bedMesh} />;
 }

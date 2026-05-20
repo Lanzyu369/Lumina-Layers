@@ -139,6 +139,20 @@ def _resolve_material_archive_backing_color_id(
     return backing_color_id
 
 
+def _resolve_converter_separate_backing_color_id(
+    material_source: str,
+    selected_materials: Optional[List[str]],
+    material_backing_material_index: Optional[int],
+    separate_backing_color_id: Optional[int],
+) -> Optional[int]:
+    if material_source != "material_archive" or separate_backing_color_id is not None:
+        return separate_backing_color_id
+    return _resolve_material_archive_backing_color_id(
+        selected_materials,
+        material_backing_material_index,
+    )
+
+
 def _build_color_contour_mesh(mask, height, total_layers, rgba):
     """Build a simple extruded mesh for a boolean mask.
     构建布尔掩码的简化挤出网格（兼容旧导出符号）。
@@ -247,6 +261,7 @@ def convert_image_to_3d(
     material_layer_count: Optional[int] = None,
     material_layer_height_mm: Optional[float] = None,
     material_grid_resolution: Optional[int] = None,
+    material_backing_material_index: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
@@ -266,10 +281,17 @@ def convert_image_to_3d(
             Defaults to ``image_path`` so普通模式与大画幅光栅模式下，每张
             3MF 都使用对应输入图作为封面图源。
             (可选的封面缩略图源路径；缺省镜像 ``image_path``)
+        material_backing_material_index: Optional selected-material index used
+            as the backing color when ``material_source`` is
+            ``"material_archive"``. Native and legacy LUT flows ignore it.
+            (耗材档案模式下作为底板颜色的已选耗材索引；传统 LUT 与反推 LUT
+            流程会忽略该值)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
     """
+    separate_backing_color_id = _resolve_converter_separate_backing_color_id(material_source, selected_materials, material_backing_material_index, separate_backing_color_id)
+
     ctx = {k: v for k, v in locals().items() if k != "progress"}
     ctx["progress"] = progress
     # Intentional: the API layer produces its own GLB preview, so skip the
