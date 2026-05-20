@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ANNOUNCEMENTS } from "../data/announcements";
 import type { AnnouncementEntry } from "../data/announcements";
 import {
+  ANNOUNCEMENT_HISTORY_LIMIT,
   ANNOUNCEMENT_STORAGE_KEY,
-  ANNOUNCEMENT_WINDOW_DAYS,
-  selectEntriesWithinWindow,
+  selectAnnouncementHistory,
   useAnnouncement,
 } from "../hooks/useAnnouncement";
 
@@ -123,22 +123,21 @@ describe("useAnnouncement", () => {
 });
 
 /**
- * AGENTS.md 公告渲染规则：窗口=锚点那一天向前 WINDOW_DAYS 天（含锚点当天）。
- * 下面的不变式断言直接锁住"窗口内所有 entry 都返回"，防止退化成"只返回最新一条"。
+ * 公告弹窗展示最近的日公告历史，防止服务器隔几天上线时只露出最新一天。
  */
-describe("selectEntriesWithinWindow", () => {
+describe("selectAnnouncementHistory", () => {
   it("空数组返回空", () => {
-    expect(selectEntriesWithinWindow([])).toEqual([]);
+    expect(selectAnnouncementHistory([])).toEqual([]);
   });
 
-  it("窗口内多条 entry 按 version 降序全部返回", () => {
+  it("多条 entry 按 version 降序返回", () => {
     const entries = [
-      makeEntry("2026-05-10"),
       makeEntry("2026-05-09"),
+      makeEntry("2026-05-10"),
       makeEntry("2026-05-08"),
     ];
 
-    const selected = selectEntriesWithinWindow(entries);
+    const selected = selectAnnouncementHistory(entries);
 
     expect(selected.map((e) => e.version)).toEqual([
       "2026-05-10",
@@ -147,45 +146,42 @@ describe("selectEntriesWithinWindow", () => {
     ]);
   });
 
-  it("超出窗口的旧 entry 被剔除", () => {
-    // anchor=2026-05-10, WINDOW_DAYS=3 → [05-08, 05-09, 05-10]，05-07 必须被剔除
-    const entries = [
-      makeEntry("2026-05-10"),
-      makeEntry("2026-05-09"),
-      makeEntry("2026-05-07"),
-    ];
-
-    const selected = selectEntriesWithinWindow(entries);
-
-    expect(selected.map((e) => e.version)).toEqual(["2026-05-10", "2026-05-09"]);
-  });
-
-  it("窗口宽度由 ANNOUNCEMENT_WINDOW_DAYS 控制", () => {
-    // 用一个明显更宽的窗口验证可配置性，避免硬编码 3
+  it("最多返回指定条数的历史记录", () => {
     const entries = Array.from({ length: 5 }, (_, index) =>
       makeEntry(`2026-05-${String(10 - index).padStart(2, "0")}`),
     );
 
-    const wide = selectEntriesWithinWindow(entries, 5);
-    expect(wide).toHaveLength(5);
+    const selected = selectAnnouncementHistory(entries, 3);
 
-    const narrow = selectEntriesWithinWindow(entries, 1);
-    expect(narrow.map((e) => e.version)).toEqual(["2026-05-10"]);
+    expect(selected.map((e) => e.version)).toEqual([
+      "2026-05-10",
+      "2026-05-09",
+      "2026-05-08",
+    ]);
   });
 
-  it("常量 ANNOUNCEMENT_WINDOW_DAYS 必须 >= 3", () => {
-    // AGENTS.md 规则硬性要求窗口至少覆盖 3 天；这个断言让任何私自缩小窗口的改动立刻红
-    expect(ANNOUNCEMENT_WINDOW_DAYS).toBeGreaterThanOrEqual(3);
+  it("限制为 0 或负数时返回空", () => {
+    const entries = [makeEntry("2026-05-10")];
+
+    expect(selectAnnouncementHistory(entries, 0)).toEqual([]);
+    expect(selectAnnouncementHistory(entries, -1)).toEqual([]);
   });
 
-  it("锚点 version 非法格式时降级为只返回锚点本身", () => {
+  it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(7);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(7);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
+      "2026-05-05",
+    );
+  });
+
+  it("非法日期文本也按普通版本文本排序，不会丢掉其它历史", () => {
     const entries = [
-      { ...makeEntry("2026-05-10"), version: "not-a-date" },
       makeEntry("2026-05-09"),
+      { ...makeEntry("2026-05-10"), version: "not-a-date" },
     ];
 
-    const selected = selectEntriesWithinWindow(entries);
-    expect(selected).toHaveLength(1);
-    expect(selected[0]?.version).toBe("not-a-date");
+    const selected = selectAnnouncementHistory(entries);
+    expect(selected.map((e) => e.version)).toEqual(["not-a-date", "2026-05-09"]);
   });
 });
