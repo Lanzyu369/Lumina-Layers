@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-21",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 里由线条围出的白色留白不再在颜色识别时显示成黑色。",
+            en: "White spaces enclosed by SVG linework no longer show up as black during colour matching.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-20",
     title: {
       zh: "Lumina Layers — 近期更新速览",

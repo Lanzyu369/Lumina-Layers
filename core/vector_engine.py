@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
 from shapely import affinity
-from shapely.ops import unary_union
+from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from shapely import set_precision
@@ -965,12 +965,38 @@ class VectorProcessor:
         sampling_precision: Curve approximation precision in mm.
     """
 
-    def __init__(self, lut_path: str, color_mode: str):
+    def __init__(
+        self,
+        lut_path: str,
+        color_mode: str,
+        *,
+        hue_weight: float = 0.0,
+        chroma_gate: float = 15.0,
+    ):
+        """Initialize the LUT-backed SVG vector processor.
+
+        初始化基于 LUT 的 SVG 矢量处理器。
+
+        Args:
+            lut_path: LUT file path used for color-to-recipe matching.
+                用于颜色匹配到配方的 LUT 文件路径。
+            color_mode: Canonical color mode label for this conversion.
+                本次转换使用的标准颜色模式名称。
+            hue_weight: Hue-protection strength forwarded to the shared
+                image processor. 色相保护强度，传给共用图像处理器。
+            chroma_gate: Chroma threshold for dark-color protection.
+                暗色保护的彩度门槛。
+        """
         self.color_mode = color_mode
         _log.debug("Initializing Native Vector Engine (%s)...", color_mode)
 
         ImageProcessor = _get_image_processor_class()
-        self.img_processor = ImageProcessor(lut_path, color_mode)
+        self.img_processor = ImageProcessor(
+            lut_path,
+            color_mode,
+            hue_weight=hue_weight,
+            chroma_gate=chroma_gate,
+        )
         self._init_runtime_defaults()
 
         _log.debug("Initialized with %s LUT colors", len(self.img_processor.ref_stacks))
@@ -1877,7 +1903,6 @@ class VectorProcessor:
                 _norm_area,
                 _split_area,
             )
-
             stage_timings["occlusion_s"] = time.perf_counter() - t0
             _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
 
@@ -2546,8 +2571,14 @@ class VectorProcessor:
             ppm = w_px / w_mm
 
         coord_scale = sf * ppm
-        matched_rgb = np.zeros((h_px, w_px, 3), dtype=np.uint8)
-        quantized_image = np.zeros((h_px, w_px, 3), dtype=np.uint8)
+        # Keep transparent SVG background visually white in raw matched-RGB
+        # consumers. ``mask_solid`` / ``material_matrix`` still mark those
+        # pixels as air, so this does not turn the exterior canvas into print
+        # geometry. It only prevents unpainted SVG negative space from being
+        # displayed as default black when a caller previews ``matched_rgb``
+        # without compositing alpha.
+        matched_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
+        quantized_image = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         mask_solid = np.zeros((h_px, w_px), dtype=bool)
         material_matrix = np.full((h_px, w_px, analysis.num_layers), -1, dtype=np.int16)
 
@@ -2751,6 +2782,39 @@ class VectorProcessor:
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 
+    def _match_lut_index_for_rgb(self, query_rgb):
+        """Return the LUT index and Lab distance for one RGB query.
+
+        Uses the shared hue-aware matcher when it is enabled on the
+        image processor, keeping SVG-native matching aligned with the
+        raster/high-fidelity paths.
+
+        使用图像处理器已启用的色相保护匹配器，让 SVG 原生矢量路径与
+        栅格/高保真路径保持一致。
+        """
+        query_lab = self.img_processor._rgb_to_lab(
+            np.array([query_rgb], dtype=np.uint8)
+        )
+        hue_matcher = getattr(self.img_processor, "hue_matcher", None)
+        if hue_matcher is not None:
+            matched_indices = hue_matcher.match_colors_batch(
+                np.array([query_rgb], dtype=np.uint8)
+            )
+            lut_idx = int(np.asarray(matched_indices).reshape(-1)[0])
+            matched_lab = np.asarray(
+                self.img_processor.lut_lab[lut_idx],
+                dtype=np.float64,
+            )
+            lab_dist = float(
+                np.linalg.norm(query_lab.reshape(-1) - matched_lab.reshape(-1))
+            )
+            return lut_idx, lab_dist
+
+        dist, index = self.img_processor.kdtree.query(query_lab)
+        lut_idx = int(index[0])
+        lab_dist = float(dist[0]) if hasattr(dist, "__len__") else float(dist)
+        return lut_idx, lab_dist
+
     def _match_colors(self, clipped_shapes, replacement_manager, num_channels, num_layers=None):
         """Match each shape's fill colour to a LUT recipe.
 
@@ -2780,10 +2844,7 @@ class VectorProcessor:
                 matched_rgb = cached["matched_rgb"]
                 lut_idx = cached["lut_idx"]
             else:
-                query_lab = self.img_processor._rgb_to_lab(np.array([query_rgb], dtype=np.uint8))
-                dist, index = self.img_processor.kdtree.query(query_lab)
-                lut_idx = int(index[0])
-                lab_dist = float(dist[0]) if hasattr(dist, '__len__') else float(dist)
+                lut_idx, lab_dist = self._match_lut_index_for_rgb(query_rgb)
                 matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
 
                 if replacement_manager is not None:
@@ -3216,7 +3277,7 @@ class VectorProcessor:
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
         parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
 
-        def _sample_path_to_polygon(path_obj):
+        def _sample_path_coords(path_obj):
             try:
                 segments = list(path_obj.segments())
             except Exception:
@@ -3227,6 +3288,25 @@ class VectorProcessor:
             else:
                 coords = _flatten_segments_fallback(path_obj, tol_svg)
 
+            if segments:
+                try:
+                    last_end = segments[-1].end
+                    last_pt = (last_end.x, last_end.y)
+                    if coords and coords[-1] != last_pt:
+                        coords.append(last_pt)
+                except VECTOR_HANDLED_ERRORS:
+                    pass
+            return coords
+
+        def _signed_ring_area(coords):
+            if len(coords) < 3:
+                return 0.0
+            area = 0.0
+            for (x1, y1), (x2, y2) in zip(coords, coords[1:] + coords[:1]):
+                area += (float(x1) * float(y2)) - (float(x2) * float(y1))
+            return area * 0.5
+
+        def _polygon_from_coords(coords):
             if len(coords) < 3:
                 return None
 
@@ -3238,6 +3318,117 @@ class VectorProcessor:
             if poly is not None and not poly.is_empty:
                 return poly
             return None
+
+        def _sample_path_to_polygon(path_obj):
+            return _polygon_from_coords(_sample_path_coords(path_obj))
+
+        def _combine_nonzero_subpaths(subpath_items):
+            """Merge subpaths using SVG nonzero winding orientation.
+
+            SVG's default ``nonzero`` fill rule uses opposite winding
+            direction for holes. A plain union turns those holes into solid
+            paint, which is exactly what Vector Magic output does around
+            small white foot / eye details.
+
+            按 SVG 默认 nonzero 规则合并复合路径：反向子路径是洞，不能
+            简单 union，否则白色细节会被深色路径填实。
+            """
+            if not subpath_items:
+                return None
+            if len(subpath_items) == 1:
+                return subpath_items[0]["poly"]
+
+            try:
+                boundaries = [
+                    item["poly"].boundary
+                    for item in subpath_items
+                    if item.get("poly") is not None and not item["poly"].is_empty
+                ]
+                faces = list(polygonize(unary_union(boundaries))) if boundaries else []
+                filled_faces = []
+                for face in faces:
+                    probe = face.representative_point()
+                    winding = 0
+                    for item in subpath_items:
+                        poly = item["poly"]
+                        if poly is None or poly.is_empty:
+                            continue
+                        if poly.contains(probe):
+                            winding += 1 if item.get("signed_area", 0.0) >= 0 else -1
+                    if winding != 0:
+                        filled_faces.append(face)
+                if filled_faces:
+                    result = unary_union(filled_faces)
+                    result = VectorProcessor._extract_polygonal_geometry(make_valid(result))
+                    if result is not None and not result.is_empty:
+                        return result
+            except VECTOR_HANDLED_ERRORS:
+                pass
+
+            # Use the largest ring's orientation as the main paint
+            # direction. Opposite-orientation rings inside it become holes;
+            # disjoint opposite rings are still valid filled islands under
+            # nonzero winding and are kept.
+            dominant_sign = 1 if subpath_items[0]["signed_area"] >= 0 else -1
+            try:
+                dominant = max(
+                    subpath_items,
+                    key=lambda item: abs(float(item.get("signed_area", 0.0))),
+                )
+                dominant_sign = 1 if dominant["signed_area"] >= 0 else -1
+            except (TypeError, ValueError):
+                pass
+
+            fill_polys = []
+            opposite_polys = []
+            for item in subpath_items:
+                poly = item["poly"]
+                if poly is None or poly.is_empty:
+                    continue
+                sign = 1 if item.get("signed_area", 0.0) >= 0 else -1
+                if sign == dominant_sign:
+                    fill_polys.append(poly)
+                else:
+                    opposite_polys.append(poly)
+
+            if fill_polys:
+                try:
+                    combined = unary_union(fill_polys)
+                except VECTOR_HANDLED_ERRORS:
+                    combined = fill_polys[0]
+            else:
+                combined = None
+
+            disjoint_opposite = []
+            for hole in opposite_polys:
+                if hole is None or hole.is_empty:
+                    continue
+                if combined is None or combined.is_empty:
+                    disjoint_opposite.append(hole)
+                    continue
+                try:
+                    if combined.intersects(hole) or combined.contains(hole):
+                        combined = combined.difference(hole)
+                    else:
+                        disjoint_opposite.append(hole)
+                except VECTOR_HANDLED_ERRORS:
+                    disjoint_opposite.append(hole)
+
+            pieces = []
+            if combined is not None and not combined.is_empty:
+                pieces.append(combined)
+            pieces.extend(
+                poly for poly in disjoint_opposite
+                if poly is not None and not poly.is_empty
+            )
+            if not pieces:
+                return None
+            try:
+                result = unary_union(pieces)
+            except VECTOR_HANDLED_ERRORS:
+                result = pieces[0]
+            result = VectorProcessor._extract_polygonal_geometry(make_valid(result))
+            return result if result is not None and not result.is_empty else None
 
         def _sample_path_to_stroke_geometry(
             path_obj, stroke_width_svg, cap_style_name="round", join_style_name="round"
@@ -3521,16 +3712,23 @@ class VectorProcessor:
             except Exception:
                 subpaths = []
 
-            subpath_polys = []
+            subpath_items = []
             for subpath in subpaths:
                 try:
                     sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
-                    poly = _sample_path_to_polygon(sub_path)
+                    coords = _sample_path_coords(sub_path)
+                    poly = _polygon_from_coords(coords)
                 except Exception:
                     continue
                 if poly is None:
                     continue
-                subpath_polys.append(poly)
+                subpath_items.append(
+                    {
+                        "poly": poly,
+                        "signed_area": _signed_ring_area(coords),
+                    }
+                )
+            subpath_polys = [item["poly"] for item in subpath_items]
 
             # --- Fix 4: gradient flattening ---
             if is_gradient:
@@ -3573,8 +3771,8 @@ class VectorProcessor:
             if fill_rule not in ("nonzero", "evenodd"):
                 fill_rule = "nonzero"
 
-            if len(subpath_polys) == 1:
-                result_poly = subpath_polys[0]
+            if len(subpath_items) == 1:
+                result_poly = subpath_items[0]["poly"]
             elif len(subpath_polys) > 1:
                 if fill_rule == "evenodd":
                     combined = subpath_polys[0]
@@ -3584,10 +3782,7 @@ class VectorProcessor:
                         except Exception:
                             pass
                 else:
-                    try:
-                        combined = unary_union(subpath_polys)
-                    except Exception:
-                        combined = subpath_polys[0]
+                    combined = _combine_nonzero_subpaths(subpath_items)
 
                 if combined is not None and not combined.is_empty:
                     if not combined.is_valid:

@@ -5,6 +5,7 @@ Covers:
     Fix 2: fill-rule aware subpath handling
     Fix 3: Morphological closing (_normalize_contours)
     Fix 4: Gradient flattening
+    Regression: Hue-aware SVG color matching
     Fix 5: Disconnected shape splitting (_split_disconnected_shapes)
     Fix 6: Backing plate hole filtering (_filter_backing_holes)
     Fix 7: Same-colour shape merging in _run_length_extrude
@@ -206,6 +207,195 @@ class TestFlattenGradientShape:
         }
         result = VectorProcessor._flatten_gradient_shape(grad_info, [])
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: Hue-aware SVG color matching
+# ---------------------------------------------------------------------------
+
+
+class TestHueAwareVectorColorMatching:
+    """Verify SVG-native matching uses the shared hue-aware matcher."""
+
+    def test_match_colors_uses_hue_aware_matcher_when_available(self):
+        class _ForcedHueMatcher:
+            def __init__(self):
+                self.seen = None
+
+            def match_colors_batch(self, colors):
+                self.seen = np.array(colors, copy=True)
+                return np.array([1], dtype=np.intp)
+
+        class _FallbackKdtree:
+            n = 2
+
+            def query(self, lab):
+                return np.array([0.0]), np.array([0])
+
+        class _FakeImageProcessor:
+            def __init__(self, hue_matcher):
+                self.hue_matcher = hue_matcher
+                self.kdtree = _FallbackKdtree()
+                self.lut_rgb = np.array(
+                    [[0, 0, 0], [80, 70, 140]],
+                    dtype=np.uint8,
+                )
+                self.lut_lab = self.lut_rgb.astype(np.float64)
+                self.ref_stacks = np.array(
+                    [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+                    dtype=np.int32,
+                )
+
+            @staticmethod
+            def _rgb_to_lab(arr):
+                return np.asarray(arr, dtype=np.float64)
+
+        hue_matcher = _ForcedHueMatcher()
+        vp = VectorProcessor.from_img_processor(
+            _FakeImageProcessor(hue_matcher),
+            "6-Color (RYBWGK 1296)",
+        )
+        clipped = [
+            {
+                "geometry": Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                "color": (46, 30, 67),
+            }
+        ]
+
+        matched = vp._match_colors(
+            clipped,
+            replacement_manager=None,
+            num_channels=2,
+            num_layers=5,
+        )
+
+        assert hue_matcher.seen.tolist() == [[46, 30, 67]]
+        assert matched[0]["lut_idx"] == 1
+        assert matched[0]["matched_rgb"] == (80, 70, 140)
+        assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
+
+
+class TestVectorNegativeSpacePreview:
+    """Verify SVG transparent negative space does not display as black."""
+
+    class _NearestKdtree:
+        def __init__(self, lut_rgb):
+            self.lut_rgb = lut_rgb.astype(np.float64)
+            self.n = len(lut_rgb)
+
+        def query(self, lab):
+            lab = np.asarray(lab, dtype=np.float64).reshape(-1, 3)
+            dist = np.linalg.norm(lab[:, None, :] - self.lut_rgb[None, :, :], axis=2)
+            index = np.argmin(dist, axis=1)
+            return dist[np.arange(len(lab)), index], index
+
+    class _FakeImageProcessor:
+        lut_path = "fake.npy"
+        color_mode = "Unit"
+        layer_count = 5
+        lut_rgb = np.array([[255, 255, 255], [0, 0, 0]], dtype=np.uint8)
+        lut_lab = lut_rgb.astype(np.float64)
+        ref_stacks = np.array(
+            [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+            dtype=np.int16,
+        )
+        color_conf = {
+            "slots": ["White", "Black"],
+            "preview": {0: [255, 255, 255, 255], 1: [0, 0, 0, 255]},
+            "map": {"White": 0, "Black": 1},
+        }
+        slot_names = ["White", "Black"]
+        preview_colors = color_conf["preview"]
+        hue_matcher = None
+
+        def __init__(self, kdtree):
+            self.kdtree = kdtree
+
+        @staticmethod
+        def _rgb_to_lab(arr):
+            return np.asarray(arr, dtype=np.float64)
+
+    def _processor(self):
+        return VectorProcessor.from_img_processor(
+            self._FakeImageProcessor(self._NearestKdtree(self._FakeImageProcessor.lut_rgb)),
+            "Unit",
+        )
+
+    def test_enclosed_transparent_hole_displays_white_but_stays_air(self, tmp_path):
+        svg_path = tmp_path / "hole.svg"
+        svg_path.write_text(
+            """
+            <svg width="100" height="100" viewBox="0 0 100 100"
+                 xmlns="http://www.w3.org/2000/svg">
+              <path fill="#000000" fill-rule="evenodd"
+                    d="M10 10 H90 V90 H10 Z M40 40 H60 V60 H40 Z"/>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        analysis = self._processor().analyze_svg(str(svg_path), 10.0)
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=10.0,
+            supersample_preview=1,
+        )
+        cy = cache["mask_solid"].shape[0] // 2
+        cx = cache["mask_solid"].shape[1] // 2
+
+        assert bool(cache["mask_solid"][cy, cx]) is False
+        assert cache["matched_rgb"][cy, cx].tolist() == [255, 255, 255]
+        assert int(cache["material_matrix"][cy, cx, 0]) == -1
+
+    def test_default_nonzero_reverse_winding_allows_later_white_shape(self, tmp_path):
+        svg_path = tmp_path / "nonzero-hole.svg"
+        svg_path.write_text(
+            """
+            <svg width="100" height="100" viewBox="0 0 100 100"
+                 xmlns="http://www.w3.org/2000/svg">
+              <path fill="#000000"
+                    d="M10 10 H90 V90 H10 Z M40 40 V60 H60 V40 Z"/>
+              <rect x="42" y="42" width="16" height="16" fill="#ffffff"/>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        analysis = self._processor().analyze_svg(str(svg_path), 10.0)
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=10.0,
+            supersample_preview=1,
+        )
+        cy = cache["mask_solid"].shape[0] // 2
+        cx = cache["mask_solid"].shape[1] // 2
+
+        assert bool(cache["mask_solid"][cy, cx]) is True
+        assert cache["matched_rgb"][cy, cx].tolist() == [255, 255, 255]
+        assert int(cache["material_matrix"][cy, cx, 0]) == 0
+
+    def test_transparent_exterior_displays_white_but_stays_air(self, tmp_path):
+        svg_path = tmp_path / "square.svg"
+        svg_path.write_text(
+            """
+            <svg width="100" height="100" viewBox="0 0 100 100"
+                 xmlns="http://www.w3.org/2000/svg">
+              <rect x="40" y="40" width="20" height="20" fill="#000000"/>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        analysis = self._processor().analyze_svg(str(svg_path), 10.0)
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=10.0,
+            supersample_preview=1,
+        )
+
+        assert bool(cache["mask_solid"][0, 0]) is False
+        assert cache["matched_rgb"][0, 0].tolist() == [255, 255, 255]
+        assert int(cache["material_matrix"][0, 0, 0]) == -1
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +892,13 @@ class TestFlattenGradientCoordinates:
 class TestFillRuleValuesFallback:
     """fill-rule inherited via SVG root style must be detected from values dict."""
 
-    def _make_svg_with_fillrule(self, fill_rule_on_root: bool, fill_rule_on_element: bool):
+    def _make_svg_with_fillrule(
+        self,
+        fill_rule_on_root: bool,
+        fill_rule_on_element: bool,
+        *,
+        inner_same_winding: bool = False,
+    ):
         """Create a minimal SVG with concentric-circle compound path.
 
         When *fill_rule_on_root* is True, the SVG root ``<svg>`` has
@@ -711,12 +907,13 @@ class TestFillRuleValuesFallback:
         """
         root_style = ' style="fill-rule:evenodd;"' if fill_rule_on_root else ""
         elem_attr = ' fill-rule="evenodd"' if fill_rule_on_element else ""
+        inner_sweep = "1" if inner_same_winding else "0"
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"{root_style}>'
             f'  <path{elem_attr} fill="rgb(255,0,0)"'
             '    d="M100,10 A90,90 0 1,1 99.99,10 Z'
-            '      M100,40 A60,60 0 1,0 100.01,40 Z"/>'
+            f'      M100,40 A60,60 0 1,{inner_sweep} 100.01,40 Z"/>'
             "</svg>"
         )
 
@@ -762,8 +959,12 @@ class TestFillRuleValuesFallback:
         assert poly.area < expected_disc_area * 0.85
 
     def test_nonzero_default_fills_disc(self):
-        """Without any evenodd declaration, both circles should merge into a solid disc."""
-        svg = self._make_svg_with_fillrule(fill_rule_on_root=False, fill_rule_on_element=False)
+        """Same-winding nonzero rings should merge into a solid disc."""
+        svg = self._make_svg_with_fillrule(
+            fill_rule_on_root=False,
+            fill_rule_on_element=False,
+            inner_same_winding=True,
+        )
         shapes = self._parse_shapes(svg)
         assert len(shapes) >= 1
         poly = shapes[0]["poly"]
