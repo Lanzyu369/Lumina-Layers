@@ -502,7 +502,13 @@ def _neighbor_coherence_refine(
     # Full distance matrix (C, K)
     full_dist = cdist(target_lab, all_lab, metric="euclidean")
     # top-K indices per target
-    topk_indices = np.argpartition(full_dist, top_k, axis=1)[:, :top_k]  # (C, top_k)
+    if top_k >= K_total:
+        # All candidates fit within top-K; no partial sort needed.
+        topk_indices = np.broadcast_to(
+            np.arange(K_total, dtype=np.intp)[None, :], (C_count, K_total)
+        ).copy()
+    else:
+        topk_indices = np.argpartition(full_dist, top_k, axis=1)[:, :top_k]  # (C, top_k)
 
     # Current matched Lab (from matched_rgb)
     matched_lab = rgb_to_lab(matched_rgb).astype(np.float64)
@@ -975,7 +981,14 @@ class MaterialSolverCache:
                 chunk_target = target_lab[c_start:c_end]
                 dist_matrix = cdist(chunk_target, all_lab, metric="euclidean")
                 # Get top-k indices per row
-                topk_idx = np.argpartition(dist_matrix, top_k_for_hue, axis=1)[:, :top_k_for_hue]
+                chunk_size = c_end - c_start
+                if top_k_for_hue >= K:
+                    # All recipes fit; no partial sort needed.
+                    topk_idx = np.broadcast_to(
+                        np.arange(K, dtype=np.intp)[None, :], (chunk_size, K)
+                    ).copy()
+                else:
+                    topk_idx = np.argpartition(dist_matrix, top_k_for_hue, axis=1)[:, :top_k_for_hue]
                 row_idx = np.arange(c_end - c_start)[:, None]
                 topk_lab = all_lab[topk_idx]  # (chunk, top_k, 3)
                 topk_de = dist_matrix[row_idx, topk_idx]  # (chunk, top_k)
