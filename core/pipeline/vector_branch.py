@@ -992,7 +992,21 @@ def _run_vector_branch(ctx: dict) -> dict:
                 vector_region_masks = None
 
             if isinstance(vector_region_masks, dict) and vector_region_masks:
-                base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
+                # In material-archive mode there is no LUT metadata, so the
+                # backing/white channel index lives on ctx (written by S01
+                # input validation via ``infer_material_archive_base_channel_idx``).
+                # Without this fallback the previous ``getattr(lut_metadata,
+                # "base_channel_idx", 0) or 0`` quietly defaulted to channel 0,
+                # which filled user-added layers with the first material in the
+                # palette instead of the white backing slot — matching the
+                # equivalent fix already applied to ``s03_color_replacement``.
+                # 耗材档案模式下 ``lut_metadata`` 为 None，白色/底色通道索引由 S01
+                # 写入 ``ctx["material_base_channel_idx"]``；没有这个 fallback 会
+                # 退回 0 号通道，与 s03_color_replacement 中已有的修复保持一致。
+                if lut_metadata is not None:
+                    base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
+                else:
+                    base_channel_idx = int(ctx.get("material_base_channel_idx", 0) or 0)
                 try:
                     apply_recipe_overrides_to_analysis(
                         analysis,

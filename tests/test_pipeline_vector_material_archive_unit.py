@@ -587,6 +587,142 @@ class TestAnalyzeSvgMaterialSmallShapeSnap:
         assert all(item["matched_rgb"] == (87, 51, 51) for item in brown_shapes)
 
 
+class TestRecipeOverrideBaseChannelIdxFallback:
+    """Material-archive vector custom-recipe layer padding must use the
+    backing channel inferred by S01, not channel 0.
+
+    Background / 背景:
+        When the user opens the Custom Recipe dialog under SVG + material
+        archive and bumps the layer count from N to N+k, the freshly
+        appended layers must be padded with the white/backing material so
+        non-overridden regions stay continuous with the backing slab. In
+        material-archive mode ``lut_metadata`` is ``None`` (there is no
+        LUT file), so the only authoritative source for the backing
+        channel index is ``ctx["material_base_channel_idx"]`` (written by
+        ``core.pipeline._input_validation_common`` from
+        ``infer_material_archive_base_channel_idx``).
+
+        A previous version of this fix (commit ``791ad20``) replaced the
+        old hard-coded ``getattr(lut_metadata, "base_channel_idx", 0) or
+        0`` with the same ``ctx`` fallback that ``s03_color_replacement``
+        already uses. That patch was silently dropped during the upstream
+        merge in PR #174 (``970254f``), regressing the fix. This test
+        pins the fallback so any future merge that reintroduces the
+        hard-coded ``or 0`` form fails fast.
+
+        当用户在"自定义配方"对话框里把层数从 N 加到 N+k，新增层必须用底色
+        通道补齐，否则非 override 区域的"白色"会被填成 0 号耗材；耗材档案
+        模式下 ``lut_metadata`` 为 None，正确通道索引只能来自
+        ``ctx["material_base_channel_idx"]``。本测试锁住该 fallback，避免
+        历史上发生过的"upstream merge 静默回退"再次发生。
+    """
+
+    def test_run_vector_branch_falls_back_to_ctx_when_lut_metadata_missing(self):
+        """The fallback expression must read ``material_base_channel_idx``
+        from ctx when ``lut_metadata`` is ``None``.
+
+        ``lut_metadata`` 为 None 时必须从 ctx 读 ``material_base_channel_idx``。
+        """
+        import inspect
+        import re
+
+        from core.pipeline.vector_branch import _run_vector_branch
+
+        source = inspect.getsource(_run_vector_branch)
+
+        pattern = re.compile(
+            r"if\s+lut_metadata\s+is\s+not\s+None\s*:\s*\n"
+            r"\s*base_channel_idx\s*=\s*int\(\s*getattr\(\s*lut_metadata\s*,"
+            r"\s*[\"']base_channel_idx[\"']\s*,\s*0\s*\)\s*or\s*0\s*\)\s*\n"
+            r"\s*else\s*:\s*\n"
+            r"\s*base_channel_idx\s*=\s*int\(\s*ctx\.get\(\s*"
+            r"[\"']material_base_channel_idx[\"']\s*,\s*0\s*\)\s*or\s*0\s*\)",
+            re.MULTILINE,
+        )
+        assert pattern.search(source) is not None, (
+            "vector_branch._run_vector_branch must keep the "
+            "lut_metadata=None -> ctx['material_base_channel_idx'] fallback "
+            "for material-archive recipe override layer padding; this fix "
+            "was silently dropped during the upstream merge in PR #174 and "
+            "must not regress again."
+        )
+
+    def test_run_vector_branch_does_not_hardcode_base_channel_to_zero(self):
+        """The previous bug form ``getattr(..., 0) or 0`` without a
+        ``ctx`` fallback must not reappear.
+
+        旧的硬编码形式（无 ctx fallback）不允许再次出现。
+        """
+        import inspect
+        import re
+
+        from core.pipeline.vector_branch import _run_vector_branch
+
+        source = inspect.getsource(_run_vector_branch)
+
+        # The buggy single-line form is exactly:
+        #   base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
+        # appearing as a standalone statement (not inside an ``if lut_metadata
+        # is not None`` branch).
+        bug_pattern = re.compile(
+            r"^[ \t]*base_channel_idx\s*=\s*int\(\s*getattr\(\s*lut_metadata"
+            r"\s*,\s*[\"']base_channel_idx[\"']\s*,\s*0\s*\)\s*or\s*0\s*\)"
+            r"\s*$",
+            re.MULTILINE,
+        )
+
+        for match in bug_pattern.finditer(source):
+            line_start = source.rfind("\n", 0, match.start()) + 1
+            preceding = source[max(0, line_start - 200):line_start]
+            assert "if lut_metadata is not None" in preceding, (
+                "Found ``base_channel_idx = int(getattr(lut_metadata, "
+                "\"base_channel_idx\", 0) or 0)`` outside an "
+                "``if lut_metadata is not None`` branch in "
+                "vector_branch._run_vector_branch. This is the regression "
+                "form fixed by ``791ad20``: in material-archive mode "
+                "``lut_metadata`` is None and the expression silently "
+                "defaults to channel 0, filling user-added layers with "
+                "the first material instead of the backing white. Restore "
+                "the ``else: ctx.get(\"material_base_channel_idx\", 0)`` "
+                "branch."
+            )
+
+    def test_s03_and_vector_branch_use_consistent_fallback_shape(self):
+        """``vector_branch`` and ``s03_color_replacement`` must agree on
+        the same fallback chain so behaviour stays parallel between
+        raster and vector pipelines.
+
+        ``vector_branch`` 与 ``s03_color_replacement`` 的 base_channel_idx
+        fallback 必须保持一致，避免栅格/矢量两条管线在同一边界条件下产生
+        不同行为。
+        """
+        import inspect
+        import re
+
+        from core.pipeline.s03_color_replacement import run as s03_run
+        from core.pipeline.vector_branch import _run_vector_branch
+
+        # Both modules must contain the exact same fallback construct for
+        # ``ctx["material_base_channel_idx"]``. We assert presence rather
+        # than equality of surrounding code because the rest of the two
+        # functions intentionally differ.
+        # 两边必须都包含同款 ``ctx["material_base_channel_idx"]`` fallback；
+        # 不强求两段代码完全一致，只锁住关键 fallback 形式相同。
+        fallback_re = re.compile(
+            r"ctx\.get\(\s*[\"']material_base_channel_idx[\"']\s*,\s*0\s*\)\s*or\s*0",
+        )
+        assert fallback_re.search(inspect.getsource(s03_run)) is not None, (
+            "s03_color_replacement.run lost its material_base_channel_idx "
+            "fallback; this is required for the raster recipe override "
+            "path and must stay in lock-step with vector_branch."
+        )
+        assert fallback_re.search(inspect.getsource(_run_vector_branch)) is not None, (
+            "vector_branch._run_vector_branch lost its "
+            "material_base_channel_idx fallback; see "
+            "TestRecipeOverrideBaseChannelIdxFallback for context."
+        )
+
+
 class _BruteForceLabTree:
     def __init__(self, lab_points: np.ndarray):
         self.lab_points = np.asarray(lab_points, dtype=np.float64).reshape(-1, 3)
