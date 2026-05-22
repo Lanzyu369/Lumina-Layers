@@ -176,6 +176,13 @@ function isRawFileConverter(file: File): boolean {
   return RAW_EXTENSIONS_CONVERTER.has(ext);
 }
 
+function isSvgFile(file: File): boolean {
+  return (
+    file.type === "image/svg+xml" ||
+    file.name.toLowerCase().endsWith(".svg")
+  );
+}
+
 // ========== Selection Mode Types ==========
 
 export type SelectionMode =
@@ -1438,6 +1445,7 @@ export interface ConverterState {
 export interface ConverterActions {
   // 图片
   setImageFile: (file: File | null) => void;
+  loadVectorizedSvgIntoConverter: (file: File) => void;
 
   // 参数 setter
   setLutName: (name: string) => void;
@@ -2430,6 +2438,51 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         cropModalOpen: shouldOpenCrop,
       });
       console.log("[DEBUG] setImageFile: cleared layerImages");
+    },
+
+    loadVectorizedSvgIntoConverter: (file: File) => {
+      if (_previewAbortController) {
+        _previewAbortController.abort();
+        _previewAbortController = null;
+      }
+      _gradientGroupsAbortController?.abort();
+      _gradientGroupsAbortController = null;
+
+      const prev = _get().imagePreviewUrl;
+      if (prev && prev.startsWith("blob:")) {
+        URL.revokeObjectURL(prev);
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+      };
+      img.src = previewUrl;
+
+      set({
+        imageFile: file,
+        imagePreviewUrl: previewUrl,
+        aspectRatio: null,
+        ...buildPreviewSessionResetState(),
+        modeling_mode: ModelingModeEnum.VECTOR,
+        isLoading: false,
+        error: null,
+        cropModalOpen: false,
+        batchMode: false,
+        batchFiles: [],
+        batchResult: null,
+        batchLoading: false,
+        previewWarnings: [],
+        largeFormatWarnings: [],
+        gradientGroups: null,
+        gradientGroupsLoading: false,
+        gradientGroupsError: null,
+        gradientGroupsSessionId: null,
+        gradientSelection: null,
+        selectedGradientRegions: [],
+        puzzleEnabled: false,
+      });
     },
 
     // --- 基础参数 ---
@@ -5241,6 +5294,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewParams,
           signal,
         );
+        if (signal.aborted || _previewAbortController?.signal !== signal) {
+          return;
+        }
         _logPreviewTimer("response received");
         // 后端返回 JSON，preview_url 是相对路径如 /api/files/xxx
         const previewUrl =
@@ -5892,9 +5948,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       if (validFiles.length === 1) {
         const singleFile = validFiles[0];
-        const isSvg =
-          singleFile.name.toLowerCase().endsWith(".svg") ||
-          singleFile.type === "image/svg+xml";
+        const isSvg = isSvgFile(singleFile);
         const autoModelingMode = isSvg ? ModelingModeEnum.VECTOR : undefined;
 
         if (isRawFileConverter(singleFile)) {

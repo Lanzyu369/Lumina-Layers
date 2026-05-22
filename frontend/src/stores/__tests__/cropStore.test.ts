@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../converter';
+import { ModelingMode } from '../../api/types';
 
 /**
  * cropStore 单元测试
@@ -12,11 +13,13 @@ vi.mock('../../api/converter', async (importOriginal) => {
   return {
     ...actual,
     cropImage: vi.fn(),
+    convertPreview: vi.fn(),
   };
 });
 
-import { cropImage } from '../../api/converter';
+import { cropImage, convertPreview } from '../../api/converter';
 const mockCropImage = vi.mocked(cropImage);
+const mockConvertPreview = vi.mocked(convertPreview);
 
 // Mock fetch (used by submitCrop to download cropped blob)
 const mockFetch = vi.fn();
@@ -122,5 +125,137 @@ describe('使用原图 (setCropModalOpen)', () => {
     // Original image is preserved
     expect(state.imagePreviewUrl).toBe('blob:old-preview');
     expect(state.imageFile).not.toBeNull();
+  });
+});
+
+describe('矢量化 SVG 导入', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it('loadVectorizedSvgIntoConverter 载入 SVG 时关闭裁剪并切换到矢量模式', () => {
+    const svgFile = new File(['<svg/>'], 'vectorized.svg', {
+      type: 'image/svg+xml',
+    });
+    useConverterStore.setState({
+      imagePreviewUrl: 'blob:old-preview',
+      cropModalOpen: true,
+      enableCrop: true,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      batchMode: true,
+      batchFiles: [new File(['old'], 'old.png', { type: 'image/png' })],
+      sessionId: 'old-session',
+      previewImageUrl: '/api/files/old-preview',
+      previewGlbUrl: '/api/files/old-glb',
+      downloadUrl: '/api/files/old-download',
+      previewWarnings: ['old preview warning'],
+      largeFormatWarnings: ['old large-format warning'],
+      error: 'Invalid image file',
+      source_version: 'material',
+      gradientGroups: [],
+      gradientGroupsLoading: true,
+      gradientGroupsError: 'old gradient error',
+      gradientGroupsSessionId: 'old-session',
+      gradientSelection: { kind: 'group', groupIndex: 0 },
+      selectedGradientRegions: [{ groupIndex: 0, regionIndex: 1 }],
+    });
+
+    useConverterStore.getState().loadVectorizedSvgIntoConverter(svgFile);
+
+    const state = useConverterStore.getState();
+    expect(mockRevokeObjectURL).toHaveBeenCalledWith('blob:old-preview');
+    expect(state.imageFile).toBe(svgFile);
+    expect(state.imagePreviewUrl).toBe('blob:cropped-preview');
+    expect(state.modeling_mode).toBe(ModelingMode.VECTOR);
+    expect(state.cropModalOpen).toBe(false);
+    expect(state.batchMode).toBe(false);
+    expect(state.batchFiles).toEqual([]);
+    expect(state.sessionId).toBeNull();
+    expect(state.previewImageUrl).toBeNull();
+    expect(state.previewGlbUrl).toBeNull();
+    expect(state.downloadUrl).toBeNull();
+    expect(state.previewWarnings).toEqual([]);
+    expect(state.largeFormatWarnings).toEqual([]);
+    expect(state.error).toBeNull();
+    expect(state.gradientGroups).toBeNull();
+    expect(state.gradientGroupsLoading).toBe(false);
+    expect(state.gradientGroupsError).toBeNull();
+    expect(state.gradientGroupsSessionId).toBeNull();
+    expect(state.gradientSelection).toBeNull();
+    expect(state.selectedGradientRegions).toEqual([]);
+  });
+
+  it('loadVectorizedSvgIntoConverter 取消未完成预览并阻止旧响应回写', async () => {
+    let resolvePreview!: (value: Awaited<ReturnType<typeof convertPreview>>) => void;
+    let previewSignal: AbortSignal | undefined;
+    mockConvertPreview.mockImplementation((_file, _params, signal) => {
+      previewSignal = signal;
+      return new Promise((resolve) => {
+        resolvePreview = resolve;
+      });
+    });
+    mockFetch.mockResolvedValue({
+      blob: () => Promise.resolve(new Blob(['ignored'], { type: 'image/png' })),
+    });
+    useConverterStore.setState({
+      imageFile: new File(['old'], 'old.png', { type: 'image/png' }),
+      imagePreviewUrl: 'blob:old-preview',
+      source_version: 'legacy',
+      lut_name: 'test-lut',
+      isLoading: false,
+      sessionId: null,
+      previewImageUrl: null,
+      previewGlbUrl: null,
+    });
+
+    const previewPromise = useConverterStore.getState().submitPreview();
+    expect(useConverterStore.getState().isLoading).toBe(true);
+    expect(previewSignal?.aborted).toBe(false);
+
+    const svgFile = new File(['<svg/>'], 'vectorized.svg', {
+      type: 'image/svg+xml',
+    });
+    useConverterStore.getState().loadVectorizedSvgIntoConverter(svgFile);
+
+    expect(previewSignal?.aborted).toBe(true);
+    expect(useConverterStore.getState().isLoading).toBe(false);
+
+    resolvePreview({
+      session_id: 'stale-session',
+      status: 'ok',
+      message: 'stale',
+      preview_url: '/api/files/stale-preview',
+      preview_glb_url: '/api/files/stale-glb',
+      palette: [],
+      dimensions: { width: 10, height: 10 },
+      warnings: ['stale warning'],
+    });
+    await previewPromise;
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(svgFile);
+    expect(state.sessionId).toBeNull();
+    expect(state.previewImageUrl).toBeNull();
+    expect(state.previewGlbUrl).toBeNull();
+    expect(state.previewWarnings).toEqual([]);
+  });
+
+  it('setImageFile 保持通用入口原有裁剪行为', () => {
+    const svgFile = new File(['<svg/>'], 'manual.svg', {
+      type: 'image/svg+xml',
+    });
+    useConverterStore.setState({
+      cropModalOpen: false,
+      enableCrop: true,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+    });
+
+    useConverterStore.getState().setImageFile(svgFile);
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(svgFile);
+    expect(state.cropModalOpen).toBe(true);
+    expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
   });
 });
