@@ -1255,13 +1255,58 @@ def _run_vector_branch(ctx: dict) -> dict:
         if bool(ctx.get("center_on_bed", True)):
             s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
 
+        # ------------------------------------------------------------------
+        # Vector cover thumbnail: render a lightweight 2D RGBA preview from
+        # the analyzed geometry and PNG-encode it in-memory so the 3MF
+        # cover thumbnail never points at the raw .svg file (PIL cannot
+        # decode SVG → letterbox would fall back to a blank placeholder,
+        # which is the bug we are fixing).
+        # 矢量分支封面：从已分析的矢量几何渲染一份轻量 2D RGBA 预览并在
+        # 内存里 PNG 编码，避免 cover_source 直接指向 .svg（PIL 无法解码 SVG，
+        # 走占位回退会导致系统文件管理器看到纯白缩略图，正是本次修复的
+        # bug）。失败时静默回退到原有 cover_source_path / image_path 链路，
+        # 保持现有契约与测试不变。
+        if not ctx.get("svg_raster_preview_bytes"):
+            cover_render_t0 = time.perf_counter()
+            try:
+                cover_rgba = VectorProcessor.render_preview(analysis, pixels_per_mm=10.0)
+                from io import BytesIO as _CoverBytesIO
+                from PIL import Image as _CoverImage
+
+                cover_pil = _CoverImage.fromarray(cover_rgba, mode="RGBA")
+                cover_buffer = _CoverBytesIO()
+                cover_pil.save(cover_buffer, format="PNG", optimize=False)
+                ctx["svg_raster_preview_bytes"] = cover_buffer.getvalue()
+                log.debug(
+                    "Vector cover thumbnail rendered from analyzed geometry",
+                    extra={
+                        "event": "vector_cover_render_done",
+                        "duration_ms": round(
+                            (time.perf_counter() - cover_render_t0) * 1000, 3
+                        ),
+                        "bytes": len(ctx["svg_raster_preview_bytes"]),
+                        "rgba_shape": [int(s) for s in cover_rgba.shape],
+                    },
+                )
+            except COORDINATOR_HANDLED_ERRORS as cover_exc:
+                log.warning(
+                    "Vector cover thumbnail render failed; will fall back to "
+                    "cover_source_path or image_path",
+                    extra={
+                        "event": "vector_cover_render_failed",
+                        "error_type": type(cover_exc).__name__,
+                        "error_message": str(cover_exc),
+                    },
+                )
+
         export_t0 = time.perf_counter()
         # Cover thumbnail source resolution priority:
-        # 1. ``ctx['svg_raster_preview_bytes']`` (rasterized SVG preview bytes,
-        #    if a future stage caches them);
+        # 1. ``ctx['svg_raster_preview_bytes']`` (rasterized SVG preview bytes
+        #    produced just above; primary path for SVG inputs);
         # 2. ``ctx['cover_source_path']`` (explicit override mirrored from
         #    convert_image_to_3d / generate_final_model);
-        # 3. ``ctx['image_path']`` (the original SVG path).
+        # 3. ``ctx['image_path']`` (the original SVG path; only useful for
+        #    non-SVG callers since PIL cannot decode SVG).
         # Each entry is checked separately so a falsy intermediate (e.g. an
         # empty bytes buffer) does not poison the fallback chain.
         # 封面图源按优先级选择，缺省回退到 image_path 保持安全。

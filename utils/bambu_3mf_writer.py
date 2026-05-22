@@ -960,7 +960,72 @@ class BambuStudio3MFWriter:
         if self.cover_bundle is not None:
             return
 
+        # Cover-source diagnostics (DEBUG only): describe what the writer
+        # received before letting the builder decode it. Helps identify cases
+        # where a path is wrong, missing, or unexpectedly None for a given
+        # structure_mode without spending INFO budget.
+        # 封面源诊断（仅 DEBUG）：在解码之前记录 writer 收到的 cover_source
+        # 形态，方便复盘单面/双面差异且不消耗 INFO 配额。
+        _src = self.cover_source
+        if _src is None:
+            _src_kind = "none"
+            _src_repr = ""
+            _src_exists = False
+            _src_size = 0
+        elif isinstance(_src, str):
+            _src_kind = "path"
+            _src_repr = _src[:1024]
+            _src_exists = os.path.exists(_src)
+            try:
+                _src_size = os.path.getsize(_src) if _src_exists else 0
+            except OSError:
+                _src_size = -1
+        elif isinstance(_src, (bytes, bytearray, memoryview)):
+            _src_kind = "bytes"
+            _src_repr = ""
+            _src_exists = True
+            _src_size = len(bytes(_src))
+        else:
+            _src_kind = type(_src).__name__
+            _src_repr = ""
+            _src_exists = True
+            _src_size = -1
+        log.debug(
+            "Bambu 3MF cover source received",
+            extra={
+                "event": "bambu_3mf_cover_source_received",
+                "path": str(self.output_path)[:1024],
+                "cover_source_kind": _src_kind,
+                "cover_source_path": _src_repr,
+                "cover_source_exists": bool(_src_exists),
+                "cover_source_size_bytes": int(_src_size),
+            },
+        )
+
         self.cover_bundle = CoverThumbnailBuilder().build(self.cover_source)
+
+        # Cover-bundle diagnostics (DEBUG only): record the per-PNG byte sizes
+        # plus the placeholder flag so we can tell at a glance whether the
+        # decoded image actually flowed into the bundle for this 3MF.
+        # 封面 bundle 诊断（仅 DEBUG）：输出每张缩略图字节数与是否走了占位，
+        # 用于一眼判断该次 3MF 的缩略图是否真的来自源图。
+        log.debug(
+            "Bambu 3MF cover bundle built",
+            extra={
+                "event": "bambu_3mf_cover_bundle_built",
+                "path": str(self.output_path)[:1024],
+                "is_placeholder": bool(self.cover_bundle.is_placeholder),
+                "thumbnail_3mf_bytes": len(self.cover_bundle.thumbnail_3mf),
+                "thumbnail_middle_bytes": len(self.cover_bundle.thumbnail_middle),
+                "thumbnail_small_bytes": len(self.cover_bundle.thumbnail_small),
+                "plate_main_bytes": len(self.cover_bundle.plate_main),
+                "plate_no_light_bytes": len(self.cover_bundle.plate_no_light),
+                "warning_error_type": (
+                    (self.cover_bundle.warning or {}).get("error_type", "")
+                ),
+            },
+        )
+
         warning = self.cover_bundle.warning
         if warning is not None:
             extra = {
