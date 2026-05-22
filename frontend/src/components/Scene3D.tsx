@@ -726,7 +726,26 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           </Suspense>
         ) : effectiveModelUrl ? (
           <Suspense fallback={null}>
-            <ModelViewer url={effectiveModelUrl} />
+            <InteractiveModelViewer
+              url={effectiveModelUrl}
+              colorRemapMap={colorRemapMap}
+              colorHeightMap={colorHeightMap}
+              baseHeight={baseHeight}
+              enableRelief={enableRelief}
+              scaleX={scaleX}
+              scaleY={scaleY}
+              spacerThick={spacerThick}
+              structureMode={structureMode}
+              enableOutline={enableOutline}
+              outlineWidth={outlineWidth}
+              enableCloisonne={enableCloisonne}
+              wireWidthMm={wireWidthMm}
+              wireHeightMm={wireHeightMm}
+              enableFridgeMagnet={enableFridgeMagnet}
+              rasterCellSize={rasterCellSize}
+              puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
+              puzzleOverlayUrl={puzzleOverlayUrl}
+            />
           </Suspense>
         ) : previewGlbUrl ? (
           <Suspense fallback={null}>

@@ -152,6 +152,34 @@ def run(ctx: dict) -> dict:
             float(ctx.get("bambu_color_height_mm", 0.0)),
             str(ctx.get("bambu_face_orientation", "down")),
         )
+
+        # Cover-thumbnail diagnostics: log which image is forwarded as
+        # cover_source for this export, plus structure_mode / face_orientation
+        # to help correlate single-sided vs double-sided behaviour.
+        # 封面缩略图诊断日志：记录本次导出实际使用的 cover_source 路径，
+        # 以及 structure_mode / face_orientation，帮助定位单面/双面差异。
+        _cover_path = ctx.get("cover_source_path") or ctx.get("image_path")
+        _cover_exists = bool(_cover_path) and os.path.exists(str(_cover_path))
+        try:
+            _cover_size = os.path.getsize(str(_cover_path)) if _cover_exists else 0
+        except OSError:
+            _cover_size = -1
+        _log.debug(
+            "Cover thumbnail source resolved",
+            extra={
+                "event": "s09_cover_source_resolved",
+                "structure_mode": str(ctx.get("structure_mode", "")),
+                "face_orientation": str(ctx.get("bambu_face_orientation", "down")),
+                "color_mode": str(color_mode),
+                "cover_source_path_param": str(ctx.get("cover_source_path") or ""),
+                "image_path": str(ctx.get("image_path") or ""),
+                "resolved_cover_path": str(_cover_path or ""),
+                "resolved_cover_exists": bool(_cover_exists),
+                "resolved_cover_size_bytes": int(_cover_size),
+                "out_path": str(out_path),
+            },
+        )
+
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,

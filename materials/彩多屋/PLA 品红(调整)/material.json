@@ -1,0 +1,232 @@
+{
+    "schema_version": "1.1",
+    "kind": "lumina_stage_a_material",
+    "material_name": "PLA 品红(调整)",
+    "brand": "彩多屋",
+    "created_at": "2026-05-20T02:50:00.000000+00:00",
+    "updated_at": "2026-05-20T02:50:00.000000+00:00",
+    "stage_a_params_file": "stage_A_parameters.json",
+    "fit_summary": {
+        "substrate_count": 2,
+        "channel_count": 1,
+        "substrates": [
+            "black",
+            "white"
+        ],
+        "colors": [
+            "PLA 品红(调整)"
+        ],
+        "overall_validation": {
+            "mean_delta_e": null,
+            "max_delta_e": null,
+            "rmse_linear": null,
+            "channel_rmse": null,
+            "verification_count": 0,
+            "aggregation_method": "manual_adjustment",
+            "selected_run_count": 0,
+            "selection_strategy": "manual_k_adjustment"
+        },
+        "warnings": []
+    },
+    "material_summary": {
+        "sample_count": 36,
+        "per_substrate_sample_count": 18,
+        "grid_rows": 3,
+        "grid_cols": 6,
+        "layer_height_mm": 0.08,
+        "warp_width_px": 1340,
+        "warp_height_px": 680,
+        "thickness_layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            25
+        ],
+        "white_zero_rgb": [
+            225,
+            228,
+            224
+        ],
+        "black_zero_rgb": [
+            31,
+            31,
+            35
+        ],
+        "estimated_rgb": [
+            187,
+            79,
+            143
+        ],
+        "estimated_k": [
+            2.2,
+            18.816049,
+            5.998628
+        ],
+        "verification_count": 0,
+        "aggregation_method": "manual_adjustment",
+        "selected_run_count": 0
+    },
+    "source": {
+        "kit_manifest": {
+            "schema_version": "1.0",
+            "workflow": "single-stage-kit",
+            "substrate_id": "white",
+            "substrate_display_name": "White",
+            "material_default": "PLA Basic",
+            "dataset_layout": "{substrate_id}/{color_name}/",
+            "spec": {
+                "grid_cols": 6,
+                "grid_rows": 3,
+                "block_mm": 10.0,
+                "gap_mm": 1.0,
+                "margin_mm": 1.0,
+                "pixel_mm": 1.0,
+                "layer_height_mm": 0.08,
+                "base_mm": 1.0,
+                "max_step_layers": 25,
+                "step_layers": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16,
+                    25
+                ],
+                "shrink_xy_mm": 0.02
+            },
+            "labelme": {
+                "required_labels": [
+                    "ColorChecker",
+                    "stage"
+                ],
+                "dataset_layout": "{substrate_id}/{color_name}/",
+                "color_source": "folder_name"
+            },
+            "shared_model_filename": "single_stage_white_20260517_094249.3mf",
+            "jobs": []
+        },
+        "white_corner_points": [
+            [
+                2492,
+                1622
+            ],
+            [
+                3867,
+                1607
+            ],
+            [
+                3843,
+                2260
+            ],
+            [
+                2492,
+                2275
+            ]
+        ],
+        "black_corner_points": [
+            [
+                2338,
+                1760
+            ],
+            [
+                3676,
+                1790
+            ],
+            [
+                3649,
+                2434
+            ],
+            [
+                2329,
+                2410
+            ]
+        ],
+        "white_detected_orientation": "flip_horizontal",
+        "black_detected_orientation": "flip_horizontal",
+        "white_detected_corner_order": [
+            1,
+            0,
+            3,
+            2
+        ],
+        "black_detected_corner_order": [
+            1,
+            0,
+            3,
+            2
+        ],
+        "white_orientation_info": {
+            "signal_strength": 0.251261,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+        },
+        "black_orientation_info": {
+            "signal_strength": 0.146938,
+            "flat": false,
+            "manual_override": null,
+            "locked_to": null
+        },
+        "spec": {
+            "grid_cols": 6,
+            "grid_rows": 3,
+            "block_mm": 10.0,
+            "gap_mm": 1.0,
+            "margin_mm": 1.0,
+            "pixel_mm": 1.0,
+            "layer_height_mm": 0.08,
+            "base_mm": 1.0,
+            "max_step_layers": 25,
+            "step_layers": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                25
+            ],
+            "shrink_xy_mm": 0.02
+        },
+        "image_source": "raw"
+    },
+    "verification_count": 0,
+    "verification_runs": []
+}
