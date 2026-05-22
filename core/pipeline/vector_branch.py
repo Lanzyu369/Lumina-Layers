@@ -1428,7 +1428,19 @@ def _run_vector_branch(ctx: dict) -> dict:
                     mesh=geom,
                     face_colors=np.tile(rgba, (face_count, 1)),
                 )
-                glb_scene.add_geometry(geom, geom_name=str(geom_name))
+                # Use "color_RRGGBB" naming so InteractiveModelViewer can
+                # identify colour layers via the `color_` prefix convention.
+                # Append a suffix when duplicate hex values occur (two slots
+                # may share an RGB, e.g. Board merged into White).
+                # 使用 "color_RRGGBB" 命名，让 InteractiveModelViewer 能通过
+                # `color_` 前缀识别颜色层。相同 hex 时追加后缀防止冲突。
+                _hex = f"{int(rgba[0]):02x}{int(rgba[1]):02x}{int(rgba[2]):02x}"
+                _candidate = f"color_{_hex}"
+                _n = 0
+                while _candidate in glb_scene.geometry:
+                    _n += 1
+                    _candidate = f"color_{_hex}_{_n}"
+                glb_scene.add_geometry(geom, geom_name=_candidate)
 
             exported_glb = glb_scene.export(glb_path, file_type="glb")
             if isinstance(exported_glb, (bytes, bytearray)):
