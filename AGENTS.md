@@ -7,8 +7,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Communication & Explanation
 
 - 与用户沟通时默认使用中文，除非用户明确要求使用其他语言
-- 默认假设用户不了解项目内部结构、历史背景、模块职责和实现细节；解释时先说明结论，再说明必要背景
-- 默认假设用户技术理解深度较低；避免直接堆叠术语，首次出现关键术语时用简短、直接的文字说明它在当前任务中的作用
+- 默认假设用户不了解项目内部结构、历史背景、模块职责和术语；解释时先说明结论，再补充必要背景和关键术语含义
 - 解释问题原因、修改方案或测试结果时，优先使用清晰的步骤、因果关系和可验证结果，不要使用比喻
 - 不要只说“已修复”或“改了某文件”；总结时应说明用户能看到的变化、风险点、是否已验证，以及还需要用户做什么
 - 如果需要用户做决定，给出少量明确选项，并说明每个选项的影响；避免让用户先理解完整技术背景才能选择
@@ -25,12 +24,12 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Common Commands
 
 - `pip install -r requirements.txt`
-- `cd frontend && npm install`
-- `python api_server.py` | `python start_dev.py`
-- `cd frontend && npm run dev|build|lint`
+- Frontend setup: from `frontend/`, run `npm install`
+- Start the backend: `python api_server.py` or `python start_dev.py`
+- Frontend scripts: from `frontend/`, run `npm run dev`, `npm run build`, or `npm run lint`
 - `python -m pytest tests/ -v`
 - `python -m pytest tests/ --hypothesis-show-statistics`
-- `python scripts/run_vitest.py run` (preferred over `cd frontend && npx vitest --run`; see Tests rules)
+- `python scripts/run_vitest.py run`
 - `python scripts/run_smoke_tests.py`
 - `python scripts/run_full_tests.py`
 - `python scripts/run_realtime_tests.py --no-lint`
@@ -39,7 +38,8 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `python scripts/check_perf_regression.py --use-cold-start`
 - `python scripts/log_quality_check.py --mode fast`
 - `python scripts/log_quality_check.py --mode full`
-- `docker build -t lumina-layers . && docker run -p 7860:7860 lumina-layers`
+- Docker build: `docker build -t lumina-layers .`
+- Docker run: `docker run -p 7860:7860 lumina-layers`
 
 ## Engineering Rules
 
@@ -59,7 +59,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - When inspecting non-ASCII content from the shell, use explicit UTF-8 reads such as `Get-Content -Encoding UTF8`; do not trust default `Get-Content`, redirected output, or terminal rendering alone
 - For manual code edits, prefer `apply_patch`; avoid PowerShell `Set-Content`, `Out-File`, `>`, `>>`, or ad-hoc scripts for files containing non-ASCII text unless UTF-8 encoding is explicitly forced end-to-end
 - After touching Chinese comments, docstrings, translations, or test strings, re-open the edited file with explicit UTF-8 and scan the touched files for common mojibake markers before concluding the work is done
-- Keep user-facing Chinese text in `frontend/src/i18n/translations.ts`; avoid duplicating Chinese literals across multiple files when a translation key can be used instead
+- Avoid duplicating Chinese literals across multiple files when a frontend source of truth already exists
 - If a public API requires bilingual docstrings, verify both languages after the edit; if a private comment/docstring is non-essential and encoding risk is high, prefer concise ASCII-only wording over corrupted Chinese
 
 ## Lossless Refactoring
@@ -71,7 +71,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Frontend Rules
 
 - Frontend design specification: follow `DESIGN.md` (referenced, not duplicated here) as the authoritative source for visual language, layout, components, and interaction patterns; when in doubt, defer to `DESIGN.md` over ad-hoc styling
-- All user-facing strings must come from `frontend/src/i18n/translations.ts`
+- All regular UI strings must come from `frontend/src/i18n/translations.ts`; in-app announcement entries are the exception and follow `docs/announcement-maintenance.md`
 - Support both light and dark themes via tokens/Tailwind vars; no raw UI colors like `#fff`, `bg-white`, or `text-black`
 - Keep frontend resource/file URLs as relative paths in state/domain logic; only normalization-focused tests may use absolute localhost inputs
 - Keep components focused on presentation/local interaction; use API clients and Zustand stores for orchestration
@@ -113,16 +113,16 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - WARNING/ERROR records must carry actionable fields (`error_type`, `error_message`, `path`, `dependency`, etc.); a level alone is not enough
 - External loggers (`uvicorn`, `fastapi`, `starlette`, `asyncio`, `httpx`, `watchfiles`) are normalized by `_resolve_event_label` in `api/structured_logging.py`; `uvicorn.error` is held at WARNING so server lifecycle banners do not spend INFO budget; ANSI noise keys (`color_message`, `color_msg`) are filtered by `_EXTERNAL_NOISE_KEYS`. Update both sets together when onboarding a new external logger
 - Spawned workers and subprocess servers must inherit `LUMINA_LOG_PATH` and `LUMINA_LOG_INIT_BY_PARENT=1`; `setup_file_logging()` then attaches silently without re-emitting `log_file_configured`. Preserve this protocol when changing worker pool startup or any code that spawns child processes
-- File handler always writes JSON Lines; the console handler picks `human` (TTY) or `json` (pipe) automatically and respects `LUMINA_LOG_FORMAT=json|human|auto`
+- File handler always writes JSON Lines; the console handler picks `human` for TTY output or `json` for piped output automatically and respects `LUMINA_LOG_FORMAT` values `json`, `human`, or `auto`
 - Per-workflow INFO budget: a single request-scoped endpoint (preview, generate, etc.) emits at most 8 INFO lines; a full preview + generate run stays at most 30. `request_completed` and other catch-all buckets must stay at 0
 - Pipeline events follow the `*_init` -> `*_done` (or `*_failed`) two-stage convention; demote intermediate progress traces to DEBUG instead of inflating INFO
-- When adding a mutating endpoint to any file in `tests/test_logging_exception_governance_unit.py::TARGETS` (currently 14 governed source files spanning all 9 backend router families), emit a single success-path `<family>_<action>_done` INFO at convergence, register the event in the matching whitelist (e.g. `LUT_STRUCTURED_EVENTS`, `SYSTEM_STRUCTURED_EVENTS`) inside `REQUIRED_STRUCTURED_EVENTS`, and add an ad-hoc workflow step in `scripts/log_quality_check.py::WORKFLOW_ORDER` plus the matching runner branch; do not extend the default canonical workflow without an explicit governance round
-- Bug-triage entry point for AI agents and humans: default log file is `<repo>/logs/lumina_<timestamp>.log` (JSON Lines); start at `docs/logging-guide.md` §6, which covers four canonical recipes — filter by `session_id` for stuck-flow reproduction, aggregate `*_timing` events for slow-path triage, filter `level=ERROR` with `error_type` / `error_message` / `path` for failure analysis, and read `log_quality_check.py --mode fast` stderr for gate-failure localization. Copy-pasteable PowerShell, bash, and `jq` commands are in §2-§5 of the guide
-- After any logger-touching change, run `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v` (currently 21 passed; this number grows as new whitelists are introduced — the requirement is PASS, not a fixed count) before opening a PR
-- Run `python scripts/log_quality_check.py --mode fast` as the smoke gate and `--mode full` before release; both default to the canonical 10-step workflow (`startup,lut_list,lut_colors,preview,generate,replace,extract_single_stage,extract,merge_8color,merge_5color_ext`) which is FROZEN at INFO `14/30 fast`, `29/30 full`, per-endpoint `7/8`. Exit codes are `0` = PASS, `1` = governance violation, `2` = script error. Do not weaken thresholds (`--max-info`, `--max-info-per-endpoint`) to "fix" failures — address the offending event instead
+- When adding a mutating governed endpoint, emit one success-path `<family>_<action>_done` INFO at convergence, register it in the matching `REQUIRED_STRUCTURED_EVENTS` whitelist, and add a targeted `scripts/log_quality_check.py` workflow step only when the endpoint needs workflow coverage. Do not extend the default canonical workflow without an explicit governance round
+- Bug-triage entry point for AI agents and humans: logs write JSON Lines to `<repo>/logs/lumina_<timestamp>.log`; start with `docs/logging-guide.md` for session, timing, ERROR, and quality-gate recipes
+- After any logger-touching change, run `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v`; the requirement is PASS, not a fixed test count
+- Run `python scripts/log_quality_check.py --mode fast` as the smoke gate and `--mode full` before release. Treat the script's current canonical workflow and thresholds as source of truth; do not weaken thresholds to "fix" failures
 - `vector` remains in `WORKFLOW_ORDER` for narrow vector debugging; `replace` is its strict superset and the canonical gate.
 - Alternate color-mode replace gates (`replace_bw`, `replace_8color`, `replace_5color_ext`) are available for ad-hoc per-mode regression testing. The default PR-time gate stays at `replace` (4-Color RYBW). The replace family is mutually exclusive within a single workflow run.
-- Reusable infrastructure: `api/structured_logging.py` (formatters + fallback), `api/logger.py` (file handler + parent marker protocol), `scripts/audit_logs.py` (read-only auditor), `scripts/log_quality_check.py` (workflow runner + governance scanner), `progress/log_audit_*_reviewer.json` (frozen baselines), `progress/governance-roadmap.md` (v2 final coverage map and entry point), `docs/logging-guide.md` (bilingual operator and contributor guide); v2 program closure is captured by tag `log-governance-v2`
+- Main logging entry points: `api/structured_logging.py`, `api/logger.py`, `scripts/audit_logs.py`, `scripts/log_quality_check.py`, `progress/log_audit_*_reviewer.json`, `progress/governance-roadmap.md`, and `docs/logging-guide.md`. Keep them aligned when governance changes
 
 ## Tests
 
@@ -132,7 +132,8 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep gate layering: `smoke` for fast pre-push checks, `full` for release-level regression, `watch` for local feedback loops
 - Keep performance checks reproducible via `profile_stage3` + `check_perf_regression`; default regression decisions should use warm runs (run2/run3)
 - Maintain governance tests (`tests/test_logging_exception_governance_unit.py`, URL/resource contract guards) when changing logging, exception boundaries, or URL semantics
-- Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>` (transparent to `vitest run ...`); the wrapper binds the run to a Windows Job Object so the worker tree dies with the wrapper, and sweeps orphan fork workers before each run. This prevents the multi-GB fork-worker pile-up seen when agents repeatedly spawn `npx vitest run` and abort it. Watch mode (`run_realtime_tests.py`, `npm run test:watch:core`) is unaffected. The fork pool is also capped via `LUMINA_VITEST_MAX_FORKS` in `frontend/vite.config.ts` (default `2`)
+- Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>`; do not call `npx vitest run` directly
+- The Vitest wrapper binds the run to a Windows Job Object and sweeps orphan fork workers before each run. Watch-mode commands (`run_realtime_tests.py`, `npm run test:watch:core`) are unaffected, and `frontend/vite.config.ts` caps fork workers through `LUMINA_VITEST_MAX_FORKS` (default `2`)
 
 ## Destructive Git Operations & Data Safety
 
@@ -148,11 +149,12 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 ## Branch Naming & Lifecycle
 
-- Default to `<owner>/<topic>` for in-flight work (e.g., `Lanz/frontend-and-agents-tweaks`, `Min/fix-relief-height-map-init`); this matches the dominant style on upstream and best supports composite multi-topic branches that stay open until PR
-- Conventional `<type>/<topic>` (e.g., `fix/material-archive-vector-preview`, `feat/gradient-card-ux-upstream-merge`) is acceptable **only** when the branch will stay single-topic until merge; if the work will accumulate mixed topics, prefer the `<owner>/<topic>` form so the name does not lie about its contents
+- Default in-flight branch format is `<owner>/<type>/<topic>`, where `type` is `feat`, `fix`, or `chore`; for this workspace, use owner `shmx` unless the user requests another owner
+- Use `feat` for user-visible features, `fix` for bugs or regressions, and `chore` for documentation, tests, maintenance, or infrastructure work with no intended product behavior change
+- Examples: `shmx/feat/colorchecker-image-calibration`, `shmx/fix/material-archive-vector-preview`, `shmx/chore/agents-guidelines-cleanup`
 - Topic segment: kebab-case, name the intent rather than the touched files; avoid file extensions in branch names (no `-md`, `-tsx`, `-py`, etc.)
-- Long-lived branches (`dev-refactor`, `main`) are protected: never push directly, never force-push, always merge through PR
-- Once a topic branch has been merged into a long-lived branch (e.g., its tip becomes a `Merge pull request #N from .../<branch>` commit on `dev-refactor`), treat it as **retired**: do not stack new commits on it. Cut a fresh `<owner>/<topic>` branch from the current `origin/dev-refactor` for follow-up work, even if it would feel like "the same line of work"
+- Long-lived branches (`dev-refactor`, `main`) are protected; see Git Push Safety before publishing changes
+- Once a topic branch has been merged into a long-lived branch (e.g., its tip becomes a `Merge pull request #N from .../<branch>` commit on `dev-refactor`), treat it as **retired**: do not stack new commits on it. Cut a fresh `<owner>/<type>/<topic>` branch from the current `origin/dev-refactor` for follow-up work, even if it would feel like "the same line of work"
 - For local safety snapshots and rollback pointers, use `backup/<YYYY-MM-DD>-<short-context>` (e.g., `backup/2026-04-26-pre-reorg`); these stay local-only and should be cleaned up once the snapshotted work is verified safe
 - When in doubt about an existing branch, run `git log --decorate -1 <branch>` and check whether its tip is already a merge commit on a protected branch before adding more commits to it
 
@@ -168,48 +170,17 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Git Push Safety
 
 - **Never push directly to `dev-refactor` or `main`** — these are protected long-lived branches; all changes must land via pull request
-- Always create a new feature/fix branch (e.g. `feat/xxx`, `fix/xxx`), push that branch, and open a PR against `dev-refactor`
+- Always create a new `<owner>/<type>/<topic>` branch, push that branch, and open a PR against `dev-refactor`
 - **Never force-push (`push -f` / `--force`) to `dev-refactor` or `main`** — force-pushing a shared branch can silently overwrite others' work and break CI
 - If a force-push to a non-protected branch is absolutely necessary (e.g. rebasing a personal PR branch), always use `--force-with-lease` so the push is rejected if the remote has moved on
-- Before pushing, verify the target branch name; a mistaken `git push origin dev-refactor` instead of a feature branch is a hard-to-undo error
+- Before pushing, verify the target branch name; a mistaken `git push origin dev-refactor` instead of a topic branch is a hard-to-undo error
 
 ## In-App Announcement Maintenance
 
-- Source of truth: `frontend/src/data/announcements.ts`; rendered by `AnnouncementDialog` via `useAnnouncement` on first launch
-- **Audience is non-technical end users** (普通消费者 / 打印玩家，基本不写代码，不了解本仓库的模块、术语、内部名词）。Every announcement item must read like a product changelog a friend would send, not like an engineering note
-- **Rendering rule (do NOT silently regress)**: `useAnnouncement` must return the latest daily announcement history entries, capped by `ANNOUNCEMENT_HISTORY_LIMIT`, in descending `version` order. This lets a server update show several days of changes instead of only the newest day. `AnnouncementDialog` must render every returned entry and must NOT collapse to a single latest entry. The version badge and dismiss key remain bound to the anchor entry (`ANNOUNCEMENTS[0].version`, the newest entry). This rule is enforced by `selectAnnouncementHistory` and its tests in `src/__tests__/useAnnouncement.test.ts` — if you change the history semantics, update both the code, the tests, and this bullet together
-- Any PR merged to the default branch that introduces a user-visible change (new feature, behavior change, UX fix, notable stability fix) must be reflected in the announcement file in a follow-up commit or PR
-- Versioning is by **publish date in Beijing time (UTC+8)**, formatted `YYYY-MM-DD`; never use semver here, never backdate, never use a future date
-- If the latest entry's `version` equals today's Beijing date, append new `items` to the appropriate existing `sections[].category`; otherwise prepend a new `AnnouncementEntry` whose `version` is today's Beijing date
-- **Every user-facing string in `announcements.ts` is bilingual**: `title`, each `sections[].category`, and every item must be a `{ zh, en }` `LocalizedText`; both locales are mandatory and must describe the same change
-- Use the canonical category vocabulary (keep order stable): zh `新功能` / en `New`, zh `颜色工作站` / en `Color Workstation`, zh `提取器（校色卡）` / en `Extractor (Calibration Card)`, zh `校准 & 材料` / en `Calibration & Materials`, zh `预览 & 交互` / en `Preview & Interaction`, zh `矢量化` / en `Vectorisation`, zh `稳定性` / en `Stability`; add a new category only when no existing one fits, and when adding, introduce both zh and en at once
-- **Writing style (strict, 面向非程序员的大白话)**:
-  - 一句话讲清楚**用户看到什么变化**，而不是代码改了什么
-  - 禁止内部模块名（如 `FileRegistry`、`SessionStore`、`coordinator.py`、`S01` 等）、PR/Issue 号、commit hash、堆栈关键词
-  - 禁止英文技术黑话（pipeline、hook、store、reducer、mock、stub、schema、endpoint 之类）；前端/后端/接口这种面向用户的词也尽量不用，必要时用"打开软件时""生成 3MF 时"这种使用场景语替换
-  - 避免缩写，除非是已经出现在 UI 上的缩写（如 LUT、3MF、RGB、CMYK）；首次出现时在后面用括号加一句人话解释
-  - Chinese 先写，英文自然镜像不是逐字翻译，两边讲的是同一件事但英文也要口语化；不要出现机翻痕迹
-  - 没有 emoji，没有感叹号堆叠，没有自我营销（"强大""震撼""全新升级"这类词）
-  - 正例：zh "之前打开颜色工作站有时会突然白屏，现在修好了。"  en "Fixed a rare white-screen issue when opening the Color Workstation."
-  - 反例：zh "修复了 `ColorWorkstation` 组件在 `usePreviewStore` 初始化时 race condition 导致的白屏。"（内部名词 + 黑话 + 讲实现）
-- Keep `title` stable within a release cycle; only bump it when the marketing framing actually changes (bump both zh and en together)
-- After editing, run `cd frontend && npx tsc --noEmit` plus `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`; both must stay green
-- Suggested AI workflow when merging PRs: (1) read the merged PR titles/bodies since the last announcement commit, (2) translate each into one plain-language bullet (no jargon, no internal names) under the right category, Chinese first, English mirroring it naturally, (3) update `announcements.ts` following the rules above, (4) open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
-
-与用户沟通和回复时使用中文，除非用户明确要求使用其他语言。
+- Read `docs/announcement-maintenance.md` before editing `frontend/src/data/announcements.ts`, changing `useAnnouncement` / `AnnouncementDialog` history semantics, or preparing announcement updates for user-visible changes
+- Announcement copy is the deliberate exception to the `translations.ts` source-of-truth rule. Keep entries bilingual and end-user oriented as described in the announcement guide
 
 ## Bug Report Reproducibility
 
-- Bug reports submitted via `/api/feedback/bug-report` now land as a **ticket directory** at `feedback/<YYYY-MM>/<ticket_id>/` where `ticket_id` matches `LUM-YYYYMMDD-NNN` (Beijing date; fallback `LUM-YYYYMMDD-<8-char-hex>` when the daily serial exceeds 999)
-- Ticket directory contents:
-  - `ticket.json` — canonical payload (schema_version=3) with user description, workflow snapshot, action history, client logs, attachments manifest, email status, and `assembly_status`
-  - `index.md` — human-readable index generated by the assembler
-  - `summary.txt` — Chinese summary optimized for AI assistants
-  - Optional bulky files: `original.<ext>`, `final.<ext>`, `lut.<ext>`, `materials.zip`, `screenshot.<ext>` (each independently attached when available via `FileRegistry` + copy; missing attachments are explicitly marked in the manifest, never silently dropped)
-- `submit_bug_report` uses the **hybrid assembly model**: synchronous path copies the small attachments (original image / final artifact / LUT) and returns `assembly_status: "in_progress"` under ~2 s; `finalize_ticket_async` runs via `BackgroundTasks` to pack `materials.zip`, render `index.md` / `summary.txt`, and send the email
-- When adding or changing converter generation parameters, update bug-report reproducibility capture in the same PR: `AdvancedParams` types, `buildAdvancedParams`, `WorkflowSnapshot.advanced_params`, `BugReportContextPayload.advanced_params`, `api/routers/feedback.py` sanitizer/schema if shape or limits change, `api/feedback_index.py` rendering when triage should surface the value, and the matching frontend/backend tests. Validate with a real local bug report and confirm `ticket.json`, `index.md`, and `summary.txt` contain the expected state without `File`/`Blob`/data URL payloads
-- Materials zip excludes `_solver_cache/` (developer can rebuild locally) and has a 30 s wall-clock timeout controlled by `LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`
-- Email attachments over `LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB` (default 40) stay on disk — the email body lists them with absolute paths so the on-call engineer can `scp` them manually
-- `run_startup_cleanup` runs inside the FastAPI lifespan: tickets older than `LUMINA_FEEDBACK_TICKET_TTL_DAYS` (default 30) lose their bulky attachments but keep the small metadata; tickets stuck in `in_progress` past the 10-minute grace window are tagged `interrupted` and logged for follow-up. Set `LUMINA_FEEDBACK_STARTUP_CLEANUP=false` to disable
-- To rebuild a session locally: `python scripts/load_bug_repro.py <ticket_id>` — copies every available attachment to `repro_sessions/<ticket_id>/`, extracts `materials.zip`, and writes a `repro_manifest.md` with the action history. The frontend shows a yellow badge when opened at `http://localhost:5174/?repro_session=<ticket_id>`
-- Structured logging events whitelisted under `FEEDBACK_STRUCTURED_EVENTS` in `tests/test_logging_exception_governance_unit.py`: `feedback_bug_report_submitted`, `feedback_ticket_assembled_init`, `feedback_ticket_assembled_done`, `feedback_attachment_collected`, `feedback_materials_bundle_packed_done` (+ relay / rate-limit events from the existing flow). WARNING / ERROR events (`feedback_ticket_assembly_interrupted`, `feedback_materials_bundle_packed_failed`, etc.) are off the INFO whitelist by design
+- Read `docs/bug-report-reproducibility.md` before changing `/api/feedback/bug-report`, feedback ticket assembly, attachment collection, cleanup, email attachment handling, `scripts/load_bug_repro.py`, or any converter generation parameter captured for reproduction
+- Preserve ticket-based reproducibility under `feedback/<YYYY-MM>/<ticket_id>/`; update schemas, frontend/backend tests, and structured logging whitelists when bug-report payloads or assembly steps change
