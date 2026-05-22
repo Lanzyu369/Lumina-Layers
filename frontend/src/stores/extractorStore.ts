@@ -573,19 +573,35 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     setColorcheckerEnabled: (value: boolean) => {
       if (value) {
+        const state = get();
+        const fallbackPreview =
+          state.originalPreviewUrl ??
+          state.imagePreviewUrl ??
+          (state.imageFile && !isRawFile(state.imageFile)
+            ? URL.createObjectURL(state.imageFile)
+            : null);
         set({
           colorchecker_enabled: true,
-          colorchecker_phase: null,
+          colorchecker_phase: "calibrating",
+          originalPreviewUrl: fallbackPreview,
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
           colorcheckerSummary: null,
         });
+        if (state.imageFile && isRawFile(state.imageFile) && !fallbackPreview) {
+          uploadImagePreview(state.imageFile)
+            .then(({ preview_url }) => {
+              set({ originalPreviewUrl: preview_url });
+            })
+            .catch(() => {});
+        }
       } else {
         set({
           colorchecker_enabled: false,
           colorchecker_phase: null,
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
+          originalPreviewUrl: null,
           colorcheckerSummary: null,
         });
       }

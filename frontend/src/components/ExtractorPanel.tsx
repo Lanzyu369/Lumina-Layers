@@ -16,7 +16,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import HelpDot from "./ui/HelpDot";
-import ColorcheckerConfirmDialog from "./ColorcheckerConfirmDialog";
+import { ColorcheckerConfirmDialogInner } from "./ColorcheckerConfirmDialog";
 import {
   cx,
   StatusBanner,
@@ -67,6 +67,8 @@ export default function ExtractorPanel() {
     colorchecker_enabled,
     colorchecker_phase,
     colorcheckerSummary,
+    originalPreviewUrl,
+    calibratedPreviewUrl,
     isLoading,
     error,
     lut_download_url,
@@ -95,7 +97,10 @@ export default function ExtractorPanel() {
     setVignetteCorrection,
     setAutoWb,
     setColorcheckerEnabled,
-    openColorcheckerDialog,
+    receiveCalibratedFromCC,
+    confirmCalibrated,
+    rejectCalibrated,
+    closeColorcheckerDialog,
     setManufacturer,
     setType,
     submitExtract,
@@ -531,14 +536,19 @@ export default function ExtractorPanel() {
                         {t("ext_cc_calibrated_badge")}
                       </span>
                     )}
-                    <Button
-                      label={t("ext_cc_open_dialog_btn")}
-                      variant="primary"
-                      onClick={openColorcheckerDialog}
-                      disabled={imageFile === null || colorchecker_phase === "calibrating"}
-                    />
                   </div>
                 </div>
+                <ColorcheckerConfirmDialogInner
+                  phase={colorchecker_phase ?? "calibrating"}
+                  imageFile={imageFile}
+                  originalPreviewUrl={originalPreviewUrl}
+                  calibratedPreviewUrl={calibratedPreviewUrl}
+                  calibrationSummary={colorcheckerSummary}
+                  receiveCalibrated={receiveCalibratedFromCC}
+                  confirmCalibrated={confirmCalibrated}
+                  rejectCalibrated={rejectCalibrated}
+                  closeDialog={closeColorcheckerDialog}
+                />
                 {colorcheckerSummary && (
                   <div className="grid gap-2 sm:grid-cols-4">
                     {[
@@ -766,7 +776,6 @@ export default function ExtractorPanel() {
         )}
       </div>
 
-      <ColorcheckerConfirmDialog />
     </motion.aside>
   );
 }

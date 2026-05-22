@@ -1041,6 +1041,19 @@ export default function GradientCardExtractPanel() {
                     className="w-full"
                   />
                 </div>
+                {(colorchecker_phase === "calibrating" || colorchecker_phase === "confirming") && (
+                  <ColorcheckerConfirmDialogInner
+                    phase={colorchecker_phase}
+                    imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
+                    originalPreviewUrl={originalWhitePreviewUrl}
+                    calibratedPreviewUrl={calibratedPreviewUrl}
+                    calibrationSummary={colorcheckerSummary}
+                    receiveCalibrated={receiveCalibratedFromCC}
+                    confirmCalibrated={confirmCalibrated}
+                    rejectCalibrated={rejectCalibrated}
+                    closeDialog={closeColorcheckerDialog}
+                  />
+                )}
                 {colorchecker_phase === "done" && (
                   <StatusBanner tone="success">
                     {t("mat_gradient_colorchecker_restored_source")}
@@ -1625,17 +1638,6 @@ export default function GradientCardExtractPanel() {
           ) : null}
         </div>
       </div>
-      <ColorcheckerConfirmDialogInner
-        phase={colorchecker_phase}
-        imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
-        originalPreviewUrl={originalWhitePreviewUrl}
-        calibratedPreviewUrl={calibratedPreviewUrl}
-        calibrationSummary={colorcheckerSummary}
-        receiveCalibrated={receiveCalibratedFromCC}
-        confirmCalibrated={confirmCalibrated}
-        rejectCalibrated={rejectCalibrated}
-        closeDialog={closeColorcheckerDialog}
-      />
     </motion.aside>
   );
 }

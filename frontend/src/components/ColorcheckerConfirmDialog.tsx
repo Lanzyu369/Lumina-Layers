@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { createPortal } from "react-dom";
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
@@ -12,7 +11,6 @@ import { useI18n } from "../i18n/context";
 import { useExtractorStore } from "../stores/extractorStore";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
-import { XIcon } from "./ui/icons";
 import { StatusBanner, cx } from "./ui/panelPrimitives";
 
 type CornerPoint = [number, number];
@@ -189,7 +187,6 @@ export function ColorcheckerConfirmDialogInner({
   receiveCalibrated,
   confirmCalibrated,
   rejectCalibrated,
-  closeDialog,
 }: ColorcheckerConfirmDialogProps) {
   const { t } = useI18n();
   const isCalibrating = phase === "calibrating";
@@ -242,7 +239,6 @@ export function ColorcheckerConfirmDialogInner({
     setWarpPreviewUrl(null);
     setWarpSize(null);
     setPatchPoints(null);
-    setWarpSize(null);
     setOverlayPreviewUrl(null);
     setLocalSummary(null);
     setCorners([]);
@@ -401,13 +397,10 @@ export function ColorcheckerConfirmDialogInner({
 
   if (!open) return null;
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center px-3 py-4 backdrop-blur-sm"
-      style={{ background: "var(--surface-scrim)" }}
-    >
+  return (
+    <div data-testid="colorchecker-inline-tool" className="min-w-0">
       <div
-        className="relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border shadow-2xl"
+        className="relative flex w-full flex-col overflow-hidden rounded-[24px] border shadow-[var(--shadow-control)]"
         style={{
           borderColor: "var(--surface-outline)",
           background: "var(--surface-panel-strong)",
@@ -422,27 +415,19 @@ export function ColorcheckerConfirmDialogInner({
               {isConfirming ? t("ext_cc_confirm_body") : t("ext_cc_step1_hint")}
             </p>
           </div>
-          <Button
-            label={t("ext_cc_close_btn")}
-            variant="secondary"
-            size="icon"
-            icon={<XIcon />}
-            onClick={closeDialog}
-            className="shrink-0"
-          />
         </div>
 
         {isCalibrating && (
-          <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+          <div className="grid min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.75fr)]">
             <div className="flex min-h-0 flex-col gap-3">
-              <div className="relative flex min-h-[22rem] items-center justify-center overflow-hidden rounded-[24px] border border-slate-200/80 bg-slate-950/5 p-3 dark:border-slate-700/80 dark:bg-slate-950/40">
+              <div className="relative flex min-h-72 items-center justify-center overflow-hidden rounded-[24px] border border-slate-200/80 bg-slate-950/5 p-3 dark:border-slate-700/80 dark:bg-slate-950/40">
                 {sourceUrl ? (
-                  <div className="relative inline-block max-h-[58vh] max-w-full">
+                  <div className="relative inline-block max-h-[48vh] max-w-full">
                     <img
                       ref={imageRef}
                       src={sourceUrl}
                       alt={t("ext_cc_dialog_title")}
-                      className="block max-h-[58vh] max-w-full select-none rounded-2xl object-contain"
+                      className="block max-h-[48vh] max-w-full select-none rounded-2xl object-contain"
                       draggable={false}
                       onLoad={(event) => {
                         setImageSize({
@@ -579,7 +564,7 @@ export function ColorcheckerConfirmDialogInner({
           <div className="flex min-h-0 flex-1 flex-col overflow-auto">
             <div
               ref={compareRef}
-              className="relative min-h-[24rem] cursor-col-resize select-none overflow-hidden bg-slate-950/5 dark:bg-slate-950/50"
+              className="relative min-h-80 cursor-col-resize select-none overflow-hidden bg-slate-950/5 dark:bg-slate-950/50"
               onPointerDown={handleCompareDown}
             >
               {originalPreviewUrl && (
@@ -667,12 +652,12 @@ export function ColorcheckerConfirmDialogInner({
           </div>
         )}
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
 export default function ColorcheckerConfirmDialogExtractor() {
+  const enabled = useExtractorStore((s) => s.colorchecker_enabled);
   const phase = useExtractorStore((s) => s.colorchecker_phase);
   const imageFile = useExtractorStore((s) => s.imageFile);
   const originalPreviewUrl = useExtractorStore((s) => s.originalPreviewUrl);
@@ -685,7 +670,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
 
   return (
     <ColorcheckerConfirmDialogInner
-      phase={phase}
+      phase={enabled ? (phase ?? "calibrating") : phase}
       imageFile={imageFile}
       originalPreviewUrl={originalPreviewUrl}
       calibratedPreviewUrl={calibratedPreviewUrl}
