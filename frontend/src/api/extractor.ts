@@ -58,11 +58,80 @@ export async function extractColors(
 }
 
 /** Warp preview response (step 1) */
+export interface ColorcheckerPoint {
+  x: number;
+  y: number;
+}
+
+export interface ColorcheckerDeltaSummary {
+  mean: number | null;
+  median: number | null;
+  p95: number | null;
+  max: number | null;
+}
+
+export interface ColorcheckerWorstPatch {
+  index: number;
+  label: string;
+  deltaE00: number;
+  referenceSrgb?: number[] | null;
+  correctedSrgb?: number[] | null;
+}
+
+export interface ColorcheckerLuminancePoint {
+  index: number;
+  label: string;
+  reference: number | null;
+  captured: number | null;
+  normalized: number | null;
+  corrected: number | null;
+  fitUsed: boolean;
+  grayPatch: boolean;
+}
+
+export interface ColorcheckerDisplaySummary {
+  deltaE00: ColorcheckerDeltaSummary;
+  worstPatch: ColorcheckerWorstPatch | null;
+  luminanceCurve: ColorcheckerLuminancePoint[];
+  warnings: string[];
+}
+
+export interface ColorcheckerDetectResponse {
+  detected: boolean;
+  corners: ColorcheckerPoint[];
+  patchOrientation: string;
+  confidence: number;
+  score: number | null;
+  mode: string;
+  reason: string;
+  candidateCount: number;
+}
+
 export interface ColorcheckerWarpPreviewResponse {
   preview_url: string;
   preview_width: number;
   preview_height: number;
-  auto_patch_points: Array<{ x: number; y: number }>;
+  auto_patch_points: ColorcheckerPoint[];
+}
+
+/** Automatically locate the ColorChecker chart corners */
+export async function colorcheckerDetectChart(
+  image: File,
+  patchLayout: string = "4x6",
+  assistPoint: ColorcheckerPoint | null = null,
+): Promise<ColorcheckerDetectResponse> {
+  const fd = new FormData();
+  fd.append("image", image);
+  fd.append("patch_layout", patchLayout);
+  if (assistPoint) {
+    fd.append("assist_point", JSON.stringify(assistPoint));
+  }
+  const response = await apiClient.post<ColorcheckerDetectResponse>(
+    "/extractor/colorchecker-detect-chart",
+    fd,
+    { timeout: 120_000 },
+  );
+  return response.data;
 }
 
 /** Warp the ColorChecker region and return preview + auto 24 patch points */
@@ -89,14 +158,15 @@ export interface ColorcheckerCalibrateResponse {
   overlay_url: string;
   width: number;
   height: number;
-  patch_points: Array<{ x: number; y: number }>;
+  patch_points: ColorcheckerPoint[];
+  display_summary: ColorcheckerDisplaySummary;
 }
 
 /** Compute CCM and return calibrated image + overlay */
 export async function colorcheckerCalibrate(
   image: File,
   cornerPoints: Array<[number, number]>,
-  patchPoints: Array<{ x: number; y: number }> | null = null,
+  patchPoints: ColorcheckerPoint[] | null = null,
   patchLayout: string = "4x6",
 ): Promise<ColorcheckerCalibrateResponse> {
   const fd = new FormData();

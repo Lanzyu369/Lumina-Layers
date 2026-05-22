@@ -4,6 +4,7 @@ import {
   extractGradientCardStageA,
   rotateExtractorImage,
   saveGradientCardMaterial,
+  type ColorcheckerDisplaySummary,
   type ExtractorRotationDirection,
 } from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
@@ -69,6 +70,7 @@ interface SingleStageState {
   calibratedImageFile: File | null;
   calibratedPreviewUrl: string | null;
   originalWhitePreviewUrl: string | null;
+  colorcheckerSummary: ColorcheckerDisplaySummary | null;
   materialName: string;
   materialBrand: string;
   verificationTargetDirectoryName: string | null;
@@ -103,8 +105,11 @@ interface SingleStageActions {
   setManualBlackAnchor: (value: GradientCardAnchorCorner | null) => void;
   setImageSource: (value: GradientCardImageSource) => void;
   setColorcheckerEnabled: (value: boolean) => void;
-  openColorcheckerDialog: () => void;
-  receiveCalibratedFromCC: (dataUrl: string) => void;
+  openColorcheckerDialog: (target?: "white" | "black") => void;
+  receiveCalibratedFromCC: (
+    imageUrl: string,
+    summary?: ColorcheckerDisplaySummary | null,
+  ) => void;
   confirmCalibrated: () => void;
   rejectCalibrated: () => void;
   closeColorcheckerDialog: () => void;
@@ -362,6 +367,7 @@ const DEFAULT_STATE: SingleStageState = {
   calibratedImageFile: null,
   calibratedPreviewUrl: null,
   originalWhitePreviewUrl: null,
+  colorcheckerSummary: null,
   materialName: "",
   materialBrand: "",
   verificationTargetDirectoryName: null,
@@ -414,6 +420,7 @@ export const useSingleStageStore = create<
         colorchecker_target: "white",
         calibratedImageFile: null,
         calibratedPreviewUrl: null,
+        colorcheckerSummary: null,
         ...RESULT_RESET_STATE,
       });
       // Generate originalWhitePreviewUrl for the comparison dialog.
@@ -437,6 +444,7 @@ export const useSingleStageStore = create<
       whiteCornerPoints: [],
       activeCanvas: null,
       activeCornerIndex: null,
+      imageSource: "raw",
       ...RESULT_RESET_STATE,
     });
     if (!file || !useBackendPreview) {
@@ -489,6 +497,7 @@ export const useSingleStageStore = create<
         colorchecker_target: "black",
         calibratedImageFile: null,
         calibratedPreviewUrl: null,
+        colorcheckerSummary: null,
         ...RESULT_RESET_STATE,
       });
       if (useBackendPreview) {
@@ -511,6 +520,7 @@ export const useSingleStageStore = create<
       blackCornerPoints: [],
       activeCanvas: null,
       activeCornerIndex: null,
+      imageSource: "raw",
       ...RESULT_RESET_STATE,
     });
     if (!file || !useBackendPreview) {
@@ -760,6 +770,11 @@ export const useSingleStageStore = create<
     set({ imageSource: value, extractError: null }),
 
   setColorcheckerEnabled: (value: boolean) => {
+    const state = get();
+    const resetToRaw =
+      !value &&
+      state.colorchecker_phase !== "done" &&
+      state.calibratedImageFile === null;
     set({
       colorchecker_enabled: value,
       colorchecker_phase: null,
@@ -767,15 +782,37 @@ export const useSingleStageStore = create<
       calibratedImageFile: null,
       calibratedPreviewUrl: null,
       originalWhitePreviewUrl: null,
+      colorcheckerSummary: null,
+      ...(resetToRaw ? { imageSource: "raw" as const } : {}),
     });
   },
 
-  openColorcheckerDialog: () => {
-    set({ colorchecker_phase: "calibrating" });
+  openColorcheckerDialog: (target?: "white" | "black") => {
+    const state = get();
+    const nextTarget = target ?? state.colorchecker_target ?? "white";
+    const sourceFile =
+      nextTarget === "black" ? state.blackImageFile : state.whiteImageFile;
+    const sourcePreview =
+      nextTarget === "black"
+        ? state.blackImagePreviewUrl
+        : state.whiteImagePreviewUrl;
+    if (!sourceFile) return;
+    set({
+      colorchecker_phase: "calibrating",
+      colorchecker_target: nextTarget,
+      calibratedImageFile: null,
+      calibratedPreviewUrl: null,
+      colorcheckerSummary: null,
+      originalWhitePreviewUrl: sourcePreview ?? createPreviewUrl(sourceFile),
+    });
   },
 
-  receiveCalibratedFromCC: (dataUrl: string) => {
-    fetch(dataUrl)
+  receiveCalibratedFromCC: (
+    imageUrl: string,
+    summary?: ColorcheckerDisplaySummary | null,
+  ) => {
+    const resolvedUrl = normalizeResourceUrl(imageUrl) ?? imageUrl;
+    fetch(resolvedUrl)
       .then((r) => r.blob())
       .then((blob) => {
         const calibratedFile = new File([blob], "colorchecker_calibrated.png", {
@@ -786,6 +823,7 @@ export const useSingleStageStore = create<
           colorchecker_phase: "confirming",
           calibratedImageFile: calibratedFile,
           calibratedPreviewUrl: previewUrl,
+          colorcheckerSummary: summary ?? null,
         });
       })
       .catch(() => {
@@ -809,6 +847,7 @@ export const useSingleStageStore = create<
             whiteCornerPoints: [],
           };
     const img = new Image();
+    set({ imageSource: "restored" });
     img.onload = () => {
       set({
         colorchecker_phase: "done",
@@ -847,6 +886,7 @@ export const useSingleStageStore = create<
       colorchecker_phase: "calibrating",
       calibratedImageFile: null,
       calibratedPreviewUrl: null,
+      colorcheckerSummary: null,
     });
   },
 

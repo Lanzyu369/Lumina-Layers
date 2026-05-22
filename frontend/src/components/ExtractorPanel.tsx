@@ -66,6 +66,7 @@ export default function ExtractorPanel() {
     auto_wb,
     colorchecker_enabled,
     colorchecker_phase,
+    colorcheckerSummary,
     isLoading,
     error,
     lut_download_url,
@@ -501,26 +502,70 @@ export default function ExtractorPanel() {
           )}
         </section>
 
-        {colorchecker_enabled && (
-          <section data-testid="colorchecker-step-section" className={`${sectionCardClass} flex flex-col gap-3`}>
-            <div className="flex items-center gap-2">
-              <Button
-                label={t("ext_cc_open_dialog_btn")}
-                variant="primary"
-                onClick={openColorcheckerDialog}
-                disabled={imageFile === null || colorchecker_phase === "calibrating"}
-              />
-              {colorchecker_phase === "done" && (
-                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                  {t("ext_cc_calibrated_badge")}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t("ext_colorchecker_hint")}
-            </p>
-          </section>
-        )}
+        <AnimatePresence initial={false}>
+          {colorchecker_enabled && (
+            <motion.section
+              data-testid="colorchecker-step-section"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+              className="overflow-hidden"
+            >
+              <div
+                className={`${sectionCardClass} flex flex-col gap-3`}
+                style={{ background: "var(--surface-panel)" }}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {t("ext_cc_dialog_title")}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {t("ext_colorchecker_hint")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {colorchecker_phase === "done" && (
+                      <span className="inline-flex items-center rounded-full border border-emerald-300/80 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300">
+                        {t("ext_cc_calibrated_badge")}
+                      </span>
+                    )}
+                    <Button
+                      label={t("ext_cc_open_dialog_btn")}
+                      variant="primary"
+                      onClick={openColorcheckerDialog}
+                      disabled={imageFile === null || colorchecker_phase === "calibrating"}
+                    />
+                  </div>
+                </div>
+                {colorcheckerSummary && (
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    {[
+                      [t("ext_cc_metric_mean"), colorcheckerSummary.deltaE00.mean],
+                      [t("ext_cc_metric_median"), colorcheckerSummary.deltaE00.median],
+                      [t("ext_cc_metric_p95"), colorcheckerSummary.deltaE00.p95],
+                      [t("ext_cc_metric_worst"), colorcheckerSummary.deltaE00.max],
+                    ].map(([label, value]) => (
+                      <div
+                        key={String(label)}
+                        className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+                        style={{ background: "var(--surface-panel-strong)" }}
+                      >
+                        <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
+                          {label}
+                        </div>
+                        <div className="mt-1 text-base font-semibold tabular-nums text-slate-900 dark:text-slate-50">
+                          {typeof value === "number" ? value.toFixed(2) : "-"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         <section className={`${sectionCardClass} flex flex-col gap-2 lg:flex-row`}>
           <div data-testid="extract-button" className="lg:flex-1 lg:min-w-0">

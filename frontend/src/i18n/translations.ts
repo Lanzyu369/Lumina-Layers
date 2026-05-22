@@ -2614,9 +2614,85 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "ColorChecker 色卡校色",
     en: "ColorChecker Calibration",
   },
+  ext_cc_close_btn: {
+    zh: "关闭",
+    en: "Close",
+  },
   ext_cc_open_dialog_btn: {
     zh: "打开校色工具",
     en: "Open Calibration Tool",
+  },
+  ext_cc_auto_detect_btn: {
+    zh: "自动定位色卡",
+    en: "Auto Locate Card",
+  },
+  ext_cc_auto_detect_success: {
+    zh: "已自动定位色卡",
+    en: "Card auto-located",
+  },
+  ext_cc_auto_detect_failed: {
+    zh: "自动定位失败，请手动点选四角",
+    en: "Auto locate failed. Mark the four corners manually.",
+  },
+  ext_cc_corner_adjust_hint: {
+    zh: "按顺序点选四角；点完后可拖动圆点，或先选中角点再在图片上点击新位置。",
+    en: "Mark the four corners in order. After that, drag a handle or select a corner and click a new position.",
+  },
+  ext_cc_corner_label: {
+    zh: "色卡角点",
+    en: "Card corner",
+  },
+  ext_cc_missing_image: {
+    zh: "请先选择图片",
+    en: "Choose an image first",
+  },
+  ext_cc_warp_ready: {
+    zh: "透视预览已生成，可执行校色",
+    en: "Warp preview is ready. You can calibrate now.",
+  },
+  ext_cc_warp_failed: {
+    zh: "透视预览生成失败",
+    en: "Failed to generate warp preview",
+  },
+  ext_cc_calibrate_failed: {
+    zh: "校色失败",
+    en: "Calibration failed",
+  },
+  ext_cc_result_ready: {
+    zh: "校色完成，请检查结果后确认使用。",
+    en: "Calibration is complete. Review the result before accepting it.",
+  },
+  ext_cc_metric_mean: {
+    zh: "平均",
+    en: "Mean",
+  },
+  ext_cc_metric_median: {
+    zh: "中位",
+    en: "Median",
+  },
+  ext_cc_metric_p95: {
+    zh: "P95",
+    en: "P95",
+  },
+  ext_cc_metric_worst: {
+    zh: "最差",
+    en: "Worst",
+  },
+  ext_cc_metric_worst_patch: {
+    zh: "最差色块",
+    en: "Worst Patch",
+  },
+  ext_cc_metric_delta_e00: {
+    zh: "DeltaE00",
+    en: "DeltaE00",
+  },
+  ext_cc_luminance_curve: {
+    zh: "亮度曲线",
+    en: "Luminance Curve",
+  },
+  ext_cc_no_curve: {
+    zh: "暂无曲线",
+    en: "No curve",
   },
   ext_cc_calibrated_badge: {
     zh: "已校色 ✓",
@@ -5611,6 +5687,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_extract_desc: {
     zh: "首先导入下载好的梯度卡ZIP，然后分别上传白底与黑底照片，并框选出色块区域即可完成提取。",
     en: "First import the downloaded gradient card ZIP, then upload the white and black background photos separately, and bound the color blocks area to complete extraction.",
+  },
+  mat_gradient_colorchecker_hint: {
+    zh: "这里的 ColorChecker 只负责先校正白底图或黑底图的颜色；确认使用后，梯度卡提取会明确标记为已校色图片来源。",
+    en: "ColorChecker only corrects the white or black image first. After you accept it, gradient extraction explicitly records the image as a calibrated source.",
+  },
+  mat_gradient_colorchecker_white_btn: {
+    zh: "校色白底图",
+    en: "Calibrate White Image",
+  },
+  mat_gradient_colorchecker_black_btn: {
+    zh: "校色黑底图",
+    en: "Calibrate Black Image",
+  },
+  mat_gradient_colorchecker_restored_source: {
+    zh: "已确认使用校色图，Stage A 将按 restored 来源记录，不会静默当作 raw 原图。",
+    en: "Accepted calibrated image. Stage A will record it as restored, not silently treat it as raw.",
   },
   mat_gradient_view_details_btn: {
     zh: "查看详细信息",

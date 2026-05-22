@@ -115,30 +115,20 @@ _VALID_MANUAL_ORIENTATION_LABELS: frozenset[str] = frozenset(
 )
 
 
-_GRADIENT_CARD_ALLOWED_IMAGE_SOURCES: tuple[str, ...] = ("raw",)
+_GRADIENT_CARD_ALLOWED_IMAGE_SOURCES: tuple[str, ...] = ("raw", "restored")
 
 
 def _normalize_image_source(raw: str | None) -> str | None:
     """Normalize and validate the gradient-card ``image_source`` form value.
     规范化并校验梯度卡 ``image_source`` 表单值。
 
-    Stage A currently only supports ``"raw"`` direct camera/scanner captures.
-    The historical ``"restored"`` tag (white-balanced / geometrically restored
-    renders) is intentionally rejected at the API boundary as well, because:
+    Stage A accepts ``"raw"`` direct camera/scanner captures by default and
+    ``"restored"`` only when the caller explicitly labels the inputs as
+    restored/calibrated renders. The core layer records the source tag and
+    prevents accidental raw/restored archive mixing.
 
-    1. The frontend selector is hidden and ``imageSource`` is pinned to
-       ``"raw"`` (`@frontend/src/components/GradientCardExtractPanel.tsx`).
-    2. Allowing ``"restored"`` here creates a trap-door: an archive tagged
-       ``restored`` cannot later be merged via the UI, since the merge
-       consistency check in
-       ``core.single_stage.materials.save_stage_a_material_archive`` rejects
-       mixing ``raw`` and ``restored`` runs.
-
-    The whitelist keeps API and UI in lock-step until a UI surface is added
-    back to manage ``restored`` captures explicitly.
-
-    目前 Stage A 仅支持 ``"raw"``。``"restored"`` 在前端选择器已隐藏的情况下
-    若由 API 写入，会形成无法通过 UI 合并的死路；故双锁拒绝。
+    Stage A 默认使用 ``"raw"``。只有调用方明确传入 ``"restored"`` 时，才把已校色
+    或修复后的图像作为 restored 来源记录，避免静默当作 raw 原图。
 
     Args:
         raw (str | None): Raw form value, possibly ``None`` or whitespace.
@@ -160,9 +150,7 @@ def _normalize_image_source(raw: str | None) -> str | None:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Unsupported image_source '{raw}'. Stage A currently only "
-                f"accepts {allowed}; the gradient-card UI no longer exposes "
-                "other capture origins."
+                f"Unsupported image_source '{raw}'. Stage A accepts {allowed}."
             ),
         )
     return cleaned
@@ -353,12 +341,9 @@ async def extractor_extract_gradient_card_stage_a(
     image_source: str | None = Form(
         None,
         description=(
-            "Optional gradient-card capture origin tag. Currently only "
-            "'raw' (direct camera/scanner capture, default) is accepted; "
-            "the historical 'restored' tag is rejected at the API "
-            "boundary because the gradient-card UI no longer exposes a "
-            "selector for it, and a 'restored'-tagged archive cannot "
-            "later be merged via the UI."
+            "Optional gradient-card capture origin tag. Use 'raw' for direct "
+            "camera/scanner captures (default) and 'restored' only when the "
+            "caller explicitly uses calibrated/restored images."
         ),
     ),
     store: SessionStore = Depends(get_session_store),

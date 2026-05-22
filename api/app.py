@@ -79,7 +79,6 @@ from api.routers import (
     system_router,
     vectorizer_router,
 )
-from api.routers.colorchecker_proxy import router as colorchecker_proxy_router
 
 log = get_logger(__name__)
 
@@ -372,7 +371,6 @@ def create_app() -> FastAPI:
     app.include_router(single_stage_router)
     app.include_router(system_router)
     app.include_router(vectorizer_router)
-    app.include_router(colorchecker_proxy_router)
 
     @app.get("/api/files/{file_id}")
     def serve_file(

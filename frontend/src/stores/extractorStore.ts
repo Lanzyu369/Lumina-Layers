@@ -13,6 +13,7 @@ import {
   mergeFiveColorExtended,
   previewAutoWb,
   rotateExtractorImage,
+  type ColorcheckerDisplaySummary,
 } from "../api/extractor";
 import type { ExtractorPaletteEntry } from "../api/types";
 import { clampValue } from "./converter";
@@ -101,6 +102,7 @@ export interface ExtractorState {
   calibratedImageFile: File | null;
   calibratedPreviewUrl: string | null;
   originalPreviewUrl: string | null;
+  colorcheckerSummary: ColorcheckerDisplaySummary | null;
 
   // API 状态
   isLoading: boolean;
@@ -158,7 +160,10 @@ export interface ExtractorActions {
   setAutoWb: (value: boolean) => Promise<void>;
   setColorcheckerEnabled: (value: boolean) => void;
   openColorcheckerDialog: () => void;
-  receiveCalibratedFromCC: (dataUrl: string) => void;
+  receiveCalibratedFromCC: (
+    imageUrl: string,
+    summary?: ColorcheckerDisplaySummary | null,
+  ) => void;
   confirmCalibrated: () => void;
   rejectCalibrated: () => void;
   closeColorcheckerDialog: () => void;
@@ -200,6 +205,7 @@ const DEFAULT_STATE: ExtractorState = {
   calibratedImageFile: null,
   calibratedPreviewUrl: null,
   originalPreviewUrl: null,
+  colorcheckerSummary: null,
   isLoading: false,
   error: null,
   session_id: null,
@@ -267,6 +273,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
           originalPreviewUrl: null,
+          colorcheckerSummary: null,
           ...correctionDefaults,
         });
         return;
@@ -291,6 +298,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         calibratedImageFile: null,
         calibratedPreviewUrl: null,
         originalPreviewUrl: null,
+        colorcheckerSummary: null,
         ...correctionDefaults,
       } as const;
 
@@ -402,6 +410,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
           originalPreviewUrl: null,
+          colorcheckerSummary: null,
         });
       } catch (err) {
         set({
@@ -569,6 +578,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: null,
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
+          colorcheckerSummary: null,
         });
       } else {
         set({
@@ -576,18 +586,32 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: null,
           calibratedImageFile: null,
           calibratedPreviewUrl: null,
+          colorcheckerSummary: null,
         });
       }
     },
 
     openColorcheckerDialog: () => {
-      set({ colorchecker_phase: "calibrating" });
+      const state = get();
+      if (!state.imageFile) return;
+      const fallbackPreview =
+        state.originalPreviewUrl ??
+        state.imagePreviewUrl ??
+        (isRawFile(state.imageFile) ? null : URL.createObjectURL(state.imageFile));
+      set({
+        colorchecker_phase: "calibrating",
+        originalPreviewUrl: fallbackPreview,
+      });
     },
 
-    receiveCalibratedFromCC: (dataUrl: string) => {
-      // Convert data URL to File, then enter "confirming" phase.
+    receiveCalibratedFromCC: (
+      imageUrl: string,
+      summary?: ColorcheckerDisplaySummary | null,
+    ) => {
+      // Convert calibrated URL to File, then enter "confirming" phase.
       // originalPreviewUrl was already set during image upload.
-      fetch(dataUrl)
+      const resolvedUrl = normalizeResourceUrl(imageUrl) ?? imageUrl;
+      fetch(resolvedUrl)
         .then((r) => r.blob())
         .then((blob) => {
           const calibratedFile = new File([blob], "colorchecker_calibrated.png", {
@@ -598,6 +622,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
             colorchecker_phase: "confirming",
             calibratedImageFile: calibratedFile,
             calibratedPreviewUrl: previewUrl,
+            colorcheckerSummary: summary ?? null,
           });
         })
         .catch(() => {
@@ -641,6 +666,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         colorchecker_phase: "calibrating",
         calibratedImageFile: null,
         calibratedPreviewUrl: null,
+        colorcheckerSummary: null,
       });
     },
 

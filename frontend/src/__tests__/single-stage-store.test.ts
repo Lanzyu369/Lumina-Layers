@@ -34,6 +34,8 @@ describe("useSingleStageStore ColorChecker flow", () => {
       calibratedImageFile: null,
       calibratedPreviewUrl: null,
       originalWhitePreviewUrl: null,
+      colorcheckerSummary: null,
+      imageSource: "raw",
     });
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:gradient-card-source");
   });
@@ -50,5 +52,22 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(state.blackImageFile).toBe(blackFile);
     expect(state.blackImagePreviewUrl).toBeNull();
     expect(state.originalWhitePreviewUrl).toBe("blob:gradient-card-source");
+  });
+
+  it("marks confirmed ColorChecker images as restored source", () => {
+    const calibratedFile = buildPngFile("calibrated.png");
+
+    useSingleStageStore.setState({
+      colorchecker_phase: "confirming",
+      colorchecker_target: "white",
+      calibratedImageFile: calibratedFile,
+      calibratedPreviewUrl: "blob:calibrated",
+      imageSource: "raw",
+    });
+
+    useSingleStageStore.getState().confirmCalibrated();
+
+    const state = useSingleStageStore.getState();
+    expect(state.imageSource).toBe("restored");
   });
 });

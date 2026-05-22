@@ -37,6 +37,13 @@ export const ChevronRight = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const XIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} className={sizeClass} {...props}>
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
 export const ActivityIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg {...baseProps} className={sizeClass} {...props}>
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />

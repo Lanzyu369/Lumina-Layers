@@ -385,6 +385,7 @@ async def extractor_colorchecker_warp_preview(
     from core.colorchecker_adapter import (
         ColorCheckerCalibrationError,
         ColorCheckerUnavailableError,
+        decode_colorchecker_upload,
         warp_colorchecker_preview,
     )
 
@@ -399,18 +400,29 @@ async def extractor_colorchecker_warp_preview(
         )
 
     try:
-        img_arr = await upload_to_ndarray(image)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    try:
-        result = warp_colorchecker_preview(img_arr, points, patch_layout=patch_layout)
+        raw = await image.read()
+        decoded = decode_colorchecker_upload(
+            raw,
+            file_name=image.filename or "",
+            mime_type=image.content_type or "application/octet-stream",
+        )
     except ColorCheckerUnavailableError as e:
-        raise HTTPException(status_code=501, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except ColorCheckerCalibrationError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    del img_arr
+    try:
+        result = warp_colorchecker_preview(
+            decoded.image_bgr,
+            points,
+            patch_layout=patch_layout,
+        )
+    except ColorCheckerUnavailableError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except ColorCheckerCalibrationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    del decoded
     file_id = registry.register_bytes(
         str(uuid.uuid4()),
         result.preview_png,
@@ -435,11 +447,65 @@ async def extractor_colorchecker_warp_preview(
     }
 
 
+@router.post("/colorchecker-detect-chart")
+async def extractor_colorchecker_detect_chart(
+    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    assist_point: str | None = Form(None, description="Optional assist point JSON {x,y}"),
+):
+    """Automatically detect ColorChecker chart corners.
+
+    自动定位图片中的 24 色卡四角；失败时返回原因，前端仍可手动调整。
+    """
+    from core.colorchecker_adapter import (
+        ColorCheckerCalibrationError,
+        ColorCheckerUnavailableError,
+        decode_colorchecker_upload,
+        detect_colorchecker_chart,
+    )
+
+    assist = None
+    if assist_point:
+        try:
+            assist = json.loads(assist_point)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise HTTPException(status_code=422, detail=f"Invalid assist_point JSON: {e}")
+
+    try:
+        raw = await image.read()
+        decoded = decode_colorchecker_upload(
+            raw,
+            file_name=image.filename or "",
+            mime_type=image.content_type or "application/octet-stream",
+        )
+        result = detect_colorchecker_chart(
+            decoded.image_bgr,
+            patch_layout=patch_layout,
+            assist_point=assist,
+        )
+    except ColorCheckerUnavailableError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except ColorCheckerCalibrationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    log.info(
+        "ColorChecker chart detection completed",
+        extra={
+            "event": "extractor_colorchecker_detect_chart_done",
+            "detected": result.detected,
+            "confidence": round(float(result.confidence), 4),
+            "candidate_count": result.candidate_count,
+        },
+    )
+
+    return result.to_response()
+
+
 @router.post("/colorchecker-calibrate")
 async def extractor_colorchecker_calibrate(
     image: UploadFile = File(..., description="Image containing a ColorChecker card"),
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
-    patch_points: str = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
+    patch_points: str | None = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
@@ -475,22 +541,22 @@ async def extractor_colorchecker_calibrate(
         if isinstance(pp_raw, list) and len(pp_raw) > 0:
             pp = [[float(p["x"]), float(p["y"])] if isinstance(p, dict) else p for p in pp_raw]
 
-    try:
-        img_arr = await upload_to_ndarray(image)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
     cal_start = time.perf_counter()
+    raw = await image.read()
     try:
         result = apply_colorchecker_calibration(
-            img_arr, corners, patch_points=pp, patch_layout=patch_layout,
+            raw,
+            corners,
+            patch_points=pp,
+            patch_layout=patch_layout,
+            file_name=image.filename or "",
+            mime_type=image.content_type or "application/octet-stream",
         )
     except ColorCheckerUnavailableError as e:
-        raise HTTPException(status_code=501, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except ColorCheckerCalibrationError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    del img_arr
     h, w = result.calibrated_image.shape[:2]
 
     calibrated_id = registry.register_bytes(
@@ -524,6 +590,7 @@ async def extractor_colorchecker_calibrate(
         "width": w,
         "height": h,
         "patch_points": result.patch_points,
+        "display_summary": result.display_summary,
     }
 
 

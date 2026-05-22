@@ -689,7 +689,9 @@ export default function GradientCardExtractPanel() {
     colorchecker_target,
     calibratedPreviewUrl,
     originalWhitePreviewUrl,
+    colorcheckerSummary,
     setColorcheckerEnabled,
+    openColorcheckerDialog,
     receiveCalibratedFromCC,
     confirmCalibrated,
     rejectCalibrated,
@@ -1000,6 +1002,77 @@ export default function GradientCardExtractPanel() {
         <section data-testid="gradient-colorchecker-toggle-section" className={resolveSectionCardClass(workspace.mode)}>
           <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
         </section>
+
+        <AnimatePresence initial={false}>
+          {colorchecker_enabled && (
+            <motion.section
+              data-testid="gradient-colorchecker-card"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+              className="overflow-hidden"
+            >
+              <div
+                className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}
+                style={{ background: "var(--surface-panel)" }}
+              >
+                <div className="flex flex-col gap-2">
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("ext_cc_dialog_title")}
+                  </h3>
+                  <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {t("mat_gradient_colorchecker_hint")}
+                  </p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button
+                    label={t("mat_gradient_colorchecker_white_btn")}
+                    variant="secondary"
+                    onClick={() => openColorcheckerDialog("white")}
+                    disabled={!whiteImageFile || colorchecker_phase === "calibrating"}
+                    className="w-full"
+                  />
+                  <Button
+                    label={t("mat_gradient_colorchecker_black_btn")}
+                    variant="secondary"
+                    onClick={() => openColorcheckerDialog("black")}
+                    disabled={!blackImageFile || colorchecker_phase === "calibrating"}
+                    className="w-full"
+                  />
+                </div>
+                {colorchecker_phase === "done" && (
+                  <StatusBanner tone="success">
+                    {t("mat_gradient_colorchecker_restored_source")}
+                  </StatusBanner>
+                )}
+                {colorcheckerSummary && (
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    {[
+                      [t("ext_cc_metric_mean"), colorcheckerSummary.deltaE00.mean],
+                      [t("ext_cc_metric_median"), colorcheckerSummary.deltaE00.median],
+                      [t("ext_cc_metric_p95"), colorcheckerSummary.deltaE00.p95],
+                      [t("ext_cc_metric_worst"), colorcheckerSummary.deltaE00.max],
+                    ].map(([label, value]) => (
+                      <div
+                        key={String(label)}
+                        className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+                        style={{ background: "var(--surface-panel-strong)" }}
+                      >
+                        <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
+                          {label}
+                        </div>
+                        <div className="mt-1 text-base font-semibold tabular-nums text-slate-900 dark:text-slate-50">
+                          {typeof value === "number" ? value.toFixed(2) : "-"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)] xl:items-stretch`}>
           <div className="flex flex-col gap-4">
@@ -1557,6 +1630,7 @@ export default function GradientCardExtractPanel() {
         imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
         originalPreviewUrl={originalWhitePreviewUrl}
         calibratedPreviewUrl={calibratedPreviewUrl}
+        calibrationSummary={colorcheckerSummary}
         receiveCalibrated={receiveCalibratedFromCC}
         confirmCalibrated={confirmCalibrated}
         rejectCalibrated={rejectCalibrated}

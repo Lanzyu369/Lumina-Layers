@@ -2338,11 +2338,8 @@ def test_processing_helpers_build_summaries(monkeypatch, tmp_path: Path) -> None
 class TestNormalizeImageSource:
     """Unit tests for ``_normalize_image_source``.
 
-    The helper enforces parity between the API surface and the gradient-card
-    UI: the UI no longer offers a 'restored' selector, so the API must reject
-    'restored' too — otherwise a 'restored'-tagged archive could be created
-    via direct HTTP and then become unmerge-able through the UI (the merge
-    consistency check rejects mixed raw/restored runs).
+    The helper keeps the API explicit: default/blank values let the core use
+    raw, while restored is accepted only when the caller labels it directly.
     """
 
     def test_none_passes_through(self) -> None:
@@ -2363,16 +2360,12 @@ class TestNormalizeImageSource:
         assert _normalize_image_source("RAW") == "raw"
         assert _normalize_image_source("  Raw  ") == "raw"
 
-    def test_restored_is_rejected_with_422(self) -> None:
-        from fastapi import HTTPException
-
+    def test_restored_is_normalized_lowercase(self) -> None:
         from api.routers.single_stage import _normalize_image_source
 
-        with pytest.raises(HTTPException) as exc_info:
-            _normalize_image_source("restored")
-        assert exc_info.value.status_code == 422
-        assert "restored" in exc_info.value.detail
-        assert "raw" in exc_info.value.detail
+        assert _normalize_image_source("restored") == "restored"
+        assert _normalize_image_source("RESTORED") == "restored"
+        assert _normalize_image_source("  Restored  ") == "restored"
 
     def test_unknown_value_is_rejected_with_422(self) -> None:
         from fastapi import HTTPException
@@ -2384,39 +2377,59 @@ class TestNormalizeImageSource:
         assert exc_info.value.status_code == 422
 
 
-def test_extract_gradient_card_endpoint_rejects_restored_image_source(
+def test_extract_gradient_card_endpoint_accepts_explicit_restored_image_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """End-to-end guard: the HTTP endpoint must short-circuit ``restored``
-    before any upload work is attempted, returning 422 with an actionable
-    message. Sentinels on ``upload_to_ndarray`` and the core extractor would
-    fire if validation regressed.
-    """
+    """The HTTP endpoint must forward explicit ``restored`` to the core."""
     client, _, _ = _client_with_state()
 
-    sentinel = {"upload_called": False, "extract_called": False}
+    seen: dict[str, str | None] = {"image_source": None}
 
-    async def _fail_upload_to_ndarray(*_args, **_kwargs):  # noqa: ANN001
-        sentinel["upload_called"] = True
-        raise AssertionError("upload_to_ndarray must not run for rejected image_source")
+    async def _upload_to_ndarray(*_args, **_kwargs):  # noqa: ANN001
+        return np.zeros((8, 8, 3), dtype=np.uint8)
 
-    async def _fail_upload_to_tempfile(*_args, **_kwargs):  # noqa: ANN001
-        sentinel["upload_called"] = True
-        raise AssertionError("upload_to_tempfile must not run for rejected image_source")
+    async def _upload_to_tempfile(*_args, **_kwargs):  # noqa: ANN001
+        return str(tmp_path / "kit.zip")
 
-    def _fail_extract(*_args, **_kwargs):  # noqa: ANN001
-        sentinel["extract_called"] = True
-        raise AssertionError("extract_stage_a_material_from_gradient_cards must not run")
+    def _extract(*_args, image_source=None, **_kwargs):  # noqa: ANN001
+        from types import SimpleNamespace
+
+        seen["image_source"] = image_source
+        params_path = tmp_path / "stage_a.json"
+        params_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(
+            params_path=str(params_path),
+            params_payload={"meta": {"image_source": image_source}},
+            fit_summary={
+                "substrate_count": 2,
+                "channel_count": 4,
+                "substrates": ["white", "black"],
+                "colors": ["C0", "C1", "C2", "C3"],
+                "overall_validation": {},
+                "warnings": [],
+            },
+            material_summary={
+                "sample_count": 2,
+                "per_substrate_sample_count": 1,
+                "grid_rows": 1,
+                "grid_cols": 1,
+                "layer_height_mm": 0.2,
+            },
+            source_summary={"image_source": image_source},
+            white_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+            black_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+            warnings=[],
+        )
 
     monkeypatch.setattr(
-        "api.routers.single_stage.upload_to_ndarray", _fail_upload_to_ndarray
+        "api.routers.single_stage.upload_to_ndarray", _upload_to_ndarray
     )
     monkeypatch.setattr(
-        "api.routers.single_stage.upload_to_tempfile", _fail_upload_to_tempfile
+        "api.routers.single_stage.upload_to_tempfile", _upload_to_tempfile
     )
     monkeypatch.setattr(
         "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
-        _fail_extract,
+        _extract,
     )
 
     response = client.post(
@@ -2433,8 +2446,5 @@ def test_extract_gradient_card_endpoint_rejects_restored_image_source(
         },
     )
 
-    assert response.status_code == 422
-    body = response.json()
-    assert "restored" in body["detail"]
-    assert sentinel["upload_called"] is False
-    assert sentinel["extract_called"] is False
+    assert response.status_code == 200
+    assert seen["image_source"] == "restored"
