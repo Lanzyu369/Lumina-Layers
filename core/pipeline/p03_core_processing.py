@@ -307,20 +307,41 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     solver_path: str
     solver_meta: dict = {}
     if cache is not None and unique_colors.shape[0] > 0:
+        cache_mode = str(getattr(cache, "mode", "bucketed"))
+        cache_metadata = getattr(cache, "metadata", {}) or {}
+        cache_layer_count = int(getattr(cache, "layer_count", layer_count))
+        cache_grid_resolution = int(getattr(cache, "grid_resolution", requested_grid))
+        cache_valid_cell_count = int(getattr(cache, "valid_cell_count", 0))
         matched_rgb_unique, recipes_unique, delta_e = cache.lookup(
             unique_colors, materials
         )
         solver_path = "cache"
         solver_meta = {
-            "palette_hash": cache.palette_hash,
+            "palette_hash": getattr(cache, "palette_hash", ""),
             "requested_grid_resolution": requested_grid,
-            "grid_resolution": cache.grid_resolution,
+            "grid_resolution": cache_grid_resolution,
             "grid_fallback_used": actual_grid != requested_grid,
-            "valid_cell_count": cache.valid_cell_count,
-            "built_at": cache.metadata.get("built_at"),
-            "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
-            "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
+            "valid_cell_count": cache_valid_cell_count,
+            "built_at": cache_metadata.get("built_at"),
+            "cache_mean_delta_e": float(cache_metadata.get("mean_delta_e", 0.0)),
+            "cache_max_delta_e": float(cache_metadata.get("max_delta_e", 0.0)),
+            "cache_mode": cache_mode,
         }
+        _log.info(
+            "Material solver: using %s cache (M=%d, N=%d, recipes=%d)",
+            cache_mode.upper(),
+            len(materials),
+            cache_layer_count,
+            cache_valid_cell_count,
+            extra={
+                "event": "material_solver_cache_used",
+                "cache_mode": cache_mode,
+                "material_count": len(materials),
+                "layer_count": cache_layer_count,
+                "valid_cell_count": cache_valid_cell_count,
+                "unique_color_count": int(unique_colors.shape[0]),
+            },
+        )
     else:
         # No persisted cache found — build a temporary low-res (64³) cache
         # in-memory and use it for lookup.  This avoids the MITM per-pixel

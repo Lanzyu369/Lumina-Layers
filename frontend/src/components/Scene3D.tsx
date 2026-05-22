@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
-import ModelViewer, { computeFitDistance } from "./ModelViewer";
+import { computeFitDistance } from "./ModelViewer";
 import InteractiveModelViewer from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
@@ -726,7 +726,26 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           </Suspense>
         ) : effectiveModelUrl ? (
           <Suspense fallback={null}>
-            <ModelViewer url={effectiveModelUrl} />
+            <InteractiveModelViewer
+              url={effectiveModelUrl}
+              colorRemapMap={colorRemapMap}
+              colorHeightMap={colorHeightMap}
+              baseHeight={baseHeight}
+              enableRelief={enableRelief}
+              scaleX={scaleX}
+              scaleY={scaleY}
+              spacerThick={spacerThick}
+              structureMode={structureMode}
+              enableOutline={enableOutline}
+              outlineWidth={outlineWidth}
+              enableCloisonne={enableCloisonne}
+              wireWidthMm={wireWidthMm}
+              wireHeightMm={wireHeightMm}
+              enableFridgeMagnet={enableFridgeMagnet}
+              rasterCellSize={rasterCellSize}
+              puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
+              puzzleOverlayUrl={puzzleOverlayUrl}
+            />
           </Suspense>
         ) : previewGlbUrl ? (
           <Suspense fallback={null}>

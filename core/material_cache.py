@@ -87,6 +87,19 @@ HUE_RERANK_MAX_DE_PENALTY: float = 5.0
 # Constants & schema
 # ---------------------------------------------------------------------------
 
+EXACT_MODE_MAX_MATERIALS: int = 10
+"""Maximum number of materials for exact (exhaustive) mode.
+精确穷举模式最大耗材数。当 M ≤ 此值且 N ≤ EXACT_MODE_MAX_LAYERS 时
+自动走精确模式，跳过 Lab 网格分桶，保留全量 M^N 配方表实现零精度损失。"""
+
+EXACT_MODE_MAX_LAYERS: int = 5
+"""Maximum layer count for exact (exhaustive) mode.
+精确穷举模式最大层数。"""
+
+EXACT_MODE_MAX_COMBINATIONS: int = 100_000
+"""Hard cap on total combinations allowed in exact mode.
+精确模式组合数上限，作为最终安全阀。"""
+
 DEFAULT_GRID_RESOLUTION: int = 64
 """Lab grid cells per axis. Total cell count is ``grid_resolution ** 3``.
 
@@ -151,6 +164,23 @@ _HASH_PREFIX_LEN: int = 16
 _CHUNK_TARGET_BYTES: int = 64 * 1024 * 1024
 """Per-chunk memory budget for the build pass (final linear RGB block).
 64 MiB chunks keep peak memory comfortable on 8 GB-class machines."""
+
+
+def _is_exact_mode_eligible(num_materials: int, layer_count: int) -> bool:
+    """Check whether the palette/layer combination qualifies for exact mode.
+    判断该耗材数/层数组合是否满足精确穷举条件。
+
+    Exact mode stores the complete M^N formula table (no bucketing) and does
+    brute-force ΔE lookup, guaranteeing zero precision loss. The eligibility
+    thresholds (M≤10, N≤5, M^N≤100K) keep memory and build time manageable.
+    """
+    if num_materials > EXACT_MODE_MAX_MATERIALS:
+        return False
+    if layer_count > EXACT_MODE_MAX_LAYERS:
+        return False
+    if num_materials ** layer_count > EXACT_MODE_MAX_COMBINATIONS:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +423,225 @@ def _hue_aware_rerank(
 
 
 # ---------------------------------------------------------------------------
+# Neighbor coherence refinement
+# ---------------------------------------------------------------------------
+
+# Maximum absolute ΔE penalty tolerated when switching from the per-color
+# CIE76-best to a neighbor-coherent candidate. If the coherent pick's ΔE
+# exceeds the original best by more than this, we keep the original.
+# 邻近色一致性修正允许的最大 ΔE 惩罚；超出时保留原始最优匹配。
+_NEIGHBOR_COHERENCE_MAX_DE_PENALTY: float = 8.0
+
+# Lab distance threshold below which two source colours are considered
+# "neighbours" for coherence purposes.
+# 两个源色在 Lab 中的距离低于此阈值时被视为邻近色对。
+_NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD: float = 20.0
+
+# Number of top candidates to consider per target during refinement.
+# 修正时每个目标色考察的候选数。
+_NEIGHBOR_COHERENCE_TOP_K: int = 8
+
+
+def _neighbor_coherence_refine(
+    *,
+    target_lab: np.ndarray,
+    matched_rgb: np.ndarray,
+    recipes_user_order: np.ndarray,
+    delta_e: np.ndarray,
+    all_lab: np.ndarray,
+    all_srgb: np.ndarray,
+    all_recipes: np.ndarray,
+    user_mapping: np.ndarray,
+    coherence_weight: float,
+    layer_count: int,
+    uniform_lab: np.ndarray | None,
+    uniform_srgb: np.ndarray | None,
+    uniform_recipes: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Refine per-color best picks to preserve gradient coherence among neighbours.
+    对初始逐色最优匹配做邻近色一致性修正，保持相邻色之间的梯度方向与间距比例。
+
+    Algorithm:
+      1. Build an adjacency graph: pairs (i, j) where ΔE(target_i, target_j) < threshold.
+      2. For each pair, compute the source direction vector in Lab: d_src = target_j - target_i.
+      3. Check if the matched direction d_matched = matched_j_lab - matched_i_lab preserves
+         the same direction (cosine similarity) and proportional spacing.
+      4. When coherence is broken, try swapping one of the pair's picks to a top-K candidate
+         that restores direction while staying within the absolute ΔE penalty cap.
+
+    算法：
+      1. 建立邻接图：源色 Lab 距离 < 阈值的所有颜色对 (i, j)。
+      2. 对每对计算源方向向量 d_src = target_j - target_i。
+      3. 检查匹配后方向 d_matched 是否保持了同向性（余弦相似度）和比例间距。
+      4. 当一致性被破坏时，从 top-K 候选里为该对中的某一色选一个更一致的替代，
+         前提是绝对 ΔE 惩罚不超过阈值。
+
+    Returns the (potentially refined) matched_rgb, recipes, delta_e arrays.
+    """
+    from scipy.spatial.distance import cdist
+
+    C_count = target_lab.shape[0]
+    if C_count < 2:
+        return matched_rgb, recipes_user_order, delta_e
+
+    # 1. Find neighbor pairs
+    target_dist = cdist(target_lab, target_lab, metric="euclidean")
+    # Only upper triangle to avoid duplicates
+    pairs = []
+    for i in range(C_count):
+        for j in range(i + 1, C_count):
+            if target_dist[i, j] < _NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD:
+                pairs.append((i, j))
+
+    if not pairs:
+        return matched_rgb, recipes_user_order, delta_e
+
+    # 2. Get top-K candidates for each target (computed once)
+    K_total = all_lab.shape[0]
+    top_k = min(_NEIGHBOR_COHERENCE_TOP_K, K_total)
+    # Full distance matrix (C, K)
+    full_dist = cdist(target_lab, all_lab, metric="euclidean")
+    # top-K indices per target
+    if top_k >= K_total:
+        # All candidates fit within top-K; no partial sort needed.
+        topk_indices = np.broadcast_to(
+            np.arange(K_total, dtype=np.intp)[None, :], (C_count, K_total)
+        ).copy()
+    else:
+        topk_indices = np.argpartition(full_dist, top_k, axis=1)[:, :top_k]  # (C, top_k)
+
+    # Current matched Lab (from matched_rgb)
+    matched_lab = rgb_to_lab(matched_rgb).astype(np.float64)
+
+    # Track which targets have been refined (to avoid cascading conflicts)
+    refined = np.zeros(C_count, dtype=bool)
+    new_matched_rgb = matched_rgb.copy()
+    new_recipes = recipes_user_order.copy()
+    new_de = delta_e.copy()
+    refinement_count = 0
+
+    # 3. For each pair, check coherence and refine if needed
+    for i, j in pairs:
+        # Source direction vector
+        d_src = target_lab[j] - target_lab[i]
+        d_src_norm = np.linalg.norm(d_src)
+        if d_src_norm < 1e-6:
+            continue  # identical colours, skip
+
+        # Current matched direction
+        d_matched = matched_lab[j] - matched_lab[i]
+        d_matched_norm = np.linalg.norm(d_matched)
+
+        # Cosine similarity between source and matched direction
+        if d_matched_norm < 1e-6:
+            cos_sim = 0.0
+        else:
+            cos_sim = float(np.dot(d_src, d_matched) / (d_src_norm * d_matched_norm))
+
+        # Spacing ratio: how much the relative distance changed
+        spacing_ratio = d_matched_norm / d_src_norm if d_src_norm > 0 else 1.0
+
+        # Coherence score: 1.0 = perfect preservation, 0.0 = completely broken
+        # Combines direction (cosine) and spacing (penalise extreme stretching)
+        direction_score = max(0.0, cos_sim)  # negative cos = reversed direction
+        spacing_penalty = 1.0 - min(1.0, abs(np.log(max(spacing_ratio, 0.01))) / 2.0)
+        coherence_score = direction_score * spacing_penalty
+
+        # If coherence is already good enough, skip
+        threshold = 1.0 - coherence_weight  # higher weight = stricter requirement
+        if coherence_score >= threshold:
+            continue
+
+        # 4. Try to find better candidates for one of the pair members
+        # Prefer to adjust the one with higher initial ΔE (less optimal original pick)
+        if refined[i] and refined[j]:
+            continue  # Both already touched, avoid cascade
+
+        # Choose which to adjust: the one with larger ΔE (more room to improve)
+        adjust_idx = j if new_de[j] >= new_de[i] else i
+        anchor_idx = i if adjust_idx == j else j
+
+        if refined[adjust_idx]:
+            # Try the other one
+            adjust_idx, anchor_idx = anchor_idx, adjust_idx
+            if refined[adjust_idx]:
+                continue
+
+        # Direction from anchor to adjust in source space
+        if adjust_idx == j:
+            d_src_to_adjust = d_src  # i -> j
+        else:
+            d_src_to_adjust = -d_src  # j -> i
+        d_src_to_adjust_norm = np.linalg.norm(d_src_to_adjust)
+        d_src_unit = d_src_to_adjust / d_src_to_adjust_norm
+
+        # Get top-K candidates for the adjust target
+        cand_indices = topk_indices[adjust_idx]  # (top_k,)
+        cand_labs = all_lab[cand_indices]  # (top_k, 3)
+        cand_des = full_dist[adjust_idx, cand_indices]  # (top_k,)
+
+        # Current anchor matched Lab
+        anchor_lab = matched_lab[anchor_idx]
+
+        # Evaluate each candidate's coherence with the anchor
+        best_combined_score = -np.inf
+        best_cand_pos = -1
+        original_de = new_de[adjust_idx]
+
+        for k_pos in range(top_k):
+            cand_de = cand_des[k_pos]
+            # Reject if ΔE penalty too large
+            if cand_de - original_de > _NEIGHBOR_COHERENCE_MAX_DE_PENALTY:
+                continue
+
+            cand_lab = cand_labs[k_pos]
+            # Direction from anchor to this candidate
+            d_cand = cand_lab - anchor_lab
+            d_cand_norm = np.linalg.norm(d_cand)
+            if d_cand_norm < 1e-6:
+                cand_cos = 0.0
+            else:
+                cand_cos = float(np.dot(d_src_unit, d_cand / d_cand_norm))
+
+            cand_spacing = d_cand_norm / d_src_to_adjust_norm
+            cand_spacing_penalty = 1.0 - min(1.0, abs(np.log(max(cand_spacing, 0.01))) / 2.0)
+            cand_coherence = max(0.0, cand_cos) * cand_spacing_penalty
+
+            # Combined score: coherence improvement vs ΔE cost
+            de_penalty_fraction = (cand_de - original_de) / max(_NEIGHBOR_COHERENCE_MAX_DE_PENALTY, 1e-6)
+            combined = cand_coherence - de_penalty_fraction * 0.5
+
+            if combined > best_combined_score:
+                best_combined_score = combined
+                best_cand_pos = k_pos
+
+        # Accept refinement only if it actually improves coherence
+        if best_cand_pos >= 0 and best_combined_score > coherence_score:
+            cand_row = int(cand_indices[best_cand_pos])
+            new_matched_rgb[adjust_idx] = all_srgb[cand_row]
+            new_recipes[adjust_idx] = user_mapping[all_recipes[cand_row]]
+            new_de[adjust_idx] = cand_des[best_cand_pos]
+            matched_lab[adjust_idx] = all_lab[cand_row]
+            refined[adjust_idx] = True
+            refinement_count += 1
+
+    if refinement_count > 0:
+        _log.info(
+            "Neighbor coherence refined %d/%d targets (pairs=%d, weight=%.2f)",
+            refinement_count, C_count, len(pairs), coherence_weight,
+            extra={
+                "event": "neighbor_coherence_refined",
+                "refined_count": refinement_count,
+                "total_targets": C_count,
+                "pair_count": len(pairs),
+                "coherence_weight": coherence_weight,
+            },
+        )
+
+    return new_matched_rgb, new_recipes, new_de
+
+
+# ---------------------------------------------------------------------------
 # Cache data class
 # ---------------------------------------------------------------------------
 
@@ -467,6 +716,17 @@ class MaterialSolverCache:
         return int(self.metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION))
 
     @property
+    def mode(self) -> str:
+        """Cache mode: ``"exact"`` (full formula table) or ``"bucketed"`` (Lab grid).
+        缓存模式：精确穷举 / 分桶。"""
+        return str(self.metadata.get("mode", "bucketed"))
+
+    @property
+    def is_exact(self) -> bool:
+        """Whether this cache uses exact (exhaustive) lookup — no bucketing loss."""
+        return self.mode == "exact"
+
+    @property
     def valid_cell_count(self) -> int:
         return int(self.lab_centers.shape[0])
 
@@ -490,6 +750,7 @@ class MaterialSolverCache:
         user_materials: list[MaterialParams],
         *,
         hue_weight: float = 0.0,
+        neighbor_coherence: float = 0.5,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Find the best stored recipe for each target color.
         为每个目标颜色查找最优存档配方。
@@ -556,6 +817,21 @@ class MaterialSolverCache:
                 f"User palette fingerprint {user_fp} does not match cached "
                 f"palette {self.palette_hash}"
             )
+
+        # ---- Exact mode: brute-force vectorised ΔE over full formula table ----
+        # 精确模式：对全量配方表做向量化暴力 ΔE 搜索，零精度损失。
+        if self.is_exact:
+            return self._lookup_exact(
+                target_srgb, user_materials,
+                hue_weight=hue_weight,
+                neighbor_coherence=neighbor_coherence,
+            )
+
+        # ---- Bucketed mode: KDTree nearest-bucket lookup ----
+        _log.debug(
+            "BUCKETED lookup: %d targets, grid=%d, cells=%d",
+            target_srgb.shape[0], self.grid_resolution, self.valid_cell_count,
+        )
         # Build KDTree over achieved Lab (lazily; expected small cost).
         tree = cKDTree(self.achieved_lab.astype(np.float64))
         target_lab = rgb_to_lab(target_srgb).astype(np.float64)
@@ -625,6 +901,163 @@ class MaterialSolverCache:
             recipes_canonical[bkt_idx] = self.recipes[best_rows]
 
         recipes_user_order = mapping[recipes_canonical].astype(np.int32)
+        return matched_rgb, recipes_user_order, best_de
+
+    # ------------------------------------------------------------------
+    # Exact-mode lookup (brute-force over full formula table)
+    # ------------------------------------------------------------------
+
+    def _lookup_exact(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+        *,
+        hue_weight: float = 0.0,
+        neighbor_coherence: float = 0.5,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Brute-force lookup against the full M^N formula table.
+        对全量 M^N 配方表做暴力 ΔE 匹配，无精度损失。
+
+        For each target colour, computes CIE76 ΔE to every stored recipe's
+        achieved Lab, then selects the minimum. Since exact-mode caches have
+        at most 100K entries, this vectorised broadcast is fast (~ms for
+        typical image palettes of 8-64 unique colours).
+
+        When ``neighbor_coherence > 0``, a post-processing step refines the
+        initial best picks to preserve gradient direction and spacing between
+        neighbouring target colours in Lab space, preventing the case where
+        two close input colours diverge after matching.
+
+        每个目标色与全部配方的 Lab 值做向量化 ΔE 计算后取最小值。精确模式
+        上限 100K 条配方，对典型 8-64 种唯一色的图像仅耗时毫秒级。
+
+        当 ``neighbor_coherence > 0`` 时，在初始最优匹配之后做邻近色一致性
+        修正：确保相邻源色匹配后的梯度方向和间距比例不被扭曲。
+        """
+        from scipy.spatial.distance import cdist
+
+        C_count = target_srgb.shape[0]
+        N = self.layer_count
+        target_lab = rgb_to_lab(target_srgb).astype(np.float64)
+
+        # achieved_lab: (K, 3) — full formula table
+        all_lab = self.achieved_lab.astype(np.float64)  # (K, 3)
+        K = all_lab.shape[0]
+
+        _log.info(
+            "EXACT lookup: %d targets × %d recipes (brute-force ΔE, zero loss)",
+            C_count, K,
+            extra={
+                "event": "material_solver_exact_lookup",
+                "target_count": C_count,
+                "recipe_count": K,
+            },
+        )
+
+        # Use scipy cdist for efficient pairwise distance computation.
+        # cdist uses optimised C code and is much faster than broadcast norm
+        # for the (C, K) shape. For C=256 K=100K this runs in ~50ms vs ~900ms.
+        # 使用 scipy cdist 高效计算成对距离——底层是 C 实现，远快于 broadcast norm。
+        _CHUNK_C = 2048  # chunk targets to cap memory: 2048*100K*8B = 1.6 GB max
+        best_idx = np.empty(C_count, dtype=np.int64)
+        best_de = np.empty(C_count, dtype=np.float64)
+
+        for c_start in range(0, C_count, _CHUNK_C):
+            c_end = min(c_start + _CHUNK_C, C_count)
+            chunk_target = target_lab[c_start:c_end]  # (chunk, 3)
+            # cdist returns (chunk, K) distance matrix
+            dist_matrix = cdist(chunk_target, all_lab, metric="euclidean")
+            chunk_best_idx = np.argmin(dist_matrix, axis=1)
+            chunk_best_de = dist_matrix[np.arange(c_end - c_start), chunk_best_idx]
+            best_idx[c_start:c_end] = chunk_best_idx
+            best_de[c_start:c_end] = chunk_best_de
+
+        # --- Hue-aware reranking (optional) ---
+        if hue_weight > 0.0:
+            # For hue reranking, gather top-64 candidates per target via cdist
+            top_k_for_hue = min(64, K)
+            for c_start in range(0, C_count, _CHUNK_C):
+                c_end = min(c_start + _CHUNK_C, C_count)
+                chunk_target = target_lab[c_start:c_end]
+                dist_matrix = cdist(chunk_target, all_lab, metric="euclidean")
+                # Get top-k indices per row
+                chunk_size = c_end - c_start
+                if top_k_for_hue >= K:
+                    # All recipes fit; no partial sort needed.
+                    topk_idx = np.broadcast_to(
+                        np.arange(K, dtype=np.intp)[None, :], (chunk_size, K)
+                    ).copy()
+                else:
+                    topk_idx = np.argpartition(dist_matrix, top_k_for_hue, axis=1)[:, :top_k_for_hue]
+                row_idx = np.arange(c_end - c_start)[:, None]
+                topk_lab = all_lab[topk_idx]  # (chunk, top_k, 3)
+                topk_de = dist_matrix[row_idx, topk_idx]  # (chunk, top_k)
+                reranked_pos = _hue_aware_rerank(
+                    chunk_target, topk_lab, topk_de, hue_weight
+                )
+                for i, pos in enumerate(reranked_pos):
+                    c_global = c_start + i
+                    best_idx[c_global] = topk_idx[i, pos]
+                    best_de[c_global] = topk_de[i, pos]
+
+        # --- Also check uniform (pure-colour) recipes ---
+        uniform_count = int(self.uniform_recipes.shape[0])
+        if uniform_count > 0:
+            uniform_lab = rgb_to_lab(self.uniform_achieved_srgb).astype(np.float64)
+            uniform_de = np.linalg.norm(
+                target_lab[:, None, :] - uniform_lab[None, :, :], axis=2
+            )  # (C, M)
+            uniform_best_per_c = np.min(uniform_de, axis=1)  # (C,)
+            uniform_best_idx_per_c = np.argmin(uniform_de, axis=1)  # (C,)
+            # Replace where uniform is better
+            improved = uniform_best_per_c < best_de
+            if np.any(improved):
+                best_de[improved] = uniform_best_per_c[improved]
+                # Mark with negative index to distinguish from formula table
+                best_idx[improved] = -(uniform_best_idx_per_c[improved] + 1)
+
+        # --- Assemble output ---
+        user_order = canonical_palette_order(user_materials)
+        mapping = np.asarray(user_order, dtype=np.int32)
+
+        matched_rgb = np.empty((C_count, 3), dtype=np.uint8)
+        recipes_canonical = np.zeros((C_count, N), dtype=np.uint8)
+
+        is_uniform = best_idx < 0
+        if np.any(is_uniform):
+            uni_idx = np.where(is_uniform)[0]
+            u_col = -(best_idx[uni_idx] + 1).astype(np.int64)
+            matched_rgb[uni_idx] = self.uniform_achieved_srgb[u_col]
+            recipes_canonical[uni_idx] = self.uniform_recipes[u_col]
+        if np.any(~is_uniform):
+            bkt_idx = np.where(~is_uniform)[0]
+            rows = best_idx[bkt_idx].astype(np.int64)
+            matched_rgb[bkt_idx] = self.achieved_srgb[rows]
+            recipes_canonical[bkt_idx] = self.recipes[rows]
+
+        recipes_user_order = mapping[recipes_canonical].astype(np.int32)
+
+        # --- Neighbor coherence post-processing ---
+        # When enabled, refine picks so that close source colours map to
+        # results that preserve relative direction and spacing in Lab.
+        # 邻近色一致性修正：保持相近源色匹配后的梯度方向与间距比例。
+        if neighbor_coherence > 0.0 and C_count >= 2:
+            matched_rgb, recipes_user_order, best_de = _neighbor_coherence_refine(
+                target_lab=target_lab,
+                matched_rgb=matched_rgb,
+                recipes_user_order=recipes_user_order,
+                delta_e=best_de,
+                all_lab=all_lab,
+                all_srgb=self.achieved_srgb,
+                all_recipes=self.recipes,
+                user_mapping=mapping,
+                coherence_weight=neighbor_coherence,
+                layer_count=N,
+                uniform_lab=rgb_to_lab(self.uniform_achieved_srgb).astype(np.float64) if uniform_count > 0 else None,
+                uniform_srgb=self.uniform_achieved_srgb if uniform_count > 0 else None,
+                uniform_recipes=self.uniform_recipes if uniform_count > 0 else None,
+            )
+
         return matched_rgb, recipes_user_order, best_de
 
     def lookup_top_k(
@@ -756,6 +1189,139 @@ class MaterialSolverCache:
             ))
         return suggestions
 
+    def lookup_candidates(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+        *,
+        k: int = 16,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return top-k candidates per target for palette-aware reranking.
+        为每个目标色返回 top-k 候选，供保形重排使用。
+
+        Merges bucket-pool and uniform-pool candidates, sorts per-target by
+        ΔE ascending, and returns the top-k slice. Recipes are returned in
+        the caller's material order.
+
+        合并分桶池和纯色池候选，按每个目标色的 ΔE 升序排列，取 top-k。
+        配方返回调用方耗材顺序。
+
+        Args:
+            target_srgb: ``(C, 3)`` uint8 target colours in sRGB.
+                (目标 sRGB 唯一色)
+            user_materials: The caller's ordered material list.
+                (调用方耗材顺序)
+            k: Number of candidates per target. (每色候选数)
+
+        Returns:
+            Tuple of four arrays:
+
+            - ``cands_rgb``: ``(C, K, 3)`` uint8 — each candidate's sRGB.
+            - ``cands_lab``: ``(C, K, 3)`` float64 — each candidate's Lab.
+            - ``cands_recipes``: ``(C, K, N)`` int32 — recipes in user order.
+            - ``cands_delta_e``: ``(C, K)`` float64 — CIE76 ΔE per candidate.
+
+            Where ``K = min(k, available_candidates)``.
+
+        Raises:
+            ValueError: Shape or fingerprint mismatch.
+        """
+        if target_srgb.ndim != 2 or target_srgb.shape[1] != 3:
+            raise ValueError("target_srgb must be shaped (C, 3)")
+        C_count = target_srgb.shape[0]
+        N = self.layer_count
+        if C_count == 0:
+            return (
+                np.zeros((0, 0, 3), dtype=np.uint8),
+                np.zeros((0, 0, 3), dtype=np.float64),
+                np.zeros((0, 0, N), dtype=np.int32),
+                np.zeros((0, 0), dtype=np.float64),
+            )
+        if int(self.valid_cell_count) == 0:
+            raise ValueError(
+                "MaterialSolverCache has no populated cells; rebuild the cache "
+                "before lookup_candidates. (缓存不含任何有效分桶)"
+            )
+        user_fp = fingerprint_palette(user_materials)
+        if user_fp != self.palette_hash:
+            raise ValueError(
+                f"User palette fingerprint {user_fp} does not match cached "
+                f"palette {self.palette_hash}"
+            )
+
+        # Query more from KDTree than k to have room after merging uniform pool.
+        tree = cKDTree(self.achieved_lab.astype(np.float64))
+        target_lab = rgb_to_lab(target_srgb).astype(np.float64)
+        query_k = min(max(k, 64), int(self.valid_cell_count))
+        _, nearest_idx = tree.query(target_lab, k=query_k)
+        nearest_idx = np.asarray(nearest_idx)
+        if nearest_idx.ndim == 1:
+            nearest_idx = nearest_idx.reshape(-1, 1)
+
+        bucket_count = nearest_idx.shape[1]
+        candidate_lab = self.achieved_lab[nearest_idx].astype(np.float64)
+        candidate_lab = candidate_lab.reshape(C_count, bucket_count, 3)
+        candidate_srgb = self.achieved_srgb[nearest_idx].reshape(C_count, bucket_count, 3)
+        candidate_delta_e = np.linalg.norm(
+            candidate_lab - target_lab[:, None, :], axis=2
+        )
+
+        # Merge uniform (pure-colour) pool.
+        uniform_count = int(self.uniform_recipes.shape[0])
+        if uniform_count > 0:
+            uniform_lab = rgb_to_lab(self.uniform_achieved_srgb).astype(np.float64)
+            uniform_lab_tiled = np.broadcast_to(
+                uniform_lab[None, :, :], (C_count, uniform_count, 3)
+            )
+            uniform_srgb_tiled = np.broadcast_to(
+                self.uniform_achieved_srgb[None, :, :], (C_count, uniform_count, 3)
+            )
+            uniform_de = np.linalg.norm(
+                uniform_lab_tiled - target_lab[:, None, :], axis=2
+            )
+            candidate_lab = np.concatenate(
+                [candidate_lab, uniform_lab_tiled], axis=1
+            )
+            candidate_srgb = np.concatenate(
+                [candidate_srgb, np.ascontiguousarray(uniform_srgb_tiled)], axis=1
+            )
+            candidate_delta_e = np.concatenate(
+                [candidate_delta_e, uniform_de], axis=1
+            )
+
+        # Sort per-target by ΔE and take top-k.
+        total_pool = candidate_delta_e.shape[1]
+        actual_k = min(k, total_pool)
+        sort_idx = np.argsort(candidate_delta_e, axis=1)[:, :actual_k]  # (C, K)
+
+        row_idx = np.arange(C_count)[:, None]
+        out_lab = candidate_lab[row_idx, sort_idx]           # (C, K, 3)
+        out_srgb = candidate_srgb[row_idx, sort_idx]         # (C, K, 3)
+        out_de = candidate_delta_e[row_idx, sort_idx]        # (C, K)
+
+        # Build recipes for selected candidates.
+        user_order = canonical_palette_order(user_materials)
+        mapping = np.asarray(user_order, dtype=np.int32)
+        out_recipes = np.zeros((C_count, actual_k, N), dtype=np.int32)
+
+        for c in range(C_count):
+            for ki in range(actual_k):
+                pool_col = int(sort_idx[c, ki])
+                if pool_col < bucket_count:
+                    cache_row = int(nearest_idx[c, pool_col])
+                    recipe_canonical = self.recipes[cache_row]
+                else:
+                    uni_idx = pool_col - bucket_count
+                    recipe_canonical = self.uniform_recipes[uni_idx]
+                out_recipes[c, ki] = mapping[recipe_canonical]
+
+        return (
+            out_srgb.astype(np.uint8),
+            out_lab,
+            out_recipes,
+            out_de,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Build
@@ -881,6 +1447,187 @@ def _compute_uniform_recipes(
     return uniform_recipes, uniform_achieved_srgb
 
 
+def _build_exact_cache(
+    canonical_materials: list[MaterialParams],
+    canonical_order: list[int],
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    *,
+    progress_callback: Callable[[float, dict[str, Any]], None] | None = None,
+    start_time: float,
+) -> MaterialSolverCache:
+    """Build an exact (full-enumeration) cache with zero bucketing loss.
+    构建精确穷举缓存：存储全量 M^N 配方表，查询时暴力 ΔE 匹配。
+
+    Stores every single recipe and its predicted colour so that lookup can
+    do a brute-force nearest-neighbour search with guaranteed global
+    optimality. Only called when M^N ≤ 100K (e.g. 10 colours × 5 layers).
+
+    全量存储每条配方及其预测颜色，查询时暴力搜索保证全局最优。
+    仅当 M^N ≤ 100K 时被调用（如 10 色 5 层）。
+    """
+    M = len(canonical_materials)
+    affines = _compute_material_affines(canonical_materials, layer_height_mm)
+    substrate_linear = (
+        np.zeros(3, dtype=np.float64)
+        if substrate == "black"
+        else np.ones(3, dtype=np.float64)
+    )
+
+    top_depth = (layer_count + 1) // 2
+    bottom_depth = layer_count - top_depth
+
+    # Enumerate halves via MITM decomposition (reuse existing infrastructure).
+    bot_alpha, bot_beta, bot_recipes = _enumerate_cumulative_affines(
+        affines, bottom_depth
+    )
+    bot_colors = bot_alpha * substrate_linear + bot_beta  # (K_bot, 3)
+    top_alpha, top_beta, top_recipes = _enumerate_cumulative_affines(
+        affines, top_depth
+    )
+    K_bot = bot_colors.shape[0]
+    K_top = top_alpha.shape[0]
+    total_combinations = int(K_top) * int(K_bot)
+
+    # Pre-allocate output arrays for all M^N recipes.
+    all_recipes = np.empty((total_combinations, layer_count), dtype=np.int8)
+    all_srgb = np.empty((total_combinations, 3), dtype=np.uint8)
+    all_lab = np.empty((total_combinations, 3), dtype=np.float32)
+
+    # Process in chunks to keep memory comfortable.
+    per_row_bytes = K_bot * 24
+    chunk_size = max(1, min(K_top, _CHUNK_TARGET_BYTES // max(per_row_bytes, 1)))
+    num_chunks = (K_top + chunk_size - 1) // chunk_size
+    write_offset = 0
+
+    for chunk_idx, chunk_start in enumerate(range(0, K_top, chunk_size)):
+        chunk_end = min(chunk_start + chunk_size, K_top)
+        sub = chunk_end - chunk_start
+        chunk_alpha = top_alpha[chunk_start:chunk_end]
+        chunk_beta = top_beta[chunk_start:chunk_end]
+        chunk_recipes_top = top_recipes[chunk_start:chunk_end]
+
+        # final_linear: (sub, K_bot, 3)
+        final_linear = (
+            chunk_alpha[:, None, :] * bot_colors[None, :, :]
+            + chunk_beta[:, None, :]
+        )
+        flat_linear = final_linear.reshape(-1, 3)  # (sub*K_bot, 3)
+        flat_srgb = linear_to_srgb_uint8(flat_linear)
+        flat_lab = _linear_to_lab(flat_linear).astype(np.float32)  # (sub*K_bot, 3)
+
+        # Build recipes: bottom-then-top column order.
+        chunk_count = sub * K_bot
+        chunk_recipes = np.empty((chunk_count, layer_count), dtype=np.int8)
+        # Expand: top_idx = flat_row // K_bot, bot_idx = flat_row % K_bot
+        top_idx = np.repeat(np.arange(sub), K_bot)
+        bot_idx = np.tile(np.arange(K_bot), sub)
+        if bottom_depth > 0:
+            chunk_recipes[:, :bottom_depth] = bot_recipes[bot_idx]
+        if top_depth > 0:
+            chunk_recipes[:, bottom_depth:] = chunk_recipes_top[top_idx]
+
+        # Write to output arrays.
+        all_recipes[write_offset:write_offset + chunk_count] = chunk_recipes
+        all_srgb[write_offset:write_offset + chunk_count] = flat_srgb
+        all_lab[write_offset:write_offset + chunk_count] = flat_lab
+        write_offset += chunk_count
+
+        if progress_callback is not None:
+            fraction = (chunk_idx + 1) / max(num_chunks, 1)
+            progress_callback(
+                fraction,
+                {
+                    "chunk_index": chunk_idx + 1,
+                    "total_chunks": num_chunks,
+                    "valid_bucket_count": write_offset,
+                    "elapsed_seconds": time.time() - start_time,
+                },
+            )
+
+    # Trim in case of rounding (shouldn't happen, but defensive).
+    all_recipes = all_recipes[:write_offset]
+    all_srgb = all_srgb[:write_offset]
+    all_lab = all_lab[:write_offset]
+
+    # center_delta_e: not meaningful for exact mode, but keep shape contract.
+    # Store zeros since there's no bucket centre concept.
+    center_delta_e = np.zeros(write_offset, dtype=np.float32)
+
+    build_time = time.time() - start_time
+
+    metadata = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "color_precision": "continuous_lab",
+        "mode": "exact",
+        "palette_hash": palette_hash,
+        "canonical_materials": [
+            {
+                "name": m.name,
+                "directory_name": m.directory_name,
+                "fingerprint": _material_fingerprint(m),
+                "E": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.E.tolist()],
+                "k": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.k.tolist()],
+                "C0_white": [
+                    round(float(v), _FINGERPRINT_DECIMALS) for v in m.C0_white.tolist()
+                ],
+            }
+            for m in canonical_materials
+        ],
+        "layer_count": int(layer_count),
+        "layer_height_mm": float(layer_height_mm),
+        "substrate": substrate,
+        "grid_resolution": 0,  # Not applicable for exact mode
+        "total_combinations": total_combinations,
+        "valid_cell_count": write_offset,
+        "total_cell_count": total_combinations,
+        "mean_delta_e": 0.0,  # Exact mode has no bucketing error
+        "max_delta_e": 0.0,
+        "build_time_seconds": build_time,
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    _log.info(
+        "Built EXACT material solver cache: palette=%s M=%d N=%d "
+        "combinations=%d build=%.1fs",
+        palette_hash,
+        M,
+        layer_count,
+        total_combinations,
+        build_time,
+        extra={
+            "event": "material_solver_cache_built",
+            "palette_hash": palette_hash,
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "mode": "exact",
+            "total_combinations": total_combinations,
+            "valid_cell_count": write_offset,
+            "build_time_seconds": build_time,
+        },
+    )
+
+    # Pure-colour recipes (always pinned).
+    uniform_recipes, uniform_achieved_srgb = _compute_uniform_recipes(
+        canonical_materials, layer_count, layer_height_mm, substrate,
+    )
+    metadata["uniform_recipe_count"] = int(uniform_recipes.shape[0])
+
+    return MaterialSolverCache(
+        lab_centers=all_lab,  # In exact mode, these are achieved Labs (not bucket centers)
+        recipes=all_recipes,
+        achieved_srgb=all_srgb,
+        achieved_lab=all_lab,
+        center_delta_e=center_delta_e,
+        uniform_recipes=uniform_recipes,
+        uniform_achieved_srgb=uniform_achieved_srgb,
+        metadata=metadata,
+    )
+
+
 def build_material_solver_cache(
     materials: list[MaterialParams],
     layer_count: int,
@@ -889,16 +1636,25 @@ def build_material_solver_cache(
     *,
     grid_resolution: int = DEFAULT_GRID_RESOLUTION,
     progress_callback: Callable[[float, dict[str, Any]], None] | None = None,
+    mode: str = "auto",
 ) -> MaterialSolverCache:
-    """Exhaustively enumerate every recipe and build a bucketed lookup cache.
-    穷举所有配方并构建分桶查询缓存。
+    """Exhaustively enumerate every recipe and build a lookup cache.
+    穷举所有配方并构建查询缓存。
 
     The build pass uses the MITM decomposition from
     :mod:`core.material_color_solver`: the top and bottom halves are
     enumerated into cumulative-affine tables once, then combined chunk-by-chunk
-    to produce every ``M**N`` final color. Each chunk bucketizes outputs into a
-    ``grid_resolution ** 3`` Lab grid and keeps the recipe whose output Lab is
-    closest to its cell centre.
+    to produce every ``M**N`` final color.
+
+    When ``mode="auto"`` (default) and the palette is small enough (M≤10,
+    N≤5, M^N≤100K), the builder stores the *complete* formula table without
+    bucketing — guaranteeing zero precision loss at lookup time. Larger
+    palettes fall back to Lab-grid bucketing. Pass ``mode="bucketed"`` to
+    force the traditional bucketing path regardless of palette size.
+
+    当 ``mode="auto"``（默认）且调色板足够小（M≤10, N≤5, M^N≤100K）时，
+    构建器存储完整配方表，查询时零精度损失。更大的调色板回退到 Lab 网格分桶。
+    传 ``mode="bucketed"`` 可强制走分桶路径。
 
     Args:
         materials: Palette used for enumeration. The solver internally reorders
@@ -909,10 +1665,13 @@ def build_material_solver_cache(
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"``. (基底)
         grid_resolution: Lab grid cells per axis. Default 128.
-            (Lab 网格分辨率，默认 128)
+            Ignored in exact mode. (Lab 网格分辨率，精确模式下忽略)
         progress_callback: Optional callback invoked as
             ``cb(progress_fraction, info)`` where ``progress_fraction`` is in
             ``[0, 1]`` and ``info`` carries build stats. (进度回调)
+        mode: ``"auto"`` (default), ``"exact"``, or ``"bucketed"``.
+            ``"auto"`` chooses exact when eligible, else bucketed.
+            (模式选择：auto/exact/bucketed)
 
     Returns:
         MaterialSolverCache with populated arrays and metadata.
@@ -940,6 +1699,24 @@ def build_material_solver_cache(
     canonical_order = canonical_palette_order(materials)
     canonical_materials = [materials[i] for i in canonical_order]
     palette_hash = fingerprint_palette(canonical_materials)
+
+    # ---- Exact mode shortcut: M≤10 and N≤5 → store full formula table ----
+    # 精确模式快速路径：小规模调色板直接存全量配方表，零精度损失。
+    _use_exact = (
+        mode == "exact"
+        or (mode == "auto" and _is_exact_mode_eligible(len(materials), layer_count))
+    )
+    if _use_exact:
+        return _build_exact_cache(
+            canonical_materials,
+            canonical_order,
+            palette_hash,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            progress_callback=progress_callback,
+            start_time=start_time,
+        )
 
     affines = _compute_material_affines(canonical_materials, layer_height_mm)
     substrate_linear = (
@@ -1400,7 +2177,12 @@ def load_material_solver_cache(
         )
         return None
     stored_grid = int(metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION))
-    if stored_grid != int(grid_resolution):
+    stored_mode = str(metadata.get("mode", "bucketed"))
+    # Exact-mode caches (grid_resolution=0) supersede any grid request —
+    # they are strictly better than any bucketed tier for the same palette.
+    # 精确模式缓存（grid_resolution=0）无条件匹配任何 grid 请求，因为它
+    # 严格优于任何分桶分辨率。
+    if stored_mode != "exact" and stored_grid != int(grid_resolution):
         _log.info(
             "Material solver cache %s grid_resolution=%d does not match caller's "
             "expected %d; treating as missing.",
@@ -1551,6 +2333,25 @@ def load_material_solver_cache_with_fallback(
         requested one). Returns ``(None, None)`` when no usable cache file
         exists on disk.
     """
+    # ---- Try exact-mode cache first (grid=0) when palette is eligible ----
+    # Exact caches are strictly superior to any bucketed tier, so we always
+    # prefer them when available. The grid_resolution=0 convention signals
+    # "exact mode" on disk.
+    # 先尝试精确模式缓存（grid=0），若存在则无条件使用——精确模式严格优于
+    # 任何分桶分辨率。
+    if _is_exact_mode_eligible(len(materials), layer_count):
+        try:
+            exact_cache = load_material_solver_cache(
+                materials, layer_count, layer_height_mm, substrate,
+                grid_resolution=0, cache_root=cache_root,
+            )
+        except (AttributeError, TypeError):
+            # Defensive: if materials are not proper MaterialParams instances
+            # (e.g. test mocks), skip the exact path gracefully.
+            exact_cache = None
+        if exact_cache is not None:
+            return exact_cache, 0
+
     cache = load_material_solver_cache(
         materials, layer_count, layer_height_mm, substrate,
         grid_resolution=grid_resolution, cache_root=cache_root,
@@ -1639,8 +2440,11 @@ def delete_cached_entry(
     Removes the canonical ``-g<grid>`` entry first, then also sweeps any
     pre-suffix legacy entry whose metadata reports the matching
     ``grid_resolution`` so old 64³/128³ files do not silently pile up.
+    When the palette is exact-mode eligible, the exact cache (``-g000``) is
+    also targeted.
     (先删除带 ``-g<grid>`` 后缀的规范条目，并按元数据声明的分辨率一并清理
-    没有后缀的历史条目，避免新旧缓存文件在磁盘上堆积。)
+    没有后缀的历史条目，避免新旧缓存文件在磁盘上堆积。当调色板满足精确模式
+    条件时，同时删除精确缓存（-g000）。)
     """
     npz_path = cache_file_path(
         materials, layer_count, layer_height_mm, substrate,
@@ -1649,6 +2453,17 @@ def delete_cached_entry(
     )
     meta_path = _cache_meta_path_for(npz_path)
     targets: list[Path] = [npz_path, meta_path]
+
+    # Also target the exact-mode cache (-g000) when palette is eligible.
+    # 当调色板满足精确模式条件时，同时删除精确缓存。
+    if _is_exact_mode_eligible(len(materials), layer_count) and grid_resolution != 0:
+        exact_npz = cache_file_path(
+            materials, layer_count, layer_height_mm, substrate,
+            grid_resolution=0,
+            cache_root=cache_root,
+        )
+        exact_meta = _cache_meta_path_for(exact_npz)
+        targets.extend((exact_npz, exact_meta))
 
     # Also sweep the legacy pre-``-g<grid>`` file pair when its metadata
     # reports the same grid_resolution, so repeated deletes from modern

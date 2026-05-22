@@ -239,7 +239,8 @@ function matchesColorHighlightSnapshot(
 ): boolean {
   if (state.sessionId !== snapshot.sessionId) return false;
   if (state.selectionMode !== snapshot.selectionMode) return false;
-  if (state.selectedColors.size !== snapshot.selectedColors.length) return false;
+  if (state.selectedColors.size !== snapshot.selectedColors.length)
+    return false;
   return snapshot.selectedColors.every((hex) => state.selectedColors.has(hex));
 }
 
@@ -733,7 +734,9 @@ function normalizeLutGroups<
   }));
 }
 
-function normalizeNativeBrandGroups(groups: NativeBrandGroup[]): NativeBrandGroup[] {
+function normalizeNativeBrandGroups(
+  groups: NativeBrandGroup[],
+): NativeBrandGroup[] {
   return groups.map((group) => ({
     ...group,
     db_options: group.db_options.map(normalizeLutColorMode),
@@ -1066,7 +1069,9 @@ function buildMaterialSourceParams(
     ? settingsState.solverCacheGridResolution
     : undefined;
   const backingMaterialIndex = state.materialBackingMaterialDirName
-    ? state.selectedMaterialDirNames.indexOf(state.materialBackingMaterialDirName)
+    ? state.selectedMaterialDirNames.indexOf(
+        state.materialBackingMaterialDirName,
+      )
     : 0;
   return {
     source_kind: "legacy_single" as const,
@@ -1076,7 +1081,8 @@ function buildMaterialSourceParams(
     material_layer_count: state.materialLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
     material_grid_resolution: materialGridResolution,
-    material_backing_material_index: backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
+    material_backing_material_index:
+      backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
   };
 }
 
@@ -1929,7 +1935,8 @@ function loadLutName(): string {
 }
 
 const SELECTED_MATERIAL_DIR_NAMES_KEY = "lumina_selectedMaterialDirNames";
-const MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY = "lumina_materialBackingMaterialDirName";
+const MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY =
+  "lumina_materialBackingMaterialDirName";
 
 function loadSelectedMaterialDirNames(): string[] {
   try {
@@ -4010,13 +4017,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const usingExplicitTargets =
         explicitTargets !== undefined && explicitTargets.length > 0;
       const regions = usingExplicitTargets
-        ? (explicitTargets as ReadonlyArray<{ groupIndex: number; regionIndex: number }>)
+        ? (explicitTargets as ReadonlyArray<{
+            groupIndex: number;
+            regionIndex: number;
+          }>)
         : state.selectedGradientRegions;
       if (regions.length === 0) return;
       // Clamp to the backend's validated range [12, 256]. The dialog enforces
       // it too, but belt-and-braces protects against rogue callers.
       // 边界兜底：后端也校验 12-256，这里再夹一道避免发送非法值。
-      const clamped = Math.max(12, Math.min(256, Math.round(localQuantizeColors)));
+      const clamped = Math.max(
+        12,
+        Math.min(256, Math.round(localQuantizeColors)),
+      );
 
       set({ replacePreviewLoading: true, error: null });
       try {
@@ -4698,12 +4711,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const currentState = _get();
         const index = buildLutCatalogIndex(groups);
         const currentLutInfo = currentState.lut_name
-          ? currentState.lutListFull.find((l) => l.name === currentState.lut_name)
+          ? currentState.lutListFull.find(
+              (l) => l.name === currentState.lut_name,
+            )
           : null;
         const location = currentLutInfo
           ? findLutLocationByPath(index, currentLutInfo.path)
           : null;
-        const selectedManufacturer = location?.manufacturer ??
+        const selectedManufacturer =
+          location?.manufacturer ??
           (currentState.selectedLegacyManufacturer &&
           index.byManufacturer[currentState.selectedLegacyManufacturer]
             ? currentState.selectedLegacyManufacturer
@@ -5528,7 +5544,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               ? mergedReplacements
               : undefined,
           recipe_overrides:
-            state.recipe_overrides.length > 0 ? state.recipe_overrides : undefined,
+            state.recipe_overrides.length > 0
+              ? state.recipe_overrides
+              : undefined,
           free_color_set:
             state.free_color_set.size > 0
               ? Array.from(state.free_color_set).map((h) => `#${h}`)
@@ -5557,13 +5575,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
 
         if (state.puzzleEnabled) {
-          const puzzleResponse = await apiConvertGeneratePuzzle(
-            sessionId,
-            {
-              ...buildPuzzlePreviewParams(state),
-              params: baseParams,
-            },
-          );
+          const puzzleResponse = await apiConvertGeneratePuzzle(sessionId, {
+            ...buildPuzzlePreviewParams(state),
+            params: baseParams,
+          });
           set({
             isGenerating: false,
             modelUrl: null,
@@ -5590,15 +5605,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
 
         if (state.largeFormatEnabled) {
-          const lfResponse = await apiConvertGenerateLargeFormat(
-            sessionId,
-            {
-              target_height_mm: state.target_height_mm,
-              tile_width_mm: state.tileWidthMm,
-              tile_height_mm: state.tileHeightMm,
-              params: baseParams,
-            },
-          );
+          const lfResponse = await apiConvertGenerateLargeFormat(sessionId, {
+            target_height_mm: state.target_height_mm,
+            tile_width_mm: state.tileWidthMm,
+            tile_height_mm: state.tileHeightMm,
+            params: baseParams,
+          });
           set({
             isGenerating: false,
             modelUrl: null,
@@ -5639,7 +5651,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : null;
         set({
           isGenerating: false,
-          modelUrl,
+          // Keep previewGlbUrl as the 3D viewer source: it renders the
+          // pixel-level colour-mixed preview. The generate GLB contains the
+          // exact per-material geometry used for 3MF export which looks like
+          // solid single-colour blocks and confuses users. Only fall back to
+          // modelUrl when no preview GLB exists (e.g. raster flow).
+          // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
+          // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
+          // 只在没有 preview GLB 时（如光栅流程）才用 modelUrl。
+          modelUrl: useConverterStore.getState().previewGlbUrl
+            ? null
+            : modelUrl,
           batchPreviewItems: [],
           threemfDiskPath: response.threemf_disk_path ?? null,
           downloadUrl: response.download_url
@@ -5739,7 +5761,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           state.target_width_mm,
         );
         set({
-          quantize_colors: clampValue(result.recommended, 8, _get().quantize_colors_unlocked ? 8192 : 256),
+          quantize_colors: clampValue(
+            result.recommended,
+            8,
+            _get().quantize_colors_unlocked ? 8192 : 256,
+          ),
           autoDetectColorsLoading: false,
           threemfDiskPath: null,
           downloadUrl: null,

@@ -61,6 +61,10 @@ BLACK = _mat("Black", E=(0.05, 0.05, 0.05), k=(6.0, 6.0, 6.0))
 SMALL_PALETTE = [RED, BLUE, WHITE]
 MEDIUM_PALETTE = [RED, BLUE, WHITE, GREEN, BLACK]
 
+# A palette that forces bucketed mode (layer_count=6 > EXACT_MODE_MAX_LAYERS)
+# or using >10 materials would also work, but changing layer count is simpler.
+_BUCKETED_LAYER_COUNT = 6  # Forces bucketed mode for any palette (N > 5)
+
 
 # ---------------------------------------------------------------------------
 # Palette fingerprinting
@@ -174,7 +178,9 @@ class TestBuild:
         assert cache.metadata["layer_count"] == 5
         assert cache.metadata["layer_height_mm"] == 0.08
         assert cache.metadata["substrate"] == "white"
-        assert cache.metadata["grid_resolution"] == 32
+        # SMALL_PALETTE (M=3, N=5) triggers exact mode: grid_resolution=0.
+        assert cache.metadata["mode"] == "exact"
+        assert cache.metadata["grid_resolution"] == 0
         assert cache.metadata["palette_hash"] == fingerprint_palette(SMALL_PALETTE)
         assert cache.metadata["valid_cell_count"] == cache.valid_cell_count
         assert cache.metadata["total_combinations"] == 3 ** 5
@@ -246,12 +252,16 @@ class TestBuild:
         让构建期内存只随实际配方数（这里 3^5=243）增长，无关 grid 大小。
         本用例确保 SMALL_PALETTE @ grid=1024 能跑完，且有效桶数被 recipe
         数（而非桶总数）限制。
+
+        NOTE: SMALL_PALETTE with N=5 now triggers exact mode (M≤10, N≤5),
+        which stores all M^N recipes directly. Use N=6 to exercise the
+        sparse bucketed build path.
         """
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=1024,
         )
-        total_combinations = 3 ** 5
+        total_combinations = 3 ** _BUCKETED_LAYER_COUNT
         # valid cells <= unique recipes; usually exactly equal at very high
         # grid resolutions because every recipe lands in its own bucket.
         # 有效桶数 <= 不重复配方数；高分辨率下通常恰好相等。
@@ -264,7 +274,7 @@ class TestBuild:
         # Output arrays must be in canonical bucket-index ascending order
         # so on-disk layout matches the legacy dense-path output.
         # 输出按桶号升序，与旧密集路径的磁盘布局一致。
-        assert cache.recipes.shape == (cache.valid_cell_count, 5)
+        assert cache.recipes.shape == (cache.valid_cell_count, _BUCKETED_LAYER_COUNT)
         assert cache.lab_centers.shape == (cache.valid_cell_count, 3)
         assert cache.achieved_srgb.shape == (cache.valid_cell_count, 3)
         assert cache.achieved_lab.shape == (cache.valid_cell_count, 3)
@@ -288,12 +298,12 @@ class TestBuild:
 class TestSaveLoadRoundtrip:
     def test_roundtrip_preserves_arrays_and_metadata(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         loaded = load_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -307,6 +317,24 @@ class TestSaveLoadRoundtrip:
         assert loaded.metadata["palette_hash"] == cache.metadata["palette_hash"]
         assert loaded.metadata["layer_count"] == cache.metadata["layer_count"]
 
+    def test_roundtrip_exact_mode(self, tmp_path: Path):
+        """Exact-mode cache (M=3, N=5) roundtrips correctly."""
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=32,
+        )
+        assert cache.is_exact
+        save_material_solver_cache(cache, cache_root=tmp_path)
+        loaded = load_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=0, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert loaded.is_exact
+        np.testing.assert_array_equal(loaded.recipes, cache.recipes)
+        np.testing.assert_array_equal(loaded.achieved_srgb, cache.achieved_srgb)
+        np.testing.assert_allclose(loaded.achieved_lab, cache.achieved_lab, atol=1e-3)
+
     def test_load_returns_none_when_absent(self, tmp_path: Path):
         result = load_material_solver_cache(
             SMALL_PALETTE, 5, 0.08, "white",
@@ -316,44 +344,44 @@ class TestSaveLoadRoundtrip:
 
     def test_load_returns_none_when_npz_corrupt(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         # Corrupt the npz file.
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         npz_path.write_bytes(b"not a valid npz file")
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
 
     def test_load_returns_none_when_palette_mismatched(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         # Try loading with a different palette sharing same N/t/substrate.
         # cache_file_path will resolve to a different file (palette_hash differs),
         # so the loader simply returns None.
         result = load_material_solver_cache(
-            MEDIUM_PALETTE, 5, 0.08, "white",
+            MEDIUM_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
 
     def test_load_returns_none_when_grid_resolution_mismatched(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         # Asking for a different grid resolution must neither read the suffixed
         # file (paths differ) nor silently upgrade/downgrade; result is None.
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=64, cache_root=tmp_path,
         )
         assert result is None
@@ -362,11 +390,11 @@ class TestSaveLoadRoundtrip:
         import json
 
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         meta_path = npz_path.with_suffix(".meta.json")
@@ -387,7 +415,7 @@ class TestSaveLoadRoundtrip:
         )
 
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
 
@@ -398,18 +426,18 @@ class TestSaveLoadRoundtrip:
         import json
 
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         # Rename the suffixed file pair to the legacy (pre-g<grid>) stem.
         suffixed_npz = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         suffixed_meta = suffixed_npz.with_suffix(".meta.json")
         directory = suffixed_npz.parent
         palette_hash = fingerprint_palette(SMALL_PALETTE)
-        legacy_stem = f"{palette_hash}-N05-t0_08-white"
+        legacy_stem = f"{palette_hash}-N{_BUCKETED_LAYER_COUNT:02d}-t0_08-white"
         legacy_npz = directory / f"{legacy_stem}.npz"
         legacy_meta = directory / f"{legacy_stem}.meta.json"
         suffixed_npz.replace(legacy_npz)
@@ -421,7 +449,7 @@ class TestSaveLoadRoundtrip:
         # Legacy metadata already records grid_resolution=32, so the loader
         # should accept it when the caller explicitly asks for grid 32.
         loaded = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -436,7 +464,7 @@ class TestSaveLoadRoundtrip:
             encoding="utf-8",
         )
         result = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert result is None
@@ -628,18 +656,18 @@ class TestListingAndDeletion:
 
     def test_delete_removes_npz_and_meta(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         meta_path = npz_path.with_suffix(".meta.json")
         assert npz_path.exists() and meta_path.exists()
 
         removed = delete_cached_entry(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert removed is True
@@ -708,18 +736,18 @@ class TestFindAnyCachedGrid:
 
     def test_empty_directory_returns_empty(self, tmp_path: Path):
         result = find_any_cached_grid(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", cache_root=tmp_path,
         )
         assert result == []
 
     def test_finds_single_suffixed_cache(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         result = find_any_cached_grid(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", cache_root=tmp_path,
         )
         assert len(result) == 1
         assert result[0][0] == 32
@@ -727,24 +755,24 @@ class TestFindAnyCachedGrid:
     def test_finds_multiple_grids_sorted_descending(self, tmp_path: Path):
         for grid in (16, 32):
             cache = build_material_solver_cache(
-                SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+                SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
                 substrate="white", grid_resolution=grid,
             )
             save_material_solver_cache(cache, cache_root=tmp_path)
         result = find_any_cached_grid(
-            SMALL_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", cache_root=tmp_path,
         )
         grids = [g for g, _ in result]
         assert grids == [32, 16], "should be sorted descending"
 
     def test_different_palette_not_found(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         result = find_any_cached_grid(
-            MEDIUM_PALETTE, 5, 0.08, "white", cache_root=tmp_path,
+            MEDIUM_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white", cache_root=tmp_path,
         )
         assert result == []
 
@@ -754,12 +782,12 @@ class TestLoadWithFallback:
 
     def test_exact_hit_returns_requested_grid(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         loaded, actual_grid = load_material_solver_cache_with_fallback(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -768,12 +796,12 @@ class TestLoadWithFallback:
     def test_fallback_to_different_grid(self, tmp_path: Path):
         # Build only grid=32; request grid=64 — should fall back to 32.
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         loaded, actual_grid = load_material_solver_cache_with_fallback(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=64, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -783,20 +811,35 @@ class TestLoadWithFallback:
         # Build both 16 and 32; request 64 — should fall back to 32 (finer).
         for grid in (16, 32):
             c = build_material_solver_cache(
-                SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+                SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
                 substrate="white", grid_resolution=grid,
             )
             save_material_solver_cache(c, cache_root=tmp_path)
         loaded, actual_grid = load_material_solver_cache_with_fallback(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=64, cache_root=tmp_path,
         )
         assert loaded is not None
         assert actual_grid == 32, "finer grid should be preferred"
 
-    def test_returns_none_when_no_cache_exists(self, tmp_path: Path):
+    def test_exact_mode_preferred_over_bucketed(self, tmp_path: Path):
+        """When M≤10 and N≤5, exact-mode cache is preferred regardless of grid."""
+        cache = build_material_solver_cache(
+            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            substrate="white", grid_resolution=64,
+        )
+        save_material_solver_cache(cache, cache_root=tmp_path)
         loaded, actual_grid = load_material_solver_cache_with_fallback(
             SMALL_PALETTE, 5, 0.08, "white",
+            grid_resolution=128, cache_root=tmp_path,
+        )
+        assert loaded is not None
+        assert loaded.is_exact
+        assert actual_grid == 0
+
+    def test_returns_none_when_no_cache_exists(self, tmp_path: Path):
+        loaded, actual_grid = load_material_solver_cache_with_fallback(
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=64, cache_root=tmp_path,
         )
         assert loaded is None
@@ -882,12 +925,12 @@ class TestPinnedUniformRecipes:
 
     def test_save_load_roundtrip_preserves_uniform_arrays(self, tmp_path: Path):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         loaded = load_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -903,12 +946,12 @@ class TestPinnedUniformRecipes:
         self, tmp_path: Path
     ):
         cache = build_material_solver_cache(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+            SMALL_PALETTE, layer_count=_BUCKETED_LAYER_COUNT, layer_height_mm=0.08,
             substrate="white", grid_resolution=32,
         )
         save_material_solver_cache(cache, cache_root=tmp_path)
         npz_path = cache_file_path(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         # Simulate a legacy cache: remove uniform_* arrays from .npz.
@@ -932,7 +975,7 @@ class TestPinnedUniformRecipes:
         )
 
         loaded = load_material_solver_cache(
-            SMALL_PALETTE, 5, 0.08, "white",
+            SMALL_PALETTE, _BUCKETED_LAYER_COUNT, 0.08, "white",
             grid_resolution=32, cache_root=tmp_path,
         )
         assert loaded is not None
@@ -943,4 +986,4 @@ class TestPinnedUniformRecipes:
         targets = np.asarray([[200, 100, 50]], dtype=np.uint8)
         matched, recipes, delta_e = loaded.lookup(targets, SMALL_PALETTE)
         assert matched.shape == (1, 3)
-        assert recipes.shape == (1, 5)
+        assert recipes.shape == (1, _BUCKETED_LAYER_COUNT)
