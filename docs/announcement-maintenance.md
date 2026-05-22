@@ -64,3 +64,13 @@ After editing announcements:
 - From the repo root, run `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`
 
 Both commands must stay green.
+
+## Follow-Up PR Workflow
+
+When refreshing announcements after PRs are merged:
+
+- Read the merged PR titles and bodies since the last announcement commit
+- Convert each user-visible change into one plain-language bilingual bullet under the right category
+- Keep Chinese first and mirror the same meaning naturally in English
+- Update `frontend/src/data/announcements.ts` following this guide
+- Open a small follow-up PR titled `docs(announcement): refresh YYYY-MM-DD updates`
