@@ -31,6 +31,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           },
         ],
       },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "在耗材档案下用 SVG 图打开“自定义配方”加层后，新增的几层有时会被填成耗材列表里的第一种颜色，即使你列表里第一种不是白色。修好了：现在新增层会用真正的白色/底色耗材，导出的 3MF 跟分层预览一致。",
+            en: "Under the material archive workflow with SVG inputs, adding extra layers in the Custom Recipe dialog could fill the new layers with the first material in your list instead of the white/backing one. This is now fixed — the exported 3MF matches the layer-by-layer preview.",
+          },
+        ],
+      },
     ],
   },
   {
