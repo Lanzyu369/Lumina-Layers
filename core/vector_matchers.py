@@ -353,10 +353,30 @@ class MaterialVectorMatcher:
                     "truncated": new_arr.shape[0] > 50,
                 },
             )
+            lookup_kwargs = {
+                "hue_weight": self.hue_weight,
+                "neighbor_coherence": self.neighbor_coherence,
+            }
+            try:
+                import inspect
+
+                lookup_signature = inspect.signature(self._solver_cache.lookup)
+                accepts_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in lookup_signature.parameters.values()
+                )
+                if not accepts_kwargs:
+                    lookup_kwargs = {
+                        key: value
+                        for key, value in lookup_kwargs.items()
+                        if key in lookup_signature.parameters
+                    }
+            except (TypeError, ValueError):
+                pass
             matched_rgb_unique, recipes_b2t, delta_e = self._solver_cache.lookup(
-                new_arr, self.materials,
-                hue_weight=self.hue_weight,
-                neighbor_coherence=self.neighbor_coherence,
+                new_arr,
+                self.materials,
+                **lookup_kwargs,
             )
             recipes_t2b = self._normalise_recipes(recipes_b2t)
             for i in range(new_arr.shape[0]):
