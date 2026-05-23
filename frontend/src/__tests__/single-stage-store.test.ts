@@ -253,4 +253,80 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(state.colorchecker_phase).toBeNull();
     expect(state.imageSource).toBe("raw");
   });
+
+  it("clears restored corner points when disabling ColorChecker", () => {
+    useSingleStageStore.setState({
+      colorchecker_enabled: true,
+      imageSource: "restored",
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
+      whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+      activeCanvas: "white",
+      activeCornerIndex: 2,
+    });
+
+    useSingleStageStore.getState().setColorcheckerEnabled(false);
+
+    const state = useSingleStageStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("white-full-id");
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("black-full-id");
+    expect(state.whiteCornerPoints).toEqual([]);
+    expect(state.blackCornerPoints).toEqual([]);
+    expect(state.activeCanvas).toBeNull();
+    expect(state.activeCornerIndex).toBeNull();
+    expect(state.imageSource).toBe("raw");
+  });
+
+  it("releases calibration responses that arrive during rotation", async () => {
+    const whiteFile = buildPngFile("white.png");
+    let resolveRotate:
+      | ((value: Awaited<ReturnType<typeof rotateExtractorImage>>) => void)
+      | null = null;
+    mockedRotateExtractorImage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRotate = resolve;
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ blob: () => Promise.resolve(new Blob([""])) }) as unknown as typeof fetch;
+
+    useSingleStageStore.setState({
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+      colorchecker_target: "white",
+      whiteImageFile: whiteFile,
+    });
+
+    const rotation = useSingleStageStore.getState().rotateWhiteImage("cw");
+    expect(useSingleStageStore.getState().colorchecker_phase).toBeNull();
+    expect(useSingleStageStore.getState().isRotatingWhite).toBe(true);
+
+    useSingleStageStore.getState().receiveCalibratedFromCC(
+      "/api/files/stale-preview.jpg",
+      "stale-full-id",
+      null,
+      {
+        fullWidth: 800,
+        fullHeight: 600,
+        previewWidth: 400,
+        previewHeight: 300,
+      },
+      { imageFile: whiteFile, target: "white" },
+    );
+
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
+
+    resolveRotate?.({
+      preview_url: "/api/files/rotated.png",
+      width: 100,
+      height: 100,
+    });
+    await rotation;
+    globalThis.fetch = originalFetch;
+  });
 });

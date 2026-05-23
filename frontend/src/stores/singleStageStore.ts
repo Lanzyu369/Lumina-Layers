@@ -160,6 +160,10 @@ function releaseColorcheckerArtifact(fileId: string | null): void {
   void colorcheckerRelease(fileId).catch(() => {});
 }
 
+function isColorcheckerBusy(phase: SingleStageState["colorchecker_phase"]): boolean {
+  return phase === "calibrating" || phase === "confirming";
+}
+
 const BACKEND_PREVIEW_EXTENSIONS = new Set([
   ".heic", ".heif",
   ".dng", ".cr2", ".cr3", ".nef", ".arw",
@@ -619,13 +623,25 @@ export const useSingleStageStore = create<
     if (!whiteImageFile) {
       return;
     }
-    releaseColorcheckerArtifact(get().whiteColorcheckerFileId);
-    releaseColorcheckerArtifact(get().pendingColorcheckerFileId);
+    const initial = get();
+    releaseColorcheckerArtifact(initial.whiteColorcheckerFileId);
+    releaseColorcheckerArtifact(initial.pendingColorcheckerFileId);
     set({
       isRotatingWhite: true,
       extractError: null,
       saveError: null,
       saveSuccess: null,
+      colorchecker_phase: null,
+      colorchecker_target: null,
+      calibratedPreviewUrl: null,
+      pendingColorcheckerFileId: null,
+      pendingColorcheckerFullWidth: null,
+      pendingColorcheckerFullHeight: null,
+      pendingColorcheckerPreviewWidth: null,
+      pendingColorcheckerPreviewHeight: null,
+      whiteColorcheckerFileId: null,
+      colorcheckerSummary: null,
+      imageSource: initial.blackColorcheckerFileId ? initial.imageSource : "raw",
     });
     try {
       const response = await rotateExtractorImage(
@@ -686,13 +702,25 @@ export const useSingleStageStore = create<
     if (!blackImageFile) {
       return;
     }
-    releaseColorcheckerArtifact(get().blackColorcheckerFileId);
-    releaseColorcheckerArtifact(get().pendingColorcheckerFileId);
+    const initial = get();
+    releaseColorcheckerArtifact(initial.blackColorcheckerFileId);
+    releaseColorcheckerArtifact(initial.pendingColorcheckerFileId);
     set({
       isRotatingBlack: true,
       extractError: null,
       saveError: null,
       saveSuccess: null,
+      colorchecker_phase: null,
+      colorchecker_target: null,
+      calibratedPreviewUrl: null,
+      pendingColorcheckerFileId: null,
+      pendingColorcheckerFullWidth: null,
+      pendingColorcheckerFullHeight: null,
+      pendingColorcheckerPreviewWidth: null,
+      pendingColorcheckerPreviewHeight: null,
+      blackColorcheckerFileId: null,
+      colorcheckerSummary: null,
+      imageSource: initial.whiteColorcheckerFileId ? initial.imageSource : "raw",
     });
     try {
       const response = await rotateExtractorImage(
@@ -861,6 +889,8 @@ export const useSingleStageStore = create<
 
   setColorcheckerEnabled: (value: boolean) => {
     const state = get();
+    const clearWhiteRestored = !value && Boolean(state.whiteColorcheckerFileId);
+    const clearBlackRestored = !value && Boolean(state.blackColorcheckerFileId);
     const resetToRaw =
       !value &&
       state.colorchecker_phase !== "done" &&
@@ -902,6 +932,10 @@ export const useSingleStageStore = create<
       whiteImageNaturalHeight: !value && state.whiteColorcheckerFileId ? null : state.whiteImageNaturalHeight,
       blackImageNaturalWidth: !value && state.blackColorcheckerFileId ? null : state.blackImageNaturalWidth,
       blackImageNaturalHeight: !value && state.blackColorcheckerFileId ? null : state.blackImageNaturalHeight,
+      whiteCornerPoints: clearWhiteRestored ? [] : state.whiteCornerPoints,
+      blackCornerPoints: clearBlackRestored ? [] : state.blackCornerPoints,
+      activeCanvas: clearWhiteRestored || clearBlackRestored ? null : state.activeCanvas,
+      activeCornerIndex: clearWhiteRestored || clearBlackRestored ? null : state.activeCornerIndex,
       originalWhitePreviewUrl: null,
       colorcheckerSummary: null,
       ...(!value || resetToRaw ? { imageSource: "raw" as const } : {}),
@@ -994,6 +1028,8 @@ export const useSingleStageStore = create<
     if (
       !state.colorchecker_enabled ||
       state.colorchecker_phase !== "calibrating" ||
+      state.isRotatingWhite ||
+      state.isRotatingBlack ||
       state.colorchecker_target !== target ||
       (context?.imageFile && targetFile !== context.imageFile)
     ) {
@@ -1198,10 +1234,7 @@ export const useSingleStageStore = create<
       });
       return;
     }
-    if (
-      state.colorchecker_phase === "calibrating" ||
-      state.colorchecker_phase === "confirming"
-    ) {
+    if (isColorcheckerBusy(state.colorchecker_phase)) {
       return;
     }
 

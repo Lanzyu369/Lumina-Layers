@@ -1114,7 +1114,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_ccw_btn")}
                   variant="secondary"
                   onClick={() => void rotateWhiteImage("ccw")}
-                  disabled={!whiteImageFile || isRotatingWhite}
+                  disabled={!whiteImageFile || isRotatingWhite || colorcheckerPending}
                   loading={isRotatingWhite}
                   className="w-full"
                   data-testid="white-rotate-ccw-btn"
@@ -1123,7 +1123,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_cw_btn")}
                   variant="secondary"
                   onClick={() => void rotateWhiteImage("cw")}
-                  disabled={!whiteImageFile || isRotatingWhite}
+                  disabled={!whiteImageFile || isRotatingWhite || colorcheckerPending}
                   loading={isRotatingWhite}
                   className="w-full"
                   data-testid="white-rotate-cw-btn"
@@ -1200,7 +1200,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_ccw_btn")}
                   variant="secondary"
                   onClick={() => void rotateBlackImage("ccw")}
-                  disabled={!blackImageFile || isRotatingBlack}
+                  disabled={!blackImageFile || isRotatingBlack || colorcheckerPending}
                   loading={isRotatingBlack}
                   className="w-full"
                   data-testid="black-rotate-ccw-btn"
@@ -1209,7 +1209,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_cw_btn")}
                   variant="secondary"
                   onClick={() => void rotateBlackImage("cw")}
-                  disabled={!blackImageFile || isRotatingBlack}
+                  disabled={!blackImageFile || isRotatingBlack || colorcheckerPending}
                   loading={isRotatingBlack}
                   className="w-full"
                   data-testid="black-rotate-cw-btn"

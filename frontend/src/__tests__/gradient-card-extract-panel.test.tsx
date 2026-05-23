@@ -149,6 +149,9 @@ describe("GradientCardExtractPanel", () => {
       expect(
         screen.getByRole("button", { name: /提取耗材|extract material/i }),
       ).toBeDisabled();
+      for (const button of screen.getAllByRole("button", { name: /顺时针 90°|Rotate 90° CW/i })) {
+        expect(button).toBeDisabled();
+      }
     },
   );
 
