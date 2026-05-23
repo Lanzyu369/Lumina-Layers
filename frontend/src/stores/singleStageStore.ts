@@ -462,6 +462,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewHeight: null,
         whiteColorcheckerFileId: null,
         colorcheckerSummary: null,
+        imageSource: previousState.blackColorcheckerFileId ? previousState.imageSource : "raw",
         ...RESULT_RESET_STATE,
       });
       uploadImagePreview(file)
@@ -551,6 +552,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewHeight: null,
         blackColorcheckerFileId: null,
         colorcheckerSummary: null,
+        imageSource: previousState.whiteColorcheckerFileId ? previousState.imageSource : "raw",
         ...RESULT_RESET_STATE,
       });
       uploadImagePreview(file)

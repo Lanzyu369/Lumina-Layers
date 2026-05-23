@@ -271,4 +271,94 @@ describe("ColorcheckerConfirmDialog", () => {
     });
     expect(receiveCalibrated).not.toHaveBeenCalled();
   });
+
+  it("ignores stale auto-detect responses after the source image changes", async () => {
+    let resolveDetect:
+      | ((value: Awaited<ReturnType<typeof colorcheckerDetectChart>>) => void)
+      | null = null;
+    vi.mocked(colorcheckerDetectChart).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDetect = resolve;
+      }),
+    );
+    const { rerender } = renderDialog();
+
+    rerender(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogInner
+          phase="calibrating"
+          imageFile={replacementImageFile}
+          originalPreviewUrl="/api/files/replacement.png"
+          calibratedPreviewUrl={null}
+          calibrationSummary={null}
+          receiveCalibrated={vi.fn()}
+          confirmCalibrated={vi.fn()}
+          rejectCalibrated={vi.fn()}
+          closeDialog={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    resolveDetect?.({
+      detected: true,
+      corners: [
+        { x: 11, y: 12 },
+        { x: 91, y: 12 },
+        { x: 91, y: 62 },
+        { x: 11, y: 62 },
+      ],
+      patchOrientation: "normal",
+      confidence: 0.95,
+      score: 0.9,
+      mode: "auto",
+      reason: "",
+      candidateCount: 1,
+    });
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "色卡角点 1" })).not.toBeInTheDocument();
+  });
+
+  it("ignores stale warp responses after the source image changes", async () => {
+    let resolveWarp:
+      | ((value: Awaited<ReturnType<typeof colorcheckerWarpPreview>>) => void)
+      | null = null;
+    vi.mocked(colorcheckerWarpPreview).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveWarp = resolve;
+      }),
+    );
+    const { rerender } = renderDialog();
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith(imageFile, "4x6"));
+    const warpButton = await screen.findByRole("button", { name: "生成预览" });
+    await waitFor(() => expect(warpButton).not.toBeDisabled());
+    fireEvent.click(warpButton);
+
+    rerender(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogInner
+          phase="calibrating"
+          imageFile={replacementImageFile}
+          originalPreviewUrl="/api/files/replacement.png"
+          calibratedPreviewUrl={null}
+          calibrationSummary={null}
+          receiveCalibrated={vi.fn()}
+          confirmCalibrated={vi.fn()}
+          rejectCalibrated={vi.fn()}
+          closeDialog={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    resolveWarp?.({
+      preview_url: "/api/files/stale-warp.png",
+      preview_width: 720,
+      preview_height: 480,
+      auto_patch_points: [{ x: 1, y: 2 }],
+    });
+
+    await waitFor(() => expect(colorcheckerWarpPreview).toHaveBeenCalled());
+    expect(screen.queryByText("透视预览已生成，可执行校色")).not.toBeInTheDocument();
+  });
 });

@@ -398,6 +398,8 @@ export function ColorcheckerConfirmDialogInner({
   const compareRef = useRef<HTMLDivElement>(null);
   const compareDragging = useRef(false);
   const autoDetectAttempted = useRef(false);
+  const detectionRunRef = useRef(0);
+  const warpRunRef = useRef(0);
   const calibrationRunRef = useRef(0);
   const latestCalibrationContext = useRef({
     phase,
@@ -447,6 +449,8 @@ export function ColorcheckerConfirmDialogInner({
   }, [imageFile, open]);
 
   useEffect(() => {
+    detectionRunRef.current += 1;
+    warpRunRef.current += 1;
     calibrationRunRef.current += 1;
   }, [imageFile, open, colorcheckerTarget]);
 
@@ -509,11 +513,24 @@ export function ColorcheckerConfirmDialogInner({
 
   const runAutoDetect = useCallback(async () => {
     if (!imageFile) return;
+    const runId = ++detectionRunRef.current;
+    const requestImageFile = imageFile;
+    const requestTarget = colorcheckerTarget;
     setAutoDetecting(true);
     setErrorMessage(null);
     setStatusMessage(null);
     try {
       const result = await colorcheckerDetectChart(imageFile, PATCH_LAYOUT);
+      const latest = latestCalibrationContext.current;
+      if (
+        detectionRunRef.current !== runId ||
+        latest.phase !== "calibrating" ||
+        !latest.open ||
+        latest.imageFile !== requestImageFile ||
+        latest.colorcheckerTarget !== requestTarget
+      ) {
+        return;
+      }
       if (result.detected && result.corners.length === 4) {
         setCorners(toCornerTuples(result.corners));
         setActiveCornerIndex(0);
@@ -524,11 +541,15 @@ export function ColorcheckerConfirmDialogInner({
         setStatusMessage(result.reason || t("ext_cc_auto_detect_failed"));
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("ext_cc_auto_detect_failed"));
+      if (detectionRunRef.current === runId) {
+        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_auto_detect_failed"));
+      }
     } finally {
-      setAutoDetecting(false);
+      if (detectionRunRef.current === runId) {
+        setAutoDetecting(false);
+      }
     }
-  }, [imageFile, t]);
+  }, [colorcheckerTarget, imageFile, t]);
 
   useEffect(() => {
     if (!isCalibrating || !imageFile || autoDetectAttempted.current) return;
@@ -538,18 +559,35 @@ export function ColorcheckerConfirmDialogInner({
 
   const runWarpPreview = async () => {
     if (!imageFile || corners.length !== 4) return;
+    const runId = ++warpRunRef.current;
+    const requestImageFile = imageFile;
+    const requestTarget = colorcheckerTarget;
     setWarping(true);
     setErrorMessage(null);
     try {
       const result = await colorcheckerWarpPreview(imageFile, corners, PATCH_LAYOUT);
+      const latest = latestCalibrationContext.current;
+      if (
+        warpRunRef.current !== runId ||
+        latest.phase !== "calibrating" ||
+        !latest.open ||
+        latest.imageFile !== requestImageFile ||
+        latest.colorcheckerTarget !== requestTarget
+      ) {
+        return;
+      }
       setWarpPreviewUrl(normalizeResourceUrl(result.preview_url));
       setWarpSize({ width: result.preview_width, height: result.preview_height });
       setPatchPoints(result.auto_patch_points);
       setStatusMessage(t("ext_cc_warp_ready"));
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("ext_cc_warp_failed"));
+      if (warpRunRef.current === runId) {
+        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_warp_failed"));
+      }
     } finally {
-      setWarping(false);
+      if (warpRunRef.current === runId) {
+        setWarping(false);
+      }
     }
   };
 

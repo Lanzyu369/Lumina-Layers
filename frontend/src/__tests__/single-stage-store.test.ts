@@ -378,4 +378,24 @@ describe("useSingleStageStore ColorChecker flow", () => {
       globalThis.Image = OriginalImage;
     }
   });
+
+  it("resets restored image source when replacing one ColorChecker image", async () => {
+    useSingleStageStore.setState({
+      colorchecker_enabled: true,
+      imageSource: "restored",
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteColorcheckerFileId: "white-full-id",
+      whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+    });
+
+    await useSingleStageStore.getState().setWhiteImageFile(buildPngFile("white-new.png"));
+    useSingleStageStore.getState().closeColorcheckerDialog();
+
+    const state = useSingleStageStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("white-full-id");
+    expect(state.whiteColorcheckerFileId).toBeNull();
+    expect(state.imageSource).toBe("raw");
+  });
 });
