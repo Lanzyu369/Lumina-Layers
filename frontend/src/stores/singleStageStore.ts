@@ -1085,19 +1085,28 @@ export const useSingleStageStore = create<
           };
     const img = new Image();
     set({ imageSource: "restored" });
-    img.onload = () => {
+    const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
+      const current = get();
+      if (
+        current.colorchecker_phase !== "confirming" ||
+        current.colorchecker_target !== colorchecker_target ||
+        current.pendingColorcheckerFileId !== pendingColorcheckerFileId ||
+        current.calibratedPreviewUrl !== calibratedPreviewUrl
+      ) {
+        return;
+      }
       set({
         colorchecker_phase: "done",
         ...(colorchecker_target === "black"
           ? {
               ...imagePatch,
-              blackImageNaturalWidth: pendingColorcheckerPreviewWidth ?? img.naturalWidth,
-              blackImageNaturalHeight: pendingColorcheckerPreviewHeight ?? img.naturalHeight,
+              blackImageNaturalWidth: pendingColorcheckerPreviewWidth ?? dimensions?.width ?? null,
+              blackImageNaturalHeight: pendingColorcheckerPreviewHeight ?? dimensions?.height ?? null,
             }
           : {
               ...imagePatch,
-              whiteImageNaturalWidth: pendingColorcheckerPreviewWidth ?? img.naturalWidth,
-              whiteImageNaturalHeight: pendingColorcheckerPreviewHeight ?? img.naturalHeight,
+              whiteImageNaturalWidth: pendingColorcheckerPreviewWidth ?? dimensions?.width ?? null,
+              whiteImageNaturalHeight: pendingColorcheckerPreviewHeight ?? dimensions?.height ?? null,
             }),
         pendingColorcheckerFileId: null,
         pendingColorcheckerFullWidth: null,
@@ -1108,18 +1117,14 @@ export const useSingleStageStore = create<
         activeCornerIndex: null,
       });
     };
-    img.onerror = () => {
-      set({
-        colorchecker_phase: "done",
-        ...imagePatch,
-        pendingColorcheckerFileId: null,
-        pendingColorcheckerFullWidth: null,
-        pendingColorcheckerFullHeight: null,
-        pendingColorcheckerPreviewWidth: null,
-        pendingColorcheckerPreviewHeight: null,
-        activeCanvas: null,
-        activeCornerIndex: null,
+    img.onload = () => {
+      applyAcceptedPreview({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
       });
+    };
+    img.onerror = () => {
+      applyAcceptedPreview();
     };
     img.src = calibratedPreviewUrl;
   },

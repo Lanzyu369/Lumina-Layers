@@ -323,6 +323,55 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(state.colorchecker_enabled).toBe(false);
     expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
   });
+
+  it("releases calibration responses that arrive during image rotation", async () => {
+    const file = new File(["raw"], "calibration.png", { type: "image/png" });
+    let resolveRotate:
+      | ((value: Awaited<ReturnType<typeof rotateExtractorImage>>) => void)
+      | null = null;
+    mockedRotateExtractorImage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRotate = resolve;
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue({ blob: () => Promise.resolve(new Blob(["rotated"])) }) as unknown as typeof fetch;
+
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "/api/files/original-preview.jpg",
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+    });
+
+    const rotation = useExtractorStore.getState().rotateImage();
+    expect(useExtractorStore.getState().colorchecker_phase).toBeNull();
+
+    useExtractorStore.getState().receiveCalibratedFromCC(
+      "/api/files/stale-preview.jpg",
+      "stale-full-id",
+      null,
+      {
+        fullWidth: 800,
+        fullHeight: 600,
+        previewWidth: 400,
+        previewHeight: 300,
+      },
+      { imageFile: file },
+    );
+
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
+
+    resolveRotate?.({
+      preview_url: "/api/files/rotated.png",
+      width: 100,
+      height: 100,
+    });
+    await rotation;
+    globalThis.fetch = originalFetch;
+  });
 });
 
 describe("Feature: extractor-calibration-tab, Property 11: confirm-palette 请求载荷与 Store 状态一致性", () => {

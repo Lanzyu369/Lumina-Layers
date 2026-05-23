@@ -329,4 +329,53 @@ describe("useSingleStageStore ColorChecker flow", () => {
     await rotation;
     globalThis.fetch = originalFetch;
   });
+
+  it("does not reattach a pending full id after accept preview loads late", () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
+
+      constructor() {
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
+
+    try {
+      useSingleStageStore.setState({
+        colorchecker_enabled: true,
+        colorchecker_phase: "confirming",
+        colorchecker_target: "white",
+        calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+        pendingColorcheckerFileId: "pending-full-id",
+        whiteImageFile: buildPngFile("white.png"),
+      });
+
+      useSingleStageStore.getState().confirmCalibrated();
+      useSingleStageStore.getState().setColorcheckerEnabled(false);
+      createdImage?.onload?.();
+
+      const state = useSingleStageStore.getState();
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("pending-full-id");
+      expect(state.whiteColorcheckerFileId).toBeNull();
+      expect(state.pendingColorcheckerFileId).toBeNull();
+      expect(state.colorchecker_phase).toBeNull();
+      expect(state.imageSource).toBe("raw");
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
+  });
 });

@@ -410,7 +410,19 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       if (!imageFile) return;
       releaseColorcheckerArtifact(get().calibratedFullFileId);
 
-      set({ isLoading: true, error: null });
+      set({
+        isLoading: true,
+        error: null,
+        colorchecker_enabled: false,
+        colorchecker_phase: null,
+        calibratedPreviewUrl: null,
+        calibratedFullFileId: null,
+        calibratedFullWidth: null,
+        calibratedFullHeight: null,
+        calibratedPreviewWidth: null,
+        calibratedPreviewHeight: null,
+        colorcheckerSummary: null,
+      });
       try {
         const { preview_url, width, height } = await rotateExtractorImage(
           imageFile,
@@ -779,26 +791,39 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     confirmCalibrated: () => {
       // User accepts the calibrated image — apply it as the active preview
-      const { calibratedPreviewUrl } = get();
-      if (!calibratedPreviewUrl) return;
-      const img = new Image();
-      img.onload = () => {
+      const { calibratedPreviewUrl, calibratedFullFileId } = get();
+      if (!calibratedPreviewUrl || !calibratedFullFileId) return;
+      const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
+        const current = get();
+        if (
+          current.colorchecker_phase !== "confirming" ||
+          current.calibratedFullFileId !== calibratedFullFileId ||
+          current.calibratedPreviewUrl !== calibratedPreviewUrl
+        ) {
+          return;
+        }
         set({
           colorchecker_phase: "done",
           imagePreviewUrl: calibratedPreviewUrl,
-          imageNaturalWidth: img.naturalWidth,
-          imageNaturalHeight: img.naturalHeight,
+          ...(dimensions
+            ? {
+                imageNaturalWidth: dimensions.width,
+                imageNaturalHeight: dimensions.height,
+              }
+            : {}),
           corner_points: [],
           active_corner_index: null,
         });
       };
-      img.onerror = () => {
-        set({
-          colorchecker_phase: "done",
-          imagePreviewUrl: calibratedPreviewUrl,
-          corner_points: [],
-          active_corner_index: null,
+      const img = new Image();
+      img.onload = () => {
+        applyAcceptedPreview({
+          width: img.naturalWidth,
+          height: img.naturalHeight,
         });
+      };
+      img.onerror = () => {
+        applyAcceptedPreview();
       };
       img.src = calibratedPreviewUrl;
     },
