@@ -1093,6 +1093,9 @@ export const useSingleStageStore = create<
       ) {
         return;
       }
+      if (replacingId && replacingId !== pendingColorcheckerFileId) {
+        releaseColorcheckerArtifact(replacingId);
+      }
       set({
         colorchecker_phase: "done",
         imageSource: "restored",
@@ -1126,9 +1129,6 @@ export const useSingleStageStore = create<
           current.calibratedPreviewUrl !== calibratedPreviewUrl
         ) {
           return;
-        }
-        if (replacingId && replacingId !== pendingColorcheckerFileId) {
-          releaseColorcheckerArtifact(replacingId);
         }
         const img = new Image();
         img.onload = () => {

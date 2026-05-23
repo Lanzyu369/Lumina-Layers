@@ -413,6 +413,57 @@ describe("useSingleStageStore ColorChecker flow", () => {
     }
   });
 
+  it("keeps the previous Stage A ColorChecker id when rejecting after confirm but before preview load", async () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
+
+      constructor() {
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
+
+    try {
+      useSingleStageStore.setState({
+        colorchecker_enabled: true,
+        colorchecker_phase: "confirming",
+        colorchecker_target: "white",
+        calibratedPreviewUrl: "/api/files/new-calibrated-preview.jpg",
+        pendingColorcheckerFileId: "new-full-id",
+        whiteColorcheckerFileId: "old-full-id",
+        imageSource: "restored",
+      });
+
+      useSingleStageStore.getState().confirmCalibrated();
+      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      useSingleStageStore.getState().rejectCalibrated();
+      createdImage?.onload?.();
+
+      const state = useSingleStageStore.getState();
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("new-full-id");
+      expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+      expect(state.whiteColorcheckerFileId).toBe("old-full-id");
+      expect(state.pendingColorcheckerFileId).toBeNull();
+      expect(state.colorchecker_phase).toBe("calibrating");
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
+  });
+
   it("resets restored image source when replacing one ColorChecker image", async () => {
     useSingleStageStore.setState({
       colorchecker_enabled: true,

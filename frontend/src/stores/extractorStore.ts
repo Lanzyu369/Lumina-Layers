@@ -824,6 +824,12 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         ) {
           return;
         }
+        if (
+          previousCalibratedFullFileId &&
+          previousCalibratedFullFileId !== calibratedFullFileId
+        ) {
+          releaseColorcheckerArtifact(previousCalibratedFullFileId);
+        }
         set({
           colorchecker_phase: "done",
           imagePreviewUrl: calibratedPreviewUrl,
@@ -847,12 +853,6 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
             current.calibratedPreviewUrl !== calibratedPreviewUrl
           ) {
             return;
-          }
-          if (
-            previousCalibratedFullFileId &&
-            previousCalibratedFullFileId !== calibratedFullFileId
-          ) {
-            releaseColorcheckerArtifact(previousCalibratedFullFileId);
           }
           const img = new Image();
           img.onload = () => {
