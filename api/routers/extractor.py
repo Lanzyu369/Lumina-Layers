@@ -151,7 +151,7 @@ def _write_colorchecker_full_png(image_bgr: np.ndarray) -> str:
     try:
         if not cv2.imwrite(path, image_to_uint8_display(image_bgr)):
             raise ValueError("Failed to write ColorChecker calibrated image.")
-    except Exception:
+    except (cv2.error, OSError, TypeError, ValueError):
         try:
             os.remove(path)
         except OSError:
@@ -675,7 +675,7 @@ async def extractor_colorchecker_calibrate(
             except OSError:
                 pass
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception:
+    except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
         if full_file_id:
             registry.cleanup_file(full_file_id)
         if full_png_path is not None:
@@ -704,7 +704,7 @@ async def extractor_colorchecker_calibrate(
             "colorchecker_overlay_preview.jpg",
             ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
         )
-    except Exception:
+    except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
         if full_file_id:
             registry.cleanup_file(full_file_id)
         if preview_id:
@@ -745,6 +745,13 @@ async def extractor_colorchecker_release(
 ):
     """Release one private ColorChecker full-image artifact."""
     released = cleanup_colorchecker_full_file(registry, file_id)
+    log.info(
+        "ColorChecker artifact released",
+        extra={
+            "event": "extractor_colorchecker_release_done",
+            "released": released,
+        },
+    )
     return {"status": "ok", "released": released}
 
 
@@ -755,6 +762,13 @@ async def extractor_colorchecker_confirm(
 ):
     """Mark one private ColorChecker full-image artifact as user-confirmed."""
     confirmed = confirm_colorchecker_full_file(registry, file_id)
+    log.info(
+        "ColorChecker artifact confirmed",
+        extra={
+            "event": "extractor_colorchecker_confirm_done",
+            "confirmed": confirmed,
+        },
+    )
     return {"status": "ok", "confirmed": confirmed}
 
 
@@ -765,6 +779,13 @@ async def extractor_colorchecker_touch(
 ):
     """Renew one private ColorChecker full-image artifact without loading it."""
     renewed = touch_colorchecker_full_file(registry, file_id)
+    log.info(
+        "ColorChecker artifact renewed",
+        extra={
+            "event": "extractor_colorchecker_touch_done",
+            "renewed": renewed,
+        },
+    )
     return {"status": "ok", "renewed": renewed}
 
 
