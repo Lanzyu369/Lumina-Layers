@@ -473,8 +473,10 @@ export function ColorcheckerConfirmDialogInner({
   const invalidateManualGeometry = useCallback(() => {
     detectionRunRef.current += 1;
     warpRunRef.current += 1;
+    calibrationRunRef.current += 1;
     setAutoDetecting(false);
     setWarping(false);
+    setCalibrating(false);
     setWarpPreviewUrl(null);
     setWarpSize(null);
     setPatchPoints(null);

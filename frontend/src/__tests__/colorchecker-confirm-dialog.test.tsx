@@ -455,4 +455,60 @@ describe("ColorcheckerConfirmDialog", () => {
     const call = vi.mocked(colorcheckerCalibrate).mock.calls[0];
     expect(call[2]).toBeNull();
   });
+
+  it("releases stale calibration when corners change during the request", async () => {
+    let resolveCalibration:
+      | ((value: Awaited<ReturnType<typeof colorcheckerCalibrate>>) => void)
+      | null = null;
+    vi.mocked(colorcheckerCalibrate).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCalibration = resolve;
+      }),
+    );
+    const receiveCalibrated = vi.fn();
+    renderDialog({ receiveCalibrated });
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith(imageFile, "4x6"));
+    const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
+    Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
+    Object.defineProperty(image, "naturalHeight", { configurable: true, value: 80 });
+    image.getBoundingClientRect = vi.fn(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 80,
+      width: 100,
+      height: 80,
+      toJSON: () => ({}),
+    }));
+    fireEvent.load(image);
+
+    const calibrateButton = screen.getByRole("button", { name: "执行校色" });
+    await waitFor(() => expect(calibrateButton).not.toBeDisabled());
+    fireEvent.click(calibrateButton);
+
+    const topLeftCorner = await screen.findByRole("button", { name: "色卡角点 1" });
+    fireEvent.pointerDown(topLeftCorner, { clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 35, clientY: 40 });
+    fireEvent.pointerUp(window);
+
+    await act(async () => {
+      resolveCalibration?.({
+        calibrated_preview_url: "/api/files/stale-preview.jpg",
+        calibrated_full_file_id: "stale-full-id",
+        overlay_url: "/api/files/stale-overlay.jpg",
+        full_width: 800,
+        full_height: 600,
+        preview_width: 400,
+        preview_height: 300,
+        patch_points: [],
+        display_summary: summary,
+      });
+    });
+
+    await waitFor(() => expect(colorcheckerRelease).toHaveBeenCalledWith("stale-full-id"));
+    expect(receiveCalibrated).not.toHaveBeenCalled();
+  });
 });
