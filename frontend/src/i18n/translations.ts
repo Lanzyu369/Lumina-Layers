@@ -2662,6 +2662,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色完成，请检查结果后确认使用。",
     en: "Calibration is complete. Review the result before accepting it.",
   },
+  ext_cc_confirm_preview_failed: {
+    zh: "校色预览加载失败，请重试或重新执行校色。",
+    en: "Failed to load the calibrated preview. Try again or recalibrate.",
+  },
   ext_cc_metric_mean: {
     zh: "平均",
     en: "Mean",

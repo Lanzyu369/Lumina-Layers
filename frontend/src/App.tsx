@@ -237,14 +237,19 @@ function AppContent() {
       s.colorchecker_phase !== "done" &&
       s.imageFile !== null,
   );
-  const extractorColorcheckerFullId = useExtractorStore((s) =>
-    s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
+  const extractorColorcheckerFullIds = useExtractorStore(
+    useShallow((s) => [
+      s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
+      s.colorchecker_phase === "confirming"
+        ? s.previousCalibratedFullFileId
+        : null,
+    ]),
   );
   const gradientColorcheckerFullIds = useSingleStageStore(
     useShallow((s) => [s.whiteColorcheckerFileId, s.blackColorcheckerFileId]),
   );
   useColorcheckerArtifactLease([
-    extractorColorcheckerFullId,
+    ...extractorColorcheckerFullIds,
     ...gradientColorcheckerFullIds,
   ]);
   const clearMaterialVerification = useSingleStageStore(

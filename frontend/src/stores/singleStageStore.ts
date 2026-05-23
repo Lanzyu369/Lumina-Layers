@@ -1098,6 +1098,7 @@ export const useSingleStageStore = create<
       }
       set({
         colorchecker_phase: "done",
+        extractError: null,
         imageSource: "restored",
         ...(colorchecker_target === "black"
           ? {
@@ -1138,7 +1139,15 @@ export const useSingleStageStore = create<
           });
         };
         img.onerror = () => {
-          applyAcceptedPreview();
+          const latest = get();
+          if (
+            latest.colorchecker_phase === "confirming" &&
+            latest.colorchecker_target === colorchecker_target &&
+            latest.pendingColorcheckerFileId === pendingColorcheckerFileId &&
+            latest.calibratedPreviewUrl === calibratedPreviewUrl
+          ) {
+            set({ extractError: tRuntime("ext_cc_confirm_preview_failed") });
+          }
         };
         img.src = calibratedPreviewUrl;
       })

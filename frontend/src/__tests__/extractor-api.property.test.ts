@@ -393,6 +393,56 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     }
   });
 
+  it("does not accept or release the previous ColorChecker id when preview loading fails", async () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
+
+      constructor() {
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
+
+    try {
+      useExtractorStore.setState({
+        colorchecker_enabled: true,
+        colorchecker_phase: "confirming",
+        imagePreviewUrl: "/api/files/old-calibrated.jpg",
+        calibratedPreviewUrl: "/api/files/new-calibrated.jpg",
+        calibratedFullFileId: "new-full-id",
+        previousCalibratedFullFileId: "old-full-id",
+      });
+
+      useExtractorStore.getState().confirmCalibrated();
+      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      createdImage?.onerror?.();
+
+      const state = useExtractorStore.getState();
+      expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+      expect(state.colorchecker_phase).toBe("confirming");
+      expect(state.calibratedFullFileId).toBe("new-full-id");
+      expect(state.previousCalibratedFullFileId).toBe("old-full-id");
+      expect(state.imagePreviewUrl).toBe("/api/files/old-calibrated.jpg");
+      expect(state.error).toBeTruthy();
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
+  });
+
   it("keeps the previous ColorChecker id when rejecting after confirm but before preview load", async () => {
     const OriginalImage = globalThis.Image;
     let createdImage:

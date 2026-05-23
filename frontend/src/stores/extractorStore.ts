@@ -20,6 +20,7 @@ import {
 import type { ExtractorPaletteEntry } from "../api/types";
 import { clampValue } from "./converter";
 import { uploadImagePreview } from "../api/system";
+import { tRuntime } from "../i18n/runtime";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 
 export const RAW_EXTENSIONS = new Set([
@@ -832,6 +833,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         }
         set({
           colorchecker_phase: "done",
+          error: null,
           imagePreviewUrl: calibratedPreviewUrl,
           previousCalibratedFullFileId: null,
           ...(dimensions
@@ -862,7 +864,14 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
             });
           };
           img.onerror = () => {
-            applyAcceptedPreview();
+            const latest = get();
+            if (
+              latest.colorchecker_phase === "confirming" &&
+              latest.calibratedFullFileId === calibratedFullFileId &&
+              latest.calibratedPreviewUrl === calibratedPreviewUrl
+            ) {
+              set({ error: tRuntime("ext_cc_confirm_preview_failed") });
+            }
           };
           img.src = calibratedPreviewUrl;
         })

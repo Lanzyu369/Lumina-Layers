@@ -104,6 +104,8 @@ vi.mock("../components/widget/SubTabBar", () => ({ default: () => null }));
 
 import App from "../App";
 import apiClient from "../api/client";
+import { colorcheckerTouch } from "../api/extractor";
+import { useExtractorStore } from "../stores/extractorStore";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 
 describe("App component", () => {
@@ -112,6 +114,13 @@ describe("App component", () => {
     // Restore default rejection for unmocked calls
     vi.mocked(apiClient.get).mockRejectedValue(new Error("unmocked"));
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    useExtractorStore.setState({
+      colorchecker_enabled: false,
+      colorchecker_phase: null,
+      imageFile: null,
+      calibratedFullFileId: null,
+      previousCalibratedFullFileId: null,
+    });
     localStorage.clear();
   });
 
@@ -145,5 +154,24 @@ describe("App component", () => {
     render(<App />);
 
     expect(screen.getByText("Lumina Studio 2")).toBeInTheDocument();
+  });
+
+  it("renews the previous extractor ColorChecker id while replacement confirmation is open", async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: { status: "ok", version: "2.0", uptime_seconds: 100 },
+    });
+    useExtractorStore.setState({
+      colorchecker_enabled: true,
+      colorchecker_phase: "confirming",
+      imageFile: new File(["raw"], "checker.png", { type: "image/png" }),
+      calibratedFullFileId: "new-pending-id",
+      previousCalibratedFullFileId: "old-confirmed-id",
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(colorcheckerTouch).toHaveBeenCalledWith("old-confirmed-id");
+    });
   });
 });
