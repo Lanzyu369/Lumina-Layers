@@ -123,6 +123,17 @@ class FileRegistry:
                 return None
             return dict(entry)
 
+    def set_purpose(self, file_id: str, purpose: Optional[str]) -> bool:
+        """Update the purpose metadata for one registered file.
+        更新单个注册文件的 purpose 元数据。
+        """
+        with self._lock:
+            entry = self._registry.get(file_id)
+            if entry is None:
+                return False
+            entry["purpose"] = purpose
+            return True
+
     def get_session_entries(self, session_id: str) -> dict[str, dict]:
         """Return shallow copies of all entries owned by a session.
         返回指定 session 拥有的所有条目的浅拷贝。

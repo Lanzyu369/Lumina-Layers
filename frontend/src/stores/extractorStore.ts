@@ -8,6 +8,7 @@ import {
 import {
   confirmPalette,
   extractColors,
+  colorcheckerConfirm,
   colorcheckerRelease,
   manualFixCell,
   mergeEightColor,
@@ -107,6 +108,7 @@ export interface ExtractorState {
   colorchecker_phase: "calibrating" | "confirming" | "done" | null;
   calibratedPreviewUrl: string | null;
   calibratedFullFileId: string | null;
+  previousCalibratedFullFileId: string | null;
   calibratedFullWidth: number | null;
   calibratedFullHeight: number | null;
   calibratedPreviewWidth: number | null;
@@ -225,6 +227,7 @@ const DEFAULT_STATE: ExtractorState = {
   colorchecker_phase: null,
   calibratedPreviewUrl: null,
   calibratedFullFileId: null,
+  previousCalibratedFullFileId: null,
   calibratedFullWidth: null,
   calibratedFullHeight: null,
   calibratedPreviewWidth: null,
@@ -267,7 +270,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
-      releaseColorcheckerArtifact(get().calibratedFullFileId);
+      const current = get();
+      releaseColorcheckerArtifact(current.calibratedFullFileId);
+      releaseColorcheckerArtifact(current.previousCalibratedFullFileId);
 
       const correctionDefaults = {
         offset_x: DEFAULT_STATE.offset_x,
@@ -298,6 +303,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: null,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
+          previousCalibratedFullFileId: null,
           calibratedFullWidth: null,
           calibratedFullHeight: null,
           calibratedPreviewWidth: null,
@@ -327,6 +333,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         colorchecker_enabled: ccEnabled,
         calibratedPreviewUrl: null,
         calibratedFullFileId: null,
+        previousCalibratedFullFileId: null,
         calibratedFullWidth: null,
         calibratedFullHeight: null,
         calibratedPreviewWidth: null,
@@ -408,7 +415,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     rotateImage: async () => {
       const { imageFile, imagePreviewUrl, originalPreviewUrl } = get();
       if (!imageFile) return;
-      releaseColorcheckerArtifact(get().calibratedFullFileId);
+      const current = get();
+      releaseColorcheckerArtifact(current.calibratedFullFileId);
+      releaseColorcheckerArtifact(current.previousCalibratedFullFileId);
 
       set({
         isLoading: true,
@@ -417,6 +426,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         colorchecker_phase: null,
         calibratedPreviewUrl: null,
         calibratedFullFileId: null,
+        previousCalibratedFullFileId: null,
         calibratedFullWidth: null,
         calibratedFullHeight: null,
         calibratedPreviewWidth: null,
@@ -455,6 +465,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: null,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
+          previousCalibratedFullFileId: null,
           calibratedFullWidth: null,
           calibratedFullHeight: null,
           calibratedPreviewWidth: null,
@@ -470,6 +481,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: null,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
+          previousCalibratedFullFileId: null,
           calibratedFullWidth: null,
           calibratedFullHeight: null,
           calibratedPreviewWidth: null,
@@ -669,6 +681,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           originalPreviewUrl: null,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
+          previousCalibratedFullFileId: null,
           calibratedFullWidth: null,
           calibratedFullHeight: null,
           calibratedPreviewWidth: null,
@@ -697,11 +710,13 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
                 : null)
             : state.imagePreviewUrl;
         releaseColorcheckerArtifact(state.calibratedFullFileId);
+        releaseColorcheckerArtifact(state.previousCalibratedFullFileId);
         set({
           colorchecker_enabled: false,
           colorchecker_phase: null,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
+          previousCalibratedFullFileId: null,
           calibratedFullWidth: null,
           calibratedFullHeight: null,
           calibratedPreviewWidth: null,
@@ -773,14 +788,17 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         return;
       }
       const previousId = state.calibratedFullFileId;
-      if (previousId && previousId !== fullFileId) {
-        releaseColorcheckerArtifact(previousId);
+      const previousPendingId = state.previousCalibratedFullFileId;
+      if (previousPendingId && previousPendingId !== previousId) {
+        releaseColorcheckerArtifact(previousPendingId);
       }
       const resolvedUrl = normalizeResourceUrl(previewUrl) ?? previewUrl;
       set({
         colorchecker_phase: "confirming",
         calibratedPreviewUrl: resolvedUrl,
         calibratedFullFileId: fullFileId,
+        previousCalibratedFullFileId:
+          previousId && previousId !== fullFileId ? previousId : null,
         calibratedFullWidth: dimensions?.fullWidth ?? null,
         calibratedFullHeight: dimensions?.fullHeight ?? null,
         calibratedPreviewWidth: dimensions?.previewWidth ?? null,
@@ -791,7 +809,11 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     confirmCalibrated: () => {
       // User accepts the calibrated image — apply it as the active preview
-      const { calibratedPreviewUrl, calibratedFullFileId } = get();
+      const {
+        calibratedPreviewUrl,
+        calibratedFullFileId,
+        previousCalibratedFullFileId,
+      } = get();
       if (!calibratedPreviewUrl || !calibratedFullFileId) return;
       const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
         const current = get();
@@ -805,6 +827,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         set({
           colorchecker_phase: "done",
           imagePreviewUrl: calibratedPreviewUrl,
+          previousCalibratedFullFileId: null,
           ...(dimensions
             ? {
                 imageNaturalWidth: dimensions.width,
@@ -815,26 +838,54 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           active_corner_index: null,
         });
       };
-      const img = new Image();
-      img.onload = () => {
-        applyAcceptedPreview({
-          width: img.naturalWidth,
-          height: img.naturalHeight,
+      void colorcheckerConfirm(calibratedFullFileId)
+        .then(() => {
+          const current = get();
+          if (
+            current.colorchecker_phase !== "confirming" ||
+            current.calibratedFullFileId !== calibratedFullFileId ||
+            current.calibratedPreviewUrl !== calibratedPreviewUrl
+          ) {
+            return;
+          }
+          if (
+            previousCalibratedFullFileId &&
+            previousCalibratedFullFileId !== calibratedFullFileId
+          ) {
+            releaseColorcheckerArtifact(previousCalibratedFullFileId);
+          }
+          const img = new Image();
+          img.onload = () => {
+            applyAcceptedPreview({
+              width: img.naturalWidth,
+              height: img.naturalHeight,
+            });
+          };
+          img.onerror = () => {
+            applyAcceptedPreview();
+          };
+          img.src = calibratedPreviewUrl;
+        })
+        .catch(() => {
+          const current = get();
+          if (
+            current.colorchecker_phase === "confirming" &&
+            current.calibratedFullFileId === calibratedFullFileId
+          ) {
+            set({ error: "ColorChecker calibration confirmation failed" });
+          }
         });
-      };
-      img.onerror = () => {
-        applyAcceptedPreview();
-      };
-      img.src = calibratedPreviewUrl;
     },
 
     rejectCalibrated: () => {
       // User rejects — discard calibrated image, go back to calibrating
-      releaseColorcheckerArtifact(get().calibratedFullFileId);
+      const state = get();
+      releaseColorcheckerArtifact(state.calibratedFullFileId);
       set({
-        colorchecker_phase: "calibrating",
+        colorchecker_phase: state.previousCalibratedFullFileId ? "done" : "calibrating",
         calibratedPreviewUrl: null,
-        calibratedFullFileId: null,
+        calibratedFullFileId: state.previousCalibratedFullFileId,
+        previousCalibratedFullFileId: null,
         calibratedFullWidth: null,
         calibratedFullHeight: null,
         calibratedPreviewWidth: null,
@@ -850,10 +901,12 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         return;
       }
       releaseColorcheckerArtifact(state.calibratedFullFileId);
+      const restoredFullId = state.previousCalibratedFullFileId;
       set({
-        colorchecker_phase: null,
+        colorchecker_phase: restoredFullId ? "done" : null,
         calibratedPreviewUrl: null,
-        calibratedFullFileId: null,
+        calibratedFullFileId: restoredFullId,
+        previousCalibratedFullFileId: null,
         calibratedFullWidth: null,
         calibratedFullHeight: null,
         calibratedPreviewWidth: null,

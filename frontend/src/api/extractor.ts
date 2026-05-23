@@ -247,6 +247,14 @@ export async function colorcheckerRelease(fileId: string): Promise<void> {
   });
 }
 
+export async function colorcheckerConfirm(fileId: string): Promise<void> {
+  const fd = new FormData();
+  fd.append("file_id", fileId);
+  await apiClient.post("/extractor/colorchecker-confirm", fd, {
+    timeout: 30_000,
+  });
+}
+
 /** Capture-origin tag forwarded as the ``image_source`` form field.
  * 上传给后端的输入图像来源标签。
  */

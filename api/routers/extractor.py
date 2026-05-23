@@ -17,8 +17,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
 
 from api.colorchecker_artifacts import (
-    COLORCHECKER_FULL_PURPOSE,
+    COLORCHECKER_FULL_PENDING_PURPOSE,
     cleanup_colorchecker_full_file,
+    confirm_colorchecker_full_file,
     load_colorchecker_full_rgb,
     scale_corner_points,
 )
@@ -642,7 +643,7 @@ async def extractor_colorchecker_calibrate(
             "colorchecker_calibrated.png",
             ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
             is_public=False,
-            purpose=COLORCHECKER_FULL_PURPOSE,
+            purpose=COLORCHECKER_FULL_PENDING_PURPOSE,
         )
         full_png_path = None
 
@@ -739,6 +740,16 @@ async def extractor_colorchecker_release(
     """Release one private ColorChecker full-image artifact."""
     released = cleanup_colorchecker_full_file(registry, file_id)
     return {"status": "ok", "released": released}
+
+
+@router.post("/colorchecker-confirm")
+async def extractor_colorchecker_confirm(
+    file_id: str = Form(..., description="Private ColorChecker full-image file id"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Mark one private ColorChecker full-image artifact as user-confirmed."""
+    confirmed = confirm_colorchecker_full_file(registry, file_id)
+    return {"status": "ok", "confirmed": confirmed}
 
 
 @router.post("/extract")

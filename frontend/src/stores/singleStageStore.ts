@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import {
+  colorcheckerConfirm,
   colorcheckerRelease,
   extractGradientCardStageA,
   rotateExtractorImage,
@@ -1070,9 +1071,6 @@ export const useSingleStageStore = create<
       colorchecker_target === "black"
         ? blackColorcheckerFileId
         : whiteColorcheckerFileId;
-    if (replacingId && replacingId !== pendingColorcheckerFileId) {
-      releaseColorcheckerArtifact(replacingId);
-    }
     const imagePatch =
       colorchecker_target === "black"
         ? {
@@ -1085,8 +1083,6 @@ export const useSingleStageStore = create<
             whiteCornerPoints: [],
             whiteColorcheckerFileId: pendingColorcheckerFileId,
           };
-    const img = new Image();
-    set({ imageSource: "restored" });
     const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
       const current = get();
       if (
@@ -1099,6 +1095,7 @@ export const useSingleStageStore = create<
       }
       set({
         colorchecker_phase: "done",
+        imageSource: "restored",
         ...(colorchecker_target === "black"
           ? {
               ...imagePatch,
@@ -1119,16 +1116,43 @@ export const useSingleStageStore = create<
         activeCornerIndex: null,
       });
     };
-    img.onload = () => {
-      applyAcceptedPreview({
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+    void colorcheckerConfirm(pendingColorcheckerFileId)
+      .then(() => {
+        const current = get();
+        if (
+          current.colorchecker_phase !== "confirming" ||
+          current.colorchecker_target !== colorchecker_target ||
+          current.pendingColorcheckerFileId !== pendingColorcheckerFileId ||
+          current.calibratedPreviewUrl !== calibratedPreviewUrl
+        ) {
+          return;
+        }
+        if (replacingId && replacingId !== pendingColorcheckerFileId) {
+          releaseColorcheckerArtifact(replacingId);
+        }
+        const img = new Image();
+        img.onload = () => {
+          applyAcceptedPreview({
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+          });
+        };
+        img.onerror = () => {
+          applyAcceptedPreview();
+        };
+        img.src = calibratedPreviewUrl;
+      })
+      .catch(() => {
+        const current = get();
+        if (
+          current.colorchecker_phase === "confirming" &&
+          current.pendingColorcheckerFileId === pendingColorcheckerFileId
+        ) {
+          set({
+            extractError: tRuntime("mat_gradient_colorchecker_confirm_error"),
+          });
+        }
       });
-    };
-    img.onerror = () => {
-      applyAcceptedPreview();
-    };
-    img.src = calibratedPreviewUrl;
   },
 
   rejectCalibrated: () => {

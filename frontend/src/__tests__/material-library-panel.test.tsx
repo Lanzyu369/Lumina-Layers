@@ -13,6 +13,7 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
   deleteGradientCardMaterial: vi.fn(),
   exportGradientCardMaterials: vi.fn(),

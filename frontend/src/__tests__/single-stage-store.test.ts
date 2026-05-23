@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  colorcheckerConfirm,
   colorcheckerRelease,
   extractGradientCardStageA,
   rotateExtractorImage,
@@ -9,6 +10,7 @@ import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
   extractGradientCardStageA: vi.fn(),
   rotateExtractorImage: vi.fn(),
@@ -23,6 +25,7 @@ const buildPngFile = (name: string) =>
   new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
 
 const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
+const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
 
@@ -30,6 +33,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    mockedColorcheckerConfirm.mockResolvedValue(undefined);
     mockedColorcheckerRelease.mockResolvedValue(undefined);
     useSingleStageStore.setState({
       colorchecker_enabled: false,
@@ -80,19 +84,48 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(uploadImagePreview).toHaveBeenCalledWith(blackFile);
   });
 
-  it("marks confirmed ColorChecker images as restored source", () => {
-    useSingleStageStore.setState({
-      colorchecker_phase: "confirming",
-      colorchecker_target: "white",
-      pendingColorcheckerFileId: "full-id",
-      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
-      imageSource: "raw",
-    });
+  it("marks confirmed ColorChecker images as restored source", async () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
 
-    useSingleStageStore.getState().confirmCalibrated();
+      constructor() {
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
 
-    const state = useSingleStageStore.getState();
-    expect(state.imageSource).toBe("restored");
+    try {
+      useSingleStageStore.setState({
+        colorchecker_phase: "confirming",
+        colorchecker_target: "white",
+        pendingColorcheckerFileId: "full-id",
+        calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+        imageSource: "raw",
+      });
+
+      useSingleStageStore.getState().confirmCalibrated();
+      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("full-id"));
+      createdImage?.onload?.();
+
+      const state = useSingleStageStore.getState();
+      expect(state.imageSource).toBe("restored");
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
   });
 
   it("submits private ColorChecker ids without image files", async () => {

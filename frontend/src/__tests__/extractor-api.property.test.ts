@@ -7,6 +7,7 @@ import type { ExtractResponse } from "../api/types";
 // ========== Mock API module ==========
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
   confirmPalette: vi.fn(),
   extractColors: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("../api/extractor", () => ({
 }));
 
 import {
+  colorcheckerConfirm,
   colorcheckerRelease,
   confirmPalette,
   extractColors,
@@ -23,6 +25,7 @@ import {
 
 const mockedExtractColors = vi.mocked(extractColors);
 const mockedConfirmPalette = vi.mocked(confirmPalette);
+const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
 
@@ -78,6 +81,7 @@ function resetExtractorStore(): void {
     colorchecker_phase: null,
     calibratedPreviewUrl: null,
     calibratedFullFileId: null,
+    previousCalibratedFullFileId: null,
     calibratedFullWidth: null,
     calibratedFullHeight: null,
     calibratedPreviewWidth: null,
@@ -150,6 +154,7 @@ const arbPaletteEntry = fc.record({
 beforeEach(() => {
   resetExtractorStore();
   vi.clearAllMocks();
+  mockedColorcheckerConfirm.mockResolvedValue(undefined);
   mockedColorcheckerRelease.mockResolvedValue(undefined);
 });
 
@@ -299,6 +304,91 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
     expect(useExtractorStore.getState().calibratedFullFileId).toBeNull();
     expect(useExtractorStore.getState().colorchecker_phase).toBe("calibrating");
+  });
+
+  it("keeps the previous confirmed ColorChecker id when rejecting a replacement", () => {
+    const file = new File(["raw"], "calibration.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "/api/files/old-calibrated.jpg",
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+      calibratedFullFileId: "old-full-id",
+    });
+
+    useExtractorStore.getState().receiveCalibratedFromCC(
+      "/api/files/new-calibrated.jpg",
+      "new-full-id",
+      null,
+      {
+        fullWidth: 800,
+        fullHeight: 600,
+        previewWidth: 400,
+        previewHeight: 300,
+      },
+      { imageFile: file },
+    );
+
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+    expect(useExtractorStore.getState().previousCalibratedFullFileId).toBe("old-full-id");
+
+    useExtractorStore.getState().rejectCalibrated();
+
+    const state = useExtractorStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("new-full-id");
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+    expect(state.colorchecker_phase).toBe("done");
+    expect(state.calibratedFullFileId).toBe("old-full-id");
+    expect(state.previousCalibratedFullFileId).toBeNull();
+    expect(state.imagePreviewUrl).toBe("/api/files/old-calibrated.jpg");
+  });
+
+  it("confirms a replacement ColorChecker id before releasing the previous one", async () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
+
+      constructor() {
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
+
+    try {
+      useExtractorStore.setState({
+        colorchecker_enabled: true,
+        colorchecker_phase: "confirming",
+        calibratedPreviewUrl: "/api/files/new-calibrated.jpg",
+        calibratedFullFileId: "new-full-id",
+        previousCalibratedFullFileId: "old-full-id",
+      });
+
+      useExtractorStore.getState().confirmCalibrated();
+      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("old-full-id");
+      createdImage?.onload?.();
+
+      const state = useExtractorStore.getState();
+      expect(state.colorchecker_phase).toBe("done");
+      expect(state.calibratedFullFileId).toBe("new-full-id");
+      expect(state.previousCalibratedFullFileId).toBeNull();
+      expect(state.imagePreviewUrl).toBe("/api/files/new-calibrated.jpg");
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
   });
 
   it("clears released ColorChecker id when image rotation fails", async () => {

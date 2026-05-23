@@ -11,7 +11,10 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import create_app
-from api.colorchecker_artifacts import COLORCHECKER_FULL_PURPOSE
+from api.colorchecker_artifacts import (
+    COLORCHECKER_FULL_PENDING_PURPOSE,
+    COLORCHECKER_FULL_PURPOSE,
+)
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
@@ -74,9 +77,19 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     entry = registry.get_entry(full_id)
     assert entry is not None
     assert entry["is_public"] is False
-    assert entry["purpose"] == COLORCHECKER_FULL_PURPOSE
+    assert entry["purpose"] == COLORCHECKER_FULL_PENDING_PURPOSE
     assert os.path.exists(entry["path"])
     assert client.get(f"/api/files/{full_id}").status_code == 404
+
+    confirm_response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={"file_id": full_id},
+    )
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["confirmed"] is True
+    confirmed_entry = registry.get_entry(full_id)
+    assert confirmed_entry is not None
+    assert confirmed_entry["purpose"] == COLORCHECKER_FULL_PURPOSE
 
     release_response = client.post(
         "/api/extractor/colorchecker-release",
@@ -139,6 +152,14 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
         is_public=False,
         purpose=COLORCHECKER_FULL_PURPOSE,
     )
+    pending_id = registry.register_path(
+        "colorchecker:pending",
+        str(full_image_path),
+        "pending.png",
+        ttl_seconds=600,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PENDING_PURPOSE,
+    )
     lut_path = tmp_path / "lut.json"
     lut_path.write_text("{}", encoding="utf-8")
     captured: dict[str, object] = {}
@@ -153,6 +174,18 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
         )
 
     monkeypatch.setattr(extractor_router, "run_extraction", fake_run_extraction)
+
+    pending_response = client.post(
+        "/api/extractor/extract",
+        data={
+            "corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "colorchecker_calibrated_file_id": pending_id,
+            "corner_points_width": "10",
+            "corner_points_height": "10",
+        },
+    )
+    assert pending_response.status_code == 404
+    assert captured == {}
 
     response = client.post(
         "/api/extractor/extract",
@@ -196,6 +229,14 @@ def test_stage_a_uses_private_colorchecker_images_only_when_restored(
         ttl_seconds=600,
         is_public=False,
         purpose=COLORCHECKER_FULL_PURPOSE,
+    )
+    pending_white_id = registry.register_path(
+        "colorchecker:white:pending",
+        str(white_path),
+        "white-pending.png",
+        ttl_seconds=600,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PENDING_PURPOSE,
     )
     params_path = tmp_path / "params.json"
     params_path.write_text("{}", encoding="utf-8")
@@ -296,6 +337,26 @@ def test_stage_a_uses_private_colorchecker_images_only_when_restored(
         },
     )
     assert restored_upload_response.status_code == 422
+    assert captured == {}
+
+    pending_response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "black_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "white_colorchecker_file_id": pending_white_id,
+            "black_colorchecker_file_id": black_id,
+            "white_corner_points_width": "10",
+            "white_corner_points_height": "10",
+            "black_corner_points_width": "10",
+            "black_corner_points_height": "10",
+            "image_source": "restored",
+        },
+        files={
+            "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+        },
+    )
+    assert pending_response.status_code == 404
     assert captured == {}
 
     response = client.post(

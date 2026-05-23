@@ -12,7 +12,12 @@ from PIL import Image, UnidentifiedImageError
 
 from api.file_registry import FileRegistry
 
+COLORCHECKER_FULL_PENDING_PURPOSE = "colorchecker_full_pending"
 COLORCHECKER_FULL_PURPOSE = "colorchecker_full"
+_COLORCHECKER_FULL_PURPOSES = {
+    COLORCHECKER_FULL_PENDING_PURPOSE,
+    COLORCHECKER_FULL_PURPOSE,
+}
 
 
 def resolve_colorchecker_full_path(registry: FileRegistry, file_id: str) -> str:
@@ -55,11 +60,29 @@ def cleanup_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool
     if entry is None:
         return False
     if (
-        entry.get("purpose") != COLORCHECKER_FULL_PURPOSE
+        entry.get("purpose") not in _COLORCHECKER_FULL_PURPOSES
         or entry.get("is_public") is not False
     ):
         raise HTTPException(status_code=403, detail="Only ColorChecker private artifacts can be released")
     return registry.cleanup_file(file_id) > 0
+
+
+def confirm_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
+    """Mark a pending private ColorChecker full-image artifact as confirmed.
+    将待确认的内部完整校色图标记为用户已确认。
+    """
+    entry = registry.get_entry(file_id)
+    if (
+        entry is None
+        or entry.get("purpose") not in _COLORCHECKER_FULL_PURPOSES
+        or entry.get("is_public") is not False
+    ):
+        raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
+    if registry.resolve(file_id) is None:
+        raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
+    if entry.get("purpose") == COLORCHECKER_FULL_PURPOSE:
+        return True
+    return registry.set_purpose(file_id, COLORCHECKER_FULL_PURPOSE)
 
 
 def scale_corner_points(

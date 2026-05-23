@@ -5884,6 +5884,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "ColorChecker 校色图需要白底图和黑底图都确认后才能用于梯度卡拟合。",
     en: "Confirm both white and black ColorChecker images before using them for gradient-card fitting.",
   },
+  mat_gradient_colorchecker_confirm_error: {
+    zh: "ColorChecker 校色图确认失败，请重新执行校色后再试。",
+    en: "Failed to confirm the ColorChecker calibrated image. Please recalibrate and try again.",
+  },
   mat_gradient_invalid_image_error: {
     zh: "上传的图片无法识别，请重新选择清晰且完整的梯度卡照片。",
     en: "The uploaded image could not be read. Please reselect a clear and complete gradient card photo.",

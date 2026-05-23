@@ -175,6 +175,19 @@ class PostgresFileRegistryBackend(FileRegistry):
                 return None
             return self._entry_from_row(row)
 
+    def set_purpose(self, file_id: str, purpose: Optional[str]) -> bool:
+        """Update the purpose metadata for one registered file.
+        更新单个注册文件的 purpose 元数据。
+        """
+        file_uuid = self._file_uuid_or_none(file_id)
+        if file_uuid is None:
+            return False
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(_FILES).where(_FILES.c.id == file_uuid).values(purpose=purpose)
+            )
+            return int(result.rowcount or 0) > 0
+
     def get_session_entries(self, session_id: str) -> dict[str, dict]:
         """Return shallow copies of all entries owned by a session.
         返回指定 session 拥有的所有条目的浅拷贝。
