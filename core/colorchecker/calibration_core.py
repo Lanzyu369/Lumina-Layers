@@ -1072,4 +1072,3 @@ def apply_ccm_to_image(
         chunk = linear_to_srgb(chunk)
         result[y0:y1] = np.clip(chunk * 255.0, 0, 255).astype(np.uint8)[..., ::-1]
     return result
-
