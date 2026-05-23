@@ -224,6 +224,45 @@ describe("ColorcheckerConfirmDialog", () => {
     });
   });
 
+  it("forwards auto-detected patch orientation to warp and calibration requests", async () => {
+    vi.mocked(colorcheckerDetectChart).mockResolvedValueOnce({
+      detected: true,
+      corners: [
+        { x: 10, y: 10 },
+        { x: 90, y: 10 },
+        { x: 90, y: 60 },
+        { x: 10, y: 60 },
+      ],
+      patchOrientation: "flip_horizontal",
+      confidence: 0.92,
+      score: 0.88,
+      mode: "auto",
+      reason: "",
+      candidateCount: 1,
+    });
+    renderDialog();
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith(imageFile, "4x6"));
+    const warpButton = await screen.findByRole("button", { name: "生成预览" });
+    await waitFor(() => expect(warpButton).not.toBeDisabled());
+    fireEvent.click(warpButton);
+
+    await waitFor(() =>
+      expect(colorcheckerWarpPreview).toHaveBeenCalledWith(
+        imageFile,
+        [[10, 10], [90, 10], [90, 60], [10, 60]],
+        "4x6",
+        "flip_horizontal",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "执行校色" }));
+
+    await waitFor(() => expect(colorcheckerCalibrate).toHaveBeenCalled());
+    const call = vi.mocked(colorcheckerCalibrate).mock.calls[0];
+    expect(call[5]).toBe("flip_horizontal");
+  });
+
   it("releases stale calibration responses after the source image changes", async () => {
     let resolveCalibration:
       | ((value: Awaited<ReturnType<typeof colorcheckerCalibrate>>) => void)

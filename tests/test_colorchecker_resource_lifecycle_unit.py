@@ -46,8 +46,10 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     calibrated = np.zeros((80, 120, 3), dtype=np.uint8)
     calibrated[:, :] = [10, 120, 240]
     overlay = np.zeros((40, 60, 3), dtype=np.uint8)
+    captured: dict[str, object] = {}
 
-    def fake_apply(*_args, **_kwargs):
+    def fake_apply(*_args, **kwargs):
+        captured.update(kwargs)
         return SimpleNamespace(
             calibrated_image=calibrated,
             overlay_image=overlay,
@@ -59,7 +61,10 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
 
     response = client.post(
         "/api/extractor/colorchecker-calibrate",
-        data={"corner_points": "[[0,0],[1,0],[1,1],[0,1]]"},
+        data={
+            "corner_points": "[[0,0],[1,0],[1,1],[0,1]]",
+            "patch_orientation": "flip_horizontal",
+        },
         files={"image": ("chart.png", _png_bytes(), "image/png")},
     )
 
@@ -72,6 +77,7 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert body["full_height"] == 80
     assert body["preview_width"] == 120
     assert body["preview_height"] == 80
+    assert captured["patch_orientation"] == "flip_horizontal"
 
     full_id = body["calibrated_full_file_id"]
     entry = registry.get_entry(full_id)
@@ -124,7 +130,10 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
     def fake_decode(*_args, **_kwargs):
         return SimpleNamespace(image_bgr=np.zeros((8, 8, 3), dtype=np.uint8))
 
-    def fake_warp(*_args, **_kwargs):
+    captured: dict[str, object] = {}
+
+    def fake_warp(*_args, **kwargs):
+        captured.update(kwargs)
         return SimpleNamespace(
             preview_png=_png_bytes(),
             preview_width=8,
@@ -137,7 +146,10 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
 
     response = client.post(
         "/api/extractor/colorchecker-warp-preview",
-        data={"corner_points": "[[0,0],[1,0],[1,1],[0,1]]"},
+        data={
+            "corner_points": "[[0,0],[1,0],[1,1],[0,1]]",
+            "patch_orientation": "rotate_180",
+        },
         files={"image": ("chart.png", _png_bytes(), "image/png")},
     )
 
@@ -146,6 +158,7 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
     entry = registry.get_entry(preview_id)
     assert entry is not None
     assert entry["ttl_seconds"] == COLORCHECKER_TEMP_TTL_SECONDS
+    assert captured["patch_orientation"] == "rotate_180"
 
 
 def test_extractor_uses_private_colorchecker_image_and_scales_points(

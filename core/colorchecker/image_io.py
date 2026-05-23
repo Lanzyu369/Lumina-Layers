@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 try:
     import rawpy
@@ -73,10 +74,23 @@ def parse_data_url(data_url: str) -> tuple[str, bytes]:
 
 
 def decode_standard_image_bytes(raw: bytes) -> np.ndarray | None:
-    arr = np.frombuffer(raw, dtype=np.uint8)
-    if arr.size == 0:
+    if not raw:
         return None
-    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            transposed = ImageOps.exif_transpose(image)
+            rgb = np.asarray(transposed.convert("RGB"), dtype=np.uint8)
+    except (UnidentifiedImageError, OSError, ValueError):
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        if arr.size == 0:
+            return None
+        try:
+            return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        except cv2.error:
+            return None
+    if rgb.size == 0:
+        return None
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
 def apply_unsharp_mask(image: np.ndarray, sigma: float, amount: float) -> np.ndarray:

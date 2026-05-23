@@ -63,6 +63,36 @@ class TestDecodeColorcheckerUpload:
             decode_colorchecker_upload(b"bad")
 
 
+def test_warp_preview_orients_auto_patch_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warp preview should return auto points in detected reference order."""
+    image = np.zeros((20, 30, 3), dtype=np.uint8)
+    corners = [[0, 0], [29, 0], [29, 19], [0, 19]]
+
+    from core.colorchecker.pipeline import generate_patch_points, orient_patch_points
+
+    fake_core = SimpleNamespace(
+        DEFAULT_PREVIEW_WIDTH=600,
+        DEFAULT_PREVIEW_HEIGHT=400,
+        warp_colorchecker_preview=lambda *_args, **_kwargs: (
+            np.zeros((400, 600, 3), dtype=np.uint8),
+            np.zeros((400, 600), dtype=np.uint8),
+            np.zeros((4, 2), dtype=np.float32),
+        ),
+        generate_patch_points=generate_patch_points,
+        orient_patch_points=orient_patch_points,
+        encode_png_bytes=lambda _image: b"png",
+    )
+    monkeypatch.setattr(adapter, "_import_core", lambda: fake_core)
+
+    result = adapter.warp_colorchecker_preview(
+        image,
+        corners,
+        patch_orientation="flip_horizontal",
+    )
+
+    assert result.auto_patch_points[0]["x"] > result.auto_patch_points[1]["x"]
+
+
 class TestApplyColorcheckerCalibration:
     """Tests for applying calibration through the local core."""
 
@@ -188,6 +218,80 @@ class TestApplyColorcheckerCalibration:
         assert result.display_summary["settings"]["method"] == "median"
         assert result.display_summary["settings"]["calibrationMode"] == "root_polynomial"
         assert result.display_summary["settings"]["grayAffineMode"] == "enabled"
+
+    def test_orients_generated_patch_points_when_no_manual_points(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        img = self._make_image()
+        corners = self._make_corners()
+        calibrated = self._make_image()
+        fake_result = SimpleNamespace(
+            calibrated_image=calibrated,
+            preview_overlay_image=np.zeros((8, 8, 3), dtype=np.uint8),
+            preview_overlay_png=b"overlay",
+            patch_points=[{"x": 1.0, "y": 2.0}] * 24,
+            report={},
+        )
+        captured_kwargs: dict[str, object] = {}
+
+        def fake_calibrate(*_args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_result
+
+        from core.colorchecker.pipeline import generate_patch_points, orient_patch_points
+
+        fake_core = SimpleNamespace(
+            DEFAULT_PREVIEW_WIDTH=600,
+            DEFAULT_PREVIEW_HEIGHT=400,
+            generate_patch_points=generate_patch_points,
+            orient_patch_points=orient_patch_points,
+            calibrate=fake_calibrate,
+        )
+        monkeypatch.setattr(adapter, "_import_core", lambda: fake_core)
+
+        apply_colorchecker_calibration(
+            img,
+            corners,
+            patch_orientation="flip_horizontal",
+        )
+
+        patch_points = captured_kwargs["patch_points"]
+        assert isinstance(patch_points, list)
+        assert patch_points[0]["x"] > patch_points[1]["x"]
+
+    def test_manual_patch_points_are_not_oriented_twice(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        img = self._make_image()
+        corners = self._make_corners()
+        manual_points = [{"x": float(i), "y": 0.0} for i in range(24)]
+        calibrated = self._make_image()
+        fake_result = SimpleNamespace(
+            calibrated_image=calibrated,
+            preview_overlay_image=np.zeros((8, 8, 3), dtype=np.uint8),
+            preview_overlay_png=b"overlay",
+            patch_points=manual_points,
+            report={},
+        )
+        captured_kwargs: dict[str, object] = {}
+
+        def fake_calibrate(*_args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_result
+
+        fake_core = SimpleNamespace(calibrate=fake_calibrate)
+        monkeypatch.setattr(adapter, "_import_core", lambda: fake_core)
+
+        apply_colorchecker_calibration(
+            img,
+            corners,
+            patch_points=manual_points,
+            patch_orientation="flip_horizontal",
+        )
+
+        assert captured_kwargs["patch_points"] == manual_points
 
     def test_calibrate_exception_wraps_as_calibration_error(
         self,

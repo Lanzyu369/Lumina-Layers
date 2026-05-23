@@ -444,6 +444,7 @@ async def extractor_colorchecker_warp_preview(
     image: UploadFile = File(..., description="Image containing a ColorChecker card"),
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    patch_orientation: str = Form("normal", description="Detected patch orientation"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
     """Warp the ColorChecker region and return preview + auto 24 patch points.
@@ -486,6 +487,7 @@ async def extractor_colorchecker_warp_preview(
             decoded.image_bgr,
             points,
             patch_layout=patch_layout,
+            patch_orientation=patch_orientation,
         )
     except ColorCheckerUnavailableError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -506,6 +508,7 @@ async def extractor_colorchecker_warp_preview(
             "event": "extractor_colorchecker_warp_preview_done",
             "preview_width": result.preview_width,
             "preview_height": result.preview_height,
+            "patch_orientation": patch_orientation,
         },
     )
 
@@ -577,6 +580,7 @@ async def extractor_colorchecker_calibrate(
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
     patch_points: str | None = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    patch_orientation: str = Form("normal", description="Detected patch orientation"),
     sample_radius: int = Form(12, description="Patch sampling radius in warped preview pixels"),
     method: str = Form("mean", description="Patch sampling method: mean or median"),
     calibration_mode: str = Form("matrix_3x3", description="Calibration model"),
@@ -626,6 +630,7 @@ async def extractor_colorchecker_calibrate(
             corners,
             patch_points=pp,
             patch_layout=patch_layout,
+            patch_orientation=patch_orientation,
             file_name=image.filename or "",
             mime_type=image.content_type or "application/octet-stream",
             sample_radius=sample_radius,

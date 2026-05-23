@@ -165,11 +165,13 @@ export async function colorcheckerWarpPreview(
   image: File,
   cornerPoints: Array<[number, number]>,
   patchLayout: string = "4x6",
+  patchOrientation: string = "normal",
 ): Promise<ColorcheckerWarpPreviewResponse> {
   const fd = new FormData();
   fd.append("image", image);
   fd.append("corner_points", JSON.stringify(cornerPoints));
   fd.append("patch_layout", patchLayout);
+  fd.append("patch_orientation", patchOrientation);
   const response = await apiClient.post<ColorcheckerWarpPreviewResponse>(
     "/extractor/colorchecker-warp-preview",
     fd,
@@ -206,6 +208,7 @@ export async function colorcheckerCalibrate(
   patchPoints: ColorcheckerPoint[] | null = null,
   patchLayout: string = "4x6",
   options: ColorcheckerCalibrateOptions | null = null,
+  patchOrientation: string = "normal",
 ): Promise<ColorcheckerCalibrateResponse> {
   const fd = new FormData();
   fd.append("image", image);
@@ -214,6 +217,7 @@ export async function colorcheckerCalibrate(
     fd.append("patch_points", JSON.stringify(patchPoints));
   }
   fd.append("patch_layout", patchLayout);
+  fd.append("patch_orientation", patchOrientation);
   if (options) {
     if (options.sampleRadius !== undefined) {
       fd.append("sample_radius", String(options.sampleRadius));

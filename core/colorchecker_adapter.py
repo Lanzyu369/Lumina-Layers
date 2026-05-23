@@ -216,6 +216,7 @@ def warp_colorchecker_preview(
     image_bgr: np.ndarray,
     corner_points: Sequence[PointInput],
     patch_layout: str = "4x6",
+    patch_orientation: str = "normal",
 ) -> WarpPreviewResult:
     """Warp the ColorChecker region and return preview + sampling points.
 
@@ -237,6 +238,8 @@ def warp_colorchecker_preview(
     corners = _normalize_points(corner_points, expected_count=4, name="corner_points")
     pw = int(core.DEFAULT_PREVIEW_WIDTH)
     ph = int(core.DEFAULT_PREVIEW_HEIGHT)
+    layout = _validate_patch_layout(patch_layout)
+    orientation = _validate_patch_orientation(patch_orientation)
 
     try:
         preview, _mask, _ordered = core.warp_colorchecker_preview(
@@ -248,7 +251,12 @@ def warp_colorchecker_preview(
         auto_points = core.generate_patch_points(
             pw,
             ph,
-            patch_layout=_validate_patch_layout(patch_layout),
+            patch_layout=layout,
+        )
+        auto_points = core.orient_patch_points(
+            auto_points,
+            patch_layout=layout,
+            orientation=orientation,
         )
     except (ValueError, TypeError, RuntimeError) as exc:
         raise ColorCheckerCalibrationError(
@@ -291,6 +299,7 @@ def apply_colorchecker_calibration(
     ] = "matrix_3x3",
     gray_affine_mode: Literal["auto", "enabled", "fallback"] = "auto",
     blur_radius: float = 0.0,
+    patch_orientation: str = "normal",
 ) -> CalibrationResult:
     """Compute ColorChecker calibration and apply it to the image.
 
@@ -324,11 +333,23 @@ def apply_colorchecker_calibration(
     core = _import_core_or_raise()
 
     corners = _normalize_points(corner_points, expected_count=4, name="corner_points")
+    layout = _validate_patch_layout(patch_layout)
+    orientation = _validate_patch_orientation(patch_orientation)
     pp = (
         _normalize_points(patch_points, expected_count=24, name="patch_points")
         if patch_points is not None
         else None
     )
+    if pp is None and orientation != "normal":
+        pp = core.orient_patch_points(
+            core.generate_patch_points(
+                int(core.DEFAULT_PREVIEW_WIDTH),
+                int(core.DEFAULT_PREVIEW_HEIGHT),
+                patch_layout=layout,
+            ),
+            patch_layout=layout,
+            orientation=orientation,
+        )
 
     try:
         result = core.calibrate(
@@ -338,7 +359,7 @@ def apply_colorchecker_calibration(
             file_name=file_name,
             mime_type=mime_type,
             input_color=input_color,
-            patch_layout=_validate_patch_layout(patch_layout),
+            patch_layout=layout,
             sample_radius=_validate_sample_radius(sample_radius),
             method=_validate_method(method),
             calibration_mode=_validate_calibration_mode(calibration_mode),
@@ -437,6 +458,17 @@ def _validate_patch_layout(patch_layout: str) -> Literal["4x6", "3x8"]:
             f"Unsupported patch_layout '{patch_layout}'."
         )
     return patch_layout  # type: ignore[return-value]
+
+
+def _validate_patch_orientation(
+    patch_orientation: str,
+) -> Literal["normal", "rotate_180", "flip_horizontal", "flip_vertical"]:
+    value = (patch_orientation or "normal").strip().lower()
+    if value not in {"normal", "rotate_180", "flip_horizontal", "flip_vertical"}:
+        raise ColorCheckerCalibrationError(
+            f"Unsupported ColorChecker patch_orientation '{patch_orientation}'."
+        )
+    return value  # type: ignore[return-value]
 
 
 def _validate_method(method: str) -> Literal["mean", "median"]:

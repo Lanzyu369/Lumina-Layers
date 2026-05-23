@@ -382,6 +382,7 @@ export function ColorcheckerConfirmDialogInner({
   const [warpPreviewUrl, setWarpPreviewUrl] = useState<string | null>(null);
   const [warpSize, setWarpSize] = useState<{ width: number; height: number } | null>(null);
   const [patchPoints, setPatchPoints] = useState<ColorcheckerPoint[] | null>(null);
+  const [patchOrientation, setPatchOrientation] = useState("normal");
   const [overlayPreviewUrl, setOverlayPreviewUrl] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -461,12 +462,13 @@ export function ColorcheckerConfirmDialogInner({
     setWarpPreviewUrl(null);
     setWarpSize(null);
     setPatchPoints(null);
+    setPatchOrientation("normal");
     setOverlayPreviewUrl(null);
     setLocalSummary(null);
     setCorners([]);
     setActiveCornerIndex(null);
     autoDetectAttempted.current = false;
-  }, [imageFile, open]);
+  }, [colorcheckerTarget, imageFile, open]);
 
   useEffect(() => {
     detectionRunRef.current += 1;
@@ -566,6 +568,7 @@ export function ColorcheckerConfirmDialogInner({
       }
       if (result.detected && result.corners.length === 4) {
         setCorners(toCornerTuples(result.corners));
+        setPatchOrientation(result.patchOrientation || "normal");
         setActiveCornerIndex(0);
         setWarpPreviewUrl(null);
         setPatchPoints(null);
@@ -598,7 +601,12 @@ export function ColorcheckerConfirmDialogInner({
     setWarping(true);
     setErrorMessage(null);
     try {
-      const result = await colorcheckerWarpPreview(imageFile, corners, PATCH_LAYOUT);
+      const result = await colorcheckerWarpPreview(
+        imageFile,
+        corners,
+        PATCH_LAYOUT,
+        patchOrientation,
+      );
       const latest = latestCalibrationContext.current;
       if (
         warpRunRef.current !== runId ||
@@ -641,7 +649,14 @@ export function ColorcheckerConfirmDialogInner({
             blurRadius,
           }
         : null;
-      const result = await colorcheckerCalibrate(imageFile, corners, patchPoints, PATCH_LAYOUT, options);
+      const result = await colorcheckerCalibrate(
+        imageFile,
+        corners,
+        patchPoints,
+        PATCH_LAYOUT,
+        options,
+        patchOrientation,
+      );
       const latest = latestCalibrationContext.current;
       if (
         calibrationRunRef.current !== runId ||
