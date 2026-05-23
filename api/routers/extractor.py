@@ -22,6 +22,7 @@ from api.colorchecker_artifacts import (
     confirm_colorchecker_full_file,
     load_colorchecker_full_rgb,
     scale_corner_points,
+    touch_colorchecker_full_file,
 )
 from api.dependencies import get_file_registry, get_session_store
 from api.errors import to_http_exception
@@ -750,6 +751,16 @@ async def extractor_colorchecker_confirm(
     """Mark one private ColorChecker full-image artifact as user-confirmed."""
     confirmed = confirm_colorchecker_full_file(registry, file_id)
     return {"status": "ok", "confirmed": confirmed}
+
+
+@router.post("/colorchecker-touch")
+async def extractor_colorchecker_touch(
+    file_id: str = Form(..., description="Private ColorChecker full-image file id"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Renew one private ColorChecker full-image artifact without loading it."""
+    renewed = touch_colorchecker_full_file(registry, file_id)
+    return {"status": "ok", "renewed": renewed}
 
 
 @router.post("/extract")

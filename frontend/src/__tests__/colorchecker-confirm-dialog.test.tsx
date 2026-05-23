@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
   colorcheckerRelease,
+  colorcheckerTouch,
   colorcheckerWarpPreview,
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
@@ -20,6 +21,7 @@ vi.mock("../api/extractor", async (importOriginal) => {
     colorcheckerCalibrate: vi.fn(),
     colorcheckerDetectChart: vi.fn(),
     colorcheckerRelease: vi.fn(),
+    colorcheckerTouch: vi.fn(() => Promise.resolve()),
     colorcheckerWarpPreview: vi.fn(),
   };
 });
@@ -147,6 +149,7 @@ describe("ColorcheckerConfirmDialog", () => {
       display_summary: summary,
     });
     vi.mocked(colorcheckerRelease).mockResolvedValue(undefined);
+    vi.mocked(colorcheckerTouch).mockResolvedValue(undefined);
   });
 
   it("collapses when inactive and renders localized result cards when confirming", () => {
@@ -510,5 +513,31 @@ describe("ColorcheckerConfirmDialog", () => {
 
     await waitFor(() => expect(colorcheckerRelease).toHaveBeenCalledWith("stale-full-id"));
     expect(receiveCalibrated).not.toHaveBeenCalled();
+  });
+
+  it("renews a pending full artifact while showing confirmation", async () => {
+    renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+      colorcheckerFullFileId: "pending-full-id",
+      calibrationSummary: summary,
+    });
+
+    await waitFor(() => expect(colorcheckerTouch).toHaveBeenCalledWith("pending-full-id"));
+  });
+
+  it("closes the store dialog when the inline tool unmounts", async () => {
+    const closeDialog = vi.fn();
+    const { unmount } = renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+      colorcheckerFullFileId: "pending-full-id",
+      calibrationSummary: summary,
+      closeDialog,
+    });
+
+    unmount();
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalledTimes(1));
   });
 });

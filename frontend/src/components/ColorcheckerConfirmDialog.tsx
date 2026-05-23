@@ -11,6 +11,7 @@ import {
 } from "../api/extractor";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
+import { useColorcheckerArtifactLease } from "../hooks/useColorcheckerArtifactLease";
 import { useExtractorStore } from "../stores/extractorStore";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
@@ -27,6 +28,7 @@ export interface ColorcheckerConfirmDialogProps {
   imageFile: File | null;
   originalPreviewUrl: string | null;
   calibratedPreviewUrl: string | null;
+  colorcheckerFullFileId?: string | null;
   calibrationSummary?: ColorcheckerDisplaySummary | null;
   receiveCalibrated: (
     previewUrl: string,
@@ -51,6 +53,7 @@ export interface ColorcheckerConfirmDialogProps {
 const PATCH_LAYOUT = "4x6";
 const CORNER_LABELS = ["TL", "TR", "BR", "BL"];
 const LOCAL_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
+let deferredUnmountCleanup: ReturnType<typeof window.setTimeout> | null = null;
 
 type CalibrationMode = NonNullable<ColorcheckerCalibrateOptions["calibrationMode"]>;
 type SamplingMethod = NonNullable<ColorcheckerCalibrateOptions["method"]>;
@@ -360,10 +363,12 @@ export function ColorcheckerConfirmDialogInner({
   imageFile,
   originalPreviewUrl,
   calibratedPreviewUrl,
+  colorcheckerFullFileId,
   calibrationSummary,
   receiveCalibrated,
   confirmCalibrated,
   rejectCalibrated,
+  closeDialog,
 }: ColorcheckerConfirmDialogProps) {
   const { t } = useI18n();
   const isCalibrating = phase === "calibrating";
@@ -416,6 +421,21 @@ export function ColorcheckerConfirmDialogInner({
 
   const sourceUrl = originalPreviewUrl ?? localPreviewUrl;
   const summary = calibrationSummary ?? localSummary;
+
+  useColorcheckerArtifactLease([colorcheckerFullFileId], open);
+
+  useEffect(() => {
+    if (deferredUnmountCleanup !== null) {
+      window.clearTimeout(deferredUnmountCleanup);
+      deferredUnmountCleanup = null;
+    }
+    return () => {
+      deferredUnmountCleanup = window.setTimeout(() => {
+        closeDialog();
+        deferredUnmountCleanup = null;
+      }, 0);
+    };
+  }, [closeDialog]);
 
   useEffect(() => {
     if (!open || !imageFile || originalPreviewUrl) {
@@ -1020,6 +1040,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
   const imageFile = useExtractorStore((s) => s.imageFile);
   const originalPreviewUrl = useExtractorStore((s) => s.originalPreviewUrl);
   const calibratedPreviewUrl = useExtractorStore((s) => s.calibratedPreviewUrl);
+  const colorcheckerFullFileId = useExtractorStore((s) => s.calibratedFullFileId);
   const calibrationSummary = useExtractorStore((s) => s.colorcheckerSummary);
   const receiveCalibrated = useExtractorStore((s) => s.receiveCalibratedFromCC);
   const confirmCalibrated = useExtractorStore((s) => s.confirmCalibrated);
@@ -1033,6 +1054,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
       imageFile={imageFile}
       originalPreviewUrl={originalPreviewUrl}
       calibratedPreviewUrl={calibratedPreviewUrl}
+      colorcheckerFullFileId={colorcheckerFullFileId}
       calibrationSummary={calibrationSummary}
       receiveCalibrated={receiveCalibrated}
       confirmCalibrated={confirmCalibrated}

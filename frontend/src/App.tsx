@@ -6,6 +6,7 @@ import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
+import { useColorcheckerArtifactLease } from "./hooks/useColorcheckerArtifactLease";
 import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
@@ -236,6 +237,16 @@ function AppContent() {
       s.colorchecker_phase !== "done" &&
       s.imageFile !== null,
   );
+  const extractorColorcheckerFullId = useExtractorStore((s) =>
+    s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
+  );
+  const gradientColorcheckerFullIds = useSingleStageStore(
+    useShallow((s) => [s.whiteColorcheckerFileId, s.blackColorcheckerFileId]),
+  );
+  useColorcheckerArtifactLease([
+    extractorColorcheckerFullId,
+    ...gradientColorcheckerFullIds,
+  ]);
   const clearMaterialVerification = useSingleStageStore(
     (s) => s.clearMaterialVerification,
   );

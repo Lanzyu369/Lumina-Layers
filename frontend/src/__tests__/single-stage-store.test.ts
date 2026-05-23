@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   colorcheckerConfirm,
@@ -12,6 +12,7 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractGradientCardStageA: vi.fn(),
   rotateExtractorImage: vi.fn(),
   saveGradientCardMaterial: vi.fn(),

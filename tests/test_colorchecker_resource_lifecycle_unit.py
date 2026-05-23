@@ -81,6 +81,13 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert os.path.exists(entry["path"])
     assert client.get(f"/api/files/{full_id}").status_code == 404
 
+    touch_pending_response = client.post(
+        "/api/extractor/colorchecker-touch",
+        data={"file_id": full_id},
+    )
+    assert touch_pending_response.status_code == 200
+    assert touch_pending_response.json()["renewed"] is True
+
     confirm_response = client.post(
         "/api/extractor/colorchecker-confirm",
         data={"file_id": full_id},
@@ -90,6 +97,13 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     confirmed_entry = registry.get_entry(full_id)
     assert confirmed_entry is not None
     assert confirmed_entry["purpose"] == COLORCHECKER_FULL_PURPOSE
+
+    touch_confirmed_response = client.post(
+        "/api/extractor/colorchecker-touch",
+        data={"file_id": full_id},
+    )
+    assert touch_confirmed_response.status_code == 200
+    assert touch_confirmed_response.json()["renewed"] is True
 
     release_response = client.post(
         "/api/extractor/colorchecker-release",

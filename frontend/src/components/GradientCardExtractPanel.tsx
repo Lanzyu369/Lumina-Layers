@@ -688,6 +688,7 @@ export default function GradientCardExtractPanel() {
     colorchecker_phase,
     colorchecker_target,
     calibratedPreviewUrl,
+    pendingColorcheckerFileId,
     originalWhitePreviewUrl,
     colorcheckerSummary,
     setColorcheckerEnabled,
@@ -1052,6 +1053,7 @@ export default function GradientCardExtractPanel() {
                     imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
                     originalPreviewUrl={originalWhitePreviewUrl}
                     calibratedPreviewUrl={calibratedPreviewUrl}
+                    colorcheckerFullFileId={pendingColorcheckerFileId}
                     calibrationSummary={colorcheckerSummary}
                     receiveCalibrated={receiveCalibratedFromCC}
                     confirmCalibrated={confirmCalibrated}

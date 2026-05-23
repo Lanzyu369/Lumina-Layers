@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import GradientCardExtractPanel from "../components/GradientCardExtractPanel";
@@ -14,6 +14,7 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractGradientCardStageA: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),

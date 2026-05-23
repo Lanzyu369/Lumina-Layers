@@ -85,6 +85,22 @@ def confirm_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool
     return registry.set_purpose(file_id, COLORCHECKER_FULL_PURPOSE)
 
 
+def touch_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
+    """Renew one pending or confirmed private ColorChecker full-image artifact.
+    续期一个待确认或已确认的内部完整校色图产物。
+    """
+    entry = registry.get_entry(file_id)
+    if (
+        entry is None
+        or entry.get("purpose") not in _COLORCHECKER_FULL_PURPOSES
+        or entry.get("is_public") is not False
+    ):
+        raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
+    if registry.resolve(file_id) is None:
+        raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
+    return True
+
+
 def scale_corner_points(
     points: Sequence[Sequence[float]],
     *,

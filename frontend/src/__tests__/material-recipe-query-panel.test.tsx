@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import MaterialRecipeQueryPanel from "../components/MaterialRecipeQueryPanel";
@@ -11,6 +11,7 @@ import {
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   generateMaterialRecipeSwatch: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   previewMaterialRecipe: vi.fn(),

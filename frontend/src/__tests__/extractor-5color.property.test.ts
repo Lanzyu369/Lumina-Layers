@@ -1,4 +1,4 @@
-import { describe, it, vi, beforeEach, expect } from "vitest";
+﻿import { describe, it, vi, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
 import type { ExtractorState } from "../stores/extractorStore";
@@ -14,6 +14,7 @@ import type { ExtractResponse } from "../api/types";
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
   colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
   mergeEightColor: vi.fn(),
