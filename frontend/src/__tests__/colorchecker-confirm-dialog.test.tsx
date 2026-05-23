@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -319,6 +319,56 @@ describe("ColorcheckerConfirmDialog", () => {
     expect(screen.queryByRole("button", { name: "色卡角点 1" })).not.toBeInTheDocument();
   });
 
+  it("keeps manually selected corners when auto-detect resolves late", async () => {
+    let resolveDetect:
+      | ((value: Awaited<ReturnType<typeof colorcheckerDetectChart>>) => void)
+      | null = null;
+    vi.mocked(colorcheckerDetectChart).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDetect = resolve;
+      }),
+    );
+    renderDialog();
+
+    const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
+    Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
+    Object.defineProperty(image, "naturalHeight", { configurable: true, value: 80 });
+    image.getBoundingClientRect = vi.fn(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 80,
+      width: 100,
+      height: 80,
+      toJSON: () => ({}),
+    }));
+    fireEvent.load(image);
+    fireEvent.pointerDown(image, { clientX: 25, clientY: 30 });
+
+    await act(async () => {
+      resolveDetect?.({
+        detected: true,
+        corners: [
+          { x: 11, y: 12 },
+          { x: 91, y: 12 },
+          { x: 91, y: 62 },
+          { x: 11, y: 62 },
+        ],
+        patchOrientation: "normal",
+        confidence: 0.95,
+        score: 0.9,
+        mode: "auto",
+        reason: "",
+        candidateCount: 1,
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "色卡角点 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "色卡角点 2" })).not.toBeInTheDocument();
+  });
+
   it("ignores stale warp responses after the source image changes", async () => {
     let resolveWarp:
       | ((value: Awaited<ReturnType<typeof colorcheckerWarpPreview>>) => void)
@@ -360,5 +410,49 @@ describe("ColorcheckerConfirmDialog", () => {
 
     await waitFor(() => expect(colorcheckerWarpPreview).toHaveBeenCalled());
     expect(screen.queryByText("透视预览已生成，可执行校色")).not.toBeInTheDocument();
+  });
+
+  it("drops warp patch points after a corner is dragged", async () => {
+    vi.mocked(colorcheckerWarpPreview).mockResolvedValueOnce({
+      preview_url: "/api/files/warp-with-points.png",
+      preview_width: 720,
+      preview_height: 480,
+      auto_patch_points: [{ x: 12, y: 18 }],
+    });
+    renderDialog();
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith(imageFile, "4x6"));
+    const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
+    Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
+    Object.defineProperty(image, "naturalHeight", { configurable: true, value: 80 });
+    image.getBoundingClientRect = vi.fn(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 80,
+      width: 100,
+      height: 80,
+      toJSON: () => ({}),
+    }));
+    fireEvent.load(image);
+
+    const warpButton = await screen.findByRole("button", { name: "生成预览" });
+    await waitFor(() => expect(warpButton).not.toBeDisabled());
+    fireEvent.click(warpButton);
+    await screen.findByText("透视预览已生成，可执行校色");
+
+    const topLeftCorner = await screen.findByRole("button", { name: "色卡角点 1" });
+    fireEvent.pointerDown(topLeftCorner, { clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 30, clientY: 35 });
+    fireEvent.pointerUp(window);
+
+    expect(screen.queryByText("透视预览已生成，可执行校色")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "执行校色" }));
+
+    await waitFor(() => expect(colorcheckerCalibrate).toHaveBeenCalled());
+    const call = vi.mocked(colorcheckerCalibrate).mock.calls[0];
+    expect(call[2]).toBeNull();
   });
 });

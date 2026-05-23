@@ -386,6 +386,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
       whiteImageFile: buildPngFile("white.png"),
       blackImageFile: buildPngFile("black.png"),
       whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
       whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
       blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
     });
@@ -396,6 +397,26 @@ describe("useSingleStageStore ColorChecker flow", () => {
     const state = useSingleStageStore.getState();
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("white-full-id");
     expect(state.whiteColorcheckerFileId).toBeNull();
+    expect(state.blackColorcheckerFileId).toBe("black-full-id");
     expect(state.imageSource).toBe("raw");
+  });
+
+  it("does not submit Stage A with only one ColorChecker full id", async () => {
+    useSingleStageStore.setState({
+      datasetFile: new File([new Uint8Array([1])], "kit.zip", {
+        type: "application/zip",
+      }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+      blackColorcheckerFileId: "black-full-id",
+      imageSource: "restored",
+    });
+
+    await useSingleStageStore.getState().submitExtract();
+
+    expect(mockedExtractGradientCardStageA).not.toHaveBeenCalled();
+    expect(useSingleStageStore.getState().extractError).toContain("ColorChecker");
   });
 });

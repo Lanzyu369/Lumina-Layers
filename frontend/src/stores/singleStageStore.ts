@@ -462,7 +462,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewHeight: null,
         whiteColorcheckerFileId: null,
         colorcheckerSummary: null,
-        imageSource: previousState.blackColorcheckerFileId ? previousState.imageSource : "raw",
+        imageSource: "raw",
         ...RESULT_RESET_STATE,
       });
       uploadImagePreview(file)
@@ -552,7 +552,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewHeight: null,
         blackColorcheckerFileId: null,
         colorcheckerSummary: null,
-        imageSource: previousState.whiteColorcheckerFileId ? previousState.imageSource : "raw",
+        imageSource: "raw",
         ...RESULT_RESET_STATE,
       });
       uploadImagePreview(file)
@@ -643,7 +643,7 @@ export const useSingleStageStore = create<
       pendingColorcheckerPreviewHeight: null,
       whiteColorcheckerFileId: null,
       colorcheckerSummary: null,
-      imageSource: initial.blackColorcheckerFileId ? initial.imageSource : "raw",
+      imageSource: "raw",
     });
     try {
       const response = await rotateExtractorImage(
@@ -694,7 +694,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewWidth: null,
         pendingColorcheckerPreviewHeight: null,
         colorcheckerSummary: null,
-        imageSource: current.blackColorcheckerFileId ? current.imageSource : "raw",
+        imageSource: "raw",
       });
     }
   },
@@ -722,7 +722,7 @@ export const useSingleStageStore = create<
       pendingColorcheckerPreviewHeight: null,
       blackColorcheckerFileId: null,
       colorcheckerSummary: null,
-      imageSource: initial.whiteColorcheckerFileId ? initial.imageSource : "raw",
+      imageSource: "raw",
     });
     try {
       const response = await rotateExtractorImage(
@@ -773,7 +773,7 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewWidth: null,
         pendingColorcheckerPreviewHeight: null,
         colorcheckerSummary: null,
-        imageSource: current.whiteColorcheckerFileId ? current.imageSource : "raw",
+        imageSource: "raw",
       });
     }
   },
@@ -1242,6 +1242,16 @@ export const useSingleStageStore = create<
       return;
     }
     if (isColorcheckerBusy(state.colorchecker_phase)) {
+      return;
+    }
+    const hasWhiteColorchecker = Boolean(state.whiteColorcheckerFileId);
+    const hasBlackColorchecker = Boolean(state.blackColorcheckerFileId);
+    if (hasWhiteColorchecker !== hasBlackColorchecker) {
+      set({
+        extractError: tRuntime(
+          "mat_gradient_extract_colorchecker_pair_required_error",
+        ),
+      });
       return;
     }
 

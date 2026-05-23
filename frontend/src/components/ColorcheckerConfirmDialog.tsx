@@ -470,6 +470,17 @@ export function ColorcheckerConfirmDialogInner({
     setCorners((current) => current.map((corner, i) => (i === index ? point : corner)));
   }, []);
 
+  const invalidateManualGeometry = useCallback(() => {
+    detectionRunRef.current += 1;
+    warpRunRef.current += 1;
+    setAutoDetecting(false);
+    setWarping(false);
+    setWarpPreviewUrl(null);
+    setWarpSize(null);
+    setPatchPoints(null);
+    setStatusMessage(null);
+  }, []);
+
   useEffect(() => {
     if (dragCornerIndex === null) return;
     const handleMove = (event: PointerEvent) => {
@@ -489,8 +500,7 @@ export function ColorcheckerConfirmDialogInner({
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
     setErrorMessage(null);
-    setWarpPreviewUrl(null);
-    setPatchPoints(null);
+    invalidateManualGeometry();
     if (corners.length < 4) {
       setCorners((current) => [...current, point]);
       setActiveCornerIndex(corners.length);
@@ -507,6 +517,7 @@ export function ColorcheckerConfirmDialogInner({
   ) => {
     event.preventDefault();
     event.stopPropagation();
+    invalidateManualGeometry();
     setActiveCornerIndex(index);
     setDragCornerIndex(index);
   };
