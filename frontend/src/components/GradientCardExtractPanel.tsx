@@ -1048,6 +1048,7 @@ export default function GradientCardExtractPanel() {
                 {(colorchecker_phase === "calibrating" || colorchecker_phase === "confirming") && (
                   <ColorcheckerConfirmDialogInner
                     phase={colorchecker_phase}
+                    colorcheckerTarget={colorchecker_target}
                     imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
                     originalPreviewUrl={originalWhitePreviewUrl}
                     calibratedPreviewUrl={calibratedPreviewUrl}

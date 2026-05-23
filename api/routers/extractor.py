@@ -495,7 +495,7 @@ async def extractor_colorchecker_warp_preview(
         str(uuid.uuid4()),
         result.preview_png,
         "colorchecker_warp_preview.png",
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
     )
 
     log.info(

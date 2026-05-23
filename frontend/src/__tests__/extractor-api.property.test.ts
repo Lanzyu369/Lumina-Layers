@@ -13,10 +13,11 @@ vi.mock("../api/extractor", () => ({
   manualFixCell: vi.fn(),
 }));
 
-import { confirmPalette, extractColors } from "../api/extractor";
+import { colorcheckerRelease, confirmPalette, extractColors } from "../api/extractor";
 
 const mockedExtractColors = vi.mocked(extractColors);
 const mockedConfirmPalette = vi.mocked(confirmPalette);
+const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 
 // ========== Mock browser APIs ==========
 
@@ -142,6 +143,7 @@ const arbPaletteEntry = fc.record({
 beforeEach(() => {
   resetExtractorStore();
   vi.clearAllMocks();
+  mockedColorcheckerRelease.mockResolvedValue(undefined);
 });
 
 // **Feature: extractor-calibration-tab, Property 7: API 请求载荷与 Store 状态一致性**
@@ -263,6 +265,34 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       expect(mockedExtractColors).not.toHaveBeenCalled();
     },
   );
+
+  it("releases stale ColorChecker calibration responses", () => {
+    const oldFile = new File(["old"], "old.png", { type: "image/png" });
+    const newFile = new File(["new"], "new.png", { type: "image/png" });
+
+    useExtractorStore.setState({
+      imageFile: newFile,
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+    });
+
+    useExtractorStore.getState().receiveCalibratedFromCC(
+      "/api/files/stale-preview.jpg",
+      "stale-full-id",
+      null,
+      {
+        fullWidth: 800,
+        fullHeight: 600,
+        previewWidth: 400,
+        previewHeight: 300,
+      },
+      { imageFile: oldFile },
+    );
+
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
+    expect(useExtractorStore.getState().calibratedFullFileId).toBeNull();
+    expect(useExtractorStore.getState().colorchecker_phase).toBe("calibrating");
+  });
 });
 
 describe("Feature: extractor-calibration-tab, Property 11: confirm-palette 请求载荷与 Store 状态一致性", () => {

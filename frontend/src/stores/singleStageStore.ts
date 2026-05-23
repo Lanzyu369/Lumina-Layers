@@ -123,6 +123,10 @@ interface SingleStageActions {
       previewWidth: number;
       previewHeight: number;
     },
+    context?: {
+      imageFile: File | null;
+      target?: "white" | "black" | null;
+    },
   ) => void;
   confirmCalibrated: () => void;
   rejectCalibrated: () => void;
@@ -958,8 +962,25 @@ export const useSingleStageStore = create<
       previewWidth: number;
       previewHeight: number;
     },
+    context?: {
+      imageFile: File | null;
+      target?: "white" | "black" | null;
+    },
   ) => {
-    const previousId = get().pendingColorcheckerFileId;
+    const state = get();
+    const target = context?.target ?? state.colorchecker_target;
+    const targetFile =
+      target === "black" ? state.blackImageFile : state.whiteImageFile;
+    if (
+      !state.colorchecker_enabled ||
+      state.colorchecker_phase !== "calibrating" ||
+      state.colorchecker_target !== target ||
+      (context?.imageFile && targetFile !== context.imageFile)
+    ) {
+      releaseColorcheckerArtifact(fullFileId);
+      return;
+    }
+    const previousId = state.pendingColorcheckerFileId;
     if (previousId && previousId !== fullFileId) {
       releaseColorcheckerArtifact(previousId);
     }

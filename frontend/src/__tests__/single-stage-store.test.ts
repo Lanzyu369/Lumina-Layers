@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { extractGradientCardStageA } from "../api/extractor";
+import { colorcheckerRelease, extractGradientCardStageA } from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
@@ -19,11 +19,13 @@ const buildPngFile = (name: string) =>
   new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
 
 const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
+const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 
 describe("useSingleStageStore ColorChecker flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    mockedColorcheckerRelease.mockResolvedValue(undefined);
     useSingleStageStore.setState({
       colorchecker_enabled: false,
       colorchecker_phase: null,
@@ -177,4 +179,33 @@ describe("useSingleStageStore ColorChecker flow", () => {
       expect(mockedExtractGradientCardStageA).not.toHaveBeenCalled();
     },
   );
+
+  it("releases stale ColorChecker responses for the wrong target image", () => {
+    const oldWhiteFile = buildPngFile("old-white.png");
+    const currentWhiteFile = buildPngFile("current-white.png");
+
+    useSingleStageStore.setState({
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+      colorchecker_target: "white",
+      whiteImageFile: currentWhiteFile,
+    });
+
+    useSingleStageStore.getState().receiveCalibratedFromCC(
+      "/api/files/stale-preview.jpg",
+      "stale-full-id",
+      null,
+      {
+        fullWidth: 800,
+        fullHeight: 600,
+        previewWidth: 400,
+        previewHeight: 300,
+      },
+      { imageFile: oldWhiteFile, target: "white" },
+    );
+
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
+    expect(useSingleStageStore.getState().pendingColorcheckerFileId).toBeNull();
+    expect(useSingleStageStore.getState().colorchecker_phase).toBe("calibrating");
+  });
 });

@@ -15,6 +15,7 @@ from api.colorchecker_artifacts import COLORCHECKER_FULL_PURPOSE
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from config import COLORCHECKER_TEMP_TTL_SECONDS
 
 
 def _png_bytes(width: int = 8, height: int = 6) -> bytes:
@@ -85,6 +86,39 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert release_response.json()["released"] is True
     assert registry.resolve(full_id) is None
     assert os.path.exists(entry["path"]) is False
+
+
+def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
+    """Warp preview should use the ColorChecker artifact TTL constant."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 8, 3), dtype=np.uint8))
+
+    def fake_warp(*_args, **_kwargs):
+        return SimpleNamespace(
+            preview_png=_png_bytes(),
+            preview_width=8,
+            preview_height=6,
+            auto_patch_points=[],
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_upload", fake_decode)
+    monkeypatch.setattr(adapter, "warp_colorchecker_preview", fake_warp)
+
+    response = client.post(
+        "/api/extractor/colorchecker-warp-preview",
+        data={"corner_points": "[[0,0],[1,0],[1,1],[0,1]]"},
+        files={"image": ("chart.png", _png_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 200
+    preview_id = response.json()["preview_url"].rsplit("/", 1)[-1]
+    entry = registry.get_entry(preview_id)
+    assert entry is not None
+    assert entry["ttl_seconds"] == COLORCHECKER_TEMP_TTL_SECONDS
 
 
 def test_extractor_uses_private_colorchecker_image_and_scales_points(

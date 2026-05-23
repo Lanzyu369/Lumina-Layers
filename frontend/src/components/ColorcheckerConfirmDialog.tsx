@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
+  colorcheckerRelease,
   colorcheckerWarpPreview,
   type ColorcheckerCalibrateOptions,
   type ColorcheckerDisplaySummary,
@@ -22,6 +23,7 @@ type CornerPoint = [number, number];
 
 export interface ColorcheckerConfirmDialogProps {
   phase: "calibrating" | "confirming" | "done" | null;
+  colorcheckerTarget?: "white" | "black" | null;
   imageFile: File | null;
   originalPreviewUrl: string | null;
   calibratedPreviewUrl: string | null;
@@ -35,6 +37,10 @@ export interface ColorcheckerConfirmDialogProps {
       fullHeight: number;
       previewWidth: number;
       previewHeight: number;
+    },
+    context?: {
+      imageFile: File | null;
+      target?: "white" | "black" | null;
     },
   ) => void;
   confirmCalibrated: () => void;
@@ -350,6 +356,7 @@ function ColorcheckerWarningCards({
 
 export function ColorcheckerConfirmDialogInner({
   phase,
+  colorcheckerTarget = null,
   imageFile,
   originalPreviewUrl,
   calibratedPreviewUrl,
@@ -391,6 +398,19 @@ export function ColorcheckerConfirmDialogInner({
   const compareRef = useRef<HTMLDivElement>(null);
   const compareDragging = useRef(false);
   const autoDetectAttempted = useRef(false);
+  const calibrationRunRef = useRef(0);
+  const latestCalibrationContext = useRef({
+    phase,
+    open,
+    imageFile,
+    colorcheckerTarget,
+  });
+  latestCalibrationContext.current = {
+    phase,
+    open,
+    imageFile,
+    colorcheckerTarget,
+  };
 
   const sourceUrl = originalPreviewUrl ?? localPreviewUrl;
   const summary = calibrationSummary ?? localSummary;
@@ -425,6 +445,10 @@ export function ColorcheckerConfirmDialogInner({
     setActiveCornerIndex(null);
     autoDetectAttempted.current = false;
   }, [imageFile, open]);
+
+  useEffect(() => {
+    calibrationRunRef.current += 1;
+  }, [imageFile, open, colorcheckerTarget]);
 
   const pointFromPointer = useCallback((clientX: number, clientY: number): CornerPoint | null => {
     const image = imageRef.current;
@@ -531,6 +555,9 @@ export function ColorcheckerConfirmDialogInner({
 
   const runCalibration = async () => {
     if (!imageFile || corners.length !== 4) return;
+    const runId = ++calibrationRunRef.current;
+    const requestImageFile = imageFile;
+    const requestTarget = colorcheckerTarget;
     setCalibrating(true);
     setErrorMessage(null);
     try {
@@ -544,6 +571,17 @@ export function ColorcheckerConfirmDialogInner({
           }
         : null;
       const result = await colorcheckerCalibrate(imageFile, corners, patchPoints, PATCH_LAYOUT, options);
+      const latest = latestCalibrationContext.current;
+      if (
+        calibrationRunRef.current !== runId ||
+        latest.phase !== "calibrating" ||
+        !latest.open ||
+        latest.imageFile !== requestImageFile ||
+        latest.colorcheckerTarget !== requestTarget
+      ) {
+        void colorcheckerRelease(result.calibrated_full_file_id).catch(() => {});
+        return;
+      }
       const calibratedUrl = normalizeResourceUrl(result.calibrated_preview_url) ?? result.calibrated_preview_url;
       setOverlayPreviewUrl(normalizeResourceUrl(result.overlay_url));
       setLocalSummary(result.display_summary);
@@ -557,11 +595,19 @@ export function ColorcheckerConfirmDialogInner({
           previewWidth: result.preview_width,
           previewHeight: result.preview_height,
         },
+        {
+          imageFile,
+          target: colorcheckerTarget,
+        },
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("ext_cc_calibrate_failed"));
+      if (calibrationRunRef.current === runId) {
+        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_calibrate_failed"));
+      }
     } finally {
-      setCalibrating(false);
+      if (calibrationRunRef.current === runId) {
+        setCalibrating(false);
+      }
     }
   };
 
@@ -932,6 +978,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
   return (
     <ColorcheckerConfirmDialogInner
       phase={enabled ? (phase ?? "calibrating") : phase}
+      colorcheckerTarget={null}
       imageFile={imageFile}
       originalPreviewUrl={originalPreviewUrl}
       calibratedPreviewUrl={calibratedPreviewUrl}

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
+  colorcheckerRelease,
   colorcheckerWarpPreview,
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
@@ -18,11 +19,15 @@ vi.mock("../api/extractor", async (importOriginal) => {
     ...actual,
     colorcheckerCalibrate: vi.fn(),
     colorcheckerDetectChart: vi.fn(),
+    colorcheckerRelease: vi.fn(),
     colorcheckerWarpPreview: vi.fn(),
   };
 });
 
 const imageFile = new File([new Uint8Array([1, 2, 3])], "chart.png", {
+  type: "image/png",
+});
+const replacementImageFile = new File([new Uint8Array([4, 5, 6])], "replacement.png", {
   type: "image/png",
 });
 
@@ -141,6 +146,7 @@ describe("ColorcheckerConfirmDialog", () => {
       patch_points: [],
       display_summary: summary,
     });
+    vi.mocked(colorcheckerRelease).mockResolvedValue(undefined);
   });
 
   it("collapses when inactive and renders localized result cards when confirming", () => {
@@ -213,5 +219,56 @@ describe("ColorcheckerConfirmDialog", () => {
       sampleRadius: 12,
       blurRadius: 0,
     });
+  });
+
+  it("releases stale calibration responses after the source image changes", async () => {
+    let resolveCalibration:
+      | ((value: Awaited<ReturnType<typeof colorcheckerCalibrate>>) => void)
+      | null = null;
+    vi.mocked(colorcheckerCalibrate).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCalibration = resolve;
+      }),
+    );
+    const receiveCalibrated = vi.fn();
+    const { rerender } = renderDialog({ receiveCalibrated });
+
+    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith(imageFile, "4x6"));
+    const calibrateButton = screen.getByRole("button", { name: "执行校色" });
+    await waitFor(() => expect(calibrateButton).not.toBeDisabled());
+    fireEvent.click(calibrateButton);
+
+    rerender(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogInner
+          phase="calibrating"
+          imageFile={replacementImageFile}
+          originalPreviewUrl="/api/files/replacement.png"
+          calibratedPreviewUrl={null}
+          calibrationSummary={null}
+          receiveCalibrated={receiveCalibrated}
+          confirmCalibrated={vi.fn()}
+          rejectCalibrated={vi.fn()}
+          closeDialog={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    resolveCalibration?.({
+      calibrated_preview_url: "/api/files/stale-preview.jpg",
+      calibrated_full_file_id: "stale-full-id",
+      overlay_url: "/api/files/stale-overlay.jpg",
+      full_width: 800,
+      full_height: 600,
+      preview_width: 400,
+      preview_height: 300,
+      patch_points: [],
+      display_summary: summary,
+    });
+
+    await waitFor(() => {
+      expect(colorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
+    });
+    expect(receiveCalibrated).not.toHaveBeenCalled();
   });
 });

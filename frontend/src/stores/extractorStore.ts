@@ -181,6 +181,9 @@ export interface ExtractorActions {
       previewWidth: number;
       previewHeight: number;
     },
+    context?: {
+      imageFile: File | null;
+    },
   ) => void;
   confirmCalibrated: () => void;
   rejectCalibrated: () => void;
@@ -733,8 +736,20 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         previewWidth: number;
         previewHeight: number;
       },
+      context?: {
+        imageFile: File | null;
+      },
     ) => {
-      const previousId = get().calibratedFullFileId;
+      const state = get();
+      if (
+        !state.colorchecker_enabled ||
+        state.colorchecker_phase !== "calibrating" ||
+        (context?.imageFile && state.imageFile !== context.imageFile)
+      ) {
+        releaseColorcheckerArtifact(fullFileId);
+        return;
+      }
+      const previousId = state.calibratedFullFileId;
       if (previousId && previousId !== fullFileId) {
         releaseColorcheckerArtifact(previousId);
       }
