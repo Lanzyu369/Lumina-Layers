@@ -383,7 +383,19 @@ async def extractor_extract_gradient_card_stage_a(
     manual_white = _normalize_manual_orientation(manual_white_orientation)
     manual_black = _normalize_manual_orientation(manual_black_orientation)
     validated_image_source = _normalize_image_source(image_source)
-    if (white_colorchecker_file_id or black_colorchecker_file_id) and validated_image_source != "restored":
+    has_white_colorchecker = bool(white_colorchecker_file_id)
+    has_black_colorchecker = bool(black_colorchecker_file_id)
+    if validated_image_source == "restored" and not (
+        has_white_colorchecker and has_black_colorchecker
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "image_source='restored' requires both white_colorchecker_file_id "
+                "and black_colorchecker_file_id"
+            ),
+        )
+    if (has_white_colorchecker or has_black_colorchecker) and validated_image_source != "restored":
         raise HTTPException(
             status_code=422,
             detail="ColorChecker calibrated images require image_source='restored'",

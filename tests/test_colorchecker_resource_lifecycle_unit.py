@@ -262,6 +262,41 @@ def test_stage_a_uses_private_colorchecker_images_only_when_restored(
         },
     )
     assert raw_response.status_code == 422
+    assert captured == {}
+
+    mixed_response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "black_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "white_colorchecker_file_id": white_id,
+            "white_corner_points_width": "10",
+            "white_corner_points_height": "10",
+            "image_source": "restored",
+        },
+        files={
+            "black_image": ("black.png", _png_bytes(), "image/png"),
+            "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+        },
+    )
+    assert mixed_response.status_code == 422
+    assert captured == {}
+
+    restored_upload_response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "black_corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "image_source": "restored",
+        },
+        files={
+            "white_image": ("white.png", _png_bytes(), "image/png"),
+            "black_image": ("black.png", _png_bytes(), "image/png"),
+            "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+        },
+    )
+    assert restored_upload_response.status_code == 422
+    assert captured == {}
 
     response = client.post(
         "/api/extractor/extract-gradient-card-stage-a",
