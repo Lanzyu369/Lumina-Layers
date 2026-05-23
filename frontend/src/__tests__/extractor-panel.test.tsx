@@ -75,6 +75,16 @@ function resetExtractorStore(): void {
     paletteConfirmed: false,
     paletteConfirmLoading: false,
     paletteConfirmError: null,
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    calibratedPreviewUrl: null,
+    calibratedFullFileId: null,
+    calibratedFullWidth: null,
+    calibratedFullHeight: null,
+    calibratedPreviewWidth: null,
+    calibratedPreviewHeight: null,
+    originalPreviewUrl: null,
+    colorcheckerSummary: null,
   });
 }
 
@@ -119,6 +129,7 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
           imagePreviewUrl: imageFile ? "blob:mock-url" : null,
           corner_points: corners,
           isLoading: false,
+          colorchecker_phase: null,
         });
 
         render(<ExtractorPanel />);
@@ -136,6 +147,30 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
       { numRuns: 100 }
     );
   });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "disables extraction while ColorChecker is %s",
+    async (phase) => {
+      const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+      useExtractorStore.setState({
+        imageFile: new File(["test"], "test.png", { type: "image/png" }),
+        imagePreviewUrl: "blob:mock-url",
+        corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+        isLoading: false,
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        calibratedFullFileId: phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      render(<ExtractorPanel />);
+
+      const extractDiv = screen.getByTestId("extract-button");
+      const button = extractDiv.querySelector("button")!;
+
+      expect(button.disabled).toBe(true);
+    },
+  );
 });
 
 // ========== Unit Tests ==========

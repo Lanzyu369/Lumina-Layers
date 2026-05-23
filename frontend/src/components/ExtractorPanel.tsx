@@ -151,9 +151,12 @@ export default function ExtractorPanel() {
     ? extractedEightColorFullPages.length === EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES
     : p1Done && p2Done;
 
+  const colorcheckerPending =
+    colorchecker_phase === "calibrating" ||
+    colorchecker_phase === "confirming";
   const extractDisabled =
     imageFile === null || corner_points.length < 4 || isLoading ||
-    colorchecker_phase === "calibrating";
+    colorcheckerPending;
 
 
   const [correctionOpen, setCorrectionOpen] = useState(false);

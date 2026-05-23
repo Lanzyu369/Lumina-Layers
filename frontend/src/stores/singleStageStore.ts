@@ -1157,6 +1157,12 @@ export const useSingleStageStore = create<
       });
       return;
     }
+    if (
+      state.colorchecker_phase === "calibrating" ||
+      state.colorchecker_phase === "confirming"
+    ) {
+      return;
+    }
 
     set({
       isExtracting: true,

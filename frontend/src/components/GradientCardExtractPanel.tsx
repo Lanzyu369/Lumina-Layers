@@ -703,12 +703,16 @@ export default function GradientCardExtractPanel() {
       ? t("mat_gradient_corner_complete")
       : `${t("mat_gradient_corner_hint_prefix")}: ${count}/4 · ${t("mat_gradient_corner_pick_order_hint")}`;
 
+  const colorcheckerPending =
+    colorchecker_phase === "calibrating" ||
+    colorchecker_phase === "confirming";
   const canExtract =
     !!datasetFile &&
     !!whiteImageFile &&
     !!blackImageFile &&
     whiteCornerPoints.length === 4 &&
-    blackCornerPoints.length === 4;
+    blackCornerPoints.length === 4 &&
+    !colorcheckerPending;
 
   const estimatedRgb = isRgbTriplet(materialSummary?.estimated_rgb)
     ? materialSummary.estimated_rgb
@@ -1030,14 +1034,14 @@ export default function GradientCardExtractPanel() {
                     label={t("mat_gradient_colorchecker_white_btn")}
                     variant="secondary"
                     onClick={() => openColorcheckerDialog("white")}
-                    disabled={!whiteImageFile || colorchecker_phase === "calibrating"}
+                    disabled={!whiteImageFile || colorcheckerPending}
                     className="w-full"
                   />
                   <Button
                     label={t("mat_gradient_colorchecker_black_btn")}
                     variant="secondary"
                     onClick={() => openColorcheckerDialog("black")}
-                    disabled={!blackImageFile || colorchecker_phase === "calibrating"}
+                    disabled={!blackImageFile || colorcheckerPending}
                     className="w-full"
                   />
                 </div>

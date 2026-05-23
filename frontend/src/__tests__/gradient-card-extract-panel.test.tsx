@@ -80,6 +80,20 @@ beforeEach(() => {
     manualWhiteAnchor: null,
     manualBlackAnchor: null,
     savedMaterialSummary: null,
+    imageSource: "raw",
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    colorchecker_target: null,
+    calibratedPreviewUrl: null,
+    pendingColorcheckerFileId: null,
+    pendingColorcheckerFullWidth: null,
+    pendingColorcheckerFullHeight: null,
+    pendingColorcheckerPreviewWidth: null,
+    pendingColorcheckerPreviewHeight: null,
+    whiteColorcheckerFileId: null,
+    blackColorcheckerFileId: null,
+    originalWhitePreviewUrl: null,
+    colorcheckerSummary: null,
   });
 });
 
@@ -103,6 +117,40 @@ describe("GradientCardExtractPanel", () => {
       screen.getByRole("button", { name: /保存耗材档案|save material archive/i }),
     ).toBeDisabled();
   });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "disables Stage A compute while ColorChecker is %s",
+    (phase) => {
+      useSingleStageStore.setState({
+        datasetFile: new File(["zip"], "dataset.zip", { type: "application/zip" }),
+        whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+        blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+        whiteCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        blackCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        colorchecker_target: "white",
+        pendingColorcheckerFileId:
+          phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      render(<GradientCardExtractPanel />);
+
+      expect(
+        screen.getByRole("button", { name: /提取耗材|extract material/i }),
+      ).toBeDisabled();
+    },
+  );
 
   it("renders Stage A, saved material, warp previews, and warnings when results are available", () => {
     useSingleStageStore.setState({

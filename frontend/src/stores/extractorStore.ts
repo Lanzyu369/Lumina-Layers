@@ -866,6 +866,12 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       const state = get();
       const fileToExtract = state.imageFile;
       if (!fileToExtract || state.corner_points.length < 4) return;
+      if (
+        state.colorchecker_phase === "calibrating" ||
+        state.colorchecker_phase === "confirming"
+      ) {
+        return;
+      }
       const useColorcheckerFull =
         state.colorchecker_phase === "done" && state.calibratedFullFileId;
 

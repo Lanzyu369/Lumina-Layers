@@ -23,6 +23,7 @@ const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 describe("useSingleStageStore ColorChecker flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     useSingleStageStore.setState({
       colorchecker_enabled: false,
       colorchecker_phase: null,
@@ -152,4 +153,28 @@ describe("useSingleStageStore ColorChecker flow", () => {
       }),
     );
   });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "does not compute Stage A while ColorChecker is %s",
+    async (phase) => {
+      useSingleStageStore.setState({
+        datasetFile: new File([new Uint8Array([1])], "kit.zip", {
+          type: "application/zip",
+        }),
+        whiteImageFile: buildPngFile("white.png"),
+        blackImageFile: buildPngFile("black.png"),
+        whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+        blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        colorchecker_target: "white",
+        pendingColorcheckerFileId:
+          phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      await useSingleStageStore.getState().submitExtract();
+
+      expect(mockedExtractGradientCardStageA).not.toHaveBeenCalled();
+    },
+  );
 });

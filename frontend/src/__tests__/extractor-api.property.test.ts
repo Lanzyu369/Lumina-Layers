@@ -242,6 +242,27 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(calledParams.cornerPointsWidth).toBe(1600);
     expect(calledParams.cornerPointsHeight).toBe(1200);
   });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "does not submit while ColorChecker is %s",
+    async (phase) => {
+      const file = new File(["test-data"], "calibration.png", {
+        type: "image/png",
+      });
+
+      useExtractorStore.setState({
+        imageFile: file,
+        corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        calibratedFullFileId: phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      await useExtractorStore.getState().submitExtract();
+
+      expect(mockedExtractColors).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("Feature: extractor-calibration-tab, Property 11: confirm-palette 请求载荷与 Store 状态一致性", () => {
