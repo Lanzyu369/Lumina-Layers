@@ -29,7 +29,7 @@ class CalibrationResult:
     calibrated_image: np.ndarray
     preview_image: np.ndarray
     preview_overlay_image: np.ndarray
-    calibrated_png: bytes
+    calibrated_png: bytes | None
     preview_png: bytes
     preview_overlay_png: bytes
     report: dict[str, Any]
@@ -40,6 +40,8 @@ class CalibrationResult:
 
     @property
     def calibrated_image_data_url(self) -> str:
+        if self.calibrated_png is None:
+            raise ValueError("Calibrated PNG bytes were not generated.")
         return png_bytes_to_data_url(self.calibrated_png)
 
     @property
@@ -58,7 +60,11 @@ class CalibrationResult:
             "preview": target / f"{prefix}_preview.png",
             "preview_overlay": target / f"{prefix}_preview_overlay.png",
         }
-        paths["calibrated"].write_bytes(self.calibrated_png)
+        if self.calibrated_png is None:
+            if not cv2.imwrite(str(paths["calibrated"]), self.calibrated_image):
+                raise ValueError("Failed to save calibrated image.")
+        else:
+            paths["calibrated"].write_bytes(self.calibrated_png)
         paths["preview"].write_bytes(self.preview_png)
         paths["preview_overlay"].write_bytes(self.preview_overlay_png)
         return paths
@@ -84,6 +90,7 @@ def calibrate(
     patch_layout: Literal["4x6", "3x8"] = "4x6",
     auto_arrange: bool = True,
     exposure_anchor_target_srgb: int = EXPOSURE_ANCHOR_TARGET_SRGB,
+    encode_calibrated_png: bool = True,
 ) -> CalibrationResult:
     if method not in {"mean", "median"}:
         raise ValueError("method must be 'mean' or 'median'.")
@@ -130,7 +137,11 @@ def calibrate(
             blur_radius=float(blur_radius),
             target_white_point="D50",
         )
-        calibrated_png = encode_png_bytes(calibration.calibrated_image)
+        calibrated_png = (
+            encode_png_bytes(calibration.calibrated_image)
+            if encode_calibrated_png
+            else None
+        )
         preview_png = encode_png_bytes(calibration.preview_image)
         overlay_png = encode_png_bytes(calibration.preview_overlay_image)
         calibration.report.setdefault("reference_source", reference_source)
@@ -165,7 +176,11 @@ def calibrate(
         sampling_filter=sampling_filter,
         blur_radius=float(blur_radius),
     )
-    calibrated_png = encode_png_bytes(calibration.calibrated_image)
+    calibrated_png = (
+        encode_png_bytes(calibration.calibrated_image)
+        if encode_calibrated_png
+        else None
+    )
     preview_png = encode_png_bytes(calibration.preview_image)
     overlay_png = encode_png_bytes(calibration.preview_overlay_image)
     calibration.report.setdefault("reference_source", reference_source)

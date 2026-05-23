@@ -6,14 +6,22 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import uuid
 from typing import List, Tuple
 
+import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
 
+from api.colorchecker_artifacts import (
+    COLORCHECKER_FULL_PURPOSE,
+    cleanup_colorchecker_full_file,
+    load_colorchecker_full_rgb,
+    scale_corner_points,
+)
 from api.dependencies import get_file_registry, get_session_store
 from api.errors import to_http_exception
 from api.file_bridge import (
@@ -32,7 +40,15 @@ from api.schemas.extractor import (
 from api.schemas.responses import ExtractResponse, LutPreviewResolvedCell, ManualFixResponse
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
-from config import ColorSystem, LUTMetadata, PaletteEntry
+from config import (
+    COLORCHECKER_PREVIEW_JPEG_QUALITY,
+    COLORCHECKER_PREVIEW_MAX_EDGE,
+    COLORCHECKER_TEMP_TTL_SECONDS,
+    TEMP_DIR,
+    ColorSystem,
+    LUTMetadata,
+    PaletteEntry,
+)
 from core.extractor import (
     EIGHT_COLOR_FULL_TOTAL_PAGES,
     apply_auto_white_balance,
@@ -88,6 +104,58 @@ def _handle_core_error(e: Exception, context: str) -> None:
         },
     )
     raise to_http_exception(e, context)
+
+
+def _resize_bgr_for_colorchecker_preview(image_bgr: np.ndarray) -> np.ndarray:
+    """Return a display copy constrained by ColorChecker preview config.
+    按 ColorChecker 预览配置返回受限尺寸的显示图。
+    """
+    from core.colorchecker.image_io import image_to_uint8_display
+
+    display = image_to_uint8_display(image_bgr)
+    h, w = display.shape[:2]
+    max_edge = int(COLORCHECKER_PREVIEW_MAX_EDGE)
+    if max_edge <= 0 or max(h, w) <= max_edge:
+        return display
+    scale = max_edge / float(max(h, w))
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return cv2.resize(display, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def _encode_colorchecker_preview_jpeg(image_bgr: np.ndarray) -> tuple[bytes, int, int]:
+    """Encode a bounded ColorChecker preview JPEG.
+    编码受尺寸限制的 ColorChecker JPEG 预览。
+    """
+    from core.colorchecker.image_io import encode_jpeg_bytes
+
+    preview = _resize_bgr_for_colorchecker_preview(image_bgr)
+    h, w = preview.shape[:2]
+    return (
+        encode_jpeg_bytes(preview, quality=int(COLORCHECKER_PREVIEW_JPEG_QUALITY)),
+        int(w),
+        int(h),
+    )
+
+
+def _write_colorchecker_full_png(image_bgr: np.ndarray) -> str:
+    """Write a full-size ColorChecker calibration image directly to disk.
+    将完整 ColorChecker 校色图直接写入磁盘。
+    """
+    from core.colorchecker.image_io import image_to_uint8_display
+
+    fd, path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+    os.close(fd)
+    try:
+        if not cv2.imwrite(path, image_to_uint8_display(image_bgr)):
+            raise ValueError("Failed to write ColorChecker calibrated image.")
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def _image_to_png_bytes(img: object) -> bytes:
@@ -507,14 +575,19 @@ async def extractor_colorchecker_calibrate(
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
     patch_points: str | None = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
+    sample_radius: int = Form(12, description="Patch sampling radius in warped preview pixels"),
+    method: str = Form("mean", description="Patch sampling method: mean or median"),
+    calibration_mode: str = Form("matrix_3x3", description="Calibration model"),
+    gray_affine_mode: str = Form("auto", description="Neutral gray normalization mode"),
+    blur_radius: float = Form(0.0, description="Optional output blur sigma"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
-    """Compute CCM and return calibrated image + overlay preview.
+    """Compute CCM and return private full image id + preview images.
 
     Step 2 of the two-step ColorChecker calibration flow. Accepts the 4
     corners and (optionally user-adjusted) 24 patch sampling points,
-    computes the CCM, and returns the calibrated full image plus an overlay
-    preview showing the sampling results.
+    computes the CCM, stores the calibrated full image as a private temporary
+    file, and returns bounded previews for the browser.
     """
     from core.colorchecker_adapter import (
         ColorCheckerCalibrationError,
@@ -543,6 +616,8 @@ async def extractor_colorchecker_calibrate(
 
     cal_start = time.perf_counter()
     raw = await image.read()
+    full_png_path: str | None = None
+    full_file_id: str | None = None
     try:
         result = apply_colorchecker_calibration(
             raw,
@@ -551,26 +626,85 @@ async def extractor_colorchecker_calibrate(
             patch_layout=patch_layout,
             file_name=image.filename or "",
             mime_type=image.content_type or "application/octet-stream",
+            sample_radius=sample_radius,
+            method=method,
+            calibration_mode=calibration_mode,
+            gray_affine_mode=gray_affine_mode,
+            blur_radius=blur_radius,
         )
+        del raw
+
+        h, w = result.calibrated_image.shape[:2]
+        full_png_path = _write_colorchecker_full_png(result.calibrated_image)
+        full_file_id = registry.register_path(
+            f"colorchecker:{uuid.uuid4()}",
+            full_png_path,
+            "colorchecker_calibrated.png",
+            ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+            is_public=False,
+            purpose=COLORCHECKER_FULL_PURPOSE,
+        )
+        full_png_path = None
+
+        preview_bytes, preview_w, preview_h = _encode_colorchecker_preview_jpeg(
+            result.calibrated_image
+        )
+        overlay_bytes, _overlay_w, _overlay_h = _encode_colorchecker_preview_jpeg(
+            result.overlay_image
+        )
+        patch_points_out = result.patch_points
+        display_summary = result.display_summary
     except ColorCheckerUnavailableError as e:
+        if full_png_path is not None:
+            try:
+                os.remove(full_png_path)
+            except OSError:
+                pass
         raise HTTPException(status_code=500, detail=str(e))
     except ColorCheckerCalibrationError as e:
+        if full_png_path is not None:
+            try:
+                os.remove(full_png_path)
+            except OSError:
+                pass
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
+        if full_file_id:
+            registry.cleanup_file(full_file_id)
+        if full_png_path is not None:
+            try:
+                os.remove(full_png_path)
+            except OSError:
+                pass
+        raise
+    finally:
+        try:
+            del result
+        except UnboundLocalError:
+            pass
 
-    h, w = result.calibrated_image.shape[:2]
-
-    calibrated_id = registry.register_bytes(
-        str(uuid.uuid4()),
-        result.calibrated_png,
-        "colorchecker_calibrated.png",
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
-    overlay_id = registry.register_bytes(
-        str(uuid.uuid4()),
-        result.overlay_png,
-        "colorchecker_overlay.png",
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
+    preview_id: str | None = None
+    try:
+        preview_id = registry.register_bytes(
+            str(uuid.uuid4()),
+            preview_bytes,
+            "colorchecker_calibrated_preview.jpg",
+            ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        )
+        overlay_id = registry.register_bytes(
+            str(uuid.uuid4()),
+            overlay_bytes,
+            "colorchecker_overlay_preview.jpg",
+            ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        )
+    except Exception:
+        if full_file_id:
+            registry.cleanup_file(full_file_id)
+        if preview_id:
+            registry.cleanup_file(preview_id)
+        raise
+    finally:
+        del preview_bytes, overlay_bytes
 
     cal_ms = (time.perf_counter() - cal_start) * 1000.0
 
@@ -585,18 +719,31 @@ async def extractor_colorchecker_calibrate(
     )
 
     return {
-        "calibrated_url": f"/api/files/{calibrated_id}",
+        "calibrated_preview_url": f"/api/files/{preview_id}",
+        "calibrated_full_file_id": full_file_id,
         "overlay_url": f"/api/files/{overlay_id}",
-        "width": w,
-        "height": h,
-        "patch_points": result.patch_points,
-        "display_summary": result.display_summary,
+        "full_width": w,
+        "full_height": h,
+        "preview_width": preview_w,
+        "preview_height": preview_h,
+        "patch_points": patch_points_out,
+        "display_summary": display_summary,
     }
+
+
+@router.post("/colorchecker-release")
+async def extractor_colorchecker_release(
+    file_id: str = Form(..., description="Private ColorChecker full-image file id"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Release one private ColorChecker full-image artifact."""
+    released = cleanup_colorchecker_full_file(registry, file_id)
+    return {"status": "ok", "released": released}
 
 
 @router.post("/extract")
 async def extractor_extract(
-    image: UploadFile = File(..., description="Calibration board image"),
+    image: UploadFile | None = File(None, description="Calibration board image"),
     corner_points: str = Form(..., description="4 个角点坐标 JSON 数组 [[x,y],...]"),
     color_mode: str = Form("4-Color (RYBW)", description="标准颜色模式"),
     page: str = Form("Page 1", description="8-Color 页码"),
@@ -607,6 +754,18 @@ async def extractor_extract(
     distortion: float = Form(0.0, description="畸变校正"),
     vignette_correction: bool = Form(False, description="暗角校正"),
     auto_wb: bool = Form(False, description="Enable auto white balance"),
+    colorchecker_calibrated_file_id: str | None = Form(
+        None,
+        description="Private ColorChecker full-image id to use instead of uploaded image",
+    ),
+    corner_points_width: float | None = Form(
+        None,
+        description="Width of the coordinate space used by corner_points",
+    ),
+    corner_points_height: float | None = Form(
+        None,
+        description="Height of the coordinate space used by corner_points",
+    ),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> ExtractResponse:
@@ -615,24 +774,39 @@ async def extractor_extract(
     """
     # Parse corner_points from JSON string
     try:
-        points: List[List[int]] = json.loads(corner_points)
+        points_raw = json.loads(corner_points)
     except (json.JSONDecodeError, TypeError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
 
-    if len(points) != 4:
+    if not isinstance(points_raw, list) or len(points_raw) != 4:
         raise HTTPException(
             status_code=422,
-            detail=f"corner_points must contain exactly 4 points, got {len(points)}",
+            detail=f"corner_points must contain exactly 4 points, got {len(points_raw) if isinstance(points_raw, list) else 'non-list'}",
         )
+    points: List[List[int]] = [
+        [int(round(float(point[0]))), int(round(float(point[1])))]
+        for point in points_raw
+    ]
 
     requested_color_mode = LUTManager._canonicalize_legacy_color_mode(color_mode) or color_mode
     effective_color_mode = _normalize_6color_mode(requested_color_mode)
 
-    # Convert UploadFile to ndarray
-    try:
-        img_arr = await upload_to_ndarray(image)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    if colorchecker_calibrated_file_id:
+        img_arr = load_colorchecker_full_rgb(registry, colorchecker_calibrated_file_id)
+        points = scale_corner_points(
+            points,
+            source_width=corner_points_width,
+            source_height=corner_points_height,
+            target_width=int(img_arr.shape[1]),
+            target_height=int(img_arr.shape[0]),
+        )
+    else:
+        if image is None:
+            raise HTTPException(status_code=422, detail="image is required")
+        try:
+            img_arr = await upload_to_ndarray(image)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     # Call core extraction (field name mapping: distortion->barrel, vignette_correction->bright)
     extract_start = time.perf_counter()

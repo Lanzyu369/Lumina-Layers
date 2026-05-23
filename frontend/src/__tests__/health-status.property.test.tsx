@@ -36,6 +36,7 @@ vi.mock("../api/lut", () => ({
 }));
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
 }));

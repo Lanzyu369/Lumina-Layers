@@ -12,6 +12,7 @@ import type { ExtractResponse } from "../api/types";
 // ========== Mock API module ==========
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
   mergeEightColor: vi.fn(),

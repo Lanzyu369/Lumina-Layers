@@ -4,13 +4,18 @@ import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
   colorcheckerWarpPreview,
+  type ColorcheckerCalibrateOptions,
   type ColorcheckerDisplaySummary,
   type ColorcheckerPoint,
 } from "../api/extractor";
 import { useI18n } from "../i18n/context";
+import { tRuntime } from "../i18n/runtime";
 import { useExtractorStore } from "../stores/extractorStore";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
+import Checkbox from "./ui/Checkbox";
+import Dropdown from "./ui/Dropdown";
+import Slider from "./ui/Slider";
 import { StatusBanner, cx } from "./ui/panelPrimitives";
 
 type CornerPoint = [number, number];
@@ -22,8 +27,15 @@ export interface ColorcheckerConfirmDialogProps {
   calibratedPreviewUrl: string | null;
   calibrationSummary?: ColorcheckerDisplaySummary | null;
   receiveCalibrated: (
-    imageUrl: string,
+    previewUrl: string,
+    fullFileId: string,
     summary?: ColorcheckerDisplaySummary | null,
+    dimensions?: {
+      fullWidth: number;
+      fullHeight: number;
+      previewWidth: number;
+      previewHeight: number;
+    },
   ) => void;
   confirmCalibrated: () => void;
   rejectCalibrated: () => void;
@@ -32,6 +44,29 @@ export interface ColorcheckerConfirmDialogProps {
 
 const PATCH_LAYOUT = "4x6";
 const CORNER_LABELS = ["TL", "TR", "BR", "BL"];
+const LOCAL_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
+
+type CalibrationMode = NonNullable<ColorcheckerCalibrateOptions["calibrationMode"]>;
+type SamplingMethod = NonNullable<ColorcheckerCalibrateOptions["method"]>;
+type GrayAffineMode = NonNullable<ColorcheckerCalibrateOptions["grayAffineMode"]>;
+
+const CALIBRATION_MODE_OPTIONS: Array<{ labelKey: string; value: CalibrationMode }> = [
+  { labelKey: "ext_cc_algorithm_matrix_3x3", value: "matrix_3x3" },
+  { labelKey: "ext_cc_algorithm_matrix_3x4", value: "matrix_3x4" },
+  { labelKey: "ext_cc_algorithm_root_polynomial", value: "root_polynomial" },
+  { labelKey: "ext_cc_algorithm_auto", value: "auto" },
+];
+
+const SAMPLING_METHOD_OPTIONS: Array<{ labelKey: string; value: SamplingMethod }> = [
+  { labelKey: "ext_cc_sampling_mean", value: "mean" },
+  { labelKey: "ext_cc_sampling_median", value: "median" },
+];
+
+const GRAY_AFFINE_OPTIONS: Array<{ labelKey: string; value: GrayAffineMode }> = [
+  { labelKey: "ext_cc_gray_affine_auto", value: "auto" },
+  { labelKey: "ext_cc_gray_affine_enabled", value: "enabled" },
+  { labelKey: "ext_cc_gray_affine_fallback", value: "fallback" },
+];
 
 function toCornerTuples(points: ColorcheckerPoint[]): CornerPoint[] {
   return points.map((point) => [point.x, point.y]);
@@ -41,6 +76,63 @@ function formatMetric(value: number | null | undefined, digits = 2) {
   return typeof value === "number" && Number.isFinite(value)
     ? value.toFixed(digits)
     : "-";
+}
+
+function optionLabel(
+  options: Array<{ labelKey: string; value: string }>,
+  value: string | null | undefined,
+  t: (key: string) => string,
+) {
+  return t(options.find((option) => option.value === value)?.labelKey ?? "ext_cc_unknown_value");
+}
+
+function localizeColorcheckerWarning(warning: string) {
+  const fitMatch = /^fit (mean|median|P95|max) ΔE00 ([0-9.]+) exceeds suggested ([0-9.]+) threshold\.$/.exec(warning);
+  if (fitMatch) {
+    const metricKeys = {
+      mean: "ext_cc_metric_mean",
+      median: "ext_cc_metric_median",
+      P95: "ext_cc_metric_p95",
+      max: "ext_cc_metric_worst",
+    } as const;
+    const metricKey = metricKeys[fitMatch[1] as keyof typeof metricKeys];
+    return tRuntime("ext_cc_warning_fit_metric", {
+      metric: tRuntime(metricKey),
+      value: fitMatch[2],
+      threshold: fitMatch[3],
+    });
+  }
+  const patchMatch = /^Patch validity risk: ([0-9]+)\/([0-9]+) patches were excluded from fitting(?: \((.*?)\))?\. The PNG was generated from the remaining patches only; check patch placement, orientation, sample radius, and (.*?) before trusting the result\.$/.exec(warning);
+  if (patchMatch) {
+    return tRuntime("ext_cc_warning_patch_validity", {
+      invalid: patchMatch[1],
+      total: patchMatch[2],
+    });
+  }
+  const negativeMatch = /^Corrected image negative channel ratio is ([0-9.]+%)\.$/.exec(warning);
+  if (negativeMatch) {
+    return tRuntime("ext_cc_warning_negative_ratio", { value: negativeMatch[1] });
+  }
+  const clippingMatch = /^Corrected image gamut clipping ratio is ([0-9.]+%)\.$/.exec(warning);
+  if (clippingMatch) {
+    return tRuntime("ext_cc_warning_clipping_ratio", { value: clippingMatch[1] });
+  }
+  if (warning === "Neutral gray L* values are not monotonic.") {
+    return tRuntime("ext_cc_warning_gray_l_not_monotonic");
+  }
+  if (warning === "Neutral gray |a*| exceeds suggested 1.5 threshold.") {
+    return tRuntime("ext_cc_warning_gray_a_threshold");
+  }
+  if (warning === "Neutral gray |b*| exceeds suggested 1.5 threshold.") {
+    return tRuntime("ext_cc_warning_gray_b_threshold");
+  }
+  if (warning.includes("exposure-scale drift")) {
+    return tRuntime("ext_cc_warning_exposure_drift");
+  }
+  if (warning.includes("affine bias")) {
+    return tRuntime("ext_cc_warning_affine_bias");
+  }
+  return tRuntime("ext_cc_warning_generic");
 }
 
 function nearestCornerIndex(points: CornerPoint[], target: CornerPoint) {
@@ -178,6 +270,84 @@ function CalibrationMetrics({
   );
 }
 
+function CalibrationReferenceInfo({
+  summary,
+}: {
+  summary: ColorcheckerDisplaySummary | null;
+}) {
+  const { t } = useI18n();
+  const reference = summary?.reference;
+  const settings = summary?.settings;
+  const sourceName = reference?.sourceName || t("ext_cc_reference_builtin");
+  const selectedModel = settings?.calibrationMode || "matrix_3x3";
+  return (
+    <div className="grid gap-2 text-xs sm:grid-cols-2">
+      <div
+        className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+        style={{ background: "var(--surface-panel)" }}
+      >
+        <div className="font-medium text-slate-500 dark:text-slate-400">
+          {t("ext_cc_reference_label")}
+        </div>
+        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+          {sourceName}
+        </div>
+        <div className="mt-1 text-slate-500 dark:text-slate-400">
+          {tRuntime("ext_cc_reference_meta", {
+            count: String(reference?.patchCount ?? 24),
+            whitePoint: String(reference?.labWhitePoint ?? "D50"),
+          })}
+        </div>
+      </div>
+      <div
+        className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+        style={{ background: "var(--surface-panel)" }}
+      >
+        <div className="font-medium text-slate-500 dark:text-slate-400">
+          {t("ext_cc_algorithm_label")}
+        </div>
+        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+          {optionLabel(CALIBRATION_MODE_OPTIONS, selectedModel, t)}
+        </div>
+        <div className="mt-1 text-slate-500 dark:text-slate-400">
+          {tRuntime("ext_cc_algorithm_meta", {
+            method: optionLabel(SAMPLING_METHOD_OPTIONS, settings?.method ?? "mean", t),
+            gray: optionLabel(GRAY_AFFINE_OPTIONS, settings?.grayAffineMode ?? "auto", t),
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColorcheckerWarningCards({
+  warnings,
+}: {
+  warnings: string[] | undefined;
+}) {
+  const { t } = useI18n();
+  if (!warnings?.length) {
+    return (
+      <StatusBanner tone="success">
+        {t("ext_cc_result_ready")}
+      </StatusBanner>
+    );
+  }
+  return (
+    <div className="grid gap-2" data-testid="colorchecker-warning-cards">
+      {warnings.map((warning, index) => (
+        <StatusBanner
+          key={`${warning}-${index}`}
+          tone="warning"
+          title={t("ext_cc_warning_title")}
+        >
+          {localizeColorcheckerWarning(warning)}
+        </StatusBanner>
+      ))}
+    </div>
+  );
+}
+
 export function ColorcheckerConfirmDialogInner({
   phase,
   imageFile,
@@ -209,6 +379,12 @@ export function ColorcheckerConfirmDialogInner({
   const [calibrating, setCalibrating] = useState(false);
   const [sliderPos, setSliderPos] = useState(50);
   const [localSummary, setLocalSummary] = useState<ColorcheckerDisplaySummary | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>("matrix_3x3");
+  const [samplingMethod, setSamplingMethod] = useState<SamplingMethod>("mean");
+  const [grayAffineMode, setGrayAffineMode] = useState<GrayAffineMode>("auto");
+  const [sampleRadius, setSampleRadius] = useState(12);
+  const [blurRadius, setBlurRadius] = useState(0);
 
   const imageRef = useRef<HTMLImageElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -221,6 +397,10 @@ export function ColorcheckerConfirmDialogInner({
 
   useEffect(() => {
     if (!open || !imageFile || originalPreviewUrl) {
+      setLocalPreviewUrl(null);
+      return;
+    }
+    if (imageFile.size > LOCAL_PREVIEW_MAX_BYTES) {
       setLocalPreviewUrl(null);
       return;
     }
@@ -354,11 +534,30 @@ export function ColorcheckerConfirmDialogInner({
     setCalibrating(true);
     setErrorMessage(null);
     try {
-      const result = await colorcheckerCalibrate(imageFile, corners, patchPoints, PATCH_LAYOUT);
-      const calibratedUrl = normalizeResourceUrl(result.calibrated_url) ?? result.calibrated_url;
+      const options: ColorcheckerCalibrateOptions | null = advancedOpen
+        ? {
+            calibrationMode,
+            method: samplingMethod,
+            grayAffineMode,
+            sampleRadius,
+            blurRadius,
+          }
+        : null;
+      const result = await colorcheckerCalibrate(imageFile, corners, patchPoints, PATCH_LAYOUT, options);
+      const calibratedUrl = normalizeResourceUrl(result.calibrated_preview_url) ?? result.calibrated_preview_url;
       setOverlayPreviewUrl(normalizeResourceUrl(result.overlay_url));
       setLocalSummary(result.display_summary);
-      receiveCalibrated(calibratedUrl, result.display_summary);
+      receiveCalibrated(
+        calibratedUrl,
+        result.calibrated_full_file_id,
+        result.display_summary,
+        {
+          fullWidth: result.full_width,
+          fullHeight: result.full_height,
+          previewWidth: result.preview_width,
+          previewHeight: result.preview_height,
+        },
+      );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("ext_cc_calibrate_failed"));
     } finally {
@@ -526,6 +725,62 @@ export function ColorcheckerConfirmDialogInner({
                 </div>
               </div>
 
+              <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
+                <Checkbox
+                  label={t("ext_cc_advanced_toggle")}
+                  tooltip={t("ext_cc_advanced_hint")}
+                  checked={advancedOpen}
+                  onChange={setAdvancedOpen}
+                />
+                {advancedOpen && (
+                  <div className="mt-4 grid gap-3">
+                    <Dropdown
+                      label={t("ext_cc_algorithm_label")}
+                      value={calibrationMode}
+                      options={CALIBRATION_MODE_OPTIONS.map((option) => ({
+                        label: t(option.labelKey),
+                        value: option.value,
+                      }))}
+                      onChange={(value) => setCalibrationMode(value as CalibrationMode)}
+                    />
+                    <Dropdown
+                      label={t("ext_cc_sampling_method_label")}
+                      value={samplingMethod}
+                      options={SAMPLING_METHOD_OPTIONS.map((option) => ({
+                        label: t(option.labelKey),
+                        value: option.value,
+                      }))}
+                      onChange={(value) => setSamplingMethod(value as SamplingMethod)}
+                    />
+                    <Dropdown
+                      label={t("ext_cc_gray_affine_label")}
+                      value={grayAffineMode}
+                      options={GRAY_AFFINE_OPTIONS.map((option) => ({
+                        label: t(option.labelKey),
+                        value: option.value,
+                      }))}
+                      onChange={(value) => setGrayAffineMode(value as GrayAffineMode)}
+                    />
+                    <Slider
+                      label={t("ext_cc_sample_radius_label")}
+                      value={sampleRadius}
+                      min={2}
+                      max={64}
+                      step={1}
+                      onChange={setSampleRadius}
+                    />
+                    <Slider
+                      label={t("ext_cc_blur_radius_label")}
+                      value={blurRadius}
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      onChange={setBlurRadius}
+                    />
+                  </div>
+                )}
+              </div>
+
               {warpPreviewUrl && (
                 <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
@@ -562,51 +817,65 @@ export function ColorcheckerConfirmDialogInner({
 
         {isConfirming && (
           <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-            <div
-              ref={compareRef}
-              className="relative min-h-80 cursor-col-resize select-none overflow-hidden bg-slate-950/5 dark:bg-slate-950/50"
-              onPointerDown={handleCompareDown}
-            >
-              {originalPreviewUrl && (
-                <img
-                  src={originalPreviewUrl}
-                  alt={t("ext_cc_compare_original")}
-                  className="absolute inset-0 h-full w-full object-contain"
-                  draggable={false}
-                />
-              )}
-              {calibratedPreviewUrl && (
-                <div
-                  className="absolute inset-0 overflow-hidden"
-                  style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}
-                >
+            <div className="grid gap-3 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.45fr)]">
+              <div
+                ref={compareRef}
+                className="relative min-h-[22rem] cursor-col-resize select-none overflow-hidden rounded-[24px] border border-slate-200/80 bg-slate-950/5 dark:border-slate-700/80 dark:bg-slate-950/50"
+                onPointerDown={handleCompareDown}
+              >
+                {originalPreviewUrl && (
                   <img
-                    src={calibratedPreviewUrl}
-                    alt={t("ext_cc_compare_calibrated")}
+                    src={originalPreviewUrl}
+                    alt={t("ext_cc_compare_original")}
                     className="absolute inset-0 h-full w-full object-contain"
                     draggable={false}
                   />
-                </div>
-              )}
-              <div
-                className="absolute bottom-0 top-0 z-10 w-0.5 shadow-lg"
-                style={{ left: `${sliderPos}%`, transform: "translateX(-50%)", background: "var(--surface-overlay)" }}
-              >
-                <div className="absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-xs font-bold shadow" style={{ background: "var(--surface-panel)" }}>
-                  ||
+                )}
+                {calibratedPreviewUrl && (
+                  <div
+                    className="absolute inset-0 overflow-hidden"
+                    style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}
+                  >
+                    <img
+                      src={calibratedPreviewUrl}
+                      alt={t("ext_cc_compare_calibrated")}
+                      className="absolute inset-0 h-full w-full object-contain"
+                      draggable={false}
+                    />
+                  </div>
+                )}
+                <div
+                  className="absolute bottom-0 top-0 z-10 w-0.5 shadow-lg"
+                  style={{ left: `${sliderPos}%`, transform: "translateX(-50%)", background: "var(--surface-overlay)" }}
+                >
+                  <div className="absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-xs font-bold shadow" style={{ background: "var(--surface-panel)" }}>
+                    ||
+                  </div>
                 </div>
               </div>
-              {overlayPreviewUrl && (
-                <img
-                  src={overlayPreviewUrl}
-                  alt={t("ext_cc_step_review_title")}
-                  className="absolute bottom-3 right-3 max-h-32 max-w-[35%] rounded-2xl border border-slate-200/80 object-contain shadow-lg dark:border-slate-700/80"
-                  draggable={false}
-                />
-              )}
+              <div className="flex min-h-[16rem] flex-col gap-2 rounded-[24px] border border-slate-200/80 p-3 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  {t("ext_cc_overlay_title")}
+                </h3>
+                <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-2xl bg-slate-950/5 dark:bg-slate-950/40">
+                  {overlayPreviewUrl ? (
+                    <img
+                      src={overlayPreviewUrl}
+                      alt={t("ext_cc_step_review_title")}
+                      className="max-h-[min(48vh,34rem)] w-full object-contain"
+                      draggable={false}
+                    />
+                  ) : (
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {t("ext_cc_no_overlay")}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="flex flex-col gap-3 border-t border-slate-200/80 p-4 dark:border-slate-700/80">
+              <CalibrationReferenceInfo summary={summary ?? null} />
               <CalibrationMetrics
                 summary={summary ?? null}
                 labels={{
@@ -624,15 +893,7 @@ export function ColorcheckerConfirmDialogInner({
                   noCurveLabel={t("ext_cc_no_curve")}
                   ariaLabel={t("ext_cc_luminance_curve")}
                 />
-                {summary?.warnings?.length ? (
-                  <StatusBanner tone="warning">
-                    {summary.warnings.slice(0, 2).join(" ")}
-                  </StatusBanner>
-                ) : (
-                  <StatusBanner tone="success">
-                    {t("ext_cc_result_ready")}
-                  </StatusBanner>
-                )}
+                <ColorcheckerWarningCards warnings={summary?.warnings} />
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                 <Button

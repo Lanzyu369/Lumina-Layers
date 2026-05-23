@@ -9,6 +9,7 @@ import {
 } from "../api/extractor";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   generateMaterialRecipeSwatch: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   previewMaterialRecipe: vi.fn(),

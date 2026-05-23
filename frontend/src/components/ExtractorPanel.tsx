@@ -16,7 +16,6 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import HelpDot from "./ui/HelpDot";
-import { ColorcheckerConfirmDialogInner } from "./ColorcheckerConfirmDialog";
 import {
   cx,
   StatusBanner,
@@ -67,8 +66,6 @@ export default function ExtractorPanel() {
     colorchecker_enabled,
     colorchecker_phase,
     colorcheckerSummary,
-    originalPreviewUrl,
-    calibratedPreviewUrl,
     isLoading,
     error,
     lut_download_url,
@@ -97,10 +94,6 @@ export default function ExtractorPanel() {
     setVignetteCorrection,
     setAutoWb,
     setColorcheckerEnabled,
-    receiveCalibratedFromCC,
-    confirmCalibrated,
-    rejectCalibrated,
-    closeColorcheckerDialog,
     setManufacturer,
     setType,
     submitExtract,
@@ -240,7 +233,7 @@ export default function ExtractorPanel() {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="extractor-panel"
-      className={`${panelSurfaceClass} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
+      className={`${panelSurfaceClass} h-auto max-h-[46dvh] w-full overflow-y-auto xl:h-full xl:max-h-none xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
     >
       <div className="flex flex-col gap-2">
         <section className={`${sectionCardClass} flex flex-col gap-2`}>
@@ -538,17 +531,11 @@ export default function ExtractorPanel() {
                     )}
                   </div>
                 </div>
-                <ColorcheckerConfirmDialogInner
-                  phase={colorchecker_phase ?? "calibrating"}
-                  imageFile={imageFile}
-                  originalPreviewUrl={originalPreviewUrl}
-                  calibratedPreviewUrl={calibratedPreviewUrl}
-                  calibrationSummary={colorcheckerSummary}
-                  receiveCalibrated={receiveCalibratedFromCC}
-                  confirmCalibrated={confirmCalibrated}
-                  rejectCalibrated={rejectCalibrated}
-                  closeDialog={closeColorcheckerDialog}
-                />
+                <StatusBanner tone={colorchecker_phase === "done" ? "success" : "info"}>
+                  {colorchecker_phase === "done"
+                    ? t("ext_cc_calibrated_badge")
+                    : t("ext_cc_main_area_hint")}
+                </StatusBanner>
                 {colorcheckerSummary && (
                   <div className="grid gap-2 sm:grid-cols-4">
                     {[

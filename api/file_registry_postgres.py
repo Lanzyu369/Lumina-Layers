@@ -38,6 +38,8 @@ _FILES = Table(
     Column("filename", Text, nullable=False),
     Column("lifecycle", Text, nullable=False),
     Column("delete_on_cleanup", Boolean, nullable=False),
+    Column("is_public", Boolean, nullable=False),
+    Column("purpose", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=True),
     Column("ttl_seconds", Integer, nullable=True),
@@ -85,6 +87,8 @@ class PostgresFileRegistryBackend(FileRegistry):
         path: str,
         filename: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
+        is_public: bool = True,
+        purpose: Optional[str] = None,
     ) -> str:
         """注册磁盘文件，返回 file_id。"""
         file_id = uuid.uuid4()
@@ -110,6 +114,8 @@ class PostgresFileRegistryBackend(FileRegistry):
                     filename=filename,
                     lifecycle=lifecycle,
                     delete_on_cleanup=delete_on_cleanup,
+                    is_public=bool(is_public),
+                    purpose=purpose,
                     created_at=now,
                     expires_at=expires_at,
                     ttl_seconds=ttl_seconds,
@@ -208,6 +214,12 @@ class PostgresFileRegistryBackend(FileRegistry):
             file_ids = [str(row._mapping["id"]) for row in rows]
         return self._cleanup_entries(file_ids, expire_failed_session_bound=True)
 
+    def cleanup_file(self, file_id: str) -> int:
+        """Clean up one registered file and delete it from disk.
+        清理单个注册文件并删除磁盘文件。
+        """
+        return self._cleanup_entries([file_id], expire_failed_session_bound=True)
+
     def clear_all(self) -> int:
         """清除所有注册文件并删除磁盘文件，返回清理数量。"""
         with self._engine.begin() as conn:
@@ -294,6 +306,8 @@ class PostgresFileRegistryBackend(FileRegistry):
             "ttl_seconds": mapping["ttl_seconds"],
             "lifecycle": str(mapping["lifecycle"]),
             "delete_on_cleanup": bool(mapping["delete_on_cleanup"]),
+            "is_public": bool(mapping["is_public"]),
+            "purpose": mapping["purpose"],
         }
 
     def _session_exists(self, conn: Any, session_uuid: uuid.UUID) -> bool:

@@ -2722,6 +2722,146 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "重新校色",
     en: "Retry",
   },
+  ext_cc_main_area_hint: {
+    zh: "24 色卡校色会在右侧图像区展开，完成后再继续选择 LUT 色卡四角。",
+    en: "The 24-patch correction tool opens in the image area. Continue picking LUT corners after correction.",
+  },
+  ext_cc_advanced_toggle: {
+    zh: "高级选项",
+    en: "Advanced Options",
+  },
+  ext_cc_advanced_hint: {
+    zh: "默认使用 3x3 矩阵校色。只有需要对比算法、采样方式或灰阶归一化时再打开。",
+    en: "The default uses a 3x3 matrix. Enable this only when comparing algorithms, sampling, or gray-axis normalization.",
+  },
+  ext_cc_algorithm_label: {
+    zh: "校色算法",
+    en: "Calibration Algorithm",
+  },
+  ext_cc_algorithm_matrix_3x3: {
+    zh: "3x3 矩阵（默认）",
+    en: "3x3 Matrix (Default)",
+  },
+  ext_cc_algorithm_matrix_3x4: {
+    zh: "3x4 仿射矩阵",
+    en: "3x4 Affine Matrix",
+  },
+  ext_cc_algorithm_root_polynomial: {
+    zh: "二阶 Root-Polynomial",
+    en: "Degree-2 Root-Polynomial",
+  },
+  ext_cc_algorithm_auto: {
+    zh: "自动选择",
+    en: "Auto",
+  },
+  ext_cc_sampling_method_label: {
+    zh: "采样方式",
+    en: "Sampling Method",
+  },
+  ext_cc_sampling_mean: {
+    zh: "平均值",
+    en: "Mean",
+  },
+  ext_cc_sampling_median: {
+    zh: "中位数",
+    en: "Median",
+  },
+  ext_cc_gray_affine_label: {
+    zh: "灰阶归一化",
+    en: "Gray Normalization",
+  },
+  ext_cc_gray_affine_auto: {
+    zh: "自动",
+    en: "Auto",
+  },
+  ext_cc_gray_affine_enabled: {
+    zh: "强制启用",
+    en: "Force On",
+  },
+  ext_cc_gray_affine_fallback: {
+    zh: "回退模式",
+    en: "Fallback",
+  },
+  ext_cc_sample_radius_label: {
+    zh: "采样半径",
+    en: "Sample Radius",
+  },
+  ext_cc_blur_radius_label: {
+    zh: "输出柔化",
+    en: "Output Blur",
+  },
+  ext_cc_reference_label: {
+    zh: "当前基准",
+    en: "Reference",
+  },
+  ext_cc_reference_builtin: {
+    zh: "内置 24 色卡基准",
+    en: "Built-in 24-patch reference",
+  },
+  ext_cc_reference_meta: {
+    zh: "{count} 个色块 · Lab 白点 {whitePoint}",
+    en: "{count} patches · Lab white point {whitePoint}",
+  },
+  ext_cc_algorithm_meta: {
+    zh: "{method} 采样 · 灰阶 {gray}",
+    en: "{method} sampling · Gray {gray}",
+  },
+  ext_cc_unknown_value: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  ext_cc_overlay_title: {
+    zh: "色卡检查图",
+    en: "Patch Check View",
+  },
+  ext_cc_no_overlay: {
+    zh: "暂无检查图",
+    en: "No check view",
+  },
+  ext_cc_warning_title: {
+    zh: "校色质量提示",
+    en: "Correction Quality Notice",
+  },
+  ext_cc_warning_fit_metric: {
+    zh: "{metric} ΔE00 为 {value}，高于建议值 {threshold}。建议检查色卡角点、采样点和光照。",
+    en: "{metric} ΔE00 is {value}, above the suggested {threshold}. Check chart corners, sample points, and lighting.",
+  },
+  ext_cc_warning_patch_validity: {
+    zh: "{total} 个色块中有 {invalid} 个未参与拟合。请检查采样点是否落在色块中心，并适当调小采样半径。",
+    en: "{invalid} of {total} patches were excluded from fitting. Check that sample points are centered and reduce the sample radius if needed.",
+  },
+  ext_cc_warning_gray_l_not_monotonic: {
+    zh: "中性灰亮度顺序不稳定。请检查灰阶色块是否被反光、阴影或错误采样影响。",
+    en: "Neutral gray brightness is not monotonic. Check for glare, shadow, or misplaced gray samples.",
+  },
+  ext_cc_warning_gray_a_threshold: {
+    zh: "中性灰 a* 偏色偏高。建议检查白平衡、光源和灰阶采样点。",
+    en: "Neutral gray a* cast is high. Check white balance, lighting, and gray sample points.",
+  },
+  ext_cc_warning_gray_b_threshold: {
+    zh: "中性灰 b* 偏色偏高。建议检查白平衡、光源和灰阶采样点。",
+    en: "Neutral gray b* cast is high. Check white balance, lighting, and gray sample points.",
+  },
+  ext_cc_warning_negative_ratio: {
+    zh: "校色后有 {value} 的像素出现负通道裁剪。建议改用默认算法或降低高级校正强度。",
+    en: "{value} of corrected pixels have negative-channel clipping. Prefer the default algorithm or reduce advanced correction strength.",
+  },
+  ext_cc_warning_clipping_ratio: {
+    zh: "校色后有 {value} 的像素超出可显示色域。建议检查曝光，或改用更保守的算法。",
+    en: "{value} of corrected pixels exceed the display gamut. Check exposure or use a more conservative algorithm.",
+  },
+  ext_cc_warning_exposure_drift: {
+    zh: "该算法对曝光变化较敏感，结果可能随亮度变化而偏色。建议优先使用默认 3x3 矩阵。",
+    en: "This algorithm is sensitive to exposure changes. Prefer the default 3x3 matrix unless you are comparing expert settings.",
+  },
+  ext_cc_warning_affine_bias: {
+    zh: "仿射算法的偏置项较大，暗部颜色可能漂移。建议检查黑色块采样或改回 3x3 矩阵。",
+    en: "The affine bias is high, so dark colors may drift. Check black-patch sampling or switch back to the 3x3 matrix.",
+  },
+  ext_cc_warning_generic: {
+    zh: "校色结果存在质量风险。请检查角点、采样点、曝光和色卡摆放。",
+    en: "The correction result has a quality risk. Check corners, samples, exposure, and chart placement.",
+  },
   ext_extract_btn_label: {
     zh: "提取颜色",
     en: "Extract Colors",
@@ -5701,8 +5841,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Calibrate Black Image",
   },
   mat_gradient_colorchecker_restored_source: {
-    zh: "已确认使用校色图，Stage A 将按 restored 来源记录，不会静默当作 raw 原图。",
-    en: "Accepted calibrated image. Stage A will record it as restored, not silently treat it as raw.",
+    zh: "已使用校色后的图片。后续提取会标记为校色来源，避免和原始拍摄图混用。",
+    en: "Using the corrected image. Later extraction will keep it separate from original captures.",
   },
   mat_gradient_view_details_btn: {
     zh: "查看详细信息",

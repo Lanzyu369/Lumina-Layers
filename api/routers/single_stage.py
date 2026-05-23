@@ -12,6 +12,7 @@ import anyio
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
@@ -321,11 +322,35 @@ async def extractor_fit_stage_a(
 
 @router.post("/extract-gradient-card-stage-a")
 async def extractor_extract_gradient_card_stage_a(
-    white_image: UploadFile = File(..., description="White-substrate gradient card image"),
-    black_image: UploadFile = File(..., description="Black-substrate gradient card image"),
+    white_image: UploadFile | None = File(None, description="White-substrate gradient card image"),
+    black_image: UploadFile | None = File(None, description="Black-substrate gradient card image"),
     dataset_zip: UploadFile = File(..., description="Generated gradient card kit ZIP"),
     white_corner_points: str = Form(..., description="White image corners JSON [[x,y], ...]"),
     black_corner_points: str = Form(..., description="Black image corners JSON [[x,y], ...]"),
+    white_colorchecker_file_id: str | None = Form(
+        None,
+        description="Private ColorChecker full-image id for the white capture",
+    ),
+    black_colorchecker_file_id: str | None = Form(
+        None,
+        description="Private ColorChecker full-image id for the black capture",
+    ),
+    white_corner_points_width: float | None = Form(
+        None,
+        description="Width of the white corner coordinate space",
+    ),
+    white_corner_points_height: float | None = Form(
+        None,
+        description="Height of the white corner coordinate space",
+    ),
+    black_corner_points_width: float | None = Form(
+        None,
+        description="Width of the black corner coordinate space",
+    ),
+    black_corner_points_height: float | None = Form(
+        None,
+        description="Height of the black corner coordinate space",
+    ),
     manual_white_orientation: str | None = Form(
         None,
         description=(
@@ -358,11 +383,40 @@ async def extractor_extract_gradient_card_stage_a(
     manual_white = _normalize_manual_orientation(manual_white_orientation)
     manual_black = _normalize_manual_orientation(manual_black_orientation)
     validated_image_source = _normalize_image_source(image_source)
+    if (white_colorchecker_file_id or black_colorchecker_file_id) and validated_image_source != "restored":
+        raise HTTPException(
+            status_code=422,
+            detail="ColorChecker calibrated images require image_source='restored'",
+        )
     zip_path: str | None = None
     session_id: str | None = None
     try:
-        white_rgb = await upload_to_ndarray(white_image)
-        black_rgb = await upload_to_ndarray(black_image)
+        if white_colorchecker_file_id:
+            white_rgb = load_colorchecker_full_rgb(registry, white_colorchecker_file_id)
+            white_points = scale_corner_points(
+                white_points,
+                source_width=white_corner_points_width,
+                source_height=white_corner_points_height,
+                target_width=int(white_rgb.shape[1]),
+                target_height=int(white_rgb.shape[0]),
+            )
+        else:
+            if white_image is None:
+                raise HTTPException(status_code=422, detail="white_image is required")
+            white_rgb = await upload_to_ndarray(white_image)
+        if black_colorchecker_file_id:
+            black_rgb = load_colorchecker_full_rgb(registry, black_colorchecker_file_id)
+            black_points = scale_corner_points(
+                black_points,
+                source_width=black_corner_points_width,
+                source_height=black_corner_points_height,
+                target_width=int(black_rgb.shape[1]),
+                target_height=int(black_rgb.shape[0]),
+            )
+        else:
+            if black_image is None:
+                raise HTTPException(status_code=422, detail="black_image is required")
+            black_rgb = await upload_to_ndarray(black_image)
 
         zip_path = await upload_to_tempfile(dataset_zip, suffix=".zip")
         result = extract_stage_a_material_from_gradient_cards(

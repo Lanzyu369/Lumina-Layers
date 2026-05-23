@@ -93,7 +93,7 @@ class CalibrationResult:
 
     Args:
         calibrated_image: Calibrated BGR image array.
-        calibrated_png: PNG bytes for the calibrated image.
+        overlay_image: Warped sampling overlay image.
         overlay_png: PNG bytes for the warped sampling overlay.
         patch_points: Sampling points used in the warped preview.
         report: Full core report for backend diagnostics.
@@ -103,7 +103,7 @@ class CalibrationResult:
     """
 
     calibrated_image: np.ndarray
-    calibrated_png: bytes
+    overlay_image: np.ndarray
     overlay_png: bytes
     patch_points: list[PointDict]
     report: dict[str, Any]
@@ -281,6 +281,16 @@ def apply_colorchecker_calibration(
     file_name: str = "",
     mime_type: str = "application/octet-stream",
     input_color: Literal["bgr", "rgb"] = "bgr",
+    sample_radius: int = 12,
+    method: Literal["mean", "median"] = "mean",
+    calibration_mode: Literal[
+        "matrix_3x3",
+        "matrix_3x4",
+        "root_polynomial",
+        "auto",
+    ] = "matrix_3x3",
+    gray_affine_mode: Literal["auto", "enabled", "fallback"] = "auto",
+    blur_radius: float = 0.0,
 ) -> CalibrationResult:
     """Compute ColorChecker calibration and apply it to the image.
 
@@ -294,6 +304,12 @@ def apply_colorchecker_calibration(
         file_name: Original filename when ``image`` is bytes.
         mime_type: MIME type when ``image`` is bytes.
         input_color: Channel order for ndarray inputs.
+        sample_radius: Half-size of the patch sampling window in pixels.
+        method: Patch sampling method, ``"mean"`` or ``"median"``.
+        calibration_mode: Color correction model to fit. The default is the
+            conservative 3x3 matrix used by the original integration.
+        gray_affine_mode: Neutral-gray exposure normalization mode.
+        blur_radius: Optional Gaussian blur sigma applied after correction.
 
     Returns:
         Calibrated image, overlay, sampling points, full report, and compact
@@ -323,6 +339,12 @@ def apply_colorchecker_calibration(
             mime_type=mime_type,
             input_color=input_color,
             patch_layout=_validate_patch_layout(patch_layout),
+            sample_radius=_validate_sample_radius(sample_radius),
+            method=_validate_method(method),
+            calibration_mode=_validate_calibration_mode(calibration_mode),
+            gray_affine_mode=_validate_gray_affine_mode(gray_affine_mode),
+            blur_radius=_validate_blur_radius(blur_radius),
+            encode_calibrated_png=False,
         )
     except (ValueError, TypeError, RuntimeError, KeyError, np.linalg.LinAlgError) as exc:
         raise ColorCheckerCalibrationError(
@@ -348,7 +370,7 @@ def apply_colorchecker_calibration(
 
     return CalibrationResult(
         calibrated_image=calibrated,
-        calibrated_png=result.calibrated_png,
+        overlay_image=result.preview_overlay_image,
         overlay_png=result.preview_overlay_png,
         patch_points=result.patch_points,
         report=result.report,
@@ -374,7 +396,9 @@ def build_display_summary(report: dict[str, Any]) -> dict[str, Any]:
         "deltaE00": delta,
         "worstPatch": worst_patch,
         "luminanceCurve": luminance_curve,
-        "warnings": list(report.get("warnings") or []),
+        "reference": _extract_reference_summary(report),
+        "settings": _extract_settings_summary(report),
+        "warnings": _extract_warnings(report),
     }
 
 
@@ -413,6 +437,59 @@ def _validate_patch_layout(patch_layout: str) -> Literal["4x6", "3x8"]:
             f"Unsupported patch_layout '{patch_layout}'."
         )
     return patch_layout  # type: ignore[return-value]
+
+
+def _validate_method(method: str) -> Literal["mean", "median"]:
+    if method not in {"mean", "median"}:
+        raise ColorCheckerCalibrationError(
+            f"Unsupported ColorChecker sampling method '{method}'."
+        )
+    return method  # type: ignore[return-value]
+
+
+def _validate_calibration_mode(
+    calibration_mode: str,
+) -> Literal["matrix_3x3", "matrix_3x4", "root_polynomial", "auto"]:
+    if calibration_mode not in {
+        "matrix_3x3",
+        "matrix_3x4",
+        "root_polynomial",
+        "auto",
+    }:
+        raise ColorCheckerCalibrationError(
+            f"Unsupported ColorChecker calibration_mode '{calibration_mode}'."
+        )
+    return calibration_mode  # type: ignore[return-value]
+
+
+def _validate_gray_affine_mode(
+    gray_affine_mode: str,
+) -> Literal["auto", "enabled", "fallback"]:
+    if gray_affine_mode not in {"auto", "enabled", "fallback"}:
+        raise ColorCheckerCalibrationError(
+            f"Unsupported ColorChecker gray_affine_mode '{gray_affine_mode}'."
+        )
+    return gray_affine_mode  # type: ignore[return-value]
+
+
+def _validate_sample_radius(sample_radius: int) -> int:
+    try:
+        value = int(sample_radius)
+    except (TypeError, ValueError) as exc:
+        raise ColorCheckerCalibrationError("sample_radius must be an integer.") from exc
+    if not 2 <= value <= 64:
+        raise ColorCheckerCalibrationError("sample_radius must be between 2 and 64.")
+    return value
+
+
+def _validate_blur_radius(blur_radius: float) -> float:
+    try:
+        value = float(blur_radius)
+    except (TypeError, ValueError) as exc:
+        raise ColorCheckerCalibrationError("blur_radius must be a number.") from exc
+    if not np.isfinite(value) or value < 0.0 or value > 10.0:
+        raise ColorCheckerCalibrationError("blur_radius must be between 0 and 10.")
+    return value
 
 
 def _to_point_dict(point: PointInput) -> PointDict:
@@ -514,6 +591,42 @@ def _extract_luminance_curve(luminance: dict[str, object]) -> list[dict[str, obj
             }
         )
     return curve
+
+
+def _extract_reference_summary(report: dict[str, Any]) -> dict[str, object | None]:
+    source = report.get("reference_source")
+    if not isinstance(source, dict):
+        return {
+            "sourceType": "built_in",
+            "sourceName": "core/colorchecker/data/desc.txt",
+            "serialNumber": None,
+            "patchCount": 24,
+            "labWhitePoint": "D50",
+        }
+    return {
+        "sourceType": source.get("source_type"),
+        "sourceName": source.get("source_name"),
+        "serialNumber": source.get("serial_number"),
+        "patchCount": source.get("patch_count"),
+        "labWhitePoint": source.get("lab_white_point"),
+    }
+
+
+def _extract_settings_summary(report: dict[str, Any]) -> dict[str, object | None]:
+    return {
+        "method": report.get("method"),
+        "calibrationMode": report.get("selected_model"),
+        "grayAffineMode": report.get("gray_affine_mode"),
+        "sampleRadius": report.get("sample_radius"),
+        "blurRadius": report.get("blur_radius"),
+    }
+
+
+def _extract_warnings(report: dict[str, Any]) -> list[str]:
+    warnings = report.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [str(item) for item in warnings if item is not None]
 
 
 def _optional_float(value: object) -> float | None:

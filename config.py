@@ -22,6 +22,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMP_DIR = os.path.join(OUTPUT_DIR, "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+# ColorChecker calibration artifacts.
+COLORCHECKER_PREVIEW_MAX_EDGE = 1600
+COLORCHECKER_PREVIEW_JPEG_QUALITY = 85
+COLORCHECKER_TEMP_TTL_SECONDS = 600
+
 MODELS_DIR = os.path.join(OUTPUT_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 

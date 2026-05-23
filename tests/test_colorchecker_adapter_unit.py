@@ -102,7 +102,7 @@ class TestApplyColorcheckerCalibration:
 
         fake_result = SimpleNamespace(
             calibrated_image=calibrated,
-            calibrated_png=b"png",
+            preview_overlay_image=np.zeros((8, 8, 3), dtype=np.uint8),
             preview_overlay_png=b"overlay",
             patch_points=[{"x": 1.0, "y": 2.0}] * 24,
             report={
@@ -138,19 +138,56 @@ class TestApplyColorcheckerCalibration:
                     ]
                 },
                 "warnings": ["notice"],
+                "reference_source": {
+                    "source_type": "built_in",
+                    "source_name": "大凡光学",
+                    "serial_number": None,
+                    "patch_count": 24,
+                    "lab_white_point": "D50",
+                },
+                "method": "median",
+                "selected_model": "root_polynomial",
+                "gray_affine_mode": "enabled",
+                "sample_radius": 9,
+                "blur_radius": 1.5,
             },
         )
-        fake_core = SimpleNamespace(calibrate=lambda *_args, **_kwargs: fake_result)
+        captured_kwargs: dict[str, object] = {}
+
+        def fake_calibrate(*_args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_result
+
+        fake_core = SimpleNamespace(calibrate=fake_calibrate)
         monkeypatch.setattr(adapter, "_import_core", lambda: fake_core)
 
-        result = apply_colorchecker_calibration(img, corners)
+        result = apply_colorchecker_calibration(
+            img,
+            corners,
+            sample_radius=9,
+            method="median",
+            calibration_mode="root_polynomial",
+            gray_affine_mode="enabled",
+            blur_radius=1.5,
+        )
 
         assert result.calibrated_image is calibrated
-        assert result.calibrated_png == b"png"
+        assert result.overlay_image.shape == (8, 8, 3)
         assert result.overlay_png == b"overlay"
+        assert captured_kwargs["encode_calibrated_png"] is False
+        assert captured_kwargs["sample_radius"] == 9
+        assert captured_kwargs["method"] == "median"
+        assert captured_kwargs["calibration_mode"] == "root_polynomial"
+        assert captured_kwargs["gray_affine_mode"] == "enabled"
+        assert captured_kwargs["blur_radius"] == 1.5
         assert result.display_summary["deltaE00"]["mean"] == 1.0
         assert result.display_summary["worstPatch"]["deltaE00"] == 3.4
         assert result.display_summary["luminanceCurve"][0]["grayPatch"] is True
+        assert result.display_summary["reference"]["sourceName"] == "大凡光学"
+        assert result.display_summary["reference"]["labWhitePoint"] == "D50"
+        assert result.display_summary["settings"]["method"] == "median"
+        assert result.display_summary["settings"]["calibrationMode"] == "root_polynomial"
+        assert result.display_summary["settings"]["grayAffineMode"] == "enabled"
 
     def test_calibrate_exception_wraps_as_calibration_error(
         self,

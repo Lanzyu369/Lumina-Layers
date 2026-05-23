@@ -12,6 +12,7 @@ import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   extractGradientCardStageA: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),

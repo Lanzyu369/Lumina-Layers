@@ -19,6 +19,7 @@ function tZh(key: string): string {
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   confirmPalette: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),

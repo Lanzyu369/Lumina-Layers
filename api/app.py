@@ -382,6 +382,8 @@ def create_app() -> FastAPI:
         entry = registry.get_entry(file_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="File not found or expired")
+        if entry.get("is_public") is False:
+            raise HTTPException(status_code=404, detail="File not found or expired")
 
         result = registry.resolve(file_id)
         if result is None:

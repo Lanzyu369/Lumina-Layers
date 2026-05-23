@@ -32,6 +32,7 @@ vi.stubGlobal("Image", MockImage);
 
 // Mock the extractor API to prevent real network calls
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
 }));

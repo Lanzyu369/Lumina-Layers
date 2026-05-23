@@ -7,6 +7,7 @@ import type { ExtractResponse } from "../api/types";
 // ========== Mock API module ==========
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerRelease: vi.fn(),
   confirmPalette: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
@@ -65,6 +66,16 @@ function resetExtractorStore(): void {
     paletteConfirmed: false,
     paletteConfirmLoading: false,
     paletteConfirmError: null,
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    calibratedPreviewUrl: null,
+    calibratedFullFileId: null,
+    calibratedFullWidth: null,
+    calibratedFullHeight: null,
+    calibratedPreviewWidth: null,
+    calibratedPreviewHeight: null,
+    originalPreviewUrl: null,
+    colorcheckerSummary: null,
   });
 }
 
@@ -196,6 +207,40 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       }),
       { numRuns: 100 },
     );
+  });
+
+  it("When ColorChecker is confirmed, submitExtract sends the private id without an image file", async () => {
+    const file = new File(["test-data"], "calibration.png", {
+      type: "image/png",
+    });
+
+    useExtractorStore.setState({
+      imageFile: file,
+      imageNaturalWidth: 1600,
+      imageNaturalHeight: 1200,
+      corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+      colorchecker_phase: "done",
+      calibratedFullFileId: "full-id",
+    });
+
+    mockedExtractColors.mockResolvedValueOnce({
+      session_id: "dummy",
+      status: "success",
+      message: "ok",
+      lut_download_url: "/dummy.npy",
+      warp_view_url: "/dummy_warp.png",
+      lut_preview_url: "/dummy_preview.png",
+      default_palette: [],
+    });
+
+    await useExtractorStore.getState().submitExtract();
+
+    expect(mockedExtractColors).toHaveBeenCalledTimes(1);
+    const [calledImage, calledParams] = mockedExtractColors.mock.calls[0];
+    expect(calledImage).toBeNull();
+    expect(calledParams.colorcheckerCalibratedFileId).toBe("full-id");
+    expect(calledParams.cornerPointsWidth).toBe(1600);
+    expect(calledParams.cornerPointsHeight).toBe(1200);
   });
 });
 
