@@ -2381,12 +2381,34 @@ def test_extract_gradient_card_endpoint_accepts_explicit_restored_image_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The HTTP endpoint must forward explicit ``restored`` to the core."""
-    client, _, _ = _client_with_state()
+    from api.colorchecker_artifacts import COLORCHECKER_FULL_PURPOSE
+
+    client, _, registry = _client_with_state()
+    white_path = tmp_path / "white-full.png"
+    black_path = tmp_path / "black-full.png"
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(white_path)
+    Image.new("RGB", (8, 8), (0, 0, 0)).save(black_path)
+    white_id = registry.register_path(
+        "colorchecker:white",
+        str(white_path),
+        "white-full.png",
+        ttl_seconds=600,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PURPOSE,
+    )
+    black_id = registry.register_path(
+        "colorchecker:black",
+        str(black_path),
+        "black-full.png",
+        ttl_seconds=600,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PURPOSE,
+    )
 
     seen: dict[str, str | None] = {"image_source": None}
 
     async def _upload_to_ndarray(*_args, **_kwargs):  # noqa: ANN001
-        return np.zeros((8, 8, 3), dtype=np.uint8)
+        raise AssertionError("restored ColorChecker extraction must use full artifact ids")
 
     async def _upload_to_tempfile(*_args, **_kwargs):  # noqa: ANN001
         return str(tmp_path / "kit.zip")
@@ -2437,11 +2459,15 @@ def test_extract_gradient_card_endpoint_accepts_explicit_restored_image_source(
         data={
             "white_corner_points": json.dumps([[0, 0], [1, 0], [1, 1], [0, 1]]),
             "black_corner_points": json.dumps([[0, 0], [1, 0], [1, 1], [0, 1]]),
+            "white_colorchecker_file_id": white_id,
+            "black_colorchecker_file_id": black_id,
+            "white_corner_points_width": "1",
+            "white_corner_points_height": "1",
+            "black_corner_points_width": "1",
+            "black_corner_points_height": "1",
             "image_source": "restored",
         },
         files={
-            "white_image": ("white.png", b"white", "image/png"),
-            "black_image": ("black.png", b"black", "image/png"),
             "dataset_zip": ("kit.zip", b"zip", "application/zip"),
         },
     )
