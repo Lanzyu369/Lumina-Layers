@@ -53,7 +53,6 @@ export interface ColorcheckerConfirmDialogProps {
 const PATCH_LAYOUT = "4x6";
 const CORNER_LABELS = ["TL", "TR", "BR", "BL"];
 const LOCAL_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
-let deferredUnmountCleanup: ReturnType<typeof window.setTimeout> | null = null;
 
 type CalibrationMode = NonNullable<ColorcheckerCalibrateOptions["calibrationMode"]>;
 type SamplingMethod = NonNullable<ColorcheckerCalibrateOptions["method"]>;
@@ -406,6 +405,7 @@ export function ColorcheckerConfirmDialogInner({
   const detectionRunRef = useRef(0);
   const warpRunRef = useRef(0);
   const calibrationRunRef = useRef(0);
+  const deferredUnmountCleanupRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const latestCalibrationContext = useRef({
     phase,
     open,
@@ -425,14 +425,14 @@ export function ColorcheckerConfirmDialogInner({
   useColorcheckerArtifactLease([colorcheckerFullFileId], open);
 
   useEffect(() => {
-    if (deferredUnmountCleanup !== null) {
-      window.clearTimeout(deferredUnmountCleanup);
-      deferredUnmountCleanup = null;
+    if (deferredUnmountCleanupRef.current !== null) {
+      window.clearTimeout(deferredUnmountCleanupRef.current);
+      deferredUnmountCleanupRef.current = null;
     }
     return () => {
-      deferredUnmountCleanup = window.setTimeout(() => {
+      deferredUnmountCleanupRef.current = window.setTimeout(() => {
         closeDialog();
-        deferredUnmountCleanup = null;
+        deferredUnmountCleanupRef.current = null;
       }, 0);
     };
   }, [closeDialog]);

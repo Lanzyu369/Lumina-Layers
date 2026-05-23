@@ -540,4 +540,28 @@ describe("ColorcheckerConfirmDialog", () => {
 
     await waitFor(() => expect(closeDialog).toHaveBeenCalledTimes(1));
   });
+
+  it("does not cancel one dialog cleanup when another instance mounts", async () => {
+    const firstClose = vi.fn();
+    const secondClose = vi.fn();
+    const first = renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/first-preview.jpg",
+      colorcheckerFullFileId: "first-full-id",
+      calibrationSummary: summary,
+      closeDialog: firstClose,
+    });
+
+    first.unmount();
+    renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/second-preview.jpg",
+      colorcheckerFullFileId: "second-full-id",
+      calibrationSummary: summary,
+      closeDialog: secondClose,
+    });
+
+    await waitFor(() => expect(firstClose).toHaveBeenCalledTimes(1));
+    expect(secondClose).not.toHaveBeenCalled();
+  });
 });
