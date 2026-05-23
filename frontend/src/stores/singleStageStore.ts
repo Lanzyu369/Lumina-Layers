@@ -664,9 +664,19 @@ export const useSingleStageStore = create<
         ...RESULT_RESET_STATE,
       });
     } catch (err) {
+      const current = get();
       set({
         extractError: resolveGradientCardRotationError(err, "white"),
         isRotatingWhite: false,
+        colorchecker_phase: null,
+        whiteColorcheckerFileId: null,
+        pendingColorcheckerFileId: null,
+        pendingColorcheckerFullWidth: null,
+        pendingColorcheckerFullHeight: null,
+        pendingColorcheckerPreviewWidth: null,
+        pendingColorcheckerPreviewHeight: null,
+        colorcheckerSummary: null,
+        imageSource: current.blackColorcheckerFileId ? current.imageSource : "raw",
       });
     }
   },
@@ -721,9 +731,19 @@ export const useSingleStageStore = create<
         ...RESULT_RESET_STATE,
       });
     } catch (err) {
+      const current = get();
       set({
         extractError: resolveGradientCardRotationError(err, "black"),
         isRotatingBlack: false,
+        colorchecker_phase: null,
+        blackColorcheckerFileId: null,
+        pendingColorcheckerFileId: null,
+        pendingColorcheckerFullWidth: null,
+        pendingColorcheckerFullHeight: null,
+        pendingColorcheckerPreviewWidth: null,
+        pendingColorcheckerPreviewHeight: null,
+        colorcheckerSummary: null,
+        imageSource: current.whiteColorcheckerFileId ? current.imageSource : "raw",
       });
     }
   },

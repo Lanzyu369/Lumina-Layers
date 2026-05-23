@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { colorcheckerRelease, extractGradientCardStageA } from "../api/extractor";
+import {
+  colorcheckerRelease,
+  extractGradientCardStageA,
+  rotateExtractorImage,
+} from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
@@ -20,6 +24,7 @@ const buildPngFile = (name: string) =>
 
 const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
+const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
 
 describe("useSingleStageStore ColorChecker flow", () => {
   beforeEach(() => {
@@ -207,5 +212,45 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
     expect(useSingleStageStore.getState().pendingColorcheckerFileId).toBeNull();
     expect(useSingleStageStore.getState().colorchecker_phase).toBe("calibrating");
+  });
+
+  it("clears released white ColorChecker id when white rotation fails", async () => {
+    mockedRotateExtractorImage.mockRejectedValueOnce(new Error("rotate failed"));
+
+    useSingleStageStore.setState({
+      whiteImageFile: buildPngFile("white.png"),
+      whiteColorcheckerFileId: "released-white-id",
+      colorchecker_phase: "done",
+      imageSource: "restored",
+    });
+
+    await useSingleStageStore.getState().rotateWhiteImage("cw");
+
+    const state = useSingleStageStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("released-white-id");
+    expect(state.whiteColorcheckerFileId).toBeNull();
+    expect(state.pendingColorcheckerFileId).toBeNull();
+    expect(state.colorchecker_phase).toBeNull();
+    expect(state.imageSource).toBe("raw");
+  });
+
+  it("clears released black ColorChecker id when black rotation fails", async () => {
+    mockedRotateExtractorImage.mockRejectedValueOnce(new Error("rotate failed"));
+
+    useSingleStageStore.setState({
+      blackImageFile: buildPngFile("black.png"),
+      blackColorcheckerFileId: "released-black-id",
+      colorchecker_phase: "done",
+      imageSource: "restored",
+    });
+
+    await useSingleStageStore.getState().rotateBlackImage("ccw");
+
+    const state = useSingleStageStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("released-black-id");
+    expect(state.blackColorcheckerFileId).toBeNull();
+    expect(state.pendingColorcheckerFileId).toBeNull();
+    expect(state.colorchecker_phase).toBeNull();
+    expect(state.imageSource).toBe("raw");
   });
 });

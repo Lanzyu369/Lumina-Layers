@@ -11,13 +11,20 @@ vi.mock("../api/extractor", () => ({
   confirmPalette: vi.fn(),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
+  rotateExtractorImage: vi.fn(),
 }));
 
-import { colorcheckerRelease, confirmPalette, extractColors } from "../api/extractor";
+import {
+  colorcheckerRelease,
+  confirmPalette,
+  extractColors,
+  rotateExtractorImage,
+} from "../api/extractor";
 
 const mockedExtractColors = vi.mocked(extractColors);
 const mockedConfirmPalette = vi.mocked(confirmPalette);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
+const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
 
 // ========== Mock browser APIs ==========
 
@@ -292,6 +299,29 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
     expect(useExtractorStore.getState().calibratedFullFileId).toBeNull();
     expect(useExtractorStore.getState().colorchecker_phase).toBe("calibrating");
+  });
+
+  it("clears released ColorChecker id when image rotation fails", async () => {
+    mockedRotateExtractorImage.mockRejectedValueOnce(new Error("rotate failed"));
+
+    useExtractorStore.setState({
+      imageFile: new File(["raw"], "calibration.png", { type: "image/png" }),
+      imagePreviewUrl: "/api/files/calibrated-preview.jpg",
+      originalPreviewUrl: "/api/files/original-preview.jpg",
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+      calibratedFullFileId: "released-full-id",
+    });
+
+    await useExtractorStore.getState().rotateImage();
+
+    const state = useExtractorStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("released-full-id");
+    expect(state.calibratedFullFileId).toBeNull();
+    expect(state.colorchecker_phase).toBeNull();
+    expect(state.colorchecker_enabled).toBe(false);
+    expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
   });
 });
 

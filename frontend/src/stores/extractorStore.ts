@@ -406,7 +406,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     },
 
     rotateImage: async () => {
-      const { imageFile, imagePreviewUrl } = get();
+      const { imageFile, imagePreviewUrl, originalPreviewUrl } = get();
       if (!imageFile) return;
       releaseColorcheckerArtifact(get().calibratedFullFileId);
 
@@ -454,6 +454,17 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         set({
           error: err instanceof Error ? err.message : "图片旋转失败",
           isLoading: false,
+          colorchecker_enabled: false,
+          colorchecker_phase: null,
+          calibratedPreviewUrl: null,
+          calibratedFullFileId: null,
+          calibratedFullWidth: null,
+          calibratedFullHeight: null,
+          calibratedPreviewWidth: null,
+          calibratedPreviewHeight: null,
+          imagePreviewUrl: originalPreviewUrl ?? imagePreviewUrl,
+          originalPreviewUrl: null,
+          colorcheckerSummary: null,
         });
       }
     },
