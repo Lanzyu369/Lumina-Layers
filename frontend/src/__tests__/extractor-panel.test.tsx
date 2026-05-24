@@ -86,6 +86,8 @@ function resetExtractorStore(): void {
     calibratedPreviewWidth: null,
     calibratedPreviewHeight: null,
     originalPreviewUrl: null,
+    originalPreviewWidth: null,
+    originalPreviewHeight: null,
     colorcheckerSummary: null,
   });
 }

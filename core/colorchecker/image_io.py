@@ -9,6 +9,13 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+try:  # pragma: no cover - depends on optional runtime dependency
+    from pillow_heif import register_heif_opener
+except ImportError:  # pragma: no cover - optional dependency
+    pass
+else:  # pragma: no cover - registration side effect
+    register_heif_opener()
+
 try:
     import rawpy
 except ImportError:  # pragma: no cover - depends on the local runtime
@@ -48,6 +55,8 @@ RAW_EXTENSIONS = {
 }
 STANDARD_IMAGE_EXTENSIONS = {
     ".bmp",
+    ".heic",
+    ".heif",
     ".jpg",
     ".jpeg",
     ".png",
@@ -102,8 +111,11 @@ def apply_unsharp_mask(image: np.ndarray, sigma: float, amount: float) -> np.nda
 
 
 def looks_like_raw_input(mime_type: str, file_name: str) -> bool:
+    mime_type = (mime_type or "").lower()
     suffix = Path(file_name).suffix.lower()
     if suffix in STANDARD_IMAGE_EXTENSIONS:
+        return False
+    if not suffix and mime_type == "application/octet-stream":
         return False
     return (
         suffix in RAW_EXTENSIONS
@@ -119,28 +131,64 @@ def is_supported_archive_image(file_name: str) -> bool:
     return suffix in RAW_EXTENSIONS or suffix in STANDARD_IMAGE_EXTENSIONS
 
 
-def decode_raw_image_bytes(raw: bytes) -> np.ndarray:
+def decode_raw_image_bytes(raw: bytes, *, file_name: str = "") -> np.ndarray:
     if rawpy is None:
         raise ValueError(
             "当前环境未安装 rawpy，暂时无法解码 RAW 图片。请先执行 pip install -r requirements.txt。"
         )
     try:
         with rawpy.imread(io.BytesIO(raw)) as raw_image:
-            postprocess_kwargs: dict[str, object] = {
-                "use_camera_wb": True,
-                "use_auto_wb": False,
-                "no_auto_bright": True,
-                "output_bps": 8,
-            }
-            color_space = getattr(getattr(rawpy, "ColorSpace", None), "sRGB", None)
-            if color_space is not None:
-                postprocess_kwargs["output_color"] = color_space
-            demosaic_algorithm = getattr(getattr(rawpy, "DemosaicAlgorithm", None), "AHD", None)
-            if demosaic_algorithm is not None:
-                postprocess_kwargs["demosaic_algorithm"] = demosaic_algorithm
-            rgb = raw_image.postprocess(**postprocess_kwargs)
+            return _postprocess_raw_image(raw_image)
     except RAW_DECODE_ERRORS as exc:
         raise ValueError(f"RAW 图片解码失败：{exc}") from exc
+
+
+def decode_standard_image_file(path: str | Path) -> np.ndarray | None:
+    if not str(path):
+        return None
+    try:
+        with Image.open(path) as image:
+            transposed = ImageOps.exif_transpose(image)
+            rgb = np.asarray(transposed.convert("RGB"), dtype=np.uint8)
+    except (UnidentifiedImageError, OSError, ValueError):
+        try:
+            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        except cv2.error:
+            return None
+        if image is None or image.size == 0:
+            return None
+        return image
+    if rgb.size == 0:
+        return None
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def decode_raw_image_file(path: str | Path, *, file_name: str = "") -> np.ndarray:
+    if rawpy is None:
+        raise ValueError(
+            "当前环境未安装 rawpy，暂时无法解码 RAW 图片。请先执行 pip install -r requirements.txt。"
+        )
+    try:
+        with rawpy.imread(str(path)) as raw_image:
+            return _postprocess_raw_image(raw_image)
+    except RAW_DECODE_ERRORS as exc:
+        raise ValueError(f"RAW 图片解码失败：{exc}") from exc
+
+
+def _postprocess_raw_image(raw_image: object) -> np.ndarray:
+    postprocess_kwargs: dict[str, object] = {
+        "use_camera_wb": True,
+        "use_auto_wb": False,
+        "no_auto_bright": True,
+        "output_bps": 8,
+    }
+    color_space = getattr(getattr(rawpy, "ColorSpace", None), "sRGB", None)
+    if color_space is not None:
+        postprocess_kwargs["output_color"] = color_space
+    demosaic_algorithm = getattr(getattr(rawpy, "DemosaicAlgorithm", None), "AHD", None)
+    if demosaic_algorithm is not None:
+        postprocess_kwargs["demosaic_algorithm"] = demosaic_algorithm
+    rgb = raw_image.postprocess(**postprocess_kwargs)
     if rgb is None or rgb.size == 0:
         raise ValueError("RAW 图片解码失败。")
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -155,13 +203,36 @@ def decode_uploaded_bytes(
     mime_type = (mime_type or "application/octet-stream").lower()
     raw_hint = looks_like_raw_input(mime_type, file_name)
     if raw_hint:
-        return decode_raw_image_bytes(raw), "raw"
+        return decode_raw_image_bytes(raw, file_name=file_name), "raw"
     image = decode_standard_image_bytes(raw)
     if image is not None:
         return image, "standard"
     if rawpy is not None:
         try:
-            return decode_raw_image_bytes(raw), "raw"
+            return decode_raw_image_bytes(raw, file_name=file_name), "raw"
+        except ValueError:
+            pass
+    raise ValueError(
+        "当前文件无法解码。支持常规图片，以及 DNG、NEF、CR2、CR3、ARW、RAF、ORF、RW2、PEF、SRW、RAW 等格式。"
+    )
+
+
+def decode_uploaded_file(
+    path: str | Path,
+    file_name: str = "",
+    mime_type: str = "application/octet-stream",
+) -> tuple[np.ndarray, str]:
+    mime_type = (mime_type or "application/octet-stream").lower()
+    detected_name = file_name or str(path)
+    raw_hint = looks_like_raw_input(mime_type, detected_name)
+    if raw_hint:
+        return decode_raw_image_file(path, file_name=detected_name), "raw"
+    image = decode_standard_image_file(path)
+    if image is not None:
+        return image, "standard"
+    if rawpy is not None:
+        try:
+            return decode_raw_image_file(path, file_name=detected_name), "raw"
         except ValueError:
             pass
     raise ValueError(

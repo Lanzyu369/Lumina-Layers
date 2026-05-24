@@ -31,6 +31,8 @@ from .diagnostics import (
     build_luminance_diagnostics,
     clipping_reasons,
     fit_patch_diagnostics,
+    gray_reference_delta_metrics,
+    gray_reference_delta_warnings,
     gray_affine_post_fit_failures,
     is_nonuniform,
     patch_validity_report,
@@ -738,10 +740,14 @@ def calibrate_image_bgr(
         warnings.append(validity_warning)
     if gray_metrics.get("l_monotonic") is False:
         warnings.append("Neutral gray L* values are not monotonic.")
-    if gray_metrics.get("a_abs_max") is not None and float(gray_metrics["a_abs_max"]) > 1.5:
-        warnings.append("Neutral gray |a*| exceeds suggested 1.5 threshold.")
-    if gray_metrics.get("b_abs_max") is not None and float(gray_metrics["b_abs_max"]) > 1.5:
-        warnings.append("Neutral gray |b*| exceeds suggested 1.5 threshold.")
+    gray_delta_metrics = gray_reference_delta_metrics(
+        corrected_lab[gray_rows],
+        reference_lab[gray_rows],
+        used_gray_indices,
+        [str(patch_details[row].get("label") or used_gray_indices[pos]) for pos, row in enumerate(gray_rows)],
+    )
+    gray_metrics["reference_delta"] = gray_delta_metrics
+    warnings.extend(gray_reference_delta_warnings(gray_delta_metrics))
     model_report["warnings"] = warnings
     calibrated = apply_color_model_to_image_bgr(
         image_bgr,

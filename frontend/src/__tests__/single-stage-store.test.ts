@@ -30,6 +30,36 @@ const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
 
+type MockImageHandle = {
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  naturalWidth: number;
+  naturalHeight: number;
+  src: string;
+};
+
+const resolvePending = <T,>(resolver: ((value: T) => void) | null, value: T) => {
+  if (!resolver) {
+    throw new Error("Expected a pending mocked request resolver");
+  }
+  resolver(value);
+};
+
+const requireCreatedImage = (image: MockImageHandle | null): MockImageHandle => {
+  if (!image) {
+    throw new Error("Expected the store to create a preview Image");
+  }
+  return image;
+};
+
+const triggerImageLoad = (image: MockImageHandle | null) => {
+  image?.onload?.();
+};
+
+const triggerImageError = (image: MockImageHandle | null) => {
+  image?.onerror?.();
+};
+
 describe("useSingleStageStore ColorChecker flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -61,6 +91,10 @@ describe("useSingleStageStore ColorChecker flow", () => {
       originalWhitePreviewUrl: null,
       colorcheckerSummary: null,
       imageSource: "raw",
+      isRotatingWhite: false,
+      isRotatingBlack: false,
+      isExtracting: false,
+      extractError: null,
     });
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:gradient-card-source");
     vi.mocked(uploadImagePreview).mockResolvedValue({
@@ -81,8 +115,37 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(state.colorchecker_target).toBe("black");
     expect(state.blackImageFile).toBe(blackFile);
     expect(state.blackImagePreviewUrl).toBeNull();
-    expect(state.originalWhitePreviewUrl).toBe("/api/files/gradient-card-preview.png");
-    expect(uploadImagePreview).toHaveBeenCalledWith(blackFile);
+    expect(state.originalWhitePreviewUrl).toBeNull();
+    expect(uploadImagePreview).not.toHaveBeenCalled();
+  });
+
+  it("does not request system previews for ColorChecker substrate targets", async () => {
+    const blackFile = buildPngFile("black.png");
+    const whiteFile = buildPngFile("white.png");
+
+    useSingleStageStore.getState().setColorcheckerEnabled(true);
+    await useSingleStageStore.getState().setBlackImageFile(blackFile);
+    await useSingleStageStore.getState().setWhiteImageFile(whiteFile);
+
+    const state = useSingleStageStore.getState();
+    expect(state.colorchecker_target).toBe("white");
+    expect(state.originalWhitePreviewUrl).toBeNull();
+    expect(uploadImagePreview).not.toHaveBeenCalled();
+  });
+
+  it("clears the previous substrate preview when starting another ColorChecker upload", async () => {
+    const blackFile = buildPngFile("black.png");
+    const whiteFile = buildPngFile("white.png");
+
+    useSingleStageStore.getState().setColorcheckerEnabled(true);
+    await useSingleStageStore.getState().setBlackImageFile(blackFile);
+
+    await useSingleStageStore.getState().setWhiteImageFile(whiteFile);
+
+    const state = useSingleStageStore.getState();
+    expect(state.colorchecker_target).toBe("white");
+    expect(state.originalWhitePreviewUrl).toBeNull();
+    expect(uploadImagePreview).not.toHaveBeenCalled();
   });
 
   it("marks confirmed ColorChecker images as restored source", async () => {
@@ -104,12 +167,20 @@ describe("useSingleStageStore ColorChecker flow", () => {
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
     globalThis.Image = MockImage as unknown as typeof Image;
 
     try {
+      mockedColorcheckerConfirm.mockResolvedValueOnce({
+        status: "ok",
+        confirmed: true,
+        calibrated_preview_url: "/api/files/fresh-stage-a-preview.jpg",
+        preview_width: 640,
+        preview_height: 480,
+      });
       useSingleStageStore.setState({
         colorchecker_phase: "confirming",
         colorchecker_target: "white",
@@ -119,11 +190,21 @@ describe("useSingleStageStore ColorChecker flow", () => {
       });
 
       useSingleStageStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("full-id"));
-      createdImage?.onload?.();
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "full-id",
+          "/api/files/calibrated-preview.jpg",
+        ),
+      );
+      const acceptedImage = requireCreatedImage(createdImage);
+      expect(acceptedImage.src).toBe("/api/files/fresh-stage-a-preview.jpg");
+      acceptedImage.onload?.();
 
       const state = useSingleStageStore.getState();
       expect(state.imageSource).toBe("restored");
+      expect(state.whiteImagePreviewUrl).toBe("/api/files/fresh-stage-a-preview.jpg");
+      expect(state.whiteImageNaturalWidth).toBe(640);
+      expect(state.whiteImageNaturalHeight).toBe(480);
     } finally {
       globalThis.Image = OriginalImage;
     }
@@ -218,6 +299,228 @@ describe("useSingleStageStore ColorChecker flow", () => {
       expect(mockedExtractGradientCardStageA).not.toHaveBeenCalled();
     },
   );
+
+  it("does not disable confirmed Stage A ColorChecker images while extracting", () => {
+    useSingleStageStore.setState({
+      isExtracting: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
+      imageSource: "restored",
+    });
+
+    useSingleStageStore.getState().setColorcheckerEnabled(false);
+
+    const state = useSingleStageStore.getState();
+    expect(state.colorchecker_enabled).toBe(true);
+    expect(state.whiteColorcheckerFileId).toBe("white-full-id");
+    expect(state.blackColorcheckerFileId).toBe("black-full-id");
+    expect(state.imageSource).toBe("restored");
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not replace confirmed Stage A ColorChecker images while extracting", async () => {
+    const whiteFile = buildPngFile("white.png");
+    const blackFile = buildPngFile("black.png");
+    useSingleStageStore.setState({
+      isExtracting: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      whiteImageFile: whiteFile,
+      blackImageFile: blackFile,
+      whiteImagePreviewUrl: "/api/files/white-preview.jpg",
+      blackImagePreviewUrl: "/api/files/black-preview.jpg",
+      whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
+      imageSource: "restored",
+    });
+
+    await useSingleStageStore.getState().setWhiteImageFile(buildPngFile("white-new.png"));
+    await useSingleStageStore.getState().setBlackImageFile(buildPngFile("black-new.png"));
+
+    const state = useSingleStageStore.getState();
+    expect(state.whiteImageFile).toBe(whiteFile);
+    expect(state.blackImageFile).toBe(blackFile);
+    expect(state.whiteColorcheckerFileId).toBe("white-full-id");
+    expect(state.blackColorcheckerFileId).toBe("black-full-id");
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+    expect(uploadImagePreview).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate confirmed Stage A ColorChecker images while extracting", async () => {
+    const whiteFile = buildPngFile("white.png");
+    const blackFile = buildPngFile("black.png");
+    useSingleStageStore.setState({
+      isExtracting: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      whiteImageFile: whiteFile,
+      blackImageFile: blackFile,
+      whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
+      imageSource: "restored",
+    });
+
+    await useSingleStageStore.getState().rotateWhiteImage("cw");
+    await useSingleStageStore.getState().rotateBlackImage("ccw");
+
+    const state = useSingleStageStore.getState();
+    expect(mockedRotateExtractorImage).not.toHaveBeenCalled();
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+    expect(state.whiteColorcheckerFileId).toBe("white-full-id");
+    expect(state.blackColorcheckerFileId).toBe("black-full-id");
+    expect(state.isExtracting).toBe(true);
+  });
+
+  it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {
+    let resolveExtract:
+      | ((value: Awaited<ReturnType<typeof extractGradientCardStageA>>) => void)
+      | null = null;
+    mockedExtractGradientCardStageA.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveExtract = resolve;
+      }),
+    );
+
+    useSingleStageStore.setState({
+      datasetFile: new File([new Uint8Array([1])], "kit.zip", {
+        type: "application/zip",
+      }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+      whiteColorcheckerFileId: "white-full-id",
+      blackColorcheckerFileId: "black-full-id",
+      imageSource: "restored",
+      sessionId: null,
+      stageAParamsUrl: null,
+    });
+
+    const submit = useSingleStageStore.getState().submitExtract();
+    await vi.waitFor(() => {
+      expect(mockedExtractGradientCardStageA).toHaveBeenCalled();
+    });
+
+    useSingleStageStore.setState({
+      colorchecker_enabled: false,
+      whiteColorcheckerFileId: null,
+      blackColorcheckerFileId: null,
+      imageSource: "raw",
+    });
+    resolvePending(resolveExtract, {
+      session_id: "stale-stage-a-session",
+      status: "success",
+      message: "ok",
+      stage_a_params_url: "/api/files/stale-stage-a.json",
+      white_warp_preview_url: "/api/files/stale-white-warp.png",
+      black_warp_preview_url: "/api/files/stale-black-warp.png",
+      fit_summary: {
+        substrate_count: 2,
+        channel_count: 4,
+        substrates: [],
+        colors: [],
+        overall_validation: {},
+        warnings: [],
+      },
+      material_summary: {
+        sample_count: 0,
+        per_substrate_sample_count: 0,
+        grid_rows: 0,
+        grid_cols: 0,
+        layer_height_mm: 0.2,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [],
+        black_zero_rgb: [],
+        estimated_rgb: [],
+        estimated_k: [],
+      },
+      warnings: [],
+    });
+    await submit;
+
+    const state = useSingleStageStore.getState();
+    expect(state.sessionId).toBeNull();
+    expect(state.stageAParamsUrl).toBeNull();
+    expect(state.isExtracting).toBe(false);
+  });
+
+  it("ignores stale Stage A extraction responses after corner or orientation changes", async () => {
+    let resolveExtract:
+      | ((value: Awaited<ReturnType<typeof extractGradientCardStageA>>) => void)
+      | null = null;
+    mockedExtractGradientCardStageA.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveExtract = resolve;
+      }),
+    );
+
+    useSingleStageStore.setState({
+      datasetFile: new File([new Uint8Array([1])], "kit.zip", {
+        type: "application/zip",
+      }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteImageNaturalWidth: 640,
+      whiteImageNaturalHeight: 480,
+      blackImageNaturalWidth: 320,
+      blackImageNaturalHeight: 240,
+      whiteCornerPoints: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      blackCornerPoints: [[0, 0], [20, 0], [20, 20], [0, 20]],
+      manualWhiteAnchor: null,
+      manualBlackAnchor: null,
+      sessionId: null,
+      stageAParamsUrl: null,
+    });
+
+    const submit = useSingleStageStore.getState().submitExtract();
+    await vi.waitFor(() => {
+      expect(mockedExtractGradientCardStageA).toHaveBeenCalled();
+    });
+
+    useSingleStageStore.getState().setManualWhiteAnchor("tr");
+    useSingleStageStore.getState().clearWhiteCornerPoints();
+    resolvePending(resolveExtract, {
+      session_id: "stale-stage-a-session",
+      status: "success",
+      message: "ok",
+      stage_a_params_url: "/api/files/stale-stage-a.json",
+      white_warp_preview_url: "/api/files/stale-white-warp.png",
+      black_warp_preview_url: "/api/files/stale-black-warp.png",
+      fit_summary: {
+        substrate_count: 2,
+        channel_count: 4,
+        substrates: [],
+        colors: [],
+        overall_validation: {},
+        warnings: [],
+      },
+      material_summary: {
+        sample_count: 0,
+        per_substrate_sample_count: 0,
+        grid_rows: 0,
+        grid_cols: 0,
+        layer_height_mm: 0.2,
+        thickness_layers: [],
+        sample_boxes: [],
+        white_zero_rgb: [],
+        black_zero_rgb: [],
+        estimated_rgb: [],
+        estimated_k: [],
+      },
+      warnings: [],
+    });
+    await submit;
+
+    const state = useSingleStageStore.getState();
+    expect(state.manualWhiteAnchor).toBe("tr");
+    expect(state.whiteCornerPoints).toEqual([]);
+    expect(state.sessionId).toBeNull();
+    expect(state.stageAParamsUrl).toBeNull();
+    expect(state.isExtracting).toBe(false);
+  });
 
   it("releases stale ColorChecker responses for the wrong target image", () => {
     const oldWhiteFile = buildPngFile("old-white.png");
@@ -355,7 +658,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
 
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
 
-    resolveRotate?.({
+    resolvePending(resolveRotate, {
       preview_url: "/api/files/rotated.png",
       width: 100,
       height: 100,
@@ -383,6 +686,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
@@ -400,7 +704,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
 
       useSingleStageStore.getState().confirmCalibrated();
       useSingleStageStore.getState().setColorcheckerEnabled(false);
-      createdImage?.onload?.();
+      triggerImageLoad(createdImage);
 
       const state = useSingleStageStore.getState();
       expect(mockedColorcheckerRelease).toHaveBeenCalledWith("pending-full-id");
@@ -432,6 +736,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
@@ -449,9 +754,14 @@ describe("useSingleStageStore ColorChecker flow", () => {
       });
 
       useSingleStageStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "new-full-id",
+          "/api/files/new-calibrated-preview.jpg",
+        ),
+      );
       useSingleStageStore.getState().rejectCalibrated();
-      createdImage?.onload?.();
+      triggerImageLoad(createdImage);
 
       const state = useSingleStageStore.getState();
       expect(mockedColorcheckerRelease).toHaveBeenCalledWith("new-full-id");
@@ -483,6 +793,7 @@ describe("useSingleStageStore ColorChecker flow", () => {
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
@@ -500,8 +811,13 @@ describe("useSingleStageStore ColorChecker flow", () => {
       });
 
       useSingleStageStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
-      createdImage?.onerror?.();
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "new-full-id",
+          "/api/files/new-calibrated-preview.jpg",
+        ),
+      );
+      triggerImageError(createdImage);
 
       const state = useSingleStageStore.getState();
       expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");

@@ -77,6 +77,22 @@ function uniqueSortedPageNumbers(pageNumbers: number[]): number[] {
   ).sort((a, b) => a - b);
 }
 
+function cloneCornerPoints(
+  points: Array<[number, number]>,
+): Array<[number, number]> {
+  return points.map(([x, y]) => [x, y]);
+}
+
+function cornerPointsEqual(
+  left: Array<[number, number]>,
+  right: Array<[number, number]>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(([x, y], index) => x === right[index]?.[0] && y === right[index]?.[1])
+  );
+}
+
 // ========== State Interface ==========
 
 export interface ExtractorState {
@@ -115,6 +131,8 @@ export interface ExtractorState {
   calibratedPreviewWidth: number | null;
   calibratedPreviewHeight: number | null;
   originalPreviewUrl: string | null;
+  originalPreviewWidth: number | null;
+  originalPreviewHeight: number | null;
   colorcheckerSummary: ColorcheckerDisplaySummary | null;
 
   // API 状态
@@ -186,6 +204,9 @@ export interface ExtractorActions {
     },
     context?: {
       imageFile: File | null;
+      sourcePreviewUrl?: string | null;
+      sourcePreviewWidth?: number | null;
+      sourcePreviewHeight?: number | null;
     },
   ) => void;
   confirmCalibrated: () => void;
@@ -234,6 +255,8 @@ const DEFAULT_STATE: ExtractorState = {
   calibratedPreviewWidth: null,
   calibratedPreviewHeight: null,
   originalPreviewUrl: null,
+  originalPreviewWidth: null,
+  originalPreviewHeight: null,
   colorcheckerSummary: null,
   isLoading: false,
   error: null,
@@ -266,6 +289,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     ...DEFAULT_STATE,
 
     setImageFile: (file: File | null) => {
+      if (get().isLoading) {
+        return;
+      }
       // Revoke previous blob URL to avoid memory leaks
       const prev = get().imagePreviewUrl;
       if (prev && prev.startsWith("blob:")) {
@@ -310,6 +336,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedPreviewWidth: null,
           calibratedPreviewHeight: null,
           originalPreviewUrl: null,
+          originalPreviewWidth: null,
+          originalPreviewHeight: null,
           colorcheckerSummary: null,
           ...correctionDefaults,
         });
@@ -340,13 +368,13 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         calibratedPreviewWidth: null,
         calibratedPreviewHeight: null,
         originalPreviewUrl: null,
+        originalPreviewWidth: null,
+        originalPreviewHeight: null,
         colorcheckerSummary: null,
         ...correctionDefaults,
       } as const;
 
       // --- CC enabled: store file, skip active preview, open dialog ---
-      // We still generate a preview in the background for the before/after
-      // comparison shown after calibration completes.
       if (ccEnabled) {
         set({
           imageFile: file,
@@ -356,14 +384,6 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           colorchecker_phase: "calibrating",
           ...resetFields,
         });
-        uploadImagePreview(file)
-          .then(({ preview_url }) => {
-            if (get().imageFile !== file) {
-              return;
-            }
-            set({ originalPreviewUrl: normalizeResourceUrl(preview_url) });
-          })
-          .catch(() => {});
         return;
       }
 
@@ -414,7 +434,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     },
 
     rotateImage: async () => {
-      const { imageFile, imagePreviewUrl, originalPreviewUrl } = get();
+      const { imageFile, imagePreviewUrl, originalPreviewUrl, isLoading } = get();
+      if (isLoading) return;
       if (!imageFile) return;
       const current = get();
       releaseColorcheckerArtifact(current.calibratedFullFileId);
@@ -472,6 +493,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedPreviewWidth: null,
           calibratedPreviewHeight: null,
           originalPreviewUrl: null,
+          originalPreviewWidth: null,
+          originalPreviewHeight: null,
           colorcheckerSummary: null,
         });
       } catch (err) {
@@ -489,6 +512,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedPreviewHeight: null,
           imagePreviewUrl: originalPreviewUrl ?? imagePreviewUrl,
           originalPreviewUrl: null,
+          originalPreviewWidth: null,
+          originalPreviewHeight: null,
           colorcheckerSummary: null,
         });
       }
@@ -674,12 +699,18 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       set({ vignette_correction: value }),
 
     setColorcheckerEnabled: (value: boolean) => {
+      const currentState = get();
+      if (currentState.isLoading && value !== currentState.colorchecker_enabled) {
+        return;
+      }
       if (value) {
-        const state = get();
+        const state = currentState;
         set({
           colorchecker_enabled: true,
           colorchecker_phase: "calibrating",
           originalPreviewUrl: null,
+          originalPreviewWidth: state.imageNaturalWidth,
+          originalPreviewHeight: state.imageNaturalHeight,
           calibratedPreviewUrl: null,
           calibratedFullFileId: null,
           previousCalibratedFullFileId: null,
@@ -689,19 +720,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedPreviewHeight: null,
           colorcheckerSummary: null,
         });
-        if (state.imageFile) {
-          const sourceFile = state.imageFile;
-          uploadImagePreview(state.imageFile)
-            .then(({ preview_url }) => {
-              if (get().imageFile !== sourceFile) {
-                return;
-              }
-              set({ originalPreviewUrl: normalizeResourceUrl(preview_url) });
-            })
-            .catch(() => {});
-        }
       } else {
-        const state = get();
+        const state = currentState;
         const hadCalibratedImage = Boolean(state.calibratedFullFileId);
         const restoredPreview =
           hadCalibratedImage
@@ -710,6 +730,12 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
                 ? URL.createObjectURL(state.imageFile)
                 : null)
             : state.imagePreviewUrl;
+        const restoredNaturalWidth = hadCalibratedImage
+          ? state.originalPreviewWidth ?? state.imageNaturalWidth
+          : state.imageNaturalWidth;
+        const restoredNaturalHeight = hadCalibratedImage
+          ? state.originalPreviewHeight ?? state.imageNaturalHeight
+          : state.imageNaturalHeight;
         releaseColorcheckerArtifact(state.calibratedFullFileId);
         releaseColorcheckerArtifact(state.previousCalibratedFullFileId);
         set({
@@ -723,26 +749,15 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           calibratedPreviewWidth: null,
           calibratedPreviewHeight: null,
           originalPreviewUrl: null,
+          originalPreviewWidth: null,
+          originalPreviewHeight: null,
           imagePreviewUrl: restoredPreview,
-          imageNaturalWidth: hadCalibratedImage ? null : state.imageNaturalWidth,
-          imageNaturalHeight: hadCalibratedImage ? null : state.imageNaturalHeight,
+          imageNaturalWidth: restoredNaturalWidth,
+          imageNaturalHeight: restoredNaturalHeight,
           corner_points: hadCalibratedImage ? [] : state.corner_points,
           active_corner_index: hadCalibratedImage ? null : state.active_corner_index,
           colorcheckerSummary: null,
         });
-        if (hadCalibratedImage && state.imageFile && (isRawFile(state.imageFile) || !restoredPreview)) {
-          const sourceFile = state.imageFile;
-          uploadImagePreview(sourceFile)
-            .then(({ preview_url, width, height }) => {
-              if (get().imageFile !== sourceFile || get().colorchecker_enabled) return;
-              set({
-                imagePreviewUrl: normalizeResourceUrl(preview_url),
-                imageNaturalWidth: width,
-                imageNaturalHeight: height,
-              });
-            })
-            .catch(() => {});
-        }
       }
     },
 
@@ -753,16 +768,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       set({
         colorchecker_phase: "calibrating",
         originalPreviewUrl: fallbackPreview,
+        originalPreviewWidth: fallbackPreview ? state.originalPreviewWidth : null,
+        originalPreviewHeight: fallbackPreview ? state.originalPreviewHeight : null,
       });
-      const sourceFile = state.imageFile;
-      uploadImagePreview(sourceFile)
-        .then(({ preview_url }) => {
-          if (get().imageFile !== sourceFile) {
-            return;
-          }
-          set({ originalPreviewUrl: normalizeResourceUrl(preview_url) });
-        })
-        .catch(() => {});
     },
 
     receiveCalibratedFromCC: (
@@ -777,6 +785,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       },
       context?: {
         imageFile: File | null;
+        sourcePreviewUrl?: string | null;
+        sourcePreviewWidth?: number | null;
+        sourcePreviewHeight?: number | null;
       },
     ) => {
       const state = get();
@@ -794,6 +805,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         releaseColorcheckerArtifact(previousPendingId);
       }
       const resolvedUrl = normalizeResourceUrl(previewUrl) ?? previewUrl;
+      const sourcePreviewUrl =
+        normalizeResourceUrl(context?.sourcePreviewUrl ?? null) ??
+        context?.sourcePreviewUrl ??
+        state.originalPreviewUrl;
       set({
         colorchecker_phase: "confirming",
         calibratedPreviewUrl: resolvedUrl,
@@ -804,6 +819,11 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         calibratedFullHeight: dimensions?.fullHeight ?? null,
         calibratedPreviewWidth: dimensions?.previewWidth ?? null,
         calibratedPreviewHeight: dimensions?.previewHeight ?? null,
+        originalPreviewUrl: sourcePreviewUrl,
+        originalPreviewWidth:
+          context?.sourcePreviewWidth ?? state.originalPreviewWidth,
+        originalPreviewHeight:
+          context?.sourcePreviewHeight ?? state.originalPreviewHeight,
         colorcheckerSummary: summary ?? null,
       });
     },
@@ -816,7 +836,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         previousCalibratedFullFileId,
       } = get();
       if (!calibratedPreviewUrl || !calibratedFullFileId) return;
-      const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
+      const applyAcceptedPreview = (
+        previewUrl: string,
+        dimensions?: { width: number; height: number },
+      ) => {
         const current = get();
         if (
           current.colorchecker_phase !== "confirming" ||
@@ -834,7 +857,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         set({
           colorchecker_phase: "done",
           error: null,
-          imagePreviewUrl: calibratedPreviewUrl,
+          auto_wb: false,
+          imagePreviewUrl: previewUrl,
+          calibratedPreviewUrl: previewUrl,
           previousCalibratedFullFileId: null,
           ...(dimensions
             ? {
@@ -846,8 +871,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           active_corner_index: null,
         });
       };
-      void colorcheckerConfirm(calibratedFullFileId)
-        .then(() => {
+      void colorcheckerConfirm(calibratedFullFileId, calibratedPreviewUrl)
+        .then((confirmResult) => {
           const current = get();
           if (
             current.colorchecker_phase !== "confirming" ||
@@ -856,12 +881,25 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           ) {
             return;
           }
+          const acceptedPreviewUrl =
+            normalizeResourceUrl(confirmResult?.calibrated_preview_url ?? null) ??
+            calibratedPreviewUrl;
+          const confirmDimensions =
+            confirmResult?.preview_width && confirmResult?.preview_height
+              ? {
+                  width: confirmResult.preview_width,
+                  height: confirmResult.preview_height,
+                }
+              : null;
           const img = new Image();
           img.onload = () => {
-            applyAcceptedPreview({
-              width: img.naturalWidth,
-              height: img.naturalHeight,
-            });
+            applyAcceptedPreview(
+              acceptedPreviewUrl,
+              confirmDimensions ?? {
+                width: img.naturalWidth,
+                height: img.naturalHeight,
+              },
+            );
           };
           img.onerror = () => {
             const latest = get();
@@ -873,7 +911,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
               set({ error: tRuntime("ext_cc_confirm_preview_failed") });
             }
           };
-          img.src = calibratedPreviewUrl;
+          img.src = acceptedPreviewUrl;
         })
         .catch(() => {
           const current = get();
@@ -925,7 +963,21 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
     },
 
     setAutoWb: async (value: boolean) => {
-      const { imageFile, imagePreviewUrl, originalPreviewUrl } = get();
+      const {
+        imageFile,
+        imagePreviewUrl,
+        imageNaturalWidth,
+        imageNaturalHeight,
+        originalPreviewUrl,
+        originalPreviewWidth,
+        originalPreviewHeight,
+        colorchecker_phase,
+        calibratedFullFileId,
+      } = get();
+      if (value && colorchecker_phase === "done" && calibratedFullFileId) {
+        set({ auto_wb: false });
+        return;
+      }
       if (!imageFile) {
         set({ auto_wb: value });
         return;
@@ -942,6 +994,12 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           );
           set({
             originalPreviewUrl: saved,
+            originalPreviewWidth: originalPreviewUrl
+              ? originalPreviewWidth
+              : imageNaturalWidth,
+            originalPreviewHeight: originalPreviewUrl
+              ? originalPreviewHeight
+              : imageNaturalHeight,
             imagePreviewUrl: preview_url,
             imageNaturalWidth: width,
             imageNaturalHeight: height,
@@ -964,6 +1022,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
             auto_wb: false,
             imagePreviewUrl: originalPreviewUrl,
             originalPreviewUrl: null,
+            originalPreviewWidth: null,
+            originalPreviewHeight: null,
           });
         } else {
           set({ auto_wb: false });
@@ -987,6 +1047,25 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       }
       const useColorcheckerFull =
         state.colorchecker_phase === "done" && state.calibratedFullFileId;
+      const effectiveAutoWb = useColorcheckerFull ? false : state.auto_wb;
+      const requestSnapshot = {
+        imageFile: fileToExtract,
+        corner_points: cloneCornerPoints(state.corner_points),
+        color_mode: state.color_mode,
+        page: state.page,
+        eight_color_full_export: state.eight_color_full_export,
+        offset_x: state.offset_x,
+        offset_y: state.offset_y,
+        zoom: state.zoom,
+        distortion: state.distortion,
+        vignette_correction: state.vignette_correction,
+        auto_wb: state.auto_wb,
+        colorchecker_enabled: state.colorchecker_enabled,
+        colorchecker_phase: state.colorchecker_phase,
+        calibratedFullFileId: state.calibratedFullFileId,
+        cornerPointsWidth: useColorcheckerFull ? state.imageNaturalWidth : null,
+        cornerPointsHeight: useColorcheckerFull ? state.imageNaturalHeight : null,
+      };
 
       set({ isLoading: true, error: null });
       try {
@@ -1000,7 +1079,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           zoom: state.zoom,
           distortion: state.distortion,
           vignette_correction: state.vignette_correction,
-          auto_wb: state.auto_wb,
+          auto_wb: effectiveAutoWb,
           colorcheckerCalibratedFileId: useColorcheckerFull
             ? state.calibratedFullFileId
             : null,
@@ -1032,6 +1111,31 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
             pageUpdate.page2Extracted_5c = true;
           }
         }
+        const current = get();
+        if (
+          current.imageFile !== requestSnapshot.imageFile ||
+          !cornerPointsEqual(current.corner_points, requestSnapshot.corner_points) ||
+          current.color_mode !== requestSnapshot.color_mode ||
+          current.page !== requestSnapshot.page ||
+          current.eight_color_full_export !== requestSnapshot.eight_color_full_export ||
+          current.offset_x !== requestSnapshot.offset_x ||
+          current.offset_y !== requestSnapshot.offset_y ||
+          current.zoom !== requestSnapshot.zoom ||
+          current.distortion !== requestSnapshot.distortion ||
+          current.vignette_correction !== requestSnapshot.vignette_correction ||
+          current.auto_wb !== requestSnapshot.auto_wb ||
+          current.colorchecker_enabled !== requestSnapshot.colorchecker_enabled ||
+          current.colorchecker_phase !== requestSnapshot.colorchecker_phase ||
+          current.calibratedFullFileId !== requestSnapshot.calibratedFullFileId ||
+          (useColorcheckerFull &&
+            (current.imageNaturalWidth !== requestSnapshot.cornerPointsWidth ||
+              current.imageNaturalHeight !== requestSnapshot.cornerPointsHeight))
+        ) {
+          if (current.isLoading) {
+            set({ isLoading: false });
+          }
+          return;
+        }
 
         set({
           session_id: response.session_id,
@@ -1052,6 +1156,31 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           ...pageUpdate,
         });
       } catch (err) {
+        const current = get();
+        if (
+          current.imageFile !== requestSnapshot.imageFile ||
+          !cornerPointsEqual(current.corner_points, requestSnapshot.corner_points) ||
+          current.color_mode !== requestSnapshot.color_mode ||
+          current.page !== requestSnapshot.page ||
+          current.eight_color_full_export !== requestSnapshot.eight_color_full_export ||
+          current.offset_x !== requestSnapshot.offset_x ||
+          current.offset_y !== requestSnapshot.offset_y ||
+          current.zoom !== requestSnapshot.zoom ||
+          current.distortion !== requestSnapshot.distortion ||
+          current.vignette_correction !== requestSnapshot.vignette_correction ||
+          current.auto_wb !== requestSnapshot.auto_wb ||
+          current.colorchecker_enabled !== requestSnapshot.colorchecker_enabled ||
+          current.colorchecker_phase !== requestSnapshot.colorchecker_phase ||
+          current.calibratedFullFileId !== requestSnapshot.calibratedFullFileId ||
+          (useColorcheckerFull &&
+            (current.imageNaturalWidth !== requestSnapshot.cornerPointsWidth ||
+              current.imageNaturalHeight !== requestSnapshot.cornerPointsHeight))
+        ) {
+          if (current.isLoading) {
+            set({ isLoading: false });
+          }
+          return;
+        }
         set({
           error: err instanceof Error ? err.message : "颜色提取失败，请重试",
           isLoading: false,

@@ -907,6 +907,7 @@ export default function GradientCardExtractPanel() {
         type="file"
         accept={ACCEPT_EXTRACTOR_FORMATS}
         className="hidden"
+        disabled={isExtracting}
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
           void setWhiteImageFile(file);
@@ -918,6 +919,7 @@ export default function GradientCardExtractPanel() {
         type="file"
         accept={ACCEPT_EXTRACTOR_FORMATS}
         className="hidden"
+        disabled={isExtracting}
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
           void setBlackImageFile(file);
@@ -1005,7 +1007,7 @@ export default function GradientCardExtractPanel() {
 </div>
 
         <section data-testid="gradient-colorchecker-toggle-section" className={resolveSectionCardClass(workspace.mode)}>
-          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isExtracting} />
         </section>
 
         <AnimatePresence initial={false}>
@@ -1109,6 +1111,7 @@ export default function GradientCardExtractPanel() {
                 label={t("mat_gradient_select_image_btn")}
                 variant="secondary"
                 onClick={() => whiteImageInputRef.current?.click()}
+                disabled={isExtracting}
                 className="w-full"
               />
               <div className="grid gap-3 grid-cols-2">
@@ -1116,7 +1119,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_ccw_btn")}
                   variant="secondary"
                   onClick={() => void rotateWhiteImage("ccw")}
-                  disabled={!whiteImageFile || isRotatingWhite || colorcheckerPending}
+                  disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
                   className="w-full"
                   data-testid="white-rotate-ccw-btn"
@@ -1125,7 +1128,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_cw_btn")}
                   variant="secondary"
                   onClick={() => void rotateWhiteImage("cw")}
-                  disabled={!whiteImageFile || isRotatingWhite || colorcheckerPending}
+                  disabled={!whiteImageFile || isRotatingWhite || isExtracting || colorcheckerPending}
                   loading={isRotatingWhite}
                   className="w-full"
                   data-testid="white-rotate-cw-btn"
@@ -1195,6 +1198,7 @@ export default function GradientCardExtractPanel() {
                 label={t("mat_gradient_select_image_btn")}
                 variant="secondary"
                 onClick={() => blackImageInputRef.current?.click()}
+                disabled={isExtracting}
                 className="w-full"
               />
               <div className="grid gap-3 grid-cols-2">
@@ -1202,7 +1206,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_ccw_btn")}
                   variant="secondary"
                   onClick={() => void rotateBlackImage("ccw")}
-                  disabled={!blackImageFile || isRotatingBlack || colorcheckerPending}
+                  disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
                   className="w-full"
                   data-testid="black-rotate-ccw-btn"
@@ -1211,7 +1215,7 @@ export default function GradientCardExtractPanel() {
                   label={t("mat_gradient_rotate_cw_btn")}
                   variant="secondary"
                   onClick={() => void rotateBlackImage("cw")}
-                  disabled={!blackImageFile || isRotatingBlack || colorcheckerPending}
+                  disabled={!blackImageFile || isRotatingBlack || isExtracting || colorcheckerPending}
                   loading={isRotatingBlack}
                   className="w-full"
                   data-testid="black-rotate-cw-btn"

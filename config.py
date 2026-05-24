@@ -22,9 +22,14 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMP_DIR = os.path.join(OUTPUT_DIR, "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+# Bounded image previews used by workflows that must not return full-size
+# source images to the browser.
+IMAGE_PREVIEW_MAX_EDGE = 1600
+IMAGE_PREVIEW_JPEG_QUALITY = 85
+
 # ColorChecker calibration artifacts.
-COLORCHECKER_PREVIEW_MAX_EDGE = 1600
-COLORCHECKER_PREVIEW_JPEG_QUALITY = 85
+COLORCHECKER_PREVIEW_MAX_EDGE = IMAGE_PREVIEW_MAX_EDGE
+COLORCHECKER_PREVIEW_JPEG_QUALITY = IMAGE_PREVIEW_JPEG_QUALITY
 COLORCHECKER_TEMP_TTL_SECONDS = 600
 
 MODELS_DIR = os.path.join(OUTPUT_DIR, "models")

@@ -8,6 +8,10 @@ import numpy as np
 import pytest
 
 import core.colorchecker_adapter as adapter
+from core.colorchecker.diagnostics import (
+    gray_reference_delta_metrics,
+    gray_reference_delta_warnings,
+)
 from core.colorchecker_adapter import (
     ColorCheckerCalibrationError,
     ColorCheckerUnavailableError,
@@ -325,3 +329,126 @@ def test_build_display_summary_falls_back_to_legacy_stats() -> None:
         "p95": 2.4,
         "max": 3.0,
     }
+
+
+def test_gray_reference_delta_does_not_warn_on_nonzero_reference_gray() -> None:
+    reference = np.asarray([[19.04, -0.05, 1.99]], dtype=np.float64)
+    corrected = reference.copy()
+
+    metrics = gray_reference_delta_metrics(corrected, reference, [24], ["N2/"])
+
+    assert metrics["b_delta_abs_max"] == 0.0
+    assert gray_reference_delta_warnings(metrics) == []
+
+
+def test_gray_reference_delta_warning_names_worst_gray_patch() -> None:
+    reference = np.asarray(
+        [
+            [99.07, -1.1, 0.88],
+            [38.85, -0.82, -1.57],
+        ],
+        dtype=np.float64,
+    )
+    corrected = np.asarray(
+        [
+            [99.07, -1.2, 1.0],
+            [38.85, -0.9, -3.2],
+        ],
+        dtype=np.float64,
+    )
+
+    metrics = gray_reference_delta_metrics(
+        corrected,
+        reference,
+        [19, 23],
+        ["White", "N3.5/"],
+    )
+
+    warnings = gray_reference_delta_warnings(metrics)
+    assert warnings == [
+        "Neutral gray Δb* patch 23 (N3.5/) is -1.6300 "
+        "(corrected -3.2000 vs reference -1.5700), exceeds suggested 1.5 threshold."
+    ]
+
+
+def test_standard_pipeline_uses_reference_lab_for_gray_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.colorchecker.pipeline as pipeline
+    from core.colorchecker.reference import get_brand
+
+    brand = get_brand(None)
+    reference_patches = brand["patches"]
+    reference_color_map = brand["color_map"]
+    assert isinstance(reference_patches, list)
+    assert isinstance(reference_color_map, dict)
+
+    def fake_warp(image, _corners, preview_width, preview_height):
+        preview = np.zeros((int(preview_height), int(preview_width), 3), dtype=np.uint8)
+        ordered = np.asarray([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+        return preview, np.ones(preview.shape[:2], dtype=np.uint8), ordered
+
+    def fake_build_patch_measurements(
+        _preview,
+        _patch_points,
+        _radius,
+        _method,
+        reference_patches_arg,
+        _sampling_filter,
+    ):
+        patch_colors: dict[str, dict[str, object]] = {}
+        patch_details: list[dict[str, object]] = []
+        for patch in reference_patches_arg:
+            label = str(patch["label"])
+            linear_rgb = pipeline.srgb_to_linear(
+                np.asarray(patch["sRGB"], dtype=np.float64)[:3] / 255.0
+            )
+            patch_colors[label] = {"linear_rgb": linear_rgb.tolist()}
+            patch_details.append(
+                {
+                    "index": int(patch["index"]),
+                    "label": label,
+                    "point": {"x": 0.0, "y": 0.0},
+                    "exclude_reasons": [],
+                    "fit_used": True,
+                }
+            )
+        return patch_colors, patch_details
+
+    captured: dict[str, np.ndarray] = {}
+
+    def capture_gray_delta(_corrected_lab, reference_lab, _patch_indices, _patch_labels=None):
+        captured["reference_lab"] = np.asarray(reference_lab, dtype=np.float64)
+        return {
+            "patches": [],
+            "a_delta_abs_max": None,
+            "b_delta_abs_max": None,
+            "a_delta_worst": None,
+            "b_delta_worst": None,
+        }
+
+    monkeypatch.setattr(pipeline, "warp_colorchecker_preview", fake_warp)
+    monkeypatch.setattr(pipeline, "build_patch_measurements", fake_build_patch_measurements)
+    monkeypatch.setattr(pipeline, "gray_reference_delta_metrics", capture_gray_delta)
+    monkeypatch.setattr(pipeline, "gray_reference_delta_warnings", lambda _metrics: [])
+
+    corners = [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}]
+    patch_points = [{"x": 0.0, "y": 0.0} for _ in reference_patches]
+    pipeline.calibrate_image_bgr(
+        np.zeros((4, 4, 3), dtype=np.uint8),
+        corners,
+        patch_points,
+        reference_patches,
+        reference_color_map,
+        sample_radius=2,
+    )
+
+    expected_gray_lab = np.stack(
+        [
+            np.asarray(patch["Lab_d65"], dtype=np.float64)[:3]
+            for patch in reference_patches
+            if 19 <= int(patch["index"]) <= 24
+        ],
+        axis=0,
+    )
+    np.testing.assert_allclose(captured["reference_lab"], expected_gray_lab)

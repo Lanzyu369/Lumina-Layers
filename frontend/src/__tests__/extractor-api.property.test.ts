@@ -88,6 +88,8 @@ function resetExtractorStore(): void {
     calibratedPreviewWidth: null,
     calibratedPreviewHeight: null,
     originalPreviewUrl: null,
+    originalPreviewWidth: null,
+    originalPreviewHeight: null,
     colorcheckerSummary: null,
   });
 }
@@ -234,6 +236,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       imageNaturalWidth: 1600,
       imageNaturalHeight: 1200,
       corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+      auto_wb: true,
       colorchecker_phase: "done",
       calibratedFullFileId: "full-id",
     });
@@ -254,6 +257,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     const [calledImage, calledParams] = mockedExtractColors.mock.calls[0];
     expect(calledImage).toBeNull();
     expect(calledParams.colorcheckerCalibratedFileId).toBe("full-id");
+    expect(calledParams.auto_wb).toBe(false);
     expect(calledParams.cornerPointsWidth).toBe(1600);
     expect(calledParams.cornerPointsHeight).toBe(1200);
   });
@@ -278,6 +282,158 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       expect(mockedExtractColors).not.toHaveBeenCalled();
     },
   );
+
+  it("does not disable a confirmed ColorChecker image while extraction is in flight", () => {
+    useExtractorStore.setState({
+      isLoading: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedFullFileId: "full-id",
+    });
+
+    useExtractorStore.getState().setColorcheckerEnabled(false);
+
+    const state = useExtractorStore.getState();
+    expect(state.colorchecker_enabled).toBe(true);
+    expect(state.colorchecker_phase).toBe("done");
+    expect(state.calibratedFullFileId).toBe("full-id");
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a confirmed ColorChecker image while extraction is in flight", () => {
+    const existingFile = new File(["old"], "old.png", { type: "image/png" });
+    const nextFile = new File(["new"], "new.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: existingFile,
+      imagePreviewUrl: "/api/files/confirmed-preview.jpg",
+      isLoading: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedFullFileId: "full-id",
+    });
+
+    useExtractorStore.getState().setImageFile(nextFile);
+
+    const state = useExtractorStore.getState();
+    expect(state.imageFile).toBe(existingFile);
+    expect(state.imagePreviewUrl).toBe("/api/files/confirmed-preview.jpg");
+    expect(state.calibratedFullFileId).toBe("full-id");
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate a confirmed ColorChecker image while extraction is in flight", async () => {
+    const file = new File(["raw"], "calibration.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "/api/files/confirmed-preview.jpg",
+      isLoading: true,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedFullFileId: "full-id",
+    });
+
+    await useExtractorStore.getState().rotateImage();
+
+    const state = useExtractorStore.getState();
+    expect(mockedRotateExtractorImage).not.toHaveBeenCalled();
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalled();
+    expect(state.imageFile).toBe(file);
+    expect(state.calibratedFullFileId).toBe("full-id");
+    expect(state.isLoading).toBe(true);
+  });
+
+  it("ignores stale extractor responses after ColorChecker state changes", async () => {
+    const file = new File(["test-data"], "calibration.png", {
+      type: "image/png",
+    });
+    let resolveExtract: ((value: ExtractResponse) => void) | null = null;
+    mockedExtractColors.mockReturnValueOnce(
+      new Promise<ExtractResponse>((resolve) => {
+        resolveExtract = resolve;
+      }),
+    );
+
+    useExtractorStore.setState({
+      imageFile: file,
+      imageNaturalWidth: 1600,
+      imageNaturalHeight: 1200,
+      corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedFullFileId: "full-id",
+    });
+
+    const submit = useExtractorStore.getState().submitExtract();
+    await vi.waitFor(() => expect(mockedExtractColors).toHaveBeenCalled());
+
+    useExtractorStore.setState({
+      colorchecker_enabled: false,
+      colorchecker_phase: null,
+      calibratedFullFileId: null,
+    });
+    resolveExtract?.({
+      session_id: "stale-session",
+      status: "success",
+      message: "ok",
+      lut_download_url: "/stale.npy",
+      warp_view_url: "/stale_warp.png",
+      lut_preview_url: "/stale_preview.png",
+      default_palette: [],
+    });
+    await submit;
+
+    const state = useExtractorStore.getState();
+    expect(state.session_id).toBeNull();
+    expect(state.lut_download_url).toBeNull();
+    expect(state.isLoading).toBe(false);
+  });
+
+  it("ignores stale extractor responses after extraction parameters change", async () => {
+    const file = new File(["test-data"], "calibration.png", {
+      type: "image/png",
+    });
+    let resolveExtract: ((value: ExtractResponse) => void) | null = null;
+    mockedExtractColors.mockReturnValueOnce(
+      new Promise<ExtractResponse>((resolve) => {
+        resolveExtract = resolve;
+      }),
+    );
+
+    useExtractorStore.setState({
+      imageFile: file,
+      imageNaturalWidth: 1600,
+      imageNaturalHeight: 1200,
+      corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+      color_mode: ExtractorColorMode.FOUR_COLOR_RYBW,
+      page: ExtractorPage.PAGE_1,
+      offset_x: 0,
+      offset_y: 0,
+      zoom: 1,
+      distortion: 0,
+      vignette_correction: false,
+    });
+
+    const submit = useExtractorStore.getState().submitExtract();
+    await vi.waitFor(() => expect(mockedExtractColors).toHaveBeenCalled());
+
+    useExtractorStore.getState().setColorMode(ExtractorColorMode.SIX_COLOR);
+    resolveExtract?.({
+      session_id: "stale-session",
+      status: "success",
+      message: "ok",
+      lut_download_url: "/stale.npy",
+      warp_view_url: "/stale_warp.png",
+      lut_preview_url: "/stale_preview.png",
+      default_palette: [],
+    });
+    await submit;
+
+    const state = useExtractorStore.getState();
+    expect(state.color_mode).toBe(ExtractorColorMode.SIX_COLOR);
+    expect(state.session_id).toBeNull();
+    expect(state.lut_download_url).toBeNull();
+    expect(state.isLoading).toBe(false);
+  });
 
   it("releases stale ColorChecker calibration responses", () => {
     const oldFile = new File(["old"], "old.png", { type: "image/png" });
@@ -363,12 +519,20 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
     globalThis.Image = MockImage as unknown as typeof Image;
 
     try {
+      mockedColorcheckerConfirm.mockResolvedValueOnce({
+        status: "ok",
+        confirmed: true,
+        calibrated_preview_url: "/api/files/fresh-calibrated.jpg",
+        preview_width: 640,
+        preview_height: 480,
+      });
       useExtractorStore.setState({
         colorchecker_enabled: true,
         colorchecker_phase: "confirming",
@@ -378,8 +542,14 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       });
 
       useExtractorStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "new-full-id",
+          "/api/files/new-calibrated.jpg",
+        ),
+      );
       expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+      expect(createdImage?.src).toBe("/api/files/fresh-calibrated.jpg");
       createdImage?.onload?.();
 
       const state = useExtractorStore.getState();
@@ -387,7 +557,9 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       expect(state.colorchecker_phase).toBe("done");
       expect(state.calibratedFullFileId).toBe("new-full-id");
       expect(state.previousCalibratedFullFileId).toBeNull();
-      expect(state.imagePreviewUrl).toBe("/api/files/new-calibrated.jpg");
+      expect(state.imagePreviewUrl).toBe("/api/files/fresh-calibrated.jpg");
+      expect(state.imageNaturalWidth).toBe(640);
+      expect(state.imageNaturalHeight).toBe(480);
     } finally {
       globalThis.Image = OriginalImage;
     }
@@ -412,6 +584,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
@@ -428,7 +601,12 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       });
 
       useExtractorStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "new-full-id",
+          "/api/files/new-calibrated.jpg",
+        ),
+      );
       createdImage?.onerror?.();
 
       const state = useExtractorStore.getState();
@@ -462,6 +640,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage = this;
       }
     }
@@ -477,7 +656,12 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       });
 
       useExtractorStore.getState().confirmCalibrated();
-      await vi.waitFor(() => expect(mockedColorcheckerConfirm).toHaveBeenCalledWith("new-full-id"));
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "new-full-id",
+          "/api/files/new-calibrated.jpg",
+        ),
+      );
       useExtractorStore.getState().rejectCalibrated();
       createdImage?.onload?.();
 
@@ -513,6 +697,35 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(state.colorchecker_phase).toBeNull();
     expect(state.colorchecker_enabled).toBe(false);
     expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
+  });
+
+  it("keeps original image dimensions when disabling ColorChecker to an existing preview", () => {
+    const file = new File(["image"], "calibration.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "/api/files/calibrated-preview.jpg",
+      imageNaturalWidth: 1600,
+      imageNaturalHeight: 1200,
+      originalPreviewUrl: "/api/files/original-preview.jpg",
+      originalPreviewWidth: 2400,
+      originalPreviewHeight: 1800,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+      calibratedFullFileId: "released-full-id",
+      corner_points: [[0, 0], [1, 0], [1, 1], [0, 1]],
+      active_corner_index: 2,
+    });
+
+    useExtractorStore.getState().setColorcheckerEnabled(false);
+
+    const state = useExtractorStore.getState();
+    expect(mockedColorcheckerRelease).toHaveBeenCalledWith("released-full-id");
+    expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
+    expect(state.imageNaturalWidth).toBe(2400);
+    expect(state.imageNaturalHeight).toBe(1800);
+    expect(state.corner_points).toEqual([]);
+    expect(state.active_corner_index).toBeNull();
   });
 
   it("releases calibration responses that arrive during image rotation", async () => {

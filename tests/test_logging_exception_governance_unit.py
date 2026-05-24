@@ -134,6 +134,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_preview_wb_done",
     "extractor_rotate_done",
     "extractor_colorchecker_warp_preview_done",
+    "extractor_colorchecker_source_done",
     "extractor_colorchecker_detect_chart_done",
     "extractor_colorchecker_calibrate_done",
     "extractor_colorchecker_release_done",

@@ -1,4 +1,5 @@
 import apiClient from "./client";
+import { createPreviewResource } from "./system";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
@@ -131,6 +132,10 @@ export interface ColorcheckerDetectResponse {
   mode: string;
   reason: string;
   candidateCount: number;
+  full_width?: number;
+  full_height?: number;
+  preview_width?: number;
+  preview_height?: number;
 }
 
 export interface ColorcheckerWarpPreviewResponse {
@@ -140,14 +145,42 @@ export interface ColorcheckerWarpPreviewResponse {
   auto_patch_points: ColorcheckerPoint[];
 }
 
+export interface ColorcheckerSourceResponse {
+  colorchecker_source_file_id: string;
+  source_preview_file_id?: string | null;
+  source_preview_url: string;
+  full_width: number;
+  full_height: number;
+  preview_width: number;
+  preview_height: number;
+  source_type?: string | null;
+}
+
+/** Upload the ColorChecker source image once and receive a bounded preview. */
+export async function colorcheckerPrepareSource(
+  image: File,
+): Promise<ColorcheckerSourceResponse> {
+  const response = await createPreviewResource(image, "colorchecker");
+  return {
+    colorchecker_source_file_id: response.resource_id,
+    source_preview_file_id: response.preview_id,
+    source_preview_url: response.preview_url,
+    full_width: response.full_width,
+    full_height: response.full_height,
+    preview_width: response.preview_width,
+    preview_height: response.preview_height,
+    source_type: response.source_type ?? null,
+  };
+}
+
 /** Automatically locate the ColorChecker chart corners */
 export async function colorcheckerDetectChart(
-  image: File,
+  sourceFileId: string,
   patchLayout: string = "4x6",
   assistPoint: ColorcheckerPoint | null = null,
 ): Promise<ColorcheckerDetectResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  fd.append("colorchecker_source_file_id", sourceFileId);
   fd.append("patch_layout", patchLayout);
   if (assistPoint) {
     fd.append("assist_point", JSON.stringify(assistPoint));
@@ -162,14 +195,17 @@ export async function colorcheckerDetectChart(
 
 /** Warp the ColorChecker region and return preview + auto 24 patch points */
 export async function colorcheckerWarpPreview(
-  image: File,
+  sourceFileId: string,
   cornerPoints: Array<[number, number]>,
+  cornerPointsSize: { width: number; height: number },
   patchLayout: string = "4x6",
   patchOrientation: string = "normal",
 ): Promise<ColorcheckerWarpPreviewResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  fd.append("colorchecker_source_file_id", sourceFileId);
   fd.append("corner_points", JSON.stringify(cornerPoints));
+  fd.append("corner_points_width", String(cornerPointsSize.width));
+  fd.append("corner_points_height", String(cornerPointsSize.height));
   fd.append("patch_layout", patchLayout);
   fd.append("patch_orientation", patchOrientation);
   const response = await apiClient.post<ColorcheckerWarpPreviewResponse>(
@@ -183,8 +219,10 @@ export async function colorcheckerWarpPreview(
 /** Calibration response (step 2) */
 export interface ColorcheckerCalibrateResponse {
   calibrated_preview_url: string;
+  calibrated_preview_file_id?: string | null;
   calibrated_full_file_id: string;
   overlay_url: string;
+  overlay_preview_file_id?: string | null;
   full_width: number;
   full_height: number;
   preview_width: number;
@@ -203,16 +241,19 @@ export interface ColorcheckerCalibrateOptions {
 
 /** Compute CCM and return calibrated image + overlay */
 export async function colorcheckerCalibrate(
-  image: File,
+  sourceFileId: string,
   cornerPoints: Array<[number, number]>,
+  cornerPointsSize: { width: number; height: number },
   patchPoints: ColorcheckerPoint[] | null = null,
   patchLayout: string = "4x6",
   options: ColorcheckerCalibrateOptions | null = null,
   patchOrientation: string = "normal",
 ): Promise<ColorcheckerCalibrateResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  fd.append("colorchecker_source_file_id", sourceFileId);
   fd.append("corner_points", JSON.stringify(cornerPoints));
+  fd.append("corner_points_width", String(cornerPointsSize.width));
+  fd.append("corner_points_height", String(cornerPointsSize.height));
   if (patchPoints) {
     fd.append("patch_points", JSON.stringify(patchPoints));
   }
@@ -251,12 +292,49 @@ export async function colorcheckerRelease(fileId: string): Promise<void> {
   });
 }
 
-export async function colorcheckerConfirm(fileId: string): Promise<void> {
+export interface ColorcheckerConfirmResponse {
+  status: string;
+  confirmed: boolean;
+  calibrated_preview_url?: string | null;
+  preview_width?: number | null;
+  preview_height?: number | null;
+}
+
+function fileIdFromApiFilesUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const extract = (pathname: string): string | null => {
+    const prefix = "/api/files/";
+    if (!pathname.startsWith(prefix)) return null;
+    return decodeURIComponent(pathname.slice(prefix.length).split("/")[0] ?? "");
+  };
+  if (url.startsWith("/api/files/")) {
+    return extract(url);
+  }
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.origin !== window.location.origin) return null;
+    return extract(parsed.pathname);
+  } catch {
+    return null;
+  }
+}
+
+export async function colorcheckerConfirm(
+  fileId: string,
+  previewUrl?: string | null,
+): Promise<ColorcheckerConfirmResponse | undefined> {
   const fd = new FormData();
   fd.append("file_id", fileId);
-  await apiClient.post("/extractor/colorchecker-confirm", fd, {
-    timeout: 30_000,
-  });
+  const previewFileId = fileIdFromApiFilesUrl(previewUrl);
+  if (previewFileId) {
+    fd.append("preview_file_id", previewFileId);
+  }
+  const response = await apiClient.post<ColorcheckerConfirmResponse>(
+    "/extractor/colorchecker-confirm",
+    fd,
+    { timeout: 30_000 },
+  );
+  return response.data;
 }
 
 export async function colorcheckerTouch(fileId: string): Promise<void> {

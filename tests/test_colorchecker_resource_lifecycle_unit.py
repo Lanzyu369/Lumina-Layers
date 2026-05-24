@@ -14,11 +14,13 @@ from api.app import create_app
 from api.colorchecker_artifacts import (
     COLORCHECKER_FULL_PENDING_PURPOSE,
     COLORCHECKER_FULL_PURPOSE,
+    COLORCHECKER_SOURCE_PURPOSE,
 )
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_resources import PREVIEW_PUBLIC_PURPOSE
 from api.session_store import SessionStore
-from config import COLORCHECKER_TEMP_TTL_SECONDS
+from config import COLORCHECKER_TEMP_TTL_SECONDS, IMAGE_PREVIEW_MAX_EDGE
 
 
 def _png_bytes(width: int = 8, height: int = 6) -> bytes:
@@ -36,19 +38,299 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     return TestClient(app), store, registry
 
 
+def _register_colorchecker_source(
+    registry: FileRegistry,
+    tmp_path,
+    *,
+    width: int = 8,
+    height: int = 6,
+) -> str:
+    source_path = tmp_path / f"source-{width}x{height}.png"
+    Image.new("RGB", (width, height), (128, 96, 64)).save(source_path, format="PNG")
+    return registry.register_path(
+        "colorchecker-source:test",
+        str(source_path),
+        source_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_SOURCE_PURPOSE,
+    )
+
+
+def test_preview_resource_returns_private_source_id_and_bounded_preview() -> None:
+    """Preview resource upload should expose only a bounded public preview plus private id."""
+    client, _store, registry = _client_with_state()
+
+    response = client.post(
+        "/api/system/preview-resources",
+        data={"context": "colorchecker"},
+        files={"file": ("chart.png", _png_bytes(12, 8), "image/png")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    source_id = body["resource_id"]
+    assert body["preview_url"].startswith("/api/files/")
+    assert body["full_width"] == 12
+    assert body["full_height"] == 8
+    assert body["preview_width"] == 12
+    assert body["preview_height"] == 8
+
+    source_entry = registry.get_entry(source_id)
+    assert source_entry is not None
+    assert source_entry["is_public"] is False
+    assert source_entry["purpose"] == COLORCHECKER_SOURCE_PURPOSE
+    preview_entry = registry.get_entry(body["preview_id"])
+    assert preview_entry is not None
+    assert preview_entry["is_public"] is True
+    assert preview_entry["purpose"] == PREVIEW_PUBLIC_PURPOSE
+    assert preview_entry["session_id"].endswith(f"{source_id}:role:source")
+    assert client.get(f"/api/files/{source_id}").status_code == 404
+    assert client.get(body["preview_url"]).status_code == 200
+
+    release_response = client.post(
+        "/api/extractor/colorchecker-release",
+        data={"file_id": source_id},
+    )
+    assert release_response.status_code == 200
+    assert release_response.json()["released"] is True
+    assert registry.resolve(source_id) is None
+    assert client.get(body["preview_url"]).status_code == 404
+
+
+def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
+    """Extensionless standard images should still decode through the private source id."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    captured: dict[str, object] = {}
+
+    class FakeDetectResult:
+        detected = True
+        confidence = 1.0
+        candidate_count = 1
+
+        def to_response(self) -> dict[str, object]:
+            return {
+                "detected": True,
+                "corners": [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 12.0, "y": 0.0},
+                    {"x": 12.0, "y": 8.0},
+                    {"x": 0.0, "y": 8.0},
+                ],
+                "patchOrientation": "normal",
+                "confidence": 1.0,
+                "score": 1.0,
+                "mode": "fake",
+                "reason": "",
+                "candidateCount": 1,
+            }
+
+    def fake_detect(image_bgr, **_kwargs):
+        captured["shape"] = image_bgr.shape
+        return FakeDetectResult()
+
+    monkeypatch.setattr(adapter, "detect_colorchecker_chart", fake_detect)
+
+    source_response = client.post(
+        "/api/extractor/colorchecker-source",
+        files={"image": ("chart", _png_bytes(12, 8), "image/png")},
+    )
+
+    assert source_response.status_code == 200
+    source_id = source_response.json()["colorchecker_source_file_id"]
+    source_entry = registry.get_entry(source_id)
+    assert source_entry is not None
+    assert source_entry["filename"].endswith(".png")
+
+    detect_response = client.post(
+        "/api/extractor/colorchecker-detect-chart",
+        data={"colorchecker_source_file_id": source_id},
+    )
+
+    assert detect_response.status_code == 200
+    assert captured["shape"] == (8, 12, 3)
+
+
+def test_colorchecker_source_accepts_extensionless_octet_stream_standard_image(monkeypatch) -> None:
+    """Unknown-MIME extensionless standard images should not be forced through RAW."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    captured: dict[str, object] = {}
+
+    class FakeDetectResult:
+        detected = True
+        confidence = 1.0
+        candidate_count = 1
+
+        def to_response(self) -> dict[str, object]:
+            return {
+                "detected": True,
+                "corners": [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 12.0, "y": 0.0},
+                    {"x": 12.0, "y": 8.0},
+                    {"x": 0.0, "y": 8.0},
+                ],
+                "patchOrientation": "normal",
+                "confidence": 1.0,
+                "score": 1.0,
+                "mode": "fake",
+                "reason": "",
+                "candidateCount": 1,
+            }
+
+    def fake_detect(image_bgr, **_kwargs):
+        captured["shape"] = image_bgr.shape
+        return FakeDetectResult()
+
+    monkeypatch.setattr(adapter, "detect_colorchecker_chart", fake_detect)
+
+    source_response = client.post(
+        "/api/extractor/colorchecker-source",
+        files={"image": ("chart", _png_bytes(12, 8), "application/octet-stream")},
+    )
+
+    assert source_response.status_code == 200
+    source_id = source_response.json()["colorchecker_source_file_id"]
+    source_entry = registry.get_entry(source_id)
+    assert source_entry is not None
+    assert source_entry["filename"] == "chart"
+
+    detect_response = client.post(
+        "/api/extractor/colorchecker-detect-chart",
+        data={"colorchecker_source_file_id": source_id},
+    )
+
+    assert detect_response.status_code == 200
+    assert captured["shape"] == (8, 12, 3)
+
+
+def test_colorchecker_source_heic_extension_redecodes_as_standard(tmp_path) -> None:
+    """HEIC-like standard sources should not be treated as RAW after registration."""
+    from api.routers.extractor import _decode_colorchecker_source
+
+    registry = FileRegistry()
+    source_path = tmp_path / "photo.heic"
+    source_path.write_bytes(_png_bytes(12, 8))
+    source_id = registry.register_path(
+        "colorchecker-source:heic",
+        str(source_path),
+        source_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_SOURCE_PURPOSE,
+    )
+
+    decoded = _decode_colorchecker_source(registry, source_id)
+
+    assert decoded.source_type == "standard"
+    assert decoded.image_bgr.shape == (8, 12, 3)
+
+
+def test_colorchecker_source_infers_heic_suffix_for_extensionless_upload(tmp_path) -> None:
+    """Extensionless HEIC uploads should keep a standard-image type hint."""
+    from api.preview_resources import colorchecker_source_registry_filename
+
+    source_path = tmp_path / "upload.tmp"
+    source_path.write_bytes(b"fake")
+
+    filename = colorchecker_source_registry_filename(
+        SimpleNamespace(filename="chart", content_type="image/heic"),
+        str(source_path),
+        "standard",
+    )
+
+    assert filename == "chart.heic"
+
+
+def test_preview_artifact_returns_bounded_preview_for_private_source(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Preview artifact endpoint should expose only a bounded public preview."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    source_id = _register_colorchecker_source(registry, tmp_path, width=18, height=10)
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(
+            image_bgr=np.zeros((10, 18, 3), dtype=np.uint8),
+            source_type="standard",
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+
+    response = client.post(
+        "/api/system/preview-artifacts",
+        data={"context": "colorchecker", "resource_id": source_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preview_url"].startswith("/api/files/")
+    assert body["preview_width"] == 18
+    assert body["preview_height"] == 10
+    preview_entry = registry.get_entry(body["preview_id"])
+    assert preview_entry is not None
+    assert preview_entry["is_public"] is True
+    assert preview_entry["purpose"] == PREVIEW_PUBLIC_PURPOSE
+    assert client.get(body["preview_url"]).status_code == 200
+
+
+def test_colorchecker_source_preserves_raw_extension_when_mime_is_standard(monkeypatch) -> None:
+    """RAW-looking filenames should not be relabeled from browser MIME alone."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    captured: dict[str, object] = {}
+
+    def fake_decode(*_args, **kwargs):
+        captured["file_name"] = kwargs["file_name"]
+        return SimpleNamespace(
+            image_bgr=np.zeros((8, 12, 3), dtype=np.uint8),
+            source_type="raw",
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+
+    response = client.post(
+        "/api/extractor/colorchecker-source",
+        files={"image": ("shot.dng", _png_bytes(12, 8), "image/tiff")},
+    )
+
+    assert response.status_code == 200
+    source_id = response.json()["colorchecker_source_file_id"]
+    source_entry = registry.get_entry(source_id)
+    assert source_entry is not None
+    assert captured["file_name"] == "shot.dng"
+    assert source_entry["filename"] == "shot.dng"
+
+
 def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     monkeypatch,
+    tmp_path,
 ) -> None:
     """Calibration should expose only preview URLs and private full-image id."""
     import core.colorchecker_adapter as adapter
+    import api.routers.extractor as extractor_router
 
     client, _store, registry = _client_with_state()
     calibrated = np.zeros((80, 120, 3), dtype=np.uint8)
     calibrated[:, :] = [10, 120, 240]
     overlay = np.zeros((40, 60, 3), dtype=np.uint8)
     captured: dict[str, object] = {}
+    source_id = _register_colorchecker_source(registry, tmp_path, width=8, height=6)
 
-    def fake_apply(*_args, **kwargs):
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((6, 8, 3), dtype=np.uint8))
+
+    def fake_apply(*args, **kwargs):
+        captured["image_shape"] = args[0].shape
+        captured["corners"] = args[1]
         captured.update(kwargs)
         return SimpleNamespace(
             calibrated_image=calibrated,
@@ -57,15 +339,18 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
             display_summary={"deltaE00": {"mean": 1.0, "median": 1.0, "p95": 2.0, "max": 3.0}},
         )
 
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
     monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fake_apply)
 
     response = client.post(
         "/api/extractor/colorchecker-calibrate",
         data={
-            "corner_points": "[[0,0],[1,0],[1,1],[0,1]]",
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+            "corner_points_width": "4",
+            "corner_points_height": "3",
             "patch_orientation": "flip_horizontal",
         },
-        files={"image": ("chart.png", _png_bytes(), "image/png")},
     )
 
     assert response.status_code == 200
@@ -77,15 +362,32 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert body["full_height"] == 80
     assert body["preview_width"] == 120
     assert body["preview_height"] == 80
+    assert captured["image_shape"] == (6, 8, 3)
+    assert captured["corners"] == [[0, 0], [8, 0], [8, 6], [0, 6]]
     assert captured["patch_orientation"] == "flip_horizontal"
 
+    assert client.get(f"/api/files/{source_id}").status_code == 404
+    source_touch_response = client.post(
+        "/api/extractor/colorchecker-touch",
+        data={"file_id": source_id},
+    )
+    assert source_touch_response.status_code == 200
+    assert source_touch_response.json()["renewed"] is True
+
     full_id = body["calibrated_full_file_id"]
+    calibrated_preview_id = body["calibrated_preview_file_id"]
     entry = registry.get_entry(full_id)
     assert entry is not None
     assert entry["is_public"] is False
     assert entry["purpose"] == COLORCHECKER_FULL_PENDING_PURPOSE
     assert os.path.exists(entry["path"])
     assert client.get(f"/api/files/{full_id}").status_code == 404
+    calibrated_preview_entry = registry.get_entry(calibrated_preview_id)
+    assert calibrated_preview_entry is not None
+    assert calibrated_preview_entry["session_id"].endswith(f"{full_id}:role:calibrated")
+    overlay_preview_entry = registry.get_entry(body["overlay_preview_file_id"])
+    assert overlay_preview_entry is not None
+    assert overlay_preview_entry["session_id"].endswith(f"{full_id}:role:overlay")
 
     touch_pending_response = client.post(
         "/api/extractor/colorchecker-touch",
@@ -94,12 +396,49 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert touch_pending_response.status_code == 200
     assert touch_pending_response.json()["renewed"] is True
 
+    def fail_full_image_load(*_args, **_kwargs):
+        raise AssertionError("confirm should reuse the bounded preview")
+
+    monkeypatch.setattr(extractor_router, "load_colorchecker_full_rgb", fail_full_image_load)
+
+    mismatched_preview_id = registry.register_bytes(
+        "preview:other",
+        _png_bytes(),
+        "wrong-preview.jpg",
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=True,
+        purpose=PREVIEW_PUBLIC_PURPOSE,
+    )
+    mismatch_response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={"file_id": full_id, "preview_file_id": mismatched_preview_id},
+    )
+    assert mismatch_response.status_code == 422
+    assert registry.get_entry(full_id)["purpose"] == COLORCHECKER_FULL_PENDING_PURPOSE
+
+    overlay_mismatch_response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={"file_id": full_id, "preview_file_id": body["overlay_preview_file_id"]},
+    )
+    assert overlay_mismatch_response.status_code == 422
+    assert registry.get_entry(full_id)["purpose"] == COLORCHECKER_FULL_PENDING_PURPOSE
+
     confirm_response = client.post(
         "/api/extractor/colorchecker-confirm",
-        data={"file_id": full_id},
+        data={"file_id": full_id, "preview_file_id": calibrated_preview_id},
     )
     assert confirm_response.status_code == 200
-    assert confirm_response.json()["confirmed"] is True
+    confirm_body = confirm_response.json()
+    assert confirm_body["confirmed"] is True
+    assert confirm_body["calibrated_preview_url"] == body["calibrated_preview_url"]
+    assert confirm_body["preview_width"] == 120
+    assert confirm_body["preview_height"] == 80
+    confirmed_preview_id = confirm_body["calibrated_preview_url"].rsplit("/", 1)[-1]
+    confirmed_preview_entry = registry.get_entry(confirmed_preview_id)
+    assert confirmed_preview_entry is not None
+    assert confirmed_preview_entry["is_public"] is True
+    assert confirmed_preview_entry["ttl_seconds"] == COLORCHECKER_TEMP_TTL_SECONDS
+    assert client.get(confirm_body["calibrated_preview_url"]).status_code == 200
     confirmed_entry = registry.get_entry(full_id)
     assert confirmed_entry is not None
     assert confirmed_entry["purpose"] == COLORCHECKER_FULL_PURPOSE
@@ -119,20 +458,94 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert release_response.json()["released"] is True
     assert registry.resolve(full_id) is None
     assert os.path.exists(entry["path"]) is False
+    assert client.get(body["calibrated_preview_url"]).status_code == 404
+    assert client.get(body["overlay_url"]).status_code == 404
+
+    source_release_response = client.post(
+        "/api/extractor/colorchecker-release",
+        data={"file_id": source_id},
+    )
+    assert source_release_response.status_code == 200
+    assert source_release_response.json()["released"] is True
+    assert registry.resolve(source_id) is None
 
 
-def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
+def test_colorchecker_calibrate_passes_raw_source_path_to_core(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """RAW calibration should keep the core on its strict RAW file path."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    source_path = tmp_path / "shot.dng"
+    source_path.write_bytes(b"fake raw")
+    source_id = registry.register_path(
+        "colorchecker-source:raw",
+        str(source_path),
+        "shot.dng",
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_SOURCE_PURPOSE,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_decode(path, **kwargs):
+        captured["decoded_path"] = path
+        captured["decoded_file_name"] = kwargs["file_name"]
+        return SimpleNamespace(
+            image_bgr=np.zeros((6, 8, 3), dtype=np.uint8),
+            source_type="raw",
+        )
+
+    def fake_apply(*args, **kwargs):
+        captured["calibration_image"] = args[0]
+        captured["corners"] = args[1]
+        captured.update(kwargs)
+        return SimpleNamespace(
+            calibrated_image=np.zeros((8, 12, 3), dtype=np.uint8),
+            overlay_image=np.zeros((4, 6, 3), dtype=np.uint8),
+            patch_points=[{"x": 1.0, "y": 2.0}] * 24,
+            display_summary={
+                "deltaE00": {"mean": 1.0, "median": 1.0, "p95": 2.0, "max": 3.0}
+            },
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fake_apply)
+
+    response = client.post(
+        "/api/extractor/colorchecker-calibrate",
+        data={
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+            "corner_points_width": "4",
+            "corner_points_height": "3",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["decoded_path"] == str(source_path)
+    assert captured["decoded_file_name"] == "shot.dng"
+    assert captured["calibration_image"] == str(source_path)
+    assert captured["file_name"] == "shot.dng"
+    assert captured["mime_type"] == "application/octet-stream"
+    assert captured["corners"] == [[0, 0], [8, 0], [8, 6], [0, 6]]
+
+
+def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch, tmp_path) -> None:
     """Warp preview should use the ColorChecker artifact TTL constant."""
     import core.colorchecker_adapter as adapter
 
     client, _store, registry = _client_with_state()
 
     def fake_decode(*_args, **_kwargs):
-        return SimpleNamespace(image_bgr=np.zeros((8, 8, 3), dtype=np.uint8))
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
 
     captured: dict[str, object] = {}
 
-    def fake_warp(*_args, **kwargs):
+    def fake_warp(*args, **kwargs):
+        captured["corner_points"] = args[1]
         captured.update(kwargs)
         return SimpleNamespace(
             preview_png=_png_bytes(),
@@ -141,16 +554,19 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
             auto_patch_points=[],
         )
 
-    monkeypatch.setattr(adapter, "decode_colorchecker_upload", fake_decode)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
     monkeypatch.setattr(adapter, "warp_colorchecker_preview", fake_warp)
 
     response = client.post(
         "/api/extractor/colorchecker-warp-preview",
         data={
-            "corner_points": "[[0,0],[1,0],[1,1],[0,1]]",
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+            "corner_points_width": "8",
+            "corner_points_height": "4",
             "patch_orientation": "rotate_180",
         },
-        files={"image": ("chart.png", _png_bytes(), "image/png")},
     )
 
     assert response.status_code == 200
@@ -158,7 +574,78 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch) -> None:
     entry = registry.get_entry(preview_id)
     assert entry is not None
     assert entry["ttl_seconds"] == COLORCHECKER_TEMP_TTL_SECONDS
+    assert captured["corner_points"] == [[0, 0], [16, 0], [16, 8], [0, 8]]
     assert captured["patch_orientation"] == "rotate_180"
+
+
+def test_colorchecker_detect_uses_private_source_and_preview_coordinates(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Auto-detected full-image corners should be returned in preview space."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    captured: dict[str, object] = {}
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((1000, 2000, 3), dtype=np.uint8))
+
+    def fake_detect(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            detected=True,
+            corners=[
+                {"x": 0.0, "y": 0.0},
+                {"x": 2000.0, "y": 0.0},
+                {"x": 2000.0, "y": 1000.0},
+                {"x": 0.0, "y": 1000.0},
+            ],
+            patch_orientation="normal",
+            confidence=0.9,
+            score=0.1,
+            mode="auto",
+            reason="",
+            candidate_count=1,
+            to_response=lambda: {
+                "detected": True,
+                "corners": [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 2000.0, "y": 0.0},
+                    {"x": 2000.0, "y": 1000.0},
+                    {"x": 0.0, "y": 1000.0},
+                ],
+                "patchOrientation": "normal",
+                "confidence": 0.9,
+                "score": 0.1,
+                "mode": "auto",
+                "reason": "",
+                "candidateCount": 1,
+            },
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "detect_colorchecker_chart", fake_detect)
+
+    response = client.post(
+        "/api/extractor/colorchecker-detect-chart",
+        data={"colorchecker_source_file_id": source_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    expected_preview_width = int(IMAGE_PREVIEW_MAX_EDGE)
+    expected_preview_height = int(IMAGE_PREVIEW_MAX_EDGE / 2)
+    assert body["preview_width"] == expected_preview_width
+    assert body["preview_height"] == expected_preview_height
+    assert body["corners"] == [
+        {"x": 0.0, "y": 0.0},
+        {"x": float(expected_preview_width), "y": 0.0},
+        {"x": float(expected_preview_width), "y": float(expected_preview_height)},
+        {"x": 0.0, "y": float(expected_preview_height)},
+    ]
+    assert captured["assist_point"] is None
 
 
 def test_extractor_uses_private_colorchecker_image_and_scales_points(
@@ -214,6 +701,20 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
     assert pending_response.status_code == 404
     assert captured == {}
 
+    auto_wb_response = client.post(
+        "/api/extractor/extract",
+        data={
+            "corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "colorchecker_calibrated_file_id": full_id,
+            "corner_points_width": "10",
+            "corner_points_height": "10",
+            "auto_wb": "true",
+        },
+    )
+    assert auto_wb_response.status_code == 422
+    assert "auto_wb" in auto_wb_response.json()["detail"]
+    assert captured == {}
+
     response = client.post(
         "/api/extractor/extract",
         data={
@@ -227,6 +728,7 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
     assert response.status_code == 200
     assert captured["img"].shape == (20, 40, 3)
     assert captured["points"] == [[0, 0], [40, 0], [40, 20], [0, 20]]
+    assert captured["auto_wb"] is False
 
 
 def test_stage_a_uses_private_colorchecker_images_only_when_restored(

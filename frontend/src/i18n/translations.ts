@@ -2642,9 +2642,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡角点",
     en: "Card corner",
   },
+  ext_cc_patch_orientation_label: {
+    zh: "色块方向",
+    en: "Patch Order",
+  },
+  ext_cc_patch_orientation_normal: {
+    zh: "正常",
+    en: "Normal",
+  },
+  ext_cc_patch_orientation_rotate_180: {
+    zh: "旋转 180°",
+    en: "Rotated 180°",
+  },
+  ext_cc_patch_orientation_flip_horizontal: {
+    zh: "水平镜像",
+    en: "Mirrored Horizontally",
+  },
+  ext_cc_patch_orientation_flip_vertical: {
+    zh: "垂直镜像",
+    en: "Mirrored Vertically",
+  },
   ext_cc_missing_image: {
     zh: "请先选择图片",
     en: "Choose an image first",
+  },
+  ext_cc_status_preparing: {
+    zh: "正在生成校色预览",
+    en: "Preparing calibration preview",
   },
   ext_cc_warp_ready: {
     zh: "透视预览已生成，可执行校色",
@@ -2846,13 +2870,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "中性灰 b* 偏色偏高。建议检查白平衡、光源和灰阶采样点。",
     en: "Neutral gray b* cast is high. Check white balance, lighting, and gray sample points.",
   },
+  ext_cc_warning_gray_reference_delta: {
+    zh: "{index}. {label} 灰块的 Δ{axis}* 为 {delta}（校色后 {corrected}，参考 {reference}），高于建议值 {threshold}。建议检查白平衡、光源和该灰阶采样点。",
+    en: "Gray patch {index}. {label} has Δ{axis}* {delta} (corrected {corrected}, reference {reference}), above the suggested {threshold}. Check white balance, lighting, and that gray sample point.",
+  },
   ext_cc_warning_negative_ratio: {
     zh: "校色后有 {value} 的像素出现负通道裁剪。建议改用默认算法或降低高级校正强度。",
     en: "{value} of corrected pixels have negative-channel clipping. Prefer the default algorithm or reduce advanced correction strength.",
   },
   ext_cc_warning_clipping_ratio: {
-    zh: "校色后有 {value} 的像素超出可显示色域。建议检查曝光，或改用更保守的算法。",
-    en: "{value} of corrected pixels exceed the display gamut. Check exposure or use a more conservative algorithm.",
+    zh: "校色后有 {value} 的线性 RGB 通道样本超过 1.0，导出到当前显示色域时会被裁剪。建议检查曝光，或改用更保守的算法。",
+    en: "{value} of corrected linear RGB channel samples exceed 1.0 and will be clipped for the current display gamut. Check exposure or use a more conservative algorithm.",
+  },
+  ext_cc_delta_status_high_precision: {
+    zh: "高精度",
+    en: "High precision",
+  },
+  ext_cc_delta_status_acceptable: {
+    zh: "可接受",
+    en: "Acceptable",
+  },
+  ext_cc_delta_status_check: {
+    zh: "需检查",
+    en: "Check",
   },
   ext_cc_warning_exposure_drift: {
     zh: "该算法对曝光变化较敏感，结果可能随亮度变化而偏色。建议优先使用默认 3x3 矩阵。",

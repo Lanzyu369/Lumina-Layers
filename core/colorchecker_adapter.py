@@ -9,6 +9,7 @@ frontend.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Sequence
 
 import numpy as np
@@ -159,6 +160,43 @@ def decode_colorchecker_upload(
     return DecodedColorCheckerImage(image_bgr=image_bgr, source_type=source_type)
 
 
+def decode_colorchecker_file(
+    path: str,
+    *,
+    file_name: str = "",
+    mime_type: str = "application/octet-stream",
+) -> DecodedColorCheckerImage:
+    """Decode a server-side ColorChecker source file as BGR.
+
+    Args:
+        path: Local temporary file path.
+        file_name: Original upload filename for RAW/type detection.
+        mime_type: Upload MIME type when known.
+
+    Returns:
+        Decoded image and source label.
+
+    从服务端临时文件解码 ColorChecker 源图，避免后续 ColorChecker 步骤重复传输
+    或长期保存上传原始字节。
+    """
+
+    try:
+        core = _import_core()
+        image_bgr, source_type = core.decode_uploaded_file(
+            path,
+            file_name=file_name,
+            mime_type=mime_type,
+        )
+    except ImportError as exc:
+        raise ColorCheckerUnavailableError(
+            "Local core.colorchecker package cannot be imported."
+        ) from exc
+    except ValueError as exc:
+        raise ColorCheckerCalibrationError(str(exc)) from exc
+    _validate_image(image_bgr)
+    return DecodedColorCheckerImage(image_bgr=image_bgr, source_type=source_type)
+
+
 def detect_colorchecker_chart(
     image_bgr: np.ndarray,
     *,
@@ -281,7 +319,7 @@ def warp_colorchecker_preview(
 
 
 def apply_colorchecker_calibration(
-    image: np.ndarray | bytes | bytearray,
+    image: np.ndarray | bytes | bytearray | str | Path,
     corner_points: Sequence[PointInput],
     patch_points: Sequence[PointInput] | None = None,
     patch_layout: str = "4x6",
@@ -304,14 +342,14 @@ def apply_colorchecker_calibration(
     """Compute ColorChecker calibration and apply it to the image.
 
     Args:
-        image: BGR/RGB image array or original upload bytes.
+        image: BGR/RGB image array, original upload bytes, or server-side file path.
         corner_points: Four chart corners in original-image coordinates.
         patch_points: Optional 24 sampling points in warped-preview
             coordinates. If omitted, the core generates them from
             ``patch_layout``.
         patch_layout: ``"4x6"`` or ``"3x8"``.
-        file_name: Original filename when ``image`` is bytes.
-        mime_type: MIME type when ``image`` is bytes.
+        file_name: Original filename when ``image`` is bytes or a path.
+        mime_type: MIME type when ``image`` is bytes or a path.
         input_color: Channel order for ndarray inputs.
         sample_radius: Half-size of the patch sampling window in pixels.
         method: Patch sampling method, ``"mean"`` or ``"median"``.

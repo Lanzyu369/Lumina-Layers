@@ -13,8 +13,32 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
-  colorcheckerRelease: vi.fn(),
+  colorcheckerCalibrate: vi.fn(),
+  colorcheckerDetectChart: vi.fn(() =>
+    Promise.resolve({
+      detected: false,
+      corners: [],
+      patchOrientation: "normal",
+      confidence: 0,
+      score: null,
+      mode: "auto",
+      reason: "",
+      candidateCount: 0,
+    }),
+  ),
+  colorcheckerPrepareSource: vi.fn(() =>
+    Promise.resolve({
+      colorchecker_source_file_id: "source-id",
+      source_preview_url: "/api/files/source-preview.jpg",
+      full_width: 800,
+      full_height: 600,
+      preview_width: 400,
+      preview_height: 300,
+    }),
+  ),
+  colorcheckerRelease: vi.fn(() => Promise.resolve()),
   colorcheckerTouch: vi.fn(() => Promise.resolve()),
+  colorcheckerWarpPreview: vi.fn(),
   extractGradientCardStageA: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),

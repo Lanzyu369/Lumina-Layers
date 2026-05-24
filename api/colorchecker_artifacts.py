@@ -14,9 +14,14 @@ from api.file_registry import FileRegistry
 
 COLORCHECKER_FULL_PENDING_PURPOSE = "colorchecker_full_pending"
 COLORCHECKER_FULL_PURPOSE = "colorchecker_full"
+COLORCHECKER_SOURCE_PURPOSE = "colorchecker_source"
 _COLORCHECKER_FULL_PURPOSES = {
     COLORCHECKER_FULL_PENDING_PURPOSE,
     COLORCHECKER_FULL_PURPOSE,
+}
+_COLORCHECKER_PRIVATE_PURPOSES = {
+    *_COLORCHECKER_FULL_PURPOSES,
+    COLORCHECKER_SOURCE_PURPOSE,
 }
 
 
@@ -52,19 +57,45 @@ def load_colorchecker_full_rgb(registry: FileRegistry, file_id: str) -> np.ndarr
         raise HTTPException(status_code=422, detail=f"Unable to read ColorChecker calibrated image: {exc}") from exc
 
 
-def cleanup_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
-    """Delete one private ColorChecker full-image artifact when it exists.
-    删除一个存在的内部完整校色图产物。
+def resolve_colorchecker_source_file(registry: FileRegistry, file_id: str) -> tuple[str, str]:
+    """Resolve a private ColorChecker source file id to a local path.
+    将内部 ColorChecker 源图 file id 解析为本地路径。
+    """
+    if not file_id:
+        raise HTTPException(status_code=422, detail="ColorChecker source file id is required")
+    entry = registry.get_entry(file_id)
+    if (
+        entry is None
+        or entry.get("purpose") != COLORCHECKER_SOURCE_PURPOSE
+        or entry.get("is_public") is not False
+    ):
+        raise HTTPException(status_code=404, detail="ColorChecker source image not found or expired")
+    result = registry.resolve(file_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="ColorChecker source image not found or expired")
+    return result
+
+
+def cleanup_colorchecker_private_file(registry: FileRegistry, file_id: str) -> bool:
+    """Delete one private ColorChecker source or calibrated artifact.
+    删除一个 ColorChecker 内部源图或完整校色图产物。
     """
     entry = registry.get_entry(file_id)
     if entry is None:
         return False
     if (
-        entry.get("purpose") not in _COLORCHECKER_FULL_PURPOSES
+        entry.get("purpose") not in _COLORCHECKER_PRIVATE_PURPOSES
         or entry.get("is_public") is not False
     ):
         raise HTTPException(status_code=403, detail="Only ColorChecker private artifacts can be released")
     return registry.cleanup_file(file_id) > 0
+
+
+def cleanup_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
+    """Delete one private ColorChecker full-image artifact when it exists.
+    删除一个存在的内部完整校色图产物。
+    """
+    return cleanup_colorchecker_private_file(registry, file_id)
 
 
 def confirm_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
@@ -98,6 +129,22 @@ def touch_colorchecker_full_file(registry: FileRegistry, file_id: str) -> bool:
         raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
     if registry.resolve(file_id) is None:
         raise HTTPException(status_code=404, detail="ColorChecker calibrated image not found or expired")
+    return True
+
+
+def touch_colorchecker_private_file(registry: FileRegistry, file_id: str) -> bool:
+    """Renew one private ColorChecker source or calibrated artifact.
+    续期一个 ColorChecker 内部源图或完整校色图产物。
+    """
+    entry = registry.get_entry(file_id)
+    if (
+        entry is None
+        or entry.get("purpose") not in _COLORCHECKER_PRIVATE_PURPOSES
+        or entry.get("is_public") is not False
+    ):
+        raise HTTPException(status_code=404, detail="ColorChecker private artifact not found or expired")
+    if registry.resolve(file_id) is None:
+        raise HTTPException(status_code=404, detail="ColorChecker private artifact not found or expired")
     return True
 
 

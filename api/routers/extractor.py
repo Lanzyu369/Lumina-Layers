@@ -9,6 +9,7 @@ import os
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from typing import List, Tuple
 
 import cv2
@@ -18,11 +19,12 @@ from PIL import Image
 
 from api.colorchecker_artifacts import (
     COLORCHECKER_FULL_PENDING_PURPOSE,
-    cleanup_colorchecker_full_file,
+    cleanup_colorchecker_private_file,
     confirm_colorchecker_full_file,
     load_colorchecker_full_rgb,
+    resolve_colorchecker_source_file,
     scale_corner_points,
-    touch_colorchecker_full_file,
+    touch_colorchecker_private_file,
 )
 from api.dependencies import get_file_registry, get_session_store
 from api.errors import to_http_exception
@@ -33,6 +35,14 @@ from api.file_bridge import (
     upload_to_tempfile,
 )
 from api.file_registry import FileRegistry
+from api.preview_resources import (
+    PREVIEW_CONTEXT_COLORCHECKER,
+    cleanup_previews_for_owner,
+    preview_dimensions,
+    register_preview_bytes,
+    register_preview_resource_upload,
+    validate_public_preview_file,
+)
 from api.schemas.extractor import (
     ConfirmPaletteRequest,
     ExtractorManualFixRequest,
@@ -43,9 +53,9 @@ from api.schemas.responses import ExtractResponse, LutPreviewResolvedCell, Manua
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import (
-    COLORCHECKER_PREVIEW_JPEG_QUALITY,
-    COLORCHECKER_PREVIEW_MAX_EDGE,
     COLORCHECKER_TEMP_TTL_SECONDS,
+    IMAGE_PREVIEW_JPEG_QUALITY,
+    IMAGE_PREVIEW_MAX_EDGE,
     TEMP_DIR,
     ColorSystem,
     LUTMetadata,
@@ -84,6 +94,19 @@ EXTRACTOR_HANDLED_ERRORS = (
     RuntimeError,
     json.JSONDecodeError,
 )
+
+
+@dataclass(frozen=True)
+class _DecodedColorCheckerSource:
+    """Decoded ColorChecker source plus its private file identity."""
+
+    image_bgr: np.ndarray
+    source_type: str
+    path: str
+    filename: str
+    mime_type: str
+
+
 LUT_PERSIST_WARNING_ERRORS = (
     ValueError,
     TypeError,
@@ -109,14 +132,14 @@ def _handle_core_error(e: Exception, context: str) -> None:
 
 
 def _resize_bgr_for_colorchecker_preview(image_bgr: np.ndarray) -> np.ndarray:
-    """Return a display copy constrained by ColorChecker preview config.
-    按 ColorChecker 预览配置返回受限尺寸的显示图。
+    """Return a display copy constrained by bounded preview config.
+    按小预览配置返回受限尺寸的显示图。
     """
     from core.colorchecker.image_io import image_to_uint8_display
 
     display = image_to_uint8_display(image_bgr)
     h, w = display.shape[:2]
-    max_edge = int(COLORCHECKER_PREVIEW_MAX_EDGE)
+    max_edge = int(IMAGE_PREVIEW_MAX_EDGE)
     if max_edge <= 0 or max(h, w) <= max_edge:
         return display
     scale = max_edge / float(max(h, w))
@@ -134,9 +157,70 @@ def _encode_colorchecker_preview_jpeg(image_bgr: np.ndarray) -> tuple[bytes, int
     preview = _resize_bgr_for_colorchecker_preview(image_bgr)
     h, w = preview.shape[:2]
     return (
-        encode_jpeg_bytes(preview, quality=int(COLORCHECKER_PREVIEW_JPEG_QUALITY)),
+        encode_jpeg_bytes(preview, quality=int(IMAGE_PREVIEW_JPEG_QUALITY)),
         int(w),
         int(h),
+    )
+
+
+def _colorchecker_preview_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Return bounded preview dimensions for a full-size image.
+    返回完整图片对应的小预览尺寸。
+    """
+    return preview_dimensions(width, height)
+
+
+def _scale_colorchecker_points(
+    points: list[dict[str, object]],
+    *,
+    source_width: float,
+    source_height: float,
+    target_width: float,
+    target_height: float,
+) -> list[dict[str, object]]:
+    """Scale ColorChecker point dictionaries between coordinate spaces.
+    在不同坐标空间之间缩放 ColorChecker 点字典。
+    """
+    if source_width <= 0 or source_height <= 0:
+        return points
+    scale_x = float(target_width) / float(source_width)
+    scale_y = float(target_height) / float(source_height)
+    scaled: list[dict[str, object]] = []
+    for point in points:
+        if "x" not in point or "y" not in point:
+            continue
+        scaled.append(
+            {
+                **point,
+                "x": float(point["x"]) * scale_x,
+                "y": float(point["y"]) * scale_y,
+            }
+        )
+    return scaled
+
+
+def _decode_colorchecker_source(
+    registry: FileRegistry,
+    source_file_id: str,
+):
+    """Load a private ColorChecker source artifact as decoded BGR image.
+    将内部 ColorChecker 源图产物读取为 BGR 图像。
+    """
+    from core.colorchecker_adapter import decode_colorchecker_file
+
+    path, filename = resolve_colorchecker_source_file(registry, source_file_id)
+    mime_type = "application/octet-stream"
+    decoded = decode_colorchecker_file(
+        path,
+        file_name=filename,
+        mime_type=mime_type,
+    )
+    return _DecodedColorCheckerSource(
+        image_bgr=decoded.image_bgr,
+        source_type=str(getattr(decoded, "source_type", "") or "standard"),
+        path=path,
+        filename=filename,
+        mime_type=mime_type,
     )
 
 
@@ -439,10 +523,49 @@ async def extractor_preview_wb(
     }
 
 
+@router.post("/colorchecker-source")
+async def extractor_colorchecker_source(
+    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    registry: FileRegistry = Depends(get_file_registry),
+):
+    """Register a private ColorChecker source image and return a bounded preview.
+
+    注册 ColorChecker 专用私有源图，并只向前端返回受配置限制的小预览。
+    """
+    result = await register_preview_resource_upload(
+        registry,
+        image,
+        context=PREVIEW_CONTEXT_COLORCHECKER,
+    )
+
+    log.info(
+        "ColorChecker source image registered",
+        extra={
+            "event": "extractor_colorchecker_source_done",
+            "full_width": result.full_width,
+            "full_height": result.full_height,
+            "preview_width": result.preview_width,
+            "preview_height": result.preview_height,
+        },
+    )
+    return {
+        "colorchecker_source_file_id": result.resource_id,
+        "source_preview_file_id": result.preview_id,
+        "source_preview_url": result.preview_url,
+        "full_width": result.full_width,
+        "full_height": result.full_height,
+        "preview_width": result.preview_width,
+        "preview_height": result.preview_height,
+        "source_type": result.source_type,
+    }
+
+
 @router.post("/colorchecker-warp-preview")
 async def extractor_colorchecker_warp_preview(
-    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    colorchecker_source_file_id: str = Form(..., description="Private ColorChecker source file id"),
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
+    corner_points_width: float | None = Form(None, description="Width of the coordinate space used by corner_points"),
+    corner_points_height: float | None = Form(None, description="Height of the coordinate space used by corner_points"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
     patch_orientation: str = Form("normal", description="Detected patch orientation"),
     registry: FileRegistry = Depends(get_file_registry),
@@ -450,13 +573,13 @@ async def extractor_colorchecker_warp_preview(
     """Warp the ColorChecker region and return preview + auto 24 patch points.
 
     Step 1 of the two-step ColorChecker calibration flow. The user marks 4
-    corners of the ColorChecker card. The backend perspective-warps the region
-    and auto-generates 24 sampling points for user review / adjustment.
+    corners on the bounded source preview. The backend scales them to the
+    private full source image, perspective-warps the region, and auto-generates
+    24 sampling points for user review / adjustment.
     """
     from core.colorchecker_adapter import (
         ColorCheckerCalibrationError,
         ColorCheckerUnavailableError,
-        decode_colorchecker_upload,
         warp_colorchecker_preview,
     )
 
@@ -471,21 +594,18 @@ async def extractor_colorchecker_warp_preview(
         )
 
     try:
-        raw = await image.read()
-        decoded = decode_colorchecker_upload(
-            raw,
-            file_name=image.filename or "",
-            mime_type=image.content_type or "application/octet-stream",
+        decoded = _decode_colorchecker_source(registry, colorchecker_source_file_id)
+        h, w = decoded.image_bgr.shape[:2]
+        scaled_points = scale_corner_points(
+            points,
+            source_width=corner_points_width,
+            source_height=corner_points_height,
+            target_width=w,
+            target_height=h,
         )
-    except ColorCheckerUnavailableError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except ColorCheckerCalibrationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    try:
         result = warp_colorchecker_preview(
             decoded.image_bgr,
-            points,
+            scaled_points,
             patch_layout=patch_layout,
             patch_orientation=patch_orientation,
         )
@@ -495,11 +615,13 @@ async def extractor_colorchecker_warp_preview(
         raise HTTPException(status_code=422, detail=str(e))
 
     del decoded
-    file_id = registry.register_bytes(
-        str(uuid.uuid4()),
+    file_id = register_preview_bytes(
+        registry,
         result.preview_png,
         "colorchecker_warp_preview.png",
         ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        owner_file_id=colorchecker_source_file_id,
+        preview_role="warp",
     )
 
     log.info(
@@ -508,6 +630,8 @@ async def extractor_colorchecker_warp_preview(
             "event": "extractor_colorchecker_warp_preview_done",
             "preview_width": result.preview_width,
             "preview_height": result.preview_height,
+            "source_width": int(w),
+            "source_height": int(h),
             "patch_orientation": patch_orientation,
         },
     )
@@ -522,9 +646,10 @@ async def extractor_colorchecker_warp_preview(
 
 @router.post("/colorchecker-detect-chart")
 async def extractor_colorchecker_detect_chart(
-    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    colorchecker_source_file_id: str = Form(..., description="Private ColorChecker source file id"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
     assist_point: str | None = Form(None, description="Optional assist point JSON {x,y}"),
+    registry: FileRegistry = Depends(get_file_registry),
 ):
     """Automatically detect ColorChecker chart corners.
 
@@ -533,7 +658,6 @@ async def extractor_colorchecker_detect_chart(
     from core.colorchecker_adapter import (
         ColorCheckerCalibrationError,
         ColorCheckerUnavailableError,
-        decode_colorchecker_upload,
         detect_colorchecker_chart,
     )
 
@@ -545,22 +669,30 @@ async def extractor_colorchecker_detect_chart(
             raise HTTPException(status_code=422, detail=f"Invalid assist_point JSON: {e}")
 
     try:
-        raw = await image.read()
-        decoded = decode_colorchecker_upload(
-            raw,
-            file_name=image.filename or "",
-            mime_type=image.content_type or "application/octet-stream",
-        )
+        decoded = _decode_colorchecker_source(registry, colorchecker_source_file_id)
+        h, w = decoded.image_bgr.shape[:2]
+        preview_w, preview_h = _colorchecker_preview_dimensions(w, h)
+        scaled_assist = None
+        if assist is not None:
+            scaled_assist_points = _scale_colorchecker_points(
+                [assist],
+                source_width=preview_w,
+                source_height=preview_h,
+                target_width=w,
+                target_height=h,
+            )
+            scaled_assist = scaled_assist_points[0] if scaled_assist_points else None
         result = detect_colorchecker_chart(
             decoded.image_bgr,
             patch_layout=patch_layout,
-            assist_point=assist,
+            assist_point=scaled_assist,
         )
     except ColorCheckerUnavailableError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except ColorCheckerCalibrationError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    del decoded
     log.info(
         "ColorChecker chart detection completed",
         extra={
@@ -568,16 +700,34 @@ async def extractor_colorchecker_detect_chart(
             "detected": result.detected,
             "confidence": round(float(result.confidence), 4),
             "candidate_count": result.candidate_count,
+            "source_width": int(w),
+            "source_height": int(h),
+            "preview_width": int(preview_w),
+            "preview_height": int(preview_h),
         },
     )
 
-    return result.to_response()
+    response = result.to_response()
+    response["corners"] = _scale_colorchecker_points(
+        response["corners"],  # type: ignore[arg-type]
+        source_width=w,
+        source_height=h,
+        target_width=preview_w,
+        target_height=preview_h,
+    )
+    response["full_width"] = int(w)
+    response["full_height"] = int(h)
+    response["preview_width"] = int(preview_w)
+    response["preview_height"] = int(preview_h)
+    return response
 
 
 @router.post("/colorchecker-calibrate")
 async def extractor_colorchecker_calibrate(
-    image: UploadFile = File(..., description="Image containing a ColorChecker card"),
+    colorchecker_source_file_id: str = Form(..., description="Private ColorChecker source file id"),
     corner_points: str = Form(..., description="4 corner points JSON [[x,y],...]"),
+    corner_points_width: float | None = Form(None, description="Width of the coordinate space used by corner_points"),
+    corner_points_height: float | None = Form(None, description="Height of the coordinate space used by corner_points"),
     patch_points: str | None = Form(None, description="24 patch points JSON [{x,y},...] or null for auto"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
     patch_orientation: str = Form("normal", description="Detected patch orientation"),
@@ -621,25 +771,45 @@ async def extractor_colorchecker_calibrate(
             pp = [[float(p["x"]), float(p["y"])] if isinstance(p, dict) else p for p in pp_raw]
 
     cal_start = time.perf_counter()
-    raw = await image.read()
     full_png_path: str | None = None
     full_file_id: str | None = None
     try:
-        result = apply_colorchecker_calibration(
-            raw,
+        decoded = _decode_colorchecker_source(registry, colorchecker_source_file_id)
+        source_h, source_w = decoded.image_bgr.shape[:2]
+        scaled_corners = scale_corner_points(
             corners,
+            source_width=corner_points_width,
+            source_height=corner_points_height,
+            target_width=source_w,
+            target_height=source_h,
+        )
+        calibration_image: object = decoded.image_bgr
+        calibration_file_name = ""
+        calibration_mime_type = "application/octet-stream"
+        if decoded.source_type == "raw":
+            calibration_image = decoded.path
+            calibration_file_name = decoded.filename
+            calibration_mime_type = decoded.mime_type
+            del decoded
+        result = apply_colorchecker_calibration(
+            calibration_image,
+            scaled_corners,
             patch_points=pp,
+            file_name=calibration_file_name,
+            mime_type=calibration_mime_type,
             patch_layout=patch_layout,
             patch_orientation=patch_orientation,
-            file_name=image.filename or "",
-            mime_type=image.content_type or "application/octet-stream",
             sample_radius=sample_radius,
             method=method,
             calibration_mode=calibration_mode,
             gray_affine_mode=gray_affine_mode,
             blur_radius=blur_radius,
         )
-        del raw
+        try:
+            del decoded
+        except UnboundLocalError:
+            pass
+        del calibration_image
 
         h, w = result.calibrated_image.shape[:2]
         full_png_path = _write_colorchecker_full_png(result.calibrated_image)
@@ -686,23 +856,31 @@ async def extractor_colorchecker_calibrate(
         raise
     finally:
         try:
+            del decoded
+        except UnboundLocalError:
+            pass
+        try:
             del result
         except UnboundLocalError:
             pass
 
     preview_id: str | None = None
     try:
-        preview_id = registry.register_bytes(
-            str(uuid.uuid4()),
+        preview_id = register_preview_bytes(
+            registry,
             preview_bytes,
             "colorchecker_calibrated_preview.jpg",
             ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+            owner_file_id=full_file_id,
+            preview_role="calibrated",
         )
-        overlay_id = registry.register_bytes(
-            str(uuid.uuid4()),
+        overlay_id = register_preview_bytes(
+            registry,
             overlay_bytes,
             "colorchecker_overlay_preview.jpg",
             ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+            owner_file_id=full_file_id,
+            preview_role="overlay",
         )
     except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
         if full_file_id:
@@ -727,8 +905,10 @@ async def extractor_colorchecker_calibrate(
 
     return {
         "calibrated_preview_url": f"/api/files/{preview_id}",
+        "calibrated_preview_file_id": preview_id,
         "calibrated_full_file_id": full_file_id,
         "overlay_url": f"/api/files/{overlay_id}",
+        "overlay_preview_file_id": overlay_id,
         "full_width": w,
         "full_height": h,
         "preview_width": preview_w,
@@ -743,13 +923,15 @@ async def extractor_colorchecker_release(
     file_id: str = Form(..., description="Private ColorChecker full-image file id"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
-    """Release one private ColorChecker full-image artifact."""
-    released = cleanup_colorchecker_full_file(registry, file_id)
+    """Release one private ColorChecker source or full-image artifact."""
+    released = cleanup_colorchecker_private_file(registry, file_id)
+    released_previews = cleanup_previews_for_owner(registry, file_id) if released else 0
     log.info(
         "ColorChecker artifact released",
         extra={
             "event": "extractor_colorchecker_release_done",
             "released": released,
+            "released_previews": released_previews,
         },
     )
     return {"status": "ok", "released": released}
@@ -758,18 +940,70 @@ async def extractor_colorchecker_release(
 @router.post("/colorchecker-confirm")
 async def extractor_colorchecker_confirm(
     file_id: str = Form(..., description="Private ColorChecker full-image file id"),
+    preview_file_id: str | None = Form(None, description="Existing bounded preview file id"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
     """Mark one private ColorChecker full-image artifact as user-confirmed."""
+    existing_preview = None
+    if preview_file_id:
+        existing_preview = validate_public_preview_file(
+            registry,
+            preview_file_id,
+            owner_file_id=file_id,
+            preview_role="calibrated",
+        )
+        if existing_preview is None:
+            raise HTTPException(
+                status_code=422,
+                detail="ColorChecker preview does not match calibrated image",
+            )
     confirmed = confirm_colorchecker_full_file(registry, file_id)
+    if existing_preview is not None:
+        preview_url, preview_w, preview_h = existing_preview
+        log.info(
+            "ColorChecker artifact confirmed",
+            extra={
+                "event": "extractor_colorchecker_confirm_done",
+                "confirmed": confirmed,
+                "preview_width": preview_w,
+                "preview_height": preview_h,
+                "preview_reused": True,
+            },
+        )
+        return {
+            "status": "ok",
+            "confirmed": confirmed,
+            "calibrated_preview_url": preview_url,
+            "preview_width": preview_w,
+            "preview_height": preview_h,
+        }
+    full_rgb = load_colorchecker_full_rgb(registry, file_id)
+    full_bgr = cv2.cvtColor(full_rgb, cv2.COLOR_RGB2BGR)
+    preview_bytes, preview_w, preview_h = _encode_colorchecker_preview_jpeg(full_bgr)
+    preview_id = register_preview_bytes(
+        registry,
+        preview_bytes,
+        "colorchecker_confirmed_preview.jpg",
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        owner_file_id=file_id,
+        preview_role="calibrated",
+    )
     log.info(
         "ColorChecker artifact confirmed",
         extra={
             "event": "extractor_colorchecker_confirm_done",
             "confirmed": confirmed,
+            "preview_width": preview_w,
+            "preview_height": preview_h,
         },
     )
-    return {"status": "ok", "confirmed": confirmed}
+    return {
+        "status": "ok",
+        "confirmed": confirmed,
+        "calibrated_preview_url": f"/api/files/{preview_id}",
+        "preview_width": preview_w,
+        "preview_height": preview_h,
+    }
 
 
 @router.post("/colorchecker-touch")
@@ -777,8 +1011,8 @@ async def extractor_colorchecker_touch(
     file_id: str = Form(..., description="Private ColorChecker full-image file id"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
-    """Renew one private ColorChecker full-image artifact without loading it."""
-    renewed = touch_colorchecker_full_file(registry, file_id)
+    """Renew one private ColorChecker source or full-image artifact without loading it."""
+    renewed = touch_colorchecker_private_file(registry, file_id)
     log.info(
         "ColorChecker artifact renewed",
         extra={
@@ -840,6 +1074,11 @@ async def extractor_extract(
     effective_color_mode = _normalize_6color_mode(requested_color_mode)
 
     if colorchecker_calibrated_file_id:
+        if auto_wb:
+            raise HTTPException(
+                status_code=422,
+                detail="auto_wb cannot be used with a ColorChecker calibrated image",
+            )
         img_arr = load_colorchecker_full_rgb(registry, colorchecker_calibrated_file_id)
         points = scale_corner_points(
             points,

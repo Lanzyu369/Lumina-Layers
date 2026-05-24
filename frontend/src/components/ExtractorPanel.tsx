@@ -112,6 +112,7 @@ export default function ExtractorPanel() {
 
   const is5c = color_mode === ExtractorColorMode.FIVE_COLOR_EXT;
   const isEightColorFull = isEightColor && eight_color_full_export;
+  const autoWbDisabled = colorchecker_enabled && colorchecker_phase === "done";
   const p1Done = is5c ? page1Extracted_5c : page1Extracted;
   const p2Done = is5c ? page2Extracted_5c : page2Extracted;
   const mergeTitle = is5c
@@ -296,6 +297,7 @@ export default function ExtractorPanel() {
                 onFileSelect={(file) => setImageFile(file)}
                 accept={ACCEPT_EXTRACTOR_FORMATS}
                 preview={imagePreviewUrl ?? undefined}
+                disabled={isLoading}
               />
             </div>
           </div>
@@ -350,7 +352,13 @@ export default function ExtractorPanel() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Checkbox label={t("ext_vignette_label")} tooltip={t("ext_vignette_hint")} checked={vignette_correction} onChange={setVignetteCorrection} />
-                    <Checkbox label={t("ext_auto_wb_label")} tooltip={t("ext_auto_wb_hint")} checked={auto_wb} onChange={(v) => void setAutoWb(v)} />
+                    <Checkbox
+                      label={t("ext_auto_wb_label")}
+                      tooltip={t("ext_auto_wb_hint")}
+                      checked={autoWbDisabled ? false : auto_wb}
+                      onChange={(v) => void setAutoWb(v)}
+                      disabled={autoWbDisabled}
+                    />
                   </div>
                 </div>
               </motion.div>
@@ -359,7 +367,7 @@ export default function ExtractorPanel() {
         </section>
 
         <section data-testid="colorchecker-toggle-section" className={`${sectionCardClass}`}>
-          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isLoading} />
         </section>
 
         <section

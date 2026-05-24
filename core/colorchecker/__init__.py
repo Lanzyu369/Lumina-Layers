@@ -3,6 +3,7 @@ from .calibration_core import EXPOSURE_ANCHOR_TARGET_SRGB
 from .image_io import (
     decode_data_url,
     decode_uploaded_bytes,
+    decode_uploaded_file,
     encode_jpeg_bytes,
     encode_png_bytes,
     encode_png_data_url,
@@ -26,6 +27,7 @@ __all__ = [
     "calibrate",
     "decode_data_url",
     "decode_uploaded_bytes",
+    "decode_uploaded_file",
     "encode_jpeg_bytes",
     "encode_png_bytes",
     "encode_png_data_url",

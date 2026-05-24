@@ -35,6 +35,17 @@ export type GradientCardImageSource = "raw" | "restored";
 
 type CornerPoint = [number, number];
 
+function cloneCornerPoints(points: CornerPoint[]): CornerPoint[] {
+  return points.map(([x, y]) => [x, y]);
+}
+
+function cornerPointsEqual(left: CornerPoint[], right: CornerPoint[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(([x, y], index) => x === right[index]?.[0] && y === right[index]?.[1])
+  );
+}
+
 interface SingleStageState {
   workflow: ExtractorWorkflow;
   datasetFile: File | null;
@@ -78,6 +89,11 @@ interface SingleStageState {
   whiteColorcheckerFileId: string | null;
   blackColorcheckerFileId: string | null;
   originalWhitePreviewUrl: string | null;
+  originalWhitePreviewWidth: number | null;
+  originalWhitePreviewHeight: number | null;
+  originalBlackPreviewUrl: string | null;
+  originalBlackPreviewWidth: number | null;
+  originalBlackPreviewHeight: number | null;
   colorcheckerSummary: ColorcheckerDisplaySummary | null;
   materialName: string;
   materialBrand: string;
@@ -127,6 +143,9 @@ interface SingleStageActions {
     context?: {
       imageFile: File | null;
       target?: "white" | "black" | null;
+      sourcePreviewUrl?: string | null;
+      sourcePreviewWidth?: number | null;
+      sourcePreviewHeight?: number | null;
     },
   ) => void;
   confirmCalibrated: () => void;
@@ -401,6 +420,11 @@ const DEFAULT_STATE: SingleStageState = {
   whiteColorcheckerFileId: null,
   blackColorcheckerFileId: null,
   originalWhitePreviewUrl: null,
+  originalWhitePreviewWidth: null,
+  originalWhitePreviewHeight: null,
+  originalBlackPreviewUrl: null,
+  originalBlackPreviewWidth: null,
+  originalBlackPreviewHeight: null,
   colorcheckerSummary: null,
   materialName: "",
   materialBrand: "",
@@ -435,6 +459,9 @@ export const useSingleStageStore = create<
 
   setWhiteImageFile: async (file: File | null) => {
     const previousState = get();
+    if (previousState.isExtracting) {
+      return;
+    }
     const previousUrl = previousState.whiteImagePreviewUrl;
     const useBackendPreview = requiresBackendPreview(file);
     const ccEnabled = previousState.colorchecker_enabled;
@@ -462,18 +489,13 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewWidth: null,
         pendingColorcheckerPreviewHeight: null,
         whiteColorcheckerFileId: null,
+        originalWhitePreviewUrl: null,
+        originalWhitePreviewWidth: null,
+        originalWhitePreviewHeight: null,
         colorcheckerSummary: null,
         imageSource: "raw",
         ...RESULT_RESET_STATE,
       });
-      uploadImagePreview(file)
-        .then(({ preview_url }) => {
-          if (get().whiteImageFile !== file) {
-            return;
-          }
-          set({ originalWhitePreviewUrl: normalizeResourceUrl(preview_url) });
-        })
-        .catch(() => {});
       return;
     }
 
@@ -492,6 +514,9 @@ export const useSingleStageStore = create<
       pendingColorcheckerFullHeight: null,
       pendingColorcheckerPreviewWidth: null,
       pendingColorcheckerPreviewHeight: null,
+      originalWhitePreviewUrl: null,
+      originalWhitePreviewWidth: null,
+      originalWhitePreviewHeight: null,
       ...RESULT_RESET_STATE,
     });
     if (!file || !useBackendPreview) {
@@ -527,6 +552,9 @@ export const useSingleStageStore = create<
 
   setBlackImageFile: async (file: File | null) => {
     const previousState = get();
+    if (previousState.isExtracting) {
+      return;
+    }
     const previousUrl = previousState.blackImagePreviewUrl;
     const useBackendPreview = requiresBackendPreview(file);
     const ccEnabled = previousState.colorchecker_enabled;
@@ -552,18 +580,13 @@ export const useSingleStageStore = create<
         pendingColorcheckerPreviewWidth: null,
         pendingColorcheckerPreviewHeight: null,
         blackColorcheckerFileId: null,
+        originalBlackPreviewUrl: null,
+        originalBlackPreviewWidth: null,
+        originalBlackPreviewHeight: null,
         colorcheckerSummary: null,
         imageSource: "raw",
         ...RESULT_RESET_STATE,
       });
-      uploadImagePreview(file)
-        .then(({ preview_url }) => {
-          if (get().blackImageFile !== file) {
-            return;
-          }
-          set({ originalWhitePreviewUrl: normalizeResourceUrl(preview_url) });
-        })
-        .catch(() => {});
       return;
     }
 
@@ -582,6 +605,9 @@ export const useSingleStageStore = create<
       pendingColorcheckerFullHeight: null,
       pendingColorcheckerPreviewWidth: null,
       pendingColorcheckerPreviewHeight: null,
+      originalBlackPreviewUrl: null,
+      originalBlackPreviewWidth: null,
+      originalBlackPreviewHeight: null,
       ...RESULT_RESET_STATE,
     });
     if (!file || !useBackendPreview) {
@@ -622,7 +648,10 @@ export const useSingleStageStore = create<
     set({ blackImageNaturalWidth: width, blackImageNaturalHeight: height }),
 
   rotateWhiteImage: async (direction: ExtractorRotationDirection) => {
-    const { whiteImageFile, whiteImagePreviewUrl } = get();
+    const { whiteImageFile, whiteImagePreviewUrl, isExtracting } = get();
+    if (isExtracting) {
+      return;
+    }
     if (!whiteImageFile) {
       return;
     }
@@ -683,7 +712,6 @@ export const useSingleStageStore = create<
         ...RESULT_RESET_STATE,
       });
     } catch (err) {
-      const current = get();
       set({
         extractError: resolveGradientCardRotationError(err, "white"),
         isRotatingWhite: false,
@@ -701,7 +729,10 @@ export const useSingleStageStore = create<
   },
 
   rotateBlackImage: async (direction: ExtractorRotationDirection) => {
-    const { blackImageFile, blackImagePreviewUrl } = get();
+    const { blackImageFile, blackImagePreviewUrl, isExtracting } = get();
+    if (isExtracting) {
+      return;
+    }
     if (!blackImageFile) {
       return;
     }
@@ -762,7 +793,6 @@ export const useSingleStageStore = create<
         ...RESULT_RESET_STATE,
       });
     } catch (err) {
-      const current = get();
       set({
         extractError: resolveGradientCardRotationError(err, "black"),
         isRotatingBlack: false,
@@ -892,6 +922,9 @@ export const useSingleStageStore = create<
 
   setColorcheckerEnabled: (value: boolean) => {
     const state = get();
+    if (state.isExtracting && value !== state.colorchecker_enabled) {
+      return;
+    }
     const clearWhiteRestored = !value && Boolean(state.whiteColorcheckerFileId);
     const clearBlackRestored = !value && Boolean(state.blackColorcheckerFileId);
     const resetToRaw =
@@ -907,15 +940,11 @@ export const useSingleStageStore = create<
     }
     const restoreWhitePreview =
       !value && state.whiteColorcheckerFileId
-        ? requiresBackendPreview(state.whiteImageFile)
-          ? null
-          : createPreviewUrl(state.whiteImageFile)
+        ? state.originalWhitePreviewUrl ?? createPreviewUrl(state.whiteImageFile)
         : state.whiteImagePreviewUrl;
     const restoreBlackPreview =
       !value && state.blackColorcheckerFileId
-        ? requiresBackendPreview(state.blackImageFile)
-          ? null
-          : createPreviewUrl(state.blackImageFile)
+        ? state.originalBlackPreviewUrl ?? createPreviewUrl(state.blackImageFile)
         : state.blackImagePreviewUrl;
     set({
       colorchecker_enabled: value,
@@ -931,44 +960,35 @@ export const useSingleStageStore = create<
       blackColorcheckerFileId: value ? state.blackColorcheckerFileId : null,
       whiteImagePreviewUrl: restoreWhitePreview,
       blackImagePreviewUrl: restoreBlackPreview,
-      whiteImageNaturalWidth: !value && state.whiteColorcheckerFileId ? null : state.whiteImageNaturalWidth,
-      whiteImageNaturalHeight: !value && state.whiteColorcheckerFileId ? null : state.whiteImageNaturalHeight,
-      blackImageNaturalWidth: !value && state.blackColorcheckerFileId ? null : state.blackImageNaturalWidth,
-      blackImageNaturalHeight: !value && state.blackColorcheckerFileId ? null : state.blackImageNaturalHeight,
+      whiteImageNaturalWidth:
+        !value && state.whiteColorcheckerFileId
+          ? state.originalWhitePreviewWidth
+          : state.whiteImageNaturalWidth,
+      whiteImageNaturalHeight:
+        !value && state.whiteColorcheckerFileId
+          ? state.originalWhitePreviewHeight
+          : state.whiteImageNaturalHeight,
+      blackImageNaturalWidth:
+        !value && state.blackColorcheckerFileId
+          ? state.originalBlackPreviewWidth
+          : state.blackImageNaturalWidth,
+      blackImageNaturalHeight:
+        !value && state.blackColorcheckerFileId
+          ? state.originalBlackPreviewHeight
+          : state.blackImageNaturalHeight,
       whiteCornerPoints: clearWhiteRestored ? [] : state.whiteCornerPoints,
       blackCornerPoints: clearBlackRestored ? [] : state.blackCornerPoints,
       activeCanvas: clearWhiteRestored || clearBlackRestored ? null : state.activeCanvas,
       activeCornerIndex: clearWhiteRestored || clearBlackRestored ? null : state.activeCornerIndex,
       originalWhitePreviewUrl: null,
+      originalWhitePreviewWidth: null,
+      originalWhitePreviewHeight: null,
+      originalBlackPreviewUrl: null,
+      originalBlackPreviewWidth: null,
+      originalBlackPreviewHeight: null,
       colorcheckerSummary: null,
       ...(!value || resetToRaw ? { imageSource: "raw" as const } : {}),
     });
-    if (!value && state.whiteColorcheckerFileId && requiresBackendPreview(state.whiteImageFile) && state.whiteImageFile) {
-      const sourceFile = state.whiteImageFile;
-      uploadImagePreview(sourceFile)
-        .then(({ preview_url, width, height }) => {
-          if (get().whiteImageFile !== sourceFile || get().colorchecker_enabled) return;
-          set({
-            whiteImagePreviewUrl: normalizeResourceUrl(preview_url),
-            whiteImageNaturalWidth: width,
-            whiteImageNaturalHeight: height,
-          });
-        })
-        .catch(() => {});
-    }
-    if (!value && state.blackColorcheckerFileId && requiresBackendPreview(state.blackImageFile) && state.blackImageFile) {
-      const sourceFile = state.blackImageFile;
-      uploadImagePreview(sourceFile)
-        .then(({ preview_url, width, height }) => {
-          if (get().blackImageFile !== sourceFile || get().colorchecker_enabled) return;
-          set({
-            blackImagePreviewUrl: normalizeResourceUrl(preview_url),
-            blackImageNaturalWidth: width,
-            blackImageNaturalHeight: height,
-          });
-        })
-        .catch(() => {});
-    }
   },
 
   openColorcheckerDialog: (target?: "white" | "black") => {
@@ -976,10 +996,6 @@ export const useSingleStageStore = create<
     const nextTarget = target ?? state.colorchecker_target ?? "white";
     const sourceFile =
       nextTarget === "black" ? state.blackImageFile : state.whiteImageFile;
-    const sourcePreview =
-      nextTarget === "black"
-        ? state.blackImagePreviewUrl
-        : state.whiteImagePreviewUrl;
     if (!sourceFile) return;
     releaseColorcheckerArtifact(state.pendingColorcheckerFileId);
     set({
@@ -992,21 +1008,18 @@ export const useSingleStageStore = create<
       pendingColorcheckerPreviewWidth: null,
       pendingColorcheckerPreviewHeight: null,
       colorcheckerSummary: null,
-      originalWhitePreviewUrl: null,
+      ...(nextTarget === "black"
+        ? {
+            originalBlackPreviewUrl: null,
+            originalBlackPreviewWidth: null,
+            originalBlackPreviewHeight: null,
+          }
+        : {
+            originalWhitePreviewUrl: null,
+            originalWhitePreviewWidth: null,
+            originalWhitePreviewHeight: null,
+          }),
     });
-    uploadImagePreview(sourceFile)
-      .then(({ preview_url }) => {
-        const current = get();
-        const currentSource =
-          nextTarget === "black" ? current.blackImageFile : current.whiteImageFile;
-        if (currentSource !== sourceFile || current.colorchecker_target !== nextTarget) {
-          return;
-        }
-        set({ originalWhitePreviewUrl: normalizeResourceUrl(preview_url) });
-      })
-      .catch(() => {
-        set({ originalWhitePreviewUrl: sourcePreview ?? createPreviewUrl(sourceFile) });
-      });
   },
 
   receiveCalibratedFromCC: (
@@ -1022,6 +1035,9 @@ export const useSingleStageStore = create<
     context?: {
       imageFile: File | null;
       target?: "white" | "black" | null;
+      sourcePreviewUrl?: string | null;
+      sourcePreviewWidth?: number | null;
+      sourcePreviewHeight?: number | null;
     },
   ) => {
     const state = get();
@@ -1044,6 +1060,22 @@ export const useSingleStageStore = create<
       releaseColorcheckerArtifact(previousId);
     }
     const resolvedUrl = normalizeResourceUrl(previewUrl) ?? previewUrl;
+    const sourcePreviewUrl =
+      normalizeResourceUrl(context?.sourcePreviewUrl ?? null) ??
+      context?.sourcePreviewUrl ??
+      null;
+    const sourcePatch =
+      target === "black"
+        ? {
+            originalBlackPreviewUrl: sourcePreviewUrl,
+            originalBlackPreviewWidth: context?.sourcePreviewWidth ?? null,
+            originalBlackPreviewHeight: context?.sourcePreviewHeight ?? null,
+          }
+        : {
+            originalWhitePreviewUrl: sourcePreviewUrl,
+            originalWhitePreviewWidth: context?.sourcePreviewWidth ?? null,
+            originalWhitePreviewHeight: context?.sourcePreviewHeight ?? null,
+          };
     set({
       colorchecker_phase: "confirming",
       pendingColorcheckerFileId: fullFileId,
@@ -1053,6 +1085,7 @@ export const useSingleStageStore = create<
       pendingColorcheckerPreviewHeight: dimensions?.previewHeight ?? null,
       calibratedPreviewUrl: resolvedUrl,
       colorcheckerSummary: summary ?? null,
+      ...sourcePatch,
     });
   },
 
@@ -1071,19 +1104,10 @@ export const useSingleStageStore = create<
       colorchecker_target === "black"
         ? blackColorcheckerFileId
         : whiteColorcheckerFileId;
-    const imagePatch =
-      colorchecker_target === "black"
-        ? {
-            blackImagePreviewUrl: calibratedPreviewUrl,
-            blackCornerPoints: [],
-            blackColorcheckerFileId: pendingColorcheckerFileId,
-          }
-        : {
-            whiteImagePreviewUrl: calibratedPreviewUrl,
-            whiteCornerPoints: [],
-            whiteColorcheckerFileId: pendingColorcheckerFileId,
-          };
-    const applyAcceptedPreview = (dimensions?: { width: number; height: number }) => {
+    const applyAcceptedPreview = (
+      previewUrl: string,
+      dimensions?: { width: number; height: number },
+    ) => {
       const current = get();
       if (
         current.colorchecker_phase !== "confirming" ||
@@ -1096,10 +1120,23 @@ export const useSingleStageStore = create<
       if (replacingId && replacingId !== pendingColorcheckerFileId) {
         releaseColorcheckerArtifact(replacingId);
       }
+      const imagePatch =
+        colorchecker_target === "black"
+          ? {
+              blackImagePreviewUrl: previewUrl,
+              blackCornerPoints: [],
+              blackColorcheckerFileId: pendingColorcheckerFileId,
+            }
+          : {
+              whiteImagePreviewUrl: previewUrl,
+              whiteCornerPoints: [],
+              whiteColorcheckerFileId: pendingColorcheckerFileId,
+            };
       set({
         colorchecker_phase: "done",
         extractError: null,
         imageSource: "restored",
+        calibratedPreviewUrl: previewUrl,
         ...(colorchecker_target === "black"
           ? {
               ...imagePatch,
@@ -1120,8 +1157,8 @@ export const useSingleStageStore = create<
         activeCornerIndex: null,
       });
     };
-    void colorcheckerConfirm(pendingColorcheckerFileId)
-      .then(() => {
+    void colorcheckerConfirm(pendingColorcheckerFileId, calibratedPreviewUrl)
+      .then((confirmResult) => {
         const current = get();
         if (
           current.colorchecker_phase !== "confirming" ||
@@ -1131,12 +1168,25 @@ export const useSingleStageStore = create<
         ) {
           return;
         }
+        const acceptedPreviewUrl =
+          normalizeResourceUrl(confirmResult?.calibrated_preview_url ?? null) ??
+          calibratedPreviewUrl;
+        const confirmDimensions =
+          confirmResult?.preview_width && confirmResult?.preview_height
+            ? {
+                width: confirmResult.preview_width,
+                height: confirmResult.preview_height,
+              }
+            : null;
         const img = new Image();
         img.onload = () => {
-          applyAcceptedPreview({
-            width: img.naturalWidth,
-            height: img.naturalHeight,
-          });
+          applyAcceptedPreview(
+            acceptedPreviewUrl,
+            confirmDimensions ?? {
+              width: img.naturalWidth,
+              height: img.naturalHeight,
+            },
+          );
         };
         img.onerror = () => {
           const latest = get();
@@ -1149,7 +1199,7 @@ export const useSingleStageStore = create<
             set({ extractError: tRuntime("ext_cc_confirm_preview_failed") });
           }
         };
-        img.src = calibratedPreviewUrl;
+        img.src = acceptedPreviewUrl;
       })
       .catch(() => {
         const current = get();
@@ -1287,6 +1337,23 @@ export const useSingleStageStore = create<
       });
       return;
     }
+    const requestSnapshot = {
+      datasetFile: state.datasetFile,
+      whiteImageFile: state.whiteImageFile,
+      blackImageFile: state.blackImageFile,
+      whiteCornerPoints: cloneCornerPoints(state.whiteCornerPoints),
+      blackCornerPoints: cloneCornerPoints(state.blackCornerPoints),
+      whiteImageNaturalWidth: state.whiteImageNaturalWidth,
+      whiteImageNaturalHeight: state.whiteImageNaturalHeight,
+      blackImageNaturalWidth: state.blackImageNaturalWidth,
+      blackImageNaturalHeight: state.blackImageNaturalHeight,
+      manualWhiteAnchor: state.manualWhiteAnchor,
+      manualBlackAnchor: state.manualBlackAnchor,
+      colorchecker_enabled: state.colorchecker_enabled,
+      whiteColorcheckerFileId: state.whiteColorcheckerFileId,
+      blackColorcheckerFileId: state.blackColorcheckerFileId,
+      imageSource: state.imageSource,
+    };
 
     set({
       isExtracting: true,
@@ -1323,6 +1390,29 @@ export const useSingleStageStore = create<
         ),
         imageSource: state.imageSource,
       });
+      const current = get();
+      if (
+        current.datasetFile !== requestSnapshot.datasetFile ||
+        current.whiteImageFile !== requestSnapshot.whiteImageFile ||
+        current.blackImageFile !== requestSnapshot.blackImageFile ||
+        !cornerPointsEqual(current.whiteCornerPoints, requestSnapshot.whiteCornerPoints) ||
+        !cornerPointsEqual(current.blackCornerPoints, requestSnapshot.blackCornerPoints) ||
+        current.whiteImageNaturalWidth !== requestSnapshot.whiteImageNaturalWidth ||
+        current.whiteImageNaturalHeight !== requestSnapshot.whiteImageNaturalHeight ||
+        current.blackImageNaturalWidth !== requestSnapshot.blackImageNaturalWidth ||
+        current.blackImageNaturalHeight !== requestSnapshot.blackImageNaturalHeight ||
+        current.manualWhiteAnchor !== requestSnapshot.manualWhiteAnchor ||
+        current.manualBlackAnchor !== requestSnapshot.manualBlackAnchor ||
+        current.colorchecker_enabled !== requestSnapshot.colorchecker_enabled ||
+        current.whiteColorcheckerFileId !== requestSnapshot.whiteColorcheckerFileId ||
+        current.blackColorcheckerFileId !== requestSnapshot.blackColorcheckerFileId ||
+        current.imageSource !== requestSnapshot.imageSource
+      ) {
+        if (current.isExtracting) {
+          set({ isExtracting: false });
+        }
+        return;
+      }
       set({
         sessionId: response.session_id,
         warnings: response.warnings ?? [],
@@ -1342,6 +1432,29 @@ export const useSingleStageStore = create<
         isExtracting: false,
       });
     } catch (err) {
+      const current = get();
+      if (
+        current.datasetFile !== requestSnapshot.datasetFile ||
+        current.whiteImageFile !== requestSnapshot.whiteImageFile ||
+        current.blackImageFile !== requestSnapshot.blackImageFile ||
+        !cornerPointsEqual(current.whiteCornerPoints, requestSnapshot.whiteCornerPoints) ||
+        !cornerPointsEqual(current.blackCornerPoints, requestSnapshot.blackCornerPoints) ||
+        current.whiteImageNaturalWidth !== requestSnapshot.whiteImageNaturalWidth ||
+        current.whiteImageNaturalHeight !== requestSnapshot.whiteImageNaturalHeight ||
+        current.blackImageNaturalWidth !== requestSnapshot.blackImageNaturalWidth ||
+        current.blackImageNaturalHeight !== requestSnapshot.blackImageNaturalHeight ||
+        current.manualWhiteAnchor !== requestSnapshot.manualWhiteAnchor ||
+        current.manualBlackAnchor !== requestSnapshot.manualBlackAnchor ||
+        current.colorchecker_enabled !== requestSnapshot.colorchecker_enabled ||
+        current.whiteColorcheckerFileId !== requestSnapshot.whiteColorcheckerFileId ||
+        current.blackColorcheckerFileId !== requestSnapshot.blackColorcheckerFileId ||
+        current.imageSource !== requestSnapshot.imageSource
+      ) {
+        if (current.isExtracting) {
+          set({ isExtracting: false });
+        }
+        return;
+      }
       set({
         extractError: resolveGradientCardExtractError(err),
         isExtracting: false,

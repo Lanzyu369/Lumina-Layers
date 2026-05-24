@@ -132,6 +132,98 @@ def patch_validity_warning(validity: dict[str, object], *, exposure_label: str =
     )
 
 
+def gray_reference_delta_metrics(
+    corrected_lab_values: np.ndarray,
+    reference_lab_values: np.ndarray,
+    patch_indices: list[int],
+    patch_labels: list[str] | None = None,
+) -> dict[str, object]:
+    """Measure neutral-gray cast relative to each reference gray patch.
+
+    计算校色后灰块相对对应参考灰块的 a*/b* 偏差，避免把参考灰块自身
+    的非零 a*/b* 当成偏色。
+    """
+
+    corrected = np.asarray(corrected_lab_values, dtype=np.float64)
+    reference = np.asarray(reference_lab_values, dtype=np.float64)
+    if corrected.size == 0 or reference.size == 0:
+        return {
+            "patches": [],
+            "a_delta_abs_max": None,
+            "b_delta_abs_max": None,
+            "a_delta_worst": None,
+            "b_delta_worst": None,
+        }
+    if corrected.shape != reference.shape or corrected.ndim != 2 or corrected.shape[1] < 3:
+        raise ValueError("corrected_lab_values and reference_lab_values must be matching Lab arrays.")
+
+    labels = list(patch_labels or [])
+    patches: list[dict[str, object]] = []
+    for row, patch_index in enumerate(patch_indices):
+        label = labels[row] if row < len(labels) else str(patch_index)
+        corrected_a = float(corrected[row, 1])
+        corrected_b = float(corrected[row, 2])
+        reference_a = float(reference[row, 1])
+        reference_b = float(reference[row, 2])
+        patches.append(
+            {
+                "index": int(patch_index),
+                "label": str(label),
+                "delta_a": round(corrected_a - reference_a, 4),
+                "delta_b": round(corrected_b - reference_b, 4),
+                "corrected_a": round(corrected_a, 4),
+                "corrected_b": round(corrected_b, 4),
+                "reference_a": round(reference_a, 4),
+                "reference_b": round(reference_b, 4),
+            }
+        )
+
+    def worst_by_abs(key: str) -> dict[str, object] | None:
+        if not patches:
+            return None
+        return max(patches, key=lambda item: abs(float(item[key])))
+
+    a_worst = worst_by_abs("delta_a")
+    b_worst = worst_by_abs("delta_b")
+    return {
+        "patches": patches,
+        "a_delta_abs_max": None if a_worst is None else round(abs(float(a_worst["delta_a"])), 4),
+        "b_delta_abs_max": None if b_worst is None else round(abs(float(b_worst["delta_b"])), 4),
+        "a_delta_worst": a_worst,
+        "b_delta_worst": b_worst,
+    }
+
+
+def gray_reference_delta_warnings(
+    metrics: dict[str, object],
+    *,
+    threshold: float = 1.5,
+) -> list[str]:
+    """Build warnings for gray-patch a*/b* deltas against reference Lab.
+
+    基于灰块相对参考值的 a*/b* 差值生成提示，并带上具体灰块编号和名称。
+    """
+
+    warnings: list[str] = []
+    for axis, channel in (("a", "a"), ("b", "b")):
+        worst = metrics.get(f"{axis}_delta_worst")
+        if not isinstance(worst, dict):
+            continue
+        delta = float(worst.get(f"delta_{axis}") or 0.0)
+        if abs(delta) <= threshold:
+            continue
+        patch_index = int(worst.get("index") or 0)
+        label = str(worst.get("label") or patch_index)
+        corrected = float(worst.get(f"corrected_{axis}") or 0.0)
+        reference = float(worst.get(f"reference_{axis}") or 0.0)
+        warnings.append(
+            f"Neutral gray Δ{channel}* patch {patch_index} ({label}) is {delta:.4f} "
+            f"(corrected {corrected:.4f} vs reference {reference:.4f}), "
+            f"exceeds suggested {threshold:g} threshold."
+        )
+    return warnings
+
+
 def _neutral_axis_level(rgb: np.ndarray) -> np.ndarray:
     return np.median(np.asarray(rgb, dtype=np.float64), axis=-1)
 

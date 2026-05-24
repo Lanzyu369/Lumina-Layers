@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
+  colorcheckerPrepareSource,
   colorcheckerRelease,
   colorcheckerWarpPreview,
   type ColorcheckerCalibrateOptions,
@@ -43,6 +44,9 @@ export interface ColorcheckerConfirmDialogProps {
     context?: {
       imageFile: File | null;
       target?: "white" | "black" | null;
+      sourcePreviewUrl?: string | null;
+      sourcePreviewWidth?: number | null;
+      sourcePreviewHeight?: number | null;
     },
   ) => void;
   confirmCalibrated: () => void;
@@ -52,11 +56,12 @@ export interface ColorcheckerConfirmDialogProps {
 
 const PATCH_LAYOUT = "4x6";
 const CORNER_LABELS = ["TL", "TR", "BR", "BL"];
-const LOCAL_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
 
 type CalibrationMode = NonNullable<ColorcheckerCalibrateOptions["calibrationMode"]>;
 type SamplingMethod = NonNullable<ColorcheckerCalibrateOptions["method"]>;
 type GrayAffineMode = NonNullable<ColorcheckerCalibrateOptions["grayAffineMode"]>;
+type PatchOrientation = "normal" | "rotate_180" | "flip_horizontal" | "flip_vertical";
+type DeltaMetricKind = "mean" | "median" | "p95" | "max";
 
 const CALIBRATION_MODE_OPTIONS: Array<{ labelKey: string; value: CalibrationMode }> = [
   { labelKey: "ext_cc_algorithm_matrix_3x3", value: "matrix_3x3" },
@@ -76,6 +81,16 @@ const GRAY_AFFINE_OPTIONS: Array<{ labelKey: string; value: GrayAffineMode }> = 
   { labelKey: "ext_cc_gray_affine_fallback", value: "fallback" },
 ];
 
+const PATCH_ORIENTATION_OPTIONS: Array<{ labelKey: string; value: PatchOrientation }> = [
+  { labelKey: "ext_cc_patch_orientation_normal", value: "normal" },
+  { labelKey: "ext_cc_patch_orientation_rotate_180", value: "rotate_180" },
+  { labelKey: "ext_cc_patch_orientation_flip_horizontal", value: "flip_horizontal" },
+  { labelKey: "ext_cc_patch_orientation_flip_vertical", value: "flip_vertical" },
+];
+const PATCH_ORIENTATION_VALUES = new Set<PatchOrientation>(
+  PATCH_ORIENTATION_OPTIONS.map((option) => option.value),
+);
+
 function toCornerTuples(points: ColorcheckerPoint[]): CornerPoint[] {
   return points.map((point) => [point.x, point.y]);
 }
@@ -86,12 +101,45 @@ function formatMetric(value: number | null | undefined, digits = 2) {
     : "-";
 }
 
+function deltaMetricStatus(kind: DeltaMetricKind, value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const limits: Record<DeltaMetricKind, { high: number; acceptable: number }> = {
+    mean: { high: 2, acceptable: 3 },
+    median: { high: 1.5, acceptable: 3 },
+    p95: { high: 3, acceptable: 6 },
+    max: { high: 4, acceptable: 6 },
+  };
+  const limit = limits[kind];
+  if (value <= limit.high) {
+    return { labelKey: "ext_cc_delta_status_high_precision", tone: "success" as const };
+  }
+  if (value <= limit.acceptable) {
+    return { labelKey: "ext_cc_delta_status_acceptable", tone: "warning" as const };
+  }
+  return { labelKey: "ext_cc_delta_status_check", tone: "danger" as const };
+}
+
+function deltaStatusClass(tone: "success" | "warning" | "danger") {
+  if (tone === "success") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/70 dark:bg-emerald-950/40 dark:text-emerald-200";
+  }
+  if (tone === "warning") {
+    return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200";
+  }
+  return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/40 dark:text-rose-200";
+}
+
 function optionLabel(
   options: Array<{ labelKey: string; value: string }>,
   value: string | null | undefined,
   t: (key: string) => string,
 ) {
   return t(options.find((option) => option.value === value)?.labelKey ?? "ext_cc_unknown_value");
+}
+
+function normalizePatchOrientation(value: string | null | undefined): PatchOrientation {
+  const normalized = (value || "normal").trim().toLowerCase() as PatchOrientation;
+  return PATCH_ORIENTATION_VALUES.has(normalized) ? normalized : "normal";
 }
 
 function localizeColorcheckerWarning(warning: string) {
@@ -124,6 +172,18 @@ function localizeColorcheckerWarning(warning: string) {
   const clippingMatch = /^Corrected image gamut clipping ratio is ([0-9.]+%)\.$/.exec(warning);
   if (clippingMatch) {
     return tRuntime("ext_cc_warning_clipping_ratio", { value: clippingMatch[1] });
+  }
+  const grayDeltaMatch = /^Neutral gray Δ([ab])\* patch ([0-9]+) \((.*?)\) is (-?[0-9.]+) \(corrected (-?[0-9.]+) vs reference (-?[0-9.]+)\), exceeds suggested ([0-9.]+) threshold\.$/.exec(warning);
+  if (grayDeltaMatch) {
+    return tRuntime("ext_cc_warning_gray_reference_delta", {
+      axis: grayDeltaMatch[1],
+      index: grayDeltaMatch[2],
+      label: grayDeltaMatch[3],
+      delta: grayDeltaMatch[4],
+      corrected: grayDeltaMatch[5],
+      reference: grayDeltaMatch[6],
+      threshold: grayDeltaMatch[7],
+    });
   }
   if (warning === "Neutral gray L* values are not monotonic.") {
     return tRuntime("ext_cc_warning_gray_l_not_monotonic");
@@ -237,33 +297,61 @@ function CalibrationMetrics({
 }) {
   const delta = summary?.deltaE00;
   const metrics = [
-    [labels.mean, delta?.mean],
-    [labels.median, delta?.median],
-    [labels.p95, delta?.p95],
-    [labels.worst, delta?.max],
+    { kind: "mean" as const, label: labels.mean, value: delta?.mean },
+    { kind: "median" as const, label: labels.median, value: delta?.median },
+    { kind: "p95" as const, label: labels.p95, value: delta?.p95 },
+    { kind: "max" as const, label: labels.worst, value: delta?.max },
   ] as const;
+  const worstPatchStatus = deltaMetricStatus("max", summary?.worstPatch?.deltaE00);
 
   return (
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)]">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {metrics.map(([label, value]) => (
-          <div
-            key={label}
-            className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
-            style={{ background: "var(--surface-panel)" }}
-          >
-            <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
-              {label}
+        {metrics.map((metric) => {
+          const status = deltaMetricStatus(metric.kind, metric.value);
+          return (
+            <div
+              key={metric.kind}
+              className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+              style={{ background: "var(--surface-panel)" }}
+            >
+              <div className="flex min-h-5 items-start justify-between gap-2">
+                <div className="min-w-0 text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
+                  {metric.label}
+                </div>
+                {status && (
+                  <span
+                    className={cx(
+                      "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                      deltaStatusClass(status.tone),
+                    )}
+                  >
+                    {tRuntime(status.labelKey)}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-50">
+                {formatMetric(metric.value)}
+              </div>
             </div>
-            <div className="mt-1 text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-50">
-              {formatMetric(value)}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
-        <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
-          {labels.worstPatch}
+        <div className="flex min-h-5 items-start justify-between gap-2">
+          <div className="min-w-0 text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
+            {labels.worstPatch}
+          </div>
+          {worstPatchStatus && (
+            <span
+              className={cx(
+                "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                deltaStatusClass(worstPatchStatus.tone),
+              )}
+            >
+              {tRuntime(worstPatchStatus.labelKey)}
+            </span>
+          )}
         </div>
         <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
           {summary?.worstPatch
@@ -360,7 +448,6 @@ export function ColorcheckerConfirmDialogInner({
   phase,
   colorcheckerTarget = null,
   imageFile,
-  originalPreviewUrl,
   calibratedPreviewUrl,
   colorcheckerFullFileId,
   calibrationSummary,
@@ -374,7 +461,13 @@ export function ColorcheckerConfirmDialogInner({
   const isConfirming = phase === "confirming";
   const open = isCalibrating || isConfirming;
 
-  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
+  const [sourceFileId, setSourceFileId] = useState<string | null>(null);
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
+  const [sourceContext, setSourceContext] = useState<{
+    imageFile: File;
+    target: "white" | "black" | null;
+  } | null>(null);
+  const [sourcePreparing, setSourcePreparing] = useState(false);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [corners, setCorners] = useState<CornerPoint[]>([]);
   const [activeCornerIndex, setActiveCornerIndex] = useState<number | null>(null);
@@ -382,7 +475,7 @@ export function ColorcheckerConfirmDialogInner({
   const [warpPreviewUrl, setWarpPreviewUrl] = useState<string | null>(null);
   const [warpSize, setWarpSize] = useState<{ width: number; height: number } | null>(null);
   const [patchPoints, setPatchPoints] = useState<ColorcheckerPoint[] | null>(null);
-  const [patchOrientation, setPatchOrientation] = useState("normal");
+  const [patchOrientation, setPatchOrientation] = useState<PatchOrientation>("normal");
   const [overlayPreviewUrl, setOverlayPreviewUrl] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -403,27 +496,38 @@ export function ColorcheckerConfirmDialogInner({
   const compareRef = useRef<HTMLDivElement>(null);
   const compareDragging = useRef(false);
   const autoDetectAttempted = useRef(false);
+  const sourceRunRef = useRef(0);
   const detectionRunRef = useRef(0);
   const warpRunRef = useRef(0);
   const calibrationRunRef = useRef(0);
-  const deferredUnmountCleanupRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const deferredUnmountCleanupRef = useRef<number | null>(null);
+  const activeSourceFileId =
+    sourceContext?.imageFile === imageFile && sourceContext.target === colorcheckerTarget
+      ? sourceFileId
+      : null;
   const latestCalibrationContext = useRef({
     phase,
     open,
     imageFile,
     colorcheckerTarget,
+    sourceFileId: activeSourceFileId,
   });
   latestCalibrationContext.current = {
     phase,
     open,
     imageFile,
     colorcheckerTarget,
+    sourceFileId: activeSourceFileId,
   };
 
-  const sourceUrl = originalPreviewUrl ?? localPreviewUrl;
+  const sourceUrl = activeSourceFileId ? sourcePreviewUrl : null;
   const summary = calibrationSummary ?? localSummary;
 
-  useColorcheckerArtifactLease([colorcheckerFullFileId], open);
+  useColorcheckerArtifactLease(
+    [colorcheckerFullFileId, activeSourceFileId],
+    open,
+    [calibratedPreviewUrl, sourceUrl, warpPreviewUrl, overlayPreviewUrl],
+  );
 
   useEffect(() => {
     if (deferredUnmountCleanupRef.current !== null) {
@@ -439,18 +543,67 @@ export function ColorcheckerConfirmDialogInner({
   }, [closeDialog]);
 
   useEffect(() => {
-    if (!open || !imageFile || originalPreviewUrl) {
-      setLocalPreviewUrl(null);
-      return;
+    const runId = ++sourceRunRef.current;
+    let released = false;
+    let registeredSourceId: string | null = null;
+    const releaseRegisteredSource = () => {
+      if (!registeredSourceId || released) return;
+      released = true;
+      void colorcheckerRelease(registeredSourceId).catch(() => {});
+    };
+    setSourceFileId(null);
+    setSourcePreviewUrl(null);
+    setSourceContext(null);
+    setImageSize(null);
+    if (!open || !imageFile) {
+      setSourcePreparing(false);
+      return releaseRegisteredSource;
     }
-    if (imageFile.size > LOCAL_PREVIEW_MAX_BYTES) {
-      setLocalPreviewUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(imageFile);
-    setLocalPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [imageFile, open, originalPreviewUrl]);
+    const requestImageFile = imageFile;
+    const requestTarget = colorcheckerTarget;
+    setSourcePreparing(true);
+    setErrorMessage(null);
+    colorcheckerPrepareSource(imageFile)
+      .then((result) => {
+        registeredSourceId = result.colorchecker_source_file_id;
+        const latest = latestCalibrationContext.current;
+        if (
+          sourceRunRef.current !== runId ||
+          !latest.open ||
+          latest.imageFile !== requestImageFile ||
+          latest.colorcheckerTarget !== requestTarget
+        ) {
+          releaseRegisteredSource();
+          return;
+        }
+        setSourceFileId(result.colorchecker_source_file_id);
+        setSourceContext({
+          imageFile: requestImageFile,
+          target: requestTarget ?? null,
+        });
+        setSourcePreviewUrl(
+          normalizeResourceUrl(result.source_preview_url) ?? result.source_preview_url,
+        );
+        setImageSize({
+          width: result.preview_width,
+          height: result.preview_height,
+        });
+      })
+      .catch((error) => {
+        if (sourceRunRef.current === runId) {
+          setErrorMessage(error instanceof Error ? error.message : t("ext_cc_missing_image"));
+        }
+      })
+      .finally(() => {
+        if (sourceRunRef.current === runId) {
+          setSourcePreparing(false);
+        }
+      });
+    return () => {
+      sourceRunRef.current += 1;
+      releaseRegisteredSource();
+    };
+  }, [colorcheckerTarget, imageFile, open, t]);
 
   useEffect(() => {
     if (!open) {
@@ -467,6 +620,9 @@ export function ColorcheckerConfirmDialogInner({
     setLocalSummary(null);
     setCorners([]);
     setActiveCornerIndex(null);
+    setAutoDetecting(false);
+    setWarping(false);
+    setCalibrating(false);
     autoDetectAttempted.current = false;
   }, [colorcheckerTarget, imageFile, open]);
 
@@ -504,6 +660,11 @@ export function ColorcheckerConfirmDialogInner({
     setPatchPoints(null);
     setStatusMessage(null);
   }, []);
+
+  const handlePatchOrientationChange = useCallback((value: string) => {
+    setPatchOrientation(normalizePatchOrientation(value));
+    invalidateManualGeometry();
+  }, [invalidateManualGeometry]);
 
   useEffect(() => {
     if (dragCornerIndex === null) return;
@@ -547,28 +708,30 @@ export function ColorcheckerConfirmDialogInner({
   };
 
   const runAutoDetect = useCallback(async () => {
-    if (!imageFile) return;
+    if (!imageFile || !activeSourceFileId) return;
     const runId = ++detectionRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
+    const requestSourceId = activeSourceFileId;
     setAutoDetecting(true);
     setErrorMessage(null);
     setStatusMessage(null);
     try {
-      const result = await colorcheckerDetectChart(imageFile, PATCH_LAYOUT);
+      const result = await colorcheckerDetectChart(activeSourceFileId, PATCH_LAYOUT);
       const latest = latestCalibrationContext.current;
       if (
         detectionRunRef.current !== runId ||
         latest.phase !== "calibrating" ||
         !latest.open ||
         latest.imageFile !== requestImageFile ||
-        latest.colorcheckerTarget !== requestTarget
+        latest.colorcheckerTarget !== requestTarget ||
+        latest.sourceFileId !== requestSourceId
       ) {
         return;
       }
       if (result.detected && result.corners.length === 4) {
         setCorners(toCornerTuples(result.corners));
-        setPatchOrientation(result.patchOrientation || "normal");
+        setPatchOrientation(normalizePatchOrientation(result.patchOrientation));
         setActiveCornerIndex(0);
         setWarpPreviewUrl(null);
         setPatchPoints(null);
@@ -585,25 +748,27 @@ export function ColorcheckerConfirmDialogInner({
         setAutoDetecting(false);
       }
     }
-  }, [colorcheckerTarget, imageFile, t]);
+  }, [activeSourceFileId, colorcheckerTarget, imageFile, t]);
 
   useEffect(() => {
-    if (!isCalibrating || !imageFile || autoDetectAttempted.current) return;
+    if (!isCalibrating || !imageFile || !activeSourceFileId || autoDetectAttempted.current) return;
     autoDetectAttempted.current = true;
     void runAutoDetect();
-  }, [imageFile, isCalibrating, runAutoDetect]);
+  }, [activeSourceFileId, imageFile, isCalibrating, runAutoDetect]);
 
   const runWarpPreview = async () => {
-    if (!imageFile || corners.length !== 4) return;
+    if (!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4) return;
     const runId = ++warpRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
+    const requestSourceId = activeSourceFileId;
     setWarping(true);
     setErrorMessage(null);
     try {
       const result = await colorcheckerWarpPreview(
-        imageFile,
+        activeSourceFileId,
         corners,
+        imageSize,
         PATCH_LAYOUT,
         patchOrientation,
       );
@@ -613,7 +778,8 @@ export function ColorcheckerConfirmDialogInner({
         latest.phase !== "calibrating" ||
         !latest.open ||
         latest.imageFile !== requestImageFile ||
-        latest.colorcheckerTarget !== requestTarget
+        latest.colorcheckerTarget !== requestTarget ||
+        latest.sourceFileId !== requestSourceId
       ) {
         return;
       }
@@ -633,10 +799,11 @@ export function ColorcheckerConfirmDialogInner({
   };
 
   const runCalibration = async () => {
-    if (!imageFile || corners.length !== 4) return;
+    if (!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4) return;
     const runId = ++calibrationRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
+    const requestSourceId = activeSourceFileId;
     setCalibrating(true);
     setErrorMessage(null);
     try {
@@ -650,8 +817,9 @@ export function ColorcheckerConfirmDialogInner({
           }
         : null;
       const result = await colorcheckerCalibrate(
-        imageFile,
+        activeSourceFileId,
         corners,
+        imageSize,
         patchPoints,
         PATCH_LAYOUT,
         options,
@@ -663,7 +831,8 @@ export function ColorcheckerConfirmDialogInner({
         latest.phase !== "calibrating" ||
         !latest.open ||
         latest.imageFile !== requestImageFile ||
-        latest.colorcheckerTarget !== requestTarget
+        latest.colorcheckerTarget !== requestTarget ||
+        latest.sourceFileId !== requestSourceId
       ) {
         void colorcheckerRelease(result.calibrated_full_file_id).catch(() => {});
         return;
@@ -684,6 +853,9 @@ export function ColorcheckerConfirmDialogInner({
         {
           imageFile,
           target: colorcheckerTarget,
+          sourcePreviewUrl: sourceUrl,
+          sourcePreviewWidth: imageSize.width,
+          sourcePreviewHeight: imageSize.height,
         },
       );
     } catch (error) {
@@ -788,7 +960,7 @@ export function ColorcheckerConfirmDialogInner({
                   </div>
                 ) : (
                   <span className="text-sm text-slate-500 dark:text-slate-400">
-                    {t("ext_cc_missing_image")}
+                    {sourcePreparing ? t("ext_cc_status_preparing") : t("ext_cc_missing_image")}
                   </span>
                 )}
               </div>
@@ -798,7 +970,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_auto_detect_btn")}
                   variant="secondary"
                   onClick={() => void runAutoDetect()}
-                  disabled={!imageFile || autoDetecting}
+                  disabled={!imageFile || !activeSourceFileId || autoDetecting || sourcePreparing}
                   loading={autoDetecting}
                   className="w-full"
                 />
@@ -806,7 +978,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_warp_btn")}
                   variant="secondary"
                   onClick={() => void runWarpPreview()}
-                  disabled={!imageFile || corners.length !== 4 || warping}
+                  disabled={!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4 || warping}
                   loading={warping}
                   className="w-full"
                 />
@@ -814,7 +986,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_calibrate_btn")}
                   variant="primary"
                   onClick={() => void runCalibration()}
-                  disabled={!imageFile || corners.length !== 4 || calibrating}
+                  disabled={!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4 || calibrating}
                   loading={calibrating}
                   className="w-full"
                 />
@@ -854,6 +1026,17 @@ export function ColorcheckerConfirmDialogInner({
                       {label}
                     </button>
                   ))}
+                </div>
+                <div className="mt-3">
+                  <Dropdown
+                    label={t("ext_cc_patch_orientation_label")}
+                    value={patchOrientation}
+                    options={PATCH_ORIENTATION_OPTIONS.map((option) => ({
+                      label: t(option.labelKey),
+                      value: option.value,
+                    }))}
+                    onChange={handlePatchOrientationChange}
+                  />
                 </div>
               </div>
 
@@ -955,9 +1138,9 @@ export function ColorcheckerConfirmDialogInner({
                 className="relative min-h-[22rem] cursor-col-resize select-none overflow-hidden rounded-[24px] border border-slate-200/80 bg-slate-950/5 dark:border-slate-700/80 dark:bg-slate-950/50"
                 onPointerDown={handleCompareDown}
               >
-                {originalPreviewUrl && (
+                {sourceUrl && (
                   <img
-                    src={originalPreviewUrl}
+                    src={sourceUrl}
                     alt={t("ext_cc_compare_original")}
                     className="absolute inset-0 h-full w-full object-contain"
                     draggable={false}

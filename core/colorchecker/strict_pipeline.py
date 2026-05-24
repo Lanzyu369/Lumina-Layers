@@ -26,6 +26,8 @@ from .diagnostics import (
     build_luminance_diagnostics as _build_luminance_diagnostics,
     clipping_reasons as _clipping_reasons,
     fit_patch_diagnostics as _fit_patch_diagnostics,
+    gray_reference_delta_metrics as _gray_reference_delta_metrics,
+    gray_reference_delta_warnings as _gray_reference_delta_warnings,
     gray_affine_post_fit_failures as _gray_affine_post_fit_failures,
     is_nonuniform as _is_nonuniform,
     patch_validity_report as _patch_validity_report,
@@ -335,6 +337,13 @@ def calibrate_strict_raw(
     fit_summary_76 = summarize_values(delta_e76.tolist())
     fit_summary_94 = summarize_values(delta_e94.tolist())
     gray_metrics = gray_patch_metrics(corrected_lab[gray_rows], used_gray_indices)
+    gray_delta_metrics = _gray_reference_delta_metrics(
+        corrected_lab[gray_rows],
+        reference_lab[gray_rows],
+        used_gray_indices,
+        [str(patch_details[row].get("label") or used_gray_indices[pos]) for pos, row in enumerate(gray_rows)],
+    )
+    gray_metrics["reference_delta"] = gray_delta_metrics
     luminance_diagnostics = _build_luminance_diagnostics(
         patch_details=patch_details,
         reference_linear=reference_linear,
@@ -360,10 +369,7 @@ def calibrate_strict_raw(
         warnings.append(f"fit max ΔE00 {fit_summary['max']} exceeds suggested 4.0 threshold.")
     if gray_metrics.get("l_monotonic") is False:
         warnings.append("Neutral gray L* values are not monotonic.")
-    if gray_metrics.get("a_abs_max") is not None and float(gray_metrics["a_abs_max"]) > 1.5:
-        warnings.append("Neutral gray |a*| exceeds suggested 1.5 threshold.")
-    if gray_metrics.get("b_abs_max") is not None and float(gray_metrics["b_abs_max"]) > 1.5:
-        warnings.append("Neutral gray |b*| exceeds suggested 1.5 threshold.")
+    warnings.extend(_gray_reference_delta_warnings(gray_delta_metrics))
 
     corrected_linear = apply_color_model(image_model_input, model)
     negative_ratio = float(np.mean(corrected_linear < 0.0))
