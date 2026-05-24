@@ -17,9 +17,11 @@ import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
 import {
-  computeFooterMetrics,
+  MIN_COVER_WIDTH,
+  computeFooterLayout,
   drawShareCardFooter,
   getFooterCaption,
+  makeCanvasMeasurer,
 } from "./shareCardFooter";
 
 // ========== Hex normalization ==========
@@ -304,31 +306,56 @@ export async function buildCoverImage(
 ): Promise<{ blob: Blob; cover: RecipeCover }> {
   const img = await loadImage(previewUrl);
 
+  // 1) Scale the preview to fit `maxWidth` while preserving aspect ratio.
   const scale = Math.min(1, maxWidth / img.naturalWidth);
-  const w = Math.round(img.naturalWidth * scale);
-  const previewH = Math.round(img.naturalHeight * scale);
+  const previewW = Math.max(1, Math.round(img.naturalWidth * scale));
+  const previewH = Math.max(1, Math.round(img.naturalHeight * scale));
 
-  const footerMetrics = computeFooterMetrics(w);
-  const totalH = previewH + footerMetrics.height;
+  // 2) The cover canvas must be wide enough to host the QR + caption. If the
+  //    preview is narrower, pad horizontally so the footer never gets clipped.
+  //    封面画布最小宽度受页脚约束；预览较窄时左右补白，避免 QR/文字被裁。
+  const coverW = Math.max(previewW, MIN_COVER_WIDTH);
 
+  // 3) Compute footer layout (QR size, font, wrapped lines) for the canvas
+  //    width using a real canvas measurer so caption shrink/wrap is accurate.
+  const measureCanvas = document.createElement("canvas");
+  const measureCtx = measureCanvas.getContext("2d");
+  if (!measureCtx) {
+    throw new Error("Failed to create measurement canvas context");
+  }
+  const layout = computeFooterLayout(
+    coverW,
+    getFooterCaption(),
+    makeCanvasMeasurer(measureCtx),
+  );
+
+  const totalH = previewH + layout.height;
   const canvas = document.createElement("canvas");
-  canvas.width = w;
+  canvas.width = coverW;
   canvas.height = totalH;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     throw new Error("Failed to create canvas context");
   }
 
-  // Preview occupies the top region.
-  ctx.drawImage(img, 0, 0, w, previewH);
+  // 4) Fill any horizontal padding white so the cover has no transparent gap
+  //    around the preview when coverW > previewW.
+  if (coverW > previewW) {
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, coverW, previewH);
+  }
 
-  // Footer occupies the area immediately below.
-  await drawShareCardFooter(ctx, w, previewH, footerMetrics, getFooterCaption());
+  // 5) Draw the preview centered horizontally in the top region.
+  const previewX = Math.round((coverW - previewW) / 2);
+  ctx.drawImage(img, previewX, 0, previewW, previewH);
+
+  // 6) Footer below the preview.
+  await drawShareCardFooter(ctx, coverW, previewH, layout);
 
   const blob = await canvasToPngBlob(canvas);
   return {
     blob,
-    cover: { width: w, height: totalH, mime_type: "image/png" },
+    cover: { width: coverW, height: totalH, mime_type: "image/png" },
   };
 }
 
