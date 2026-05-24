@@ -1313,6 +1313,77 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
+    def test_large_format_material_archive_raster_params_stay_generate_compatible(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_3mf, threemf_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_3mf)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(threemf_path, "wb") as threemf_file:
+            threemf_file.write(b"3mf")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        captured_params: dict = {}
+
+        async def _mock_submit(_fn, _tile_path, _lut_path, tile_params):
+            if "backing_color_id" in tile_params:
+                raise TypeError("generate_final_model() got an unexpected keyword argument 'backing_color_id'")
+            captured_params.update(tile_params)
+            return {
+                "threemf_path": threemf_path,
+                "status_msg": "ok",
+            }
+
+        mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            result = asyncio.run(
+                _generate_large_format_raster(
+                    image_path=image_path,
+                    lut_path="__material_archive__",
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    material_matrix_path=None,
+                    total_width_mm=40.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={
+                        "material_source": "material_archive",
+                        "selected_materials": ["mat-a", "mat-b"],
+                        "material_layer_count": 5,
+                        "material_layer_height_mm": 0.08,
+                        "material_grid_resolution": 64,
+                        "material_backing_material_index": 1,
+                    },
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=mock_pool,
+                )
+            )
+
+            assert result["status"] == "ok"
+            assert captured_params["material_source"] == "material_archive"
+            assert captured_params["selected_materials"] == ["mat-a", "mat-b"]
+            assert captured_params["material_backing_material_index"] == 1
+            assert "backing_color_id" not in captured_params
+        finally:
+            store.clear_all()
+            for path in (image_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     def test_large_format_raster_helper_slices_recipe_override_artifacts_per_tile(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
         os.close(fd_img)
