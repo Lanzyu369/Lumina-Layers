@@ -390,4 +390,24 @@ describe("collectBugReportContext", () => {
       expect(keys).toContain(key);
     }
   });
+
+  it("marks large-format file downloads as zip artifacts", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "converter-large-format",
+      downloadUrl: "/api/files/large-format-download-id",
+      threemfDiskPath: null,
+      largeFormatEnabled: true,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_final_artifact_ref).toEqual({
+      session_id: "converter-large-format",
+      download_url: "/api/files/large-format-download-id",
+      artifact_type: "zip",
+      disk_path: null,
+      source: "converter",
+    });
+  });
 });
