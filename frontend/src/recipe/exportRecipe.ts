@@ -16,6 +16,11 @@ import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
+import {
+  computeFooterMetrics,
+  drawShareCardFooter,
+  getFooterCaption,
+} from "./shareCardFooter";
 
 // ========== Hex normalization ==========
 
@@ -281,50 +286,75 @@ export async function buildRecipeAssets(
 }
 
 /**
- * Create a cover image by rendering the preview URL to a resized canvas PNG.
- * 通过将预览 URL 渲染到缩放画布上来创建封面图。
+ * Create a cover image by rendering the preview URL onto a canvas and
+ * appending a Lumina share-card footer (QR code + localized caption).
+ * 通过将预览 URL 渲染到画布并在底部追加分享卡尾标（二维码 + 多语言文字）来创建封面图。
+ *
+ * The footer points to the Lumina wiki and tells viewers that this PNG can be
+ * imported back into Lumina 2.0 directly.
  *
  * @param previewUrl - URL of the current 2D preview image.
  * @param maxWidth - Maximum width for the cover thumbnail (default: 800).
- * @returns Cover PNG blob and metadata.
+ * @returns Cover PNG blob and metadata. `width`/`height` describe the final
+ *   composed image including the footer.
  */
 export async function buildCoverImage(
   previewUrl: string,
   maxWidth: number = 800,
 ): Promise<{ blob: Blob; cover: RecipeCover }> {
+  const img = await loadImage(previewUrl);
+
+  const scale = Math.min(1, maxWidth / img.naturalWidth);
+  const w = Math.round(img.naturalWidth * scale);
+  const previewH = Math.round(img.naturalHeight * scale);
+
+  const footerMetrics = computeFooterMetrics(w);
+  const totalH = previewH + footerMetrics.height;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = totalH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Failed to create canvas context");
+  }
+
+  // Preview occupies the top region.
+  ctx.drawImage(img, 0, 0, w, previewH);
+
+  // Footer occupies the area immediately below.
+  await drawShareCardFooter(ctx, w, previewH, footerMetrics, getFooterCaption());
+
+  const blob = await canvasToPngBlob(canvas);
+  return {
+    blob,
+    cover: { width: w, height: totalH, mime_type: "image/png" },
+  };
+}
+
+/** Load an image element from a URL, resolving once decoded. */
+function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => {
-      const scale = Math.min(1, maxWidth / img.naturalWidth);
-      const w = Math.round(img.naturalWidth * scale);
-      const h = Math.round(img.naturalHeight * scale);
-
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Failed to create canvas context"));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, w, h);
-
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("Failed to create cover PNG blob"));
-            return;
-          }
-          resolve({
-            blob,
-            cover: { width: w, height: h, mime_type: "image/png" },
-          });
-        },
-        "image/png",
-      );
-    };
+    img.onload = () => resolve(img);
     img.onerror = () => reject(new Error("Failed to load preview image for cover"));
-    img.src = previewUrl;
+    img.src = url;
+  });
+}
+
+/** Convert a canvas into a PNG blob, rejecting on encoder failure. */
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Failed to create cover PNG blob"));
+          return;
+        }
+        resolve(blob);
+      },
+      "image/png",
+    );
   });
 }
