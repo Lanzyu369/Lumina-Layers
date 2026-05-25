@@ -331,6 +331,28 @@ def test_build_display_summary_falls_back_to_legacy_stats() -> None:
     }
 
 
+def test_strict_fit_delta_e_warning_skips_acceptable_values() -> None:
+    from core.colorchecker.strict_pipeline import _fit_delta_e_warning
+
+    assert _fit_delta_e_warning("mean", 3.0) is None
+    assert _fit_delta_e_warning("median", 3.0) is None
+    assert _fit_delta_e_warning("P95", 6.0) is None
+    assert _fit_delta_e_warning("max", 6.0) is None
+
+
+def test_strict_fit_delta_e_warning_reports_check_level_values() -> None:
+    from core.colorchecker.strict_pipeline import _fit_delta_e_warning
+
+    assert (
+        _fit_delta_e_warning("mean", 3.1)
+        == "fit mean ΔE00 3.1 exceeds suggested 3.0 threshold."
+    )
+    assert (
+        _fit_delta_e_warning("P95", 6.1)
+        == "fit P95 ΔE00 6.1 exceeds suggested 6.0 threshold."
+    )
+
+
 def test_gray_reference_delta_does_not_warn_on_nonzero_reference_gray() -> None:
     reference = np.asarray([[19.04, -0.05, 1.99]], dtype=np.float64)
     corrected = reference.copy()

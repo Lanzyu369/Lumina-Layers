@@ -57,6 +57,21 @@ class StrictCalibrationRun:
     model: dict[str, object]
 
 
+_FIT_DELTA_E_ATTENTION_LIMITS = {
+    "mean": 3.0,
+    "median": 3.0,
+    "P95": 6.0,
+    "max": 6.0,
+}
+
+
+def _fit_delta_e_warning(metric: str, value: object) -> str | None:
+    limit = _FIT_DELTA_E_ATTENTION_LIMITS[metric]
+    if value is None or float(value) <= limit:
+        return None
+    return f"fit {metric} ΔE00 {value} exceeds suggested {limit:.1f} threshold."
+
+
 def _reference_arrays(reference_patches: list[dict[str, object]], target_white_point: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
     labs: list[np.ndarray] = []
     linear: list[np.ndarray] = []
@@ -359,14 +374,11 @@ def calibrate_strict_raw(
     validity_warning = _patch_validity_warning(patch_validity, exposure_label="RAW exposure")
     if validity_warning:
         warnings.append(validity_warning)
-    if fit_summary["mean"] is not None and float(fit_summary["mean"]) > 2.0:
-        warnings.append(f"fit mean ΔE00 {fit_summary['mean']} exceeds suggested 2.0 threshold.")
-    if fit_summary["median"] is not None and float(fit_summary["median"]) > 1.5:
-        warnings.append(f"fit median ΔE00 {fit_summary['median']} exceeds suggested 1.5 threshold.")
-    if fit_summary["p95"] is not None and float(fit_summary["p95"]) > 3.0:
-        warnings.append(f"fit P95 ΔE00 {fit_summary['p95']} exceeds suggested 3.0 threshold.")
-    if fit_summary["max"] is not None and float(fit_summary["max"]) > 4.0:
-        warnings.append(f"fit max ΔE00 {fit_summary['max']} exceeds suggested 4.0 threshold.")
+    for metric in ("mean", "median", "P95", "max"):
+        summary_key = "p95" if metric == "P95" else metric
+        fit_warning = _fit_delta_e_warning(metric, fit_summary[summary_key])
+        if fit_warning:
+            warnings.append(fit_warning)
     if gray_metrics.get("l_monotonic") is False:
         warnings.append("Neutral gray L* values are not monotonic.")
     warnings.extend(_gray_reference_delta_warnings(gray_delta_metrics))

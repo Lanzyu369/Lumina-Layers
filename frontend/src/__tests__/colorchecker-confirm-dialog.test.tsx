@@ -198,9 +198,32 @@ describe("ColorcheckerConfirmDialog", () => {
     expect(screen.getByText("当前基准")).toBeInTheDocument();
     expect(screen.getByText("大凡光学")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "亮度曲线" })).toBeInTheDocument();
-    expect(screen.getAllByText("校色质量提示")).toHaveLength(2);
-    expect(screen.getByText(/平均 ΔE00 为 2.0362/)).toBeInTheDocument();
+    expect(screen.queryByText("校色质量提示")).not.toBeInTheDocument();
+    expect(screen.queryByText(/平均 ΔE00 为 2.0362/)).not.toBeInTheDocument();
+    expect(screen.getByText("校色完成，请检查结果后确认使用。")).toBeInTheDocument();
     expect(screen.getAllByText("可接受").length).toBeGreaterThan(0);
+  });
+
+  it("renders fit DeltaE warnings only when they are check-level", () => {
+    renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/calibrated.png",
+      calibrationSummary: {
+        ...summary,
+        deltaE00: {
+          ...summary.deltaE00,
+          mean: 3.2,
+        },
+        warnings: [
+          "fit median ΔE00 1.7912 exceeds suggested 1.5 threshold.",
+          "fit mean ΔE00 3.2 exceeds suggested 3.0 threshold.",
+        ],
+      },
+    });
+
+    expect(screen.getAllByText("校色质量提示")).toHaveLength(1);
+    expect(screen.queryByText(/中位 ΔE00 为 1\.7912/)).not.toBeInTheDocument();
+    expect(screen.getByText(/平均 ΔE00 为 3\.2/)).toBeInTheDocument();
   });
 
   it("renders gray reference delta warnings, gamut boundary copy, and delta status labels", () => {

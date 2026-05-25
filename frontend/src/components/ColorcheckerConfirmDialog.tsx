@@ -62,6 +62,7 @@ type SamplingMethod = NonNullable<ColorcheckerCalibrateOptions["method"]>;
 type GrayAffineMode = NonNullable<ColorcheckerCalibrateOptions["grayAffineMode"]>;
 type PatchOrientation = "normal" | "rotate_180" | "flip_horizontal" | "flip_vertical";
 type DeltaMetricKind = "mean" | "median" | "p95" | "max";
+type DeltaMetricTone = "success" | "warning" | "danger";
 
 const CALIBRATION_MODE_OPTIONS: Array<{ labelKey: string; value: CalibrationMode }> = [
   { labelKey: "ext_cc_algorithm_matrix_3x3", value: "matrix_3x3" },
@@ -90,6 +91,20 @@ const PATCH_ORIENTATION_OPTIONS: Array<{ labelKey: string; value: PatchOrientati
 const PATCH_ORIENTATION_VALUES = new Set<PatchOrientation>(
   PATCH_ORIENTATION_OPTIONS.map((option) => option.value),
 );
+const DELTA_METRIC_LIMITS: Record<DeltaMetricKind, { high: number; acceptable: number }> = {
+  mean: { high: 2, acceptable: 3 },
+  median: { high: 1.5, acceptable: 3 },
+  p95: { high: 3, acceptable: 6 },
+  max: { high: 4, acceptable: 6 },
+};
+const FIT_DELTA_E_WARNING_RE =
+  /^fit (mean|median|P95|max) ΔE00 ([0-9.]+) exceeds suggested ([0-9.]+) threshold\.$/;
+const FIT_WARNING_KIND: Record<string, DeltaMetricKind> = {
+  mean: "mean",
+  median: "median",
+  P95: "p95",
+  max: "max",
+};
 
 function toCornerTuples(points: ColorcheckerPoint[]): CornerPoint[] {
   return points.map((point) => [point.x, point.y]);
@@ -103,13 +118,7 @@ function formatMetric(value: number | null | undefined, digits = 2) {
 
 function deltaMetricStatus(kind: DeltaMetricKind, value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  const limits: Record<DeltaMetricKind, { high: number; acceptable: number }> = {
-    mean: { high: 2, acceptable: 3 },
-    median: { high: 1.5, acceptable: 3 },
-    p95: { high: 3, acceptable: 6 },
-    max: { high: 4, acceptable: 6 },
-  };
-  const limit = limits[kind];
+  const limit = DELTA_METRIC_LIMITS[kind];
   if (value <= limit.high) {
     return { labelKey: "ext_cc_delta_status_high_precision", tone: "success" as const };
   }
@@ -119,7 +128,7 @@ function deltaMetricStatus(kind: DeltaMetricKind, value: number | null | undefin
   return { labelKey: "ext_cc_delta_status_check", tone: "danger" as const };
 }
 
-function deltaStatusClass(tone: "success" | "warning" | "danger") {
+function deltaStatusClass(tone: DeltaMetricTone) {
   if (tone === "success") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/70 dark:bg-emerald-950/40 dark:text-emerald-200";
   }
@@ -143,19 +152,19 @@ function normalizePatchOrientation(value: string | null | undefined): PatchOrien
 }
 
 function localizeColorcheckerWarning(warning: string) {
-  const fitMatch = /^fit (mean|median|P95|max) ΔE00 ([0-9.]+) exceeds suggested ([0-9.]+) threshold\.$/.exec(warning);
-  if (fitMatch) {
+  const fitWarning = parseFitDeltaEWarning(warning);
+  if (fitWarning) {
     const metricKeys = {
       mean: "ext_cc_metric_mean",
       median: "ext_cc_metric_median",
-      P95: "ext_cc_metric_p95",
+      p95: "ext_cc_metric_p95",
       max: "ext_cc_metric_worst",
     } as const;
-    const metricKey = metricKeys[fitMatch[1] as keyof typeof metricKeys];
+    const metricKey = metricKeys[fitWarning.kind];
     return tRuntime("ext_cc_warning_fit_metric", {
       metric: tRuntime(metricKey),
-      value: fitMatch[2],
-      threshold: fitMatch[3],
+      value: fitWarning.valueText,
+      threshold: fitWarning.thresholdText,
     });
   }
   const patchMatch = /^Patch validity risk: ([0-9]+)\/([0-9]+) patches were excluded from fitting(?: \((.*?)\))?\. The PNG was generated from the remaining patches only; check patch placement, orientation, sample radius, and (.*?) before trusting the result\.$/.exec(warning);
@@ -201,6 +210,32 @@ function localizeColorcheckerWarning(warning: string) {
     return tRuntime("ext_cc_warning_affine_bias");
   }
   return tRuntime("ext_cc_warning_generic");
+}
+
+function parseFitDeltaEWarning(warning: string) {
+  const match = FIT_DELTA_E_WARNING_RE.exec(warning);
+  if (!match) {
+    return null;
+  }
+  const kind = FIT_WARNING_KIND[match[1]];
+  const value = Number(match[2]);
+  if (!kind || !Number.isFinite(value)) {
+    return null;
+  }
+  return {
+    kind,
+    value,
+    valueText: match[2],
+    thresholdText: match[3],
+  };
+}
+
+function shouldShowColorcheckerWarning(warning: string) {
+  const fitWarning = parseFitDeltaEWarning(warning);
+  if (!fitWarning) {
+    return true;
+  }
+  return deltaMetricStatus(fitWarning.kind, fitWarning.value)?.tone === "danger";
 }
 
 function nearestCornerIndex(points: CornerPoint[], target: CornerPoint) {
@@ -422,7 +457,8 @@ function ColorcheckerWarningCards({
   warnings: string[] | undefined;
 }) {
   const { t } = useI18n();
-  if (!warnings?.length) {
+  const visibleWarnings = warnings?.filter(shouldShowColorcheckerWarning) ?? [];
+  if (!visibleWarnings.length) {
     return (
       <StatusBanner tone="success">
         {t("ext_cc_result_ready")}
@@ -431,7 +467,7 @@ function ColorcheckerWarningCards({
   }
   return (
     <div className="grid gap-2" data-testid="colorchecker-warning-cards">
-      {warnings.map((warning, index) => (
+      {visibleWarnings.map((warning, index) => (
         <StatusBanner
           key={`${warning}-${index}`}
           tone="warning"
