@@ -1152,12 +1152,6 @@ def _resolve_large_format_shared_params(
             request,
         )
         params["material_backing_material_index"] = resolved_backing_idx
-        # Surface the backing slot index as backing_color_id for the tile
-        # worker so the Board geometry is assigned to the user-selected
-        # material slot instead of the hardcoded slot 0.
-        # 将底板槽位索引作为 backing_color_id 透传给 tile worker，
-        # 避免大幅面导出仍把底板硬编码成第一条耗材。
-        params["backing_color_id"] = int(resolved_backing_idx or 0)
     return params
 
 

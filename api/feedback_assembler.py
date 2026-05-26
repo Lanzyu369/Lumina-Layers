@@ -602,7 +602,7 @@ def _collect_final_artifact(
                     "filename": dst.name,
                     "sha256": sha,
                     "size_bytes": size,
-                    "artifact_type": artifact_type or suffix.lstrip("."),
+                    "artifact_type": suffix.lstrip(".") or artifact_type,
                     "source_session_id": session_id,
                     "generated_at": _format_created_at(entry.get("created_at")),
                     "history_count": history_count,
@@ -622,7 +622,7 @@ def _collect_final_artifact(
         if attached is not None:
             return attached
 
-    # Neither registry nor disk_path yielded a file.
+    # Neither registry nor fallback yielded a file.
     return {**base, "status": "expired_ttl"}
 
 
@@ -667,7 +667,7 @@ def _try_disk_path_fallback(
         "filename": dst.name,
         "sha256": sha,
         "size_bytes": size,
-        "artifact_type": artifact_type or suffix.lstrip("."),
+        "artifact_type": suffix.lstrip(".") or artifact_type,
         "source_session_id": session_id,
         "generated_at": None,
         "history_count": 0,

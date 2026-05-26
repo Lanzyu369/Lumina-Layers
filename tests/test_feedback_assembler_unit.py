@@ -541,6 +541,7 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     ticket_dir = tmp_path / "LUM-20260524-001"
     ticket_dir.mkdir()
     payload = {
+        "ticket_id": "LUM-20260524-001",
         "context": {
             "active_original_image_ref": None,
             "active_final_artifact_ref": {
