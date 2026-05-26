@@ -105,6 +105,17 @@ def validate_preview_context(context: str) -> str:
     return value
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all bytes to a raw file descriptor, retrying short writes."""
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError("Failed to write preview upload chunk")
+        offset += written
+
+
 async def save_upload_to_tempfile(file: UploadFile) -> str:
     """Stream an uploaded image to a temporary file.
     以流式方式保存上传图像，避免长期保留上传字节。
@@ -116,7 +127,7 @@ async def save_upload_to_tempfile(file: UploadFile) -> str:
             chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
-            os.write(fd, chunk)
+            _write_all(fd, chunk)
     except Exception:
         os.close(fd)
         try:

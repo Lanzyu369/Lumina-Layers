@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
 from types import SimpleNamespace
 
 import numpy as np
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -67,6 +69,32 @@ def _register_colorchecker_source(
         is_public=False,
         purpose=COLORCHECKER_SOURCE_PURPOSE,
     )
+
+
+def test_save_upload_to_tempfile_handles_short_os_write(monkeypatch, tmp_path) -> None:
+    """Preview upload persistence should retry raw short writes."""
+    import api.preview_resources as preview_resources
+
+    payload = b"abcdefghijklmnopqrstuvwxyz"
+    original_write = preview_resources.os.write
+    written_lengths: list[int] = []
+
+    def short_write(fd: int, data) -> int:  # noqa: ANN001
+        chunk = bytes(data[:5])
+        written_lengths.append(len(chunk))
+        return original_write(fd, chunk)
+
+    monkeypatch.setattr(preview_resources, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(preview_resources.os, "write", short_write)
+
+    upload = UploadFile(filename="short-write.bin", file=io.BytesIO(payload))
+    path = asyncio.run(preview_resources.save_upload_to_tempfile(upload))
+    try:
+        with open(path, "rb") as saved:
+            assert saved.read() == payload
+        assert len(written_lengths) > 1
+    finally:
+        os.remove(path)
 
 
 def test_preview_resource_returns_private_source_id_and_bounded_preview() -> None:
