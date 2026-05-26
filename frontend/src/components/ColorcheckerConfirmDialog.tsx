@@ -1,19 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
+  colorcheckerListReferences,
+  colorcheckerNormalizeReference,
   colorcheckerPrepareSource,
   colorcheckerRelease,
   colorcheckerWarpPreview,
   type ColorcheckerCalibrateOptions,
   type ColorcheckerDisplaySummary,
   type ColorcheckerPoint,
+  type ColorcheckerReferenceSelection,
+  type ColorcheckerReferenceSummary,
 } from "../api/extractor";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { useColorcheckerArtifactLease } from "../hooks/useColorcheckerArtifactLease";
 import { useExtractorStore } from "../stores/extractorStore";
+import {
+  loadSelectedColorcheckerReferenceKey,
+  loadStoredColorcheckerReferences,
+  makeStoredColorcheckerReference,
+  removeStoredColorcheckerReference,
+  saveSelectedColorcheckerReferenceKey,
+  type StoredColorcheckerReference,
+  readColorcheckerReferenceWorkbook,
+  upsertStoredColorcheckerReference,
+} from "../utils/colorcheckerReferences";
 import { normalizeResourceUrl } from "../utils/resourceUrl";
 import Button from "./ui/Button";
 import Checkbox from "./ui/Checkbox";
@@ -55,6 +69,8 @@ export interface ColorcheckerConfirmDialogProps {
 }
 
 const PATCH_LAYOUT = "4x6";
+const DEFAULT_REFERENCE_ID = "dafan";
+const DEFAULT_REFERENCE_KEY = `server:${DEFAULT_REFERENCE_ID}`;
 const CORNER_LABELS = ["TL", "TR", "BR", "BL"];
 
 type CalibrationMode = NonNullable<ColorcheckerCalibrateOptions["calibrationMode"]>;
@@ -144,6 +160,10 @@ function optionLabel(
   t: (key: string) => string,
 ) {
   return t(options.find((option) => option.value === value)?.labelKey ?? "ext_cc_unknown_value");
+}
+
+function shortReferenceHash(value: string | null | undefined) {
+  return value ? value.slice(0, 12) : "-";
 }
 
 function normalizePatchOrientation(value: string | null | undefined): PatchOrientation {
@@ -429,6 +449,9 @@ function CalibrationReferenceInfo({
             whitePoint: String(reference?.labWhitePoint ?? "D50"),
           })}
         </div>
+        <div className="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">
+          {shortReferenceHash(reference?.referenceHash)}
+        </div>
       </div>
       <div
         className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
@@ -526,10 +549,21 @@ export function ColorcheckerConfirmDialogInner({
   const [grayAffineMode, setGrayAffineMode] = useState<GrayAffineMode>("auto");
   const [sampleRadius, setSampleRadius] = useState(12);
   const [blurRadius, setBlurRadius] = useState(0);
+  const [serverReferences, setServerReferences] = useState<ColorcheckerReferenceSummary[]>([]);
+  const [defaultReferenceId, setDefaultReferenceId] = useState(DEFAULT_REFERENCE_ID);
+  const [customReferences, setCustomReferences] = useState<StoredColorcheckerReference[]>(
+    () => loadStoredColorcheckerReferences(),
+  );
+  const [selectedReferenceKey, setSelectedReferenceKey] = useState(
+    () => loadSelectedColorcheckerReferenceKey() ?? DEFAULT_REFERENCE_KEY,
+  );
+  const [referenceLoading, setReferenceLoading] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
 
   const imageRef = useRef<HTMLImageElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const compareRef = useRef<HTMLDivElement>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
   const compareDragging = useRef(false);
   const autoDetectAttempted = useRef(false);
   const sourceRunRef = useRef(0);
@@ -541,12 +575,73 @@ export function ColorcheckerConfirmDialogInner({
     sourceContext?.imageFile === imageFile && sourceContext.target === colorcheckerTarget
       ? sourceFileId
       : null;
+  const serverReferenceKey = selectedReferenceKey.startsWith("server:")
+    ? selectedReferenceKey.slice("server:".length)
+    : defaultReferenceId;
+  const selectedCustomReference = customReferences.find(
+    (item) => item.key === selectedReferenceKey,
+  ) ?? null;
+  const selectedServerReference = serverReferences.find(
+    (item) => item.id === serverReferenceKey,
+  ) ?? null;
+  const referenceSelectionReady = !selectedReferenceKey.startsWith("server:")
+    || serverReferenceKey === defaultReferenceId
+    || serverReferences.some((item) => item.id === serverReferenceKey);
+  const selectedReferenceRequest = useMemo<ColorcheckerReferenceSelection>(() => {
+    if (selectedCustomReference) {
+      return {
+        kind: "custom",
+        referencePatches: selectedCustomReference.patches,
+        referenceSource: selectedCustomReference.source,
+      };
+    }
+    return {
+      kind: "server",
+      referenceId: serverReferenceKey || defaultReferenceId || DEFAULT_REFERENCE_ID,
+    };
+  }, [defaultReferenceId, selectedCustomReference, serverReferenceKey]);
+  const selectedReferenceMeta = selectedCustomReference
+    ? selectedCustomReference.source
+    : selectedServerReference?.source ?? {
+        sourceName: selectedServerReference?.name ?? "大凡光学",
+        patchCount: selectedServerReference?.patchCount ?? 24,
+        labWhitePoint: selectedServerReference?.labWhitePoint ?? "D50",
+        referenceHash: selectedServerReference?.referenceHash ?? null,
+      };
+  const referenceOptions = useMemo(
+    () => [
+      {
+        label: t("ext_cc_reference_group_server"),
+        options: (serverReferences.length
+          ? serverReferences
+          : [
+              {
+                id: DEFAULT_REFERENCE_ID,
+                name: "大凡光学",
+                patchCount: 24,
+              } as ColorcheckerReferenceSummary,
+            ]).map((item) => ({
+          label: item.name,
+          value: `server:${item.id}`,
+        })),
+      },
+      {
+        label: t("ext_cc_reference_group_custom"),
+        options: customReferences.map((item) => ({
+          label: item.name,
+          value: item.key,
+        })),
+      },
+    ],
+    [customReferences, serverReferences, t],
+  );
   const latestCalibrationContext = useRef({
     phase,
     open,
     imageFile,
     colorcheckerTarget,
     sourceFileId: activeSourceFileId,
+    referenceKey: selectedReferenceKey,
   });
   latestCalibrationContext.current = {
     phase,
@@ -554,6 +649,7 @@ export function ColorcheckerConfirmDialogInner({
     imageFile,
     colorcheckerTarget,
     sourceFileId: activeSourceFileId,
+    referenceKey: selectedReferenceKey,
   };
 
   const sourceUrl = activeSourceFileId ? sourcePreviewUrl : null;
@@ -577,6 +673,69 @@ export function ColorcheckerConfirmDialogInner({
       }, 0);
     };
   }, [closeDialog]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setReferenceLoading(true);
+    colorcheckerListReferences()
+      .then((result) => {
+        if (cancelled) return;
+        setServerReferences(result.references);
+        setDefaultReferenceId(result.defaultReferenceId || DEFAULT_REFERENCE_ID);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : t("ext_cc_reference_load_failed"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setReferenceLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, t]);
+
+  useEffect(() => {
+    const fallback = `server:${defaultReferenceId || DEFAULT_REFERENCE_ID}`;
+    const fallbackToDefaultReference = () => {
+      if (selectedReferenceKey === fallback) return;
+      setSelectedReferenceKey(fallback);
+      saveSelectedColorcheckerReferenceKey(fallback);
+      detectionRunRef.current += 1;
+      warpRunRef.current += 1;
+      calibrationRunRef.current += 1;
+      autoDetectAttempted.current = false;
+      setAutoDetecting(false);
+      setWarping(false);
+      setCalibrating(false);
+      setWarpPreviewUrl(null);
+      setWarpSize(null);
+      setPatchPoints(null);
+      setOverlayPreviewUrl(null);
+      setLocalSummary(null);
+      setStatusMessage(null);
+    };
+    if (selectedReferenceKey.startsWith("custom:")) {
+      if (!customReferences.some((item) => item.key === selectedReferenceKey)) {
+        fallbackToDefaultReference();
+      }
+      return;
+    }
+    if (selectedReferenceKey.startsWith("server:")) {
+      if (serverReferences.length > 0) {
+        const serverId = selectedReferenceKey.slice("server:".length);
+        if (!serverReferences.some((item) => item.id === serverId)) {
+          fallbackToDefaultReference();
+        }
+      }
+      return;
+    }
+    fallbackToDefaultReference();
+  }, [customReferences, defaultReferenceId, selectedReferenceKey, serverReferences]);
 
   useEffect(() => {
     const runId = ++sourceRunRef.current;
@@ -666,7 +825,7 @@ export function ColorcheckerConfirmDialogInner({
     detectionRunRef.current += 1;
     warpRunRef.current += 1;
     calibrationRunRef.current += 1;
-  }, [imageFile, open, colorcheckerTarget]);
+  }, [imageFile, open, colorcheckerTarget, selectedReferenceKey]);
 
   const pointFromPointer = useCallback((clientX: number, clientY: number): CornerPoint | null => {
     const image = imageRef.current;
@@ -696,6 +855,78 @@ export function ColorcheckerConfirmDialogInner({
     setPatchPoints(null);
     setStatusMessage(null);
   }, []);
+
+  const invalidateReferenceState = useCallback(() => {
+    detectionRunRef.current += 1;
+    warpRunRef.current += 1;
+    calibrationRunRef.current += 1;
+    autoDetectAttempted.current = false;
+    setAutoDetecting(false);
+    setWarping(false);
+    setCalibrating(false);
+    setWarpPreviewUrl(null);
+    setWarpSize(null);
+    setPatchPoints(null);
+    setOverlayPreviewUrl(null);
+    setLocalSummary(null);
+    setStatusMessage(null);
+  }, []);
+
+  const handleReferenceChange = useCallback((nextKey: string) => {
+    if (nextKey === selectedReferenceKey) return;
+    setSelectedReferenceKey(nextKey);
+    saveSelectedColorcheckerReferenceKey(nextKey);
+    invalidateReferenceState();
+  }, [invalidateReferenceState, selectedReferenceKey]);
+
+  const handleReferenceUpload = useCallback(async (file: File) => {
+    setReferenceUploading(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const parsed = await readColorcheckerReferenceWorkbook(file);
+      const normalized = await colorcheckerNormalizeReference({
+        patches: parsed.patches,
+        source: parsed.source,
+      });
+      const stored = makeStoredColorcheckerReference(
+        normalized,
+        file.name.replace(/\.[^.]+$/, ""),
+      );
+      setCustomReferences(upsertStoredColorcheckerReference(stored));
+      setSelectedReferenceKey(stored.key);
+      saveSelectedColorcheckerReferenceKey(stored.key);
+      invalidateReferenceState();
+      setStatusMessage(
+        normalized.warnings.length
+          ? tRuntime("ext_cc_reference_upload_ready_with_warnings", {
+              count: normalized.warnings.length,
+            })
+          : t("ext_cc_reference_upload_ready"),
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : t("ext_cc_reference_upload_failed"));
+    } finally {
+      setReferenceUploading(false);
+    }
+  }, [invalidateReferenceState, t]);
+
+  const handleReferenceFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+    if (file) {
+      void handleReferenceUpload(file);
+    }
+  }, [handleReferenceUpload]);
+
+  const handleDeleteSelectedReference = useCallback(() => {
+    if (!selectedCustomReference) return;
+    setCustomReferences(removeStoredColorcheckerReference(selectedCustomReference.key));
+    const fallback = `server:${defaultReferenceId || DEFAULT_REFERENCE_ID}`;
+    setSelectedReferenceKey(fallback);
+    saveSelectedColorcheckerReferenceKey(fallback);
+    invalidateReferenceState();
+  }, [defaultReferenceId, invalidateReferenceState, selectedCustomReference]);
 
   const handlePatchOrientationChange = useCallback((value: string) => {
     setPatchOrientation(normalizePatchOrientation(value));
@@ -744,16 +975,22 @@ export function ColorcheckerConfirmDialogInner({
   };
 
   const runAutoDetect = useCallback(async () => {
-    if (!imageFile || !activeSourceFileId) return;
+    if (!imageFile || !activeSourceFileId || !referenceSelectionReady) return;
     const runId = ++detectionRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
     const requestSourceId = activeSourceFileId;
+    const requestReferenceKey = selectedReferenceKey;
     setAutoDetecting(true);
     setErrorMessage(null);
     setStatusMessage(null);
     try {
-      const result = await colorcheckerDetectChart(activeSourceFileId, PATCH_LAYOUT);
+      const result = await colorcheckerDetectChart(
+        activeSourceFileId,
+        PATCH_LAYOUT,
+        null,
+        selectedReferenceRequest,
+      );
       const latest = latestCalibrationContext.current;
       if (
         detectionRunRef.current !== runId ||
@@ -761,7 +998,8 @@ export function ColorcheckerConfirmDialogInner({
         !latest.open ||
         latest.imageFile !== requestImageFile ||
         latest.colorcheckerTarget !== requestTarget ||
-        latest.sourceFileId !== requestSourceId
+        latest.sourceFileId !== requestSourceId ||
+        latest.referenceKey !== requestReferenceKey
       ) {
         return;
       }
@@ -784,20 +1022,27 @@ export function ColorcheckerConfirmDialogInner({
         setAutoDetecting(false);
       }
     }
-  }, [activeSourceFileId, colorcheckerTarget, imageFile, t]);
+  }, [activeSourceFileId, colorcheckerTarget, imageFile, referenceSelectionReady, selectedReferenceKey, selectedReferenceRequest, t]);
 
   useEffect(() => {
-    if (!isCalibrating || !imageFile || !activeSourceFileId || autoDetectAttempted.current) return;
+    if (
+      !isCalibrating ||
+      !imageFile ||
+      !activeSourceFileId ||
+      !referenceSelectionReady ||
+      autoDetectAttempted.current
+    ) return;
     autoDetectAttempted.current = true;
     void runAutoDetect();
-  }, [activeSourceFileId, imageFile, isCalibrating, runAutoDetect]);
+  }, [activeSourceFileId, imageFile, isCalibrating, referenceSelectionReady, runAutoDetect, selectedReferenceKey]);
 
   const runWarpPreview = async () => {
-    if (!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4) return;
+    if (!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4) return;
     const runId = ++warpRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
     const requestSourceId = activeSourceFileId;
+    const requestReferenceKey = selectedReferenceKey;
     setWarping(true);
     setErrorMessage(null);
     try {
@@ -815,7 +1060,8 @@ export function ColorcheckerConfirmDialogInner({
         !latest.open ||
         latest.imageFile !== requestImageFile ||
         latest.colorcheckerTarget !== requestTarget ||
-        latest.sourceFileId !== requestSourceId
+        latest.sourceFileId !== requestSourceId ||
+        latest.referenceKey !== requestReferenceKey
       ) {
         return;
       }
@@ -835,11 +1081,12 @@ export function ColorcheckerConfirmDialogInner({
   };
 
   const runCalibration = async () => {
-    if (!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4) return;
+    if (!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4) return;
     const runId = ++calibrationRunRef.current;
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
     const requestSourceId = activeSourceFileId;
+    const requestReferenceKey = selectedReferenceKey;
     setCalibrating(true);
     setErrorMessage(null);
     try {
@@ -860,6 +1107,7 @@ export function ColorcheckerConfirmDialogInner({
         PATCH_LAYOUT,
         options,
         patchOrientation,
+        selectedReferenceRequest,
       );
       const latest = latestCalibrationContext.current;
       if (
@@ -868,7 +1116,8 @@ export function ColorcheckerConfirmDialogInner({
         !latest.open ||
         latest.imageFile !== requestImageFile ||
         latest.colorcheckerTarget !== requestTarget ||
-        latest.sourceFileId !== requestSourceId
+        latest.sourceFileId !== requestSourceId ||
+        latest.referenceKey !== requestReferenceKey
       ) {
         void colorcheckerRelease(result.calibrated_full_file_id).catch(() => {});
         return;
@@ -1006,7 +1255,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_auto_detect_btn")}
                   variant="secondary"
                   onClick={() => void runAutoDetect()}
-                  disabled={!imageFile || !activeSourceFileId || autoDetecting || sourcePreparing}
+                  disabled={!imageFile || !activeSourceFileId || !referenceSelectionReady || autoDetecting || sourcePreparing}
                   loading={autoDetecting}
                   className="w-full"
                 />
@@ -1014,7 +1263,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_warp_btn")}
                   variant="secondary"
                   onClick={() => void runWarpPreview()}
-                  disabled={!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4 || warping}
+                  disabled={!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4 || warping}
                   loading={warping}
                   className="w-full"
                 />
@@ -1022,7 +1271,7 @@ export function ColorcheckerConfirmDialogInner({
                   label={t("ext_cc_calibrate_btn")}
                   variant="primary"
                   onClick={() => void runCalibration()}
-                  disabled={!imageFile || !activeSourceFileId || !imageSize || corners.length !== 4 || calibrating}
+                  disabled={!imageFile || !activeSourceFileId || !imageSize || !referenceSelectionReady || corners.length !== 4 || calibrating}
                   loading={calibrating}
                   className="w-full"
                 />
@@ -1032,6 +1281,70 @@ export function ColorcheckerConfirmDialogInner({
             <div className="flex min-w-0 flex-col gap-3">
               {errorMessage && <StatusBanner tone="error">{errorMessage}</StatusBanner>}
               {statusMessage && <StatusBanner tone="info">{statusMessage}</StatusBanner>}
+              <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {t("ext_cc_reference_select_title")}
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {t("ext_cc_reference_select_hint")}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-slate-200/80 px-2 py-1 font-mono text-[10px] text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
+                    {shortReferenceHash(selectedReferenceMeta.referenceHash)}
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <Dropdown
+                    label={t("ext_cc_reference_select_label")}
+                    value={selectedReferenceKey}
+                    groupedOptions={referenceOptions}
+                    onChange={handleReferenceChange}
+                    disabled={referenceLoading || referenceUploading}
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <div>
+                    {tRuntime("ext_cc_reference_meta", {
+                      count: String(selectedReferenceMeta.patchCount ?? 24),
+                      whitePoint: String(selectedReferenceMeta.labWhitePoint ?? "D50"),
+                    })}
+                  </div>
+                  {selectedReferenceMeta.serialNumber && (
+                    <div>
+                      {tRuntime("ext_cc_reference_serial", {
+                        serial: String(selectedReferenceMeta.serialNumber),
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    label={t("ext_cc_reference_upload_btn")}
+                    variant="secondary"
+                    size="sm"
+                    loading={referenceUploading}
+                    onClick={() => referenceInputRef.current?.click()}
+                    className="w-full sm:w-auto"
+                  />
+                  <Button
+                    label={t("ext_cc_reference_delete_btn")}
+                    variant="secondary"
+                    size="sm"
+                    disabled={!selectedCustomReference || referenceUploading}
+                    onClick={handleDeleteSelectedReference}
+                    className="w-full sm:w-auto"
+                  />
+                  <input
+                    ref={referenceInputRef}
+                    type="file"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    className="hidden"
+                    onChange={handleReferenceFileChange}
+                  />
+                </div>
+              </div>
               <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">

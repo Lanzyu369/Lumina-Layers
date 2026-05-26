@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from types import SimpleNamespace
 
@@ -27,6 +28,17 @@ def _png_bytes(width: int = 8, height: int = 6) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), (128, 96, 64)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _custom_reference_patches() -> list[dict[str, object]]:
+    return [
+        {
+            "index": index,
+            "label": f"Patch {index}",
+            "sRGB": [index, index + 1, index + 2],
+        }
+        for index in range(1, 25)
+    ]
 
 
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
@@ -350,6 +362,14 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
             "corner_points_width": "4",
             "corner_points_height": "3",
             "patch_orientation": "flip_horizontal",
+            "reference_patches": json.dumps(_custom_reference_patches()),
+            "reference_source": json.dumps(
+                {
+                    "sourceType": "user_upload",
+                    "sourceName": "Uploaded reference",
+                    "serialNumber": "SN-1",
+                }
+            ),
         },
     )
 
@@ -365,6 +385,9 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert captured["image_shape"] == (6, 8, 3)
     assert captured["corners"] == [[0, 0], [8, 0], [8, 6], [0, 6]]
     assert captured["patch_orientation"] == "flip_horizontal"
+    assert captured["reference_id"] is None
+    assert captured["reference_patches"][0]["sRGB"] == [1, 2, 3]
+    assert captured["reference_source"]["sourceName"] == "Uploaded reference"
 
     assert client.get(f"/api/files/{source_id}").status_code == 404
     source_touch_response = client.post(
@@ -630,7 +653,11 @@ def test_colorchecker_detect_uses_private_source_and_preview_coordinates(
 
     response = client.post(
         "/api/extractor/colorchecker-detect-chart",
-        data={"colorchecker_source_file_id": source_id},
+        data={
+            "colorchecker_source_file_id": source_id,
+            "reference_patches": json.dumps(_custom_reference_patches()),
+            "reference_source": json.dumps({"sourceName": "Detect upload"}),
+        },
     )
 
     assert response.status_code == 200
@@ -646,6 +673,37 @@ def test_colorchecker_detect_uses_private_source_and_preview_coordinates(
         {"x": 0.0, "y": float(expected_preview_height)},
     ]
     assert captured["assist_point"] is None
+    assert captured["reference_id"] is None
+    assert captured["reference_patches"][0]["sRGB"] == [1, 2, 3]
+    assert captured["reference_source"]["sourceName"] == "Detect upload"
+
+
+def test_colorchecker_detect_rejects_ambiguous_reference_selection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Detect endpoint should require reference_id xor custom reference patches."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+
+    response = client.post(
+        "/api/extractor/colorchecker-detect-chart",
+        data={
+            "colorchecker_source_file_id": source_id,
+            "reference_id": "dafan",
+            "reference_patches": json.dumps(_custom_reference_patches()),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "mutually exclusive" in response.json()["detail"]
 
 
 def test_extractor_uses_private_colorchecker_image_and_scales_points(

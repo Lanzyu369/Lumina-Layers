@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
@@ -202,6 +202,9 @@ def detect_colorchecker_chart(
     *,
     patch_layout: str = "4x6",
     assist_point: PointInput | None = None,
+    reference_id: str | None = None,
+    reference_patches: Sequence[Mapping[str, object]] | None = None,
+    reference_source: Mapping[str, object] | None = None,
 ) -> ChartDetectionResult:
     """Detect the ColorChecker card corners in a decoded image.
 
@@ -221,7 +224,11 @@ def detect_colorchecker_chart(
     try:
         from core.colorchecker.detection import detect_colorchecker_chart as _detect
 
-        brand = core.get_brand(None)
+        brand = core.resolve_reference(
+            reference_id=reference_id,
+            reference_patches=reference_patches,
+            reference_source=reference_source,
+        )
         result = _detect(
             image_bgr,
             brand["patches"],
@@ -338,6 +345,9 @@ def apply_colorchecker_calibration(
     gray_affine_mode: Literal["auto", "enabled", "fallback"] = "auto",
     blur_radius: float = 0.0,
     patch_orientation: str = "normal",
+    reference_id: str | None = None,
+    reference_patches: Sequence[Mapping[str, object]] | None = None,
+    reference_source: Mapping[str, object] | None = None,
 ) -> CalibrationResult:
     """Compute ColorChecker calibration and apply it to the image.
 
@@ -403,6 +413,9 @@ def apply_colorchecker_calibration(
             calibration_mode=_validate_calibration_mode(calibration_mode),
             gray_affine_mode=_validate_gray_affine_mode(gray_affine_mode),
             blur_radius=_validate_blur_radius(blur_radius),
+            reference_id=reference_id,
+            reference_patches=reference_patches,
+            reference_source=reference_source,
             encode_calibrated_png=False,
         )
     except (ValueError, TypeError, RuntimeError, KeyError, np.linalg.LinAlgError) as exc:
@@ -672,6 +685,7 @@ def _extract_reference_summary(report: dict[str, Any]) -> dict[str, object | Non
             "serialNumber": None,
             "patchCount": 24,
             "labWhitePoint": "D50",
+            "referenceHash": report.get("reference_hash") or report.get("reference_token"),
         }
     return {
         "sourceType": source.get("source_type"),
@@ -679,6 +693,7 @@ def _extract_reference_summary(report: dict[str, Any]) -> dict[str, object | Non
         "serialNumber": source.get("serial_number"),
         "patchCount": source.get("patch_count"),
         "labWhitePoint": source.get("lab_white_point"),
+        "referenceHash": source.get("reference_hash") or report.get("reference_hash") or report.get("reference_token"),
     }
 
 

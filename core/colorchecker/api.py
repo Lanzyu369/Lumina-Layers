@@ -17,7 +17,7 @@ from .pipeline import (
     calibrate_image_bgr,
     generate_patch_points,
 )
-from .reference import get_brand
+from .reference import resolve_reference
 from .strict_pipeline import calibrate_strict_raw
 
 PointInput = Mapping[str, float] | Sequence[float]
@@ -87,6 +87,9 @@ def calibrate(
     sampling_filter: object | None = None,
     blur_radius: float = 0.0,
     brand: str | None = None,
+    reference_id: str | None = None,
+    reference_patches: Sequence[Mapping[str, object]] | None = None,
+    reference_source: Mapping[str, object] | None = None,
     patch_layout: Literal["4x6", "3x8"] = "4x6",
     auto_arrange: bool = True,
     exposure_anchor_target_srgb: int = EXPOSURE_ANCHOR_TARGET_SRGB,
@@ -98,10 +101,16 @@ def calibrate(
         raise ValueError("input_color must be 'bgr' or 'rgb'.")
 
     raw_payload = _raw_input_payload(image, file_name=file_name, mime_type=mime_type)
-    brand_data = get_brand(brand, exposure_anchor_target_srgb=exposure_anchor_target_srgb)
+    brand_data = resolve_reference(
+        reference_id=reference_id or brand,
+        reference_patches=reference_patches,
+        reference_source=reference_source,
+        exposure_anchor_target_srgb=exposure_anchor_target_srgb,
+    )
     reference_patches = brand_data["patches"]
     reference_color_map = brand_data["color_map"]
     reference_source = _brand_reference_source(brand_data)
+    reference_hash = brand_data.get("reference_hash") or reference_source.get("reference_hash")
     normalized_corners = _normalize_points(corners, expected_count=4, name="corners")
     if patch_points is None:
         if not auto_arrange:
@@ -145,7 +154,8 @@ def calibrate(
         preview_png = encode_png_bytes(calibration.preview_image)
         overlay_png = encode_png_bytes(calibration.preview_overlay_image)
         calibration.report.setdefault("reference_source", reference_source)
-        calibration.report.setdefault("reference_token", None)
+        calibration.report.setdefault("reference_hash", reference_hash)
+        calibration.report.setdefault("reference_token", reference_hash)
         return CalibrationResult(
             calibrated_image=calibration.calibrated_image,
             preview_image=calibration.preview_image,
@@ -184,7 +194,8 @@ def calibrate(
     preview_png = encode_png_bytes(calibration.preview_image)
     overlay_png = encode_png_bytes(calibration.preview_overlay_image)
     calibration.report.setdefault("reference_source", reference_source)
-    calibration.report.setdefault("reference_token", None)
+    calibration.report.setdefault("reference_hash", reference_hash)
+    calibration.report.setdefault("reference_token", reference_hash)
     return CalibrationResult(
         calibrated_image=calibration.calibrated_image,
         preview_image=calibration.preview_image,
@@ -237,6 +248,7 @@ def _brand_reference_source(brand_data: dict[str, Any]) -> dict[str, object]:
         "serial_number": None,
         "patch_count": len(brand_data.get("patches") or []),
         "lab_white_point": "D50",
+        "reference_hash": brand_data.get("reference_hash"),
     }
 
 

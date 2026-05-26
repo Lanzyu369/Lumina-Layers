@@ -87,8 +87,7 @@ def decode_standard_image_bytes(raw: bytes) -> np.ndarray | None:
         return None
     try:
         with Image.open(io.BytesIO(raw)) as image:
-            transposed = ImageOps.exif_transpose(image)
-            rgb = np.asarray(transposed.convert("RGB"), dtype=np.uint8)
+            rgb = _pil_image_to_rgb_array(image)
     except (UnidentifiedImageError, OSError, ValueError):
         arr = np.frombuffer(raw, dtype=np.uint8)
         if arr.size == 0:
@@ -148,8 +147,7 @@ def decode_standard_image_file(path: str | Path) -> np.ndarray | None:
         return None
     try:
         with Image.open(path) as image:
-            transposed = ImageOps.exif_transpose(image)
-            rgb = np.asarray(transposed.convert("RGB"), dtype=np.uint8)
+            rgb = _pil_image_to_rgb_array(image)
     except (UnidentifiedImageError, OSError, ValueError):
         try:
             image = cv2.imread(str(path), cv2.IMREAD_COLOR)
@@ -161,6 +159,21 @@ def decode_standard_image_file(path: str | Path) -> np.ndarray | None:
     if rgb.size == 0:
         return None
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def _pil_image_to_rgb_array(image: Image.Image) -> np.ndarray:
+    """Copy a PIL image to RGB ndarray while closing intermediate images."""
+    transposed = ImageOps.exif_transpose(image)
+    try:
+        converted = transposed.convert("RGB")
+        try:
+            return np.array(converted, dtype=np.uint8, copy=True)
+        finally:
+            if converted is not transposed:
+                converted.close()
+    finally:
+        if transposed is not image:
+            transposed.close()
 
 
 def decode_raw_image_file(path: str | Path, *, file_name: str = "") -> np.ndarray:

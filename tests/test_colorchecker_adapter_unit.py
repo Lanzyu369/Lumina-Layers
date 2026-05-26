@@ -12,6 +12,7 @@ from core.colorchecker.diagnostics import (
     gray_reference_delta_metrics,
     gray_reference_delta_warnings,
 )
+from core.colorchecker.reference import ReferenceValidationError, normalize_reference
 from core.colorchecker_adapter import (
     ColorCheckerCalibrationError,
     ColorCheckerUnavailableError,
@@ -20,6 +21,88 @@ from core.colorchecker_adapter import (
     decode_colorchecker_upload,
     is_colorchecker_available,
 )
+
+
+def _reference_patches_with(field: str) -> list[dict[str, object]]:
+    patches: list[dict[str, object]] = []
+    for index in range(1, 25):
+        patch: dict[str, object] = {"index": index, "label": f"Patch {index}"}
+        if field == "sRGB":
+            patch["sRGB"] = [index, index + 1, index + 2]
+        elif field == "Lab_d50":
+            patch["Lab_d50"] = [50.0, 0.0, 0.0]
+        elif field == "Lab_d65":
+            patch["Lab_d65"] = [50.0, 0.0, 0.0]
+        else:
+            patch.update(
+                {
+                    "sRGB": [index, index + 1, index + 2],
+                    "Lab_d50": [50.0, 0.0, 0.0],
+                    "Lab_d65": [50.0, 0.0, 0.0],
+                }
+            )
+        patches.append(patch)
+    return patches
+
+
+class TestColorcheckerReferenceNormalization:
+    """Tests for partial ColorChecker reference normalization."""
+
+    def test_accepts_srgb_only_and_derives_lab(self) -> None:
+        result = normalize_reference(_reference_patches_with("sRGB"), {"sourceName": "Upload"})
+
+        first = result["patches"][0]
+        assert first["sRGB"] == [1, 2, 3]
+        assert len(first["Lab_d50"]) == 3
+        assert len(first["Lab_d65"]) == 3
+        assert result["source"]["source_name"] == "Upload"
+        assert len(result["reference_hash"]) == 64
+
+    def test_accepts_lab_only_and_derives_srgb(self) -> None:
+        result = normalize_reference(_reference_patches_with("Lab_d50"))
+
+        first = result["patches"][0]
+        assert len(first["sRGB"]) == 3
+        assert len(first["Lab_d65"]) == 3
+
+    def test_preserves_complete_reference_values(self) -> None:
+        result = normalize_reference(_reference_patches_with("complete"))
+        first = result["patches"][0]
+
+        assert first["sRGB"] == [1, 2, 3]
+        assert first["Lab_d50"] == [50.0, 0.0, 0.0]
+        assert first["Lab_d65"] == [50.0, 0.0, 0.0]
+
+    def test_rejects_patch_without_complete_color_triplet(self) -> None:
+        patches = _reference_patches_with("sRGB")
+        patches[0].pop("sRGB")
+
+        with pytest.raises(ReferenceValidationError, match="至少需要完整"):
+            normalize_reference(patches)
+
+    def test_rejects_out_of_range_srgb(self) -> None:
+        patches = _reference_patches_with("sRGB")
+        patches[0]["sRGB"] = [0, 0, 300]
+
+        with pytest.raises(ReferenceValidationError, match="0-255"):
+            normalize_reference(patches)
+
+    def test_rejects_duplicate_or_missing_indices(self) -> None:
+        duplicate = _reference_patches_with("sRGB")
+        duplicate[1]["index"] = 1
+        with pytest.raises(ReferenceValidationError, match="重复编号"):
+            normalize_reference(duplicate)
+
+        missing = _reference_patches_with("sRGB")[:-1]
+        with pytest.raises(ReferenceValidationError, match="24 个色块"):
+            normalize_reference(missing)
+
+    def test_rejects_duplicate_labels(self) -> None:
+        patches = _reference_patches_with("sRGB")
+        patches[1]["label"] = "Patch 1"
+
+        with pytest.raises(ReferenceValidationError, match="重复色块名称"):
+            normalize_reference(patches)
 
 
 class TestIsColorcheckerAvailable:
@@ -95,6 +178,57 @@ def test_warp_preview_orients_auto_patch_points(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert result.auto_patch_points[0]["x"] > result.auto_patch_points[1]["x"]
+
+
+def test_detect_chart_uses_selected_reference_patches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.zeros((20, 30, 3), dtype=np.uint8)
+    custom_patches = _reference_patches_with("sRGB")
+    captured: dict[str, object] = {}
+
+    class FakeDetection:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "detected": True,
+                "corners": [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 1.0, "y": 0.0},
+                    {"x": 1.0, "y": 1.0},
+                    {"x": 0.0, "y": 1.0},
+                ],
+                "patchOrientation": "normal",
+                "confidence": 1.0,
+                "score": 0.0,
+                "mode": "auto",
+                "reason": "",
+                "candidateCount": 1,
+            }
+
+    def fake_resolve_reference(**kwargs):
+        captured.update(kwargs)
+        return {"patches": custom_patches}
+
+    def fake_detect(_image, reference_patches, **_kwargs):
+        captured["reference_patches_arg"] = reference_patches
+        return FakeDetection()
+
+    fake_core = SimpleNamespace(resolve_reference=fake_resolve_reference)
+    monkeypatch.setattr(adapter, "_import_core", lambda: fake_core)
+    monkeypatch.setattr(
+        "core.colorchecker.detection.detect_colorchecker_chart",
+        fake_detect,
+    )
+
+    adapter.detect_colorchecker_chart(
+        image,
+        reference_patches=custom_patches,
+        reference_source={"sourceName": "Upload"},
+    )
+
+    assert captured["reference_patches"] == custom_patches
+    assert captured["reference_source"] == {"sourceName": "Upload"}
+    assert captured["reference_patches_arg"] == custom_patches
 
 
 class TestApplyColorcheckerCalibration:
@@ -178,6 +312,7 @@ class TestApplyColorcheckerCalibration:
                     "serial_number": None,
                     "patch_count": 24,
                     "lab_white_point": "D50",
+                    "reference_hash": "abc123",
                 },
                 "method": "median",
                 "selected_model": "root_polynomial",
@@ -203,6 +338,7 @@ class TestApplyColorcheckerCalibration:
             calibration_mode="root_polynomial",
             gray_affine_mode="enabled",
             blur_radius=1.5,
+            reference_id="dafan",
         )
 
         assert result.calibrated_image is calibrated
@@ -214,11 +350,13 @@ class TestApplyColorcheckerCalibration:
         assert captured_kwargs["calibration_mode"] == "root_polynomial"
         assert captured_kwargs["gray_affine_mode"] == "enabled"
         assert captured_kwargs["blur_radius"] == 1.5
+        assert captured_kwargs["reference_id"] == "dafan"
         assert result.display_summary["deltaE00"]["mean"] == 1.0
         assert result.display_summary["worstPatch"]["deltaE00"] == 3.4
         assert result.display_summary["luminanceCurve"][0]["grayPatch"] is True
         assert result.display_summary["reference"]["sourceName"] == "大凡光学"
         assert result.display_summary["reference"]["labWhitePoint"] == "D50"
+        assert result.display_summary["reference"]["referenceHash"] == "abc123"
         assert result.display_summary["settings"]["method"] == "median"
         assert result.display_summary["settings"]["calibrationMode"] == "root_polynomial"
         assert result.display_summary["settings"]["grayAffineMode"] == "enabled"

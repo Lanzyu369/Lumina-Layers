@@ -2830,6 +2830,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "{count} 个色块 · Lab 白点 {whitePoint}",
     en: "{count} patches · Lab white point {whitePoint}",
   },
+  ext_cc_reference_select_title: {
+    zh: "校色基准",
+    en: "Calibration Reference",
+  },
+  ext_cc_reference_select_hint: {
+    zh: "检测评分和校色拟合会使用同一个基准。",
+    en: "Detection scoring and calibration fitting use the same reference.",
+  },
+  ext_cc_reference_select_label: {
+    zh: "选择基准",
+    en: "Select reference",
+  },
+  ext_cc_reference_group_server: {
+    zh: "服务端预设",
+    en: "Server presets",
+  },
+  ext_cc_reference_group_custom: {
+    zh: "自定义基准",
+    en: "Custom references",
+  },
+  ext_cc_reference_upload_btn: {
+    zh: "上传 .xlsx",
+    en: "Upload .xlsx",
+  },
+  ext_cc_reference_delete_btn: {
+    zh: "删除自定义",
+    en: "Delete custom",
+  },
+  ext_cc_reference_upload_ready: {
+    zh: "校色基准已上传并选中",
+    en: "Reference uploaded and selected",
+  },
+  ext_cc_reference_upload_ready_with_warnings: {
+    zh: "校色基准已上传并选中，{count} 条提示",
+    en: "Reference uploaded and selected with {count} warnings",
+  },
+  ext_cc_reference_upload_failed: {
+    zh: "校色基准上传失败",
+    en: "Reference upload failed",
+  },
+  ext_cc_reference_load_failed: {
+    zh: "校色基准列表加载失败",
+    en: "Failed to load references",
+  },
+  ext_cc_reference_serial: {
+    zh: "SN：{serial}",
+    en: "SN: {serial}",
+  },
   ext_cc_algorithm_meta: {
     zh: "{method} 采样 · 灰阶 {gray}",
     en: "{method} sampling · Gray {gray}",

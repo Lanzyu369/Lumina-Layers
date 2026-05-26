@@ -102,17 +102,62 @@ export interface ColorcheckerLuminancePoint {
   grayPatch: boolean;
 }
 
+export interface ColorcheckerReferencePatch {
+  index: number;
+  label?: string;
+  sRGB?: number[] | null;
+  Lab_d50?: number[] | null;
+  Lab_d65?: number[] | null;
+}
+
+export interface ColorcheckerReferenceSource {
+  sourceType?: string | null;
+  sourceName?: string | null;
+  serialNumber?: string | null;
+  patchCount?: number | null;
+  labWhitePoint?: string | null;
+  referenceHash?: string | null;
+}
+
+export interface ColorcheckerReferenceSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  source?: ColorcheckerReferenceSource | null;
+  patchCount: number;
+  labWhitePoint?: string | null;
+  serialNumber?: string | null;
+  referenceHash?: string | null;
+}
+
+export interface ColorcheckerReferencesResponse {
+  defaultReferenceId: string;
+  references: ColorcheckerReferenceSummary[];
+}
+
+export interface ColorcheckerReferenceNormalizeResponse {
+  patches: ColorcheckerReferencePatch[];
+  source: ColorcheckerReferenceSource;
+  referenceHash: string;
+  warnings: string[];
+}
+
+export type ColorcheckerReferenceSelection =
+  | {
+      kind: "server";
+      referenceId: string;
+    }
+  | {
+      kind: "custom";
+      referencePatches: ColorcheckerReferencePatch[];
+      referenceSource: ColorcheckerReferenceSource;
+    };
+
 export interface ColorcheckerDisplaySummary {
   deltaE00: ColorcheckerDeltaSummary;
   worstPatch: ColorcheckerWorstPatch | null;
   luminanceCurve: ColorcheckerLuminancePoint[];
-  reference?: {
-    sourceType?: string | null;
-    sourceName?: string | null;
-    serialNumber?: string | null;
-    patchCount?: number | null;
-    labWhitePoint?: string | null;
-  } | null;
+  reference?: ColorcheckerReferenceSource | null;
   settings?: {
     method?: string | null;
     calibrationMode?: string | null;
@@ -156,6 +201,39 @@ export interface ColorcheckerSourceResponse {
   source_type?: string | null;
 }
 
+function appendColorcheckerReference(
+  fd: FormData,
+  reference: ColorcheckerReferenceSelection | null | undefined,
+) {
+  if (!reference) return;
+  if (reference.kind === "server") {
+    fd.append("reference_id", reference.referenceId);
+    return;
+  }
+  fd.append("reference_patches", JSON.stringify(reference.referencePatches));
+  fd.append("reference_source", JSON.stringify(reference.referenceSource));
+}
+
+export async function colorcheckerListReferences(): Promise<ColorcheckerReferencesResponse> {
+  const response = await apiClient.get<ColorcheckerReferencesResponse>(
+    "/extractor/colorchecker-references",
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+export async function colorcheckerNormalizeReference(params: {
+  patches: ColorcheckerReferencePatch[];
+  source?: Partial<ColorcheckerReferenceSource> | null;
+}): Promise<ColorcheckerReferenceNormalizeResponse> {
+  const response = await apiClient.post<ColorcheckerReferenceNormalizeResponse>(
+    "/extractor/colorchecker-reference-normalize",
+    params,
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
 /** Upload the ColorChecker source image once and receive a bounded preview. */
 export async function colorcheckerPrepareSource(
   image: File,
@@ -178,6 +256,7 @@ export async function colorcheckerDetectChart(
   sourceFileId: string,
   patchLayout: string = "4x6",
   assistPoint: ColorcheckerPoint | null = null,
+  reference: ColorcheckerReferenceSelection | null = null,
 ): Promise<ColorcheckerDetectResponse> {
   const fd = new FormData();
   fd.append("colorchecker_source_file_id", sourceFileId);
@@ -185,6 +264,7 @@ export async function colorcheckerDetectChart(
   if (assistPoint) {
     fd.append("assist_point", JSON.stringify(assistPoint));
   }
+  appendColorcheckerReference(fd, reference);
   const response = await apiClient.post<ColorcheckerDetectResponse>(
     "/extractor/colorchecker-detect-chart",
     fd,
@@ -248,6 +328,7 @@ export async function colorcheckerCalibrate(
   patchLayout: string = "4x6",
   options: ColorcheckerCalibrateOptions | null = null,
   patchOrientation: string = "normal",
+  reference: ColorcheckerReferenceSelection | null = null,
 ): Promise<ColorcheckerCalibrateResponse> {
   const fd = new FormData();
   fd.append("colorchecker_source_file_id", sourceFileId);
@@ -276,6 +357,7 @@ export async function colorcheckerCalibrate(
       fd.append("blur_radius", String(options.blurRadius));
     }
   }
+  appendColorcheckerReference(fd, reference);
   const response = await apiClient.post<ColorcheckerCalibrateResponse>(
     "/extractor/colorchecker-calibrate",
     fd,

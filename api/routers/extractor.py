@@ -10,11 +10,11 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
 
 from api.colorchecker_artifacts import (
@@ -197,6 +197,74 @@ def _scale_colorchecker_points(
             }
         )
     return scaled
+
+
+def _colorchecker_reference_source_response(source: object) -> dict[str, object | None]:
+    raw = source if isinstance(source, dict) else {}
+    return {
+        "sourceType": raw.get("source_type"),
+        "sourceName": raw.get("source_name"),
+        "serialNumber": raw.get("serial_number"),
+        "patchCount": raw.get("patch_count"),
+        "labWhitePoint": raw.get("lab_white_point"),
+        "referenceHash": raw.get("reference_hash"),
+    }
+
+
+def _colorchecker_reference_summary_response(summary: dict[str, object]) -> dict[str, object | None]:
+    source = summary.get("source")
+    source_payload = _colorchecker_reference_source_response(source)
+    return {
+        "id": summary.get("id"),
+        "name": summary.get("name"),
+        "description": summary.get("description"),
+        "source": source_payload,
+        "patchCount": summary.get("patchCount"),
+        "labWhitePoint": summary.get("labWhitePoint") or source_payload.get("labWhitePoint"),
+        "serialNumber": summary.get("serialNumber") or source_payload.get("serialNumber"),
+        "referenceHash": summary.get("referenceHash") or source_payload.get("referenceHash"),
+    }
+
+
+def _parse_colorchecker_reference_form(
+    reference_id: str | None,
+    reference_patches: str | None,
+    reference_source: str | None,
+) -> dict[str, object | None]:
+    has_reference_id = bool(reference_id and reference_id.strip())
+    has_reference_patches = bool(reference_patches and reference_patches.strip())
+    if has_reference_id and has_reference_patches:
+        raise HTTPException(
+            status_code=422,
+            detail="reference_id and reference_patches are mutually exclusive.",
+        )
+    if not has_reference_patches:
+        return {
+            "reference_id": reference_id.strip() if has_reference_id else "dafan",
+            "reference_patches": None,
+            "reference_source": None,
+        }
+    try:
+        patches = json.loads(reference_patches or "[]")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid reference_patches JSON: {exc}") from exc
+    if not isinstance(patches, list):
+        raise HTTPException(status_code=422, detail="reference_patches must be a JSON list.")
+
+    source: dict[str, object] | None = None
+    if reference_source and reference_source.strip():
+        try:
+            raw_source = json.loads(reference_source)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid reference_source JSON: {exc}") from exc
+        if not isinstance(raw_source, dict):
+            raise HTTPException(status_code=422, detail="reference_source must be a JSON object.")
+        source = raw_source
+    return {
+        "reference_id": None,
+        "reference_patches": patches,
+        "reference_source": source,
+    }
 
 
 def _decode_colorchecker_source(
@@ -560,6 +628,51 @@ async def extractor_colorchecker_source(
     }
 
 
+@router.get("/colorchecker-references")
+async def extractor_colorchecker_references():
+    """Return available server-side ColorChecker reference summaries."""
+    from core.colorchecker.reference import DEFAULT_REFERENCE_ID, list_brand_summaries
+
+    return {
+        "defaultReferenceId": DEFAULT_REFERENCE_ID,
+        "references": [
+            _colorchecker_reference_summary_response(summary)
+            for summary in list_brand_summaries()
+        ],
+    }
+
+
+@router.post("/colorchecker-reference-normalize")
+async def extractor_colorchecker_reference_normalize(
+    payload: dict[str, Any] = Body(...),
+):
+    """Normalize browser-parsed ColorChecker reference color patches."""
+    from core.colorchecker.reference import ReferenceValidationError, normalize_reference
+
+    patches = payload.get("patches")
+    source = payload.get("source")
+    if not isinstance(patches, list):
+        raise HTTPException(status_code=422, detail="patches must be a list.")
+    if source is not None and not isinstance(source, dict):
+        raise HTTPException(status_code=422, detail="source must be an object.")
+    try:
+        normalized = normalize_reference(
+            patches,
+            source,
+            source_type="user_upload",
+            source_name="自定义校色基准",
+        )
+    except ReferenceValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "patches": normalized["patches"],
+        "source": _colorchecker_reference_source_response(normalized["source"]),
+        "referenceHash": normalized["reference_hash"],
+        "warnings": normalized["warnings"],
+    }
+
+
 @router.post("/colorchecker-warp-preview")
 async def extractor_colorchecker_warp_preview(
     colorchecker_source_file_id: str = Form(..., description="Private ColorChecker source file id"),
@@ -649,6 +762,9 @@ async def extractor_colorchecker_detect_chart(
     colorchecker_source_file_id: str = Form(..., description="Private ColorChecker source file id"),
     patch_layout: str = Form("4x6", description="Patch layout: 4x6 or 3x8"),
     assist_point: str | None = Form(None, description="Optional assist point JSON {x,y}"),
+    reference_id: str | None = Form(None, description="Server reference id"),
+    reference_patches: str | None = Form(None, description="Custom reference patches JSON"),
+    reference_source: str | None = Form(None, description="Custom reference source JSON"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
     """Automatically detect ColorChecker chart corners.
@@ -667,6 +783,11 @@ async def extractor_colorchecker_detect_chart(
             assist = json.loads(assist_point)
         except (json.JSONDecodeError, TypeError) as e:
             raise HTTPException(status_code=422, detail=f"Invalid assist_point JSON: {e}")
+    reference_kwargs = _parse_colorchecker_reference_form(
+        reference_id,
+        reference_patches,
+        reference_source,
+    )
 
     try:
         decoded = _decode_colorchecker_source(registry, colorchecker_source_file_id)
@@ -686,6 +807,7 @@ async def extractor_colorchecker_detect_chart(
             decoded.image_bgr,
             patch_layout=patch_layout,
             assist_point=scaled_assist,
+            **reference_kwargs,
         )
     except ColorCheckerUnavailableError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -736,6 +858,9 @@ async def extractor_colorchecker_calibrate(
     calibration_mode: str = Form("matrix_3x3", description="Calibration model"),
     gray_affine_mode: str = Form("auto", description="Neutral gray normalization mode"),
     blur_radius: float = Form(0.0, description="Optional output blur sigma"),
+    reference_id: str | None = Form(None, description="Server reference id"),
+    reference_patches: str | None = Form(None, description="Custom reference patches JSON"),
+    reference_source: str | None = Form(None, description="Custom reference source JSON"),
     registry: FileRegistry = Depends(get_file_registry),
 ):
     """Compute CCM and return private full image id + preview images.
@@ -769,6 +894,11 @@ async def extractor_colorchecker_calibrate(
             raise HTTPException(status_code=422, detail=f"Invalid patch_points JSON: {e}")
         if isinstance(pp_raw, list) and len(pp_raw) > 0:
             pp = [[float(p["x"]), float(p["y"])] if isinstance(p, dict) else p for p in pp_raw]
+    reference_kwargs = _parse_colorchecker_reference_form(
+        reference_id,
+        reference_patches,
+        reference_source,
+    )
 
     cal_start = time.perf_counter()
     full_png_path: str | None = None
@@ -804,6 +934,7 @@ async def extractor_colorchecker_calibrate(
             calibration_mode=calibration_mode,
             gray_affine_mode=gray_affine_mode,
             blur_radius=blur_radius,
+            **reference_kwargs,
         )
         try:
             del decoded

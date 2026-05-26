@@ -16,7 +16,14 @@ from .pipeline import (
     orient_patch_points,
     warp_colorchecker_preview,
 )
-from .reference import get_brand, list_brand_summaries, sanitize_exposure_anchor_target
+from .reference import (
+    ReferenceValidationError,
+    get_brand,
+    list_brand_summaries,
+    normalize_reference,
+    resolve_reference,
+    sanitize_exposure_anchor_target,
+)
 from .reference_import import ImportedReference, parse_reference_xlsx
 
 __all__ = [
@@ -36,8 +43,11 @@ __all__ = [
     "get_brand",
     "ImportedReference",
     "list_brand_summaries",
+    "normalize_reference",
     "parse_reference_xlsx",
     "png_bytes_to_data_url",
+    "ReferenceValidationError",
+    "resolve_reference",
     "sanitize_exposure_anchor_target",
     "warp_colorchecker_preview",
 ]

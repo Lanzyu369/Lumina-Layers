@@ -1,10 +1,13 @@
 ﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
+import readExcelFile from "read-excel-file/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   colorcheckerCalibrate,
   colorcheckerDetectChart,
+  colorcheckerListReferences,
+  colorcheckerNormalizeReference,
   colorcheckerPrepareSource,
   colorcheckerRelease,
   colorcheckerTouch,
@@ -15,12 +18,18 @@ import { ColorcheckerConfirmDialogInner } from "../components/ColorcheckerConfir
 import { I18nProvider } from "../i18n/context";
 import { useSettingsStore } from "../stores/settingsStore";
 
+vi.mock("read-excel-file/browser", () => ({
+  default: vi.fn(),
+}));
+
 vi.mock("../api/extractor", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/extractor")>();
   return {
     ...actual,
     colorcheckerCalibrate: vi.fn(),
     colorcheckerDetectChart: vi.fn(),
+    colorcheckerListReferences: vi.fn(),
+    colorcheckerNormalizeReference: vi.fn(),
     colorcheckerPrepareSource: vi.fn(),
     colorcheckerRelease: vi.fn(),
     colorcheckerTouch: vi.fn(() => Promise.resolve()),
@@ -34,6 +43,22 @@ const imageFile = new File([new Uint8Array([1, 2, 3])], "chart.png", {
 const replacementImageFile = new File([new Uint8Array([4, 5, 6])], "replacement.png", {
   type: "image/png",
 });
+const sampleReferenceRows = [
+  ["Company", "SN:SN-TEST"],
+  [null],
+  ["No", "Number", "sRGB", null, null, "CIE L*a*b*(d50)", null, null],
+  [null, null, "R", "G", "B", "L*", "a*", "b*"],
+  ...Array.from({ length: 24 }, (_item, index) => [
+    index + 1,
+    `Patch ${index + 1}`,
+    index + 1,
+    index + 2,
+    index + 3,
+    50,
+    0,
+    0,
+  ]),
+];
 
 const resolvePending = <T,>(resolver: ((value: T) => void) | null, value: T) => {
   if (!resolver) {
@@ -121,10 +146,65 @@ function renderDialog(
   );
 }
 
+async function expectDafanDetectCalled(sourceId: string) {
+  await waitFor(() =>
+    expect(colorcheckerDetectChart).toHaveBeenCalledWith(
+      sourceId,
+      "4x6",
+      null,
+      { kind: "server", referenceId: "dafan" },
+    ),
+  );
+}
+
 describe("ColorcheckerConfirmDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     useSettingsStore.setState({ language: "zh" });
+    vi.mocked(readExcelFile).mockResolvedValue([
+      { sheet: "Sheet1", data: sampleReferenceRows },
+    ]);
+    vi.mocked(colorcheckerListReferences).mockResolvedValue({
+      defaultReferenceId: "dafan",
+      references: [
+        {
+          id: "dafan",
+          name: "大凡光学",
+          patchCount: 24,
+          labWhitePoint: "D50",
+          serialNumber: null,
+          referenceHash: "dafan-hash",
+          source: {
+            sourceType: "built_in",
+            sourceName: "大凡光学",
+            serialNumber: null,
+            patchCount: 24,
+            labWhitePoint: "D50",
+            referenceHash: "dafan-hash",
+          },
+        },
+      ],
+    });
+    vi.mocked(colorcheckerNormalizeReference).mockResolvedValue({
+      patches: Array.from({ length: 24 }, (_item, index) => ({
+        index: index + 1,
+        label: `Patch ${index + 1}`,
+        sRGB: [index + 1, index + 2, index + 3],
+        Lab_d50: [50, 0, 0],
+        Lab_d65: [50, 0, 0],
+      })),
+      source: {
+        sourceType: "user_upload",
+        sourceName: "custom-reference",
+        serialNumber: "SN-TEST",
+        patchCount: 24,
+        labWhitePoint: "D50",
+        referenceHash: "custom-hash",
+      },
+      referenceHash: "custom-hash",
+      warnings: [],
+    });
     vi.mocked(colorcheckerDetectChart).mockResolvedValue({
       detected: true,
       corners: [
@@ -259,7 +339,7 @@ describe("ColorcheckerConfirmDialog", () => {
     renderDialog();
 
     await waitFor(() => expect(colorcheckerPrepareSource).toHaveBeenCalledWith(imageFile));
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
 
     const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
     Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
@@ -301,6 +381,119 @@ describe("ColorcheckerConfirmDialog", () => {
     });
   });
 
+  it("uploads, persists, selects, deletes, and forwards a custom reference", async () => {
+    const { container } = renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File([new Uint8Array([7, 8, 9])], "custom-reference.xlsx", {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+        ],
+      },
+    });
+
+    await waitFor(() => expect(colorcheckerNormalizeReference).toHaveBeenCalled());
+    await screen.findByText("custom-reference (SN-TEST)");
+    await waitFor(() =>
+      expect(colorcheckerDetectChart).toHaveBeenLastCalledWith(
+        "source-chart.png",
+        "4x6",
+        null,
+        expect.objectContaining({
+          kind: "custom",
+          referenceSource: expect.objectContaining({
+            sourceName: "custom-reference",
+            referenceHash: "custom-hash",
+          }),
+        }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "执行校色" }));
+    await waitFor(() => expect(colorcheckerCalibrate).toHaveBeenCalled());
+    const calibrateCalls = vi.mocked(colorcheckerCalibrate).mock.calls;
+    const calibrateCall = calibrateCalls[calibrateCalls.length - 1]!;
+    expect(calibrateCall[7]).toEqual(
+      expect.objectContaining({
+        kind: "custom",
+        referenceSource: expect.objectContaining({
+          referenceHash: "custom-hash",
+        }),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "删除自定义" }));
+    await waitFor(() =>
+      expect(colorcheckerDetectChart).toHaveBeenLastCalledWith(
+        "source-chart.png",
+        "4x6",
+        null,
+        { kind: "server", referenceId: "dafan" },
+      ),
+    );
+    expect(window.localStorage.getItem("lumina.colorchecker.references.v1")).toBe("[]");
+  });
+
+  it("uses localized upload warning copy without hard-coded suffixes", async () => {
+    useSettingsStore.setState({ language: "en" });
+    vi.mocked(colorcheckerNormalizeReference).mockResolvedValueOnce({
+      patches: Array.from({ length: 24 }, (_item, index) => ({
+        index: index + 1,
+        label: `Patch ${index + 1}`,
+        sRGB: [index + 1, index + 2, index + 3],
+        Lab_d50: [50, 0, 0],
+        Lab_d65: [50, 0, 0],
+      })),
+      source: {
+        sourceType: "user_upload",
+        sourceName: "custom-reference",
+        serialNumber: "SN-TEST",
+        patchCount: 24,
+        labWhitePoint: "D50",
+        referenceHash: "custom-hash",
+      },
+      referenceHash: "custom-hash",
+      warnings: ["warn 1", "warn 2"],
+    });
+    const { container } = renderDialog();
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File([new Uint8Array([7, 8, 9])], "custom-reference.xlsx", {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+        ],
+      },
+    });
+
+    expect(
+      await screen.findByText("Reference uploaded and selected with 2 warnings"),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back when a persisted server reference no longer exists", async () => {
+    window.localStorage.setItem(
+      "lumina.colorchecker.selectedReference.v1",
+      "server:retired-reference",
+    );
+
+    renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const submittedReferenceIds = vi
+      .mocked(colorcheckerDetectChart)
+      .mock.calls.map((call) => call[3])
+      .filter((reference) => reference?.kind === "server")
+      .map((reference) => reference.referenceId);
+    expect(submittedReferenceIds).not.toContain("retired-reference");
+  });
+
   it("forwards auto-detected patch orientation to warp and calibration requests", async () => {
     vi.mocked(colorcheckerDetectChart).mockResolvedValueOnce({
       detected: true,
@@ -319,7 +512,7 @@ describe("ColorcheckerConfirmDialog", () => {
     });
     renderDialog();
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     const warpButton = await screen.findByRole("button", { name: "生成预览" });
     await waitFor(() => expect(warpButton).not.toBeDisabled());
     fireEvent.click(warpButton);
@@ -354,7 +547,7 @@ describe("ColorcheckerConfirmDialog", () => {
     });
     renderDialog();
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     const image = await screen.findByAltText("ColorChecker 色卡校色") as HTMLImageElement;
     Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
     Object.defineProperty(image, "naturalHeight", { configurable: true, value: 80 });
@@ -411,7 +604,7 @@ describe("ColorcheckerConfirmDialog", () => {
     const receiveCalibrated = vi.fn();
     const { rerender } = renderDialog({ receiveCalibrated });
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     const calibrateButton = screen.getByRole("button", { name: "执行校色" });
     await waitFor(() => expect(calibrateButton).not.toBeDisabled());
     fireEvent.click(calibrateButton);
@@ -466,7 +659,7 @@ describe("ColorcheckerConfirmDialog", () => {
       }),
     );
     const { rerender } = renderDialog();
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     vi.mocked(colorcheckerDetectChart).mockResolvedValueOnce({
       detected: false,
       corners: [],
@@ -510,7 +703,7 @@ describe("ColorcheckerConfirmDialog", () => {
       candidateCount: 1,
     });
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-replacement.png", "4x6"));
+    await expectDafanDetectCalled("source-replacement.png");
     expect(screen.queryByRole("button", { name: "色卡角点 1" })).not.toBeInTheDocument();
   });
 
@@ -575,7 +768,7 @@ describe("ColorcheckerConfirmDialog", () => {
     );
     const { rerender } = renderDialog();
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     await screen.findByRole("button", { name: "色卡角点 1" });
     const warpButton = await screen.findByRole("button", { name: "生成预览" });
     await waitFor(() => expect(warpButton).not.toBeDisabled());
@@ -617,7 +810,7 @@ describe("ColorcheckerConfirmDialog", () => {
     });
     renderDialog();
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     await screen.findByRole("button", { name: "色卡角点 1" });
     const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
     Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
@@ -665,7 +858,7 @@ describe("ColorcheckerConfirmDialog", () => {
     const receiveCalibrated = vi.fn();
     renderDialog({ receiveCalibrated });
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;
     Object.defineProperty(image, "naturalWidth", { configurable: true, value: 100 });
     Object.defineProperty(image, "naturalHeight", { configurable: true, value: 80 });
@@ -726,7 +919,7 @@ describe("ColorcheckerConfirmDialog", () => {
 
     renderDialog();
 
-    await waitFor(() => expect(colorcheckerDetectChart).toHaveBeenCalledWith("source-chart.png", "4x6"));
+    await expectDafanDetectCalled("source-chart.png");
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/files/source-chart.png.jpg", {
         cache: "no-store",
