@@ -35,7 +35,7 @@ from core.single_stage import (
 from core.single_stage.kit import SingleStageSpec
 
 
-_RESTORED_WARNING_FRAGMENT = "已还原图"
+_RESTORED_WARNING_FRAGMENT = "ColorChecker 校正/还原"
 
 
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
@@ -185,7 +185,8 @@ def test_extract_restored_emits_warning_and_persists_tag(tmp_path: Path) -> None
     warnings = list(result.warnings or [])
     restored_msgs = [w for w in warnings if _RESTORED_WARNING_FRAGMENT in w]
     assert len(restored_msgs) == 1, warnings
-    assert "白平衡" in restored_msgs[0] or "原图" in restored_msgs[0]
+    assert "零厚度白底采样接近纯白" in restored_msgs[0]
+    assert "裁切" in restored_msgs[0]
 
 
 def test_extract_rejects_unknown_image_source(tmp_path: Path) -> None:

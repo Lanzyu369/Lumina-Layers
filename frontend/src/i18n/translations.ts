@@ -6201,24 +6201,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Image Source",
   },
   mat_gradient_image_source_section_desc: {
-    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「色卡还原图（已白平衡 / 几何归一化）」。还原图会让零厚度白底像素被推到接近纯白，导致拟合得到的 (E, k) 严重偏离真实物理值，打印效果会变差；强烈建议使用未经处理的原图。",
-    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or already-restored card renders (white-balanced / geometrically normalized). Restored inputs push zero-thickness white pixels toward 1.0, biasing the fitted (E, k) and degrading print results — strongly prefer raw photos.",
+    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「ColorChecker 校正/还原图」。色卡校正可减少相机色差，通常有利于拟合；请保持白底图、黑底图使用同一相机、曝光、白平衡和校色设置，并关注采样区域是否出现高光/阴影裁切。若出现「零厚度白底采样接近纯白」等警告，请按该警告处理。",
+    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or ColorChecker-corrected/restored renders. ColorChecker correction can reduce camera color bias and can help the fit; keep the white/black images on the same camera, exposure, white balance, and calibration settings, and watch for highlight/shadow clipping in the sampled area. If warnings such as \"zero-thickness white near pure white\" appear, treat those warnings as the deciding signal.",
   },
   mat_gradient_image_source_option_raw: {
     zh: "原图（相机/扫描仪直出，推荐）",
     en: "Raw photo (camera/scanner direct, recommended)",
   },
   mat_gradient_image_source_option_restored: {
-    zh: "已还原图（白平衡 / 几何归一化处理过）",
-    en: "Restored image (white-balanced / normalized)",
+    zh: "ColorChecker 校正/还原图",
+    en: "ColorChecker-corrected / restored image",
   },
   mat_gradient_image_source_restored_warning: {
-    zh: "已选择「已还原图」。该模式仅供调试或与已有还原图档案合并验证；用于实际打印时拟合参数会有偏差，请尽量改用原图。",
-    en: "Restored mode selected. This is intended for debugging or merging with existing restored archives; fits will be physically biased and print quality may suffer. Prefer raw photos when possible.",
+    zh: "已选择「ColorChecker 校正/还原图」。该来源会与原图记录分开合并；请确认两张图使用同一校色设置，且 Stage A 采样区域没有裁切。若出现「零厚度白底采样接近纯白」等警告，请重新拍摄或调整曝光/校色设置后再提取。",
+    en: "ColorChecker-corrected/restored source selected. This source is kept separate from raw captures during merging; make sure both images use the same calibration settings and the sampled Stage A area is not clipped. If warnings such as \"zero-thickness white near pure white\" appear, re-capture or adjust exposure/calibration before extracting again.",
   },
   mat_gradient_image_source_mismatch_error: {
-    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
-    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or restored) or use override mode when saving to discard previous verification runs.",
+    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为校正/还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
+    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or corrected/restored) or use override mode when saving to discard previous verification runs.",
   },
   // ----- Aggregation diagnostics ("merge diagnostics" section) -----
   // Surfaced in the saved-material card after a successful save so the
@@ -6278,12 +6278,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   // Bias-flag labels (stable codes from backend → localised strings)
   mat_gradient_bias_flag_c0_white_avg_gt_0_95: {
-    zh: "白底零厚度像素接近纯白（C0_white > 0.95，疑似白平衡）",
-    en: "Zero-thickness white near pure white (C0_white > 0.95, likely white-balanced)",
+    zh: "白底零厚度像素接近纯白（C0_white > 0.95，可能裁切/过亮归一化）",
+    en: "Zero-thickness white near pure white (C0_white > 0.95, possible clipping or overbright normalization)",
   },
   mat_gradient_bias_flag_image_source_restored: {
-    zh: "图像来源标记为「已还原图」",
-    en: "Image source tagged as restored",
+    zh: "图像来源标记为「ColorChecker 校正/还原图」",
+    en: "Image source tagged as ColorChecker-corrected/restored",
   },
   mat_gradient_bias_flag_white_substrate_flat: {
     zh: "白底信号过弱（朝向不可分辨）",

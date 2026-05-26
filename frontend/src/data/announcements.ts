@@ -573,8 +573,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "Re-verification now refits Beer-Lambert on the concatenated samples instead of arithmetically averaging (E, k): the model is non-linear in k, so parameter averaging is statistically meaningless. With combined-sample refitting, more captures actually yield a more accurate fit.",
           },
           {
-            zh: "新增「图像来源」标签（原图 / 已还原图）：用白平衡或色卡还原过的图来校准会被强警告并阻止与原图样本混合；自动白平衡会把零厚度白底推向纯白 1.0，让拟合的 (E, k) 系统性偏离物理真值。",
-            en: "New capture-origin tag (raw / restored): white-balanced or restored card images now trigger a strong warning and are refused for merging with raw captures, because auto-white-balance pushes the zero-thickness white sample toward pure 1.0 and biases the fitted (E, k) away from physical truth.",
+            zh: "「图像来源」标签现在区分原图和 ColorChecker 校正/还原图：校正图可以减少相机色差，但会和原图样本分开合并；真正需要处理的是采样区出现高光或阴影裁切，软件会用「零厚度白底采样接近纯白」等警告提示。",
+            en: "The Image Source tag now separates raw captures from ColorChecker-corrected/restored images. Corrected images can reduce camera colour bias, but they are merged separately from raw samples; the real issue to handle is highlight or shadow clipping in the sampled area, surfaced through warnings such as \"zero-thickness white near pure white\".",
           },
           {
             zh: "多 run 聚合自动剔除偏置 run：白底过亮、底板平、单 run ΔE>3 等结构性偏置会被排除在联合重拟合之外；3 个以上历史 run 还会做交叉验证，剔除「自我一致但和别人不一致」的捕获；新 run 始终保留以便审计。",

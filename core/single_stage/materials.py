@@ -138,23 +138,23 @@ _SAMPLE_INSET_RATIO = 0.18
 _C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
 """Linear-RGB threshold above which the zero-thickness ``C0_white``
 samples are treated as suspiciously close to ideal white (= 1.0). When
-exceeded, the input gradient-card image was almost certainly
-white-balanced / restored before Stage A fitting; the resulting
-``(E, k)`` will be biased away from the true physical attenuation.
+exceeded, the sampled Stage A area likely suffered highlight clipping or
+overbright normalization; the resulting ``(E, k)`` will be biased away
+from the true physical attenuation.
 线性 RGB 阈值，超过该值则零厚度白底采样过于接近理想纯白，输入图像
-极可能在拟合前被白平衡 / 还原处理过，会导致 (E, k) 偏离真实物理值。
+采样区域可能发生高光裁切或过亮归一化，会导致 (E, k) 偏离真实物理值。
 """
 
 _VALID_IMAGE_SOURCES: frozenset[str] = frozenset({"raw", "restored"})
 """Allowed values for the gradient-card capture origin tag.
 ``raw`` = camera/scanner output without white-balance/restoration;
 ``restored`` = card image that has already been color-normalized or
-geometrically restored. The fitter accepts both but ``restored`` carries
-a strong warning because white-balanced inputs systematically bias
-``C0_white`` toward 1.0 and ``k`` toward small values.
-``raw`` 表示未经白平衡/还原的原图；``restored`` 表示已经做过色彩归一化
-或几何还原的图。两者都允许拟合，但 ``restored`` 会给出强警告，因为
-白平衡过的输入会系统性地把 C0_white 推向 1.0、把 k 推得偏小。
+geometrically restored. The fitter accepts both and records the tag so
+raw/restored captures are not mixed silently; clipping risk is judged by
+the sampled ``C0_white`` and other diagnostics.
+``raw`` 表示相机/扫描仪原图；``restored`` 表示已经做过色彩校正或几何还原
+的图。两者都允许拟合，但会记录来源以避免原图与校正/还原图静默混合；
+裁切风险由采样得到的 C0_white 等诊断判断。
 """
 _CORNER_ORIENTATION_CANDIDATES: tuple[tuple[str, tuple[int, int, int, int]], ...] = (
     ("identity", (0, 1, 2, 3)),
@@ -528,9 +528,9 @@ def _build_fit_payload(
         warnings.append(
             "零厚度白底采样接近纯白（C0_white 均值 "
             f"{c0_white_mean:.3f} > {_C0_WHITE_OVERBRIGHT_THRESHOLD:.2f}），"
-            "输入图像可能已被自动白平衡或色卡还原处理过。"
-            "这会让拟合得到的 (E, k) 偏离真实物理值，"
-            "建议改用未经白平衡 / 还原处理的原图重新校准。"
+            "说明 Stage A 采样区域可能发生高光裁切或过亮归一化。"
+            "裁切会让拟合得到的 (E, k) 偏离真实物理值；"
+            "请重新拍摄或调整曝光/校色设置，使用未裁切的输入重新提取。"
         )
     params_payload: dict[str, Any] = {
         "param_type": "stage_A",
@@ -820,13 +820,13 @@ def extract_stage_a_material_from_gradient_cards(
         image_source: Optional capture origin tag, one of ``"raw"`` or
             ``"restored"``. ``"raw"`` (default) means the input is a direct
             camera/scanner capture; ``"restored"`` means the image has been
-            white-balanced or geometrically restored, which biases
-            ``(E, k)`` and surfaces a warning. The tag is also persisted in
+            ColorChecker-corrected or geometrically restored. The tag is
+            persisted in
             ``source_summary["image_source"]`` so the multi-run aggregator
             can refuse to mix raw/restored captures.
             可选的图像来源标签：``"raw"`` 为相机/扫描原图（默认），
-            ``"restored"`` 为已白平衡或几何还原过的图（会给出警告并阻止
-            与原图样本混合聚合）。
+            ``"restored"`` 为已 ColorChecker 校正或几何还原过的图（会阻止
+            与原图样本静默混合聚合）。
 
     Returns:
         GradientCardStageAResult: Extraction result bundle. (提取结果)
@@ -930,10 +930,12 @@ def extract_stage_a_material_from_gradient_cards(
         # so this single append surfaces the warning everywhere.
         # 该 list 同时被 fit_summary 与 params_meta 引用，append 一次即可在三处可见。
         warnings.append(
-            "已选择“已还原图（白平衡/色彩归一化处理过）”作为输入。"
-            "白平衡会把白底零厚度采样推向纯白 1.0，导致拟合得到的 (E, k) "
-            "偏离真实物理值，打印效果会显著恶化。强烈建议改用未经白平衡 / "
-            "还原处理的相机原图重新校准。"
+            "已选择 ColorChecker 校正/还原后的梯度卡图作为 Stage A 输入。"
+            "色卡校正可减少相机色差，通常有利于拟合；请保持白底图、黑底图"
+            "来自同一相机、曝光、白平衡和校色设置，并确认 Stage A 采样区域"
+            "未发生高光/阴影裁切。风险判断以“零厚度白底采样接近纯白”"
+            "等已有采样警告为准；若出现该类警告，请重新拍摄或调整曝光/校色"
+            "设置后再提取。"
         )
     # Persist the image-source tag in params meta so external tooling
     # (audit scripts, downstream consumers) can read the tag straight from
