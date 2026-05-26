@@ -81,6 +81,7 @@ function resetExtractorStore(): void {
     colorchecker_phase: null,
     calibratedPreviewUrl: null,
     calibratedFullFileId: null,
+    previousCalibratedFullFileId: null,
     calibratedFullWidth: null,
     calibratedFullHeight: null,
     calibratedPreviewWidth: null,
@@ -175,6 +176,34 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
       expect(button.disabled).toBe(true);
     },
   );
+
+  it("reopens ColorChecker calibration from the done state without dropping the accepted artifact", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    const acceptedFileId = "accepted-full-id";
+
+    useExtractorStore.setState({
+      imageFile: new File(["test"], "test.png", { type: "image/png" }),
+      imagePreviewUrl: "/api/files/accepted-preview.png",
+      imageNaturalWidth: 800,
+      imageNaturalHeight: 600,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/accepted-preview.png",
+      calibratedFullFileId: acceptedFileId,
+    });
+
+    render(<ExtractorPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /重新校色 \/ 替换|Recalibrate \/ Replace/,
+      }),
+    );
+
+    const state = useExtractorStore.getState();
+    expect(state.colorchecker_phase).toBe("calibrating");
+    expect(state.calibratedFullFileId).toBe(acceptedFileId);
+  });
 });
 
 // ========== Unit Tests ==========

@@ -2622,6 +2622,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打开校色工具",
     en: "Open Calibration Tool",
   },
+  ext_cc_recalibrate_btn: {
+    zh: "重新校色 / 替换",
+    en: "Recalibrate / Replace",
+  },
   ext_cc_auto_detect_btn: {
     zh: "自动定位色卡",
     en: "Auto Locate Card",

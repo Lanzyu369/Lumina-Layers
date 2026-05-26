@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from api.feedback_config import (
     materials_bundle_timeout_s,
@@ -154,6 +155,90 @@ def _pick_final_artifact_entry(
     matches.sort(key=lambda row: row[0], reverse=True)
     _, fid, entry = matches[0]
     return fid, entry, len(matches)
+
+
+def _extract_file_id_from_download_url(download_url: str | None) -> str | None:
+    """Extract a FileRegistry id from ``/api/files/<id>`` URLs.
+
+    从 ``/api/files/<id>`` 下载地址中提取 FileRegistry id。
+    """
+    if not isinstance(download_url, str) or not download_url.strip():
+        return None
+    try:
+        path = urlparse(download_url.strip()).path
+    except ValueError:
+        return None
+    prefix = "/api/files/"
+    if not path.startswith(prefix):
+        return None
+    file_id = path[len(prefix):].strip()
+    if (
+        not file_id
+        or file_id in {".", ".."}
+        or "/" in file_id
+        or "\\" in file_id
+        or any(char.isspace() for char in file_id)
+    ):
+        return None
+    return file_id
+
+
+def _collect_final_artifact_from_download_url(
+    ticket_dir: Path,
+    file_registry,
+    download_url: str | None,
+    artifact_type: str | None,
+    session_id: str | None,
+) -> dict[str, Any] | None:
+    """Copy the exact artifact referenced by a frontend download URL.
+
+    复制前端下载地址精确指向的产物。
+    """
+    file_id = _extract_file_id_from_download_url(download_url)
+    if file_id is None:
+        return None
+    resolve = getattr(file_registry, "resolve", None)
+    if not callable(resolve):
+        return None
+    try:
+        resolved = resolve(file_id)
+    except Exception:
+        return None
+    if resolved is None:
+        return None
+    try:
+        src_path_raw, filename = resolved
+        src_path = Path(src_path_raw)
+    except (TypeError, ValueError):
+        return None
+    candidate_name = str(filename or src_path.name)
+    suffix = Path(candidate_name).suffix.lower() or src_path.suffix.lower()
+    if suffix not in _FINAL_ARTIFACT_EXTENSIONS or not src_path.is_file():
+        return None
+
+    dst = ticket_dir / f"final{suffix}"
+    try:
+        shutil.copy2(src_path, dst)
+        size = dst.stat().st_size
+        sha = file_sha256(dst)
+    except OSError:
+        return None
+    get_entry = getattr(file_registry, "get_entry", None)
+    try:
+        entry = get_entry(file_id) if callable(get_entry) else {}
+    except Exception:
+        entry = {}
+    created_at = entry.get("created_at") if isinstance(entry, dict) else None
+    return {
+        "status": "attached",
+        "filename": dst.name,
+        "sha256": sha,
+        "size_bytes": size,
+        "artifact_type": suffix.lstrip(".") or artifact_type,
+        "source_session_id": session_id,
+        "generated_at": _format_created_at(created_at),
+        "history_count": 1,
+    }
 
 
 def _find_lut_file(lut_name: str) -> Path | None:
@@ -289,9 +374,11 @@ def collect_sync_attachments(
         session_id = ref.get("session_id") if isinstance(ref, dict) else None
         artifact_type = ref.get("artifact_type") if isinstance(ref, dict) else None
         disk_path = ref.get("disk_path") if isinstance(ref, dict) else None
+        download_url = ref.get("download_url") if isinstance(ref, dict) else None
         final = _collect_final_artifact(
             ticket_dir, file_registry, session_id, artifact_type,
             disk_path=disk_path,
+            download_url=download_url,
         )
         log.info(
             "Attachment collected.",
@@ -457,19 +544,21 @@ def _collect_final_artifact(
     artifact_type: str | None,
     *,
     disk_path: str | None = None,
+    download_url: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``final_artifact`` attachment dict.
 
     First attempts to locate the artifact via FileRegistry (by session_id).
-    If that fails (e.g. the generate endpoint registered the file under a
-    random UUID session), falls back to ``disk_path`` from the frontend ref
-    — but only if the path is a regular file with an allowed extension
-    (.3mf / .zip) and resolves inside ``REPO_ROOT/output``.
+    If that fails (e.g. a TTL artifact is registered outside the live
+    session), falls back to the exact ``download_url`` file id and then to
+    ``disk_path`` from the frontend ref — but only if the disk path is a
+    regular file with an allowed extension (.3mf / .zip) and resolves inside
+    ``REPO_ROOT/output``.
 
-    先通过 FileRegistry（按 session_id）查找产物。如果找不到（例如 generate
-    端点用随机 UUID 注册了文件），则回退到前端 ref 中的 ``disk_path``——
-    但仅当该路径是允许扩展名（.3mf / .zip）的普通文件，且 resolve 后位于
-    ``REPO_ROOT/output`` 内时才复制。
+    先通过 FileRegistry（按 session_id）查找产物。如果找不到（例如 TTL
+    产物没有挂在当前业务 session 下），再按 ``download_url`` 精确解析文件
+    id，最后回退到前端 ref 中的 ``disk_path``。磁盘路径回退仍要求扩展名
+    允许且 resolve 后位于 ``REPO_ROOT/output`` 内。
     """
     base = {
         "status": "not_applicable",
@@ -481,7 +570,7 @@ def _collect_final_artifact(
         "generated_at": None,
         "history_count": 0,
     }
-    if not session_id and not disk_path:
+    if not session_id and not disk_path and not download_url:
         return base
 
     # --- Primary path: FileRegistry lookup by session_id ---
@@ -506,6 +595,14 @@ def _collect_final_artifact(
                     "generated_at": _format_created_at(entry.get("created_at")),
                     "history_count": history_count,
                 }
+
+    # --- Fallback: exact /api/files/<id> from frontend ref ---
+    if download_url:
+        attached = _collect_final_artifact_from_download_url(
+            ticket_dir, file_registry, download_url, artifact_type, session_id,
+        )
+        if attached is not None:
+            return attached
 
     # --- Fallback: disk_path from frontend ref ---
     if disk_path:

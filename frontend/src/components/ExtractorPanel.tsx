@@ -94,6 +94,7 @@ export default function ExtractorPanel() {
     setVignetteCorrection,
     setAutoWb,
     setColorcheckerEnabled,
+    openColorcheckerDialog,
     setManufacturer,
     setType,
     submitExtract,
@@ -536,9 +537,18 @@ export default function ExtractorPanel() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {colorchecker_phase === "done" && (
-                      <span className="inline-flex items-center rounded-full border border-emerald-300/80 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300">
-                        {t("ext_cc_calibrated_badge")}
-                      </span>
+                      <>
+                        <span className="inline-flex items-center rounded-full border border-emerald-300/80 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300">
+                          {t("ext_cc_calibrated_badge")}
+                        </span>
+                        <Button
+                          label={t("ext_cc_recalibrate_btn")}
+                          variant="secondary"
+                          size="sm"
+                          onClick={openColorcheckerDialog}
+                          disabled={isLoading}
+                        />
+                      </>
                     )}
                   </div>
                 </div>

@@ -33,9 +33,11 @@ function deriveFinalArtifact(): FinalArtifactRef | null {
     ? diskPath.toLowerCase().endsWith(".zip")
       ? "zip"
       : "3mf"
-    : downloadUrl && downloadUrl.toLowerCase().includes(".zip")
+    : converter.largeFormatEnabled
       ? "zip"
-      : "3mf";
+      : downloadUrl && downloadUrl.toLowerCase().includes(".zip")
+        ? "zip"
+        : "3mf";
   return {
     session_id: converter.sessionId ?? null,
     download_url: downloadUrl,

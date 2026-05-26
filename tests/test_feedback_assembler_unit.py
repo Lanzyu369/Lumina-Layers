@@ -29,14 +29,33 @@ from api.feedback_time import BEIJING_TZ, now_beijing
 class _MockFileRegistry:
     """Tiny stand-in for :class:`api.file_registry.FileRegistry`.
 
-    迷你版 FileRegistry，仅实现 ``get_session_entries``。
+    迷你版 FileRegistry，实现本测试文件需要的查询接口。
     """
 
     def __init__(self, entries_by_session: dict[str, dict[str, dict[str, Any]]]) -> None:
         self._entries_by_session = entries_by_session
+        self._entries_by_id = {
+            file_id: entry
+            for entries in entries_by_session.values()
+            for file_id, entry in entries.items()
+        }
 
     def get_session_entries(self, session_id: str) -> dict[str, dict[str, Any]]:
         return dict(self._entries_by_session.get(session_id, {}))
+
+    def get_entry(self, file_id: str) -> dict[str, Any] | None:
+        entry = self._entries_by_id.get(file_id)
+        return dict(entry) if entry is not None else None
+
+    def resolve(self, file_id: str) -> tuple[str, str] | None:
+        entry = self._entries_by_id.get(file_id)
+        if entry is None:
+            return None
+        path = str(entry.get("path") or "")
+        filename = str(entry.get("filename") or Path(path).name)
+        if not path or not Path(path).is_file():
+            return None
+        return path, filename
 
 
 class _MockSessionStore:
@@ -490,6 +509,127 @@ def test_collect_final_artifact_disk_path_nonexistent_stays_expired(
 
     assert result.final_artifact["status"] == "expired_ttl"
     assert not (ticket_dir / "final.3mf").exists()
+
+
+def test_collect_final_artifact_uses_download_url_for_ttl_zip(
+    tmp_path: Path,
+) -> None:
+    """A large-format TTL ZIP can be copied by its exact /api/files URL.
+
+    大画幅 ZIP 可能不挂在当前业务 session 下，应能按下载 URL 精确复制。
+    """
+    zip_path = tmp_path / "large_format_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04LARGE_FORMAT")
+    registry = _MockFileRegistry(
+        {
+            "foreign-ttl-owner": {
+                "zip-file-id": _make_entry(
+                    str(zip_path),
+                    "large_format_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-001"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/zip-file-id?download=1",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "attached"
+    assert result.final_artifact["filename"] == "final.zip"
+    assert result.final_artifact["artifact_type"] == "zip"
+    assert result.final_artifact["history_count"] == 1
+    assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04LARGE_FORMAT"
+
+
+def test_collect_final_artifact_download_url_must_be_api_files_path(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "large_format_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04LARGE_FORMAT")
+    registry = _MockFileRegistry(
+        {
+            "foreign-ttl-owner": {
+                "zip-file-id": _make_entry(
+                    str(zip_path),
+                    "large_format_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-002"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/downloads/zip-file-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert not (ticket_dir / "final.zip").exists()
+
+
+def test_collect_final_artifact_download_url_requires_artifact_suffix(
+    tmp_path: Path,
+) -> None:
+    png_path = tmp_path / "preview.png"
+    png_path.write_bytes(b"PNG")
+    registry = _MockFileRegistry(
+        {
+            "foreign-ttl-owner": {
+                "preview-file-id": _make_entry(
+                    str(png_path),
+                    "preview.png",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-003"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/preview-file-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert not (ticket_dir / "final.png").exists()
 
 
 def test_collect_final_artifact_disk_path_wrong_extension_not_copied(
