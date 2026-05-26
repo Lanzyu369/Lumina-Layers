@@ -500,6 +500,33 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(state.imagePreviewUrl).toBe("/api/files/old-calibrated.jpg");
   });
 
+  it("keeps the accepted ColorChecker id when a reopened calibration dialog closes before replacement", () => {
+    const file = new File(["raw"], "calibration.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: "/api/files/old-calibrated.jpg",
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/old-calibrated.jpg",
+      calibratedFullFileId: "old-full-id",
+    });
+
+    useExtractorStore.getState().openColorcheckerDialog();
+    expect(useExtractorStore.getState().colorchecker_phase).toBe("calibrating");
+    expect(useExtractorStore.getState().previousCalibratedFullFileId).toBe(
+      "old-full-id",
+    );
+
+    useExtractorStore.getState().closeColorcheckerDialog();
+
+    const state = useExtractorStore.getState();
+    expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
+    expect(state.colorchecker_phase).toBe("done");
+    expect(state.calibratedFullFileId).toBe("old-full-id");
+    expect(state.previousCalibratedFullFileId).toBeNull();
+    expect(state.calibratedPreviewUrl).toBe("/api/files/old-calibrated.jpg");
+  });
+
   it("confirms a replacement ColorChecker id before releasing the previous one", async () => {
     const OriginalImage = globalThis.Image;
     let createdImage:

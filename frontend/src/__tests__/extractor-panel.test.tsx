@@ -203,6 +203,7 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
     const state = useExtractorStore.getState();
     expect(state.colorchecker_phase).toBe("calibrating");
     expect(state.calibratedFullFileId).toBe(acceptedFileId);
+    expect(state.previousCalibratedFullFileId).toBe(acceptedFileId);
   });
 });
 

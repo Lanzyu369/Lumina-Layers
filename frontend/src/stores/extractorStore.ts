@@ -766,11 +766,15 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       const state = get();
       if (!state.imageFile) return;
       const fallbackPreview = state.originalPreviewUrl ?? null;
+      const reopenedFullId =
+        state.colorchecker_phase === "done" ? state.calibratedFullFileId : null;
       set({
         colorchecker_phase: "calibrating",
         originalPreviewUrl: fallbackPreview,
         originalPreviewWidth: fallbackPreview ? state.originalPreviewWidth : null,
         originalPreviewHeight: fallbackPreview ? state.originalPreviewHeight : null,
+        previousCalibratedFullFileId:
+          reopenedFullId ?? state.previousCalibratedFullFileId,
       });
     },
 
@@ -965,6 +969,17 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       const state = get();
       if (state.colorchecker_phase === "done" && state.calibratedFullFileId) {
         set({ colorchecker_phase: "done" });
+        return;
+      }
+      if (
+        state.colorchecker_phase === "calibrating" &&
+        state.previousCalibratedFullFileId &&
+        state.calibratedFullFileId === state.previousCalibratedFullFileId
+      ) {
+        set({
+          colorchecker_phase: "done",
+          previousCalibratedFullFileId: null,
+        });
         return;
       }
       releaseColorcheckerArtifact(state.calibratedFullFileId);
