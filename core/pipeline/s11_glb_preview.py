@@ -26,6 +26,101 @@ from core.naming import generate_preview_filename
 _log = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Mesh-kernel feature flag
+# ---------------------------------------------------------------------------
+#
+# ``LUMINA_GLB_KERNEL`` selects the per-color extrusion backend used by the
+# S11 segmented-GLB preview. Default is the long-standing Shapely v1 path
+# (RLE -> shapely_box -> unary_union -> trimesh.creation.extrude_polygon),
+# which is the proven production code. ``v2`` opts into the prototype
+# rasterio + manifold3d backend evaluated in
+# ``progress/glb-preview-mesh-library-spike.md``.
+# 该开关用于在生产保留旧 Shapely 实现的同时，按需启用新 rasterio +
+# manifold3d 实现进行回归对比。默认仍走 v1（生产路径），异常时自动回退到
+# v1，确保任何环境（含缺少 wheel 的 Windows arm64）都能继续工作。
+#
+# Allowed values (case-insensitive, leading/trailing whitespace stripped):
+#     - ``v1`` / ``shapely`` / ``""`` / unset  -> ``shapely_v1`` (default)
+#     - ``v2`` / ``rasterio_manifold3d``       -> attempt v2, fallback to v1
+#     - ``auto``                               -> attempt v2 if importable,
+#                                                 silently fallback otherwise
+#
+# Setting this env var is the *only* supported way to toggle the kernel; we
+# keep no Python-level mutable global so process-pool workers inherit the
+# choice via env automatically (see api/routers/converter/async_glb.py).
+_KERNEL_ENV_VAR = "LUMINA_GLB_KERNEL"
+
+
+def _resolve_kernel_choice() -> str:
+    """Return the requested kernel id: 'shapely_v1', 'rasterio_manifold3d', or 'auto'.
+
+    Reads the env var fresh on every call so tests can monkeypatch
+    ``os.environ`` without restarting the process. The result is intentionally
+    *requested* (not yet "available") — actual import-time fallback to
+    ``shapely_v1`` is decided by ``_v2_available()`` and the dispatcher in
+    ``_build_color_extruded_mesh``.
+    返回调用方请求的 kernel 名称；真正的可用性检查由 dispatcher 完成。
+    """
+    raw = (os.environ.get(_KERNEL_ENV_VAR) or "").strip().lower()
+    if raw in {"", "v1", "shapely", "shapely_v1"}:
+        return "shapely_v1"
+    if raw in {"v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
+        return "rasterio_manifold3d"
+    if raw == "auto":
+        return "auto"
+    _log.warning(
+        "Unknown LUMINA_GLB_KERNEL value, falling back to shapely_v1",
+        extra={
+            "event": "glb_kernel_unknown_value",
+            "value": raw,
+            "error_type": "ValueError",
+            "fallback_kernel": "shapely_v1",
+        },
+    )
+    return "shapely_v1"
+
+
+# Cache of "did v2 import succeed" — a single failed import per process is
+# enough; we don't keep retrying on every call. ``None`` means not yet
+# probed; ``True`` / ``False`` is the cached outcome.
+_V2_IMPORT_OK: Optional[bool] = None
+_V2_IMPORT_ERROR: Optional[str] = None
+
+
+def _v2_available(log_warning: bool = True) -> bool:
+    """Return True if the v2 stack (``rasterio.features`` + ``manifold3d``) imports.
+
+    Probed once per process and cached. By default, failures are logged at
+    WARNING with the import error so operators can see why an environment
+    falls back. Pass ``log_warning=False`` to suppress that WARNING — used by
+    the ``auto`` dispatch path where a missing v2 wheel is an expected
+    "best-effort" outcome, not an operator-visible problem.
+    被调用一次后缓存结果；默认在 import 失败时发 WARNING；``log_warning=False``
+    用于 ``auto`` 路径，让缺 wheel 时的回退保持静默。
+    """
+    global _V2_IMPORT_OK, _V2_IMPORT_ERROR
+    if _V2_IMPORT_OK is not None:
+        return _V2_IMPORT_OK
+    try:
+        import rasterio.features  # noqa: F401
+        import manifold3d  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 — import probe, broad on purpose
+        _V2_IMPORT_OK = False
+        _V2_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+        if log_warning:
+            _log.warning(
+                "GLB kernel v2 unavailable, will fall back to shapely_v1",
+                extra={
+                    "event": "glb_kernel_v2_unavailable",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+        return False
+    _V2_IMPORT_OK = True
+    return True
+
 def _iter_valid_polygons(geometry_obj, min_area: float = 1e-4):
     """Yield valid Polygon geometries from Polygon/MultiPolygon-like objects."""
     if geometry_obj is None:
@@ -262,14 +357,14 @@ def _merge_low_frequency_colors(
     return merged
 
 
-def _build_color_extruded_mesh(
+def _build_color_extruded_mesh_shapely_v1(
     mask: np.ndarray,
     height: int,
     total_layers: int,
     rgba: np.ndarray,
 ) -> Optional[trimesh.Trimesh]:
-    """Build an extruded Trimesh for pixels indicated by *mask*.
-    为 mask 指示的像素构建挤出式 Trimesh。
+    """Build an extruded Trimesh for pixels indicated by *mask* (Shapely v1).
+    为 mask 指示的像素构建挤出式 Trimesh（Shapely 旧实现）。
 
     Replaces the per-pixel voxel-box representation. For a connected pixel
     region of N pixels the old approach emitted 8·N vertices / 12·N triangles
@@ -372,6 +467,255 @@ def _build_color_extruded_mesh(
     result = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
     result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
     return result
+
+
+def _build_color_extruded_mesh_v2(
+    mask: np.ndarray,
+    height: int,
+    total_layers: int,
+    rgba: np.ndarray,
+) -> Optional[trimesh.Trimesh]:
+    """Build an extruded Trimesh using rasterio polygonize + manifold3d extrude.
+    使用 rasterio polygonize + manifold3d 挤出构建 Trimesh（v2 路径）。
+
+    Geometric semantics are identical to ``_build_color_extruded_mesh_shapely_v1``:
+    pixel-corner polygons (NOT pixel-center, unlike ``cv2.findContours``),
+    interior holes preserved, 1-px strips and isolated pixels kept. The
+    measured speedup vs v1 on representative reference-image masks is in
+    ``progress/glb-preview-mesh-library-spike.md``; the recommendation is
+    to keep this off by default and opt-in via ``LUMINA_GLB_KERNEL``.
+
+    On any failure (import error, geometry error, manifold construction
+    error) this helper returns ``None``; the dispatcher in
+    ``_build_color_extruded_mesh`` then transparently falls back to v1.
+    几何语义与 v1 完全一致；任何失败都返回 None，由调度器回退到 v1。
+
+    Args:
+        mask (np.ndarray): (H, W) bool array of pixels belonging to this color.
+        height (int): Image height used for Y-axis flip so image-up maps to world-up.
+        total_layers (int): Number of Z layers for the extrusion height.
+        rgba (np.ndarray): (4,) uint8 RGBA color for face coloring.
+
+    Returns:
+        trimesh.Trimesh or None: Generated mesh, or None on empty mask / failure.
+    """
+    if not np.any(mask):
+        return None
+
+    mask_arr = np.asarray(mask, dtype=bool)
+    if mask_arr.ndim != 2:
+        return None
+
+    try:
+        from rasterio.features import shapes as rio_shapes
+        import manifold3d as m3d
+    except Exception as exc:  # noqa: BLE001 — import-level fallback signal
+        _log.warning(
+            "v2 kernel import failed",
+            extra={
+                "event": "glb_kernel_v2_import_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    h = mask_arr.shape[0]
+    # rasterio.features.shapes returns each connected component's outer ring
+    # plus its interior hole rings, already grouped per component. We don't
+    # need an O(N²) hole-pairing loop because the grouping comes for free.
+    # rasterio 已按 component 聚合外环 + 孔洞环，无需手写 O(N²) 配对。
+    components: list[list[np.ndarray]] = []
+    try:
+        for geom, val in rio_shapes(
+            mask_arr.astype(np.uint8), mask=mask_arr, connectivity=4
+        ):
+            if val != 1:
+                continue
+            rings = geom.get("coordinates") or []
+            if not rings:
+                continue
+            contours: list[np.ndarray] = []
+            for ring in rings:
+                arr = np.asarray(ring, dtype=np.float64)
+                if len(arr) >= 2 and np.allclose(arr[0], arr[-1]):
+                    arr = arr[:-1]
+                if len(arr) < 3:
+                    continue
+                # Flip Y so world-up == image-up, matching v1's convention.
+                arr[:, 1] = float(h) - arr[:, 1]
+                contours.append(arr)
+            if contours:
+                components.append(contours)
+    except Exception as exc:  # noqa: BLE001 — rasterio runtime failure
+        _log.warning(
+            "rasterio.features.shapes failed",
+            extra={
+                "event": "glb_kernel_v2_polygonize_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    if not components:
+        return None
+
+    extrude_h = float(total_layers)
+    manifolds = []
+    for component_idx, contours in enumerate(components):
+        try:
+            cs = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+            man = cs.extrude(extrude_h)
+        except Exception as exc:  # noqa: BLE001 — per-component boundary guard
+            # Atomicity contract: a single bad component is enough to
+            # abort the whole color. Returning None here lets the
+            # dispatcher transparently fall back to shapely_v1 for the
+            # entire mask, which guarantees volume / XY-coverage parity
+            # with v1 (no partial-color geometry leaks). v1 is fully
+            # capable of handling the same input — manifold3d C-extension
+            # failures are the exception, not the rule, so the cost of
+            # rebuilding the whole color in v1 is acceptable.
+            # 任一 component 失败即丢弃整色：不允许 partial 输出，
+            # 保证 v2 与 v1 在 volume / XY 覆盖上严格一致；dispatcher
+            # 看到 None 后会用 v1 重建该色。
+            _log.warning(
+                "v2 kernel per-component extrude failed, aborting color",
+                extra={
+                    "event": "glb_kernel_v2_no_manifolds",
+                    "components": len(components),
+                    "failed_component_index": int(component_idx),
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:200],
+                    "fallback_kernel": "shapely_v1",
+                },
+            )
+            return None
+        if man.is_empty():
+            # An empty manifold from a non-empty contour list is a
+            # geometry pathology (e.g. degenerate self-intersection that
+            # manifold3d collapses to nothing). Treat it the same as an
+            # exception: abort the color, let v1 rebuild.
+            # manifold 退化成空在拓扑上等价于失败，按同一策略丢色 fallback。
+            _log.warning(
+                "v2 kernel produced empty manifold for non-empty component",
+                extra={
+                    "event": "glb_kernel_v2_no_manifolds",
+                    "components": len(components),
+                    "failed_component_index": int(component_idx),
+                    "error_type": "EmptyManifold",
+                    "error_message": "CrossSection.extrude returned an empty Manifold",
+                    "fallback_kernel": "shapely_v1",
+                },
+            )
+            return None
+        manifolds.append(man)
+
+    if not manifolds:
+        # Only reachable if ``components`` was already empty above; defensive.
+        return None
+
+    try:
+        combined = m3d.Manifold.compose(manifolds)
+        mesh_data = combined.to_mesh()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "v2 kernel manifold compose/to_mesh failed",
+            extra={
+                "event": "glb_kernel_v2_compose_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    verts = np.asarray(mesh_data.vert_properties, dtype=np.float64)
+    tris = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+    if verts.size == 0 or tris.size == 0:
+        return None
+    if verts.shape[1] > 3:
+        verts = verts[:, :3]
+
+    result = trimesh.Trimesh(vertices=verts, faces=tris, process=False)
+    result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
+    return result
+
+
+def _build_color_extruded_mesh(
+    mask: np.ndarray,
+    height: int,
+    total_layers: int,
+    rgba: np.ndarray,
+) -> Optional[trimesh.Trimesh]:
+    """Dispatch to the active mesh kernel; transparently fall back to v1.
+    根据 ``LUMINA_GLB_KERNEL`` 选择 kernel；失败自动回退到 v1。
+
+    Public API: callers in ``generate_segmented_glb`` and
+    ``_build_backing_plate_mesh`` keep using this name. Behaviour:
+        - ``LUMINA_GLB_KERNEL`` unset / ``v1`` / ``shapely``  -> v1 (default)
+        - ``LUMINA_GLB_KERNEL=v2``                            -> v2, fallback to v1
+        - ``LUMINA_GLB_KERNEL=auto``                          -> v2 if importable,
+                                                                 else v1, no warning
+    """
+    requested = _resolve_kernel_choice()
+    use_v2 = False
+    if requested == "rasterio_manifold3d":
+        # Explicit v2 request: surface a WARNING when v2 is unavailable so
+        # operators see why the env value got ignored.
+        # 显式请求 v2 时，缺 wheel 必须发 WARNING，让运维看到 env 值被忽略的原因。
+        use_v2 = _v2_available(log_warning=True)
+        if not use_v2:
+            _log.warning(
+                "LUMINA_GLB_KERNEL=v2 requested but unavailable, using shapely_v1",
+                extra={
+                    "event": "glb_kernel_v2_requested_unavailable",
+                    "import_error": _V2_IMPORT_ERROR,
+                    "error_type": "ImportError",
+                    "fallback_kernel": "shapely_v1",
+                },
+            )
+    elif requested == "auto":
+        # Auto: best-effort v2, silent fallback on import failure.
+        # auto 模式：能用就用 v2，缺 wheel 时静默降级，不打扰运维。
+        use_v2 = _v2_available(log_warning=False)
+
+    if use_v2:
+        mesh = _build_color_extruded_mesh_v2(
+            mask=mask, height=height, total_layers=total_layers, rgba=rgba
+        )
+        if mesh is not None:
+            return mesh
+        # v2 explicitly returned None on a non-empty mask: fall back so we
+        # never lose a per-color mesh on a transient v2 failure.
+        # v2 在非空 mask 上返回 None 视为运行时失败，回退到 v1，避免预览丢色。
+        if np.any(mask):
+            _log.warning(
+                "GLB kernel v2 returned None on non-empty mask, falling back to shapely_v1",
+                extra={
+                    "event": "glb_kernel_v2_runtime_fallback",
+                    # Actionable fields so on-call can correlate with mask
+                    # size when grepping; v2 helper itself has already
+                    # logged the precise failure cause (one of
+                    # glb_kernel_v2_polygonize_failed / _no_manifolds /
+                    # _compose_failed / _import_failed) on the same call.
+                    # 配合 v2 helper 已发的具体失败 event 一起读，能定位到
+                    # 是哪一步触发了回退。
+                    "mask_pixels": int(np.count_nonzero(mask)),
+                    "mask_shape": list(mask.shape),
+                    "fallback_kernel": "shapely_v1",
+                },
+            )
+            return _build_color_extruded_mesh_shapely_v1(
+                mask=mask,
+                height=height,
+                total_layers=total_layers,
+                rgba=rgba,
+            )
+        return None
+
+    return _build_color_extruded_mesh_shapely_v1(
+        mask=mask, height=height, total_layers=total_layers, rgba=rgba
+    )
 
 
 def _build_backing_plate_mesh(

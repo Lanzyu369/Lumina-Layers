@@ -348,13 +348,57 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also write artifacts/perf_latest.json for regression checks.",
     )
-    return parser.parse_args()
+    # Custom-image trio: --image / --lut / --width-mm. Backward-compatible —
+    # when all three are absent the script uses the existing TCT.jpg dataset.
+    # Mixing one or two but not all three is rejected (exit 2) so the user
+    # cannot accidentally measure with a default LUT against a custom image.
+    parser.add_argument(
+        "--image",
+        type=Path,
+        default=None,
+        help="Custom image path. Must be combined with --lut and --width-mm.",
+    )
+    parser.add_argument(
+        "--lut",
+        type=Path,
+        default=None,
+        help="Custom LUT path (.npy / .json / .npz). Must be combined with --image and --width-mm.",
+    )
+    parser.add_argument(
+        "--width-mm",
+        type=float,
+        default=None,
+        dest="width_mm",
+        help="Custom target width in mm. Must be combined with --image and --lut.",
+    )
+    args = parser.parse_args()
+    custom_args = (args.image, args.lut, args.width_mm)
+    custom_set = sum(arg is not None for arg in custom_args)
+    if custom_set not in (0, 3):
+        parser.error(
+            "--image, --lut, and --width-mm must all be provided together "
+            f"(or all omitted); got image={args.image} lut={args.lut} width-mm={args.width_mm}"
+        )
+    return args
 
 
 def main() -> int:
     args = _parse_args()
-    lut_path = _require_file(DEFAULT_LUT)
-    specs = _dataset_specs()
+    if args.image is not None:
+        # Custom dataset path — used by the GLB v2 spec to measure
+        # Reference_Image baselines without disturbing the default
+        # TCT.jpg regression coverage.
+        lut_path = _require_file(args.lut)
+        specs = [
+            DatasetSpec(
+                name="custom",
+                image_path=_require_file(args.image),
+                target_width_mm=float(args.width_mm),
+            )
+        ]
+    else:
+        lut_path = _require_file(DEFAULT_LUT)
+        specs = _dataset_specs()
 
     payload: dict[str, Any] = {
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
