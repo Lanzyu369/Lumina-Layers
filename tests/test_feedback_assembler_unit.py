@@ -66,11 +66,18 @@ class _MockSessionStore:
         return self._sessions.get(session_id)
 
 
-def _make_entry(path: str, filename: str, *, created_at: float) -> dict[str, Any]:
+def _make_entry(
+    path: str,
+    filename: str,
+    *,
+    created_at: float,
+    **extra: Any,
+) -> dict[str, Any]:
     return {
         "path": path,
         "filename": filename,
         "created_at": created_at,
+        **extra,
     }
 
 
@@ -594,6 +601,44 @@ def test_collect_final_artifact_download_url_must_be_api_files_path(
     assert not (ticket_dir / "final.zip").exists()
 
 
+def test_collect_final_artifact_download_url_rejects_absolute_url(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "large_format_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04LARGE_FORMAT")
+    registry = _MockFileRegistry(
+        {
+            "foreign-ttl-owner": {
+                "zip-file-id": _make_entry(
+                    str(zip_path),
+                    "large_format_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-006"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "https://example.test/api/files/zip-file-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert not (ticket_dir / "final.zip").exists()
+
+
 def test_collect_final_artifact_download_url_requires_artifact_suffix(
     tmp_path: Path,
 ) -> None:
@@ -630,6 +675,85 @@ def test_collect_final_artifact_download_url_requires_artifact_suffix(
 
     assert result.final_artifact["status"] == "expired_ttl"
     assert not (ticket_dir / "final.png").exists()
+
+
+def test_collect_final_artifact_download_url_rejects_private_registry_entry(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "private_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04PRIVATE")
+    registry = _MockFileRegistry(
+        {
+            "foreign-private-owner": {
+                "private-zip-id": _make_entry(
+                    str(zip_path),
+                    "private_tiles.zip",
+                    created_at=9.0,
+                    is_public=False,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-004"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/private-zip-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert not (ticket_dir / "final.zip").exists()
+
+
+def test_collect_final_artifact_download_url_rejects_foreign_session_bound_entry(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "session_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04SESSION")
+    registry = _MockFileRegistry(
+        {
+            "other-session": {
+                "session-zip-id": _make_entry(
+                    str(zip_path),
+                    "session_tiles.zip",
+                    created_at=9.0,
+                    lifecycle="session_bound",
+                    session_id="other-session",
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-005"
+    ticket_dir.mkdir()
+    payload = {
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/session-zip-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert not (ticket_dir / "final.zip").exists()
 
 
 def test_collect_final_artifact_disk_path_wrong_extension_not_copied(

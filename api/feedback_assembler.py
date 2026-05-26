@@ -165,9 +165,12 @@ def _extract_file_id_from_download_url(download_url: str | None) -> str | None:
     if not isinstance(download_url, str) or not download_url.strip():
         return None
     try:
-        path = urlparse(download_url.strip()).path
+        parsed = urlparse(download_url.strip())
     except ValueError:
         return None
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = parsed.path
     prefix = "/api/files/"
     if not path.startswith(prefix):
         return None
@@ -197,6 +200,20 @@ def _collect_final_artifact_from_download_url(
     file_id = _extract_file_id_from_download_url(download_url)
     if file_id is None:
         return None
+    get_entry = getattr(file_registry, "get_entry", None)
+    if not callable(get_entry):
+        return None
+    try:
+        entry = get_entry(file_id)
+    except Exception:
+        return None
+    if not isinstance(entry, dict) or entry.get("is_public") is False:
+        return None
+    if (
+        entry.get("lifecycle") == "session_bound"
+        and entry.get("session_id") != session_id
+    ):
+        return None
     resolve = getattr(file_registry, "resolve", None)
     if not callable(resolve):
         return None
@@ -223,11 +240,6 @@ def _collect_final_artifact_from_download_url(
         sha = file_sha256(dst)
     except OSError:
         return None
-    get_entry = getattr(file_registry, "get_entry", None)
-    try:
-        entry = get_entry(file_id) if callable(get_entry) else {}
-    except Exception:
-        entry = {}
     created_at = entry.get("created_at") if isinstance(entry, dict) else None
     return {
         "status": "attached",

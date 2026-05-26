@@ -942,11 +942,35 @@ export const useSingleStageStore = create<
     const restoreWhitePreview =
       !value && state.whiteColorcheckerFileId
         ? state.originalWhitePreviewUrl ?? createPreviewUrl(state.whiteImageFile)
-        : state.whiteImagePreviewUrl;
+        : !value
+          ? state.whiteImagePreviewUrl ??
+            (requiresBackendPreview(state.whiteImageFile)
+              ? null
+              : createPreviewUrl(state.whiteImageFile))
+          : state.whiteImagePreviewUrl;
     const restoreBlackPreview =
       !value && state.blackColorcheckerFileId
         ? state.originalBlackPreviewUrl ?? createPreviewUrl(state.blackImageFile)
-        : state.blackImagePreviewUrl;
+        : !value
+          ? state.blackImagePreviewUrl ??
+            (requiresBackendPreview(state.blackImageFile)
+              ? null
+              : createPreviewUrl(state.blackImageFile))
+          : state.blackImagePreviewUrl;
+    const whiteBackendPreviewFile =
+      !value &&
+      !state.whiteColorcheckerFileId &&
+      !state.whiteImagePreviewUrl &&
+      requiresBackendPreview(state.whiteImageFile)
+        ? state.whiteImageFile
+        : null;
+    const blackBackendPreviewFile =
+      !value &&
+      !state.blackColorcheckerFileId &&
+      !state.blackImagePreviewUrl &&
+      requiresBackendPreview(state.blackImageFile)
+        ? state.blackImageFile
+        : null;
     set({
       colorchecker_enabled: value,
       colorchecker_phase: null,
@@ -990,6 +1014,74 @@ export const useSingleStageStore = create<
       colorcheckerSummary: null,
       ...(!value || resetToRaw ? { imageSource: "raw" as const } : {}),
     });
+    if (whiteBackendPreviewFile) {
+      uploadImagePreview(whiteBackendPreviewFile)
+        .then((response) => {
+          const previewUrl = normalizeResourceUrl(response.preview_url);
+          const latest = get();
+          if (
+            latest.colorchecker_enabled ||
+            latest.whiteImageFile !== whiteBackendPreviewFile ||
+            latest.whiteColorcheckerFileId
+          ) {
+            return;
+          }
+          if (!previewUrl) {
+            throw new Error("Missing preview URL");
+          }
+          set({
+            whiteImagePreviewUrl: previewUrl,
+            whiteImageNaturalWidth: response.width,
+            whiteImageNaturalHeight: response.height,
+            extractError: null,
+          });
+        })
+        .catch((err) => {
+          const latest = get();
+          if (
+            latest.colorchecker_enabled ||
+            latest.whiteImageFile !== whiteBackendPreviewFile ||
+            latest.whiteColorcheckerFileId
+          ) {
+            return;
+          }
+          set({ extractError: resolveGradientCardPreviewError(err) });
+        });
+    }
+    if (blackBackendPreviewFile) {
+      uploadImagePreview(blackBackendPreviewFile)
+        .then((response) => {
+          const previewUrl = normalizeResourceUrl(response.preview_url);
+          const latest = get();
+          if (
+            latest.colorchecker_enabled ||
+            latest.blackImageFile !== blackBackendPreviewFile ||
+            latest.blackColorcheckerFileId
+          ) {
+            return;
+          }
+          if (!previewUrl) {
+            throw new Error("Missing preview URL");
+          }
+          set({
+            blackImagePreviewUrl: previewUrl,
+            blackImageNaturalWidth: response.width,
+            blackImageNaturalHeight: response.height,
+            extractError: null,
+          });
+        })
+        .catch((err) => {
+          const latest = get();
+          if (
+            latest.colorchecker_enabled ||
+            latest.blackImageFile !== blackBackendPreviewFile ||
+            latest.blackColorcheckerFileId
+          ) {
+            return;
+          }
+          set({ extractError: resolveGradientCardPreviewError(err) });
+        });
+    }
   },
 
   openColorcheckerDialog: (target?: "white" | "black") => {

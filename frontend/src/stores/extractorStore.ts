@@ -724,13 +724,19 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       } else {
         const state = currentState;
         const hadCalibratedImage = Boolean(state.calibratedFullFileId);
+        const shouldLoadRawPreview =
+          !hadCalibratedImage && state.imageFile !== null && isRawFile(state.imageFile);
+        const rawPreviewFile = shouldLoadRawPreview ? state.imageFile : null;
         const restoredPreview =
           hadCalibratedImage
             ? state.originalPreviewUrl ??
               (state.imageFile && !isRawFile(state.imageFile)
                 ? URL.createObjectURL(state.imageFile)
                 : null)
-            : state.imagePreviewUrl;
+            : state.imagePreviewUrl ??
+              (state.imageFile && !isRawFile(state.imageFile)
+                ? URL.createObjectURL(state.imageFile)
+                : null);
         const restoredNaturalWidth = hadCalibratedImage
           ? state.originalPreviewWidth ?? state.imageNaturalWidth
           : state.imageNaturalWidth;
@@ -759,6 +765,35 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           active_corner_index: hadCalibratedImage ? null : state.active_corner_index,
           colorcheckerSummary: null,
         });
+        if (rawPreviewFile) {
+          uploadImagePreview(rawPreviewFile)
+            .then(({ preview_url, width, height }) => {
+              const latest = get();
+              if (
+                latest.colorchecker_enabled ||
+                latest.imageFile !== rawPreviewFile
+              ) {
+                return;
+              }
+              set({
+                imagePreviewUrl: normalizeResourceUrl(preview_url) ?? preview_url,
+                imageNaturalWidth: width,
+                imageNaturalHeight: height,
+              });
+            })
+            .catch((err) => {
+              const latest = get();
+              if (
+                latest.colorchecker_enabled ||
+                latest.imageFile !== rawPreviewFile
+              ) {
+                return;
+              }
+              set({
+                error: err instanceof Error ? err.message : "图片预览失败",
+              });
+            });
+        }
       }
     },
 

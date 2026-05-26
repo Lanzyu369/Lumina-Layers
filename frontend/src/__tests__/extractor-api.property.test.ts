@@ -527,6 +527,27 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(state.calibratedPreviewUrl).toBe("/api/files/old-calibrated.jpg");
   });
 
+  it("restores the original image preview when ColorChecker is disabled before acceptance", () => {
+    const file = new File(["raw"], "calibration.png", { type: "image/png" });
+    useExtractorStore.setState({
+      imageFile: file,
+      imagePreviewUrl: null,
+      imageNaturalWidth: null,
+      imageNaturalHeight: null,
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+      calibratedFullFileId: null,
+    });
+
+    useExtractorStore.getState().setColorcheckerEnabled(false);
+
+    const state = useExtractorStore.getState();
+    expect(state.colorchecker_enabled).toBe(false);
+    expect(state.colorchecker_phase).toBeNull();
+    expect(state.imagePreviewUrl).toBe("blob:mock-url");
+    expect(state.calibratedFullFileId).toBeNull();
+  });
+
   it("confirms a replacement ColorChecker id before releasing the previous one", async () => {
     const OriginalImage = globalThis.Image;
     let createdImage:

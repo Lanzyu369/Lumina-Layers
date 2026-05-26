@@ -148,6 +148,26 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(uploadImagePreview).not.toHaveBeenCalled();
   });
 
+  it("restores substrate previews when ColorChecker is disabled before acceptance", async () => {
+    const blackFile = buildPngFile("black.png");
+    const whiteFile = buildPngFile("white.png");
+
+    useSingleStageStore.getState().setColorcheckerEnabled(true);
+    await useSingleStageStore.getState().setBlackImageFile(blackFile);
+    await useSingleStageStore.getState().setWhiteImageFile(whiteFile);
+
+    useSingleStageStore.getState().setColorcheckerEnabled(false);
+
+    const state = useSingleStageStore.getState();
+    expect(state.colorchecker_enabled).toBe(false);
+    expect(state.colorchecker_phase).toBeNull();
+    expect(state.whiteImagePreviewUrl).toBe("blob:gradient-card-source");
+    expect(state.blackImagePreviewUrl).toBe("blob:gradient-card-source");
+    expect(state.whiteColorcheckerFileId).toBeNull();
+    expect(state.blackColorcheckerFileId).toBeNull();
+    expect(uploadImagePreview).not.toHaveBeenCalled();
+  });
+
   it("marks confirmed ColorChecker images as restored source", async () => {
     const OriginalImage = globalThis.Image;
     let createdImage:
