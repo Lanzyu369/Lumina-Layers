@@ -41,6 +41,7 @@ from api.preview_resources import (
     preview_dimensions,
     register_preview_bytes,
     register_preview_resource_upload,
+    snapshot_public_preview_file,
     validate_public_preview_file,
 )
 from api.schemas.extractor import (
@@ -1072,6 +1073,11 @@ async def extractor_colorchecker_release(
 async def extractor_colorchecker_confirm(
     file_id: str = Form(..., description="Private ColorChecker full-image file id"),
     preview_file_id: str | None = Form(None, description="Existing bounded preview file id"),
+    source_file_id: str | None = Form(None, description="Private ColorChecker source file id"),
+    source_preview_file_id: str | None = Form(
+        None,
+        description="Existing bounded source preview file id",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
 ):
     """Mark one private ColorChecker full-image artifact as user-confirmed."""
@@ -1088,7 +1094,39 @@ async def extractor_colorchecker_confirm(
                 status_code=422,
                 detail="ColorChecker preview does not match calibrated image",
             )
+    source_preview_snapshot = None
+    if source_file_id or source_preview_file_id:
+        if not source_file_id or not source_preview_file_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Both source_file_id and source_preview_file_id are required",
+            )
+        source_preview_snapshot = snapshot_public_preview_file(
+            registry,
+            source_preview_file_id,
+            owner_file_id=source_file_id,
+            preview_role="source",
+        )
+        if source_preview_snapshot is None:
+            raise HTTPException(
+                status_code=422,
+                detail="ColorChecker source preview does not match source image",
+            )
     confirmed = confirm_colorchecker_full_file(registry, file_id)
+    source_preview_id: str | None = None
+    source_preview_url: str | None = None
+    source_preview_w: int | None = None
+    source_preview_h: int | None = None
+    if source_preview_snapshot is not None:
+        source_preview_id = register_preview_bytes(
+            registry,
+            source_preview_snapshot.data,
+            "colorchecker_source_preview.jpg",
+            ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        )
+        source_preview_url = f"/api/files/{source_preview_id}"
+        source_preview_w = source_preview_snapshot.preview_width
+        source_preview_h = source_preview_snapshot.preview_height
     if existing_preview is not None:
         preview_url, preview_w, preview_h = existing_preview
         log.info(
@@ -1099,6 +1137,7 @@ async def extractor_colorchecker_confirm(
                 "preview_width": preview_w,
                 "preview_height": preview_h,
                 "preview_reused": True,
+                "source_preview_preserved": source_preview_id is not None,
             },
         )
         return {
@@ -1107,6 +1146,9 @@ async def extractor_colorchecker_confirm(
             "calibrated_preview_url": preview_url,
             "preview_width": preview_w,
             "preview_height": preview_h,
+            "source_preview_url": source_preview_url,
+            "source_preview_width": source_preview_w,
+            "source_preview_height": source_preview_h,
         }
     full_rgb = load_colorchecker_full_rgb(registry, file_id)
     full_bgr = cv2.cvtColor(full_rgb, cv2.COLOR_RGB2BGR)
@@ -1126,6 +1168,7 @@ async def extractor_colorchecker_confirm(
             "confirmed": confirmed,
             "preview_width": preview_w,
             "preview_height": preview_h,
+            "source_preview_preserved": source_preview_id is not None,
         },
     )
     return {
@@ -1134,6 +1177,9 @@ async def extractor_colorchecker_confirm(
         "calibrated_preview_url": f"/api/files/{preview_id}",
         "preview_width": preview_w,
         "preview_height": preview_h,
+        "source_preview_url": source_preview_url,
+        "source_preview_width": source_preview_w,
+        "source_preview_height": source_preview_h,
     }
 
 

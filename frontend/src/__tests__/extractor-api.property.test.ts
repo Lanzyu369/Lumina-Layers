@@ -532,6 +532,9 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
         calibrated_preview_url: "/api/files/fresh-calibrated.jpg",
         preview_width: 640,
         preview_height: 480,
+        source_preview_url: "/api/files/preserved-source.jpg",
+        source_preview_width: 1600,
+        source_preview_height: 1200,
       });
       useExtractorStore.setState({
         colorchecker_enabled: true,
@@ -539,13 +542,23 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
         calibratedPreviewUrl: "/api/files/new-calibrated.jpg",
         calibratedFullFileId: "new-full-id",
         previousCalibratedFullFileId: "old-full-id",
+        originalPreviewUrl: "/api/files/source-owned-preview.jpg",
+        originalPreviewWidth: 800,
+        originalPreviewHeight: 600,
       });
 
-      useExtractorStore.getState().confirmCalibrated();
+      useExtractorStore.getState().confirmCalibrated({
+        sourceFileId: "source-id",
+        sourcePreviewUrl: "/api/files/source-owned-preview.jpg",
+      });
       await vi.waitFor(() =>
         expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
           "new-full-id",
           "/api/files/new-calibrated.jpg",
+          {
+            sourceFileId: "source-id",
+            sourcePreviewUrl: "/api/files/source-owned-preview.jpg",
+          },
         ),
       );
       expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
@@ -560,6 +573,17 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       expect(state.imagePreviewUrl).toBe("/api/files/fresh-calibrated.jpg");
       expect(state.imageNaturalWidth).toBe(640);
       expect(state.imageNaturalHeight).toBe(480);
+      expect(state.originalPreviewUrl).toBe("/api/files/preserved-source.jpg");
+      expect(state.originalPreviewWidth).toBe(1600);
+      expect(state.originalPreviewHeight).toBe(1200);
+
+      mockedColorcheckerRelease.mockClear();
+      useExtractorStore.getState().setColorcheckerEnabled(false);
+      const restoredState = useExtractorStore.getState();
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("new-full-id");
+      expect(restoredState.imagePreviewUrl).toBe("/api/files/preserved-source.jpg");
+      expect(restoredState.imageNaturalWidth).toBe(1600);
+      expect(restoredState.imageNaturalHeight).toBe(1200);
     } finally {
       globalThis.Image = OriginalImage;
     }

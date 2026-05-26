@@ -353,6 +353,14 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
 
     monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
     monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fake_apply)
+    source_preview_id = registry.register_bytes(
+        f"bounded-preview-owner:{source_id}:role:source",
+        _png_bytes(120, 80),
+        "source-preview.jpg",
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=True,
+        purpose=PREVIEW_PUBLIC_PURPOSE,
+    )
 
     response = client.post(
         "/api/extractor/colorchecker-calibrate",
@@ -448,7 +456,12 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
 
     confirm_response = client.post(
         "/api/extractor/colorchecker-confirm",
-        data={"file_id": full_id, "preview_file_id": calibrated_preview_id},
+        data={
+            "file_id": full_id,
+            "preview_file_id": calibrated_preview_id,
+            "source_file_id": source_id,
+            "source_preview_file_id": source_preview_id,
+        },
     )
     assert confirm_response.status_code == 200
     confirm_body = confirm_response.json()
@@ -456,12 +469,21 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert confirm_body["calibrated_preview_url"] == body["calibrated_preview_url"]
     assert confirm_body["preview_width"] == 120
     assert confirm_body["preview_height"] == 80
+    assert confirm_body["source_preview_url"].startswith("/api/files/")
+    assert confirm_body["source_preview_width"] == 120
+    assert confirm_body["source_preview_height"] == 80
     confirmed_preview_id = confirm_body["calibrated_preview_url"].rsplit("/", 1)[-1]
     confirmed_preview_entry = registry.get_entry(confirmed_preview_id)
     assert confirmed_preview_entry is not None
     assert confirmed_preview_entry["is_public"] is True
     assert confirmed_preview_entry["ttl_seconds"] == COLORCHECKER_TEMP_TTL_SECONDS
+    confirmed_source_preview_id = confirm_body["source_preview_url"].rsplit("/", 1)[-1]
+    confirmed_source_preview_entry = registry.get_entry(confirmed_source_preview_id)
+    assert confirmed_source_preview_entry is not None
+    assert confirmed_source_preview_entry["is_public"] is True
+    assert not confirmed_source_preview_entry["session_id"].endswith(f"{full_id}:role:source")
     assert client.get(confirm_body["calibrated_preview_url"]).status_code == 200
+    assert client.get(confirm_body["source_preview_url"]).status_code == 200
     confirmed_entry = registry.get_entry(full_id)
     assert confirmed_entry is not None
     assert confirmed_entry["purpose"] == COLORCHECKER_FULL_PURPOSE
@@ -473,6 +495,16 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert touch_confirmed_response.status_code == 200
     assert touch_confirmed_response.json()["renewed"] is True
 
+    source_release_response = client.post(
+        "/api/extractor/colorchecker-release",
+        data={"file_id": source_id},
+    )
+    assert source_release_response.status_code == 200
+    assert source_release_response.json()["released"] is True
+    assert registry.resolve(source_id) is None
+    assert client.get(f"/api/files/{source_preview_id}").status_code == 404
+    assert client.get(confirm_body["source_preview_url"]).status_code == 200
+
     release_response = client.post(
         "/api/extractor/colorchecker-release",
         data={"file_id": full_id},
@@ -483,14 +515,7 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert os.path.exists(entry["path"]) is False
     assert client.get(body["calibrated_preview_url"]).status_code == 404
     assert client.get(body["overlay_url"]).status_code == 404
-
-    source_release_response = client.post(
-        "/api/extractor/colorchecker-release",
-        data={"file_id": source_id},
-    )
-    assert source_release_response.status_code == 200
-    assert source_release_response.json()["released"] is True
-    assert registry.resolve(source_id) is None
+    assert client.get(confirm_body["source_preview_url"]).status_code == 200
 
 
 def test_colorchecker_calibrate_passes_raw_source_path_to_core(

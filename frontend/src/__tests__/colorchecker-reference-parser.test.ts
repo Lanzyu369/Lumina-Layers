@@ -80,6 +80,32 @@ describe("colorchecker reference parser", () => {
     expect(parsed.patches[0].Lab_d50).toEqual([50, 0, 0]);
   });
 
+  it("accepts Number as the patch index header", () => {
+    const numberOnlyRows = [
+      ["Number", "sRGB", null, null, "Lab D50", null, null],
+      [null, "R", "G", "B", "L*", "a*", "b*"],
+      ...Array.from({ length: 24 }, (_item, index) => [
+        index + 1,
+        10 + index,
+        20 + index,
+        30 + index,
+        50,
+        0,
+        0,
+      ]),
+    ];
+
+    const parsed = parseColorcheckerReferenceRows(numberOnlyRows, "number-only.xlsx");
+
+    expect(parsed.patches).toHaveLength(24);
+    expect(parsed.patches[0]).toEqual({
+      index: 1,
+      label: "Patch 1",
+      sRGB: [10, 20, 30],
+      Lab_d50: [50, 0, 0],
+    });
+  });
+
   it("rejects incomplete triplets", () => {
     const badRows = rows.map((row) => [...row]);
     badRows[4][4] = null;

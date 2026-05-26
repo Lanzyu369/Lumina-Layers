@@ -180,20 +180,34 @@ describe("useSingleStageStore ColorChecker flow", () => {
         calibrated_preview_url: "/api/files/fresh-stage-a-preview.jpg",
         preview_width: 640,
         preview_height: 480,
+        source_preview_url: "/api/files/preserved-white-source.jpg",
+        source_preview_width: 1600,
+        source_preview_height: 1200,
       });
       useSingleStageStore.setState({
+        colorchecker_enabled: true,
         colorchecker_phase: "confirming",
         colorchecker_target: "white",
         pendingColorcheckerFileId: "full-id",
         calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+        originalWhitePreviewUrl: "/api/files/source-owned-white.jpg",
+        originalWhitePreviewWidth: 800,
+        originalWhitePreviewHeight: 600,
         imageSource: "raw",
       });
 
-      useSingleStageStore.getState().confirmCalibrated();
+      useSingleStageStore.getState().confirmCalibrated({
+        sourceFileId: "white-source-id",
+        sourcePreviewUrl: "/api/files/source-owned-white.jpg",
+      });
       await vi.waitFor(() =>
         expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
           "full-id",
           "/api/files/calibrated-preview.jpg",
+          {
+            sourceFileId: "white-source-id",
+            sourcePreviewUrl: "/api/files/source-owned-white.jpg",
+          },
         ),
       );
       const acceptedImage = requireCreatedImage(createdImage);
@@ -205,6 +219,100 @@ describe("useSingleStageStore ColorChecker flow", () => {
       expect(state.whiteImagePreviewUrl).toBe("/api/files/fresh-stage-a-preview.jpg");
       expect(state.whiteImageNaturalWidth).toBe(640);
       expect(state.whiteImageNaturalHeight).toBe(480);
+      expect(state.originalWhitePreviewUrl).toBe("/api/files/preserved-white-source.jpg");
+      expect(state.originalWhitePreviewWidth).toBe(1600);
+      expect(state.originalWhitePreviewHeight).toBe(1200);
+
+      mockedColorcheckerRelease.mockClear();
+      useSingleStageStore.getState().setColorcheckerEnabled(false);
+      const restoredState = useSingleStageStore.getState();
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("full-id");
+      expect(restoredState.whiteImagePreviewUrl).toBe("/api/files/preserved-white-source.jpg");
+      expect(restoredState.whiteImageNaturalWidth).toBe(1600);
+      expect(restoredState.whiteImageNaturalHeight).toBe(1200);
+    } finally {
+      globalThis.Image = OriginalImage;
+    }
+  });
+
+  it("preserves the black source preview returned by confirm", async () => {
+    const OriginalImage = globalThis.Image;
+    let createdImage:
+      | {
+          onload: (() => void) | null;
+          onerror: (() => void) | null;
+          naturalWidth: number;
+          naturalHeight: number;
+          src: string;
+        }
+      | null = null;
+    class MockImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = 400;
+      naturalHeight = 300;
+      src = "";
+
+      constructor() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        createdImage = this;
+      }
+    }
+    globalThis.Image = MockImage as unknown as typeof Image;
+
+    try {
+      mockedColorcheckerConfirm.mockResolvedValueOnce({
+        status: "ok",
+        confirmed: true,
+        calibrated_preview_url: "/api/files/fresh-black-preview.jpg",
+        preview_width: 640,
+        preview_height: 480,
+        source_preview_url: "/api/files/preserved-black-source.jpg",
+        source_preview_width: 1200,
+        source_preview_height: 900,
+      });
+      useSingleStageStore.setState({
+        colorchecker_enabled: true,
+        colorchecker_phase: "confirming",
+        colorchecker_target: "black",
+        pendingColorcheckerFileId: "black-full-id",
+        calibratedPreviewUrl: "/api/files/black-calibrated-preview.jpg",
+        originalBlackPreviewUrl: "/api/files/source-owned-black.jpg",
+        originalBlackPreviewWidth: 600,
+        originalBlackPreviewHeight: 450,
+        imageSource: "raw",
+      });
+
+      useSingleStageStore.getState().confirmCalibrated({
+        sourceFileId: "black-source-id",
+        sourcePreviewUrl: "/api/files/source-owned-black.jpg",
+      });
+      await vi.waitFor(() =>
+        expect(mockedColorcheckerConfirm).toHaveBeenCalledWith(
+          "black-full-id",
+          "/api/files/black-calibrated-preview.jpg",
+          {
+            sourceFileId: "black-source-id",
+            sourcePreviewUrl: "/api/files/source-owned-black.jpg",
+          },
+        ),
+      );
+      triggerImageLoad(createdImage);
+
+      const state = useSingleStageStore.getState();
+      expect(state.blackImagePreviewUrl).toBe("/api/files/fresh-black-preview.jpg");
+      expect(state.blackColorcheckerFileId).toBe("black-full-id");
+      expect(state.originalBlackPreviewUrl).toBe("/api/files/preserved-black-source.jpg");
+      expect(state.originalBlackPreviewWidth).toBe(1200);
+      expect(state.originalBlackPreviewHeight).toBe(900);
+
+      mockedColorcheckerRelease.mockClear();
+      useSingleStageStore.getState().setColorcheckerEnabled(false);
+      const restoredState = useSingleStageStore.getState();
+      expect(mockedColorcheckerRelease).toHaveBeenCalledWith("black-full-id");
+      expect(restoredState.blackImagePreviewUrl).toBe("/api/files/preserved-black-source.jpg");
+      expect(restoredState.blackImageNaturalWidth).toBe(1200);
+      expect(restoredState.blackImageNaturalHeight).toBe(900);
     } finally {
       globalThis.Image = OriginalImage;
     }

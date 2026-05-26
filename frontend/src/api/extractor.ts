@@ -380,6 +380,14 @@ export interface ColorcheckerConfirmResponse {
   calibrated_preview_url?: string | null;
   preview_width?: number | null;
   preview_height?: number | null;
+  source_preview_url?: string | null;
+  source_preview_width?: number | null;
+  source_preview_height?: number | null;
+}
+
+export interface ColorcheckerConfirmOptions {
+  sourceFileId?: string | null;
+  sourcePreviewUrl?: string | null;
 }
 
 function fileIdFromApiFilesUrl(url: string | null | undefined): string | null {
@@ -404,12 +412,18 @@ function fileIdFromApiFilesUrl(url: string | null | undefined): string | null {
 export async function colorcheckerConfirm(
   fileId: string,
   previewUrl?: string | null,
+  options?: ColorcheckerConfirmOptions | null,
 ): Promise<ColorcheckerConfirmResponse | undefined> {
   const fd = new FormData();
   fd.append("file_id", fileId);
   const previewFileId = fileIdFromApiFilesUrl(previewUrl);
   if (previewFileId) {
     fd.append("preview_file_id", previewFileId);
+  }
+  const sourcePreviewFileId = fileIdFromApiFilesUrl(options?.sourcePreviewUrl);
+  if (options?.sourceFileId && sourcePreviewFileId) {
+    fd.append("source_file_id", options.sourceFileId);
+    fd.append("source_preview_file_id", sourcePreviewFileId);
   }
   const response = await apiClient.post<ColorcheckerConfirmResponse>(
     "/extractor/colorchecker-confirm",

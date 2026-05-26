@@ -6,6 +6,7 @@ import {
   extractGradientCardStageA,
   rotateExtractorImage,
   saveGradientCardMaterial,
+  type ColorcheckerConfirmOptions,
   type ColorcheckerDisplaySummary,
   type ExtractorRotationDirection,
 } from "../api/extractor";
@@ -148,7 +149,7 @@ interface SingleStageActions {
       sourcePreviewHeight?: number | null;
     },
   ) => void;
-  confirmCalibrated: () => void;
+  confirmCalibrated: (context?: ColorcheckerConfirmOptions | null) => void;
   rejectCalibrated: () => void;
   closeColorcheckerDialog: () => void;
   startMaterialVerification: (target: {
@@ -1089,7 +1090,7 @@ export const useSingleStageStore = create<
     });
   },
 
-  confirmCalibrated: () => {
+  confirmCalibrated: (context?: ColorcheckerConfirmOptions | null) => {
     const {
       calibratedPreviewUrl,
       pendingColorcheckerFileId,
@@ -1107,6 +1108,7 @@ export const useSingleStageStore = create<
     const applyAcceptedPreview = (
       previewUrl: string,
       dimensions?: { width: number; height: number },
+      sourcePreview?: { url: string; width?: number | null; height?: number | null },
     ) => {
       const current = get();
       if (
@@ -1126,11 +1128,23 @@ export const useSingleStageStore = create<
               blackImagePreviewUrl: previewUrl,
               blackCornerPoints: [],
               blackColorcheckerFileId: pendingColorcheckerFileId,
+              originalBlackPreviewUrl:
+                sourcePreview?.url ?? current.originalBlackPreviewUrl,
+              originalBlackPreviewWidth:
+                sourcePreview?.width ?? current.originalBlackPreviewWidth,
+              originalBlackPreviewHeight:
+                sourcePreview?.height ?? current.originalBlackPreviewHeight,
             }
           : {
               whiteImagePreviewUrl: previewUrl,
               whiteCornerPoints: [],
               whiteColorcheckerFileId: pendingColorcheckerFileId,
+              originalWhitePreviewUrl:
+                sourcePreview?.url ?? current.originalWhitePreviewUrl,
+              originalWhitePreviewWidth:
+                sourcePreview?.width ?? current.originalWhitePreviewWidth,
+              originalWhitePreviewHeight:
+                sourcePreview?.height ?? current.originalWhitePreviewHeight,
             };
       set({
         colorchecker_phase: "done",
@@ -1157,7 +1171,10 @@ export const useSingleStageStore = create<
         activeCornerIndex: null,
       });
     };
-    void colorcheckerConfirm(pendingColorcheckerFileId, calibratedPreviewUrl)
+    const confirmRequest = context
+      ? colorcheckerConfirm(pendingColorcheckerFileId, calibratedPreviewUrl, context)
+      : colorcheckerConfirm(pendingColorcheckerFileId, calibratedPreviewUrl);
+    void confirmRequest
       .then((confirmResult) => {
         const current = get();
         if (
@@ -1178,6 +1195,9 @@ export const useSingleStageStore = create<
                 height: confirmResult.preview_height,
               }
             : null;
+        const confirmedSourcePreviewUrl = normalizeResourceUrl(
+          confirmResult?.source_preview_url ?? null,
+        );
         const img = new Image();
         img.onload = () => {
           applyAcceptedPreview(
@@ -1186,6 +1206,13 @@ export const useSingleStageStore = create<
               width: img.naturalWidth,
               height: img.naturalHeight,
             },
+            confirmedSourcePreviewUrl
+              ? {
+                  url: confirmedSourcePreviewUrl,
+                  width: confirmResult?.source_preview_width ?? null,
+                  height: confirmResult?.source_preview_height ?? null,
+                }
+              : undefined,
           );
         };
         img.onerror = () => {

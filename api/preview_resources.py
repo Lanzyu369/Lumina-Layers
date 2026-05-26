@@ -84,6 +84,17 @@ class PreviewArtifactRegistration:
     preview_height: int
 
 
+@dataclass(frozen=True)
+class PreviewFileSnapshot:
+    """In-memory copy of one validated public preview file.
+    已校验公开预览文件的内存副本。
+    """
+
+    data: bytes
+    preview_width: int
+    preview_height: int
+
+
 def validate_preview_context(context: str) -> str:
     """Validate a preview resource context.
     校验小预览资源上下文。
@@ -408,6 +419,48 @@ def validate_public_preview_file(
     except (UnidentifiedImageError, OSError, ValueError):
         pass
     return f"/api/files/{preview_file_id}", width, height
+
+
+def snapshot_public_preview_file(
+    registry: FileRegistry,
+    preview_file_id: str,
+    *,
+    owner_file_id: str | None = None,
+    preview_role: str | None = None,
+) -> PreviewFileSnapshot | None:
+    """Copy one validated public preview into memory before owner cleanup.
+    在 owner 被清理前，将已校验的公开预览复制到内存。
+    """
+    existing = validate_public_preview_file(
+        registry,
+        preview_file_id,
+        owner_file_id=owner_file_id,
+        preview_role=preview_role,
+    )
+    if existing is None:
+        return None
+    resolved = registry.resolve(preview_file_id)
+    if resolved is None:
+        return None
+    path, _filename = resolved
+    try:
+        width = existing[1]
+        height = existing[2]
+        if width is None or height is None:
+            with Image.open(path) as image:
+                width, height = image.size
+        with open(path, "rb") as preview_file:
+            data = preview_file.read()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unable to read ColorChecker preview: {exc}",
+        ) from exc
+    return PreviewFileSnapshot(
+        data=data,
+        preview_width=int(width),
+        preview_height=int(height),
+    )
 
 
 def cleanup_previews_for_owner(registry: FileRegistry, owner_file_id: str) -> int:

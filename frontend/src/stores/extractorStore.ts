@@ -15,6 +15,7 @@ import {
   mergeFiveColorExtended,
   previewAutoWb,
   rotateExtractorImage,
+  type ColorcheckerConfirmOptions,
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
 import type { ExtractorPaletteEntry } from "../api/types";
@@ -209,7 +210,7 @@ export interface ExtractorActions {
       sourcePreviewHeight?: number | null;
     },
   ) => void;
-  confirmCalibrated: () => void;
+  confirmCalibrated: (context?: ColorcheckerConfirmOptions | null) => void;
   rejectCalibrated: () => void;
   closeColorcheckerDialog: () => void;
   setManufacturer: (value: string) => void;
@@ -828,7 +829,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       });
     },
 
-    confirmCalibrated: () => {
+    confirmCalibrated: (context?: ColorcheckerConfirmOptions | null) => {
       // User accepts the calibrated image — apply it as the active preview
       const {
         calibratedPreviewUrl,
@@ -839,6 +840,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
       const applyAcceptedPreview = (
         previewUrl: string,
         dimensions?: { width: number; height: number },
+        sourcePreview?: { url: string; width?: number | null; height?: number | null },
       ) => {
         const current = get();
         if (
@@ -860,6 +862,11 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           auto_wb: false,
           imagePreviewUrl: previewUrl,
           calibratedPreviewUrl: previewUrl,
+          originalPreviewUrl: sourcePreview?.url ?? current.originalPreviewUrl,
+          originalPreviewWidth:
+            sourcePreview?.width ?? current.originalPreviewWidth,
+          originalPreviewHeight:
+            sourcePreview?.height ?? current.originalPreviewHeight,
           previousCalibratedFullFileId: null,
           ...(dimensions
             ? {
@@ -871,7 +878,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           active_corner_index: null,
         });
       };
-      void colorcheckerConfirm(calibratedFullFileId, calibratedPreviewUrl)
+      const confirmRequest = context
+        ? colorcheckerConfirm(calibratedFullFileId, calibratedPreviewUrl, context)
+        : colorcheckerConfirm(calibratedFullFileId, calibratedPreviewUrl);
+      void confirmRequest
         .then((confirmResult) => {
           const current = get();
           if (
@@ -891,6 +901,9 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
                   height: confirmResult.preview_height,
                 }
               : null;
+          const confirmedSourcePreviewUrl = normalizeResourceUrl(
+            confirmResult?.source_preview_url ?? null,
+          );
           const img = new Image();
           img.onload = () => {
             applyAcceptedPreview(
@@ -899,6 +912,13 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
                 width: img.naturalWidth,
                 height: img.naturalHeight,
               },
+              confirmedSourcePreviewUrl
+                ? {
+                    url: confirmedSourcePreviewUrl,
+                    width: confirmResult?.source_preview_width ?? null,
+                    height: confirmResult?.source_preview_height ?? null,
+                  }
+                : undefined,
             );
           };
           img.onerror = () => {

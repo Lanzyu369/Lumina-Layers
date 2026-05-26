@@ -206,7 +206,7 @@ function buildMapping(
     const direct = normalizeHeader(firstHeaderRow[column]);
     const combined = `${group} ${sub || direct}`.trim();
 
-    if (indexColumn === null && (direct === "no" || direct === "index")) {
+    if (indexColumn === null && (direct === "no" || direct === "number" || direct === "index")) {
       indexColumn = column;
       continue;
     }

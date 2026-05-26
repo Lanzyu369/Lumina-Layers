@@ -913,6 +913,27 @@ describe("ColorcheckerConfirmDialog", () => {
     await waitFor(() => expect(colorcheckerTouch).toHaveBeenCalledWith("pending-full-id"));
   });
 
+  it("passes source preview context when accepting a confirmed calibration", async () => {
+    const confirmCalibrated = vi.fn();
+    renderDialog({
+      phase: "confirming",
+      calibratedPreviewUrl: "/api/files/calibrated-preview.jpg",
+      colorcheckerFullFileId: "pending-full-id",
+      calibrationSummary: summary,
+      confirmCalibrated,
+    });
+
+    const originalImage = await screen.findByAltText("原图");
+    expect(originalImage).toHaveAttribute("src", "/api/files/source-chart.png.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "确认使用" }));
+
+    expect(confirmCalibrated).toHaveBeenCalledWith({
+      sourceFileId: "source-chart.png",
+      sourcePreviewUrl: "/api/files/source-chart.png.jpg",
+    });
+  });
+
   it("renews displayed warp and overlay preview URLs while mounted", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
     vi.stubGlobal("fetch", fetchMock);

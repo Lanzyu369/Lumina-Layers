@@ -37,6 +37,11 @@ import { StatusBanner, cx } from "./ui/panelPrimitives";
 
 type CornerPoint = [number, number];
 
+interface ConfirmSourcePreviewContext {
+  sourceFileId?: string | null;
+  sourcePreviewUrl?: string | null;
+}
+
 export interface ColorcheckerConfirmDialogProps {
   phase: "calibrating" | "confirming" | "done" | null;
   colorcheckerTarget?: "white" | "black" | null;
@@ -63,7 +68,7 @@ export interface ColorcheckerConfirmDialogProps {
       sourcePreviewHeight?: number | null;
     },
   ) => void;
-  confirmCalibrated: () => void;
+  confirmCalibrated: (context?: ConfirmSourcePreviewContext) => void;
   rejectCalibrated: () => void;
   closeDialog: () => void;
 }
@@ -1569,7 +1574,12 @@ export function ColorcheckerConfirmDialogInner({
                 <Button
                   label={t("ext_cc_confirm_accept")}
                   variant="primary"
-                  onClick={confirmCalibrated}
+                  onClick={() =>
+                    confirmCalibrated({
+                      sourceFileId: activeSourceFileId,
+                      sourcePreviewUrl: sourceUrl,
+                    })
+                  }
                   className="w-full sm:w-auto"
                 />
               </div>
