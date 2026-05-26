@@ -26,6 +26,22 @@ vi.mock("../api/extractor", () => ({
       candidateCount: 0,
     }),
   ),
+  colorcheckerListReferences: vi.fn(() =>
+    Promise.resolve({
+      defaultReferenceId: "dafan",
+      references: [
+        {
+          id: "dafan",
+          name: "Dafan reference",
+          patchCount: 24,
+          labWhitePoint: "D50",
+          serialNumber: null,
+          referenceHash: "test-reference",
+        },
+      ],
+    }),
+  ),
+  colorcheckerNormalizeReference: vi.fn(),
   colorcheckerPrepareSource: vi.fn(() =>
     Promise.resolve({
       colorchecker_source_file_id: "source-id",
