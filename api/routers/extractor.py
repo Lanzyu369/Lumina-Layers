@@ -1242,10 +1242,16 @@ async def extractor_extract(
             status_code=422,
             detail=f"corner_points must contain exactly 4 points, got {len(points_raw) if isinstance(points_raw, list) else 'non-list'}",
         )
-    points: List[List[int]] = [
-        [int(round(float(point[0]))), int(round(float(point[1])))]
-        for point in points_raw
-    ]
+    try:
+        points: List[List[int]] = [
+            [int(round(float(point[0]))), int(round(float(point[1])))]
+            for point in points_raw
+        ]
+    except (IndexError, KeyError, TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid corner_points coordinates: {e}",
+        ) from e
 
     requested_color_mode = LUTManager._canonicalize_legacy_color_mode(color_mode) or color_mode
     effective_color_mode = _normalize_6color_mode(requested_color_mode)

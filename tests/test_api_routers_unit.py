@@ -153,6 +153,31 @@ class TestExtractorEndpoints:
         resp = client.post("/api/extractor/extract", json=payload)
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize(
+        "corner_points",
+        [
+            "[[0],[100,0],[100,100],[0,100]]",
+            '[[0,"x"],[100,0],[100,100],[0,100]]',
+        ],
+    )
+    def test_post_extract_invalid_corner_point_coordinates_returns_422(
+        self,
+        corner_points: str,
+    ) -> None:
+        """Malformed corner coordinates are client errors, not server errors."""
+        local_client = TestClient(create_app(), raise_server_exceptions=False)
+
+        resp = local_client.post(
+            "/api/extractor/extract",
+            data={
+                "color_mode": "4-Color (RYBW)",
+                "corner_points": corner_points,
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "corner_points" in resp.text
+
     def test_post_manual_fix(self, client: TestClient) -> None:
         """POST /api/extractor/manual-fix with nonexistent LUT returns 500."""
         payload = {
