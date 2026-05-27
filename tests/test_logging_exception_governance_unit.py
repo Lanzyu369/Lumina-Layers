@@ -202,6 +202,8 @@ LUT_STRUCTURED_EVENTS = {
 SYSTEM_STRUCTURED_EVENTS = {
     "system_image_preview_done",
     "system_save_settings_done",
+    "system_preview_resource_done",
+    "system_preview_artifact_done",
 }
 FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_bug_report_rate_limited",
