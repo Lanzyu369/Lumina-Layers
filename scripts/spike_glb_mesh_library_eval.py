@@ -54,7 +54,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-DEFAULT_IMAGE = "/Users/min/Downloads/9DCCD9AB393A882ECB61703FF607F690.jpg"
+DEFAULT_IMAGE = str(_REPO_ROOT / "test_images" / "benchmark.jpg")
+# NOTE: the spike was originally driven against
+# /Users/min/Downloads/9DCCD9AB393A882ECB61703FF607F690.jpg (an off-repo
+# 1294x2250 reference). To keep this archived script runnable for any
+# developer cloning the repo, the default is now the in-repo benchmark
+# image; pass --image=<path> to reproduce the original spike numbers.
+# 默认图改为仓内 test_images/benchmark.jpg，确保任何开发者 clone 后都能
+# 直接 python scripts/spike_glb_mesh_library_eval.py 跑出结果；要复现
+# spike 报告原始数字请用 --image= 显式覆盖。
 DEFAULT_LUT = "lut-preset/精亮/精亮&PLA4色&RYBW.npy"
 DEFAULT_COLOR_MODE = "RYBW"
 DEFAULT_TARGET_WIDTH_MM = 225.0

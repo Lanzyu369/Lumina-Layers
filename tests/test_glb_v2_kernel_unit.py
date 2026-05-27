@@ -77,10 +77,14 @@ def _reset_v2_import_cache(monkeypatch):
     """Ensure each test starts with a fresh ``_v2_available()`` cache.
 
     Tests that monkeypatch ``_V2_IMPORT_OK`` to simulate a missing wheel
-    must not leak that state into siblings.
+    must not leak that state into siblings. Also resets
+    ``_V2_REQUESTED_UNAVAILABLE_LOGGED`` so the dispatcher's
+    once-per-process WARNING latch does not bleed across tests (added
+    after PR #210 follow-up that introduced the latch).
     """
     monkeypatch.setattr(s11, "_V2_IMPORT_OK", None, raising=True)
     monkeypatch.setattr(s11, "_V2_IMPORT_ERROR", None, raising=True)
+    monkeypatch.setattr(s11, "_V2_REQUESTED_UNAVAILABLE_LOGGED", False, raising=True)
     yield
 
 
@@ -328,6 +332,43 @@ def test_dispatcher_v2_unavailable_warns_and_falls_back(monkeypatch, s11_caplog)
         if getattr(rec, "event", None) == "glb_kernel_v2_requested_unavailable"
     ]
     assert getattr(matching[0], "import_error", None)
+
+
+def test_dispatcher_v2_unavailable_warning_latched_to_once_per_process(
+    monkeypatch, s11_caplog,
+):
+    """``glb_kernel_v2_requested_unavailable`` MUST fire at most once per
+    process. Without this latch, ``generate_segmented_glb`` would emit one
+    copy of this WARNING per colour (40-60 colours per preview + 1 backing
+    plate = ~50 identical WARNINGs), drowning legitimate diagnostic signal
+    on Windows arm64 / older-glibc Linux where v2 wheels are missing.
+
+    Reviewer feedback on PR #210 caught this; this regression nails the
+    semantic so the latch cannot silently regress.
+    """
+    monkeypatch.setenv("LUMINA_GLB_KERNEL", "v2")
+    monkeypatch.setattr(s11, "_V2_IMPORT_OK", False)
+    monkeypatch.setattr(s11, "_V2_IMPORT_ERROR", "ModuleNotFoundError: rasterio")
+
+    # Simulate a 50-colour preview by calling the dispatcher 50 times with
+    # different masks. Each call would, pre-latch, emit the WARNING.
+    for _ in range(50):
+        mesh = s11._build_color_extruded_mesh(
+            _simple_mask(), height=8, total_layers=3, rgba=_RGBA,
+        )
+        assert mesh is not None  # v1 fallback succeeded every time
+
+    requested_unavailable = [
+        rec for rec in s11_caplog.records
+        if getattr(rec, "event", None) == "glb_kernel_v2_requested_unavailable"
+    ]
+    assert len(requested_unavailable) == 1, (
+        f"Expected exactly 1 glb_kernel_v2_requested_unavailable WARNING across "
+        f"50 dispatcher calls, got {len(requested_unavailable)}. The latch "
+        f"_V2_REQUESTED_UNAVAILABLE_LOGGED was not reset / honoured."
+    )
+    # Latch should also be observably True after the first emission.
+    assert s11._V2_REQUESTED_UNAVAILABLE_LOGGED is True
 
 
 def test_dispatcher_auto_unavailable_silent_fallback(monkeypatch, s11_caplog):
