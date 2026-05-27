@@ -52,6 +52,12 @@ def _get_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
     return nodes
 
 
+def _get_node_mesh(scene: trimesh.Scene, node_name: str) -> trimesh.Trimesh:
+    """Return the mesh attached to a named GLB node."""
+    _, geom_name = scene.graph[node_name]
+    return scene.geometry[geom_name]
+
+
 @pytest.fixture
 def out_path(tmp_path) -> str:
     """Per-test session-scoped GLB output path.
@@ -166,6 +172,31 @@ class TestSingleColorImage:
 
         assert len(color_nodes) == 1
         assert "color_0000ff" in color_nodes
+
+    def test_vector_backing_mask_drives_visible_backing_plate(self, out_path: str) -> None:
+        """Vector preview GLB must use the cache backing footprint, not just shape pixels."""
+        h, w = 24, 24
+        red = np.array([255, 0, 0], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), red, dtype=np.uint8)
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[4:20, 4:20] = True
+        backing_mask = np.zeros((h, w), dtype=bool)
+        backing_mask[2:22, 2:22] = True
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=24.0)
+        cache["backing_mask"] = backing_mask
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_mesh = _get_color_nodes(scene)["color_ff0000"]
+        backing_mesh = _get_node_mesh(scene, "backing_plate")
+
+        assert backing_mesh.bounds[0][0] < color_mesh.bounds[0][0]
+        assert backing_mesh.bounds[0][1] < color_mesh.bounds[0][1]
+        assert backing_mesh.bounds[1][0] > color_mesh.bounds[1][0]
+        assert backing_mesh.bounds[1][1] > color_mesh.bounds[1][1]
 
 
 # ============================================================================
