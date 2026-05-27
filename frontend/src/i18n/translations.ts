@@ -2614,9 +2614,117 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "ColorChecker 色卡校色",
     en: "ColorChecker Calibration",
   },
+  ext_cc_close_btn: {
+    zh: "关闭",
+    en: "Close",
+  },
   ext_cc_open_dialog_btn: {
     zh: "打开校色工具",
     en: "Open Calibration Tool",
+  },
+  ext_cc_recalibrate_btn: {
+    zh: "重新校色 / 替换",
+    en: "Recalibrate / Replace",
+  },
+  ext_cc_auto_detect_btn: {
+    zh: "自动定位色卡",
+    en: "Auto Locate Card",
+  },
+  ext_cc_auto_detect_success: {
+    zh: "已自动定位色卡",
+    en: "Card auto-located",
+  },
+  ext_cc_auto_detect_failed: {
+    zh: "自动定位失败，请手动点选四角",
+    en: "Auto locate failed. Mark the four corners manually.",
+  },
+  ext_cc_corner_adjust_hint: {
+    zh: "按顺序点选四角；点完后可拖动圆点，或先选中角点再在图片上点击新位置。",
+    en: "Mark the four corners in order. After that, drag a handle or select a corner and click a new position.",
+  },
+  ext_cc_corner_label: {
+    zh: "色卡角点",
+    en: "Card corner",
+  },
+  ext_cc_patch_orientation_label: {
+    zh: "色块方向",
+    en: "Patch Order",
+  },
+  ext_cc_patch_orientation_normal: {
+    zh: "正常",
+    en: "Normal",
+  },
+  ext_cc_patch_orientation_rotate_180: {
+    zh: "旋转 180°",
+    en: "Rotated 180°",
+  },
+  ext_cc_patch_orientation_flip_horizontal: {
+    zh: "水平镜像",
+    en: "Mirrored Horizontally",
+  },
+  ext_cc_patch_orientation_flip_vertical: {
+    zh: "垂直镜像",
+    en: "Mirrored Vertically",
+  },
+  ext_cc_missing_image: {
+    zh: "请先选择图片",
+    en: "Choose an image first",
+  },
+  ext_cc_status_preparing: {
+    zh: "正在生成校色预览",
+    en: "Preparing calibration preview",
+  },
+  ext_cc_warp_ready: {
+    zh: "透视预览已生成，可执行校色",
+    en: "Warp preview is ready. You can calibrate now.",
+  },
+  ext_cc_warp_failed: {
+    zh: "透视预览生成失败",
+    en: "Failed to generate warp preview",
+  },
+  ext_cc_calibrate_failed: {
+    zh: "校色失败",
+    en: "Calibration failed",
+  },
+  ext_cc_result_ready: {
+    zh: "校色完成，请检查结果后确认使用。",
+    en: "Calibration is complete. Review the result before accepting it.",
+  },
+  ext_cc_confirm_preview_failed: {
+    zh: "校色预览加载失败，请重试或重新执行校色。",
+    en: "Failed to load the calibrated preview. Try again or recalibrate.",
+  },
+  ext_cc_metric_mean: {
+    zh: "平均",
+    en: "Mean",
+  },
+  ext_cc_metric_median: {
+    zh: "中位",
+    en: "Median",
+  },
+  ext_cc_metric_p95: {
+    zh: "P95",
+    en: "P95",
+  },
+  ext_cc_metric_worst: {
+    zh: "最差",
+    en: "Worst",
+  },
+  ext_cc_metric_worst_patch: {
+    zh: "最差色块",
+    en: "Worst Patch",
+  },
+  ext_cc_metric_delta_e00: {
+    zh: "DeltaE00",
+    en: "DeltaE00",
+  },
+  ext_cc_luminance_curve: {
+    zh: "亮度曲线",
+    en: "Luminance Curve",
+  },
+  ext_cc_no_curve: {
+    zh: "暂无曲线",
+    en: "No curve",
   },
   ext_cc_calibrated_badge: {
     zh: "已校色 ✓",
@@ -2645,6 +2753,210 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_cc_confirm_reject: {
     zh: "重新校色",
     en: "Retry",
+  },
+  ext_cc_main_area_hint: {
+    zh: "24 色卡校色会在右侧图像区展开，完成后再继续选择 LUT 色卡四角。",
+    en: "The 24-patch correction tool opens in the image area. Continue picking LUT corners after correction.",
+  },
+  ext_cc_advanced_toggle: {
+    zh: "高级选项",
+    en: "Advanced Options",
+  },
+  ext_cc_advanced_hint: {
+    zh: "默认使用 3x3 矩阵校色。只有需要对比算法、采样方式或灰阶归一化时再打开。",
+    en: "The default uses a 3x3 matrix. Enable this only when comparing algorithms, sampling, or gray-axis normalization.",
+  },
+  ext_cc_algorithm_label: {
+    zh: "校色算法",
+    en: "Calibration Algorithm",
+  },
+  ext_cc_algorithm_matrix_3x3: {
+    zh: "3x3 矩阵（默认）",
+    en: "3x3 Matrix (Default)",
+  },
+  ext_cc_algorithm_matrix_3x4: {
+    zh: "3x4 仿射矩阵",
+    en: "3x4 Affine Matrix",
+  },
+  ext_cc_algorithm_root_polynomial: {
+    zh: "二阶 Root-Polynomial",
+    en: "Degree-2 Root-Polynomial",
+  },
+  ext_cc_algorithm_auto: {
+    zh: "自动选择",
+    en: "Auto",
+  },
+  ext_cc_sampling_method_label: {
+    zh: "采样方式",
+    en: "Sampling Method",
+  },
+  ext_cc_sampling_mean: {
+    zh: "平均值",
+    en: "Mean",
+  },
+  ext_cc_sampling_median: {
+    zh: "中位数",
+    en: "Median",
+  },
+  ext_cc_gray_affine_label: {
+    zh: "灰阶归一化",
+    en: "Gray Normalization",
+  },
+  ext_cc_gray_affine_auto: {
+    zh: "自动",
+    en: "Auto",
+  },
+  ext_cc_gray_affine_enabled: {
+    zh: "强制启用",
+    en: "Force On",
+  },
+  ext_cc_gray_affine_fallback: {
+    zh: "回退模式",
+    en: "Fallback",
+  },
+  ext_cc_sample_radius_label: {
+    zh: "采样半径",
+    en: "Sample Radius",
+  },
+  ext_cc_blur_radius_label: {
+    zh: "输出柔化",
+    en: "Output Blur",
+  },
+  ext_cc_reference_label: {
+    zh: "当前基准",
+    en: "Reference",
+  },
+  ext_cc_reference_builtin: {
+    zh: "内置 24 色卡基准",
+    en: "Built-in 24-patch reference",
+  },
+  ext_cc_reference_meta: {
+    zh: "{count} 个色块 · Lab 白点 {whitePoint}",
+    en: "{count} patches · Lab white point {whitePoint}",
+  },
+  ext_cc_reference_select_title: {
+    zh: "校色基准",
+    en: "Calibration Reference",
+  },
+  ext_cc_reference_select_hint: {
+    zh: "检测评分和校色拟合会使用同一个基准。",
+    en: "Detection scoring and calibration fitting use the same reference.",
+  },
+  ext_cc_reference_select_label: {
+    zh: "选择基准",
+    en: "Select reference",
+  },
+  ext_cc_reference_group_server: {
+    zh: "服务端预设",
+    en: "Server presets",
+  },
+  ext_cc_reference_group_custom: {
+    zh: "自定义基准",
+    en: "Custom references",
+  },
+  ext_cc_reference_upload_btn: {
+    zh: "上传 .xlsx",
+    en: "Upload .xlsx",
+  },
+  ext_cc_reference_delete_btn: {
+    zh: "删除自定义",
+    en: "Delete custom",
+  },
+  ext_cc_reference_upload_ready: {
+    zh: "校色基准已上传并选中",
+    en: "Reference uploaded and selected",
+  },
+  ext_cc_reference_upload_ready_with_warnings: {
+    zh: "校色基准已上传并选中，{count} 条提示",
+    en: "Reference uploaded and selected with {count} warnings",
+  },
+  ext_cc_reference_upload_failed: {
+    zh: "校色基准上传失败",
+    en: "Reference upload failed",
+  },
+  ext_cc_reference_load_failed: {
+    zh: "校色基准列表加载失败",
+    en: "Failed to load references",
+  },
+  ext_cc_reference_serial: {
+    zh: "SN：{serial}",
+    en: "SN: {serial}",
+  },
+  ext_cc_algorithm_meta: {
+    zh: "{method} 采样 · 灰阶 {gray}",
+    en: "{method} sampling · Gray {gray}",
+  },
+  ext_cc_unknown_value: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  ext_cc_overlay_title: {
+    zh: "色卡检查图",
+    en: "Patch Check View",
+  },
+  ext_cc_no_overlay: {
+    zh: "暂无检查图",
+    en: "No check view",
+  },
+  ext_cc_warning_title: {
+    zh: "校色质量提示",
+    en: "Correction Quality Notice",
+  },
+  ext_cc_warning_fit_metric: {
+    zh: "{metric} ΔE00 为 {value}，高于建议值 {threshold}。建议检查色卡角点、采样点和光照。",
+    en: "{metric} ΔE00 is {value}, above the suggested {threshold}. Check chart corners, sample points, and lighting.",
+  },
+  ext_cc_warning_patch_validity: {
+    zh: "{total} 个色块中有 {invalid} 个未参与拟合。请检查采样点是否落在色块中心，并适当调小采样半径。",
+    en: "{invalid} of {total} patches were excluded from fitting. Check that sample points are centered and reduce the sample radius if needed.",
+  },
+  ext_cc_warning_gray_l_not_monotonic: {
+    zh: "中性灰亮度顺序不稳定。请检查灰阶色块是否被反光、阴影或错误采样影响。",
+    en: "Neutral gray brightness is not monotonic. Check for glare, shadow, or misplaced gray samples.",
+  },
+  ext_cc_warning_gray_a_threshold: {
+    zh: "中性灰 a* 偏色偏高。建议检查白平衡、光源和灰阶采样点。",
+    en: "Neutral gray a* cast is high. Check white balance, lighting, and gray sample points.",
+  },
+  ext_cc_warning_gray_b_threshold: {
+    zh: "中性灰 b* 偏色偏高。建议检查白平衡、光源和灰阶采样点。",
+    en: "Neutral gray b* cast is high. Check white balance, lighting, and gray sample points.",
+  },
+  ext_cc_warning_gray_reference_delta: {
+    zh: "{index}. {label} 灰块的 Δ{axis}* 为 {delta}（校色后 {corrected}，参考 {reference}），高于建议值 {threshold}。建议检查白平衡、光源和该灰阶采样点。",
+    en: "Gray patch {index}. {label} has Δ{axis}* {delta} (corrected {corrected}, reference {reference}), above the suggested {threshold}. Check white balance, lighting, and that gray sample point.",
+  },
+  ext_cc_warning_negative_ratio: {
+    zh: "校色后有 {value} 的像素出现负通道裁剪。建议改用默认算法或降低高级校正强度。",
+    en: "{value} of corrected pixels have negative-channel clipping. Prefer the default algorithm or reduce advanced correction strength.",
+  },
+  ext_cc_warning_clipping_ratio: {
+    zh: "校色后有 {value} 的线性 RGB 通道样本超过 1.0，导出到当前显示色域时会被裁剪。建议检查曝光，或改用更保守的算法。",
+    en: "{value} of corrected linear RGB channel samples exceed 1.0 and will be clipped for the current display gamut. Check exposure or use a more conservative algorithm.",
+  },
+  ext_cc_delta_status_high_precision: {
+    zh: "高精度",
+    en: "High precision",
+  },
+  ext_cc_delta_status_acceptable: {
+    zh: "可接受",
+    en: "Acceptable",
+  },
+  ext_cc_delta_status_check: {
+    zh: "需检查",
+    en: "Check",
+  },
+  ext_cc_warning_exposure_drift: {
+    zh: "该算法对曝光变化较敏感，结果可能随亮度变化而偏色。建议优先使用默认 3x3 矩阵。",
+    en: "This algorithm is sensitive to exposure changes. Prefer the default 3x3 matrix unless you are comparing expert settings.",
+  },
+  ext_cc_warning_affine_bias: {
+    zh: "仿射算法的偏置项较大，暗部颜色可能漂移。建议检查黑色块采样或改回 3x3 矩阵。",
+    en: "The affine bias is high, so dark colors may drift. Check black-patch sampling or switch back to the 3x3 matrix.",
+  },
+  ext_cc_warning_generic: {
+    zh: "校色结果存在质量风险。请检查角点、采样点、曝光和色卡摆放。",
+    en: "The correction result has a quality risk. Check corners, samples, exposure, and chart placement.",
   },
   ext_extract_btn_label: {
     zh: "提取颜色",
@@ -5616,6 +5928,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "首先导入下载好的梯度卡ZIP，然后分别上传白底与黑底照片，并框选出色块区域即可完成提取。",
     en: "First import the downloaded gradient card ZIP, then upload the white and black background photos separately, and bound the color blocks area to complete extraction.",
   },
+  mat_gradient_colorchecker_hint: {
+    zh: "这里的 ColorChecker 只负责先校正白底图或黑底图的颜色；确认使用后，梯度卡提取会明确标记为已校色图片来源。",
+    en: "ColorChecker only corrects the white or black image first. After you accept it, gradient extraction explicitly records the image as a calibrated source.",
+  },
+  mat_gradient_colorchecker_white_btn: {
+    zh: "校色白底图",
+    en: "Calibrate White Image",
+  },
+  mat_gradient_colorchecker_black_btn: {
+    zh: "校色黑底图",
+    en: "Calibrate Black Image",
+  },
+  mat_gradient_colorchecker_restored_source: {
+    zh: "已使用校色后的图片。后续提取会标记为校色来源，避免和原始拍摄图混用。",
+    en: "Using the corrected image. Later extraction will keep it separate from original captures.",
+  },
   mat_gradient_view_details_btn: {
     zh: "查看详细信息",
     en: "View Details",
@@ -5651,6 +5979,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_extract_corners_required_error: {
     zh: "请先在白底图和黑底图上各点选四个角。",
     en: "Please mark four corners on both the white and black images first.",
+  },
+  mat_gradient_extract_colorchecker_pair_required_error: {
+    zh: "ColorChecker 校色图需要白底图和黑底图都确认后才能用于梯度卡拟合。",
+    en: "Confirm both white and black ColorChecker images before using them for gradient-card fitting.",
+  },
+  mat_gradient_colorchecker_confirm_error: {
+    zh: "ColorChecker 校色图确认失败，请重新执行校色后再试。",
+    en: "Failed to confirm the ColorChecker calibrated image. Please recalibrate and try again.",
   },
   mat_gradient_invalid_image_error: {
     zh: "上传的图片无法识别，请重新选择清晰且完整的梯度卡照片。",
@@ -5921,24 +6257,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Image Source",
   },
   mat_gradient_image_source_section_desc: {
-    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「色卡还原图（已白平衡 / 几何归一化）」。还原图会让零厚度白底像素被推到接近纯白，导致拟合得到的 (E, k) 严重偏离真实物理值，打印效果会变差；强烈建议使用未经处理的原图。",
-    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or already-restored card renders (white-balanced / geometrically normalized). Restored inputs push zero-thickness white pixels toward 1.0, biasing the fitted (E, k) and degrading print results — strongly prefer raw photos.",
+    zh: "请确认上传的两张梯度卡图是「相机/扫描仪原图」还是「ColorChecker 校正/还原图」。色卡校正可减少相机色差，通常有利于拟合；请保持白底图、黑底图使用同一相机、曝光、白平衡和校色设置，并关注采样区域是否出现高光/阴影裁切。若出现「零厚度白底采样接近纯白」等警告，请按该警告处理。",
+    en: "Tell the system whether the two uploaded gradient-card images are direct camera/scanner captures (raw) or ColorChecker-corrected/restored renders. ColorChecker correction can reduce camera color bias and can help the fit; keep the white/black images on the same camera, exposure, white balance, and calibration settings, and watch for highlight/shadow clipping in the sampled area. If warnings such as \"zero-thickness white near pure white\" appear, treat those warnings as the deciding signal.",
   },
   mat_gradient_image_source_option_raw: {
     zh: "原图（相机/扫描仪直出，推荐）",
     en: "Raw photo (camera/scanner direct, recommended)",
   },
   mat_gradient_image_source_option_restored: {
-    zh: "已还原图（白平衡 / 几何归一化处理过）",
-    en: "Restored image (white-balanced / normalized)",
+    zh: "ColorChecker 校正/还原图",
+    en: "ColorChecker-corrected / restored image",
   },
   mat_gradient_image_source_restored_warning: {
-    zh: "已选择「已还原图」。该模式仅供调试或与已有还原图档案合并验证；用于实际打印时拟合参数会有偏差，请尽量改用原图。",
-    en: "Restored mode selected. This is intended for debugging or merging with existing restored archives; fits will be physically biased and print quality may suffer. Prefer raw photos when possible.",
+    zh: "已选择「ColorChecker 校正/还原图」。该来源会与原图记录分开合并；请确认两张图使用同一校色设置，且 Stage A 采样区域没有裁切。若出现「零厚度白底采样接近纯白」等警告，请重新拍摄或调整曝光/校色设置后再提取。",
+    en: "ColorChecker-corrected/restored source selected. This source is kept separate from raw captures during merging; make sure both images use the same calibration settings and the sampled Stage A area is not clipped. If warnings such as \"zero-thickness white near pure white\" appear, re-capture or adjust exposure/calibration before extracting again.",
   },
   mat_gradient_image_source_mismatch_error: {
-    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
-    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or restored) or use override mode when saving to discard previous verification runs.",
+    zh: "本次上传的图像来源与该耗材已有的验证记录不一致，无法合并。请使用相同来源（同为原图或同为校正/还原图）重新拍摄，或在保存时改用「覆盖」模式以丢弃原有验证记录。",
+    en: "The image source of this capture does not match the existing verification runs for this material, so they cannot be merged. Re-capture using the same source (raw or corrected/restored) or use override mode when saving to discard previous verification runs.",
   },
   // ----- Aggregation diagnostics ("merge diagnostics" section) -----
   // Surfaced in the saved-material card after a successful save so the
@@ -5998,12 +6334,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
   // Bias-flag labels (stable codes from backend → localised strings)
   mat_gradient_bias_flag_c0_white_avg_gt_0_95: {
-    zh: "白底零厚度像素接近纯白（C0_white > 0.95，疑似白平衡）",
-    en: "Zero-thickness white near pure white (C0_white > 0.95, likely white-balanced)",
+    zh: "白底零厚度像素接近纯白（C0_white > 0.95，可能裁切/过亮归一化）",
+    en: "Zero-thickness white near pure white (C0_white > 0.95, possible clipping or overbright normalization)",
   },
   mat_gradient_bias_flag_image_source_restored: {
-    zh: "图像来源标记为「已还原图」",
-    en: "Image source tagged as restored",
+    zh: "图像来源标记为「ColorChecker 校正/还原图」",
+    en: "Image source tagged as ColorChecker-corrected/restored",
   },
   mat_gradient_bias_flag_white_substrate_flat: {
     zh: "白底信号过弱（朝向不可分辨）",

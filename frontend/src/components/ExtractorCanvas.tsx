@@ -146,6 +146,21 @@ export function canvasClickToImageCoord(
   return [x, y];
 }
 
+function nearestCornerIndex(points: Array<[number, number]>, target: [number, number]): number {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  points.forEach(([x, y], index) => {
+    const dx = x - target[0];
+    const dy = y - target[1];
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
 // ========== Corner marker drawing constants ==========
 
 const MARKER_RADIUS = 8;
@@ -231,6 +246,8 @@ export default function ExtractorCanvas() {
   const lut_preview_url = useExtractorStore((s) => s.lut_preview_url);
   const session_id = useExtractorStore((s) => s.session_id);
   const addCornerPoint = useExtractorStore((s) => s.addCornerPoint);
+  const moveCornerPoint = useExtractorStore((s) => s.moveCornerPoint);
+  const activeCornerIndex = useExtractorStore((s) => s.active_corner_index);
 
   const submitManualFix = useExtractorStore((s) => s.submitManualFix);
   const manualFixLoading = useExtractorStore((s) => s.manualFixLoading);
@@ -283,16 +300,30 @@ export default function ExtractorCanvas() {
       const canvas = canvasRef.current;
       if (!canvas || !imageNaturalWidth || !imageNaturalHeight) return;
 
-      if (corner_points.length >= 4) return;
       const [x, y] = canvasClickToImageCoord(
         e,
         canvas,
         imageNaturalWidth,
         imageNaturalHeight
       );
+      if (corner_points.length >= 4) {
+        const targetIndex =
+          activeCornerIndex !== null && activeCornerIndex >= 0 && activeCornerIndex < corner_points.length
+            ? activeCornerIndex
+            : nearestCornerIndex(corner_points, [x, y]);
+        moveCornerPoint(targetIndex, [x, y]);
+        return;
+      }
       addCornerPoint([x, y]);
     },
-    [imageNaturalWidth, imageNaturalHeight, corner_points.length, addCornerPoint]
+    [
+      imageNaturalWidth,
+      imageNaturalHeight,
+      corner_points,
+      activeCornerIndex,
+      addCornerPoint,
+      moveCornerPoint,
+    ]
   );
 
   // ---------- Derive hint text ----------

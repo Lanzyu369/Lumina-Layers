@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import GradientCardExtractPanel from "../components/GradientCardExtractPanel";
@@ -12,6 +12,49 @@ import { uploadImagePreview } from "../api/system";
 import { useSingleStageStore } from "../stores/singleStageStore";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
+  colorcheckerCalibrate: vi.fn(),
+  colorcheckerDetectChart: vi.fn(() =>
+    Promise.resolve({
+      detected: false,
+      corners: [],
+      patchOrientation: "normal",
+      confidence: 0,
+      score: null,
+      mode: "auto",
+      reason: "",
+      candidateCount: 0,
+    }),
+  ),
+  colorcheckerListReferences: vi.fn(() =>
+    Promise.resolve({
+      defaultReferenceId: "dafan",
+      references: [
+        {
+          id: "dafan",
+          name: "Dafan reference",
+          patchCount: 24,
+          labWhitePoint: "D50",
+          serialNumber: null,
+          referenceHash: "test-reference",
+        },
+      ],
+    }),
+  ),
+  colorcheckerNormalizeReference: vi.fn(),
+  colorcheckerPrepareSource: vi.fn(() =>
+    Promise.resolve({
+      colorchecker_source_file_id: "source-id",
+      source_preview_url: "/api/files/source-preview.jpg",
+      full_width: 800,
+      full_height: 600,
+      preview_width: 400,
+      preview_height: 300,
+    }),
+  ),
+  colorcheckerRelease: vi.fn(() => Promise.resolve()),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
+  colorcheckerWarpPreview: vi.fn(),
   extractGradientCardStageA: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   rotateExtractorImage: vi.fn(),
@@ -79,6 +122,20 @@ beforeEach(() => {
     manualWhiteAnchor: null,
     manualBlackAnchor: null,
     savedMaterialSummary: null,
+    imageSource: "raw",
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    colorchecker_target: null,
+    calibratedPreviewUrl: null,
+    pendingColorcheckerFileId: null,
+    pendingColorcheckerFullWidth: null,
+    pendingColorcheckerFullHeight: null,
+    pendingColorcheckerPreviewWidth: null,
+    pendingColorcheckerPreviewHeight: null,
+    whiteColorcheckerFileId: null,
+    blackColorcheckerFileId: null,
+    originalWhitePreviewUrl: null,
+    colorcheckerSummary: null,
   });
 });
 
@@ -102,6 +159,43 @@ describe("GradientCardExtractPanel", () => {
       screen.getByRole("button", { name: /保存耗材档案|save material archive/i }),
     ).toBeDisabled();
   });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "disables Stage A compute while ColorChecker is %s",
+    (phase) => {
+      useSingleStageStore.setState({
+        datasetFile: new File(["zip"], "dataset.zip", { type: "application/zip" }),
+        whiteImageFile: new File(["white"], "white.png", { type: "image/png" }),
+        blackImageFile: new File(["black"], "black.png", { type: "image/png" }),
+        whiteCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        blackCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        colorchecker_target: "white",
+        pendingColorcheckerFileId:
+          phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      render(<GradientCardExtractPanel />);
+
+      expect(
+        screen.getByRole("button", { name: /提取耗材|extract material/i }),
+      ).toBeDisabled();
+      for (const button of screen.getAllByRole("button", { name: /顺时针 90°|Rotate 90° CW/i })) {
+        expect(button).toBeDisabled();
+      }
+    },
+  );
 
   it("renders Stage A, saved material, warp previews, and warnings when results are available", () => {
     useSingleStageStore.setState({

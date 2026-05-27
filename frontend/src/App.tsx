@@ -6,6 +6,7 @@ import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
+import { useColorcheckerArtifactLease } from "./hooks/useColorcheckerArtifactLease";
 import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
@@ -25,6 +26,7 @@ import TabNavBar, { hasSubTabs } from "./components/widget/TabNavBar";
 import SubTabBar from "./components/widget/SubTabBar";
 import CalibrationPanel from "./components/CalibrationPanel";
 import ExtractorPanel from "./components/ExtractorPanel";
+import ColorcheckerConfirmDialogExtractor from "./components/ColorcheckerConfirmDialog";
 import GradientCardGeneratePanel from "./components/GradientCardGeneratePanel";
 import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
 import MaterialLibraryPanel from "./components/MaterialLibraryPanel";
@@ -35,6 +37,7 @@ import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
 import { useSingleStageStore } from "./stores/singleStageStore";
+import { useExtractorStore } from "./stores/extractorStore";
 import { useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
@@ -228,6 +231,50 @@ function AppContent() {
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
+  const extractorColorcheckerActive = useExtractorStore(
+    (s) =>
+      s.colorchecker_enabled &&
+      s.colorchecker_phase !== "done" &&
+      s.imageFile !== null,
+  );
+  const extractorColorcheckerFullIds = useExtractorStore(
+    useShallow((s) => [
+      s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
+      s.colorchecker_phase === "confirming"
+        ? s.previousCalibratedFullFileId
+        : null,
+    ]),
+  );
+  const extractorColorcheckerPreviewUrls = useExtractorStore(
+    useShallow((s) => [
+      s.colorchecker_phase === "done"
+        ? s.calibratedPreviewUrl ?? s.imagePreviewUrl
+        : null,
+      s.colorchecker_phase === "done" && s.calibratedFullFileId
+        ? s.originalPreviewUrl
+        : null,
+      s.colorchecker_phase === "confirming" ? s.imagePreviewUrl : null,
+      s.colorchecker_phase === "confirming" ? s.calibratedPreviewUrl : null,
+    ]),
+  );
+  const gradientColorcheckerFullIds = useSingleStageStore(
+    useShallow((s) => [s.whiteColorcheckerFileId, s.blackColorcheckerFileId]),
+  );
+  const gradientColorcheckerPreviewUrls = useSingleStageStore(
+    useShallow((s) => [
+      s.whiteColorcheckerFileId ? s.whiteImagePreviewUrl : null,
+      s.blackColorcheckerFileId ? s.blackImagePreviewUrl : null,
+      s.whiteColorcheckerFileId ? s.originalWhitePreviewUrl : null,
+      s.blackColorcheckerFileId ? s.originalBlackPreviewUrl : null,
+    ]),
+  );
+  useColorcheckerArtifactLease([
+    ...extractorColorcheckerFullIds,
+    ...gradientColorcheckerFullIds,
+  ], true, [
+    ...extractorColorcheckerPreviewUrls,
+    ...gradientColorcheckerPreviewUrls,
+  ]);
   const clearMaterialVerification = useSingleStageStore(
     (s) => s.clearMaterialVerification,
   );
@@ -384,10 +431,16 @@ function AppContent() {
         {activeTab === 'material-recipe' && <MaterialRecipeQueryPanel />}
 
         {activeTab === 'extractor' && (
-          <div className="flex h-full min-h-0">
+          <div className="flex h-full min-h-0 flex-col xl:flex-row">
             <ExtractorPanel />
-            <div className="relative min-h-0 flex-1 overflow-hidden border-l border-slate-200/70 dark:border-slate-800/80">
-              <ExtractorCanvas />
+            <div className="relative min-h-[min(54vh,40rem)] flex-1 overflow-hidden border-t border-slate-200/70 dark:border-slate-800/80 xl:min-h-0 xl:border-l xl:border-t-0">
+              {extractorColorcheckerActive ? (
+                <div className="h-full min-h-0 overflow-auto p-3 sm:p-5 xl:p-7">
+                  <ColorcheckerConfirmDialogExtractor />
+                </div>
+              ) : (
+                <ExtractorCanvas />
+              )}
             </div>
           </div>
         )}

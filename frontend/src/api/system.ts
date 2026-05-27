@@ -70,3 +70,33 @@ export async function uploadImagePreview(
   });
   return response.data;
 }
+
+export interface PreviewResourceResponse {
+  resource_id: string;
+  preview_id: string;
+  preview_url: string;
+  full_width: number;
+  full_height: number;
+  preview_width: number;
+  preview_height: number;
+  source_type?: string | null;
+}
+
+/** 上传图片为私有资源，只返回受限尺寸的小预览 URL。 */
+export async function createPreviewResource(
+  file: File,
+  context: string,
+): Promise<PreviewResourceResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("context", context);
+  const response = await apiClient.post<PreviewResourceResponse>(
+    "/system/preview-resources",
+    formData,
+    {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 120_000,
+    },
+  );
+  return response.data;
+}

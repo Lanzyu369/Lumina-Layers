@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+﻿import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import fc from "fast-check";
 import type { ReactNode } from "react";
@@ -36,6 +36,9 @@ vi.mock("../api/lut", () => ({
 }));
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
+  colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
 }));

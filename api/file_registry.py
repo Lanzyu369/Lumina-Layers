@@ -24,6 +24,8 @@ class FileRegistry:
         path: str,
         filename: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
+        is_public: bool = True,
+        purpose: Optional[str] = None,
     ) -> str:
         """注册磁盘文件，返回 file_id。"""
         file_id = str(uuid.uuid4())
@@ -42,6 +44,8 @@ class FileRegistry:
                 "ttl_seconds": ttl_seconds,
                 "lifecycle": "ephemeral" if ttl_seconds is not None else "session_bound",
                 "delete_on_cleanup": delete_on_cleanup,
+                "is_public": bool(is_public),
+                "purpose": purpose,
             }
         return file_id
 
@@ -51,6 +55,8 @@ class FileRegistry:
         data: bytes,
         filename: str,
         ttl_seconds: Optional[int] = None,
+        is_public: bool = True,
+        purpose: Optional[str] = None,
     ) -> str:
         """注册字节流（写入临时文件），返回 file_id。"""
         import tempfile
@@ -66,6 +72,8 @@ class FileRegistry:
             path=path,
             filename=filename,
             ttl_seconds=ttl_seconds,
+            is_public=is_public,
+            purpose=purpose,
         )
 
     def resolve(self, file_id: str) -> Optional[Tuple[str, str]]:
@@ -115,6 +123,17 @@ class FileRegistry:
                 return None
             return dict(entry)
 
+    def set_purpose(self, file_id: str, purpose: Optional[str]) -> bool:
+        """Update the purpose metadata for one registered file.
+        更新单个注册文件的 purpose 元数据。
+        """
+        with self._lock:
+            entry = self._registry.get(file_id)
+            if entry is None:
+                return False
+            entry["purpose"] = purpose
+            return True
+
     def get_session_entries(self, session_id: str) -> dict[str, dict]:
         """Return shallow copies of all entries owned by a session.
         返回指定 session 拥有的所有条目的浅拷贝。
@@ -160,6 +179,12 @@ class FileRegistry:
                 if entry["session_id"] == session_id and fid not in keep_file_ids
             ]
         return self._cleanup_entries(file_ids, expire_failed_session_bound=True)
+
+    def cleanup_file(self, file_id: str) -> int:
+        """Clean up one registered file and delete it from disk.
+        清理单个注册文件并删除磁盘文件。
+        """
+        return self._cleanup_entries([file_id], expire_failed_session_bound=True)
 
     def clear_all(self) -> int:
         """清除所有注册文件并删除磁盘文件，返回清理数量。"""

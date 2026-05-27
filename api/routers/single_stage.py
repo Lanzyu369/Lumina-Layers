@@ -12,6 +12,7 @@ import anyio
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
@@ -115,30 +116,20 @@ _VALID_MANUAL_ORIENTATION_LABELS: frozenset[str] = frozenset(
 )
 
 
-_GRADIENT_CARD_ALLOWED_IMAGE_SOURCES: tuple[str, ...] = ("raw",)
+_GRADIENT_CARD_ALLOWED_IMAGE_SOURCES: tuple[str, ...] = ("raw", "restored")
 
 
 def _normalize_image_source(raw: str | None) -> str | None:
     """Normalize and validate the gradient-card ``image_source`` form value.
     规范化并校验梯度卡 ``image_source`` 表单值。
 
-    Stage A currently only supports ``"raw"`` direct camera/scanner captures.
-    The historical ``"restored"`` tag (white-balanced / geometrically restored
-    renders) is intentionally rejected at the API boundary as well, because:
+    Stage A accepts ``"raw"`` direct camera/scanner captures by default and
+    ``"restored"`` only when the caller explicitly labels the inputs as
+    restored/calibrated renders. The core layer records the source tag and
+    prevents accidental raw/restored archive mixing.
 
-    1. The frontend selector is hidden and ``imageSource`` is pinned to
-       ``"raw"`` (`@frontend/src/components/GradientCardExtractPanel.tsx`).
-    2. Allowing ``"restored"`` here creates a trap-door: an archive tagged
-       ``restored`` cannot later be merged via the UI, since the merge
-       consistency check in
-       ``core.single_stage.materials.save_stage_a_material_archive`` rejects
-       mixing ``raw`` and ``restored`` runs.
-
-    The whitelist keeps API and UI in lock-step until a UI surface is added
-    back to manage ``restored`` captures explicitly.
-
-    目前 Stage A 仅支持 ``"raw"``。``"restored"`` 在前端选择器已隐藏的情况下
-    若由 API 写入，会形成无法通过 UI 合并的死路；故双锁拒绝。
+    Stage A 默认使用 ``"raw"``。只有调用方明确传入 ``"restored"`` 时，才把已校色
+    或修复后的图像作为 restored 来源记录，避免静默当作 raw 原图。
 
     Args:
         raw (str | None): Raw form value, possibly ``None`` or whitespace.
@@ -160,9 +151,7 @@ def _normalize_image_source(raw: str | None) -> str | None:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Unsupported image_source '{raw}'. Stage A currently only "
-                f"accepts {allowed}; the gradient-card UI no longer exposes "
-                "other capture origins."
+                f"Unsupported image_source '{raw}'. Stage A accepts {allowed}."
             ),
         )
     return cleaned
@@ -333,11 +322,35 @@ async def extractor_fit_stage_a(
 
 @router.post("/extract-gradient-card-stage-a")
 async def extractor_extract_gradient_card_stage_a(
-    white_image: UploadFile = File(..., description="White-substrate gradient card image"),
-    black_image: UploadFile = File(..., description="Black-substrate gradient card image"),
+    white_image: UploadFile | None = File(None, description="White-substrate gradient card image"),
+    black_image: UploadFile | None = File(None, description="Black-substrate gradient card image"),
     dataset_zip: UploadFile = File(..., description="Generated gradient card kit ZIP"),
     white_corner_points: str = Form(..., description="White image corners JSON [[x,y], ...]"),
     black_corner_points: str = Form(..., description="Black image corners JSON [[x,y], ...]"),
+    white_colorchecker_file_id: str | None = Form(
+        None,
+        description="Private ColorChecker full-image id for the white capture",
+    ),
+    black_colorchecker_file_id: str | None = Form(
+        None,
+        description="Private ColorChecker full-image id for the black capture",
+    ),
+    white_corner_points_width: float | None = Form(
+        None,
+        description="Width of the white corner coordinate space",
+    ),
+    white_corner_points_height: float | None = Form(
+        None,
+        description="Height of the white corner coordinate space",
+    ),
+    black_corner_points_width: float | None = Form(
+        None,
+        description="Width of the black corner coordinate space",
+    ),
+    black_corner_points_height: float | None = Form(
+        None,
+        description="Height of the black corner coordinate space",
+    ),
     manual_white_orientation: str | None = Form(
         None,
         description=(
@@ -353,12 +366,9 @@ async def extractor_extract_gradient_card_stage_a(
     image_source: str | None = Form(
         None,
         description=(
-            "Optional gradient-card capture origin tag. Currently only "
-            "'raw' (direct camera/scanner capture, default) is accepted; "
-            "the historical 'restored' tag is rejected at the API "
-            "boundary because the gradient-card UI no longer exposes a "
-            "selector for it, and a 'restored'-tagged archive cannot "
-            "later be merged via the UI."
+            "Optional gradient-card capture origin tag. Use 'raw' for direct "
+            "camera/scanner captures (default) and 'restored' only when the "
+            "caller explicitly uses calibrated/restored images."
         ),
     ),
     store: SessionStore = Depends(get_session_store),
@@ -373,11 +383,52 @@ async def extractor_extract_gradient_card_stage_a(
     manual_white = _normalize_manual_orientation(manual_white_orientation)
     manual_black = _normalize_manual_orientation(manual_black_orientation)
     validated_image_source = _normalize_image_source(image_source)
+    has_white_colorchecker = bool(white_colorchecker_file_id)
+    has_black_colorchecker = bool(black_colorchecker_file_id)
+    if validated_image_source == "restored" and not (
+        has_white_colorchecker and has_black_colorchecker
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "image_source='restored' requires both white_colorchecker_file_id "
+                "and black_colorchecker_file_id"
+            ),
+        )
+    if (has_white_colorchecker or has_black_colorchecker) and validated_image_source != "restored":
+        raise HTTPException(
+            status_code=422,
+            detail="ColorChecker calibrated images require image_source='restored'",
+        )
     zip_path: str | None = None
     session_id: str | None = None
     try:
-        white_rgb = await upload_to_ndarray(white_image)
-        black_rgb = await upload_to_ndarray(black_image)
+        if white_colorchecker_file_id:
+            white_rgb = load_colorchecker_full_rgb(registry, white_colorchecker_file_id)
+            white_points = scale_corner_points(
+                white_points,
+                source_width=white_corner_points_width,
+                source_height=white_corner_points_height,
+                target_width=int(white_rgb.shape[1]),
+                target_height=int(white_rgb.shape[0]),
+            )
+        else:
+            if white_image is None:
+                raise HTTPException(status_code=422, detail="white_image is required")
+            white_rgb = await upload_to_ndarray(white_image)
+        if black_colorchecker_file_id:
+            black_rgb = load_colorchecker_full_rgb(registry, black_colorchecker_file_id)
+            black_points = scale_corner_points(
+                black_points,
+                source_width=black_corner_points_width,
+                source_height=black_corner_points_height,
+                target_width=int(black_rgb.shape[1]),
+                target_height=int(black_rgb.shape[0]),
+            )
+        else:
+            if black_image is None:
+                raise HTTPException(status_code=422, detail="black_image is required")
+            black_rgb = await upload_to_ndarray(black_image)
 
         zip_path = await upload_to_tempfile(dataset_zip, suffix=".zip")
         result = extract_stage_a_material_from_gradient_cards(

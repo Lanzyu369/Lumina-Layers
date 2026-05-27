@@ -5,12 +5,14 @@ interface ImageUploadProps {
   onFileSelect: (file: File) => void;
   accept: string;
   preview?: string;
+  disabled?: boolean;
 }
 
 export default function ImageUpload({
   onFileSelect,
   accept,
   preview,
+  disabled = false,
 }: ImageUploadProps) {
   const { t } = useI18n();
   const [isDragging, setIsDragging] = useState(false);
@@ -20,18 +22,20 @@ export default function ImageUpload({
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
+      if (disabled) return;
       setIsDragging(true);
     },
-    [],
+    [disabled],
   );
 
   const handleDragLeave = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
+      if (disabled) return;
       setIsDragging(false);
     },
-    [],
+    [disabled],
   );
 
   const handleDrop = useCallback(
@@ -39,26 +43,29 @@ export default function ImageUpload({
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
+      if (disabled) return;
       const file = e.dataTransfer.files[0];
       if (file) {
         onFileSelect(file);
       }
     },
-    [onFileSelect],
+    [disabled, onFileSelect],
   );
 
   const handleClick = useCallback(() => {
+    if (disabled) return;
     inputRef.current?.click();
-  }, []);
+  }, [disabled]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (disabled) return;
       const file = e.target.files?.[0];
       if (file) {
         onFileSelect(file);
       }
     },
-    [onFileSelect],
+    [disabled, onFileSelect],
   );
 
   const borderClass = isDragging
@@ -68,7 +75,8 @@ export default function ImageUpload({
   return (
     <div
       role="button"
-      tabIndex={0}
+      aria-disabled={disabled}
+      tabIndex={disabled ? -1 : 0}
       onClick={handleClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") handleClick();
@@ -76,12 +84,15 @@ export default function ImageUpload({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex min-h-[140px] items-center justify-center rounded-[24px] border-2 px-4 py-5 text-center shadow-[var(--shadow-control)] transition-all ${borderClass} cursor-pointer`}
+      className={`flex min-h-[140px] items-center justify-center rounded-[24px] border-2 px-4 py-5 text-center shadow-[var(--shadow-control)] transition-all ${borderClass} ${
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+      }`}
     >
       <input
         ref={inputRef}
         type="file"
         accept={accept}
+        disabled={disabled}
         onChange={handleChange}
         className="hidden"
       />

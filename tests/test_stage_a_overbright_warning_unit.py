@@ -1,15 +1,15 @@
 """Regression for Stage A overbright-zero-thickness warning.
 
 The warning fires when the linear-RGB ``C0_white`` mean exceeds 0.95.
-A white-balanced or restored input image pushes the zero-thickness
-samples toward (1.0, 1.0, 1.0); the resulting ``(E, k)`` will be biased
-away from the true physical attenuation. The warning is the only
-in-pipeline signal that surfaces this otherwise-invisible failure mode
-(``mean_delta_e`` / ``rmse_linear`` cannot detect it).
+Overbright normalization or clipping in the sampled Stage A area pushes
+the zero-thickness samples toward (1.0, 1.0, 1.0); the resulting
+``(E, k)`` will be biased away from the true physical attenuation. The
+warning is the in-pipeline signal that surfaces this otherwise-invisible
+failure mode (``mean_delta_e`` / ``rmse_linear`` cannot detect it).
 
-零厚度白底线性 RGB 均值超过 0.95 时触发警告：被白平衡 / 还原过的输入
-图像会让零厚度采样接近纯白 (1.0)，拟合出的 (E, k) 会偏离真实物理量；
-该警告是流水线内唯一能识别这种失效的信号。
+零厚度白底线性 RGB 均值超过 0.95 时触发警告：采样区域过亮归一化或
+发生裁切时，零厚度采样会接近纯白 (1.0)，拟合出的 (E, k) 会偏离
+真实物理量；该警告用于识别这种失效信号。
 """
 
 from __future__ import annotations
@@ -153,8 +153,8 @@ def _run_extract(
 
 
 def test_stage_a_warns_when_zero_thickness_white_is_overbright(tmp_path: Path) -> None:
-    """A white substrate at (0.99, 0.99, 0.99) — typical of a white-balanced
-    input image — must produce the C0_white-overbright warning."""
+    """A white substrate at (0.99, 0.99, 0.99) must produce the
+    C0_white-overbright warning."""
     warnings, c0_white_mean = _run_extract(
         tmp_path,
         white_substrate=np.array([0.99, 0.99, 0.99], dtype=np.float64),
@@ -164,7 +164,7 @@ def test_stage_a_warns_when_zero_thickness_white_is_overbright(tmp_path: Path) -
     overbright_warning = next(
         w for w in warnings if _OVERBRIGHT_WARNING_FRAGMENT in w
     )
-    assert "白平衡" in overbright_warning or "还原" in overbright_warning
+    assert "裁切" in overbright_warning or "过亮归一化" in overbright_warning
     assert f"{c0_white_mean:.3f}" in overbright_warning
 
 

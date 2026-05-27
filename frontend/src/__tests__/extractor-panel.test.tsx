@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+﻿import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
@@ -32,6 +32,9 @@ vi.stubGlobal("Image", MockImage);
 
 // Mock the extractor API to prevent real network calls
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
+  colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractColors: vi.fn(),
   manualFixCell: vi.fn(),
 }));
@@ -74,6 +77,19 @@ function resetExtractorStore(): void {
     paletteConfirmed: false,
     paletteConfirmLoading: false,
     paletteConfirmError: null,
+    colorchecker_enabled: false,
+    colorchecker_phase: null,
+    calibratedPreviewUrl: null,
+    calibratedFullFileId: null,
+    previousCalibratedFullFileId: null,
+    calibratedFullWidth: null,
+    calibratedFullHeight: null,
+    calibratedPreviewWidth: null,
+    calibratedPreviewHeight: null,
+    originalPreviewUrl: null,
+    originalPreviewWidth: null,
+    originalPreviewHeight: null,
+    colorcheckerSummary: null,
   });
 }
 
@@ -118,6 +134,7 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
           imagePreviewUrl: imageFile ? "blob:mock-url" : null,
           corner_points: corners,
           isLoading: false,
+          colorchecker_phase: null,
         });
 
         render(<ExtractorPanel />);
@@ -134,6 +151,59 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
       }),
       { numRuns: 100 }
     );
+  });
+
+  it.each(["calibrating", "confirming"] as const)(
+    "disables extraction while ColorChecker is %s",
+    async (phase) => {
+      const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+
+      useExtractorStore.setState({
+        imageFile: new File(["test"], "test.png", { type: "image/png" }),
+        imagePreviewUrl: "blob:mock-url",
+        corner_points: [[0, 0], [100, 0], [100, 100], [0, 100]],
+        isLoading: false,
+        colorchecker_enabled: true,
+        colorchecker_phase: phase,
+        calibratedFullFileId: phase === "confirming" ? "pending-full-id" : null,
+      });
+
+      render(<ExtractorPanel />);
+
+      const extractDiv = screen.getByTestId("extract-button");
+      const button = extractDiv.querySelector("button")!;
+
+      expect(button.disabled).toBe(true);
+    },
+  );
+
+  it("reopens ColorChecker calibration from the done state without dropping the accepted artifact", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    const acceptedFileId = "accepted-full-id";
+
+    useExtractorStore.setState({
+      imageFile: new File(["test"], "test.png", { type: "image/png" }),
+      imagePreviewUrl: "/api/files/accepted-preview.png",
+      imageNaturalWidth: 800,
+      imageNaturalHeight: 600,
+      colorchecker_enabled: true,
+      colorchecker_phase: "done",
+      calibratedPreviewUrl: "/api/files/accepted-preview.png",
+      calibratedFullFileId: acceptedFileId,
+    });
+
+    render(<ExtractorPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /重新校色 \/ 替换|Recalibrate \/ Replace/,
+      }),
+    );
+
+    const state = useExtractorStore.getState();
+    expect(state.colorchecker_phase).toBe("calibrating");
+    expect(state.calibratedFullFileId).toBe(acceptedFileId);
+    expect(state.previousCalibratedFullFileId).toBe(acceptedFileId);
   });
 });
 

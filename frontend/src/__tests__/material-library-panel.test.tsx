@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialLibraryPanel from "../components/MaterialLibraryPanel";
@@ -13,6 +13,9 @@ import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
 vi.mock("../api/extractor", () => ({
+  colorcheckerConfirm: vi.fn(),
+  colorcheckerRelease: vi.fn(),
+  colorcheckerTouch: vi.fn(() => Promise.resolve()),
   deleteGradientCardMaterial: vi.fn(),
   exportGradientCardMaterials: vi.fn(),
   importGradientCardMaterials: vi.fn(),

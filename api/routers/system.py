@@ -12,13 +12,18 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
 
 import config
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
+from api.preview_resources import (
+    register_preview_for_artifact,
+    register_preview_resource_upload,
+    validate_preview_context,
+)
 from api.schemas.system import (
     CacheCleanupDetails,
     ClearCacheResponse,
@@ -175,6 +180,77 @@ async def image_preview(
         },
     )
     return {"preview_url": f"/api/files/{file_id}", "width": width, "height": height}
+
+
+@router.post("/preview-resources")
+async def preview_resources(
+    file: UploadFile = File(...),
+    context: str = Form(...),
+    file_registry: FileRegistry = Depends(get_file_registry),
+) -> dict:
+    """Register a private image resource and return a bounded public preview.
+    注册私有图像资源，并只返回受尺寸限制的小预览。
+    """
+    context_value = validate_preview_context(context)
+    result = await register_preview_resource_upload(
+        file_registry,
+        file,
+        context=context_value,
+    )
+    log.info(
+        "Preview resource registered",
+        extra={
+            "event": "system_preview_resource_done",
+            "context": context_value,
+            "full_width": result.full_width,
+            "full_height": result.full_height,
+            "preview_width": result.preview_width,
+            "preview_height": result.preview_height,
+            "source_type": result.source_type,
+        },
+    )
+    return {
+        "resource_id": result.resource_id,
+        "preview_id": result.preview_id,
+        "preview_url": result.preview_url,
+        "full_width": result.full_width,
+        "full_height": result.full_height,
+        "preview_width": result.preview_width,
+        "preview_height": result.preview_height,
+        "source_type": result.source_type,
+    }
+
+
+@router.post("/preview-artifacts")
+async def preview_artifacts(
+    resource_id: str = Form(...),
+    context: str = Form(...),
+    file_registry: FileRegistry = Depends(get_file_registry),
+) -> dict:
+    """Return a bounded public preview for an existing private artifact.
+    基于已有私有资源返回受尺寸限制的小预览。
+    """
+    context_value = validate_preview_context(context)
+    result = register_preview_for_artifact(
+        file_registry,
+        context=context_value,
+        resource_id=resource_id,
+    )
+    log.info(
+        "Preview artifact registered",
+        extra={
+            "event": "system_preview_artifact_done",
+            "context": context_value,
+            "preview_width": result.preview_width,
+            "preview_height": result.preview_height,
+        },
+    )
+    return {
+        "preview_id": result.preview_id,
+        "preview_url": result.preview_url,
+        "preview_width": result.preview_width,
+        "preview_height": result.preview_height,
+    }
 
 
 @router.post("/clear-cache")

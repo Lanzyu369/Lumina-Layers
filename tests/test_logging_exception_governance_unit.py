@@ -133,6 +133,13 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_manual_fix_done",
     "extractor_preview_wb_done",
     "extractor_rotate_done",
+    "extractor_colorchecker_warp_preview_done",
+    "extractor_colorchecker_source_done",
+    "extractor_colorchecker_detect_chart_done",
+    "extractor_colorchecker_calibrate_done",
+    "extractor_colorchecker_release_done",
+    "extractor_colorchecker_confirm_done",
+    "extractor_colorchecker_touch_done",
     "extractor_confirm_palette_done",
     "extractor_extract_single_stage_done",
     "extractor_fit_stage_a_done",
@@ -195,6 +202,8 @@ LUT_STRUCTURED_EVENTS = {
 SYSTEM_STRUCTURED_EVENTS = {
     "system_image_preview_done",
     "system_save_settings_done",
+    "system_preview_resource_done",
+    "system_preview_artifact_done",
 }
 FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_bug_report_rate_limited",

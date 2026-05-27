@@ -1,4 +1,5 @@
 import apiClient from "./client";
+import { createPreviewResource } from "./system";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
@@ -22,7 +23,7 @@ import type {
 
 /** 提取颜色 - multipart/form-data */
 export async function extractColors(
-  image: File,
+  image: File | null,
   params: {
     corner_points: Array<[number, number]>;
     color_mode: string;
@@ -34,10 +35,15 @@ export async function extractColors(
     distortion: number;
     vignette_correction: boolean;
     auto_wb: boolean;
+    colorcheckerCalibratedFileId?: string | null;
+    cornerPointsWidth?: number | null;
+    cornerPointsHeight?: number | null;
   },
 ): Promise<ExtractResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  if (image) {
+    fd.append("image", image);
+  }
   fd.append("corner_points", JSON.stringify(params.corner_points));
   fd.append("color_mode", params.color_mode);
   fd.append("page", params.page);
@@ -48,6 +54,13 @@ export async function extractColors(
   fd.append("distortion", String(params.distortion));
   fd.append("vignette_correction", String(params.vignette_correction));
   fd.append("auto_wb", String(params.auto_wb));
+  if (params.colorcheckerCalibratedFileId) {
+    fd.append("colorchecker_calibrated_file_id", params.colorcheckerCalibratedFileId);
+  }
+  if (params.cornerPointsWidth && params.cornerPointsHeight) {
+    fd.append("corner_points_width", String(params.cornerPointsWidth));
+    fd.append("corner_points_height", String(params.cornerPointsHeight));
+  }
 
   const response = await apiClient.post<ExtractResponse>(
     "/extractor/extract",
@@ -58,23 +71,223 @@ export async function extractColors(
 }
 
 /** Warp preview response (step 1) */
+export interface ColorcheckerPoint {
+  x: number;
+  y: number;
+}
+
+export interface ColorcheckerDeltaSummary {
+  mean: number | null;
+  median: number | null;
+  p95: number | null;
+  max: number | null;
+}
+
+export interface ColorcheckerWorstPatch {
+  index: number;
+  label: string;
+  deltaE00: number;
+  referenceSrgb?: number[] | null;
+  correctedSrgb?: number[] | null;
+}
+
+export interface ColorcheckerLuminancePoint {
+  index: number;
+  label: string;
+  reference: number | null;
+  captured: number | null;
+  normalized: number | null;
+  corrected: number | null;
+  fitUsed: boolean;
+  grayPatch: boolean;
+}
+
+export interface ColorcheckerReferencePatch {
+  index: number;
+  label?: string;
+  sRGB?: number[] | null;
+  Lab_d50?: number[] | null;
+  Lab_d65?: number[] | null;
+}
+
+export interface ColorcheckerReferenceSource {
+  sourceType?: string | null;
+  sourceName?: string | null;
+  serialNumber?: string | null;
+  patchCount?: number | null;
+  labWhitePoint?: string | null;
+  referenceHash?: string | null;
+}
+
+export interface ColorcheckerReferenceSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  source?: ColorcheckerReferenceSource | null;
+  patchCount: number;
+  labWhitePoint?: string | null;
+  serialNumber?: string | null;
+  referenceHash?: string | null;
+}
+
+export interface ColorcheckerReferencesResponse {
+  defaultReferenceId: string;
+  references: ColorcheckerReferenceSummary[];
+}
+
+export interface ColorcheckerReferenceNormalizeResponse {
+  patches: ColorcheckerReferencePatch[];
+  source: ColorcheckerReferenceSource;
+  referenceHash: string;
+  warnings: string[];
+}
+
+export type ColorcheckerReferenceSelection =
+  | {
+      kind: "server";
+      referenceId: string;
+    }
+  | {
+      kind: "custom";
+      referencePatches: ColorcheckerReferencePatch[];
+      referenceSource: ColorcheckerReferenceSource;
+    };
+
+export interface ColorcheckerDisplaySummary {
+  deltaE00: ColorcheckerDeltaSummary;
+  worstPatch: ColorcheckerWorstPatch | null;
+  luminanceCurve: ColorcheckerLuminancePoint[];
+  reference?: ColorcheckerReferenceSource | null;
+  settings?: {
+    method?: string | null;
+    calibrationMode?: string | null;
+    grayAffineMode?: string | null;
+    sampleRadius?: number | null;
+    blurRadius?: number | null;
+  } | null;
+  warnings: string[];
+}
+
+export interface ColorcheckerDetectResponse {
+  detected: boolean;
+  corners: ColorcheckerPoint[];
+  patchOrientation: string;
+  confidence: number;
+  score: number | null;
+  mode: string;
+  reason: string;
+  candidateCount: number;
+  full_width?: number;
+  full_height?: number;
+  preview_width?: number;
+  preview_height?: number;
+}
+
 export interface ColorcheckerWarpPreviewResponse {
   preview_url: string;
   preview_width: number;
   preview_height: number;
-  auto_patch_points: Array<{ x: number; y: number }>;
+  auto_patch_points: ColorcheckerPoint[];
+}
+
+export interface ColorcheckerSourceResponse {
+  colorchecker_source_file_id: string;
+  source_preview_file_id?: string | null;
+  source_preview_url: string;
+  full_width: number;
+  full_height: number;
+  preview_width: number;
+  preview_height: number;
+  source_type?: string | null;
+}
+
+function appendColorcheckerReference(
+  fd: FormData,
+  reference: ColorcheckerReferenceSelection | null | undefined,
+) {
+  if (!reference) return;
+  if (reference.kind === "server") {
+    fd.append("reference_id", reference.referenceId);
+    return;
+  }
+  fd.append("reference_patches", JSON.stringify(reference.referencePatches));
+  fd.append("reference_source", JSON.stringify(reference.referenceSource));
+}
+
+export async function colorcheckerListReferences(): Promise<ColorcheckerReferencesResponse> {
+  const response = await apiClient.get<ColorcheckerReferencesResponse>(
+    "/extractor/colorchecker-references",
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+export async function colorcheckerNormalizeReference(params: {
+  patches: ColorcheckerReferencePatch[];
+  source?: Partial<ColorcheckerReferenceSource> | null;
+}): Promise<ColorcheckerReferenceNormalizeResponse> {
+  const response = await apiClient.post<ColorcheckerReferenceNormalizeResponse>(
+    "/extractor/colorchecker-reference-normalize",
+    params,
+    { timeout: 120_000 },
+  );
+  return response.data;
+}
+
+/** Upload the ColorChecker source image once and receive a bounded preview. */
+export async function colorcheckerPrepareSource(
+  image: File,
+): Promise<ColorcheckerSourceResponse> {
+  const response = await createPreviewResource(image, "colorchecker");
+  return {
+    colorchecker_source_file_id: response.resource_id,
+    source_preview_file_id: response.preview_id,
+    source_preview_url: response.preview_url,
+    full_width: response.full_width,
+    full_height: response.full_height,
+    preview_width: response.preview_width,
+    preview_height: response.preview_height,
+    source_type: response.source_type ?? null,
+  };
+}
+
+/** Automatically locate the ColorChecker chart corners */
+export async function colorcheckerDetectChart(
+  sourceFileId: string,
+  patchLayout: string = "4x6",
+  assistPoint: ColorcheckerPoint | null = null,
+  reference: ColorcheckerReferenceSelection | null = null,
+): Promise<ColorcheckerDetectResponse> {
+  const fd = new FormData();
+  fd.append("colorchecker_source_file_id", sourceFileId);
+  fd.append("patch_layout", patchLayout);
+  if (assistPoint) {
+    fd.append("assist_point", JSON.stringify(assistPoint));
+  }
+  appendColorcheckerReference(fd, reference);
+  const response = await apiClient.post<ColorcheckerDetectResponse>(
+    "/extractor/colorchecker-detect-chart",
+    fd,
+    { timeout: 120_000 },
+  );
+  return response.data;
 }
 
 /** Warp the ColorChecker region and return preview + auto 24 patch points */
 export async function colorcheckerWarpPreview(
-  image: File,
+  sourceFileId: string,
   cornerPoints: Array<[number, number]>,
+  cornerPointsSize: { width: number; height: number },
   patchLayout: string = "4x6",
+  patchOrientation: string = "normal",
 ): Promise<ColorcheckerWarpPreviewResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  fd.append("colorchecker_source_file_id", sourceFileId);
   fd.append("corner_points", JSON.stringify(cornerPoints));
+  fd.append("corner_points_width", String(cornerPointsSize.width));
+  fd.append("corner_points_height", String(cornerPointsSize.height));
   fd.append("patch_layout", patchLayout);
+  fd.append("patch_orientation", patchOrientation);
   const response = await apiClient.post<ColorcheckerWarpPreviewResponse>(
     "/extractor/colorchecker-warp-preview",
     fd,
@@ -85,33 +298,147 @@ export async function colorcheckerWarpPreview(
 
 /** Calibration response (step 2) */
 export interface ColorcheckerCalibrateResponse {
-  calibrated_url: string;
+  calibrated_preview_url: string;
+  calibrated_preview_file_id?: string | null;
+  calibrated_full_file_id: string;
   overlay_url: string;
-  width: number;
-  height: number;
-  patch_points: Array<{ x: number; y: number }>;
+  overlay_preview_file_id?: string | null;
+  full_width: number;
+  full_height: number;
+  preview_width: number;
+  preview_height: number;
+  patch_points: ColorcheckerPoint[];
+  display_summary: ColorcheckerDisplaySummary;
+}
+
+export interface ColorcheckerCalibrateOptions {
+  sampleRadius?: number;
+  method?: "mean" | "median";
+  calibrationMode?: "matrix_3x3" | "matrix_3x4" | "root_polynomial" | "auto";
+  grayAffineMode?: "auto" | "enabled" | "fallback";
+  blurRadius?: number;
 }
 
 /** Compute CCM and return calibrated image + overlay */
 export async function colorcheckerCalibrate(
-  image: File,
+  sourceFileId: string,
   cornerPoints: Array<[number, number]>,
-  patchPoints: Array<{ x: number; y: number }> | null = null,
+  cornerPointsSize: { width: number; height: number },
+  patchPoints: ColorcheckerPoint[] | null = null,
   patchLayout: string = "4x6",
+  options: ColorcheckerCalibrateOptions | null = null,
+  patchOrientation: string = "normal",
+  reference: ColorcheckerReferenceSelection | null = null,
 ): Promise<ColorcheckerCalibrateResponse> {
   const fd = new FormData();
-  fd.append("image", image);
+  fd.append("colorchecker_source_file_id", sourceFileId);
   fd.append("corner_points", JSON.stringify(cornerPoints));
+  fd.append("corner_points_width", String(cornerPointsSize.width));
+  fd.append("corner_points_height", String(cornerPointsSize.height));
   if (patchPoints) {
     fd.append("patch_points", JSON.stringify(patchPoints));
   }
   fd.append("patch_layout", patchLayout);
+  fd.append("patch_orientation", patchOrientation);
+  if (options) {
+    if (options.sampleRadius !== undefined) {
+      fd.append("sample_radius", String(options.sampleRadius));
+    }
+    if (options.method) {
+      fd.append("method", options.method);
+    }
+    if (options.calibrationMode) {
+      fd.append("calibration_mode", options.calibrationMode);
+    }
+    if (options.grayAffineMode) {
+      fd.append("gray_affine_mode", options.grayAffineMode);
+    }
+    if (options.blurRadius !== undefined) {
+      fd.append("blur_radius", String(options.blurRadius));
+    }
+  }
+  appendColorcheckerReference(fd, reference);
   const response = await apiClient.post<ColorcheckerCalibrateResponse>(
     "/extractor/colorchecker-calibrate",
     fd,
     { timeout: 120_000 },
   );
   return response.data;
+}
+
+export async function colorcheckerRelease(fileId: string): Promise<void> {
+  const fd = new FormData();
+  fd.append("file_id", fileId);
+  await apiClient.post("/extractor/colorchecker-release", fd, {
+    timeout: 30_000,
+  });
+}
+
+export interface ColorcheckerConfirmResponse {
+  status: string;
+  confirmed: boolean;
+  calibrated_preview_url?: string | null;
+  preview_width?: number | null;
+  preview_height?: number | null;
+  source_preview_url?: string | null;
+  source_preview_width?: number | null;
+  source_preview_height?: number | null;
+}
+
+export interface ColorcheckerConfirmOptions {
+  sourceFileId?: string | null;
+  sourcePreviewUrl?: string | null;
+}
+
+function fileIdFromApiFilesUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const extract = (pathname: string): string | null => {
+    const prefix = "/api/files/";
+    if (!pathname.startsWith(prefix)) return null;
+    return decodeURIComponent(pathname.slice(prefix.length).split("/")[0] ?? "");
+  };
+  if (url.startsWith("/api/files/")) {
+    return extract(url);
+  }
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.origin !== window.location.origin) return null;
+    return extract(parsed.pathname);
+  } catch {
+    return null;
+  }
+}
+
+export async function colorcheckerConfirm(
+  fileId: string,
+  previewUrl?: string | null,
+  options?: ColorcheckerConfirmOptions | null,
+): Promise<ColorcheckerConfirmResponse | undefined> {
+  const fd = new FormData();
+  fd.append("file_id", fileId);
+  const previewFileId = fileIdFromApiFilesUrl(previewUrl);
+  if (previewFileId) {
+    fd.append("preview_file_id", previewFileId);
+  }
+  const sourcePreviewFileId = fileIdFromApiFilesUrl(options?.sourcePreviewUrl);
+  if (options?.sourceFileId && sourcePreviewFileId) {
+    fd.append("source_file_id", options.sourceFileId);
+    fd.append("source_preview_file_id", sourcePreviewFileId);
+  }
+  const response = await apiClient.post<ColorcheckerConfirmResponse>(
+    "/extractor/colorchecker-confirm",
+    fd,
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+export async function colorcheckerTouch(fileId: string): Promise<void> {
+  const fd = new FormData();
+  fd.append("file_id", fileId);
+  await apiClient.post("/extractor/colorchecker-touch", fd, {
+    timeout: 30_000,
+  });
 }
 
 /** Capture-origin tag forwarded as the ``image_source`` form field.
@@ -121,20 +448,44 @@ export type GradientCardImageSourceLabel = "raw" | "restored";
 
 export async function extractGradientCardStageA(params: {
   datasetZip: File;
-  whiteImage: File;
-  blackImage: File;
+  whiteImage: File | null;
+  blackImage: File | null;
   whiteCornerPoints: Array<[number, number]>;
   blackCornerPoints: Array<[number, number]>;
+  whiteColorcheckerFileId?: string | null;
+  blackColorcheckerFileId?: string | null;
+  whiteCornerPointsWidth?: number | null;
+  whiteCornerPointsHeight?: number | null;
+  blackCornerPointsWidth?: number | null;
+  blackCornerPointsHeight?: number | null;
   manualWhiteOrientation?: ManualOrientationLabel | null;
   manualBlackOrientation?: ManualOrientationLabel | null;
   imageSource?: GradientCardImageSourceLabel | null;
 }): Promise<GradientCardStageAExtractResponse> {
   const fd = new FormData();
   fd.append("dataset_zip", params.datasetZip);
-  fd.append("white_image", params.whiteImage);
-  fd.append("black_image", params.blackImage);
+  if (!params.whiteColorcheckerFileId && params.whiteImage) {
+    fd.append("white_image", params.whiteImage);
+  }
+  if (!params.blackColorcheckerFileId && params.blackImage) {
+    fd.append("black_image", params.blackImage);
+  }
   fd.append("white_corner_points", JSON.stringify(params.whiteCornerPoints));
   fd.append("black_corner_points", JSON.stringify(params.blackCornerPoints));
+  if (params.whiteColorcheckerFileId) {
+    fd.append("white_colorchecker_file_id", params.whiteColorcheckerFileId);
+  }
+  if (params.blackColorcheckerFileId) {
+    fd.append("black_colorchecker_file_id", params.blackColorcheckerFileId);
+  }
+  if (params.whiteCornerPointsWidth && params.whiteCornerPointsHeight) {
+    fd.append("white_corner_points_width", String(params.whiteCornerPointsWidth));
+    fd.append("white_corner_points_height", String(params.whiteCornerPointsHeight));
+  }
+  if (params.blackCornerPointsWidth && params.blackCornerPointsHeight) {
+    fd.append("black_corner_points_width", String(params.blackCornerPointsWidth));
+    fd.append("black_corner_points_height", String(params.blackCornerPointsHeight));
+  }
   if (params.manualWhiteOrientation) {
     fd.append("manual_white_orientation", params.manualWhiteOrientation);
   }

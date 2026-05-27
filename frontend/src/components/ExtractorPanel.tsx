@@ -16,7 +16,6 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "./ui/icons";
 import ImageUpload from "./ui/ImageUpload";
 import Switch from "./ui/Switch";
 import HelpDot from "./ui/HelpDot";
-import ColorcheckerConfirmDialog from "./ColorcheckerConfirmDialog";
 import {
   cx,
   StatusBanner,
@@ -66,6 +65,7 @@ export default function ExtractorPanel() {
     auto_wb,
     colorchecker_enabled,
     colorchecker_phase,
+    colorcheckerSummary,
     isLoading,
     error,
     lut_download_url,
@@ -113,6 +113,7 @@ export default function ExtractorPanel() {
 
   const is5c = color_mode === ExtractorColorMode.FIVE_COLOR_EXT;
   const isEightColorFull = isEightColor && eight_color_full_export;
+  const autoWbDisabled = colorchecker_enabled && colorchecker_phase === "done";
   const p1Done = is5c ? page1Extracted_5c : page1Extracted;
   const p2Done = is5c ? page2Extracted_5c : page2Extracted;
   const mergeTitle = is5c
@@ -152,9 +153,12 @@ export default function ExtractorPanel() {
     ? extractedEightColorFullPages.length === EXTRACTOR_EIGHT_COLOR_FULL_TOTAL_PAGES
     : p1Done && p2Done;
 
+  const colorcheckerPending =
+    colorchecker_phase === "calibrating" ||
+    colorchecker_phase === "confirming";
   const extractDisabled =
     imageFile === null || corner_points.length < 4 || isLoading ||
-    colorchecker_phase === "calibrating";
+    colorcheckerPending;
 
 
   const [correctionOpen, setCorrectionOpen] = useState(false);
@@ -234,7 +238,7 @@ export default function ExtractorPanel() {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
       data-testid="extractor-panel"
-      className={`${panelSurfaceClass} h-auto w-full overflow-y-auto xl:h-full xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
+      className={`${panelSurfaceClass} h-auto max-h-[46dvh] w-full overflow-y-auto xl:h-full xl:max-h-none xl:w-[400px] xl:shrink-0 2xl:w-[480px]`}
     >
       <div className="flex flex-col gap-2">
         <section className={`${sectionCardClass} flex flex-col gap-2`}>
@@ -294,6 +298,7 @@ export default function ExtractorPanel() {
                 onFileSelect={(file) => setImageFile(file)}
                 accept={ACCEPT_EXTRACTOR_FORMATS}
                 preview={imagePreviewUrl ?? undefined}
+                disabled={isLoading}
               />
             </div>
           </div>
@@ -348,7 +353,13 @@ export default function ExtractorPanel() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Checkbox label={t("ext_vignette_label")} tooltip={t("ext_vignette_hint")} checked={vignette_correction} onChange={setVignetteCorrection} />
-                    <Checkbox label={t("ext_auto_wb_label")} tooltip={t("ext_auto_wb_hint")} checked={auto_wb} onChange={(v) => void setAutoWb(v)} />
+                    <Checkbox
+                      label={t("ext_auto_wb_label")}
+                      tooltip={t("ext_auto_wb_hint")}
+                      checked={autoWbDisabled ? false : auto_wb}
+                      onChange={(v) => void setAutoWb(v)}
+                      disabled={autoWbDisabled}
+                    />
                   </div>
                 </div>
               </motion.div>
@@ -357,7 +368,7 @@ export default function ExtractorPanel() {
         </section>
 
         <section data-testid="colorchecker-toggle-section" className={`${sectionCardClass}`}>
-          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} />
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isLoading} />
         </section>
 
         <section
@@ -501,26 +512,78 @@ export default function ExtractorPanel() {
           )}
         </section>
 
-        {colorchecker_enabled && (
-          <section data-testid="colorchecker-step-section" className={`${sectionCardClass} flex flex-col gap-3`}>
-            <div className="flex items-center gap-2">
-              <Button
-                label={t("ext_cc_open_dialog_btn")}
-                variant="primary"
-                onClick={openColorcheckerDialog}
-                disabled={imageFile === null || colorchecker_phase === "calibrating"}
-              />
-              {colorchecker_phase === "done" && (
-                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                  {t("ext_cc_calibrated_badge")}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t("ext_colorchecker_hint")}
-            </p>
-          </section>
-        )}
+        <AnimatePresence initial={false}>
+          {colorchecker_enabled && (
+            <motion.section
+              data-testid="colorchecker-step-section"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+              className="overflow-hidden"
+            >
+              <div
+                className={`${sectionCardClass} flex flex-col gap-3`}
+                style={{ background: "var(--surface-panel)" }}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {t("ext_cc_dialog_title")}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {t("ext_colorchecker_hint")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {colorchecker_phase === "done" && (
+                      <>
+                        <span className="inline-flex items-center rounded-full border border-emerald-300/80 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300">
+                          {t("ext_cc_calibrated_badge")}
+                        </span>
+                        <Button
+                          label={t("ext_cc_recalibrate_btn")}
+                          variant="secondary"
+                          size="sm"
+                          onClick={openColorcheckerDialog}
+                          disabled={isLoading}
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+                <StatusBanner tone={colorchecker_phase === "done" ? "success" : "info"}>
+                  {colorchecker_phase === "done"
+                    ? t("ext_cc_calibrated_badge")
+                    : t("ext_cc_main_area_hint")}
+                </StatusBanner>
+                {colorcheckerSummary && (
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    {[
+                      [t("ext_cc_metric_mean"), colorcheckerSummary.deltaE00.mean],
+                      [t("ext_cc_metric_median"), colorcheckerSummary.deltaE00.median],
+                      [t("ext_cc_metric_p95"), colorcheckerSummary.deltaE00.p95],
+                      [t("ext_cc_metric_worst"), colorcheckerSummary.deltaE00.max],
+                    ].map(([label, value]) => (
+                      <div
+                        key={String(label)}
+                        className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
+                        style={{ background: "var(--surface-panel-strong)" }}
+                      >
+                        <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">
+                          {label}
+                        </div>
+                        <div className="mt-1 text-base font-semibold tabular-nums text-slate-900 dark:text-slate-50">
+                          {typeof value === "number" ? value.toFixed(2) : "-"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         <section className={`${sectionCardClass} flex flex-col gap-2 lg:flex-row`}>
           <div data-testid="extract-button" className="lg:flex-1 lg:min-w-0">
@@ -721,7 +784,6 @@ export default function ExtractorPanel() {
         )}
       </div>
 
-      <ColorcheckerConfirmDialog />
     </motion.aside>
   );
 }

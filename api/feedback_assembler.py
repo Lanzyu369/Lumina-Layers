@@ -159,19 +159,29 @@ def _pick_final_artifact_entry(
 
 def _extract_file_id_from_download_url(download_url: str | None) -> str | None:
     """Extract a FileRegistry id from ``/api/files/<id>`` URLs.
+
     从 ``/api/files/<id>`` 下载地址中提取 FileRegistry id。
     """
     if not isinstance(download_url, str) or not download_url.strip():
         return None
     try:
-        path = urlparse(download_url).path
+        parsed = urlparse(download_url.strip())
     except ValueError:
         return None
-    marker = "/api/files/"
-    if marker not in path:
+    if parsed.scheme or parsed.netloc:
         return None
-    file_id = path.split(marker, 1)[1].split("/", 1)[0].strip()
-    if not file_id or file_id in {".", ".."} or "/" in file_id or "\\" in file_id:
+    path = parsed.path
+    prefix = "/api/files/"
+    if not path.startswith(prefix):
+        return None
+    file_id = path[len(prefix):].strip()
+    if (
+        not file_id
+        or file_id in {".", ".."}
+        or "/" in file_id
+        or "\\" in file_id
+        or any(char.isspace() for char in file_id)
+    ):
         return None
     return file_id
 
@@ -184,30 +194,52 @@ def _collect_final_artifact_from_download_url(
     session_id: str | None,
 ) -> dict[str, Any] | None:
     """Copy the exact artifact referenced by a frontend download URL.
+
     复制前端下载地址精确指向的产物。
     """
     file_id = _extract_file_id_from_download_url(download_url)
     if file_id is None:
         return None
+    get_entry = getattr(file_registry, "get_entry", None)
+    if not callable(get_entry):
+        return None
+    try:
+        entry = get_entry(file_id)
+    except Exception:
+        return None
+    if not isinstance(entry, dict) or entry.get("is_public") is False:
+        return None
+    if (
+        entry.get("lifecycle") == "session_bound"
+        and entry.get("session_id") != session_id
+    ):
+        return None
     resolve = getattr(file_registry, "resolve", None)
     if not callable(resolve):
         return None
-    resolved = resolve(file_id)
+    try:
+        resolved = resolve(file_id)
+    except Exception:
+        return None
     if resolved is None:
         return None
-    src_path_raw, filename = resolved
-    src_path = Path(src_path_raw)
-    candidate_name = filename or src_path.name
+    try:
+        src_path_raw, filename = resolved
+        src_path = Path(src_path_raw)
+    except (TypeError, ValueError):
+        return None
+    candidate_name = str(filename or src_path.name)
     suffix = Path(candidate_name).suffix.lower() or src_path.suffix.lower()
     if suffix not in _FINAL_ARTIFACT_EXTENSIONS or not src_path.is_file():
         return None
 
     dst = ticket_dir / f"final{suffix}"
-    shutil.copy2(src_path, dst)
-    get_entry = getattr(file_registry, "get_entry", None)
-    entry = get_entry(file_id) if callable(get_entry) else {}
-    size = dst.stat().st_size
-    sha = file_sha256(dst)
+    try:
+        shutil.copy2(src_path, dst)
+        size = dst.stat().st_size
+        sha = file_sha256(dst)
+    except OSError:
+        return None
     created_at = entry.get("created_at") if isinstance(entry, dict) else None
     return {
         "status": "attached",
