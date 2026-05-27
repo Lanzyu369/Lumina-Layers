@@ -86,6 +86,19 @@ def _resolve_kernel_choice() -> str:
 # probed; ``True`` / ``False`` is the cached outcome.
 _V2_IMPORT_OK: Optional[bool] = None
 _V2_IMPORT_ERROR: Optional[str] = None
+# Process-level latch for the dispatcher's "v2 requested but unavailable"
+# WARNING. Without this, ``_build_color_extruded_mesh`` would emit a copy of
+# ``glb_kernel_v2_requested_unavailable`` for every per-color call inside
+# ``generate_segmented_glb`` (typically 40-60 colours + 1 backing plate per
+# preview), which floods the log with identical payloads on Windows arm64
+# and other v2-wheel-less environments. ``_v2_available()``'s
+# ``glb_kernel_v2_unavailable`` is already process-level via
+# ``_V2_IMPORT_OK`` caching; this latch gives the dispatcher's downstream
+# WARNING the same one-shot semantics.
+# 进程级锁，避免 dispatcher 在每色循环中重复发出同一条 WARNING；
+# ``_V2_IMPORT_OK`` 已经把 ``glb_kernel_v2_unavailable`` 控制为进程内只发
+# 一次，本锁让 ``glb_kernel_v2_requested_unavailable`` 也只发一次。
+_V2_REQUESTED_UNAVAILABLE_LOGGED: bool = False
 
 
 def _v2_available(log_warning: bool = True) -> bool:
@@ -490,6 +503,27 @@ def _build_color_extruded_mesh_v2(
     ``_build_color_extruded_mesh`` then transparently falls back to v1.
     几何语义与 v1 完全一致；任何失败都返回 None，由调度器回退到 v1。
 
+    Precondition:
+        ``mask`` MUST be a strict 0/1 boolean grid (``dtype=bool``). With
+        this precondition, ``rasterio.features.shapes(connectivity=4)``
+        cannot produce sub-pixel degenerate rings — the smallest possible
+        output is a 1×1-pixel square at pixel-corner coordinates — so this
+        helper does NOT need the ``min_area=1e-4`` filter that
+        ``_build_color_extruded_mesh_shapely_v1`` runs via
+        ``_iter_valid_polygons``. If a future caller relaxes this and
+        passes a non-bool raster (uint8 grayscale, nodata-valued float,
+        etc.), manifold3d may receive a degenerate ring and raise a
+        ``RuntimeError`` at ``CrossSection.extrude``; that path is already
+        guarded by the per-component atomicity contract (the whole color
+        aborts to None, dispatcher falls back to v1), so behaviour stays
+        safe — only correctness of the v2 fast path would silently
+        degrade.
+        前提：``mask`` 必须是严格 0/1 bool 数组。该前提下 rasterio 的
+        connectivity=4 polygonize 不会输出退化环，因此本函数不需要
+        v1 的 ``min_area`` 过滤。若未来允许非 bool 输入，由 per-component
+        atomicity 兜底（整色 abort + dispatcher fallback v1），不会爆炸，
+        但 v2 快路径的覆盖率会下降。
+
     Args:
         mask (np.ndarray): (H, W) bool array of pixels belonging to this color.
         height (int): Image height used for Y-axis flip so image-up maps to world-up.
@@ -661,10 +695,15 @@ def _build_color_extruded_mesh(
     use_v2 = False
     if requested == "rasterio_manifold3d":
         # Explicit v2 request: surface a WARNING when v2 is unavailable so
-        # operators see why the env value got ignored.
-        # 显式请求 v2 时，缺 wheel 必须发 WARNING，让运维看到 env 值被忽略的原因。
+        # operators see why the env value got ignored. Latch it to once-per-
+        # process so a single multi-colour preview does not produce one
+        # copy of this WARNING per colour (was reviewer feedback on
+        # PR #210; see _V2_REQUESTED_UNAVAILABLE_LOGGED).
+        # 显式请求 v2 时，缺 wheel 必须发 WARNING，让运维看到 env 值被忽略
+        # 的原因；用进程级锁压制风暴，单次预览不会重复刷屏。
+        global _V2_REQUESTED_UNAVAILABLE_LOGGED
         use_v2 = _v2_available(log_warning=True)
-        if not use_v2:
+        if not use_v2 and not _V2_REQUESTED_UNAVAILABLE_LOGGED:
             _log.warning(
                 "LUMINA_GLB_KERNEL=v2 requested but unavailable, using shapely_v1",
                 extra={
@@ -674,6 +713,7 @@ def _build_color_extruded_mesh(
                     "fallback_kernel": "shapely_v1",
                 },
             )
+            _V2_REQUESTED_UNAVAILABLE_LOGGED = True
     elif requested == "auto":
         # Auto: best-effort v2, silent fallback on import failure.
         # auto 模式：能用就用 v2，缺 wheel 时静默降级，不打扰运维。
