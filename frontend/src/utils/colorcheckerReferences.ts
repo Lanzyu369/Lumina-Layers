@@ -348,7 +348,7 @@ function normalizeHeader(value: CellValue) {
     .replace(/cie/g, "")
     .replace(/cielab/g, "lab")
     .replace(/色值|编号|序号/g, "")
-    .replace(/[()\[\]{}*_\-\s/.：:]+/g, "");
+    .replace(/[()[\]{}*_\-\s/.：:]+/g, "");
 }
 
 function isStoredReference(value: unknown): value is StoredColorcheckerReference {
