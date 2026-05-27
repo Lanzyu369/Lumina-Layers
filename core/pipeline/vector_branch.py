@@ -738,6 +738,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "target_width_mm": target_width_mm,
             "pixel_scale": raster_cache["pixel_scale"],
             "mask_solid": raster_cache["mask_solid"],
+            "backing_mask": raster_cache.get("backing_mask"),
             "material_matrix": raster_cache["material_matrix"],
             "matched_rgb": raster_cache["matched_rgb"],
             "preview_rgba": raster_cache["preview_rgba"].copy(),
@@ -758,6 +759,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["matched_rgb"] = raster_cache["matched_rgb"]
         ctx["material_matrix"] = raster_cache["material_matrix"]
         ctx["mask_solid"] = raster_cache["mask_solid"]
+        ctx["backing_mask"] = raster_cache.get("backing_mask")
         ctx["target_w"] = raster_cache["target_w"]
         ctx["target_h"] = raster_cache["target_h"]
         ctx["quantized_image"] = raster_cache["quantized_image"]

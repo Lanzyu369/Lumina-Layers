@@ -2624,6 +2624,46 @@ class VectorProcessor:
 
             return region.astype(bool)
 
+        backing_geom = getattr(analysis, "image_vectorizer_bounds", None)
+        if backing_geom is None or getattr(backing_geom, "is_empty", True):
+            backing_geom = analysis.silhouette
+        if backing_geom is None or getattr(backing_geom, "is_empty", True):
+            clipped_geoms = [
+                item.get("geometry")
+                for item in getattr(analysis, "clipped_shapes", []) or []
+                if item.get("geometry") is not None
+                and not item.get("geometry").is_empty
+            ]
+            if clipped_geoms:
+                backing_geom = unary_union(clipped_geoms)
+
+        backing_mask = np.zeros((h_px, w_px), dtype=bool)
+        if backing_geom is not None and not getattr(backing_geom, "is_empty", True):
+            try:
+                normalized_backing = VectorProcessor._normalize_contours(
+                    backing_geom,
+                    close_delta_mm=0.4,
+                )
+                if normalized_backing is not None and not normalized_backing.is_empty:
+                    backing_geom = normalized_backing
+                filtered_backing = VectorProcessor._filter_backing_holes(
+                    backing_geom,
+                    min_hole_area_mm2=0.3,
+                )
+                if filtered_backing is not None and not filtered_backing.is_empty:
+                    backing_geom = filtered_backing
+                backing_geom = backing_geom.buffer(
+                    0.15,
+                    join_style="mitre",
+                    mitre_limit=2.0,
+                )
+            except VECTOR_HANDLED_ERRORS:
+                pass
+            for poly in _iter_polygons(backing_geom):
+                region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
+                if region_mask is not None and np.any(region_mask):
+                    backing_mask |= region_mask
+
         for shape in analysis.matched_shapes:
             geom = shape.get("geometry")
             if geom is None or geom.is_empty:
@@ -2678,6 +2718,7 @@ class VectorProcessor:
             "matched_rgb": matched_rgb,
             "quantized_image": quantized_image,
             "mask_solid": mask_solid,
+            "backing_mask": backing_mask if np.any(backing_mask) else mask_solid.copy(),
             "material_matrix": material_matrix,
             "preview_rgba": preview_rgba,
         }

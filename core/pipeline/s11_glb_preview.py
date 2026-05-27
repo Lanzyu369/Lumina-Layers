@@ -832,6 +832,10 @@ def generate_segmented_glb(
         cache (dict): Preview cache dict containing at least:
             - matched_rgb: (H, W, 3) uint8 array
             - mask_solid: (H, W) bool array
+            - backing_mask: (H, W) optional bool array for a backing footprint
+              that differs from the visible colour pixels. SVG/vector preview
+              caches use this to keep the GLB backing aligned with the native
+              vector ``Board`` mesh.
             - target_w, target_h: pixel dimensions
             - target_width_mm: physical width in mm
             - glb_max_meshes (optional): per-session override that bumps
@@ -883,11 +887,27 @@ def generate_segmented_glb(
 
     matched_rgb = cache.get("matched_rgb")
     mask_solid = cache.get("mask_solid")
+    backing_mask = cache.get("backing_mask")
     target_w = cache.get("target_w")
     target_width_mm = cache.get("target_width_mm")
 
     if matched_rgb is None or mask_solid is None:
         return None
+    if backing_mask is not None:
+        try:
+            backing_mask = np.asarray(backing_mask, dtype=bool)
+        except (TypeError, ValueError):
+            backing_mask = None
+    if backing_mask is not None and backing_mask.shape != mask_solid.shape:
+        _log.warning(
+            "Backing mask shape mismatch; falling back to mask_solid",
+            extra={
+                "event": "segmented_glb_backing_mask_mismatch",
+                "backing_mask_shape": list(backing_mask.shape),
+                "mask_solid_shape": list(mask_solid.shape),
+            },
+        )
+        backing_mask = None
 
     # Honour per-session override before the merge step. Anything below
     # the function default is ignored — we never want to merge MORE than
@@ -923,6 +943,12 @@ def generate_segmented_glb(
                 (new_w, new_h),
                 interpolation=cv2.INTER_NEAREST,
             ).astype(bool)
+            if backing_mask is not None:
+                backing_mask = cv2.resize(
+                    backing_mask.astype(np.uint8),
+                    (new_w, new_h),
+                    interpolation=cv2.INTER_NEAREST,
+                ).astype(bool)
             height, width = new_h, new_w
             shrink = 0.0
         else:
@@ -1067,8 +1093,9 @@ def generate_segmented_glb(
 
         # 4.5 Build backing plate mesh (contour extrusion)
         _t = time.perf_counter()
+        backing_source_mask = backing_mask if backing_mask is not None else mask_solid
         backing_mesh = _build_backing_plate_mesh(
-            mask_solid=mask_solid,
+            mask_solid=backing_source_mask,
             height=height,
             pixel_scale=pixel_scale,
             rgba=np.array([245, 245, 245, 255], dtype=np.uint8),

@@ -583,6 +583,47 @@ class TestVectorBackingColorIdRegression:
         assert list(board.visual.face_colors[0]) == [255, 255, 255, 255]
 
 
+class TestVectorPreviewBackingMaskRegression:
+    """Preview cache must preserve the backing footprint used by build_mesh."""
+
+    def test_preview_cache_backing_mask_extends_past_visible_shapes(self):
+        visible_shape = box(4, 4, 16, 16)
+        full_backing = box(0, 0, 20, 20)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": visible_shape, "color": (255, 0, 0), "draw_order": 0}
+            ],
+            matched_shapes=[
+                {
+                    "geometry": visible_shape,
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (255, 0, 0),
+                    "matched_rgb": (255, 0, 0),
+                }
+            ],
+            silhouette=visible_shape,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Red"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [255, 0, 0, 255],
+            },
+            stage_timings={},
+            image_vectorizer_bounds=full_backing,
+        )
+
+        cache = VectorProcessor.build_preview_cache(analysis, pixels_per_mm=10.0)
+
+        assert "backing_mask" in cache
+        assert cache["backing_mask"].shape == cache["mask_solid"].shape
+        assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
+
+
 class TestVectorCoatingBuildMeshRegression:
 
     def test_build_mesh_adds_coating_when_enabled(self):
