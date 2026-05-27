@@ -16,6 +16,79 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-28",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "ColorChecker 色卡校色现在直接在提取器和梯度卡页面里完成，不再跳到独立工具，确认后会自动衔接到提取或梯度卡拟合。",
+            en: "ColorChecker calibration now runs inside the Extractor and Gradient Card pages instead of opening a separate tool, and feeds straight into extraction or gradient-card fitting once you confirm it.",
+          },
+          {
+            zh: "ColorChecker 校色支持导入自定义参考表（xlsx）：可以用自己量出来的色卡数据替换默认基准，列表会保存在浏览器里下次直接选用。",
+            en: "ColorChecker calibration now imports custom reference tables (xlsx). Your own measured patches can replace the default reference, and the list is remembered locally for next time.",
+          },
+          {
+            zh: "导出的分享卡 PNG 底部新增官网二维码和「可直接导入 Lumina 2.0 重新生成」字样，方便发给别人时对方能直接扫码入门或重做。",
+            en: "Exported share-card PNGs now include a wiki QR code and a caption telling viewers they can import the image back into Lumina 2.0 to recreate the result.",
+          },
+          {
+            zh: "新增「必趣 PLA」六种颜色（白、红、绿、蓝、黄、黑）的梯度卡材料档案，可以直接在材料库里选用。",
+            en: "Added BIQU PLA gradient-card profiles for six colours (white, red, green, blue, yellow, black), available directly from the material library.",
+          },
+          {
+            zh: "颜色工作站对 10 色 5 层以内的调色板改为精确穷举匹配，并且会让相近颜色之间保持原图的明暗顺序，过渡不会被打乱。",
+            en: "The Color Workstation now does an exhaustive match for palettes up to 10 colours and 5 layers, and keeps neighbouring colours in their original light-to-dark order so gradients stay smooth.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式的第一次预览现在就能看到完整底板，不会出现「预览没底板、生成后才有」的情况。",
+            en: "The first SVG vector preview now shows the full backing plate, so you no longer see \"no backing in preview, backing appears after generation.\"",
+          },
+          {
+            zh: "在矢量化页面把 SVG 发到转换器时，不再弹出裁剪窗口，直接进入颜色匹配流程。",
+            en: "Sending an SVG from the Vectoriser to the Converter no longer pops up the crop dialog; the artwork goes straight to colour matching.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "矢量生成完成后，3D 预览继续显示像素级的混色效果，不再切换成只有几个纯色块的版本。",
+            en: "After vector generation, the 3D preview keeps the pixel-level colour-mixed view instead of switching to a flat per-material block view.",
+          },
+          {
+            zh: "用 SVG 生成的 3MF 在 Windows 资源管理器和切片软件里的封面缩略图终于会显示真实图案，不再是一张白图。",
+            en: "3MFs generated from SVGs now show the real artwork in the cover thumbnail used by Windows Explorer and slicer project lists, instead of a blank white image.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "用耗材档案做大画幅生成时偶尔报错的问题修好了；同时 bug 反馈里收集的最终产物会按真正的下载文件分类，不会再把大画幅 ZIP 误标。",
+            en: "Fixed an occasional failure when running large-format generation under the material archive workflow. Bug-report attachments now classify the final artifact by the real download, so large-format ZIPs are no longer mislabeled.",
+          },
+          {
+            zh: "macOS 上检测已安装的切片软件时，碰到某个应用包内信息文件损坏不会再让整次检测失败，会跳过坏的应用继续找其他切片软件。",
+            en: "On macOS, scanning for installed slicers no longer aborts when one app bundle has a corrupted info file; the broken bundle is skipped and the rest of the scan continues.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-21",
     title: {
       zh: "Lumina Layers — 近期更新速览",
