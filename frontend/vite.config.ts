@@ -12,6 +12,14 @@ export default defineConfig({
     __LUMINA_VERSION__: JSON.stringify(pkg.version),
   },
   plugins: [react()],
+  // Pre-bundle CommonJS deps imported on demand. Without this, the first
+  // dynamic import of `qrcode` during share-card export would trigger a
+  // dep re-optimization mid-session and Vite reloads the whole page.
+  // 预打包按需导入的 CommonJS 依赖；否则导出分享卡时首次动态加载 qrcode
+  // 会触发 Vite 依赖重优化，导致开发服务器整页刷新。
+  optimizeDeps: {
+    include: ["qrcode"],
+  },
   server: {
     ...resolveDevServerConfig(process.env),
     allowedHosts: ["online.luminastudio.com.cn"],

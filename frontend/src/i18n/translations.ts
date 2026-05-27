@@ -5347,6 +5347,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== Recipe Share Card ====================
+  share_card_footer_caption: {
+    zh: "Lumina 2.0 可直接导入本图片生成",
+    en: "Import this image directly into Lumina 2.0 to recreate",
+  },
   recipe_export_btn: {
     zh: "导出分享卡",
     en: "Export Share Card",

@@ -149,9 +149,9 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 ## Branch Naming & Lifecycle
 
-- Default in-flight branch format is `<owner>/<type>/<topic>`, where `type` is `feat`, `fix`, or `chore`; for this workspace, use owner `shmx` unless the user requests another owner
+- Default in-flight branch format is `<owner>/<type>/<topic>`, where `type` is `feat`, `fix`, or `chore`; Use the username specified in the context rather than silently using the username mentioned here; if no default username is stored in the context, the user must be prompted.
 - Use `feat` for user-visible features, `fix` for bugs or regressions, and `chore` for documentation, tests, maintenance, or infrastructure work with no intended product behavior change
-- Examples: `shmx/feat/colorchecker-image-calibration`, `shmx/fix/material-archive-vector-preview`, `shmx/chore/agents-guidelines-cleanup`
+- Examples: `shmx/feat/colorchecker-image-calibration`, `Cat-by-Cat/fix/material-archive-vector-preview`, `MOVIBALE/chore/agents-guidelines-cleanup`
 - Topic segment: kebab-case, name the intent rather than the touched files; avoid file extensions in branch names (no `-md`, `-tsx`, `-py`, etc.)
 - Long-lived branches (`dev-refactor`, `main`) are protected; see Git Push Safety before publishing changes
 - Once a topic branch has been merged into a long-lived branch (e.g., its tip becomes a `Merge pull request #N from .../<branch>` commit on `dev-refactor`), treat it as **retired**: do not stack new commits on it. Cut a fresh `<owner>/<type>/<topic>` branch from the current `origin/dev-refactor` for follow-up work, even if it would feel like "the same line of work"
