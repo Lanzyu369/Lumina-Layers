@@ -16,6 +16,13 @@ import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
+import {
+  MIN_COVER_WIDTH,
+  computeFooterLayout,
+  drawShareCardFooter,
+  getFooterCaption,
+  makeCanvasMeasurer,
+} from "./shareCardFooter";
 
 // ========== Hex normalization ==========
 
@@ -281,50 +288,100 @@ export async function buildRecipeAssets(
 }
 
 /**
- * Create a cover image by rendering the preview URL to a resized canvas PNG.
- * 通过将预览 URL 渲染到缩放画布上来创建封面图。
+ * Create a cover image by rendering the preview URL onto a canvas and
+ * appending a Lumina share-card footer (QR code + localized caption).
+ * 通过将预览 URL 渲染到画布并在底部追加分享卡尾标（二维码 + 多语言文字）来创建封面图。
+ *
+ * The footer points to the Lumina wiki and tells viewers that this PNG can be
+ * imported back into Lumina 2.0 directly.
  *
  * @param previewUrl - URL of the current 2D preview image.
  * @param maxWidth - Maximum width for the cover thumbnail (default: 800).
- * @returns Cover PNG blob and metadata.
+ * @returns Cover PNG blob and metadata. `width`/`height` describe the final
+ *   composed image including the footer.
  */
 export async function buildCoverImage(
   previewUrl: string,
   maxWidth: number = 800,
 ): Promise<{ blob: Blob; cover: RecipeCover }> {
+  const img = await loadImage(previewUrl);
+
+  // 1) Scale the preview to fit `maxWidth` while preserving aspect ratio.
+  const scale = Math.min(1, maxWidth / img.naturalWidth);
+  const previewW = Math.max(1, Math.round(img.naturalWidth * scale));
+  const previewH = Math.max(1, Math.round(img.naturalHeight * scale));
+
+  // 2) The cover canvas must be wide enough to host the QR + caption. If the
+  //    preview is narrower, pad horizontally so the footer never gets clipped.
+  //    封面画布最小宽度受页脚约束；预览较窄时左右补白，避免 QR/文字被裁。
+  const coverW = Math.max(previewW, MIN_COVER_WIDTH);
+
+  // 3) Compute footer layout (QR size, font, wrapped lines) for the canvas
+  //    width using a real canvas measurer so caption shrink/wrap is accurate.
+  const measureCanvas = document.createElement("canvas");
+  const measureCtx = measureCanvas.getContext("2d");
+  if (!measureCtx) {
+    throw new Error("Failed to create measurement canvas context");
+  }
+  const layout = computeFooterLayout(
+    coverW,
+    getFooterCaption(),
+    makeCanvasMeasurer(measureCtx),
+  );
+
+  const totalH = previewH + layout.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = coverW;
+  canvas.height = totalH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Failed to create canvas context");
+  }
+
+  // 4) Fill any horizontal padding white so the cover has no transparent gap
+  //    around the preview when coverW > previewW.
+  if (coverW > previewW) {
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, coverW, previewH);
+  }
+
+  // 5) Draw the preview centered horizontally in the top region.
+  const previewX = Math.round((coverW - previewW) / 2);
+  ctx.drawImage(img, previewX, 0, previewW, previewH);
+
+  // 6) Footer below the preview.
+  await drawShareCardFooter(ctx, coverW, previewH, layout);
+
+  const blob = await canvasToPngBlob(canvas);
+  return {
+    blob,
+    cover: { width: coverW, height: totalH, mime_type: "image/png" },
+  };
+}
+
+/** Load an image element from a URL, resolving once decoded. */
+function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => {
-      const scale = Math.min(1, maxWidth / img.naturalWidth);
-      const w = Math.round(img.naturalWidth * scale);
-      const h = Math.round(img.naturalHeight * scale);
-
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Failed to create canvas context"));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, w, h);
-
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("Failed to create cover PNG blob"));
-            return;
-          }
-          resolve({
-            blob,
-            cover: { width: w, height: h, mime_type: "image/png" },
-          });
-        },
-        "image/png",
-      );
-    };
+    img.onload = () => resolve(img);
     img.onerror = () => reject(new Error("Failed to load preview image for cover"));
-    img.src = previewUrl;
+    img.src = url;
+  });
+}
+
+/** Convert a canvas into a PNG blob, rejecting on encoder failure. */
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Failed to create cover PNG blob"));
+          return;
+        }
+        resolve(blob);
+      },
+      "image/png",
+    );
   });
 }

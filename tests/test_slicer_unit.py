@@ -185,6 +185,43 @@ class TestMacOSAppScanning:
 
         assert validate_custom_slicer_path(str(app_path)) is None
 
+    @patch("core.slicer.platform.system", return_value="Darwin")
+    def test_scan_macos_app_bundles_skips_malformed_info_plist(self, _mock_sys, tmp_path):
+        """A bundle with corrupt Info.plist must not abort the entire scan.
+
+        某些 .app 的 Info.plist 损坏会触发 plistlib 未声明的异常（如 ExpatError），
+        必须被吞掉以保证 /api/slicer/detect 不被一个坏 bundle 拖垮。
+        """
+        # Bad bundle: Info.plist contains malformed XML that triggers
+        # xml.parsers.expat.ExpatError, which is *not* in plistlib's
+        # declared exception set.
+        bad_app = tmp_path / "Broken.app"
+        (bad_app / "Contents").mkdir(parents=True)
+        (bad_app / "Contents" / "Info.plist").write_bytes(
+            b'<?xml version="1.0" encoding="UTF-8"?>\n'
+            b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+            b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            b'<plist version="1.0">\n<dict>\n<key>BadKey</key>\n'
+            b'<string>this < is not & valid xml</string>\n'
+            b'</dict>\n</plist>\n'
+        )
+
+        # Good bundle alongside the bad one: detection must still find it.
+        _make_macos_app(
+            tmp_path,
+            "OrcaSlicer.app",
+            {
+                "CFBundleName": "OrcaSlicer",
+                "CFBundleIdentifier": "io.github.softfever.OrcaSlicer",
+            },
+        )
+
+        # Must not raise; the bad bundle is silently skipped.
+        result = scan_macos_app_bundles(
+            search_roots=[tmp_path], include_spotlight=False
+        )
+        assert [s.id for s in result] == ["orca_slicer"]
+
 
 # =========================================================================
 # 2. detect_installed_slicers — mock data (Requirement 1.3, 1.5)

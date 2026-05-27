@@ -303,6 +303,24 @@ def _read_macos_app_info(app_path: Path) -> dict | None:
             info = plistlib.load(handle)
     except (OSError, plistlib.InvalidFileException, ValueError):
         return None
+    except Exception as exc:  # noqa: BLE001 - third-party app bundles ship malformed plists
+        # Some apps (e.g. broken installs, corrupt updates) leave an
+        # Info.plist that fails XML/binary parsing with implementation-specific
+        # errors such as ``xml.parsers.expat.ExpatError`` which is not in the
+        # plistlib-declared exception set. Skip the bundle instead of letting
+        # one bad plist take down the entire slicer-detection endpoint.
+        # 某些应用包的 Info.plist 损坏，会抛出 plistlib 未声明的异常（如 ExpatError）；
+        # 这里跳过该 bundle，避免单个坏文件拖垮整个 slicer 检测接口。
+        logger.warning(
+            "Failed to parse macOS app Info.plist, skipping bundle",
+            extra={
+                "event": "slicer_macos_plist_parse_failed",
+                "app_path": str(app_path),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
     return info if isinstance(info, dict) else None
 
 
