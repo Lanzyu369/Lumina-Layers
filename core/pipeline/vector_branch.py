@@ -179,6 +179,48 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
     }
 
 
+def _make_vector_glb_preview_scene(scene, *, structure_mode: object, color_mode: object):
+    """Return a display-oriented copy of a vector scene for GLB previews.
+
+    Single-sided 4-color vector exports place the backing above the color
+    layers for print assembly. The app preview is a display surface, so it
+    mirrors only the GLB source scene and keeps the 3MF/export scene unchanged.
+
+    单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
+    展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
+    """
+
+    structure_value = str(structure_mode or "")
+    color_mode_value = str(color_mode or "")
+    is_single_sided = "单面" in structure_value or "Single" in structure_value
+    if not is_single_sided or "5-Color Extended" in color_mode_value:
+        return scene
+
+    try:
+        bounds = scene.bounds
+        z_min = float(bounds[0][2])
+        z_max = float(bounds[1][2])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return scene
+    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
+        return scene
+
+    import trimesh as _trimesh
+
+    preview_scene = _trimesh.Scene()
+    mirror_z = np.eye(4)
+    mirror_z[2, 2] = -1.0
+    mirror_z[2, 3] = z_min + z_max
+    for geom_name, source_geom in scene.geometry.items():
+        try:
+            geom = source_geom.copy()
+            geom.apply_transform(mirror_z)
+        except COORDINATOR_HANDLED_ERRORS:
+            geom = source_geom
+        preview_scene.add_geometry(geom, geom_name=geom_name)
+    return preview_scene
+
+
 def _per_layer_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
     """Return per-layer per-channel pixel histograms over ``material_matrix``.
 
@@ -1369,6 +1411,11 @@ def _run_vector_branch(ctx: dict) -> dict:
 
             glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
             glb_scene = _trimesh.Scene()
+            glb_source_scene = _make_vector_glb_preview_scene(
+                scene,
+                structure_mode=structure_mode,
+                color_mode=vec_color_mode,
+            )
 
             def _coerce_preview_rgba(value: object) -> np.ndarray | None:
                 """Return a safe uint8 RGBA preview color, or ``None``.
@@ -1421,7 +1468,7 @@ def _run_vector_branch(ctx: dict) -> dict:
 
                 return np.array([200, 200, 200, 255], dtype=np.uint8)
 
-            for geom_name, source_geom in scene.geometry.items():
+            for geom_name, source_geom in glb_source_scene.geometry.items():
                 vertices = getattr(source_geom, "vertices", None)
                 faces = getattr(source_geom, "faces", None)
                 if vertices is None or faces is None:
