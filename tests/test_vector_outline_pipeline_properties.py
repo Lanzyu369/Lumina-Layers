@@ -1,4 +1,7 @@
-"""Spec: svg-vector-outline-support / Tasks 1.3 + 1.4
+"""SVG vector outline support / Tasks 1.3 + 1.4
+
+Archived context: ``progress/svg-vector-outline-counterexamples.md`` and
+``progress/svg-vector-outline-fix-verification.md``.
 
 Property 1 (Bug Condition): vector / SVG 模式下 enable_outline=true 必须真实
 生成 ``Outline`` 几何，且 preview 与 generate 在 "outline 是否存在" 这一二元
@@ -1053,7 +1056,8 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
 # P1 预览渲染范围声明的负向回归守卫。
 # ---------------------------------------------------------------------------
 #
-# Per design.md OQ-5 follow-up (and review feedback from 2026-05-29):
+# Per the SVG vector outline acceptance-notes OQ-5 follow-up
+# (and review feedback from 2026-05-29):
 # this spec exposes the outline mesh in the preview cache as metadata only.
 # The user-visible 2D preview (cache["preview_rgba"] / cache["matched_rgb"])
 # and the user-visible 3D preview built by ``generate_segmented_glb`` do not
@@ -1073,7 +1077,8 @@ def test_preview_cache_exposes_outline_geometry_metadata_only() -> None:
     ``cache["outline_added"]`` when ``enable_outline=True``, but the user-
     visible 2D / 3D preview rendering does not yet consume these keys.
 
-    See ``.kiro/specs/svg-vector-outline-support/design.md`` OQ-5 follow-up.
+    See ``progress/svg-vector-outline-acceptance-checkpoint.md`` OQ-5
+    follow-up.
     """
     import tempfile
 
@@ -1091,7 +1096,7 @@ def test_preview_cache_exposes_outline_geometry_metadata_only() -> None:
 
         # Metadata exists in ctx + cache (this is what Task 3.3 wires up).
         # The actual user-visible 2D / 3D preview pixel rendering is
-        # explicitly out of scope per design.md OQ-5 follow-up; this test
+        # explicitly out of scope per the OQ-5 follow-up notes; this test
         # pins the current shape so a future renderer can flip it from
         # "metadata-only" to "actually rendered" without re-deriving.
         # 元数据存在：Task 3.3 在 ctx 与 cache 都写过。用户可见的 2D / 3D
@@ -1100,5 +1105,6 @@ def test_preview_cache_exposes_outline_geometry_metadata_only() -> None:
         assert prev_present is True, (
             "preview branch must expose outline metadata in ctx/cache when "
             "enable_outline=True (outline_added / outline_geometry truthy); "
-            "see design.md OQ-5 follow-up for actual pixel rendering"
+            "see progress/svg-vector-outline-acceptance-checkpoint.md "
+            "OQ-5 follow-up for actual pixel rendering"
         )

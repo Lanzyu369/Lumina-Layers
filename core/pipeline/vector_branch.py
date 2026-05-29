@@ -350,7 +350,7 @@ def _resolve_vector_line_width_mm(nozzle_size: object) -> str:
 
 
 # ===================================================================
-# Vector outline mesh generation (Spec: svg-vector-outline-support / 3.3)
+# Vector outline mesh generation (see progress/svg-vector-outline-fix-verification.md)
 # 矢量分支描边 mesh 生成 —— 工单 LUM-20260527-001 的核心修复点。
 # ===================================================================
 
@@ -1251,9 +1251,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
 
         # Inject outline geometry into the preview cache as metadata only.
         # User-visible 2D / GLB preview rendering consumes this in the
-        # follow-up scope tracked by design.md OQ-6.
+        # follow-up scope tracked by the SVG vector outline acceptance notes.
         # preview 分支只暴露 outline 元数据；用户可见的 2D / GLB 像素渲染
-        # 归 design.md OQ-6 的 follow-up 处理。
+        # 归 SVG vector outline 验收归档里的 OQ-6 follow-up 处理。
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
@@ -1741,7 +1741,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 },
             )
 
-        # 1.6 Inject vector Outline mesh (Spec: svg-vector-outline-support / 3.3)
+        # 1.6 Inject vector Outline mesh.
         # 在 export 之前注入 Outline 节点，几何来源 analysis.matched_shapes union；
         # D5/D6 命中（matched_shapes 空 / ring 空）时 helper 已发 WARNING，
         # 调用方把 ctx['enable_outline'] 强制规整为 false 防止下游误用。

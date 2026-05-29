@@ -2,7 +2,8 @@
  * Recipe round-trip preservation property test for the vector + outline=false branch.
  * Vector + 关闭描边 路径下的配方往返保留属性测试。
  *
- * Spec: .kiro/specs/svg-vector-outline-support/
+ * Spec: SVG vector outline support preservation notes
+ * (`progress/svg-vector-outline-preservation-baseline.md`).
  * Task 2.4 — Frontend store 持久化 + recipe round-trip preservation.
  *
  * Property 2 (Preservation, Requirements 3.2): for any input where the bug

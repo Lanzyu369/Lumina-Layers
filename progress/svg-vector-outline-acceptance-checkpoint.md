@@ -1,13 +1,13 @@
 # SVG / Vector Outline Support — Task 4 Acceptance Checkpoint
 
-Spec: `.kiro/specs/svg-vector-outline-support/`
+Scope: SVG vector outline support acceptance checkpoint
 HEAD at run time: `59f0c57` (`dev-refactor`)
 Run timestamp (local): 2026-05-28 09:02 ~ 09:03 (UTC+8)
 
 ## Scope
 
 This file is the archival record for **Task 4 — Acceptance script & governance
-gates (Checkpoint)** of the `svg-vector-outline-support` spec. The task lists
+gates (Checkpoint)** of the SVG vector outline support work. The task lists
 8 ordered commands; steps 1–6 are automated and were executed in order, steps
 7–8 are manual sampling steps that must be performed by the user before merge.
 
@@ -21,7 +21,7 @@ Per user direction, the fix is judged on these 5 criteria only:
    `enable_outline=true`; preview branch exposes `outline_geometry`
    metadata in cache. **Pixel-level rendering of the ring in the 2D
    preview / segmented GLB is explicitly out of scope** for this
-   spec (design.md OQ-6 follow-up).
+   spec (OQ-6 follow-up).
 3. raster / high-fidelity outline behavior is unchanged.
 4. bug report captures `enable_outline=true` and `outline_width`.
 5. targeted tests (Task 1 exploration + Task 2 preservation) PASS.
@@ -38,14 +38,14 @@ ultimately exits non-zero in this environment because the canonical full
 workflow now emits +5 INFO lines vs the `progress/log_audit_full_reviewer.json`
 baseline, blowing the `info_lines_within_budget` (33 > 30) and
 `info_per_endpoint_within_budget` (9 > 8) governance budgets. The five extra
-events are all outside the `svg-vector-outline-support` scope, and none of
+events are all outside the SVG vector outline support scope, and none of
 this spec's new events (`vector_outline_init` / `vector_outline_done` /
 `vector_outline_rejected_unsupported`) appear in the canonical workflow log.
 
 This step-6 failure is a **pre-existing, unrelated log-quality budget
 regression**. It is tracked separately in
-`.kiro/specs/log-governance-info-budget-regression/` and **must not block
-the judgement of whether the SVG outline fix itself works**. The 5 narrow
+the log governance info-budget regression follow-up and **must not block the
+judgement of whether the SVG outline fix itself works**. The 5 narrow
 success criteria above are the source of truth for this spec's correctness.
 
 ## Per-step results
@@ -136,7 +136,7 @@ success criteria above are the source of truth for this spec's correctness.
     - `extractor_extract_single_stage_done` (×1) — emitted by the
       extractor router.
   - **None of these 5 events were introduced or modified by the
-    `svg-vector-outline-support` spec.** This spec adds three new
+    SVG vector outline support work.** This scope adds three new
     structured events: `vector_outline_init`, `vector_outline_done`,
     `vector_outline_rejected_unsupported`. None appear in the captured
     full-mode log because the canonical workflow does not enable
@@ -241,11 +241,11 @@ solid fill rather than a ring. Either condition reopens Task 3.3.
 Failure mode to watch for: `enable_outline=false` or `outline` block missing
 in the manifest. Either condition reopens Task 3.4.
 
-## Open Questions — final decisions (mirror from `design.md`)
+## Open Questions — final decisions
 
-These mirror the resolved Open Questions section at the bottom of
-`.kiro/specs/svg-vector-outline-support/design.md`. They should be quoted
-verbatim in the PR description so reviewers can sign off in one place.
+These decisions are recorded here so the PR remains self-contained. They
+should be quoted verbatim in the PR description so reviewers can sign off in
+one place.
 
 - **OQ-1 vector default `enable_outline`**: stays **`false`**. The fix only
   removes the `disabled={isVector}` lock on the UI; default checked state is
@@ -293,10 +293,9 @@ verbatim in the PR description so reviewers can sign off in one place.
     `vector_outline_done`, `vector_outline_rejected_unsupported`) do
     not appear in the canonical full workflow log because outline is
     not enabled on the canonical vector input.
-  - Tracked separately in
-    `.kiro/specs/log-governance-info-budget-regression/`. **Does not
-    block judging whether the SVG outline fix itself works** — the 5
-    narrow success criteria above are the source of truth.
+  - Tracked separately as the log governance info-budget regression.
+    **Does not block judging whether the SVG outline fix itself works** —
+    the 5 narrow success criteria above are the source of truth.
   - No source change is being made in this spec for the log-quality gate.
 - Steps 7–8: **manual, user pre-merge responsibility**.
 
@@ -374,8 +373,8 @@ fix-and-document approach below.
     3MF". The previous wording "同时出现在预览和导出的 3MF" /
     "shows up in both the preview and the exported 3MF" was
     over-promising.
-  - `.kiro/specs/svg-vector-outline-support/design.md` — added OQ-6
-    declaring preview pixel rendering is a follow-up
+  - This acceptance checkpoint now records OQ-6 declaring preview pixel
+    rendering is a follow-up
     (`vector-outline-preview-rendering` recommended scope) and OQ-7
     pinning the project-palette / object-slot dual-track contract that
     the new tests guard.
@@ -400,9 +399,8 @@ fix-and-document approach below.
 | Fast log gate | `.venv/bin/python scripts/log_quality_check.py --mode fast` | RESULT: PASS |
 
 Step 6 (`--mode full`) status is unchanged from the original closure — it
-fails on the pre-existing log-budget regression tracked in
-`.kiro/specs/log-governance-info-budget-regression/` and is not affected
-by this round of fixes.
+fails on the pre-existing log-budget regression and is not affected by this
+round of fixes.
 
 ### Updated success-criteria status
 
@@ -420,7 +418,7 @@ by this round of fixes.
   `vec_slot_list` Outline append; added comment explaining the
   raster-mirroring contract.
 - `frontend/src/data/announcements.ts` — soften copy.
-- `.kiro/specs/svg-vector-outline-support/design.md` — added OQ-6 + OQ-7.
+- `progress/svg-vector-outline-acceptance-checkpoint.md` — records OQ-6 + OQ-7.
 - `tests/test_vector_outline_pipeline_properties.py` — added 3
   regression guards (P2 positive + P2 sibling preservation + P1
   metadata negative anchor).

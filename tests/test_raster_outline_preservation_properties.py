@@ -1,4 +1,5 @@
-"""Spec: ``.kiro/specs/svg-vector-outline-support`` Task 2.1
+"""Spec: SVG vector outline support Task 2.1
+(``progress/svg-vector-outline-preservation-baseline.md``)
 
 Property 2 (Preservation) — Raster outline 字节级 / 结构级稳定。
 

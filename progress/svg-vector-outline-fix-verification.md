@@ -1,10 +1,9 @@
 # SVG / Vector 描边支持 — Task 3.6 修复验证归档
 
-> Spec: `.kiro/specs/svg-vector-outline-support/`
 > 工单: **LUM-20260527-001** ("svg 加不了描边")
 > Bugfix workflow Task 3.6（exploration 测试由 FAIL 转 PASS 验证）产出物
 > 关联文档:
-> - [`tasks.md`](../.kiro/specs/svg-vector-outline-support/tasks.md) §Tasks 3.1–3.6
+> - Task 3.1–3.6 修复验证范围
 > - 反例基线: [`svg-vector-outline-counterexamples.md`](./svg-vector-outline-counterexamples.md)
 > - Preservation 基线: [`svg-vector-outline-preservation-baseline.md`](./svg-vector-outline-preservation-baseline.md)
 > - 修复改动 (Task 3.1–3.5):

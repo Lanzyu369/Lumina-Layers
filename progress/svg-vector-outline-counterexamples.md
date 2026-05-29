@@ -1,11 +1,10 @@
 # SVG / Vector 描边支持 — Task 1 反例归档
 
-> Spec: `.kiro/specs/svg-vector-outline-support/`
 > 工单: **LUM-20260527-001** ("svg 加不了描边")
 > Bugfix workflow Task 1.6（汇总运行）产出物
-> 关联文档: [`design.md`](../.kiro/specs/svg-vector-outline-support/design.md) "Examples" 表 (E1–E5) ／
-> [`requirements.md`](../.kiro/specs/svg-vector-outline-support/requirements.md) Bug Analysis (1.x / 2.x) ／
-> [`tasks.md`](../.kiro/specs/svg-vector-outline-support/tasks.md) §Tasks 1.1–1.5
+> 归档范围: SVG vector outline support 的 Task 1.1–1.5 反例与 anchor。
+> 后续验证: [`svg-vector-outline-fix-verification.md`](./svg-vector-outline-fix-verification.md)
+> 和 [`svg-vector-outline-acceptance-checkpoint.md`](./svg-vector-outline-acceptance-checkpoint.md)
 
 ## 摘要 / Summary
 
@@ -165,7 +164,7 @@ test_vector_preview_generate_outline_parity:
 
 * 未修改任何业务源文件 (`frontend/src/components/**`, `frontend/src/stores/**`,
   `core/**`, `api/**`, `tests/test_*.py` 中本次 spec 范围外的测试)。
-* 未修改 `tasks.md`、`design.md`、`requirements.md`。
+* 未修改任务计划、设计说明或需求说明。
 * 仅写入 `progress/` 下三个文件：本归档 + 两个原始日志。
 * 文档为 UTF-8，无 mojibake；中文 + 英文术语并存，可读。
 

@@ -1,6 +1,6 @@
 # SVG / Vector 描边支持 — Task 3.7 修复后回归汇总
 
-- **Spec**: `.kiro/specs/svg-vector-outline-support/`
+- **Scope**: SVG vector outline support preservation regression after fix
 - **Task**: `3.7 Verify preservation tests still pass`（Wave 6，Task 3 验证子任务）
 - **目的**: bug-condition methodology 下，确认 Task 3.1–3.5 的修复落地后，
   Task 2 写下的所有非 bug-condition 输入的 preservation gate 仍然 PASS，即
@@ -20,7 +20,7 @@
 | 后端 | `.venv/bin/python -m pytest tests/test_raster_outline_preservation_properties.py tests/test_vector_branch_no_outline_preservation_properties.py tests/test_feedback_advanced_params_outline_preservation_properties.py tests/test_puzzle_boundary_pipeline_unit.py tests/test_pipeline_step_modules_unit.py -v --hypothesis-show-statistics` | `progress/svg-vector-outline-preservation-after-fix-backend.log` |
 | 前端 | `.venv/bin/python scripts/run_vitest.py run src/__tests__/recipe-roundtrip.property.test.ts src/__tests__/recipe-roundtrip-vector-outline-preservation.property.test.ts` | `progress/svg-vector-outline-preservation-after-fix-frontend.log` |
 
-> 前端命令对 `tasks.md` 第 2.5/3.7 节文本所做的两处必要调整（去掉 `--` 分隔符、
+> 前端命令对 Task 2.5/3.7 文本所做的两处必要调整（去掉 `--` 分隔符、
 > 追加 `recipe-roundtrip-vector-outline-preservation.property.test.ts`）保持
 > 与 Task 2.5 baseline 完全一致，便于直接对比。
 

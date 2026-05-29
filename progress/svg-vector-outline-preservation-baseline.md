@@ -1,6 +1,6 @@
 # SVG / Vector 描边支持 — Task 2.5 预防性基线汇总
 
-- **Spec**: `.kiro/specs/svg-vector-outline-support/`
+- **Scope**: SVG vector outline support preservation baseline
 - **Task**: `2.5 汇总运行`（Wave 3，Task 2 的尾节点）
 - **目的**: bug-condition methodology 下，在写修复代码（Task 3）之前固化非
   bug-condition 输入的现状，确认 spec 范围内不存在第三类 bug。
@@ -15,14 +15,14 @@
 | 后端 | `.venv/bin/python -m pytest tests/test_raster_outline_preservation_properties.py tests/test_vector_branch_no_outline_preservation_properties.py tests/test_feedback_advanced_params_outline_preservation_properties.py tests/test_puzzle_boundary_pipeline_unit.py tests/test_pipeline_step_modules_unit.py -v --hypothesis-show-statistics` | `progress/svg-vector-outline-preservation-backend.log` |
 | 前端 | `.venv/bin/python scripts/run_vitest.py run src/__tests__/recipe-roundtrip.property.test.ts src/__tests__/recipe-roundtrip-vector-outline-preservation.property.test.ts` | `progress/svg-vector-outline-preservation-frontend.log` |
 
-> 前端命令对 `tasks.md` 文本做了两处必要调整，并且与 Task 1.6 的处理方式一致：
+> 前端命令对原任务文本做了两处必要调整，并且与 Task 1.6 的处理方式一致：
 > 1. **去掉 `--` 分隔符**，否则 vitest 会忽略后续的文件路径并把它们留给被测进程，
 >    导致整套测试套件（含 Task 1 的探索性失败用例）被加载，破坏"基线 PASS"语义。
 > 2. **追加 `recipe-roundtrip-vector-outline-preservation.property.test.ts`**：
 >    Task 2.4 的产物，归属 preservation 闸门。
 >
 > 这两点在 task 描述与 orchestrator step plan 中已明确允许；最终运行命令保持了
-> `tasks.md` 第 2.5 节列出的全部目标文件，且仅追加。
+> Task 2.5 列出的全部目标文件，且仅追加。
 
 ## 任务 → 测试文件 → 结果映射
 

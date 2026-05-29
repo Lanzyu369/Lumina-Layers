@@ -4,7 +4,8 @@ bug-report path under the *non-bug-condition* domain.
 非 bug-condition 域下，``advanced_params.outline`` 走 bug-report 链路的
 保留属性测试。
 
-Spec: ``.kiro/specs/svg-vector-outline-support`` Task 2.3 — preservation.
+Spec: SVG vector outline support Task 2.3 — preservation
+(``progress/svg-vector-outline-preservation-baseline.md``).
 
 Domain
 ======

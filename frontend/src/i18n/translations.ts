@@ -3722,11 +3722,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "外描边线条的宽度（毫米）。值越大轮廓线越粗，值越小轮廓线越细。",
     en: "Width of the outline stroke (in mm). Larger values produce thicker lines, smaller values produce thinner lines.",
   },
-  // TODO(svg-vector-outline-support): canonical key names reserved by spec
+  // TODO(vector-outline): canonical key names reserved by the acceptance
   // design decision matrix rows D5 / D6. Copy is intentionally a concise
   // placeholder; refine in a follow-up spec when D5 / D6 detection is wired
   // and we have real product copy. See
-  // `.kiro/specs/svg-vector-outline-support/design.md` Open Question OQ-2.
+  // `progress/svg-vector-outline-acceptance-checkpoint.md` Open Question OQ-2.
   // 仅作占位文案；当 D5/D6 真正命中并需要正式提示时再单独立 spec 完善。
   outline_enable_unsupported_alpha_unavailable: {
     zh: "无法在透明通道不可用的素材上启用外轮廓",

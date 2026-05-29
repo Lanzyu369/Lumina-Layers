@@ -7,7 +7,7 @@ import Slider from "../ui/Slider";
 /**
  * Compute whether the "Enable Outline" checkbox should be disabled and, if
  * so, which i18n key explains why. Drives the decision matrix from
- * `.kiro/specs/svg-vector-outline-support/design.md`:
+ * `progress/svg-vector-outline-acceptance-checkpoint.md`:
  *
  *   - D1–D4 / D7 / D8 (default supported rows): return `null` → enabled.
  *   - D5 (subscription / 8-Color Max edge combo): return
