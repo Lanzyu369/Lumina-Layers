@@ -58,6 +58,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "在矢量化页面把 SVG 发到转换器时，不再弹出裁剪窗口，直接进入颜色匹配流程。",
             en: "Sending an SVG from the Vectoriser to the Converter no longer pops up the crop dialog; the artwork goes straight to colour matching.",
           },
+          {
+            zh: "SVG 矢量模式现在也能勾选「启用描边」了，设置的描边宽度会出现在导出的 3MF 里，和普通图片模式的描边一致。",
+            en: "SVG vector mode now lets you turn on outlines. The chosen outline width is written into the exported 3MF, matching how outlines already worked for regular images.",
+          },
         ],
       },
       {
