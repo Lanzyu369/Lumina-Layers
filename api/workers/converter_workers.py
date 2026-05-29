@@ -1276,6 +1276,38 @@ def worker_generate_model(
             "enable_cloisonne": normalized_params.get("enable_cloisonne"),
         },
     )
+    # Spec svg-vector-outline-support / Task 3.2: confirm vector + outline
+    # request payload is faithfully forwarded to ctx. DEBUG-only — does not
+    # consume the per-request INFO budget. Emitted only when the user
+    # actually asked for outline on a vector input, so the line stays cheap
+    # in the common case and observable when the bug-condition recurs.
+    # 规范 svg-vector-outline-support / Task 3.2：vector + outline 请求被
+    # 忠实写入 ctx 的可观测点；DEBUG 级，不占 INFO 预算，且只在用户真正
+    # 在 vector 模式下勾选 outline 时打印，避免无关请求噪音。
+    _modeling_mode_raw = normalized_params.get("modeling_mode")
+    _modeling_mode_value = (
+        _modeling_mode_raw.value
+        if hasattr(_modeling_mode_raw, "value")
+        else _modeling_mode_raw
+    )
+    if (
+        _modeling_mode_value == "vector"
+        and bool(normalized_params.get("enable_outline"))
+    ):
+        _outline_width_raw = normalized_params.get("outline_width")
+        try:
+            _outline_width_value: float | None = float(_outline_width_raw)
+        except (TypeError, ValueError):
+            _outline_width_value = None
+        log.debug(
+            "Vector outline normalized",
+            extra={
+                "event": "vector_outline_normalized",
+                "modeling_mode": "vector",
+                "enable_outline": True,
+                "outline_width": _outline_width_value,
+            },
+        )
     try:
         result_tuple = generate_final_model(
             image_path=image_path,

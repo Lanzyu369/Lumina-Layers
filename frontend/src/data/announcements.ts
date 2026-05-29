@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-29",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式现在也能勾选「启用描边」了，设置的描边宽度会写进导出的 3MF；大画幅模式仍按既有规则不支持描边。",
+            en: "SVG vector mode now lets you turn on outlines. The chosen outline width is written into exported 3MF files; large-format generation still follows the existing no-outline rule.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-28",
     title: {
       zh: "Lumina Layers — 近期更新速览",
