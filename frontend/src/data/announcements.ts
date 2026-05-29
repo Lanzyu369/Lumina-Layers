@@ -23,6 +23,19 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     },
     sections: [
       {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式现在也能勾选「启用描边」了，设置的描边宽度会写进导出的 3MF；大画幅模式仍按既有规则不支持描边。",
+            en: "SVG vector mode now lets you turn on outlines. The chosen outline width is written into exported 3MF files; large-format generation still follows the existing no-outline rule.",
+          },
+          {
+            zh: "单面 SVG 生成后的 3D 预览现在会朝向正面，不再先看到白色底板；导出的 3MF 仍保持原来的打印方向。",
+            en: "After generating a single-sided SVG, the 3D preview now opens on the front artwork instead of the white backing, while exported 3MF files keep their print orientation.",
+          },
+        ],
+      },
+      {
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
