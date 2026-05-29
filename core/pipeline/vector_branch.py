@@ -1308,7 +1308,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "rgba_shape": [int(s) for s in cover_rgba.shape],
                     },
                 )
-            except COORDINATOR_HANDLED_ERRORS as cover_exc:
+            except (*COORDINATOR_HANDLED_ERRORS, ImportError) as cover_exc:
                 log.warning(
                     "Vector cover thumbnail render failed; will fall back to "
                     "cover_source_path or image_path",

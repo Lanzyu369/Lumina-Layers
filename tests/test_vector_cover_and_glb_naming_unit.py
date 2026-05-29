@@ -298,6 +298,93 @@ class TestVectorCoverThumbnailFromGeometry:
         decoded = Image.open(BytesIO(cover_source)).convert("RGB")
         assert decoded.getpixel((0, 0)) == (240, 30, 50)
 
+    def test_vector_branch_cover_raster_failure_falls_back_to_source_path(self, tmp_path):
+        """Optional cover raster failure must not abort SVG 3MF generation."""
+        from config import ModelingMode
+        from core.pipeline import coordinator
+
+        captured: dict[str, object] = {}
+
+        class _FakeVectorProcessor:
+            parse_warnings: list[str] = []
+            last_stage_timings: dict[str, float] = {}
+
+            def __init__(self, _lut_path: str, color_mode: str, *, img_processor=None) -> None:
+                self.color_mode = color_mode
+                self.enable_fridge_magnet = False
+                self.fridge_magnets = []
+
+            def analyze_svg(self, *, svg_path: str, target_width_mm: float, color_replacements=None):
+                del svg_path, target_width_mm, color_replacements
+                return SimpleNamespace(
+                    matched_shapes=[],
+                    num_layers=5,
+                    num_channels=1,
+                    preview_colors={0: [10, 20, 30, 255]},
+                    slot_names=["Slot 1"],
+                )
+
+            def build_mesh(self, *, analysis, thickness_mm: float, structure_mode: str):
+                del analysis, thickness_mm, structure_mode
+                scene = trimesh.Scene()
+                scene.add_geometry(
+                    trimesh.creation.box(extents=(1, 1, 1)),
+                    geom_name="Slot 1",
+                )
+                return scene
+
+            @staticmethod
+            def render_preview(analysis, pixels_per_mm: float):
+                del analysis, pixels_per_mm
+                return np.zeros((8, 8, 4), dtype=np.uint8)
+
+        def _fake_export_scene_with_bambu_metadata(**kwargs):
+            captured.update(kwargs)
+            return kwargs["output_path"]
+
+        svg_path = tmp_path / "gradient.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+            '<rect width="10" height="10" fill="#f01e32"/></svg>',
+            encoding="utf-8",
+        )
+
+        with patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor), patch(
+            "core.pipeline.vector_branch.rasterize_svg",
+            side_effect=ImportError("missing resvg-py"),
+        ), patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_fake_export_scene_with_bambu_metadata,
+        ), patch("core.naming.generate_model_filename", lambda *_args: "vector-out.3mf"), patch(
+            "core.naming.generate_preview_filename",
+            lambda *_args: "vector-preview.glb",
+        ), patch("config.MODELS_DIR", str(tmp_path)), patch(
+            "config.OUTPUT_DIR",
+            str(tmp_path),
+        ), patch("utils.Stats.increment", lambda *_args, **_kwargs: None), patch.object(
+            coordinator,
+            "_report_progress",
+            lambda *_args, **_kwargs: None,
+        ):
+            result = coordinator._run_vector_branch(
+                {
+                    "image_path": str(svg_path),
+                    "actual_lut_path": str(tmp_path / "fake.json"),
+                    "color_mode": "4-Color",
+                    "modeling_mode": ModelingMode.VECTOR,
+                    "target_width_mm": 40.0,
+                    "spacer_thick": 1.6,
+                    "structure_mode": "Single-sided",
+                    "need_2d_preview": False,
+                    "printer_id": "bambu-h2d",
+                    "slicer": "BambuStudio",
+                    "nozzle_size": "0.4",
+                }
+            )
+
+        assert "error" not in result
+        assert captured["cover_source"] == str(svg_path)
+
 
 # ---------------------------------------------------------------------------
 # Test 2: GLB mesh naming uses color_RRGGBB convention
