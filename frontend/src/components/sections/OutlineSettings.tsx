@@ -1,6 +1,5 @@
 import { useConverterStore } from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
-import { ModelingMode } from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
 
@@ -26,7 +25,7 @@ import Slider from "../ui/Slider";
  *   - D1–D4/D7/D8 默认支持，返回 null（不禁用）。
  *   - D5/D6 命中时返回对应 i18n key（当前没有判定信号，恒为 null）。
  */
-function computeOutlineDisabledReason(_isVector: boolean): string | null {
+function computeOutlineDisabledReason(): string | null {
   // No D5 / D6 detection signals available today; default to enabled for
   // all currently supported decision-matrix rows.
   // 目前没有 D5/D6 判定信号，所有支持的决策矩阵行都返回 null。
@@ -37,12 +36,10 @@ export default function OutlineSettings() {
   const { t } = useI18n();
   const enable_outline = useConverterStore((s) => s.enable_outline);
   const outline_width = useConverterStore((s) => s.outline_width);
-  const modeling_mode = useConverterStore((s) => s.modeling_mode);
   const setEnableOutline = useConverterStore((s) => s.setEnableOutline);
   const setOutlineWidth = useConverterStore((s) => s.setOutlineWidth);
 
-  const isVector = modeling_mode === ModelingMode.VECTOR;
-  const outlineDisabledReason = computeOutlineDisabledReason(isVector);
+  const outlineDisabledReason = computeOutlineDisabledReason();
   const isOutlineDisabled = outlineDisabledReason !== null;
 
   return (

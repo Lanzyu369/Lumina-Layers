@@ -2488,7 +2488,7 @@ class VectorProcessor:
                 slot_idx,
                 preview_colors.get(slot_names[slot_idx] if slot_idx < len(slot_names) else 0, [128, 128, 128, 255]),
             )
-            bgr_color = (int(rgba[2]), int(rgba[1]), int(rgba[0]))
+            rgb_color = (int(rgba[0]), int(rgba[1]), int(rgba[2]))
 
             polys = []
             if geom.geom_type == "Polygon":
@@ -2508,7 +2508,7 @@ class VectorProcessor:
                         ext_coords[:, 1] * coord_scale,
                     ]
                 ).astype(np.int32)
-                cv2.fillPoly(canvas, [pts], (*bgr_color, int(rgba[3])))
+                cv2.fillPoly(canvas, [pts], (*rgb_color, int(rgba[3])))
 
                 for interior in poly.interiors:
                     hole_coords = np.array(interior.coords)

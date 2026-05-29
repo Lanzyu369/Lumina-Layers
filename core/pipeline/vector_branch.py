@@ -39,6 +39,7 @@ from config import BedManager, PrinterConfig, normalize_nozzle_size
 from core.pipeline import p06_bed_rendering, s09_export_3mf
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
@@ -1925,20 +1926,23 @@ def _run_vector_branch(ctx: dict) -> dict:
             s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
 
         # ------------------------------------------------------------------
-        # Vector cover thumbnail: render a lightweight 2D RGBA preview from
-        # the analyzed geometry and PNG-encode it in-memory so the 3MF
-        # cover thumbnail never points at the raw .svg file (PIL cannot
-        # decode SVG → letterbox would fall back to a blank placeholder,
-        # which is the bug we are fixing).
-        # 矢量分支封面：从已分析的矢量几何渲染一份轻量 2D RGBA 预览并在
-        # 内存里 PNG 编码，避免 cover_source 直接指向 .svg（PIL 无法解码 SVG，
-        # 走占位回退会导致系统文件管理器看到纯白缩略图，正是本次修复的
-        # bug）。失败时静默回退到原有 cover_source_path / image_path 链路，
-        # 保持现有契约与测试不变。
+        # Vector cover thumbnail: rasterize the source SVG itself and
+        # PNG-encode it in-memory. File managers and slicers should show
+        # the original artwork appearance, not the material-layer preview.
+        # The encoded PNG still avoids forwarding the raw .svg path because
+        # Pillow cannot decode SVG in CoverThumbnailBuilder.
+        # 矢量分支封面：直接光栅化源 SVG 并写成内存 PNG。文件管理器和切片
+        # 软件里的封面应展示原图外观，而不是匹配后的耗材分层预览。仍然不把
+        # raw .svg 传给 CoverThumbnailBuilder，因为 Pillow 不能解码 SVG。
         if not ctx.get("svg_raster_preview_bytes"):
             cover_render_t0 = time.perf_counter()
             try:
-                cover_rgba = VectorProcessor.render_preview(analysis, pixels_per_mm=10.0)
+                cover_rgba = rasterize_svg(
+                    image_path,
+                    target_width_mm,
+                    pixels_per_mm=2.0,
+                    crop_to_content=False,
+                )
                 from io import BytesIO as _CoverBytesIO
                 from PIL import Image as _CoverImage
 
@@ -1947,7 +1951,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 cover_pil.save(cover_buffer, format="PNG", optimize=False)
                 ctx["svg_raster_preview_bytes"] = cover_buffer.getvalue()
                 log.debug(
-                    "Vector cover thumbnail rendered from analyzed geometry",
+                    "Vector cover thumbnail rendered from source SVG",
                     extra={
                         "event": "vector_cover_render_done",
                         "duration_ms": round(
@@ -1957,7 +1961,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "rgba_shape": [int(s) for s in cover_rgba.shape],
                     },
                 )
-            except COORDINATOR_HANDLED_ERRORS as cover_exc:
+            except (*COORDINATOR_HANDLED_ERRORS, ImportError) as cover_exc:
                 log.warning(
                     "Vector cover thumbnail render failed; will fall back to "
                     "cover_source_path or image_path",
