@@ -130,6 +130,67 @@ class TestVectorCoverThumbnailFromGeometry:
         for i, shape in enumerate(analysis.matched_shapes):
             assert shape["recipe"] == recipes_before[i]
 
+    def test_render_preview_preserves_rgba_channel_order(self):
+        """SVG cover preview must keep RGB channels in RGBA byte order."""
+        from io import BytesIO
+
+        from core.vector_engine import VectorProcessor, VectorAnalysis
+        from PIL import Image
+        from shapely.geometry import box as shapely_box
+        from utils.bambu_3mf_cover import CoverThumbnailBuilder
+
+        expected_rgba = [193, 46, 31, 255]
+        shape = {
+            "geometry": shapely_box(0, 0, 10, 10),
+            "recipe": [5, 5, 5, 5, 5],
+        }
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[shape],
+            matched_shapes=[shape],
+            silhouette=shapely_box(0, 0, 10, 10),
+            scale_factor=1.0,
+            bbox=(0, 0, 10, 10),
+            color_conf={
+                "slots": [
+                    "White",
+                    "Cyan",
+                    "Magenta",
+                    "Yellow",
+                    "Black",
+                    "Red",
+                    "Deep Blue",
+                    "Green",
+                ],
+                "preview": {},
+            },
+            slot_names=[
+                "White",
+                "Cyan",
+                "Magenta",
+                "Yellow",
+                "Black",
+                "Red",
+                "Deep Blue",
+                "Green",
+            ],
+            num_channels=8,
+            num_layers=5,
+            preview_colors={5: expected_rgba},
+            stage_timings={},
+        )
+
+        rendered = VectorProcessor.render_preview(analysis, pixels_per_mm=2.0)
+
+        assert rendered[10, 10].tolist() == expected_rgba
+
+        buffer = BytesIO()
+        Image.fromarray(rendered, mode="RGBA").save(buffer, format="PNG")
+        cover_bundle = CoverThumbnailBuilder().build(buffer.getvalue())
+        thumbnail = Image.open(BytesIO(cover_bundle.thumbnail_small)).convert("RGB")
+
+        assert list(thumbnail.getpixel((thumbnail.width // 2, thumbnail.height // 2))) == expected_rgba[:3]
+
 
 # ---------------------------------------------------------------------------
 # Test 2: GLB mesh naming uses color_RRGGBB convention
