@@ -125,6 +125,26 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_diag_stage_b_before_build_mesh_per_layer_channel",
     "vector_diag_stage_c_run_groups_per_layer_channel",
     "vector_diag_stage_d_built_meshes_per_layer_channel",
+    # Spec svg-vector-outline-support / Task 3.2: DEBUG-level confirmation
+    # that a vector + enable_outline=True request was faithfully forwarded
+    # from the worker into pipeline ctx. Listed here so the inventory
+    # whitelist test recognizes the literal; not promoted to INFO and not
+    # part of the per-request INFO budget.
+    # 规范 svg-vector-outline-support / Task 3.2：vector + outline 请求被
+    # worker 忠实写入 ctx 的 DEBUG 级确认事件；登记到事件清单白名单，但不
+    # 进入每请求 INFO 预算。
+    "vector_outline_normalized",
+    # Spec svg-vector-outline-support / Task 3.3: vector_branch.py +
+    # vector_preview_branch inject an Outline mesh derived from
+    # analysis.matched_shapes. INFO double-step (init/done) stays under the
+    # 8 INFO/request budget; rejected_unsupported is WARNING-only.
+    # 规范 svg-vector-outline-support / Task 3.3：vector / preview 双端注入
+    # Outline mesh，几何来源为 analysis.matched_shapes union；init/done 双段
+    # INFO 不超出每请求 8 条预算，rejected_unsupported 为 WARNING。
+    "vector_outline_init",
+    "vector_outline_done",
+    "vector_outline_rejected_unsupported",
+    "vector_outline_polygon_extrude_failed",
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
