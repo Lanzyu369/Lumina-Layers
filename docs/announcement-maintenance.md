@@ -60,7 +60,7 @@ Audience is non-technical end users（普通消费者 / 打印玩家，基本不
 
 After editing announcements:
 
-- From `frontend/`, run `npx tsc --noEmit`
+- From `frontend/`, run `pnpm exec tsc --noEmit`
 - From the repo root, run `python scripts/run_vitest.py run src/__tests__/useAnnouncement.test.ts src/__tests__/announcement-dialog.test.tsx`
 
 Both commands must stay green.

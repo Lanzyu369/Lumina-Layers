@@ -3,6 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "main": "main.cjs",
+  "packageManager": "pnpm@10.33.2",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
@@ -11,6 +12,13 @@
   "devDependencies": {
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-builder",
+      "esbuild"
+    ]
   },
   "build": {
     "appId": "com.lumina.studio",

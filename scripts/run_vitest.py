@@ -2,7 +2,7 @@
 """Lumina vitest wrapper / Lumina vitest 包装器.
 
 Why this script exists / 设计目的:
-  Agents (and developers) often spawn ``npx vitest run`` repeatedly. Two
+  Agents (and developers) often spawn ``pnpm exec vitest run`` repeatedly. Two
   Windows-specific failure modes pile up node.exe processes until RAM
   exhausts:
     1. Each invocation spawns ``maxForks = CPU`` fork workers
@@ -16,7 +16,7 @@ Why this script exists / 设计目的:
       every descendant to die, even on Ctrl+C / SIGTERM / agent abort;
     * sweeping orphan fork workers (``vitest/dist/workers/forks.js``
       whose parent process is gone) before each run;
-    * skipping the ``npm exec`` / ``cmd /c`` indirection so the launched
+    * skipping the ``pnpm exec`` / ``cmd /c`` indirection so the launched
       process is a single ``node.exe`` we can directly track.
 
 Usage / 用法::
@@ -24,7 +24,7 @@ Usage / 用法::
     python scripts/run_vitest.py run [vitest args...]
     python scripts/run_vitest.py --run src/__tests__/Foo.test.tsx
 
-Behaviour is otherwise equivalent to ``npx vitest <argv>``. Multiple
+Behaviour is otherwise equivalent to ``pnpm exec vitest <argv>``. Multiple
 wrappers can run in parallel safely; each owns its own Job Object.
 """
 
@@ -275,7 +275,7 @@ def main(argv: list[str]) -> int:
     if not VITEST_MJS.exists():
         sys.stderr.write(
             f"[run_vitest] vitest.mjs not found at {VITEST_MJS}; "
-            f"run `cd frontend && npm install` first.\n"
+            f"run `cd frontend && pnpm install` first.\n"
         )
         return 1
 

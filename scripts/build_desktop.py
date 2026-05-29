@@ -45,7 +45,7 @@ def main():
     # ── Step 1: Build frontend ──
     print("\n[1/4] Building frontend...")
     run(
-        "npm run build",
+        "pnpm run build",
         cwd=str(FRONTEND_DIR),
         env_extra={"VITE_API_BASE_URL": "http://127.0.0.1:8000/api"},
     )
@@ -77,8 +77,8 @@ def main():
     print("\n[4/4] Building Electron installer (electron-builder)...")
     if not (ELECTRON_DIR / "node_modules").exists():
         print("  Installing Electron dependencies...")
-        run("npm install", cwd=str(ELECTRON_DIR))
-    run("npm run build", cwd=str(ELECTRON_DIR))
+        run("pnpm install", cwd=str(ELECTRON_DIR))
+    run("pnpm run build", cwd=str(ELECTRON_DIR))
 
     print("\n" + "=" * 60)
     print("  Build complete!")
