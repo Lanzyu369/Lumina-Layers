@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-05-29",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "用 SVG 梯度图生成 3MF 时，文件封面缩略图现在会像位图一样显示原图外观，不会再变成分层颜色预览。",
+            en: "For 3MF files generated from SVG gradients, the cover thumbnail now shows the original artwork like bitmap inputs do, instead of a material-layer colour preview.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-28",
     title: {
       zh: "Lumina Layers — 近期更新速览",
