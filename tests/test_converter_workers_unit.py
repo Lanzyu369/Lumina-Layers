@@ -153,7 +153,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 24
+        assert len(sig.parameters) == 26
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -172,6 +172,7 @@ class TestParameterAnnotations:
             "image_path", "lut_path", "target_width_mm",
             "color_mode", "modeling_mode", "quantize_colors",
             "color_layers", "layer_height_mm", "enable_cleanup",
+            "enable_outline", "outline_width",
             "svg_pixels_per_mm", "is_dark",
             "model_enable", "model_only", "model_threshold", "model_margin",
             "hue_weight", "chroma_gate", "use_lut_constrained",
@@ -382,7 +383,7 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
         patch(
             "core.converter.generate_preview_cached",
             return_value=(preview_img, cache_payload, "OK"),
-        ),
+        ) as generate_preview_cached_mock,
         patch("config.TEMP_DIR", str(tmp_path)),
     ):
         result = worker_generate_preview(
@@ -395,9 +396,14 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
             layer_height_mm=0.08,
             quantize_colors=16,
             enable_cleanup=True,
+            enable_outline=True,
+            outline_width=2.5,
         )
 
     assert result["status_msg"] == "OK"
+    call_kwargs = generate_preview_cached_mock.call_args.kwargs
+    assert call_kwargs["enable_outline"] is True
+    assert call_kwargs["outline_width"] == 2.5
     assert result["preview_png_path"] is not None
     assert result["cache_data_path"] is not None
     assert os.path.exists(result["preview_png_path"])

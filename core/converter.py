@@ -327,6 +327,8 @@ def generate_preview_cached(
     quantize_colors: int = 64,
     backing_color_id: int = 0,
     enable_cleanup: bool = True,
+    enable_outline: bool = False,
+    outline_width: float = 2.0,
     is_dark: bool = True,
     hue_weight: float = 0.0,
     chroma_gate: float = 15.0,

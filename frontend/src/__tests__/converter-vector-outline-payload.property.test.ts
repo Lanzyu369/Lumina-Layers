@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as fc from "fast-check";
 
 import * as converterApi from "../api/converter";
+import * as lutApi from "../api/lut";
 import { useConverterStore } from "../stores/converter";
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 
@@ -57,6 +58,22 @@ function seedVectorGenerateState(outlineWidth: number): void {
     free_color_set: new Set<string>(),
     colorRemapMap: {},
     regionReplacementCount: 0,
+  } as never);
+}
+
+function seedVectorPreviewState(outlineWidth: number): void {
+  seedVectorGenerateState(outlineWidth);
+  useConverterStore.setState({
+    sessionId: null,
+    target_width_mm: 60,
+    target_height_mm: 60,
+    color_layers: 5,
+    layer_height_mm: 0.08,
+    quantize_colors: 48,
+    enable_cleanup: true,
+    hue_enable: false,
+    use_lut_constrained: false,
+    auto_dynamic_range: false,
   } as never);
 }
 
@@ -125,14 +142,30 @@ describe("submitGenerate vector outline payload anchor (Task 1.2)", () => {
     generateSpy.mockRestore();
   });
 
-  it("preview anchor: store reads modeling_mode=VECTOR + enable_outline=true", () => {
-    seedVectorGenerateState(2.0);
-    const state = useConverterStore.getState();
-    // preview schema 不含 outline 字段 (ConvertPreviewRequest 无 enable_outline /
-    // outline_width)，所以 preview anchor 落在 store 状态：用户意图被
-    // store 忠实保存，且 modeling_mode 透传到 preview body。
-    expect(state.modeling_mode).toBe(ModelingMode.VECTOR);
-    expect(state.enable_outline).toBe(true);
-    expect(state.outline_width).toBe(2.0);
+  it("preview anchor: forwards enable_outline=true and outline_width=2.0", async () => {
+    const previewSpy = vi
+      .spyOn(converterApi, "convertPreview")
+      .mockResolvedValueOnce({
+        session_id: "preview-sess",
+        status: "ok",
+        message: "stub",
+        preview_url: "/api/files/preview.png",
+        palette: [],
+        dimensions: { width: 16, height: 16 },
+      } as never);
+    vi.spyOn(converterApi, "fetchGradientGroups").mockResolvedValueOnce({
+      groups: [],
+    } as never);
+    vi.spyOn(lutApi, "fetchSessionLutInfo").mockResolvedValueOnce(null);
+
+    seedVectorPreviewState(2.0);
+    await useConverterStore.getState().submitPreview();
+
+    expect(previewSpy).toHaveBeenCalledTimes(1);
+    const [, paramsArg] = previewSpy.mock.calls[0];
+    expect(paramsArg.modeling_mode).toBe(ModelingMode.VECTOR);
+    expect(paramsArg.color_mode).toBe(ColorMode.EIGHT_COLOR);
+    expect(paramsArg.enable_outline).toBe(true);
+    expect(paramsArg.outline_width).toBe(2.0);
   });
 });

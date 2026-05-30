@@ -5272,6 +5272,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
           enable_cleanup: state.enable_cleanup,
+          enable_outline: state.enable_outline,
+          outline_width: state.outline_width,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
@@ -5288,6 +5290,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: previewParams.color_mode,
           modeling_mode: previewParams.modeling_mode,
           quantize_colors: previewParams.quantize_colors,
+          enable_outline: previewParams.enable_outline,
+          outline_width: previewParams.outline_width,
         });
         const response = await apiConvertPreview(
           state.imageFile,
