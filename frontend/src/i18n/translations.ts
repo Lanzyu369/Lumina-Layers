@@ -3492,6 +3492,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除缓存",
     en: "Delete cache",
   },
+  basic_material_cache_charts_show_button: {
+    zh: "查看色彩分布图",
+    en: "View color charts",
+  },
+  basic_material_cache_charts_hide_button: {
+    zh: "收起色彩分布图",
+    en: "Hide color charts",
+  },
+  basic_material_cache_charts_loading: {
+    zh: "正在加载色彩分布图…",
+    en: "Loading color charts…",
+  },
+  basic_material_cache_charts_error: {
+    zh: "色彩分布图加载失败：{message}",
+    en: "Failed to load color charts: {message}",
+  },
   basic_material_cache_confirm_delete: {
     zh: "确认删除当前组合的缓存？",
     en: "Delete the cache for this combination?",

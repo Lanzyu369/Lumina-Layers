@@ -9,7 +9,13 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from api.schemas.lut import PaletteEntrySchema
+from api.schemas.lut import (
+    LutCoverageStatsResponse,
+    LutHullPoint,
+    LutPlotPoint,
+    LutPlotPoint3D,
+    PaletteEntrySchema,
+)
 
 
 class CalibrationResponse(BaseModel):
@@ -504,6 +510,36 @@ class MaterialSolverCacheDeleteResponse(BaseModel):
     layer_count: int
     layer_height_mm: float
     substrate: str
+
+
+class MaterialSolverCacheDetailsResponse(BaseModel):
+    """Visualization payload for a single solver-cache entry.
+    单份求解器缓存的可视化载荷。
+
+    Mirrors the subset of :class:`LutDetailsResponse` fields the four scatter
+    charts (Lab a*/b*, RGB isometric projection, Hue × Lightness, Hue ×
+    Saturation) consume so the frontend can reuse the same
+    ``LutScatterChart`` / ``LabPointCloud3D`` components verbatim.
+
+    与 LUT 详情响应字段同构（取四张散点图所需子集），让前端复用 LUT 详情的
+    ``LutScatterChart`` / ``LabPointCloud3D`` 组件。
+    """
+
+    status: str
+    message: str
+    palette_hash: str
+    material_directory_names: list[str] = Field(default_factory=list)
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    grid_resolution: int
+    valid_cell_count: int
+    total_cell_count: int
+    coverage_stats: LutCoverageStatsResponse
+    lab_points: list[LutPlotPoint] = Field(default_factory=list)
+    lab_points_3d: list[LutPlotPoint3D] = Field(default_factory=list)
+    lab_hull: list[LutHullPoint] = Field(default_factory=list)
+    rgb_points: list[LutPlotPoint] = Field(default_factory=list)
 
 
 class RecipePredictResponse(BaseModel):

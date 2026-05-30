@@ -27,6 +27,7 @@ from api.schemas.responses import (  # noqa: E402
     MaterialColorSuggestionsResponse,
     MaterialSolverCacheBuildResponse,
     MaterialSolverCacheDeleteResponse,
+    MaterialSolverCacheDetailsResponse,
     MaterialSolverCacheListResponse,
     MaterialSolverCacheStatusResponse,
 )
@@ -97,6 +98,27 @@ async def cache_delete(
         layer_height_mm=layer_height_mm,
         substrate=substrate,
         grid_resolution=grid_resolution,
+    )
+
+
+@router.post("/details")
+async def cache_details(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    max_points: int = Form(8000),
+) -> MaterialSolverCacheDetailsResponse:
+    """Return color-distribution charts payload for a built cache.
+    返回已构建缓存的色彩分布图载荷（与 LUT 详情同构）。"""
+    return await main_single_stage.material_solver_cache_details(
+        material_directory_names=material_directory_names,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        grid_resolution=grid_resolution,
+        max_points=max_points,
     )
 
 

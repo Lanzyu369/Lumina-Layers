@@ -3,6 +3,7 @@ import type {
   MaterialColorSuggestionsResponse,
   MaterialSolverCacheBuildResponse,
   MaterialSolverCacheDeleteResponse,
+  MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheListResponse,
   MaterialSolverCacheStatusResponse,
 } from "./types";
@@ -122,6 +123,35 @@ export async function listMaterialSolverCaches(): Promise<MaterialSolverCacheLis
   const response = await mlsClient.get<MaterialSolverCacheListResponse>(
     PREFIX,
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Fetch the LUT-details-shaped color-distribution payload for a built cache.
+ * 拉取已构建缓存的色彩分布图载荷（结构与 LUT 详情同构）。
+ *
+ * Used by :class:`MaterialSolverCacheStatusCard` to render the four scatter
+ * charts (Lab a-b plane, RGB isometric projection, Hue x Lightness, Hue x
+ * Saturation) verbatim from the existing LUT-details components.
+ *
+ * 由 :class:`MaterialSolverCacheStatusCard` 调用，复用 LUT 详情组件渲染四张散点图。
+ */
+export async function fetchMaterialSolverCacheDetails(
+  key: MaterialSolverCacheKey,
+  options?: { gridResolution?: number; maxPoints?: number; signal?: AbortSignal },
+): Promise<MaterialSolverCacheDetailsResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.gridResolution != null) {
+    extra.grid_resolution = String(options.gridResolution);
+  }
+  if (options?.maxPoints != null) {
+    extra.max_points = String(options.maxPoints);
+  }
+  const response = await mlsClient.post<MaterialSolverCacheDetailsResponse>(
+    `${PREFIX}/details`,
+    _formData(key, extra),
+    { timeout: 3_600_000, signal: options?.signal },
   );
   return response.data;
 }

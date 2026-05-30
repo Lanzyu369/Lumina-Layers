@@ -700,6 +700,244 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
   );
 });
 
+/**
+ * Reusable four-charts block: Lab a-b plane (with 2D/3D toggle), RGB
+ * isometric projection, Hue x Lightness, Hue x Saturation. Backed by the
+ * same scatter primitives used inside :class:`LutDetailsLoadedSecondaryColumn`
+ * so the solver-cache "color distribution" view in
+ * :class:`MaterialSolverCacheStatusCard` matches the LUT details page exactly.
+ *
+ * 复用的四图块：Lab a-b 平面（2D/3D 切换）、RGB 等距投影、色相×亮度、色相×饱和度。
+ * 内部使用与 LUT 详情副列同一套散点图原语，使穷举缓存的"色彩分布图"与 LUT 详情
+ * 页面视觉完全一致。
+ */
+export const LutColorDistributionCharts = memo(function LutColorDistributionCharts({
+  source,
+  workspaceMode,
+}: {
+  source: {
+    fingerprint: string;
+    lab_points: LutDetailsResponse["lab_points"];
+    lab_points_3d: LutDetailsResponse["lab_points_3d"];
+    lab_hull: LutDetailsResponse["lab_hull"];
+    rgb_points: LutDetailsResponse["rgb_points"];
+    coverage_stats: LutDetailsResponse["coverage_stats"];
+  };
+  workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
+}) {
+  const { t } = useI18n();
+  const [labChartView, setLabChartView] = useState<"2d" | "3d">("2d");
+  const [referenceAssets, setReferenceAssets] = useState<Partial<ReferenceAssets>>(() => cachedReferenceAssets);
+  const [hueProfilesReady, setHueProfilesReady] = useState(
+    () => cachedHueLightnessBoundsProfile !== null && cachedHueChromaProfile !== null,
+  );
+
+  useEffect(() => {
+    if (hueProfilesReady) return;
+    let cancelled = false;
+    const handle = scheduleDeferredWork(() => {
+      getHueLightnessBoundsProfile();
+      getHueChromaProfile();
+      if (cancelled) return;
+      startTransition(() => setHueProfilesReady(true));
+    });
+    return () => {
+      cancelled = true;
+      cancelDeferredWork(handle);
+    };
+  }, [hueProfilesReady]);
+
+  useEffect(() => {
+    const nextAssetKey = REFERENCE_ASSET_KEYS.find((key) => !referenceAssets[key]);
+    if (!nextAssetKey) return;
+    let cancelled = false;
+    const handle = scheduleDeferredWork(() => {
+      const asset = getReferenceAsset(nextAssetKey);
+      if (cancelled) return;
+      startTransition(() => {
+        setReferenceAssets((current) => {
+          if (current[nextAssetKey]) return current;
+          return { ...current, [nextAssetKey]: asset };
+        });
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelDeferredWork(handle);
+    };
+  }, [referenceAssets]);
+
+  const labPoints3D = source.lab_points_3d ?? [];
+  const hueLightnessPoints = useMemo(
+    () => (hueProfilesReady ? buildHueLightnessPoints(source.lab_points ?? []) : []),
+    [source.lab_points, hueProfilesReady],
+  );
+  const hueChromaPoints = useMemo(
+    () => (hueProfilesReady ? buildHueChromaPoints(source.lab_points ?? []) : []),
+    [source.lab_points, hueProfilesReady],
+  );
+  const omittedHuePointCount = useMemo(
+    () => (source.lab_points ?? []).length - hueLightnessPoints.length,
+    [source.lab_points, hueLightnessPoints.length],
+  );
+  const hueRange = useMemo(
+    () => formatCircularHueRange(hueLightnessPoints.map((point) => point.x)),
+    [hueLightnessPoints],
+  );
+  const relativeLightnessRange = useMemo(
+    () => formatRange(hueLightnessPoints.map((point) => point.y)),
+    [hueLightnessPoints],
+  );
+  const chromaRange = useMemo(() => formatRange(hueChromaPoints.map((point) => point.y)), [hueChromaPoints]);
+  const hueOmittedNote = omittedHuePointCount > 0
+    ? replaceTokens(t("lut_details_hue_chart_omitted_neutral"), { count: omittedHuePointCount })
+    : null;
+  const labChartFooter = replaceTokens(t("lut_details_lab_chart_footer"), {
+    lRange: formatNumberRange(source.coverage_stats.l_range.min, source.coverage_stats.l_range.max),
+    aRange: formatNumberRange(source.coverage_stats.a_range.min, source.coverage_stats.a_range.max),
+    bRange: formatNumberRange(source.coverage_stats.b_range.min, source.coverage_stats.b_range.max),
+  });
+  const labChartViewToggle = (
+    <div className="panel-section-muted inline-flex overflow-hidden rounded-full">
+      <button
+        type="button"
+        className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
+          labChartView === "2d"
+            ? "bg-blue-500 text-white"
+            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+        }`}
+        aria-pressed={labChartView === "2d"}
+        onClick={() => setLabChartView("2d")}
+      >
+        {t("lut_details_lab_view_2d")}
+      </button>
+      <button
+        type="button"
+        className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
+          labChartView === "3d"
+            ? "bg-blue-500 text-white"
+            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+        }`}
+        aria-pressed={labChartView === "3d"}
+        onClick={() => setLabChartView("3d")}
+      >
+        {t("lut_details_lab_view_3d")}
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-5">
+      {labChartView === "2d" ? (
+        <LutScatterChart
+          title={t("lut_details_lab_chart_title")}
+          description={t("lut_details_lab_chart_desc")}
+          dataTestId="lut-details-lab-chart"
+          points={source.lab_points ?? []}
+          referenceImageHref={referenceAssets?.labImage}
+          fixedBounds={LAB_REFERENCE_BOUNDS}
+          hull={source.lab_hull ?? []}
+          xLabel={t("lut_details_lab_chart_x")}
+          yLabel={t("lut_details_lab_chart_y")}
+          emptyMessage={t("lut_details_no_chart_points")}
+          className={resolveSectionCardClass(workspaceMode)}
+          showLabels={false}
+          plotShape="square"
+          footer={labChartFooter}
+          headerAction={labChartViewToggle}
+          squareViewportClassName="mx-auto block w-full max-w-[680px] aspect-square max-h-[680px]"
+        />
+      ) : (
+        <section className={resolveSectionCardClass(workspaceMode)}>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_lab_chart_title")}</h3>
+              <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{t("lut_details_lab_chart_3d_desc")}</p>
+            </div>
+            {labChartViewToggle}
+          </div>
+          <LabPointCloud3D
+            dataTestId="lut-details-lab-chart-3d"
+            fingerprint={source.fingerprint}
+            points={labPoints3D}
+            emptyMessage={t("lut_details_no_chart_points")}
+            loadingHullMessage={t("lut_details_lab_3d_loading_hull")}
+            hullErrorMessage={t("lut_details_lab_3d_error_hull")}
+            axisXLabel={t("lut_details_lab_3d_axis_x")}
+            axisYLabel={t("lut_details_lab_3d_axis_y")}
+            axisZLabel={t("lut_details_lab_3d_axis_z")}
+            referenceSliceToggleLabel={t("lut_details_lab_3d_reference_toggle")}
+            referenceSliceStatusTemplate={t("lut_details_lab_3d_reference_status")}
+            referenceSliceSliderLabel={t("lut_details_lab_3d_reference_slider")}
+          />
+          <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">{labChartFooter}</div>
+        </section>
+      )}
+      <LutScatterChart
+        title={t("lut_details_rgb_chart_title")}
+        description={t("lut_details_rgb_chart_desc")}
+        dataTestId="lut-details-rgb-chart"
+        points={source.rgb_points ?? []}
+        referenceImageHref={referenceAssets?.rgbImage}
+        fixedBounds={RGB_REFERENCE_BOUNDS}
+        xLabel={t("lut_details_rgb_chart_x")}
+        yLabel={t("lut_details_rgb_chart_y")}
+        emptyMessage={t("lut_details_no_chart_points")}
+        className={resolveSectionCardClass(workspaceMode)}
+        showLabels={false}
+        plotShape="square"
+        footer={replaceTokens(t("lut_details_rgb_chart_footer"), {
+          rRange: formatNumberRange(source.coverage_stats.r_range.min, source.coverage_stats.r_range.max),
+          gRange: formatNumberRange(source.coverage_stats.g_range.min, source.coverage_stats.g_range.max),
+          bRange: formatNumberRange(source.coverage_stats.b_rgb_range.min, source.coverage_stats.b_rgb_range.max),
+        })}
+      />
+      <LutScatterChart
+        title={t("lut_details_hue_lightness_chart_title")}
+        description={t("lut_details_hue_lightness_chart_desc")}
+        dataTestId="lut-details-hue-lightness-chart"
+        points={hueLightnessPoints}
+        referenceImageHref={referenceAssets?.hueLightnessImage}
+        fixedBounds={HUE_LIGHTNESS_REFERENCE_BOUNDS}
+        xLabel={t("lut_details_hue_lightness_chart_x")}
+        yLabel={t("lut_details_hue_lightness_chart_y")}
+        emptyMessage={t("lut_details_no_chart_points")}
+        className={resolveSectionCardClass(workspaceMode)}
+        showLabels={false}
+        plotShape="wide"
+        footer={appendSummaryPart(
+          replaceTokens(t("lut_details_hue_lightness_chart_footer"), {
+            lRange: relativeLightnessRange,
+            hRange: hueRange,
+          }),
+          hueOmittedNote,
+        )}
+      />
+      <LutScatterChart
+        title={t("lut_details_hue_chroma_chart_title")}
+        description={t("lut_details_hue_chroma_chart_desc")}
+        dataTestId="lut-details-hue-chroma-chart"
+        points={hueChromaPoints}
+        referenceImageHref={referenceAssets?.hueChromaImage}
+        fixedBounds={HUE_CHROMA_REFERENCE_BOUNDS}
+        xLabel={t("lut_details_hue_chroma_chart_x")}
+        yLabel={t("lut_details_hue_chroma_chart_y")}
+        emptyMessage={t("lut_details_no_chart_points")}
+        className={resolveSectionCardClass(workspaceMode)}
+        showLabels={false}
+        plotShape="wide"
+        footer={appendSummaryPart(
+          replaceTokens(t("lut_details_hue_chroma_chart_footer"), {
+            cRange: chromaRange,
+            hRange: hueRange,
+          }),
+          hueOmittedNote,
+        )}
+      />
+    </div>
+  );
+});
+
 const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryColumn({
   detail,
   t,

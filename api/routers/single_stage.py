@@ -37,11 +37,19 @@ from api.schemas.responses import (
     MaterialRecipePreviewResponse,
     MaterialSolverCacheBuildResponse,
     MaterialSolverCacheDeleteResponse,
+    MaterialSolverCacheDetailsResponse,
     MaterialSolverCacheEntryResponse,
     MaterialSolverCacheListResponse,
     MaterialSolverCacheStatusResponse,
     SingleStageExtractResponse,
     StageAFitResponse,
+)
+from api.schemas.lut import (
+    LutAxisRange,
+    LutCoverageStatsResponse,
+    LutHullPoint,
+    LutPlotPoint,
+    LutPlotPoint3D,
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
@@ -1445,6 +1453,162 @@ def _suggestions_to_response_items(
             )
         )
     return items
+
+
+@router.post("/material-solver-cache/details")
+async def material_solver_cache_details(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
+    max_points: int = Form(8000, ge=128, le=50000),
+) -> MaterialSolverCacheDetailsResponse:
+    """Return a LUT-details-shaped visualization payload for a built cache.
+    返回与 LUT 详情同构的可视化载荷，用于已构建的求解器缓存。
+
+    Loads the cache for the given ``(palette, layer_count, layer_height_mm,
+    substrate, grid_resolution)`` combination, projects its bucket centers
+    into the four chart spaces (Lab a*/b*, Lab 3D, isometric RGB, hull),
+    and returns the same field layout the LUT details endpoint uses. The
+    frontend can therefore reuse the existing scatter chart components.
+
+    加载指定组合的缓存，把每个被占用桶投影到四个图表空间，返回与 LUT 详情端点
+    同构的字段布局；前端可直接复用既有散点图组件。
+
+    Args:
+        material_directory_names: JSON-encoded list of material directory
+            names. (JSON 编码的耗材目录名列表)
+        layer_count: Recipe layer count. (配方层数)
+        layer_height_mm: Layer thickness in millimetres. (层厚 mm)
+        substrate: Substrate id ("white" or "black"). (基底)
+        grid_resolution: Lab-grid resolution that produced the cache.
+            (该缓存的 Lab 网格分辨率)
+        max_points: Maximum scatter points returned; values above are
+            uniformly downsampled deterministically. (散点数上限)
+
+    Returns:
+        :class:`MaterialSolverCacheDetailsResponse` ready for chart rendering.
+
+    Raises:
+        HTTPException: 404 when no cache exists; 422 on invalid params.
+    """
+    from core.material_cache_visualization import build_material_cache_details
+
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_grid_resolution(grid_resolution)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+
+    cache, actual_grid = load_material_solver_cache_with_fallback(
+        materials, layer_count, layer_height_mm, substrate,
+        grid_resolution=grid_resolution,
+    )
+    if cache is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No solver cache found for this combination. Build the "
+                "cache first via /material-solver-cache/build."
+            ),
+        )
+
+    effective_grid = int(actual_grid) if actual_grid is not None else int(grid_resolution)
+    details = build_material_cache_details(
+        cache,
+        palette_hash=palette_hash,
+        grid_resolution=effective_grid,
+        max_points=int(max_points),
+    )
+    log.info(
+        "Material solver cache details rendered",
+        extra={
+            "event": "material_solver_cache_details_done",
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "grid_resolution": effective_grid,
+            "valid_cell_count": details.valid_cell_count,
+            "plotted_point_count": details.coverage_stats.plotted_point_count,
+        },
+    )
+
+    coverage = LutCoverageStatsResponse(
+        entry_count=details.coverage_stats.entry_count,
+        plotted_point_count=details.coverage_stats.plotted_point_count,
+        l_range=LutAxisRange(
+            min=details.coverage_stats.l_range.min,
+            max=details.coverage_stats.l_range.max,
+        ),
+        a_range=LutAxisRange(
+            min=details.coverage_stats.a_range.min,
+            max=details.coverage_stats.a_range.max,
+        ),
+        b_range=LutAxisRange(
+            min=details.coverage_stats.b_range.min,
+            max=details.coverage_stats.b_range.max,
+        ),
+        r_range=LutAxisRange(
+            min=details.coverage_stats.r_range.min,
+            max=details.coverage_stats.r_range.max,
+        ),
+        g_range=LutAxisRange(
+            min=details.coverage_stats.g_range.min,
+            max=details.coverage_stats.g_range.max,
+        ),
+        b_rgb_range=LutAxisRange(
+            min=details.coverage_stats.b_rgb_range.min,
+            max=details.coverage_stats.b_rgb_range.max,
+        ),
+    )
+    return MaterialSolverCacheDetailsResponse(
+        status="ok",
+        message=f"Cache details for {len(dir_names)} materials, grid={effective_grid}",
+        palette_hash=palette_hash,
+        material_directory_names=list(dir_names),
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        grid_resolution=effective_grid,
+        valid_cell_count=details.valid_cell_count,
+        total_cell_count=details.total_cell_count,
+        coverage_stats=coverage,
+        lab_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in details.lab_points
+        ],
+        lab_points_3d=[
+            LutPlotPoint3D(
+                l=point.l,
+                a=point.a,
+                b=point.b,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in details.lab_points_3d
+        ],
+        lab_hull=[LutHullPoint(x=point[0], y=point[1]) for point in details.lab_hull],
+        rgb_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=list(point.rgb),
+                label=point.label,
+            )
+            for point in details.rgb_points
+        ],
+    )
 
 
 @router.post("/material-solver-cache/suggest-colors")

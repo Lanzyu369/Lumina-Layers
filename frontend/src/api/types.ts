@@ -948,6 +948,32 @@ export interface MaterialSolverCacheDeleteResponse {
   substrate: string;
 }
 
+/**
+ * Color-distribution visualization payload for one solver-cache entry.
+ * Mirrors the LUT details ``lab_points`` / ``rgb_points`` / ``coverage_stats``
+ * fields so the existing scatter chart components can render it verbatim.
+ *
+ * 单份求解器缓存的色彩分布图载荷；与 LUT 详情的散点字段同构，可直接复用既有图表
+ * 组件渲染。
+ */
+export interface MaterialSolverCacheDetailsResponse {
+  status: string;
+  message: string;
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  grid_resolution: number;
+  valid_cell_count: number;
+  total_cell_count: number;
+  coverage_stats: LutDetailsCoverageStats;
+  lab_points: LutDetailsPoint[];
+  lab_points_3d: LutDetailsPoint3D[];
+  lab_hull: Array<{ x: number; y: number }>;
+  rgb_points: LutDetailsPoint[];
+}
+
 /** One achievable-color candidate returned by the suggester endpoint. */
 export interface MaterialColorSuggestionItem {
   hex: string;
