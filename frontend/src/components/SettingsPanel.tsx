@@ -104,8 +104,6 @@ export default function SettingsPanel() {
   const setAutoReplaceGradientBanding = useSettingsStore(
     (s) => s.setAutoReplaceGradientBanding,
   );
-  const mlsEnabled = useSettingsStore((s) => s.mlsEnabled);
-  const setMlsEnabled = useSettingsStore((s) => s.setMlsEnabled);
   const mlsBaseUrl = useSettingsStore((s) => s.mlsBaseUrl);
   const setMlsBaseUrl = useSettingsStore((s) => s.setMlsBaseUrl);
   const mlsBackendUrl = useSettingsStore((s) => s.mlsBackendUrl);
@@ -664,92 +662,70 @@ export default function SettingsPanel() {
         <p className="text-sm text-slate-500 dark:text-slate-400">
           {t("settings.mls_description")}
         </p>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-            {t("settings.mls_enable_label")}
-          </span>
-          <WikiTooltip
-            title={t("settings.mls_enable_label")}
-            description={t("settings.mls_enable_tip")}
-            placement="left"
-          >
-            <Switch
-              checked={mlsEnabled}
-              onChange={setMlsEnabled}
-              ariaLabel={t("settings.mls_enable_label")}
-            />
-          </WikiTooltip>
-        </div>
-        {mlsEnabled ? (
-          <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
-            <div>
-              <label
-                htmlFor="mls-base-url"
-                className="text-sm font-medium text-slate-900 dark:text-slate-50"
-              >
-                {t("settings.mls_base_url_label")}
-              </label>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {t("settings.mls_base_url_help")}
-              </p>
-            </div>
-            <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto_auto]"}`}>
-              <input
-                id="mls-base-url"
-                value={mlsBaseUrlInput}
-                onChange={(event) => setMlsBaseUrlInput(event.target.value)}
-                onBlur={handleSaveMlsBaseUrl}
-                placeholder={t("settings.mls_base_url_placeholder")}
-                className={workstationInputClass}
-              />
-              <Button
-                label={t("settings.custom_slicer_save")}
-                onClick={handleSaveMlsBaseUrl}
-                variant="secondary"
-                disabled={mlsBaseUrlInput.trim() === mlsBaseUrl}
-                className={workspace.isCompact ? "w-full" : ""}
-              />
-              <Button
-                label={t("settings.mls_open_button")}
-                onClick={handleOpenMls}
-                className={workspace.isCompact ? "w-full" : ""}
-              />
-            </div>
-
-            <div className="border-t border-slate-200/60 pt-3 dark:border-slate-700/60">
-              <label
-                htmlFor="mls-backend-url"
-                className="text-sm font-medium text-slate-900 dark:text-slate-50"
-              >
-                {t("settings.mls_backend_url_label")}
-              </label>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {t("settings.mls_backend_url_help")}
-              </p>
-            </div>
-            <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
-              <input
-                id="mls-backend-url"
-                value={mlsBackendUrlInput}
-                onChange={(event) => setMlsBackendUrlInput(event.target.value)}
-                onBlur={handleSaveMlsBackendUrl}
-                placeholder={t("settings.mls_backend_url_placeholder")}
-                className={workstationInputClass}
-              />
-              <Button
-                label={t("settings.custom_slicer_save")}
-                onClick={handleSaveMlsBackendUrl}
-                variant="secondary"
-                disabled={mlsBackendUrlInput.trim() === mlsBackendUrl}
-                className={workspace.isCompact ? "w-full" : ""}
-              />
-            </div>
+        <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
+          <div>
+            <label
+              htmlFor="mls-base-url"
+              className="text-sm font-medium text-slate-900 dark:text-slate-50"
+            >
+              {t("settings.mls_base_url_label")}
+            </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {t("settings.mls_base_url_help")}
+            </p>
           </div>
-        ) : (
-          <StatusBanner tone="info">
-            {t("settings.mls_disabled_hint")}
-          </StatusBanner>
-        )}
+          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto_auto]"}`}>
+            <input
+              id="mls-base-url"
+              value={mlsBaseUrlInput}
+              onChange={(event) => setMlsBaseUrlInput(event.target.value)}
+              onBlur={handleSaveMlsBaseUrl}
+              placeholder={t("settings.mls_base_url_placeholder")}
+              className={workstationInputClass}
+            />
+            <Button
+              label={t("settings.custom_slicer_save")}
+              onClick={handleSaveMlsBaseUrl}
+              variant="secondary"
+              disabled={mlsBaseUrlInput.trim() === mlsBaseUrl}
+              className={workspace.isCompact ? "w-full" : ""}
+            />
+            <Button
+              label={t("settings.mls_open_button")}
+              onClick={handleOpenMls}
+              className={workspace.isCompact ? "w-full" : ""}
+            />
+          </div>
+
+          <div className="border-t border-slate-200/60 pt-3 dark:border-slate-700/60">
+            <label
+              htmlFor="mls-backend-url"
+              className="text-sm font-medium text-slate-900 dark:text-slate-50"
+            >
+              {t("settings.mls_backend_url_label")}
+            </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {t("settings.mls_backend_url_help")}
+            </p>
+          </div>
+          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
+            <input
+              id="mls-backend-url"
+              value={mlsBackendUrlInput}
+              onChange={(event) => setMlsBackendUrlInput(event.target.value)}
+              onBlur={handleSaveMlsBackendUrl}
+              placeholder={t("settings.mls_backend_url_placeholder")}
+              className={workstationInputClass}
+            />
+            <Button
+              label={t("settings.custom_slicer_save")}
+              onClick={handleSaveMlsBackendUrl}
+              variant="secondary"
+              disabled={mlsBackendUrlInput.trim() === mlsBackendUrl}
+              className={workspace.isCompact ? "w-full" : ""}
+            />
+          </div>
+        </div>
       </section>
     </motion.aside>
   );

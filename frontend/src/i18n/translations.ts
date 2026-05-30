@@ -1790,16 +1790,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material & LUT Studio",
   },
   "settings.mls_description": {
-    zh: "耗材档案与 LUT 已拆分为一个独立服务（Material-LUT Studio），拥有自己的管理界面。开启后，本应用会在「耗材库」「LUT 管理」等入口提供跳转到独立界面的按钮；关闭则继续使用内置面板。",
-    en: "Material archives and LUTs are now a standalone service (Material-LUT Studio) with its own management UI. When enabled, this app surfaces a button to open that standalone UI from the material/LUT entry points; when disabled, the built-in panels stay in use.",
-  },
-  "settings.mls_enable_label": {
-    zh: "启用独立的耗材与 LUT 工作室",
-    en: "Use the standalone Material & LUT Studio",
-  },
-  "settings.mls_enable_tip": {
-    zh: "需要先单独启动该服务（默认地址 http://localhost:5180）。这是客户端偏好，不会改变后端数据。",
-    en: "Requires running that service separately (default http://localhost:5180). This is a client-side preference and does not change backend data.",
+    zh: "耗材档案与 LUT 已拆分为独立服务（Material-LUT Studio），拥有自己的管理界面。本节配置该服务的前端界面与后端 API 地址；前后端可部署在不同主机上。",
+    en: "Material archives and LUTs are a standalone service (Material-LUT Studio) with its own management UI. This section configures that service's frontend URL and backend API URL — the two can live on different hosts.",
   },
   "settings.mls_base_url_label": {
     zh: "前端界面地址",
@@ -1828,10 +1820,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.mls_open_button": {
     zh: "打开独立界面",
     en: "Open standalone UI",
-  },
-  "settings.mls_disabled_hint": {
-    zh: "默认关闭：耗材与 LUT 仍使用本应用内置面板管理。",
-    en: "Off by default: materials and LUTs are still managed in this app's built-in panels.",
   },
 
   // ==================== Settings Panel (Slicer Settings) ====================
