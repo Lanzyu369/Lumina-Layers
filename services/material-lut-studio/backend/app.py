@@ -152,6 +152,22 @@ def create_app() -> FastAPI:
             "write_password_configured": get_auth_state().password_required,
         },
     )
+    if not get_auth_state().password_required:
+        # Open mode: any caller can hit write endpoints. Surface this loudly
+        # so operators see it during deployment review instead of finding
+        # out via an unauthenticated DELETE.
+        # 开放模式：任何调用方都能写。启动时大声告警，避免运维到事故时才发现。
+        log.warning(
+            "MLS write protection is disabled (no password configured)",
+            extra={
+                "event": "mls_write_protection_disabled",
+                "error_type": "auth_unprotected",
+                "remediation": (
+                    "Set MLS_WRITE_PASSWORD env var, or fill write_password "
+                    "in services/material-lut-studio/config.json."
+                ),
+            },
+        )
     return app
 
 

@@ -1,5 +1,5 @@
 {
-  "_comment_zh": "MLS 写入密码；留空或删除该字段则 MLS 完全开放（无写入保护）。也可改用环境变量 MLS_WRITE_PASSWORD。本文件已被 .gitignore 排除，请勿提交。",
-  "_comment_en": "MLS write password; an empty value or missing field leaves MLS fully open (no write protection). Alternatively set MLS_WRITE_PASSWORD. This file is gitignored — do not commit.",
-  "write_password": "lumina"
+  "_comment_zh": "MLS 写入密码占位文件。仓库内 ``write_password`` 字段刻意留空——这样新克隆的仓库以「完全开放（无写入保护）」启动，运维明确知道当前没有保护。需要密码保护时，把 ``write_password`` 改成你的密码（仅本地修改，不要提交），或者通过环境变量 ``MLS_WRITE_PASSWORD`` 注入（推荐用于生产）。环境变量优先级高于本文件。",
+  "_comment_en": "MLS write-password placeholder. The committed ``write_password`` is deliberately empty so a fresh checkout boots in fully-open (unprotected) mode and the operator can see the protection state explicitly. To enable password gating, either set ``write_password`` here (locally — do not commit a real secret) or inject via the ``MLS_WRITE_PASSWORD`` environment variable (recommended for production; it takes precedence over this file).",
+  "write_password": ""
 }

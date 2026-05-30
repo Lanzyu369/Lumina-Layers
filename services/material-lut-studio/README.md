@@ -31,10 +31,12 @@ MLS 默认只读，写操作（删除 / 编辑 / 导入 / 上传 / 合并 / 构�
 
 1. 环境变量 `MLS_WRITE_PASSWORD`（推荐用于部署环境）。
 2. 本目录下的 `config.json` 文件中的 `write_password` 字段。
-3. 两者均空 → 服务对外完全开放（仅适合本地单用户开发）。
+3. 两者均空 → 服务对外完全开放（默认状态，仅适合本地单用户开发）。
 
-仓库内的 `config.json` 是部署期占位，**不要**在生产部署直接使用其中的默认值；
-请改设环境变量或修改文件。详见 `backend/auth.py`。
+仓库内的 `config.json` 中 `write_password` 字段**刻意留空**：新克隆的仓库以
+「完全开放」状态启动，并在启动日志里打印一条 WARNING（事件名
+`mls_write_protection_disabled`）让运维明确看到当前没有保护。需要保护时优先
+使用 `MLS_WRITE_PASSWORD` 环境变量，避免把密码留在仓库内。详见 `backend/auth.py`。
 
 ## 目录结构 (Layout)
 
@@ -55,8 +57,7 @@ services/material-lut-studio/
 │       ├── lut.py            # LUT 列表 / 详情 / 对比 / 合成（薄适配主路由）
 │       └── data.py           # 跨服务器数据 API（耗材参数 / 指纹 / 缓存文件）
 ├── start_mls.py              # 仅启动后端的薄封装
-├── config.example.json       # 写入密码配置示例
-└── config.json               # 入库的默认密码占位（部署期请覆盖）
+└── config.json               # 入库的写入密码占位（默认空字符串=开放模式）
 ```
 
 > **注**：MLS **没有**独立的 frontend 子目录。前端入口就是仓库根的

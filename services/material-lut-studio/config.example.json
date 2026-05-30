@@ -1,5 +1,0 @@
-{
-  "_comment_zh": "复制本文件为 config.json 后填入写入密码; 留空或文件不存在则 MLS 完全开放（无写入保护）。也可改设环境变量 MLS_WRITE_PASSWORD。",
-  "_comment_en": "Copy this file to config.json and fill in a write password. An empty value or missing file leaves MLS fully open (no write protection). Alternatively set the MLS_WRITE_PASSWORD environment variable.",
-  "write_password": ""
-}

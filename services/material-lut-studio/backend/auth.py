@@ -99,11 +99,13 @@ class _AuthState:
     """Process-local cache for the currently configured write password.
     进程内缓存当前配置的写入密码。
 
-    Source resolution order (优先级):
-        1. ``services/material-lut-studio/config.json`` ``write_password``
-           field, if the file exists and the value is a non-empty string.
-        2. ``MLS_WRITE_PASSWORD`` environment variable.
-        3. Otherwise: no password configured, writes are unprotected.
+    Source resolution order — see :meth:`load` for the authoritative
+    implementation. Briefly: ``MLS_WRITE_PASSWORD`` env var beats
+    ``services/material-lut-studio/config.json``'s ``write_password``
+    field; both empty means writes are unprotected (open mode).
+
+    具体优先级见 :meth:`load`。简言之：环境变量 ``MLS_WRITE_PASSWORD`` 高于
+    ``config.json`` 中 ``write_password`` 字段；两者均空则写端点完全开放。
     """
 
     def __init__(self) -> None:
