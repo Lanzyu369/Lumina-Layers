@@ -947,119 +947,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
   t: (key: string) => string;
   workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
 }) {
-  const [labChartView, setLabChartView] = useState<"2d" | "3d">("2d");
-  const [referenceAssets, setReferenceAssets] = useState<Partial<ReferenceAssets>>(() => cachedReferenceAssets);
-  const [hueProfilesReady, setHueProfilesReady] = useState(
-    () => cachedHueLightnessBoundsProfile !== null && cachedHueChromaProfile !== null,
-  );
-
-  useEffect(() => {
-    if (hueProfilesReady) {
-      return;
-    }
-
-    let cancelled = false;
-    const handle = scheduleDeferredWork(() => {
-      getHueLightnessBoundsProfile();
-      getHueChromaProfile();
-      if (cancelled) {
-        return;
-      }
-      startTransition(() => {
-        setHueProfilesReady(true);
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      cancelDeferredWork(handle);
-    };
-  }, [hueProfilesReady]);
-
-  useEffect(() => {
-    const nextAssetKey = REFERENCE_ASSET_KEYS.find((key) => !referenceAssets[key]);
-    if (!nextAssetKey) {
-      return;
-    }
-
-    let cancelled = false;
-    const handle = scheduleDeferredWork(() => {
-      const asset = getReferenceAsset(nextAssetKey);
-      if (cancelled) {
-        return;
-      }
-      startTransition(() => {
-        setReferenceAssets((current) => {
-          if (current[nextAssetKey]) {
-            return current;
-          }
-          return {
-            ...current,
-            [nextAssetKey]: asset,
-          };
-        });
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      cancelDeferredWork(handle);
-    };
-  }, [referenceAssets]);
-
   const palette = detail.palette ?? [];
-  const labPoints3D = detail.lab_points_3d ?? [];
-  const hueLightnessPoints = useMemo(
-    () => (hueProfilesReady ? buildHueLightnessPoints(detail.lab_points ?? []) : []),
-    [detail, hueProfilesReady],
-  );
-  const hueChromaPoints = useMemo(
-    () => (hueProfilesReady ? buildHueChromaPoints(detail.lab_points ?? []) : []),
-    [detail, hueProfilesReady],
-  );
-  const omittedHuePointCount = useMemo(
-    () => (detail.lab_points ?? []).length - hueLightnessPoints.length,
-    [detail, hueLightnessPoints.length],
-  );
-  const hueRange = useMemo(() => formatCircularHueRange(hueLightnessPoints.map((point) => point.x)), [hueLightnessPoints]);
-  const relativeLightnessRange = useMemo(() => formatRange(hueLightnessPoints.map((point) => point.y)), [hueLightnessPoints]);
-  const chromaRange = useMemo(() => formatRange(hueChromaPoints.map((point) => point.y)), [hueChromaPoints]);
-  const hueOmittedNote = omittedHuePointCount > 0
-    ? replaceTokens(t("lut_details_hue_chart_omitted_neutral"), { count: omittedHuePointCount })
-    : null;
-  const labChartFooter = replaceTokens(t("lut_details_lab_chart_footer"), {
-    lRange: formatNumberRange(detail.coverage_stats.l_range.min, detail.coverage_stats.l_range.max),
-    aRange: formatNumberRange(detail.coverage_stats.a_range.min, detail.coverage_stats.a_range.max),
-    bRange: formatNumberRange(detail.coverage_stats.b_range.min, detail.coverage_stats.b_range.max),
-  });
-  const labChartViewToggle = (
-    <div className="panel-section-muted inline-flex overflow-hidden rounded-full">
-      <button
-        type="button"
-        className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
-          labChartView === "2d"
-            ? "bg-blue-500 text-white"
-            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-        }`}
-        aria-pressed={labChartView === "2d"}
-        onClick={() => setLabChartView("2d")}
-      >
-        {t("lut_details_lab_view_2d")}
-      </button>
-      <button
-        type="button"
-        className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
-          labChartView === "3d"
-            ? "bg-blue-500 text-white"
-            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-        }`}
-        aria-pressed={labChartView === "3d"}
-        onClick={() => setLabChartView("3d")}
-      >
-        {t("lut_details_lab_view_3d")}
-      </button>
-    </div>
-  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -1086,24 +974,22 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
           </div>
         ) : <div className={`${mutedSectionCardClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>{t("lut_details_no_palette")}</div>}
       </section>
-      {labChartView === "2d" ? (
-        <LutScatterChart title={t("lut_details_lab_chart_title")} description={t("lut_details_lab_chart_desc")} dataTestId="lut-details-lab-chart" points={detail.lab_points ?? []} referenceImageHref={referenceAssets?.labImage} fixedBounds={LAB_REFERENCE_BOUNDS} hull={detail.lab_hull ?? []} xLabel={t("lut_details_lab_chart_x")} yLabel={t("lut_details_lab_chart_y")} emptyMessage={t("lut_details_no_chart_points")} className={resolveSectionCardClass(workspaceMode)} showLabels={false} plotShape="square" footer={labChartFooter} headerAction={labChartViewToggle} squareViewportClassName="mx-auto block w-full max-w-[680px] aspect-square max-h-[680px]" />
-      ) : (
-        <section className={resolveSectionCardClass(workspaceMode)}>
-          <div className="mb-4 flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0">
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_lab_chart_title")}</h3>
-              <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{t("lut_details_lab_chart_3d_desc")}</p>
-            </div>
-            {labChartViewToggle}
-          </div>
-          <LabPointCloud3D dataTestId="lut-details-lab-chart-3d" fingerprint={detail.fingerprint} points={labPoints3D} emptyMessage={t("lut_details_no_chart_points")} loadingHullMessage={t("lut_details_lab_3d_loading_hull")} hullErrorMessage={t("lut_details_lab_3d_error_hull")} axisXLabel={t("lut_details_lab_3d_axis_x")} axisYLabel={t("lut_details_lab_3d_axis_y")} axisZLabel={t("lut_details_lab_3d_axis_z")} referenceSliceToggleLabel={t("lut_details_lab_3d_reference_toggle")} referenceSliceStatusTemplate={t("lut_details_lab_3d_reference_status")} referenceSliceSliderLabel={t("lut_details_lab_3d_reference_slider")} />
-          <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">{labChartFooter}</div>
-        </section>
-      )}
-      <LutScatterChart title={t("lut_details_rgb_chart_title")} description={t("lut_details_rgb_chart_desc")} dataTestId="lut-details-rgb-chart" points={detail.rgb_points ?? []} referenceImageHref={referenceAssets?.rgbImage} fixedBounds={RGB_REFERENCE_BOUNDS} xLabel={t("lut_details_rgb_chart_x")} yLabel={t("lut_details_rgb_chart_y")} emptyMessage={t("lut_details_no_chart_points")} className={resolveSectionCardClass(workspaceMode)} showLabels={false} plotShape="square" footer={replaceTokens(t("lut_details_rgb_chart_footer"), { rRange: formatNumberRange(detail.coverage_stats.r_range.min, detail.coverage_stats.r_range.max), gRange: formatNumberRange(detail.coverage_stats.g_range.min, detail.coverage_stats.g_range.max), bRange: formatNumberRange(detail.coverage_stats.b_rgb_range.min, detail.coverage_stats.b_rgb_range.max) })} />
-      <LutScatterChart title={t("lut_details_hue_lightness_chart_title")} description={t("lut_details_hue_lightness_chart_desc")} dataTestId="lut-details-hue-lightness-chart" points={hueLightnessPoints} referenceImageHref={referenceAssets?.hueLightnessImage} fixedBounds={HUE_LIGHTNESS_REFERENCE_BOUNDS} xLabel={t("lut_details_hue_lightness_chart_x")} yLabel={t("lut_details_hue_lightness_chart_y")} emptyMessage={t("lut_details_no_chart_points")} className={resolveSectionCardClass(workspaceMode)} showLabels={false} plotShape="wide" footer={appendSummaryPart(replaceTokens(t("lut_details_hue_lightness_chart_footer"), { lRange: relativeLightnessRange, hRange: hueRange }), hueOmittedNote)} />
-      <LutScatterChart title={t("lut_details_hue_chroma_chart_title")} description={t("lut_details_hue_chroma_chart_desc")} dataTestId="lut-details-hue-chroma-chart" points={hueChromaPoints} referenceImageHref={referenceAssets?.hueChromaImage} fixedBounds={HUE_CHROMA_REFERENCE_BOUNDS} xLabel={t("lut_details_hue_chroma_chart_x")} yLabel={t("lut_details_hue_chroma_chart_y")} emptyMessage={t("lut_details_no_chart_points")} className={resolveSectionCardClass(workspaceMode)} showLabels={false} plotShape="wide" footer={appendSummaryPart(replaceTokens(t("lut_details_hue_chroma_chart_footer"), { cRange: chromaRange, hRange: hueRange }), hueOmittedNote)} />
+      {/* The four scatter charts (Lab a-b, RGB isometric, Hue × Lightness,
+          Hue × Saturation) are rendered by the shared component so the
+          solver-cache "color distribution" view in
+          ``MaterialSolverCacheStatusCard`` stays pixel-identical. */}
+      {/* 四张散点图由共享组件渲染，使求解缓存「色彩分布图」与本面板视觉完全一致。 */}
+      <LutColorDistributionCharts
+        source={{
+          fingerprint: detail.fingerprint,
+          lab_points: detail.lab_points,
+          lab_points_3d: detail.lab_points_3d,
+          lab_hull: detail.lab_hull,
+          rgb_points: detail.rgb_points,
+          coverage_stats: detail.coverage_stats,
+        }}
+        workspaceMode={workspaceMode}
+      />
     </div>
   );
 });
