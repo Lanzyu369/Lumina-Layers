@@ -12,7 +12,7 @@ import GradientCardCornerSelector from "./GradientCardCornerSelector";
 import GradientCardWarpPreview from "./GradientCardWarpPreview";
 import Dropdown from "./ui/Dropdown";
 import Checkbox from "./ui/Checkbox";
-import { ColorcheckerConfirmDialogInner } from "./ColorcheckerConfirmDialog";
+import { ColorcheckerConfirmDialogInner, ColorcheckerModalShell } from "./ColorcheckerConfirmDialog";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   type AggregationBiasFlag,
@@ -1049,19 +1049,25 @@ export default function GradientCardExtractPanel() {
                   />
                 </div>
                 {(colorchecker_phase === "calibrating" || colorchecker_phase === "confirming") && (
-                  <ColorcheckerConfirmDialogInner
-                    phase={colorchecker_phase}
-                    colorcheckerTarget={colorchecker_target}
-                    imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
-                    originalPreviewUrl={originalWhitePreviewUrl}
-                    calibratedPreviewUrl={calibratedPreviewUrl}
-                    colorcheckerFullFileId={pendingColorcheckerFileId}
-                    calibrationSummary={colorcheckerSummary}
-                    receiveCalibrated={receiveCalibratedFromCC}
-                    confirmCalibrated={confirmCalibrated}
-                    rejectCalibrated={rejectCalibrated}
-                    closeDialog={closeColorcheckerDialog}
-                  />
+                  <ColorcheckerModalShell
+                    open
+                    title={t("ext_cc_dialog_title")}
+                    onClose={closeColorcheckerDialog}
+                  >
+                    <ColorcheckerConfirmDialogInner
+                      phase={colorchecker_phase}
+                      colorcheckerTarget={colorchecker_target}
+                      imageFile={colorchecker_target === "black" ? blackImageFile : whiteImageFile}
+                      originalPreviewUrl={originalWhitePreviewUrl}
+                      calibratedPreviewUrl={calibratedPreviewUrl}
+                      colorcheckerFullFileId={pendingColorcheckerFileId}
+                      calibrationSummary={colorcheckerSummary}
+                      receiveCalibrated={receiveCalibratedFromCC}
+                      confirmCalibrated={confirmCalibrated}
+                      rejectCalibrated={rejectCalibrated}
+                      closeDialog={closeColorcheckerDialog}
+                    />
+                  </ColorcheckerModalShell>
                 )}
                 {colorchecker_phase === "done" && (
                   <StatusBanner tone="success">

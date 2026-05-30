@@ -2755,8 +2755,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Retry",
   },
   ext_cc_main_area_hint: {
-    zh: "24 色卡校色会在右侧图像区展开，完成后再继续选择 LUT 色卡四角。",
-    en: "The 24-patch correction tool opens in the image area. Continue picking LUT corners after correction.",
+    zh: "24 色卡校色会在弹窗中进行，完成并确认后再继续选择 LUT 色卡四角。",
+    en: "The 24-patch correction runs in a popup. Continue picking LUT corners after you confirm.",
+  },
+  ext_cc_main_area_hint_upload: {
+    zh: "上传校准板照片后会自动弹出校色窗口；也可以稍后点「打开校色工具」手动打开。",
+    en: "Uploading the calibration board photo opens the correction popup automatically. You can also reopen it later with Open Calibration Tool.",
   },
   ext_cc_advanced_toggle: {
     zh: "高级选项",

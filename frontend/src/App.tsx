@@ -231,12 +231,6 @@ function AppContent() {
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
-  const extractorColorcheckerActive = useExtractorStore(
-    (s) =>
-      s.colorchecker_enabled &&
-      s.colorchecker_phase !== "done" &&
-      s.imageFile !== null,
-  );
   const extractorColorcheckerFullIds = useExtractorStore(
     useShallow((s) => [
       s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
@@ -434,13 +428,7 @@ function AppContent() {
           <div className="flex h-full min-h-0 flex-col xl:flex-row">
             <ExtractorPanel />
             <div className="relative min-h-[min(54vh,40rem)] flex-1 overflow-hidden border-t border-slate-200/70 dark:border-slate-800/80 xl:min-h-0 xl:border-l xl:border-t-0">
-              {extractorColorcheckerActive ? (
-                <div className="h-full min-h-0 overflow-auto p-3 sm:p-5 xl:p-7">
-                  <ColorcheckerConfirmDialogExtractor />
-                </div>
-              ) : (
-                <ExtractorCanvas />
-              )}
+              <ExtractorCanvas />
             </div>
           </div>
         )}
@@ -468,6 +456,14 @@ function AppContent() {
         open={bugReportOpen}
         onClose={() => setBugReportOpen(false)}
       />
+      {/* Extractor ColorChecker calibration popup. Mounted at the app root so
+          it appears regardless of whether the extractor is opened as the
+          full-page tab or as a dockable widget; it self-gates on the
+          extractor store's colorchecker phase. */}
+      {/* 提取器 ColorChecker 校色弹窗：挂载在应用根部，无论提取器是以整页标签
+          还是可停靠 widget 形式打开都能弹出；其显隐由提取器 store 的
+          colorchecker 阶段自行控制。 */}
+      <ColorcheckerConfirmDialogExtractor />
     </div>
   );
 }

@@ -536,7 +536,7 @@ export default function ExtractorPanel() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    {colorchecker_phase === "done" && (
+                    {colorchecker_phase === "done" ? (
                       <>
                         <span className="inline-flex items-center rounded-full border border-emerald-300/80 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300">
                           {t("ext_cc_calibrated_badge")}
@@ -549,13 +549,25 @@ export default function ExtractorPanel() {
                           disabled={isLoading}
                         />
                       </>
+                    ) : (
+                      imageFile !== null && (
+                        <Button
+                          label={t("ext_cc_open_dialog_btn")}
+                          variant="secondary"
+                          size="sm"
+                          onClick={openColorcheckerDialog}
+                          disabled={isLoading}
+                        />
+                      )
                     )}
                   </div>
                 </div>
                 <StatusBanner tone={colorchecker_phase === "done" ? "success" : "info"}>
                   {colorchecker_phase === "done"
                     ? t("ext_cc_calibrated_badge")
-                    : t("ext_cc_main_area_hint")}
+                    : imageFile === null
+                      ? t("ext_cc_main_area_hint_upload")
+                      : t("ext_cc_main_area_hint")}
                 </StatusBanner>
                 {colorcheckerSummary && (
                   <div className="grid gap-2 sm:grid-cols-4">
