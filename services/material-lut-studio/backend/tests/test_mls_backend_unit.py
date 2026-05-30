@@ -57,10 +57,27 @@ class TestRouteSurface:
         ):
             assert expected in paths, f"missing route: {expected}"
 
-    def test_session_coupled_lut_info_is_absent(self) -> None:
-        """Session-scoped LUT info stays owned by the main app. (会话端点不迁移)"""
-        paths = {route.path for route in create_app().routes}
-        assert not any("/session/" in path for path in paths)
+    def test_session_coupled_lut_info_runs_on_mls_session_store(self) -> None:
+        """Session-scoped LUT info routes through MLS's own SessionStore.
+        会话耦合的 LUT info 在 MLS 自有 SessionStore 上运行（与主 app 共用处理函数，
+        但通过 dependency_overrides 切到 MLS 的会话存储）。
+
+        Earlier this endpoint was excluded from the MLS service to avoid
+        cross-process session sharing. After bringing the legacy
+        ``/api/lut/...`` paths back onto MLS so the standalone frontend can
+        reach them via its Vite proxy, this endpoint comes along — but
+        ``app.dependency_overrides`` rewires its ``get_session_store``
+        dependency to the MLS-local singleton, so it is still single-tenant.
+        """
+        app = create_app()
+        paths = {route.path for route in app.routes}
+        assert "/api/lut/session/{session_id}/info" in paths
+
+        # The override must point the session dependency at the MLS-local
+        # SessionStore, not the main app's. (会话依赖必须重定向到 MLS 进程内)
+        from api.dependencies import get_session_store as main_get_session_store
+        from backend.dependencies import get_session_store as mls_get_session_store
+        assert app.dependency_overrides.get(main_get_session_store) is mls_get_session_store
 
 
 class TestThinAdapterContract:

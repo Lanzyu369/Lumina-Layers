@@ -39,6 +39,7 @@ from api.routers import (  # noqa: E402
     calibration_router,
     extractor_router,
     five_color_router,
+    lut_router as main_lut_router,
     single_stage_router,
     system_router,
 )
@@ -106,6 +107,14 @@ def create_app() -> FastAPI:
     app.include_router(single_stage_router)
     app.include_router(calibration_router)
     app.include_router(five_color_router)
+    # Reuse the main app's LUT router at its legacy ``/api/lut/...`` paths so
+    # frontend calls like ``/api/lut/list``, ``/api/lut/{name}/info``,
+    # ``/api/lut/merge`` work directly via the Vite dev proxy. The MLS-native
+    # ``/api/mls/lut/...`` router is kept alongside for cross-server callers
+    # (the converter app on a different host hits those mls-prefixed paths).
+    # 复用主应用的 LUT 路由，使前端 ``/api/lut/...`` 调用通过 Vite dev 代理直达；
+    # 同时保留 ``/api/mls/lut/...`` 给跨服务器调用方使用。
+    app.include_router(main_lut_router)
     # System router supplies image-preview / ColorChecker resource upload
     # (``/api/system/preview-resources`` etc.) plus printers / slicers /
     # settings used by the restored extraction & calibration panels.
@@ -139,7 +148,7 @@ def create_app() -> FastAPI:
         "MLS application created",
         extra={
             "event": "mls_app_created",
-            "router_count": 11,
+            "router_count": 12,
             "write_password_configured": get_auth_state().password_required,
         },
     )
