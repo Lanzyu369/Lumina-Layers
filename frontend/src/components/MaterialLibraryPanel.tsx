@@ -12,6 +12,7 @@ import {
 } from "../api/extractor";
 import type { SavedMaterialLibraryItem } from "../api/types";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
+import { useMlsReadOnly } from "../hooks/useMlsReadOnly";
 import { useI18n } from "../i18n/context";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
@@ -107,6 +108,7 @@ type MaterialLibraryBrandGroup = {
 export default function MaterialLibraryPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
+  const readOnly = useMlsReadOnly();
   const setActiveTab = useWidgetStore((state) => state.setActiveTab);
   const startMaterialVerification = useSingleStageStore((state) => state.startMaterialVerification);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -400,30 +402,36 @@ export default function MaterialLibraryPanel() {
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
-          <Button
-            label={t(
-              allSelected
-                ? "mat_gradient_library_clear_selection_btn"
-                : "mat_gradient_library_select_all_btn",
-            )}
-            variant="secondary"
-            onClick={toggleSelectAll}
-            disabled={materials.length === 0 || isLoading || isExporting || isImporting}
-          />
-          <Button
-            label={t("mat_gradient_library_import_btn")}
-            variant="secondary"
-            onClick={handleImportClick}
-            disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
-            loading={isImporting}
-          />
-          <Button
-            label={t("mat_gradient_library_export_btn")}
-            variant="secondary"
-            onClick={() => void handleExportSelected()}
-            disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
-            loading={isExporting}
-          />
+          {!readOnly && (
+            <Button
+              label={t(
+                allSelected
+                  ? "mat_gradient_library_clear_selection_btn"
+                  : "mat_gradient_library_select_all_btn",
+              )}
+              variant="secondary"
+              onClick={toggleSelectAll}
+              disabled={materials.length === 0 || isLoading || isExporting || isImporting}
+            />
+          )}
+          {!readOnly && (
+            <Button
+              label={t("mat_gradient_library_import_btn")}
+              variant="secondary"
+              onClick={handleImportClick}
+              disabled={isLoading || isExporting || pendingDeleteDirectoryName !== null}
+              loading={isImporting}
+            />
+          )}
+          {!readOnly && (
+            <Button
+              label={t("mat_gradient_library_export_btn")}
+              variant="secondary"
+              onClick={() => void handleExportSelected()}
+              disabled={selectedCount === 0 || isLoading || isImporting || pendingDeleteDirectoryName !== null}
+              loading={isExporting}
+            />
+          )}
           <Button
             label={t("mat_gradient_library_refresh_btn")}
             variant="secondary"
@@ -710,18 +718,20 @@ export default function MaterialLibraryPanel() {
                       className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
                     >
                       <div className="flex items-start gap-4">
-                        <label className="mt-1 flex shrink-0 items-center">
-                          <input
-                            type="checkbox"
-                            data-testid={`material-library-select-${item.directory_name}`}
-                            aria-label={tRuntime("mat_gradient_library_select_item_label", {
-                              materialName: item.material_name,
-                            })}
-                            checked={selectedDirectoryNames.includes(item.directory_name)}
-                            onChange={() => toggleMaterialSelection(item.directory_name)}
-                            className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
-                          />
-                        </label>
+                        {!readOnly && (
+                          <label className="mt-1 flex shrink-0 items-center">
+                            <input
+                              type="checkbox"
+                              data-testid={`material-library-select-${item.directory_name}`}
+                              aria-label={tRuntime("mat_gradient_library_select_item_label", {
+                                materialName: item.material_name,
+                              })}
+                              checked={selectedDirectoryNames.includes(item.directory_name)}
+                              onChange={() => toggleMaterialSelection(item.directory_name)}
+                              className="h-4 w-4 rounded border-slate-300 dark:border-slate-600"
+                            />
+                          </label>
+                        )}
                         <div className="flex min-w-0 flex-1 items-start gap-4">
                           <div
                             className="h-20 w-20 shrink-0 rounded-3xl border border-slate-200/80 dark:border-slate-700/80"
@@ -841,20 +851,24 @@ export default function MaterialLibraryPanel() {
                       </dl>
 
                       <div className="grid gap-3">
-                  <Button
-                    label={t("mat_gradient_library_edit_btn")}
-                    variant="secondary"
-                    onClick={() => handleOpenEditDialog(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_library_reverify_btn")}
-                    variant="secondary"
-                    onClick={() => handleStartVerification(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
+                  {!readOnly && (
+                    <Button
+                      label={t("mat_gradient_library_edit_btn")}
+                      variant="secondary"
+                      onClick={() => handleOpenEditDialog(item)}
+                      disabled={pendingDeleteDirectoryName === item.directory_name}
+                      className="w-full"
+                    />
+                  )}
+                  {!readOnly && (
+                    <Button
+                      label={t("mat_gradient_library_reverify_btn")}
+                      variant="secondary"
+                      onClick={() => handleStartVerification(item)}
+                      disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
+                      className="w-full"
+                    />
+                  )}
                   <Button
                     label={t("mat_gradient_library_show_history_btn")}
                     variant="secondary"
@@ -862,14 +876,16 @@ export default function MaterialLibraryPanel() {
                     disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
                     className="w-full"
                   />
-                  <Button
-                    label={t("mat_gradient_library_delete_btn")}
-                    variant="secondary"
-                    onClick={() => void handleDeleteMaterial(item)}
-                    disabled={pendingDeleteDirectoryName === item.directory_name}
-                    loading={pendingDeleteDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
+                  {!readOnly && (
+                    <Button
+                      label={t("mat_gradient_library_delete_btn")}
+                      variant="secondary"
+                      onClick={() => void handleDeleteMaterial(item)}
+                      disabled={pendingDeleteDirectoryName === item.directory_name}
+                      loading={pendingDeleteDirectoryName === item.directory_name}
+                      className="w-full"
+                    />
+                  )}
                       </div>
                     </section>
                   );

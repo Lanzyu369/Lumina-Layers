@@ -127,6 +127,32 @@ function MlsContent() {
   // 服务端要求密码但当前未解锁时，进入只读模式。
   const readOnlyMode = ready && passwordRequired && !writeEnabled;
 
+  // Tabs whose entire purpose is creating new data become unreachable in
+  // read-only mode; bump the active tab off them onto the first visible
+  // sibling so the empty content area never renders a "you cannot do
+  // anything here" panel.
+  // 只读模式下纯写入用途的标签不可达；若当前正落在这些标签上，自动跳到同组首个
+  // 可见标签，避免内容区显示"什么也做不了"的空面板。
+  const READ_ONLY_HIDDEN: ReadonlySet<MlsSubTabId> = new Set([
+    "gradient-card-generate",
+    "gradient-card-extract",
+    "calibration",
+    "extractor",
+  ]);
+  useEffect(() => {
+    if (!readOnlyMode) return;
+    if (READ_ONLY_HIDDEN.has(currentTab)) {
+      // material-library and lut-manager are the safest landing tabs for
+      // each primary group; pick by group of the original active tab.
+      // 选取所属一级分组的安全落点。
+      const fallback: MlsSubTabId = currentTab === "calibration" || currentTab === "extractor"
+        ? "lut-manager"
+        : "material-library";
+      setActiveTab(fallback);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnlyMode, currentTab]);
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-white">
       <header
@@ -138,7 +164,7 @@ function MlsContent() {
             <p className="truncate text-xs text-slate-500 dark:text-slate-400">{t("mls.appSubtitle")}</p>
           </div>
           <div className="min-w-0 flex-1">
-            <MlsPrimaryNav activeTab={currentTab} onTabChange={handleTabChange} />
+            <MlsPrimaryNav activeTab={currentTab} onTabChange={handleTabChange} readOnly={readOnlyMode} />
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -195,7 +221,7 @@ function MlsContent() {
         {/* Secondary tab row — same placement/strip as the converter app. */}
         {/* 二级标签行——与转换器应用相同的位置与条带样式。 */}
         <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
-          <MlsSecondaryNav activeTab={currentTab} onTabChange={handleTabChange} />
+          <MlsSecondaryNav activeTab={currentTab} onTabChange={handleTabChange} readOnly={readOnlyMode} />
         </div>
 
         <div className="relative min-h-0 flex-1">

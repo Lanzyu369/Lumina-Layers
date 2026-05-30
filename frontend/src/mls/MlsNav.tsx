@@ -148,10 +148,43 @@ interface MlsNavProps {
   activeTab: MlsSubTabId;
   onTabChange: (tab: MlsSubTabId) => void;
   compact?: boolean;
+  /**
+   * When ``true`` the secondary nav hides write-only tabs (calibration card
+   * generation, ColorChecker extraction, gradient-card capture/extract). The
+   * primary pill row still shows both groups so users can navigate.
+   * 只读模式下二级导航隐藏纯写入用途的标签（校准卡生成、ColorChecker 提取、
+   * 梯度卡拍摄/提取）；一级 pill 行仍显示两个分组以便切换。
+   */
+  readOnly?: boolean;
+}
+
+/** Tabs that have no read-only purpose: every flow there creates new data. */
+/** 只读模式下隐藏的标签：每个流程都用于创建新数据。 */
+const READ_ONLY_HIDDEN_SUB_TABS: ReadonlySet<MlsSubTabId> = new Set([
+  "gradient-card-generate",
+  "gradient-card-extract",
+  "calibration",
+  "extractor",
+]);
+
+/**
+ * Resolve the first secondary tab visible under the given primary group,
+ * honouring the read-only filter so navigation never lands on a hidden tab.
+ * 在只读过滤下找到给定一级分组中第一个可见的二级标签，避免导航跳到被隐藏的标签。
+ */
+function firstVisibleSubTab(
+  primary: MlsPrimaryTabId,
+  readOnly: boolean,
+): MlsSubTabId {
+  const list = primary === "lut-management" ? LUT_SUB_TABS : MATERIAL_SUB_TABS;
+  if (!readOnly) {
+    return list[0];
+  }
+  return list.find((id) => !READ_ONLY_HIDDEN_SUB_TABS.has(id)) ?? list[0];
 }
 
 /** Primary pill row — same markup/styling as the original TabNavBar. */
-export function MlsPrimaryNav({ activeTab, onTabChange, compact = false }: MlsNavProps) {
+export function MlsPrimaryNav({ activeTab, onTabChange, compact = false, readOnly = false }: MlsNavProps) {
   const { t } = useI18n();
   const activePrimary = resolveMlsPrimary(activeTab);
 
@@ -166,9 +199,9 @@ export function MlsPrimaryNav({ activeTab, onTabChange, compact = false }: MlsNa
               data-testid={`mls-tab-${id}`}
               onClick={() => {
                 if (id === "lut-management") {
-                  onTabChange(isMlsLutTab(activeTab) ? activeTab : LUT_SUB_TABS[0]);
+                  onTabChange(isMlsLutTab(activeTab) ? activeTab : firstVisibleSubTab("lut-management", readOnly));
                 } else {
-                  onTabChange(isMlsMaterialTab(activeTab) ? activeTab : MATERIAL_SUB_TABS[0]);
+                  onTabChange(isMlsMaterialTab(activeTab) ? activeTab : firstVisibleSubTab("material-management", readOnly));
                 }
               }}
               className={`
@@ -199,10 +232,11 @@ export function MlsPrimaryNav({ activeTab, onTabChange, compact = false }: MlsNa
 }
 
 /** Secondary row — same markup/styling as the original SubTabBar. */
-export function MlsSecondaryNav({ activeTab, onTabChange, compact = false }: MlsNavProps) {
+export function MlsSecondaryNav({ activeTab, onTabChange, compact = false, readOnly = false }: MlsNavProps) {
   const { t } = useI18n();
   const activePrimary = resolveMlsPrimary(activeTab);
-  const list = activePrimary === "lut-management" ? LUT_SUB_TABS : MATERIAL_SUB_TABS;
+  const baseList = activePrimary === "lut-management" ? LUT_SUB_TABS : MATERIAL_SUB_TABS;
+  const list = readOnly ? baseList.filter((id) => !READ_ONLY_HIDDEN_SUB_TABS.has(id)) : baseList;
 
   return (
     <nav
