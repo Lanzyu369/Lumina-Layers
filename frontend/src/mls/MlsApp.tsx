@@ -52,6 +52,22 @@ const MLS_TAB_IDS = new Set<string>([
 ]);
 const DEFAULT_MLS_TAB: MlsSubTabId = "material-library";
 
+/**
+ * Tabs that have no read-only purpose: every flow there creates new data.
+ * The secondary nav already filters them out; this set lets the active-tab
+ * sanity guard auto-bump if the user persisted an active tab that became
+ * invisible after entering read-only mode.
+ *
+ * 只读模式下纯写入用途的标签：每个流程都用于创建新数据。二级导航已经过滤掉它们，
+ * 此处的集合让活动标签守卫在用户从写入模式回到只读模式时自动跳到可见标签。
+ */
+const READ_ONLY_HIDDEN_SUB_TABS: ReadonlySet<MlsSubTabId> = new Set([
+  "gradient-card-generate",
+  "gradient-card-extract",
+  "calibration",
+  "extractor",
+]);
+
 function MlsContent() {
   const { t } = useI18n();
 
@@ -133,15 +149,9 @@ function MlsContent() {
   // anything here" panel.
   // 只读模式下纯写入用途的标签不可达；若当前正落在这些标签上，自动跳到同组首个
   // 可见标签，避免内容区显示"什么也做不了"的空面板。
-  const READ_ONLY_HIDDEN: ReadonlySet<MlsSubTabId> = new Set([
-    "gradient-card-generate",
-    "gradient-card-extract",
-    "calibration",
-    "extractor",
-  ]);
   useEffect(() => {
     if (!readOnlyMode) return;
-    if (READ_ONLY_HIDDEN.has(currentTab)) {
+    if (READ_ONLY_HIDDEN_SUB_TABS.has(currentTab)) {
       // material-library and lut-manager are the safest landing tabs for
       // each primary group; pick by group of the original active tab.
       // 选取所属一级分组的安全落点。
@@ -150,8 +160,7 @@ function MlsContent() {
         : "material-library";
       setActiveTab(fallback);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readOnlyMode, currentTab]);
+  }, [readOnlyMode, currentTab, setActiveTab]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-white">
@@ -194,8 +203,13 @@ function MlsContent() {
             <button
               type="button"
               onClick={() => {
+                // ``clearPassword`` already drops ``writeEnabled`` to false
+                // (passwordRequired is guaranteed true at this point because
+                // the button only renders inside that condition); no extra
+                // ``setStatus`` is needed.
+                // ``clearPassword`` 已经把 ``writeEnabled`` 置 false（按钮仅在
+                // passwordRequired 为 true 的分支渲染），无需额外 setStatus。
                 clearPassword();
-                setStatus(true, false);
               }}
               data-testid="mls-auth-lock"
               title={t("mls.auth.lock_tooltip")}

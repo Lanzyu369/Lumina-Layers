@@ -109,6 +109,17 @@ export const useMlsAuthStore = create<MlsAuthState & MlsAuthActions>()(
       },
       // Only persist the password — flags must come from the server every boot.
       // 只持久化密码本身，标志位每次启动都从服务端拉取。
+      //
+      // The ``as MlsAuthState & MlsAuthActions`` cast is needed because zustand
+      // v4's PersistOptions types ``partialize`` as returning the full state
+      // shape, but we deliberately strip it down. Returning a structurally
+      // narrower object is safe at runtime (the rehydrate merge only
+      // overwrites the provided keys), so the cast is the documented escape
+      // hatch. Track upstream issue if a future zustand release relaxes this.
+      // 由于 zustand v4 的 PersistOptions 把 ``partialize`` 类型化为返回完整
+      // state，这里用 ``as`` 把窄化对象强转回去；运行期是安全的（rehydrate 仅
+      // 覆盖提供的字段），是 zustand 文档化的逃生通道，未来 zustand 放宽类型时
+      // 可去掉。
       partialize: (state) =>
         ({ password: state.password }) as MlsAuthState & MlsAuthActions,
     },

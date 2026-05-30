@@ -19,7 +19,7 @@ verbatim.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -265,8 +265,3 @@ def build_material_cache_details(
         lab_hull=_compute_lab_hull(lab_full),
         rgb_points=rgb_points,
     )
-
-
-def directory_names_to_palette(_seq: Sequence[str]) -> None:
-    """Stub kept for forward-compat re-exports; not used. (占位保持兼容导出)"""
-    return None

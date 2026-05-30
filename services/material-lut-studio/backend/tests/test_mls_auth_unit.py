@@ -211,3 +211,43 @@ class TestWriteOperationDetection:
             )
             is False
         )
+
+    def test_sibling_prefix_does_not_match_an_exact_path_entry(self) -> None:
+        """A path that *starts with* an exact-write entry but isn't it stays read.
+        以精确写端点开头但不相等的路径仍视为读，避免兄弟端点误判。
+
+        Regression for the path-prefix sibling risk: with the older
+        ``startswith`` matcher, ``POST /api/mls/lut/uploaded-something``
+        would have matched ``("POST", "/api/mls/lut/upload")``. The split
+        between exact paths and prefix paths (where the latter must end in
+        ``/``) prevents this.
+        """
+        assert (
+            auth_module.is_write_protected_request(
+                "POST", "/api/mls/lut/uploaded-something"
+            )
+            is False
+        )
+        assert (
+            auth_module.is_write_protected_request(
+                "POST", "/api/mls/materials/import-status"
+            )
+            is False
+        )
+
+    def test_prefix_entries_match_actual_subpaths(self) -> None:
+        """Prefix entries match real path-segment children, not just literal prefixes.
+        前缀条目正确匹配真实的子路径段。
+        """
+        assert (
+            auth_module.is_write_protected_request(
+                "DELETE", "/api/mls/materials/brand_a/red"
+            )
+            is True
+        )
+        assert (
+            auth_module.is_write_protected_request(
+                "PATCH", "/api/extractor/gradient-card-materials/blue"
+            )
+            is True
+        )

@@ -43,11 +43,10 @@ import hmac
 import json
 import os
 from pathlib import Path
-from typing import Iterable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 _SERVICE_DIR = Path(__file__).resolve().parents[1]
 _CONFIG_FILENAME = "config.json"
@@ -56,42 +55,63 @@ _PASSWORD_HEADER = "x-mls-password"
 _PASSWORD_HEADER_CANONICAL = "X-MLS-Password"
 
 
-# Mutating endpoint allowlist: (HTTP method, path prefix). A request matches
-# when its method equals (case-insensitive) ``method`` and its path starts
-# with ``prefix`` (so DELETE /api/mls/materials/brand_a/red matches
-# ("DELETE", "/api/mls/materials/")). Anything not on this list is treated as
-# a read operation and is never password-checked.
-# 写端点白名单: (方法, 路径前缀)。请求方法相等（不区分大小写）且路径前缀匹配
-# 即视为写操作；列表外的请求一律视为读操作，从不校验密码。
-_WRITE_OPERATIONS: tuple[tuple[str, str], ...] = (
-    # MLS-native material-archive lifecycle (delete / metadata edit / import).
-    # MLS 原生耗材档案生命周期（删除/编辑元数据/导入）。
-    ("DELETE", "/api/mls/materials/"),
-    ("PATCH", "/api/mls/materials/"),
+# Mutating endpoint allowlist split into two flavours:
+#
+#   * ``_WRITE_EXACT_PATHS`` — the request path must match exactly. Used for
+#     "single-resource" routes that have no path parameter, so a sibling
+#     endpoint sharing the prefix (e.g. ``/api/mls/lut/uploaded-something``)
+#     can't be misclassified as a write.
+#   * ``_WRITE_PATH_PREFIXES`` — the request path must start with the prefix
+#     **and** the prefix must end with ``/``. This anchors every entry to a
+#     proper path-segment boundary, avoiding the same sibling-prefix risk
+#     for routes that legitimately take a path parameter (delete by name /
+#     patch by name).
+#
+# Both halves remain ``(method, value)`` tuples so the comparator is uniform.
+# Anything not on either list is treated as read.
+#
+# 把写端点白名单拆为两类：精确路径（无 path 参数的端点，必须完全相等）与路径
+# 前缀（必须以 ``/`` 结尾，确保只匹配子路径，不会被同前缀的兄弟端点误命中）。
+# 列表外的端点一律视为读操作。
+_WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
+    # MLS-native material-archive lifecycle (POST endpoints with no path
+    # parameter). MLS 原生耗材生命周期：无路径参数的 POST 端点。
     ("POST", "/api/mls/materials/import"),
-    # MLS-native LUT lifecycle (upload + merge are persistent writes).
-    # MLS 原生 LUT 生命周期（上传 + 合并都会落盘）。
+    # MLS-native LUT lifecycle (POST endpoints with no path parameter).
+    # MLS 原生 LUT 生命周期：无路径参数的 POST 端点。
     ("POST", "/api/mls/lut/upload"),
     ("POST", "/api/mls/lut/merge"),
-    ("DELETE", "/api/mls/lut/"),
-    # Reused single-stage / extractor mutations: gradient-card material save,
-    # delete, metadata edit, import; solver cache build & delete.
-    # 复用的提取器写操作：保存/删除/改元数据/导入耗材，求解缓存的构建与删除。
+    # Reused single-stage / extractor write POSTs without path parameters.
+    # 复用的提取器写 POST：无路径参数。
     ("POST", "/api/extractor/save-gradient-card-material"),
     ("POST", "/api/extractor/gradient-card-materials/import"),
-    ("DELETE", "/api/extractor/gradient-card-materials/"),
-    ("PATCH", "/api/extractor/gradient-card-materials/"),
     ("POST", "/api/extractor/material-solver-cache/build"),
     ("POST", "/api/extractor/material-solver-cache/delete"),
-    # Reused LUT lifecycle endpoints (the legacy unprefixed paths).
-    # 复用的 LUT 生命周期端点（旧无前缀路径）。
+    # Reused legacy LUT lifecycle (without ``/api/mls`` prefix).
+    # 复用的旧 LUT 生命周期端点（无 ``/api/mls`` 前缀）。
     ("POST", "/api/lut/upload"),
     ("POST", "/api/lut/merge"),
-    ("DELETE", "/api/lut/"),
-    # System-wide writes: cache wipe + user settings.
-    # 全局写操作：清缓存与用户设置。
+    # System-wide writes.
+    # 全局写操作。
     ("POST", "/api/system/clear-cache"),
     ("POST", "/api/system/settings"),
+)
+
+_WRITE_PATH_PREFIXES: tuple[tuple[str, str], ...] = (
+    # MLS-native material-archive lifecycle with ``{directory_name}`` param.
+    # MLS 原生耗材按目录名删除 / 改元数据。
+    ("DELETE", "/api/mls/materials/"),
+    ("PATCH", "/api/mls/materials/"),
+    # MLS-native LUT lifecycle with ``{lut_name}`` param.
+    # MLS 原生 LUT 按名称删除。
+    ("DELETE", "/api/mls/lut/"),
+    # Reused extractor lifecycle with ``{directory_name}`` param.
+    # 复用的提取器按目录名删除 / 改元数据。
+    ("DELETE", "/api/extractor/gradient-card-materials/"),
+    ("PATCH", "/api/extractor/gradient-card-materials/"),
+    # Reused legacy LUT lifecycle (without ``/api/mls`` prefix).
+    # 复用的旧 LUT 生命周期端点（无 ``/api/mls`` 前缀）。
+    ("DELETE", "/api/lut/"),
 )
 
 
@@ -194,7 +214,16 @@ def is_write_protected_request(method: str, path: str) -> bool:
     method_upper = method.upper()
     if method_upper in {"GET", "HEAD", "OPTIONS"}:
         return False
-    for write_method, prefix in _WRITE_OPERATIONS:
+    for write_method, exact_path in _WRITE_EXACT_PATHS:
+        if method_upper == write_method and path == exact_path:
+            return True
+    for write_method, prefix in _WRITE_PATH_PREFIXES:
+        # Prefixes are required to end with "/" (asserted by the maintainers,
+        # not enforced at runtime to keep the hot path branch-free); this
+        # anchors matching to a path-segment boundary so a sibling endpoint
+        # like ``/api/mls/lut/uploaded-something`` never gets misclassified.
+        # 前缀必须以 "/" 结尾（维护契约），匹配锚定到路径分段边界，避免兄弟端点
+        # 被误判。
         if method_upper == write_method and path.startswith(prefix):
             return True
     return False
@@ -222,11 +251,13 @@ class MlsWriteAuthMiddleware(BaseHTTPMiddleware):
     """Reject mutating MLS requests without a valid ``X-MLS-Password`` header.
     拦截缺少有效 ``X-MLS-Password`` 头部的 MLS 写请求。
 
-    Pure read operations (GET/HEAD/OPTIONS) and operations not in
-    :data:`_WRITE_OPERATIONS` pass through unauthenticated. When no password
-    is configured, this middleware is a no-op.
-    纯读请求（GET/HEAD/OPTIONS）以及不在 :data:`_WRITE_OPERATIONS` 内的操作不
-    需校验；未配置密码时该中间件等价空操作。
+    Pure read operations (GET/HEAD/OPTIONS) and operations outside the write
+    allowlist (:data:`_WRITE_EXACT_PATHS` + :data:`_WRITE_PATH_PREFIXES`) pass
+    through unauthenticated. When no password is configured, this middleware
+    is a no-op.
+    纯读请求（GET/HEAD/OPTIONS）以及不在写白名单（:data:`_WRITE_EXACT_PATHS` +
+    :data:`_WRITE_PATH_PREFIXES`）内的操作不需校验；未配置密码时该中间件等价
+    空操作。
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
@@ -248,20 +279,13 @@ class MlsWriteAuthMiddleware(BaseHTTPMiddleware):
         )
 
 
-def install_write_auth_middleware(app, *, write_operations: Iterable[tuple[str, str]] | None = None) -> None:
+def install_write_auth_middleware(app) -> None:
     """Mount :class:`MlsWriteAuthMiddleware` on the FastAPI ``app``.
     将 :class:`MlsWriteAuthMiddleware` 挂载到 FastAPI ``app``。
 
     Args:
         app: The FastAPI instance to protect. (要保护的 FastAPI 实例)
-        write_operations: Reserved for tests that want to override the
-            allowlist; pass ``None`` to use the default. (测试覆盖白名单用)
     """
-    # ``write_operations`` is reserved for forward-compat / tests; the
-    # middleware reads the module-level allowlist at request time so a
-    # future override would patch the module attribute.
-    # 该参数为前向兼容/测试预留；中间件在请求期读模块级白名单。
-    _ = write_operations
     app.add_middleware(MlsWriteAuthMiddleware)
 
 

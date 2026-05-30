@@ -66,6 +66,7 @@ from core.material_cache import (
     load_material_solver_cache_with_fallback,
     save_material_solver_cache,
 )
+from core.material_cache_visualization import build_material_cache_details
 from core.material_color_solver import (
     DEFAULT_SUGGEST_MAX_COMBINATIONS,
     DEFAULT_SUGGEST_MIN_SPACING,
@@ -1467,6 +1468,19 @@ async def material_solver_cache_details(
     """Return a LUT-details-shaped visualization payload for a built cache.
     返回与 LUT 详情同构的可视化载荷，用于已构建的求解器缓存。
 
+    HTTP semantics note: this endpoint is registered as ``POST`` to keep
+    its parameter style aligned with the sibling ``status`` / ``build`` /
+    ``delete`` / ``suggest-colors`` endpoints (form-encoded, including a
+    JSON-encoded ``material_directory_names`` array). It is **semantically
+    read-only**: it loads the cache, computes derived statistics, and never
+    mutates disk state. The MLS write-auth allowlist therefore intentionally
+    excludes this path so it remains reachable in read-only mode.
+
+    HTTP 语义说明：本端点用 ``POST`` 是为了与 ``status`` / ``build`` /
+    ``delete`` / ``suggest-colors`` 兄弟端点保持参数风格一致（form-encoded，
+    含 JSON 编码数组）。**语义上是只读的**：加载缓存并计算派生统计，从不改盘。
+    MLS 写入鉴权白名单刻意不收录此路径，使其在只读模式下仍可访问。
+
     Loads the cache for the given ``(palette, layer_count, layer_height_mm,
     substrate, grid_resolution)`` combination, projects its bucket centers
     into the four chart spaces (Lab a*/b*, Lab 3D, isometric RGB, hull),
@@ -1493,8 +1507,6 @@ async def material_solver_cache_details(
     Raises:
         HTTPException: 404 when no cache exists; 422 on invalid params.
     """
-    from core.material_cache_visualization import build_material_cache_details
-
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
