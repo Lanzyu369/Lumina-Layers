@@ -1821,6 +1821,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打开独立界面",
     en: "Open standalone UI",
   },
+  "settings.mls_save_url_button": {
+    zh: "保存",
+    en: "Save",
+  },
 
   // ==================== Settings Panel (Slicer Settings) ====================
   "settings.slicer_settings": {

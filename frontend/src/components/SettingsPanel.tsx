@@ -684,7 +684,7 @@ export default function SettingsPanel() {
               className={workstationInputClass}
             />
             <Button
-              label={t("settings.custom_slicer_save")}
+              label={t("settings.mls_save_url_button")}
               onClick={handleSaveMlsBaseUrl}
               variant="secondary"
               disabled={mlsBaseUrlInput.trim() === mlsBaseUrl}
@@ -718,7 +718,7 @@ export default function SettingsPanel() {
               className={workstationInputClass}
             />
             <Button
-              label={t("settings.custom_slicer_save")}
+              label={t("settings.mls_save_url_button")}
               onClick={handleSaveMlsBackendUrl}
               variant="secondary"
               disabled={mlsBackendUrlInput.trim() === mlsBackendUrl}

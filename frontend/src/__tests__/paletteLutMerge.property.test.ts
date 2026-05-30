@@ -144,37 +144,56 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       );
     });
 
-    it('version 3-6 preserves other widgets and injects the fridge widget when missing', () => {
-      // **Validates: Requirements 5.1**
+    it('version 3-6 drops removed widgets and seeds the full default layout', () => {
+      // **Validates: Requirements 5.1 + the v7 → v8 sanitize step**
       //
-      // When version is 3-6, migration should keep all widgets except
-      // 'palette-panel' and 'lut-color-grid', and add missing migrated widgets.
+      // Migration drops 'palette-panel', 'lut-color-grid' (legacy v6
+      // removal) **and any widget id whose layout no longer exists in
+      // DEFAULT_LAYOUT** (added in the v8 sanitize pass when MLS-only
+      // tabs/widgets like ``lut-manager`` were removed from the
+      // converter app), then seeds every still-default widget. The
+      // pre-MLS expectation that only 'fridge-magnet-settings' +
+      // 'puzzle-settings' got injected no longer holds.
+      // 迁移会丢弃 'palette-panel'、'lut-color-grid'（v6 旧迁移），并丢弃
+      // DEFAULT_LAYOUT 中已不存在的 widget（v8 sanitize 添加，对应 MLS 解耦
+      // 后从转换器移除的 widget），再补齐所有保留的默认 widget。
+      const expectedDefaultIds = new Set(Object.keys(DEFAULT_LAYOUT));
       fc.assert(
         fc.property(
           fc.constantFrom(3, 4, 5, 6),
           persistedStateArb,
           (version: number, persistedState: Record<string, unknown>) => {
             const inputWidgets = asRecord(persistedState.widgets);
-            const inputKeysWithoutOld = Object.keys(inputWidgets)
-              .filter((k) => k !== 'palette-panel' && k !== 'lut-color-grid')
-              .sort();
+            const expectedRetained = Object.keys(inputWidgets).filter(
+              (k) =>
+                k !== 'palette-panel' &&
+                k !== 'lut-color-grid' &&
+                expectedDefaultIds.has(k),
+            );
 
             const result = migrate(persistedState, version);
             const resultWidgets = asRecord(asRecord(result).widgets);
-            const resultKeys = Object.keys(resultWidgets).sort();
-            const expectedKeys = Array.from(
-              new Set([
-                ...inputKeysWithoutOld,
-                'fridge-magnet-settings',
-                'puzzle-settings',
-              ])
-            ).sort();
+            const resultKeys = Object.keys(resultWidgets);
 
-            // All non-old widgets should be preserved, plus the migrated fridge widget
-            expect(resultKeys).toEqual(expectedKeys);
+            // Retained input widgets that still exist in DEFAULT_LAYOUT
+            // must survive. (输入中仍存在于 DEFAULT_LAYOUT 的 widget 必须存活)
+            for (const key of expectedRetained) {
+              expect(resultKeys).toContain(key);
+            }
+            // The fridge widget is among the seeded defaults.
+            // (fridge widget 必须出现作为兼容性锚点)
             expect(resultWidgets).toHaveProperty('fridge-magnet-settings');
+            // Removed widgets must not survive. (旧 widget 不能残留)
+            expect(resultWidgets).not.toHaveProperty('palette-panel');
+            expect(resultWidgets).not.toHaveProperty('lut-color-grid');
+            // Every result key must be a current default widget id.
+            // (结果中只能包含当前默认布局已知的 widget)
+            for (const key of resultKeys) {
+              expect(expectedDefaultIds.has(key)).toBe(true);
+            }
 
             // The legacy collapsed flag must be dropped, not propagated.
+            // (旧 collapsed 字段必须丢弃)
             expect(asRecord(result)).not.toHaveProperty('colorWorkstationCollapsed');
           }
         ),
