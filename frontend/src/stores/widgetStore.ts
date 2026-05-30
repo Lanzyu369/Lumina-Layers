@@ -35,16 +35,19 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
     "puzzle-settings",
     "action-bar",
   ],
-  calibration: ["calibration"],
-  extractor: ["extractor"],
+  // Material/LUT tabs are rendered as full-page panels (in the MLS frontend),
+  // not as dock widgets, so they own no WidgetId entries here.
+  // 耗材/LUT 标签在 MLS 前端以整页面板渲染，非可停靠 widget，故无 WidgetId。
+  calibration: [],
+  extractor: [],
   "gradient-card-generate": [],
   "gradient-card-extract": [],
   "material-library": [],
   "material-recipe": [],
-  "lut-manager": ["lut-manager"],
+  "lut-manager": [],
   "lut-details": [],
   "lut-compare": [],
-  "five-color": ["five-color"],
+  "five-color": [],
   vectorizer: [],
   settings: [],
 };
@@ -166,43 +169,6 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     stackOrder: 8,
     expandedHeight: EXPANDED_HEIGHT,
   },
-  // --- 其他 4 个页面：各 1 个 Widget，左侧吸附，stackOrder 0 ---
-  calibration: {
-    id: "calibration",
-    position: { x: 0, y: 0 },
-    collapsed: false,
-    visible: true,
-    snapEdge: "left",
-    stackOrder: 0,
-    expandedHeight: EXPANDED_HEIGHT,
-  },
-  extractor: {
-    id: "extractor",
-    position: { x: 0, y: 0 },
-    collapsed: false,
-    visible: true,
-    snapEdge: "left",
-    stackOrder: 0,
-    expandedHeight: EXPANDED_HEIGHT,
-  },
-  "lut-manager": {
-    id: "lut-manager",
-    position: { x: 0, y: 0 },
-    collapsed: false,
-    visible: true,
-    snapEdge: "left",
-    stackOrder: 0,
-    expandedHeight: EXPANDED_HEIGHT,
-  },
-  "five-color": {
-    id: "five-color",
-    position: { x: 0, y: 0 },
-    collapsed: false,
-    visible: true,
-    snapEdge: "left",
-    stackOrder: 0,
-    expandedHeight: EXPANDED_HEIGHT,
-  },
 };
 
 // ===== Widget 注册表（静态配置，不含 component 字段）=====
@@ -279,38 +245,48 @@ export const WIDGET_REGISTRY: Omit<WidgetConfig, "component">[] = [
     defaultWidth: 350,
     minWidth: 300,
   },
-  // 其他页面
-  {
-    id: "calibration",
-    titleKey: "widget.calibration",
-    icon: "grid",
-    defaultWidth: 350,
-    minWidth: 300,
-  },
-  {
-    id: "extractor",
-    titleKey: "widget.extractor",
-    icon: "eyedropper",
-    defaultWidth: 350,
-    minWidth: 300,
-  },
-  {
-    id: "lut-manager",
-    titleKey: "widget.lutManager",
-    icon: "table",
-    defaultWidth: 350,
-    minWidth: 300,
-  },
-  {
-    id: "five-color",
-    titleKey: "widget.fiveColor",
-    icon: "palette",
-    defaultWidth: 350,
-    minWidth: 300,
-  },
 ];
 
 // ===== Store =====
+
+/**
+ * Sanitize a persisted widget payload so it never references removed tabs or
+ * widgets. Drops widget layouts whose id is no longer in DEFAULT_LAYOUT and
+ * resets an ``activeTab`` that is no longer a valid TabId back to "converter".
+ * 清洗持久化载荷，确保不引用已删除的标签/widget：丢弃 DEFAULT_LAYOUT 中已不存在
+ * 的 widget 布局，并把失效的 ``activeTab`` 重置为 "converter"。
+ */
+function _sanitizePersistedState(persistedState: unknown): WidgetStore {
+  const state =
+    typeof persistedState === "object" && persistedState !== null
+      ? (persistedState as { widgets?: Record<string, WidgetLayoutState>; activeTab?: TabId })
+      : {};
+
+  const validWidgetIds = new Set(Object.keys(DEFAULT_LAYOUT));
+  const sourceWidgets = (state.widgets ?? {}) as Record<string, WidgetLayoutState>;
+  const widgets: Record<string, WidgetLayoutState> = {};
+  for (const [id, layout] of Object.entries(sourceWidgets)) {
+    if (validWidgetIds.has(id)) {
+      widgets[id] = layout;
+    }
+  }
+  // Ensure every current widget exists (fill any missing from defaults).
+  for (const id of Object.keys(DEFAULT_LAYOUT)) {
+    if (!widgets[id]) {
+      widgets[id] = { ...DEFAULT_LAYOUT[id as WidgetId] };
+    }
+  }
+
+  const validTab = (Object.keys(TAB_WIDGET_MAP) as TabId[]).includes(
+    state.activeTab as TabId,
+  );
+
+  return {
+    ...(state as object),
+    widgets,
+    activeTab: validTab ? (state.activeTab as TabId) : "converter",
+  } as WidgetStore;
+}
 
 export const useWidgetStore = create<WidgetStore>()(
   subscribeWithSelector(
@@ -646,7 +622,7 @@ export const useWidgetStore = create<WidgetStore>()(
     }),
     {
       name: "lumina-widget-layout",
-      version: 7,
+      version: 8,
       migrate: (persistedState, version) => {
         type PersistedWidgetState = {
           widgets?: Record<WidgetId, WidgetLayoutState>;
@@ -706,18 +682,35 @@ export const useWidgetStore = create<WidgetStore>()(
           // 颜色入口已迁移至顶部二级 tab，丢弃过时的折叠状态字段。
           const { colorWorkstationCollapsed: _drop, ...rest } = state;
           void _drop;
-          return {
-            ...rest,
-            widgets,
-          };
+          return _sanitizePersistedState({ ...rest, widgets });
         }
-        return persistedState as WidgetStore;
+        // v7 -> v8: Material/LUT tabs & widgets moved to the standalone MLS
+        // service (Route B). Drop their persisted widget layouts and reset a
+        // removed ``activeTab`` to "converter" so old localStorage never points
+        // at a tab/widget that no longer exists (which crashed WidgetToggles).
+        // v7 -> v8：耗材/LUT 标签与 widget 已迁移到独立 MLS 服务。丢弃它们的持久化
+        // 布局，并把已删除的 ``activeTab`` 重置为 "converter"，避免旧 localStorage
+        // 指向不存在的标签/widget（曾导致 WidgetToggles 崩溃白屏）。
+        return _sanitizePersistedState(persistedState);
       },
       partialize: (state) => ({
         widgets: state.widgets,
         activeTab: state.activeTab,
       }),
-      onRehydrateStorage: () => () => {},
+      // Defensive guard for any payload (even at the current version) whose
+      // activeTab/widgets reference removed entries: snap them back to valid
+      // values on rehydrate so the UI never reads ``undefined``.
+      // 二次防护：无论何种持久化载荷，重新水合时把失效的 activeTab/widgets 归位，
+      // 确保 UI 不会读到 ``undefined``。
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const validTab = (Object.keys(TAB_WIDGET_MAP) as TabId[]).includes(
+          state.activeTab,
+        );
+        if (!validTab) {
+          state.activeTab = "converter";
+        }
+      },
     },
     ),
   ),

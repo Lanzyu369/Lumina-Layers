@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 import numpy as np
 from PIL import Image
 
-from api.app import create_app
+from tests._migrated_app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore

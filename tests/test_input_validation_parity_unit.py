@@ -153,7 +153,7 @@ def test_material_archive_branch_uses_event_prefix(
     # makes ``caplog``-based assertions brittle here.
     log = MagicMock(spec=logging.Logger)
 
-    with patch.object(common, "load_multiple_materials", _fake_load_multiple_materials), \
+    with patch.object(common, "load_materials", _fake_load_multiple_materials), \
          patch.object(common, "build_material_slot_names", _fake_build_material_slot_names), \
          patch.object(common, "build_material_preview_colors", _fake_build_material_preview_colors):
         ctx: dict = {
@@ -210,7 +210,7 @@ def test_material_archive_branch_unsupported_grid_falls_back() -> None:
 
     log = MagicMock(spec=logging.Logger)
 
-    with patch.object(common, "load_multiple_materials", _fake_load_multiple_materials), \
+    with patch.object(common, "load_materials", _fake_load_multiple_materials), \
          patch.object(common, "build_material_slot_names", _fake_build_material_slot_names), \
          patch.object(common, "build_material_preview_colors", _fake_build_material_preview_colors):
         ctx: dict = {

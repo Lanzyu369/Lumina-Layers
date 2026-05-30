@@ -317,6 +317,12 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     mean_delta_e: float | None = None
     verification_count: int = 1
     verification_history: list[SavedMaterialVerificationHistoryItemResponse] = Field(default_factory=list)
+    # Material usage statistics (sidecar-backed, best-effort).
+    # 耗材使用次数（边车文件支撑，缺失时回退为 0）。
+    usage_total: int = 0
+    usage_by_color_mode: dict[str, int] = Field(default_factory=dict)
+    usage_last_used_at: str | None = None
+    usage_last_used_color_mode: str | None = None
 
 
 class GradientCardMaterialLibraryResponse(BaseModel):

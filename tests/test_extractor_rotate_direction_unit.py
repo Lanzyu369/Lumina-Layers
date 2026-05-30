@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from api.app import app
+from tests._migrated_app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore

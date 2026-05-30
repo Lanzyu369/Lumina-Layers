@@ -39,6 +39,18 @@ export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;
 export const SVG_PIXELS_PER_MM_STEP = 0.1;
 
+/**
+ * Default URLs of the standalone Material-LUT Studio (MLS) service.
+ * The MLS dev frontend listens on :5180 (opened via the jump entry) and the
+ * MLS backend API on :8100 (called by the converter at runtime). Both can be
+ * overridden in Settings for separate-server deployments.
+ * 解耦后的 Material-LUT Studio 独立服务默认地址：前端默认 :5180（通过跳转入口
+ * 打开），后端 API 默认 :8100（转换器运行时调用）。两者均可在设置中覆盖，
+ * 以支持前后端分开部署到不同服务器。
+ */
+export const MLS_DEFAULT_BASE_URL = "http://localhost:5180";
+export const MLS_DEFAULT_BACKEND_URL = "http://localhost:8100";
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -86,6 +98,22 @@ export interface SettingsState {
    * 内代表色（像素最多的那一个），一键去掉海带纹；默认关闭。
    */
   autoReplaceGradientBanding: boolean;
+  /**
+   * Material-LUT Studio (MLS) — the decoupled material/LUT management service.
+   * ``mlsEnabled`` records the user's intent to route management-class calls to
+   * MLS. ``mlsBaseUrl`` is the standalone MLS **frontend** UI (opened via the
+   * jump entry); ``mlsBackendUrl`` is the MLS **backend** API the converter
+   * calls at runtime (solver cache, material list, color suggestions). They are
+   * separate so the frontend and backend can live on different servers. These
+   * are client-only preferences (no backend sync).
+   * 解耦后的耗材/LUT 管理服务。``mlsEnabled`` 记录是否启用 MLS。
+   * ``mlsBaseUrl`` 为 MLS **前端**界面地址（跳转入口打开）；``mlsBackendUrl`` 为
+   * MLS **后端** API 地址（转换器运行时调用：求解缓存、选材列表、取色建议）。
+   * 两者分开，便于前后端部署在不同服务器。仅客户端偏好，不与后端同步。
+   */
+  mlsEnabled: boolean;
+  mlsBaseUrl: string;
+  mlsBackendUrl: string;
 }
 
 // ========== Actions Interface ==========
@@ -114,6 +142,9 @@ export interface SettingsActions {
   setSvgPixelsPerMm: (value: number) => void;
   resetSvgPixelsPerMm: () => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
+  setMlsEnabled: (enabled: boolean) => void;
+  setMlsBaseUrl: (url: string) => void;
+  setMlsBackendUrl: (url: string) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -146,6 +177,9 @@ export const DEFAULT_SETTINGS: SettingsState = {
   solverCacheGridResolution: 64,
   svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
   autoReplaceGradientBanding: false,
+  mlsEnabled: false,
+  mlsBaseUrl: MLS_DEFAULT_BASE_URL,
+  mlsBackendUrl: MLS_DEFAULT_BACKEND_URL,
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
@@ -342,6 +376,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setAutoReplaceGradientBanding: (enabled: boolean) =>
         set({ autoReplaceGradientBanding: enabled }),
+
+      setMlsEnabled: (enabled: boolean) => set({ mlsEnabled: enabled }),
+
+      setMlsBaseUrl: (url: string) => set({ mlsBaseUrl: url }),
+
+      setMlsBackendUrl: (url: string) => set({ mlsBackendUrl: url }),
 
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();

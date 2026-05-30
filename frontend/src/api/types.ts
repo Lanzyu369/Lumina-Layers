@@ -836,6 +836,12 @@ export interface SavedMaterialLibraryItem {
   mean_delta_e?: number | null;
   verification_count?: number;
   verification_history?: SavedMaterialVerificationHistoryItem[];
+  // Material usage statistics surfaced from the backend sidecar file.
+  // 后端边车文件提供的耗材使用次数。
+  usage_total?: number;
+  usage_by_color_mode?: Record<string, number>;
+  usage_last_used_at?: string | null;
+  usage_last_used_color_mode?: string | null;
 }
 
 export interface GradientCardMaterialLibraryResponse {

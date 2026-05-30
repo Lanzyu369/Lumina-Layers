@@ -108,9 +108,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     it('double toggle restores original collapsed state', () => {
       // **Validates: Requirements 4.1, 4.4**
@@ -142,9 +140,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     it('stacked widgets never overlap vertically', () => {
       // **Validates: Requirements 3.3, 4.5**
@@ -191,9 +187,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     it('uses measured heights for expanded widgets when available', () => {
       fc.assert(
@@ -263,10 +257,6 @@ describe('Widget Workspace Property-Based Tests', () => {
             'fridge-magnet-settings': widgetStateArb,
             'puzzle-settings': widgetStateArb,
             'action-bar': widgetStateArb,
-            'calibration': widgetStateArb,
-            'extractor': widgetStateArb,
-            'lut-manager': widgetStateArb,
-            'five-color': widgetStateArb,
           }),
           fc.integer({ min: 1, max: 100 }), // version
           (widgets, version) => {
@@ -286,9 +276,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     it('moveWidget updates position to the exact given value', () => {
       // **Validates: Requirements 2.3**
@@ -322,9 +310,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     it('after autoArrange all visible widgets are snapped to an edge', () => {
       // **Validates: Requirements 3.6**
@@ -368,9 +354,7 @@ describe('Widget Workspace Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar',
-      'calibration', 'extractor', 'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     // Layout operations enum for generation
     const layoutOps = ['moveWidget', 'toggleCollapse', 'toggleVisible', 'snapToEdge', 'detachFromEdge'] as const;

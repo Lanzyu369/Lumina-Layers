@@ -66,6 +66,7 @@ from core.vector_large_format import (
     normalize_large_format_source_basename,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.single_stage import record_material_usage
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -106,13 +107,53 @@ class _GenerateBody(BaseModel):
 
 def _remove_temp_path(path: str | None) -> None:
     """Best-effort delete for route-owned temporary files."""
-
     if not path:
         return
     try:
         os.unlink(path)
     except OSError:
         pass
+
+
+def _record_material_archive_usage_safe(
+    *,
+    selected_materials: object,
+    color_mode: object,
+    request_id: str | None = None,
+) -> None:
+    """Best-effort: record per-material usage for a successful build.
+    尽力记录一次生成中各耗材的使用次数。
+
+    Failures here are intentionally swallowed and logged at WARNING — usage
+    tracking is auxiliary diagnostics and must never break a successful
+    generation response.
+    本函数失败会被吞掉并记录 WARNING 日志；usage 仅是辅助诊断，不能影响生成返回。
+
+    Args:
+        selected_materials: Iterable of material directory_name strings used
+            in the build. (本次生成使用的耗材 directory_name 列表)
+        color_mode: Color mode the build was generated under. (颜色模式)
+        request_id: Optional request id for log correlation. (用于日志关联的请求 id)
+    """
+    if not selected_materials:
+        return
+    if not isinstance(selected_materials, (list, tuple)):
+        return
+    directory_names = [str(name) for name in selected_materials if isinstance(name, str) and name.strip()]
+    if not directory_names:
+        return
+    try:
+        record_material_usage(directory_names=directory_names, color_mode=color_mode)
+    except (OSError, ValueError, TypeError) as exc:
+        log.warning(
+            "Failed to record material usage stats",
+            extra={
+                "event": "material_usage_record_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "request_id": request_id,
+            },
+        )
 
 
 def _remove_temp_paths(paths: list[str] | None) -> None:
@@ -957,6 +998,12 @@ async def convert_generate(
         },
     )
 
+    if session_material_source == "material_archive":
+        _record_material_archive_usage_safe(
+            selected_materials=session_data.get("selected_materials"),
+            color_mode=request.color_mode,
+        )
+
     return GenerateResponse(
         status="ok",
         message=status_msg or "Model generated",
@@ -1591,6 +1638,13 @@ async def convert_generate_large_format(
             "warning_count": len(result.get("warnings", [])),
         },
     )
+
+    if str(session_data.get("material_source") or "lut") == "material_archive":
+        _record_material_archive_usage_safe(
+            selected_materials=session_data.get("selected_materials"),
+            color_mode=request.color_mode,
+        )
+
     return LargeFormatGenerateResponse(**result)
 
 
@@ -1944,6 +1998,11 @@ async def convert_batch(
                         status="success",
                     )
                 )
+                if material_source == "material_archive":
+                    _record_material_archive_usage_safe(
+                        selected_materials=selected_material_names,
+                        color_mode=color_mode,
+                    )
             else:
                 results.append(
                     BatchItemResult(

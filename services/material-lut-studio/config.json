@@ -1,0 +1,5 @@
+{
+  "_comment_zh": "MLS 写入密码；留空或删除该字段则 MLS 完全开放（无写入保护）。也可改用环境变量 MLS_WRITE_PASSWORD。本文件已被 .gitignore 排除，请勿提交。",
+  "_comment_en": "MLS write password; an empty value or missing field leaves MLS fully open (no write protection). Alternatively set MLS_WRITE_PASSWORD. This file is gitignored — do not commit.",
+  "write_password": "lumina"
+}

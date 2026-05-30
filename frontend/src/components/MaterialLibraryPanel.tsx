@@ -794,6 +794,42 @@ export default function MaterialLibraryPanel() {
                       {Math.max(1, Number(item.verification_count ?? 1))}
                     </dd>
                   </div>
+                  <div
+                    data-testid="material-library-item-usage"
+                    className={`${mutedSectionCardClass} px-4 py-3`}
+                  >
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_gradient_library_usage_count_label")}
+                    </dt>
+                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {Number(item.usage_total ?? 0)}
+                    </dd>
+                    {item.usage_by_color_mode &&
+                      Object.keys(item.usage_by_color_mode).length > 0 && (
+                        <ul className="mt-2 grid gap-1 text-xs text-slate-500 dark:text-slate-400">
+                          {Object.entries(item.usage_by_color_mode)
+                            .sort((left, right) => right[1] - left[1])
+                            .map(([mode, count]) => (
+                              <li
+                                key={mode}
+                                className="flex items-center justify-between gap-2"
+                              >
+                                <span className="truncate">{mode}</span>
+                                <span className="shrink-0 font-mono text-slate-700 dark:text-slate-200">
+                                  {count}
+                                </span>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    {item.usage_last_used_at && (
+                      <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+                        {tRuntime("mat_gradient_library_usage_last_used", {
+                          when: formatCreatedAt(item.usage_last_used_at),
+                        })}
+                      </p>
+                    )}
+                  </div>
                   <div className={`${mutedSectionCardClass} px-4 py-3`}>
                     <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {t("mat_gradient_library_layer_height_label")}

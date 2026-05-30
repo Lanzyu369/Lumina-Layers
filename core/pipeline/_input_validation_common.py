@@ -25,11 +25,11 @@ import logging
 from typing import Any
 
 from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
+from core.material_lut_provider import load_materials
 from core.material_lut_synthesis import (
     build_material_preview_colors,
     build_material_slot_names,
     infer_material_archive_base_channel_idx,
-    load_multiple_materials,
 )
 
 
@@ -137,7 +137,7 @@ def _apply_material_archive_branch(
         return "error"
 
     try:
-        materials = load_multiple_materials(selected_materials)
+        materials = load_materials(selected_materials)
     except (FileNotFoundError, ValueError) as exc:
         ctx["error"] = f"[ERROR] Failed to load materials: {exc}"
         return "error"

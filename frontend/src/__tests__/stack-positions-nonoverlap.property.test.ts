@@ -24,9 +24,7 @@ import type { WidgetId, WidgetLayoutState } from '../types/widget';
 const ALL_WIDGET_IDS: WidgetId[] = [
   'basic-settings', 'advanced-settings', 'relief-settings',
   'outline-settings', 'cloisonne-settings', 'coating-settings',
-  'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar', 'calibration', 'extractor',
-  'lut-manager', 'five-color',
-];
+  'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
 /**
  * Arbitrary: generate a random subset of widgets with random collapsed states,

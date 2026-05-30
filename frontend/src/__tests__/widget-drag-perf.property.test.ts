@@ -145,9 +145,7 @@ describe('Widget Drag Performance Property-Based Tests', () => {
     const WIDGET_IDS: WidgetId[] = [
       'basic-settings', 'advanced-settings', 'relief-settings',
       'outline-settings', 'cloisonne-settings', 'coating-settings',
-      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar', 'calibration', 'extractor',
-      'lut-manager', 'five-color',
-    ];
+      'keychain-loop', 'fridge-magnet-settings', 'puzzle-settings', 'action-bar'];
 
     /**
      * Smart generator: creates a valid WidgetLayoutState with unique id and stackOrder.

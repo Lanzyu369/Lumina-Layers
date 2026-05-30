@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ColorMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { useSingleStageStore } from "../../stores/singleStageStore";
 import { useWidgetStore } from "../../stores/widgetStore";
 import type { AdvancedParamsFull } from "../../types/actionHistory";
 import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
@@ -29,7 +28,6 @@ describe("collectBugReportContext", () => {
       materialLayerCount: 5,
       materialLayerHeightMm: 0.08,
     });
-    useSingleStageStore.setState({ sessionId: "single-session" });
     useSettingsStore.setState({
       language: "en",
       theme: "dark",
@@ -87,7 +85,7 @@ describe("collectBugReportContext", () => {
       active_tab: "settings",
       active_session_ids: {
         converter: "converter-session",
-        single_stage: "single-session",
+        single_stage: null,
       },
       color_mode: "8-Color Max",
       lut_name: "My LUT",
@@ -101,11 +99,7 @@ describe("collectBugReportContext", () => {
       recent_client_logs: [],
       action_history: [],
       session_history: [],
-      active_original_image_ref: {
-        session_id: "single-session",
-        filename: null,
-        source: "single_stage",
-      },
+      active_original_image_ref: null,
       active_final_artifact_ref: null,
       advanced_params: null,
     });
@@ -221,7 +215,6 @@ describe("collectBugReportContext", () => {
       value: undefined,
     });
     useConverterStore.setState({ sessionId: null });
-    useSingleStageStore.setState({ sessionId: null });
 
     const context = collectBugReportContext();
 
