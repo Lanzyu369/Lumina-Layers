@@ -49,9 +49,41 @@ export default defineConfig({
     __LUMINA_VERSION__: JSON.stringify(pkg.version),
   },
   plugins: [serveMlsAtRoot(), react()],
+  // See ``vite.config.ts`` — the MLS entry shares the converter app's whole
+  // panel + dependency tree, so it pre-bundles the same set. Listing every
+  // dep explicitly avoids the white-screen-after-restart issue caused by
+  // Vite's auto-scanner producing different sets between cold starts.
+  // 详见 ``vite.config.ts``。MLS 入口与转换器共享整套面板与依赖，预打包同一份。
+  // 显式登记可避免冷启动时扫描结果不稳定导致的重启白屏问题。
   optimizeDeps: {
-    include: ["qrcode"],
+    include: [
+      "@dnd-kit/core",
+      "@floating-ui/react",
+      "@react-three/drei",
+      "@react-three/fiber",
+      "axios",
+      "framer-motion",
+      "qrcode",
+      "react",
+      "react-cropper",
+      "react-dom",
+      "react-dom/client",
+      "react/jsx-dev-runtime",
+      "react/jsx-runtime",
+      "read-excel-file/browser",
+      "three",
+      "zustand",
+      "zustand/middleware",
+      "zustand/react/shallow",
+    ],
   },
+  // Isolate the MLS pre-bundle cache from the converter entry. They share
+  // the same project files but the dev servers run independently and would
+  // otherwise stomp on each other's ``deps/_metadata.json`` whenever one
+  // restarts.
+  // 与转换器入口的预打包缓存隔离。两者共享工程文件，但开发服务器独立运行；
+  // 共用缓存会让一方重启弄乱另一方的 ``deps/_metadata.json``。
+  cacheDir: "node_modules/.vite-mls",
   server: {
     port: 5180,
     strictPort: false,

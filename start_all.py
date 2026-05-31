@@ -141,13 +141,31 @@ class Service:
     单个受管理的开发进程，支持重启。
     """
 
-    def __init__(self, key: str, name: str, cmd: list[str], cwd: Path, url: str | None, port: int | None = None) -> None:
+    def __init__(
+        self,
+        key: str,
+        name: str,
+        cmd: list[str],
+        cwd: Path,
+        url: str | None,
+        port: int | None = None,
+        vite_cache_dir: Path | None = None,
+    ) -> None:
         self.key = key          # hotkey digit, e.g. "1"
         self.name = name        # log tag, e.g. "main-backend"
         self.cmd = cmd
         self.cwd = cwd
         self.url = url
         self.port = port        # bound TCP port, for a stop-time sweep fallback
+        # Vite-only field. Absolute path of the cache directory the matching
+        # Vite config writes to (e.g. ``frontend/node_modules/.vite`` for the
+        # converter, ``frontend/node_modules/.vite-mls`` for MLS). When set,
+        # restart() wipes it before relaunching so the new dev server boots
+        # with a clean pre-bundle.
+        # Vite 专用字段。所对应 Vite 配置写入的缓存目录绝对路径（转换器为
+        # ``frontend/node_modules/.vite``，MLS 为 ``frontend/node_modules/.vite-mls``）。
+        # 设置后，restart() 在再次启动前清掉该目录，使新 dev server 从空预打包重启。
+        self.vite_cache_dir = vite_cache_dir
         self.proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
 
@@ -286,11 +304,64 @@ class Service:
                 time.sleep(0.4)
 
     def restart(self) -> None:
-        """Stop then start the service. (先停后启)"""
+        """Stop, clean Vite's pre-bundle cache (if any), then start.
+        先停后启；若是 Vite 服务，启动前清掉它的预打包缓存。
+
+        Why the cache wipe: Vite's dep optimizer writes
+        ``node_modules/.vite/deps/*.js`` with a content hash and notes that
+        hash in the page's ``?v=<hash>`` query strings. When the user
+        presses ``r`` to restart while a browser tab is still open, the
+        browser holds module references with the *previous* hash. If the
+        new dev server's pre-bundle ends up with a different hash (or
+        worse, a different file set — Vite's auto-scanner has been
+        observed to drop entries between starts), the browser's cached
+        module URLs no longer resolve. Vite either returns 504 (waiting
+        for an in-flight optimization that never targets the right file)
+        or its SPA HTML fallback (which the browser then fails to parse
+        as a module), and the page goes blank.
+
+        Wiping the cache before the fresh start guarantees the new server
+        builds a fresh pre-bundle every time. The browser's stale module
+        URLs will all 404 against the new bundle, but the HMR client's
+        WebSocket reconnect detects "server restarted" and forces a full
+        page reload, which re-fetches the entry HTML and picks up the
+        new ``?v=<new hash>`` references. The end result is an
+        always-clean restart cycle.
+
+        清缓存的原因：Vite 的依赖优化器把 ``node_modules/.vite/deps/*.js`` 按
+        内容 hash 写入，并把该 hash 标进页面的 ``?v=<hash>`` 查询串。当用户按
+        ``r`` 重启时，浏览器仍持旧 hash 的模块引用；新 dev server 若产出不同
+        hash 或不同文件集（Vite 自动扫描在不同启动间可能漏扫），浏览器请求的
+        旧 URL 就找不到——要么 504（等优化但等不到目标文件），要么落到 SPA
+        HTML 兜底（浏览器把 HTML 当 JS 模块解析失败）→ 白屏。重启前清缓存
+        保证新 server 每次都从空开始；浏览器旧 URL 全 404，HMR 客户端的
+        WebSocket 重连会探测到「服务器已重启」并强制整页刷新，从入口 HTML
+        重新拿到新 hash 的引用。最终形成稳定的重启循环。
+        """
         _log(self.name, "restarting...")
         self.stop()
+        if self.vite_cache_dir is not None:
+            self._clean_vite_cache()
         time.sleep(0.5)
         self.start()
+
+    def _clean_vite_cache(self) -> None:
+        """Best-effort wipe of the configured Vite cache directory.
+        尽力清空所配置的 Vite 缓存目录。
+
+        Failures (missing directory, permission errors) are logged at
+        SYS level and ignored — Vite will rebuild the cache anyway, and
+        a stale leftover is the very thing we're trying to avoid.
+        缺失目录或权限错误仅记录、不抛错；Vite 会自行重建，残留正是要避免的。
+        """
+        if self.vite_cache_dir is None or not self.vite_cache_dir.exists():
+            return
+        try:
+            import shutil
+            shutil.rmtree(self.vite_cache_dir, ignore_errors=False)
+            _log(self.name, f"cleared vite cache at {self.vite_cache_dir}")
+        except OSError as exc:
+            _err(f"{self.name} failed to clear vite cache: {exc}")
 
     @property
     def alive(self) -> bool:
@@ -300,6 +371,14 @@ class Service:
 def build_services(run_main: bool, run_mls: bool) -> list[Service]:
     """Build the service list for the requested scope. (按范围构建服务列表)"""
     services: list[Service] = []
+    # Each Vite entry has its own cache dir (matching the ``cacheDir`` config
+    # in the corresponding ``vite*.config.ts``). Restarting one frontend wipes
+    # only that cache, so the other frontend's running pre-bundle is never
+    # disturbed.
+    # 每个 Vite 入口拥有独立缓存目录（与对应 ``vite*.config.ts`` 的 ``cacheDir``
+    # 字段一致）。重启一个前端只清自己的缓存，不会干扰另一个前端正在使用的预打包。
+    main_vite_cache = FRONTEND_DIR / "node_modules" / ".vite"
+    mls_vite_cache = FRONTEND_DIR / "node_modules" / ".vite-mls"
     if run_main:
         services.append(Service(
             "1", "main-backend",
@@ -308,6 +387,7 @@ def build_services(run_main: bool, run_mls: bool) -> list[Service]:
         services.append(Service(
             "2", "main-frontend",
             _frontend_cmd(FRONTEND_DIR), FRONTEND_DIR, "http://localhost:4174", port=4174,
+            vite_cache_dir=main_vite_cache,
         ))
     if run_mls:
         services.append(Service(
@@ -317,6 +397,7 @@ def build_services(run_main: bool, run_mls: bool) -> list[Service]:
         services.append(Service(
             "4", "mls-frontend",
             _frontend_cmd(MLS_FRONTEND_DIR, MLS_VITE_CONFIG), MLS_FRONTEND_DIR, "http://localhost:5180", port=5180,
+            vite_cache_dir=mls_vite_cache,
         ))
     return services
 
