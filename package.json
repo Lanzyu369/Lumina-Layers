@@ -1,8 +1,9 @@
 {
   "name": "lumina-layers",
   "private": true,
+  "packageManager": "pnpm@10.33.2",
   "scripts": {
-    "dev:electron": "cd electron && npm start",
-    "build:electron": "cd electron && npm run build"
+    "dev:electron": "cd electron && pnpm start",
+    "build:electron": "cd electron && pnpm run build"
   }
 }

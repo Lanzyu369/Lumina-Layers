@@ -6,7 +6,6 @@ import type {
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
 import { getRecentClientLogs } from "./clientLog";
@@ -58,7 +57,6 @@ function deriveFinalArtifact(): FinalArtifactRef | null {
 function deriveOriginalImageRef(
   isConverterActive: boolean,
   converterSessionId: string | null,
-  singleStageSessionId: string | null,
 ): OriginalImageRef | null {
   if (isConverterActive) {
     if (!converterSessionId) return null;
@@ -68,19 +66,11 @@ function deriveOriginalImageRef(
       source: "converter",
     };
   }
-  if (singleStageSessionId) {
-    return {
-      session_id: singleStageSessionId,
-      filename: null,
-      source: "single_stage",
-    };
-  }
   return null;
 }
 
 export function collectBugReportContext(): BugReportContextPayload {
   const converter = useConverterStore.getState();
-  const singleStage = useSingleStageStore.getState();
   const settings = useSettingsStore.getState();
   const widget = useWidgetStore.getState();
 
@@ -130,7 +120,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_tab: widget.activeTab,
     active_session_ids: {
       converter: converter.sessionId ?? null,
-      single_stage: singleStage.sessionId ?? null,
+      single_stage: null,
     },
     color_mode: colorMode,
     lut_name: lutName,
@@ -147,7 +137,6 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_original_image_ref: deriveOriginalImageRef(
       isConverterActive,
       converter.sessionId ?? null,
-      singleStage.sessionId ?? null,
     ),
     active_final_artifact_ref: deriveFinalArtifact(),
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {

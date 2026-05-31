@@ -281,6 +281,7 @@ reference/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/dist-mls/
 
 # Tampermonkey / browser userscripts (local or shelved experiments, not core product)
 scripts/userscripts/
@@ -368,3 +369,10 @@ reference-projects/
 
 # macOS Finder metadata
 .DS_Store
+
+
+# MLS — write-password config is committed (default value). Treat the
+# default as a deployment-time placeholder; rotate via env var
+# ``MLS_WRITE_PASSWORD`` or by editing the file directly.
+# MLS — 写入密码配置入库（默认值）。把默认值视作部署期占位，正式环境通过环境变量
+# ``MLS_WRITE_PASSWORD`` 或直接修改文件来轮换。

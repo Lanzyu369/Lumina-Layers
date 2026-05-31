@@ -3,14 +3,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildMaterialSolverCache,
   deleteMaterialSolverCache,
+  fetchMaterialSolverCacheDetails,
   fetchMaterialSolverCacheStatus,
   type MaterialSolverCacheKey,
 } from "../api/materialCache";
-import type { MaterialSolverCacheEntry } from "../api/types";
+import type {
+  MaterialSolverCacheDetailsResponse,
+  MaterialSolverCacheEntry,
+} from "../api/types";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Button from "./ui/Button";
+import { LutColorDistributionCharts } from "./LutDetailsPanel";
 
 interface MaterialSolverCacheStatusCardProps {
   /** User-selected material directory names (ordered as in the picker). */
@@ -52,10 +58,15 @@ export default function MaterialSolverCacheStatusCard({
   substrate = "white",
 }: MaterialSolverCacheStatusCardProps) {
   const { t } = useI18n();
+  const workspace = useWorkspaceMode();
   const [state, setState] = useState<InternalState>(INITIAL_STATE);
   const [isBuilding, setIsBuilding] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [chartsExpanded, setChartsExpanded] = useState(false);
+  const [chartsLoading, setChartsLoading] = useState(false);
+  const [chartsError, setChartsError] = useState<string | null>(null);
+  const [chartsData, setChartsData] = useState<MaterialSolverCacheDetailsResponse | null>(null);
 
   const enableSolverCacheGridSelection = useSettingsStore(
     (s) => s.enableSolverCacheGridSelection,
@@ -121,6 +132,45 @@ export default function MaterialSolverCacheStatusCard({
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  // Whenever the cache key (palette, layer count, layer height, substrate, or
+  // selected grid resolution) changes, drop any stale chart payload and
+  // collapse the section back to its closed state. The user can re-open it
+  // to fetch the new cache's distribution.
+  // 当缓存键 (调色板/层数/层厚/基底/分辨率) 变化时清空已加载的图表并收起,
+  // 用户可重新展开以拉取新缓存的分布。
+  useEffect(() => {
+    setChartsData(null);
+    setChartsError(null);
+    setChartsLoading(false);
+    setChartsExpanded(false);
+  }, [cacheKey, effectiveGridResolution]);
+
+  const handleToggleCharts = useCallback(async () => {
+    if (chartsExpanded) {
+      setChartsExpanded(false);
+      return;
+    }
+    setChartsExpanded(true);
+    if (chartsData || chartsLoading) {
+      return;
+    }
+    setChartsError(null);
+    setChartsLoading(true);
+    try {
+      const response = await fetchMaterialSolverCacheDetails(cacheKey, {
+        gridResolution: effectiveGridResolution,
+        maxPoints: 8000,
+      });
+      setChartsData(response);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setChartsError(message);
+    } finally {
+      setChartsLoading(false);
+    }
+  }, [cacheKey, chartsData, chartsExpanded, chartsLoading, effectiveGridResolution]);
 
   const handleBuild = useCallback(async () => {
     if (materialDirectoryNames.length === 0) return;
@@ -285,6 +335,19 @@ export default function MaterialSolverCacheStatusCard({
               onClick={handleDelete}
               className="px-3 text-xs"
             />
+            <Button
+              label={t(
+                chartsExpanded
+                  ? "basic_material_cache_charts_hide_button"
+                  : "basic_material_cache_charts_show_button",
+              )}
+              variant="secondary"
+              disabled={materialDirectoryNames.length === 0}
+              loading={chartsLoading}
+              onClick={handleToggleCharts}
+              className="px-3 text-xs"
+              data-testid="material-solver-cache-charts-toggle"
+            />
           </>
         ) : (
           <Button
@@ -301,6 +364,37 @@ export default function MaterialSolverCacheStatusCard({
           />
         )}
       </div>
+
+      {chartsExpanded && state.phase === "cached" ? (
+        <div
+          data-testid="material-solver-cache-charts-region"
+          className="mt-3 flex flex-col gap-3"
+        >
+          {chartsError ? (
+            <p className="text-xs text-rose-500">
+              {tRuntime("basic_material_cache_charts_error", {
+                message: chartsError,
+              })}
+            </p>
+          ) : chartsLoading ? (
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {t("basic_material_cache_charts_loading")}
+            </p>
+          ) : chartsData ? (
+            <LutColorDistributionCharts
+              source={{
+                fingerprint: chartsData.palette_hash,
+                lab_points: chartsData.lab_points,
+                lab_points_3d: chartsData.lab_points_3d,
+                lab_hull: chartsData.lab_hull,
+                rgb_points: chartsData.rgb_points,
+                coverage_stats: chartsData.coverage_stats,
+              }}
+              workspaceMode={workspace.mode}
+            />
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }

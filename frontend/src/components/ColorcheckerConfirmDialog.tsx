@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   colorcheckerCalibrate,
@@ -1591,7 +1592,96 @@ export function ColorcheckerConfirmDialogInner({
   );
 }
 
+/**
+ * Shared modal shell for the ColorChecker calibration tool.
+ * ColorChecker 校色工具的通用模态外壳。
+ *
+ * Renders a centered, scrollable overlay via a portal with a close button,
+ * Escape-to-close and click-outside-to-close. Both the extractor and the
+ * gradient-card extraction flows wrap ``ColorcheckerConfirmDialogInner`` with
+ * this shell so the calibration UI shows up as a popup instead of an inline
+ * panel that forces scrolling.
+ * 通过 portal 渲染居中、可滚动的覆盖层，带关闭按钮、Esc 关闭与点击遮罩关闭。
+ * 颜色提取与梯度卡提取两条流程都用此外壳包裹 ``ColorcheckerConfirmDialogInner``，
+ * 让校色界面以弹窗形式出现，而不是内联面板导致反复滚动。
+ */
+export function ColorcheckerModalShell({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      data-testid="colorchecker-modal-backdrop"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 backdrop-blur-sm sm:p-5"
+      style={{ background: "var(--surface-scrim)" }}
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+        className="relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[24px]"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={title}
+          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 text-slate-500 shadow-[var(--shadow-control)] transition-colors hover:text-slate-700 dark:border-slate-700/80 dark:text-slate-300 dark:hover:text-slate-100"
+          style={{ background: "var(--surface-panel-strong)" }}
+        >
+          <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path
+              fillRule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * Extractor-side ColorChecker tool, presented as a centered modal overlay.
+ * 提取器侧的 ColorChecker 校色工具，以居中模态弹窗形式呈现。
+ *
+ * The modal opens automatically when ColorChecker is enabled and an image is
+ * uploaded (the store moves ``colorchecker_phase`` to ``calibrating``). The
+ * user picks corners, calibrates and confirms inside the dialog without
+ * scrolling the main extractor panel; accepting the result closes the modal
+ * and applies the calibrated image to the extraction flow.
+ * 当启用 ColorChecker 并上传图片后（store 将 ``colorchecker_phase`` 置为
+ * ``calibrating``），弹窗自动打开。用户在弹窗内完成点选、校色与确认，无需
+ * 滚动主面板；确认后弹窗关闭并把校准结果应用到后续提取流程。
+ */
 export default function ColorcheckerConfirmDialogExtractor() {
+  const { t } = useI18n();
   const enabled = useExtractorStore((s) => s.colorchecker_enabled);
   const phase = useExtractorStore((s) => s.colorchecker_phase);
   const imageFile = useExtractorStore((s) => s.imageFile);
@@ -1604,19 +1694,26 @@ export default function ColorcheckerConfirmDialogExtractor() {
   const rejectCalibrated = useExtractorStore((s) => s.rejectCalibrated);
   const closeDialog = useExtractorStore((s) => s.closeColorcheckerDialog);
 
+  const resolvedPhase = enabled ? phase ?? "calibrating" : phase;
+  const open =
+    imageFile !== null &&
+    (resolvedPhase === "calibrating" || resolvedPhase === "confirming");
+
   return (
-    <ColorcheckerConfirmDialogInner
-      phase={enabled ? (phase ?? "calibrating") : phase}
-      colorcheckerTarget={null}
-      imageFile={imageFile}
-      originalPreviewUrl={originalPreviewUrl}
-      calibratedPreviewUrl={calibratedPreviewUrl}
-      colorcheckerFullFileId={colorcheckerFullFileId}
-      calibrationSummary={calibrationSummary}
-      receiveCalibrated={receiveCalibrated}
-      confirmCalibrated={confirmCalibrated}
-      rejectCalibrated={rejectCalibrated}
-      closeDialog={closeDialog}
-    />
+    <ColorcheckerModalShell open={open} title={t("ext_cc_dialog_title")} onClose={closeDialog}>
+      <ColorcheckerConfirmDialogInner
+        phase={resolvedPhase}
+        colorcheckerTarget={null}
+        imageFile={imageFile}
+        originalPreviewUrl={originalPreviewUrl}
+        calibratedPreviewUrl={calibratedPreviewUrl}
+        colorcheckerFullFileId={colorcheckerFullFileId}
+        calibrationSummary={calibrationSummary}
+        receiveCalibrated={receiveCalibrated}
+        confirmCalibrated={confirmCalibrated}
+        rejectCalibrated={rejectCalibrated}
+        closeDialog={closeDialog}
+      />
+    </ColorcheckerModalShell>
   );
 }

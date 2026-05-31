@@ -18,15 +18,6 @@ import type { WidgetId, WidgetLayoutState, TabId } from "../types/widget";
 // All valid TabIds
 const ALL_TAB_IDS: TabId[] = [
   "converter",
-  "calibration",
-  "extractor",
-  "gradient-card-generate",
-  "gradient-card-extract",
-  "material-library",
-  "lut-manager",
-  "lut-details",
-  "lut-compare",
-  "five-color",
   "vectorizer",
   "settings",
 ];
@@ -43,10 +34,6 @@ const ALL_WIDGET_IDS: WidgetId[] = [
   "fridge-magnet-settings",
   "puzzle-settings",
   "action-bar",
-  "calibration",
-  "extractor",
-  "lut-manager",
-  "five-color",
 ];
 
 // Arbitrary for a single WidgetLayoutState with randomized layout fields

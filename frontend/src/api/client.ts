@@ -1,6 +1,25 @@
 import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
+import { getMlsPassword } from "../stores/mlsAuthStore";
+
+/**
+ * When set to ``true`` (e.g. by the MLS entry bootstrap), every request
+ * issued by ``apiClient`` is decorated with the cached ``X-MLS-Password``
+ * header. The main converter app leaves the flag at its default ``false``
+ * so its requests stay unchanged.
+ *
+ * MLS 入口启动时把该标志置为 ``true``，于是 ``apiClient`` 的每次请求都自动
+ * 注入 ``X-MLS-Password`` 头；主转换器应用保持 ``false``，请求行为不变。
+ */
+let MLS_PASSWORD_HEADER_ATTACH_ENABLED = false;
+
+/** Enable automatic ``X-MLS-Password`` header injection for ``apiClient``.
+ * 启用 ``apiClient`` 的 ``X-MLS-Password`` 头自动注入。
+ */
+export function enableApiClientMlsPasswordHeader(): void {
+  MLS_PASSWORD_HEADER_ATTACH_ENABLED = true;
+}
 
 /**
  * Axios 实例，统一管理 API 请求基础配置。
@@ -13,6 +32,17 @@ import { useActionHistoryStore } from "../stores/actionHistoryStore";
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
   timeout: 3_600_000,
+});
+
+apiClient.interceptors.request.use((config) => {
+  if (MLS_PASSWORD_HEADER_ATTACH_ENABLED) {
+    const password = getMlsPassword();
+    if (password) {
+      config.headers = config.headers ?? {};
+      (config.headers as Record<string, string>)["X-MLS-Password"] = password;
+    }
+  }
+  return config;
 });
 
 function summarizeApiErrorData(data: unknown): unknown {

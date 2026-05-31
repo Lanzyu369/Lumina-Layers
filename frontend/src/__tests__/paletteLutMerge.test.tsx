@@ -68,12 +68,20 @@ describe('Palette-LUT Merge Unit Tests', () => {
 
   // ===== Persist version 验证 =====
   describe('Persist version', () => {
-    it('persist version is 7', () => {
-      // 颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed -> bump v7
+    it('persist version is 8', () => {
+      // v6 -> v7: colour entry moved to a top-level secondary tab; dropped
+      // colorWorkstationCollapsed.
+      // v7 -> v8: persisted ``activeTab`` could point at a tab that was
+      // removed during the MLS decouple (gradient-card-extract / -generate
+      // / extractor / calibration), causing TAB_WIDGET_MAP[activeTab] to
+      // return undefined and crashing App.tsx; the migrate now sanitizes
+      // unknown tab ids back to "converter".
+      // v6→v7：颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed。
+      // v7→v8：MLS 解耦后持久化 activeTab 可能指向已删 tab，迁移时清回 "converter"。
       const options = (
         useWidgetStore.persist as unknown as { getOptions: () => { version: number } }
       ).getOptions();
-      expect(options.version).toBe(7);
+      expect(options.version).toBe(8);
     });
   });
 });

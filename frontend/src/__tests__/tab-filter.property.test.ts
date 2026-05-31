@@ -18,15 +18,6 @@ import type { TabId } from "../types/widget";
 // All valid TabIds
 const ALL_TAB_IDS: TabId[] = [
   "converter",
-  "calibration",
-  "extractor",
-  "gradient-card-generate",
-  "gradient-card-extract",
-  "material-library",
-  "lut-manager",
-  "lut-details",
-  "lut-compare",
-  "five-color",
   "vectorizer",
   "settings",
 ];

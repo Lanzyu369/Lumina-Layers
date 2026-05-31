@@ -12,10 +12,10 @@ import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from api.app import app
+from tests._migrated_app import build_migrated_app
 from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
-client: TestClient = TestClient(app)
+client: TestClient = TestClient(build_migrated_app())
 
 # Shared mock return value: (file_path, PIL preview image, status string)
 _mock_preview: Image.Image = Image.fromarray(

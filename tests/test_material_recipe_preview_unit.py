@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from api.app import create_app
+from tests._migrated_app import create_app
 from core.material_color_solver import (
     MaterialParams,
     forward_model,

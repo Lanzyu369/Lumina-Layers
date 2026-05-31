@@ -30,17 +30,22 @@ def test_extractor_router_prefix_and_key_paths() -> None:
     assert "/api/extractor/confirm-palette" in paths
 
 
-def test_converter_extractor_paths_mounted_in_app() -> None:
-    """App-level route table should keep converter/extractor public paths."""
+def test_converter_paths_mounted_in_app_extractor_migrated() -> None:
+    """Converter paths stay in the main app; extractor paths moved to MLS.
+    转换器路径保留在主应用；提取路径已迁移到 MLS，不应再挂在主应用。
+    """
     from api.app import app
 
     paths = {route.path for route in app.routes}
     assert "/api/convert/preview" in paths
     assert "/api/convert/generate" in paths
     assert "/api/convert/replace-color" in paths
-    assert "/api/extractor/extract" in paths
-    assert "/api/extractor/manual-fix" in paths
-    assert "/api/extractor/confirm-palette" in paths
+    # Extractor / single_stage / calibration / five_color migrated to MLS
+    # (Route B); the main app must no longer expose them.
+    # 提取/单段/校准/五色已迁移到 MLS；主应用不应再暴露它们。
+    assert not any(p.startswith("/api/extractor/") for p in paths)
+    assert not any(p.startswith("/api/calibration/") for p in paths)
+    assert not any(p.startswith("/api/five-color/") for p in paths)
 
 
 def test_converter_router_package_layout_present() -> None:

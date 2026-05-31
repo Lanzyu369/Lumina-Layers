@@ -1471,6 +1471,90 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "图像转换",
     en: "Converter",
   },
+  "mls.appTitle": {
+    zh: "耗材与 LUT 工作室",
+    en: "Material & LUT Studio",
+  },
+  "mls.appSubtitle": {
+    zh: "提取 · 生成 · 查询 · 管理（独立服务）",
+    en: "Extract · Generate · Query · Manage (standalone service)",
+  },
+  "mls.auth.title": {
+    zh: "进入耗材与 LUT 工作室",
+    en: "Enter Material & LUT Studio",
+  },
+  "mls.auth.description": {
+    zh: "本服务已启用写入密码。输入正确密码可新增 / 修改 / 删除耗材与 LUT；选择只读模式则可正常浏览，但所有写操作会被服务器拒绝。",
+    en: "This service has a write password enabled. Enter the correct password to create / edit / delete materials and LUTs, or pick read-only to browse normally — every write request will be rejected by the server.",
+  },
+  "mls.auth.password_label": {
+    zh: "写入密码",
+    en: "Write password",
+  },
+  "mls.auth.password_placeholder": {
+    zh: "请输入服务端配置的写入密码",
+    en: "Enter the write password configured on the server",
+  },
+  "mls.auth.unlock": {
+    zh: "解锁写入",
+    en: "Unlock writes",
+  },
+  "mls.auth.unlocking": {
+    zh: "正在校验…",
+    en: "Verifying…",
+  },
+  "mls.auth.enter_read_only": {
+    zh: "进入只读模式",
+    en: "Enter read-only",
+  },
+  "mls.auth.error_empty": {
+    zh: "请先输入密码。",
+    en: "Please enter the password first.",
+  },
+  "mls.auth.error_wrong": {
+    zh: "密码错误，请重试。",
+    en: "Wrong password. Please try again.",
+  },
+  "mls.auth.error_network": {
+    zh: "无法连接 MLS 后端，请检查地址或网络。",
+    en: "Could not reach the MLS backend; check the address or network.",
+  },
+  "mls.auth.pill_write_enabled": {
+    zh: "写入已解锁",
+    en: "Write unlocked",
+  },
+  "mls.auth.pill_write_enabled_tooltip": {
+    zh: "当前已解锁写入；点击可重新输入密码。",
+    en: "Writes are unlocked; click to re-enter the password.",
+  },
+  "mls.auth.pill_read_only": {
+    zh: "只读模式",
+    en: "Read-only",
+  },
+  "mls.auth.pill_read_only_tooltip": {
+    zh: "当前为只读模式；点击输入密码以解锁写入。",
+    en: "Currently read-only; click to enter the password and unlock writes.",
+  },
+  "mls.auth.lock": {
+    zh: "退出写入",
+    en: "Lock",
+  },
+  "mls.auth.lock_tooltip": {
+    zh: "退出写入模式，回到只读。",
+    en: "Lock writes and return to read-only.",
+  },
+  "mls.auth.read_only_banner": {
+    zh: "当前为只读模式：可浏览与查询，所有新增 / 修改 / 删除操作会被服务器拒绝。",
+    en: "Read-only mode: browse and query freely; every create / edit / delete request will be rejected by the server.",
+  },
+  "tab.openMls": {
+    zh: "耗材与 LUT",
+    en: "Material & LUT",
+  },
+  "tab.openMlsHint": {
+    zh: "打开独立的耗材与 LUT 工作室（提取/生成/查询/管理）。可在设置中配置地址。",
+    en: "Open the standalone Material-LUT Studio (extract / generate / query / manage). Configure its URL in Settings.",
+  },
   "tab.lutManagement": {
     zh: "LUT管理",
     en: "LUT Management",
@@ -1698,6 +1782,48 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.auto_replace_gradient_tip": {
     zh: "开启后渐变较多的图片在预览后会略慢一步出现最终效果（需要额外的批量替换）。若关闭，同样的功能仍可在颜色工作站里手动使用。",
     en: "With this on, images rich in gradients show the final banding-free result a beat later (extra batch replacement runs). Turning it off keeps the same capability available as a manual action in the Color Workstation.",
+  },
+
+  // ==================== Settings Panel (Material-LUT Studio) ====================
+  "settings.mls_heading": {
+    zh: "耗材与 LUT 工作室",
+    en: "Material & LUT Studio",
+  },
+  "settings.mls_description": {
+    zh: "耗材档案与 LUT 已拆分为独立服务（Material-LUT Studio），拥有自己的管理界面。本节配置该服务的前端界面与后端 API 地址；前后端可部署在不同主机上。",
+    en: "Material archives and LUTs are a standalone service (Material-LUT Studio) with its own management UI. This section configures that service's frontend URL and backend API URL — the two can live on different hosts.",
+  },
+  "settings.mls_base_url_label": {
+    zh: "前端界面地址",
+    en: "Frontend URL",
+  },
+  "settings.mls_base_url_help": {
+    zh: "Material-LUT Studio 独立界面的访问地址（点「打开独立界面」会打开它）。若部署在其他主机或端口，请在此修改。",
+    en: "Address of the standalone Material-LUT Studio UI (opened by \"Open standalone UI\"). Change this if you deploy the frontend on another host or port.",
+  },
+  "settings.mls_base_url_placeholder": {
+    zh: "http://localhost:5180",
+    en: "http://localhost:5180",
+  },
+  "settings.mls_backend_url_label": {
+    zh: "后端接口地址",
+    en: "Backend API URL",
+  },
+  "settings.mls_backend_url_help": {
+    zh: "Material-LUT Studio 后端 API 地址。转换器在「耗材档案」模式下会调用它获取选材列表、求解缓存与取色建议。前后端可部署在不同服务器。",
+    en: "Address of the Material-LUT Studio backend API. The converter calls it in material-archive mode for the material list, solver cache, and color suggestions. Frontend and backend can live on different servers.",
+  },
+  "settings.mls_backend_url_placeholder": {
+    zh: "http://localhost:8100",
+    en: "http://localhost:8100",
+  },
+  "settings.mls_open_button": {
+    zh: "打开独立界面",
+    en: "Open standalone UI",
+  },
+  "settings.mls_save_url_button": {
+    zh: "保存",
+    en: "Save",
   },
 
   // ==================== Settings Panel (Slicer Settings) ====================
@@ -2755,8 +2881,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Retry",
   },
   ext_cc_main_area_hint: {
-    zh: "24 色卡校色会在右侧图像区展开，完成后再继续选择 LUT 色卡四角。",
-    en: "The 24-patch correction tool opens in the image area. Continue picking LUT corners after correction.",
+    zh: "24 色卡校色会在弹窗中进行，完成并确认后再继续选择 LUT 色卡四角。",
+    en: "The 24-patch correction runs in a popup. Continue picking LUT corners after you confirm.",
+  },
+  ext_cc_main_area_hint_upload: {
+    zh: "上传校准板照片后会自动弹出校色窗口；也可以稍后点「打开校色工具」手动打开。",
+    en: "Uploading the calibration board photo opens the correction popup automatically. You can also reopen it later with Open Calibration Tool.",
   },
   ext_cc_advanced_toggle: {
     zh: "高级选项",
@@ -3353,6 +3483,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_cache_delete_button: {
     zh: "删除缓存",
     en: "Delete cache",
+  },
+  basic_material_cache_charts_show_button: {
+    zh: "查看色彩分布图",
+    en: "View color charts",
+  },
+  basic_material_cache_charts_hide_button: {
+    zh: "收起色彩分布图",
+    en: "Hide color charts",
+  },
+  basic_material_cache_charts_loading: {
+    zh: "正在加载色彩分布图…",
+    en: "Loading color charts…",
+  },
+  basic_material_cache_charts_error: {
+    zh: "色彩分布图加载失败：{message}",
+    en: "Failed to load color charts: {message}",
   },
   basic_material_cache_confirm_delete: {
     zh: "确认删除当前组合的缓存？",
@@ -6490,6 +6636,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_verification_count_label: {
     zh: "验证次数",
     en: "Verification Runs",
+  },
+  mat_gradient_library_usage_count_label: {
+    zh: "使用次数",
+    en: "Usage Count",
+  },
+  mat_gradient_library_usage_last_used: {
+    zh: "最近使用：{when}",
+    en: "Last used: {when}",
   },
   mat_gradient_library_directory_label: {
     zh: "目录名",

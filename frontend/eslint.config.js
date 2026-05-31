@@ -144,6 +144,19 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Allow intentionally-unused identifiers prefixed with `_`
+      // (e.g. placeholder params kept for a stable signature). Matches the
+      // common TS convention so reviewers can mark intent without disabling
+      // the rule inline.
+      // 允许下划线前缀的故意未使用标识符（如为保持签名而保留的占位参数）。
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
       'react-refresh/only-export-components': [
         'warn',
         {
