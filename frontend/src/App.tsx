@@ -19,7 +19,7 @@ import { BugReportModal } from "./components/BugReportModal";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
+import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP, isMainRenderableTab } from "./stores/widgetStore";
 import TabNavBar, { hasSubTabs } from "./components/widget/TabNavBar";
 import SubTabBar from "./components/widget/SubTabBar";
 import SettingsPanel from "./components/SettingsPanel";
@@ -214,6 +214,30 @@ function AppContent() {
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
 
+  // The shared widget store persists ``activeTab`` for both this app and the
+  // standalone MLS frontend (same store, separate origins). A localStorage
+  // value left over from before the MLS decouple — or written by the MLS app —
+  // can point at a material/LUT tab this app has no content branch for, which
+  // would render an empty workspace. Coerce any non-renderable tab back to
+  // "converter" at this boundary (mirrors how MlsApp coerces foreign tabs to
+  // its own default), keeping the shared migration logic permissive.
+  // 共享 widget store 为本应用与独立 MLS 前端同时持久化 ``activeTab``（同一 store、
+  // 不同 origin）。解耦前遗留或由 MLS 写入的值可能指向本应用没有内容分支的耗材/LUT
+  // 标签，导致空工作区。在此边界把不可渲染的标签归位到 "converter"（与 MlsApp 把
+  // 外来标签归位到自身默认值的做法对称），从而让共享迁移逻辑保持宽松。
+  useEffect(() => {
+    if (!isMainRenderableTab(activeTab)) {
+      setActiveTab("converter");
+    }
+  }, [activeTab, setActiveTab]);
+
+  // Render against a coerced tab so the very first paint (before the effect
+  // above commits the corrected store value) never shows an empty workspace
+  // for a non-renderable persisted tab.
+  // 用归位后的标签渲染，使首帧（在上面的 effect 提交修正值之前）也不会因不可渲染
+  // 的持久化标签而出现空工作区。
+  const renderTab = isMainRenderableTab(activeTab) ? activeTab : "converter";
+
   // Material/LUT extract / generate / query (and their ColorChecker capture
   // flows) moved to the standalone Material-LUT Studio (MLS) service, so the
   // converter app no longer manages single-stage sessions or ColorChecker
@@ -324,10 +348,10 @@ function AppContent() {
       </header>
 
       <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
-        {hasSubTabs(activeTab) && (
+        {hasSubTabs(renderTab) && (
           <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
             <SubTabBar
-              activeTab={activeTab}
+              activeTab={renderTab}
               compact={workspace.isCompact}
             />
           </div>
@@ -335,7 +359,7 @@ function AppContent() {
 
         <div className="relative min-h-0 flex-1">
         {/* Converter: WidgetWorkspace + Scene3D */}
-        {activeTab === 'converter' && (
+        {renderTab === 'converter' && (
           <div className="h-full min-h-0">
             <WidgetWorkspace>
               <SceneErrorBoundary
@@ -353,8 +377,8 @@ function AppContent() {
           </div>
         )}
 
-        {activeTab === 'vectorizer' && <VectorizerPanel />}
-        {activeTab === 'settings' && <SettingsPanel />}
+        {renderTab === 'vectorizer' && <VectorizerPanel />}
+        {renderTab === 'settings' && <SettingsPanel />}
         </div>
       </main>
       <AnnouncementDialog

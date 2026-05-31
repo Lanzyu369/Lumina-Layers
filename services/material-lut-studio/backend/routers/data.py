@@ -21,7 +21,6 @@ bytes with a fingerprint the caller uses to cache locally and avoid refetching.
 
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 

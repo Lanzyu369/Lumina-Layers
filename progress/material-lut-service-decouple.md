@@ -51,6 +51,13 @@ services/material-lut-studio/
    仅改 provider 从 MLS 预取到本地缓存，管线代码无需改动。
 4. **缓存自失效优于失效协议**：provider 的 memo 键折入档案文件 mtime，任何进程
    （含 MLS）改动文件都会让键失效并重载，无需脆弱的跨进程失效通知。
+5. **远程模式直接绕过 memo**：`LUMINA_MLS_ENABLED` 开启且转换器与 MLS 不共享磁盘
+   时，本地 mtime 恒为 0（文件缺失），上面的自失效键会退化成常量，从而把首次取到
+   的 `MaterialParams` 永久固定、在 MLS 改耗材后返回陈旧 Beer-Lambert 参数。因此
+   `load_materials` 在远程模式下直接绕过 memo、每次都向 MLS 取新——耗材载荷极小
+   （每种四个长度 3 的向量）且每次生成至多取数次，正确性优先于可忽略的缓存收益。
+   （`fetch_lut_path` / `fetch_solver_cache_root` 因为是 MB 级文件，仍走「先取廉价
+   指纹、命中则跳过下载」的本地缓存路径，与耗材参数不同。）
 
 ## 配置开关
 

@@ -162,3 +162,58 @@ class TestLoadSolverCachePassthrough:
         assert captured["layer_count"] == 5
         assert captured["substrate"] == "white"
         assert captured["grid_resolution"] == 256
+
+
+class TestRemoteModeBypassesMemo:
+    """In MLS remote mode ``load_materials`` must always fetch fresh.
+    远程（MLS）模式下 ``load_materials`` 必须始终取新，不命中本地 memo。
+
+    Regression for the stale-params bug: the local-mtime memo key is a
+    constant in remote mode (the material files are absent locally → mtime
+    0.0), so a memo would pin the first-fetched params forever and serve
+    stale Beer-Lambert values after MLS edits the same directories. The
+    provider therefore bypasses the memo entirely when MLS is enabled.
+    陈旧参数回归：远程模式下本地 mtime memo 键恒定（本地无文件 → mtime 0.0），
+    memo 会永久固定首次取到的参数。提供者在启用 MLS 时完全绕过 memo。
+    """
+
+    def test_remote_mode_fetches_every_call(self, monkeypatch):
+        """Each load in remote mode triggers a fresh ``fetch_materials`` call.
+        远程模式下每次加载都触发一次新的 ``fetch_materials``。
+        """
+        monkeypatch.setattr(provider, "_mls_enabled", lambda: True)
+
+        calls: list[list[str]] = []
+
+        def _fake_fetch(names):
+            calls.append(list(names))
+            # Mimic ``core.material_lut_remote.fetch_materials`` returning the
+            # rebuilt materials list. (返回重建后的材料列表)
+            return [object() for _ in names]
+
+        import core.material_lut_remote as remote
+
+        monkeypatch.setattr(remote, "fetch_materials", _fake_fetch)
+
+        provider.load_materials(["red", "blue"])
+        provider.load_materials(["red", "blue"])
+
+        # Two calls → two fetches (no memo dedupe in remote mode).
+        # 两次调用 → 两次取数（远程模式不去重）。
+        assert len(calls) == 2
+
+    def test_remote_mode_returns_only_materials_list(self, monkeypatch):
+        """``load_materials`` returns the fetched materials list unchanged.
+        ``load_materials`` 原样返回取到的材料列表。
+        """
+        monkeypatch.setattr(provider, "_mls_enabled", lambda: True)
+        sentinel = [object(), object()]
+
+        import core.material_lut_remote as remote
+
+        monkeypatch.setattr(
+            remote, "fetch_materials", lambda names: sentinel
+        )
+
+        result = provider.load_materials(["x", "y"])
+        assert result is sentinel

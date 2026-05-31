@@ -58,8 +58,14 @@ def fetch_materials(
         client: Optional injected client (tests). (可注入客户端，便于测试)
 
     Returns:
-        list[MaterialParams]: Same shape the local loader would return.
-            (与本地加载器返回结构一致的耗材参数列表)
+        list[MaterialParams]: The rebuilt material params, in the same shape
+            the local loader returns. The converter's hot-path provider does
+            NOT memoize remote results (the materials payload is tiny and
+            ships in this same response), so a remote edit/re-import is picked
+            up on the very next fetch with no extra invalidation protocol.
+            （重建的耗材参数，形状与本地加载器一致。热路径提供者在远程模式下不做
+            memo：载荷极小且随本响应返回，远程编辑/重导入会在下次取数即生效，
+            无需额外失效协议。）
 
     Raises:
         RuntimeError: When MLS returns an unusable payload. (MLS 返回不可用载荷)

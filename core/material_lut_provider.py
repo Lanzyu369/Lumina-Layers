@@ -162,6 +162,23 @@ def load_materials(
     Returns:
         list[MaterialParams]: Loaded material parameters in order. (按序的耗材参数)
     """
+    # Remote mode (Route B): the converter runs on a separate server with no
+    # shared material filesystem, so the local-mtime memo key is meaningless
+    # (the files are absent → mtime 0.0 → a constant key). Memoizing there
+    # would pin the first-fetched MaterialParams forever, serving stale
+    # Beer-Lambert params after MLS edits/re-imports the same directories.
+    # The materials payload is tiny (four length-3 vectors each) and is
+    # fetched at most a handful of times per generate, so we simply bypass
+    # the memo and always fetch fresh — correctness over a negligible cache.
+    # 远程模式（路线 B）：转换器在独立服务器、无共享耗材文件系统，本地 mtime
+    # memo 键无意义（文件缺失 → mtime 0.0 → 常量键）。在此 memo 会把首次取到的
+    # MaterialParams 永久固定，导致 MLS 编辑/重导入后返回陈旧参数。耗材载荷极小
+    # 且每次生成至多取数次，故直接绕过 memo 始终取新——正确性优先于可忽略的缓存。
+    if _mls_enabled():
+        from core.material_lut_remote import fetch_materials
+
+        return fetch_materials(directory_names)
+
     key = _materials_key(directory_names, materials_dir)
     if use_cache:
         with _materials_lock:
@@ -169,17 +186,9 @@ def load_materials(
         if cached is not None:
             return cached
 
-    if _mls_enabled():
-        # Route B / 做法一: fetch Beer-Lambert params from the MLS data API
-        # instead of reading local disk (converter runs on a separate server).
-        # 做法一：从 MLS 数据 API 获取参数，而非读本地盘（转换器在独立服务器）。
-        from core.material_lut_remote import fetch_materials
-
-        loaded = fetch_materials(directory_names)
-    else:
-        loaded = _material_lut_synthesis.load_multiple_materials(
-            directory_names, materials_dir=materials_dir
-        )
+    loaded = _material_lut_synthesis.load_multiple_materials(
+        directory_names, materials_dir=materials_dir
+    )
 
     with _materials_lock:
         _materials_memo[key] = loaded
