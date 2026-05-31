@@ -81,6 +81,10 @@ _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     # MLS 原生 LUT 生命周期：无路径参数的 POST 端点。
     ("POST", "/api/mls/lut/upload"),
     ("POST", "/api/mls/lut/merge"),
+    # MLS-native solver-cache lifecycle.
+    # MLS 原生求解缓存生命周期。
+    ("POST", "/api/mls/solver-cache/build"),
+    ("POST", "/api/mls/solver-cache/delete"),
     # Reused single-stage / extractor write POSTs without path parameters.
     # 复用的提取器写 POST：无路径参数。
     ("POST", "/api/extractor/save-gradient-card-material"),
