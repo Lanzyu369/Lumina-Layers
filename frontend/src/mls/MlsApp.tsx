@@ -97,14 +97,28 @@ function MlsContent() {
 
   // Bootstrap: ask the MLS backend whether a password is configured. If yes
   // and the cached password (if any) doesn't unlock writes, prompt at boot.
-  // 启动：向 MLS 后端询问是否配置密码；若已配置且缓存密码无法解锁写入，则启动时弹窗。
+  // When the server reports no password is configured (open mode), the user
+  // is treated as already authenticated — no dialog is ever shown, and any
+  // stale cached password from a previous protected configuration is
+  // dropped so it can't accidentally re-enable a non-existent gate.
+  // 启动：向 MLS 后端询问是否配置密码；若已配置且缓存密码无法解锁写入，则启动时
+  // 弹窗。当服务端报告未配置密码（开放模式）时，用户视同已通过认证——绝不弹窗，
+  // 同时丢弃来自上一次受保护配置的过期密码缓存，防止它意外触发已不存在的门禁。
   useEffect(() => {
     let cancelled = false;
     fetchMlsAuthStatus()
       .then((status) => {
         if (cancelled) return;
         setStatus(status.password_required, status.write_enabled);
-        if (status.password_required && !status.write_enabled) {
+        if (!status.password_required) {
+          // Open mode: forget any password the user typed previously when
+          // a different config was active. Closes the gate as a no-op.
+          // 开放模式：丢弃用户在上一份受保护配置下输入过的密码；同时确保门禁关闭。
+          clearPassword();
+          setGateOpen(false);
+          return;
+        }
+        if (!status.write_enabled) {
           setGateOpen(true);
         }
       })

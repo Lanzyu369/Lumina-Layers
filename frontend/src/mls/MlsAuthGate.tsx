@@ -45,6 +45,14 @@ export function MlsAuthGate({ open, onClose }: MlsAuthGateProps): ReactElement |
   const setPassword = useMlsAuthStore((s) => s.setPassword);
   const clearPassword = useMlsAuthStore((s) => s.clearPassword);
   const setStatus = useMlsAuthStore((s) => s.setStatus);
+  // Defence in depth: even if a caller mistakenly opens the gate when no
+  // password is configured on the server, refuse to render the dialog. The
+  // user is treated as already authenticated (writes succeed; verify endpoint
+  // would just return ok=true). This complements the boot guard in MlsApp
+  // and makes the invariant impossible to bypass via future code paths.
+  // 纵深防御：即便上游错误地在服务端无密码时打开门禁，本组件也拒绝渲染，使
+  // 「未配置密码 == 用户已通过认证」的不变量在任何调用路径下都成立。
+  const passwordRequired = useMlsAuthStore((s) => s.passwordRequired);
 
   const [candidate, setCandidate] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -58,7 +66,7 @@ export function MlsAuthGate({ open, onClose }: MlsAuthGateProps): ReactElement |
     }
   }, [open]);
 
-  if (!open) {
+  if (!open || !passwordRequired) {
     return null;
   }
 
