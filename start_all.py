@@ -223,24 +223,45 @@ class Service:
         self._sweep_port()
 
     def _sweep_port(self) -> None:
-        """Best-effort kill of any leftover process still bound to our port.
-        尽力清理仍占用本服务端口的残留进程。
+        """Best-effort kill of any leftover process still LISTENing on our port.
+        尽力清理仍在本服务端口上 LISTEN 的残留进程。
 
         A safety net for cases where a wrapper/grandchild (e.g. a detached
         Vite server) escapes the process-group signal and keeps the port bound,
         which would otherwise make the next restart fail with "address in use".
         Escalates straight to SIGKILL: by the time we sweep, the tracked process
-        has already been waited on, so anything still on the port is an orphan.
-        当包装/孙子进程（如脱离的 Vite）逃过进程组信号、仍占用端口时兜底清理，
-        避免下次重启因端口占用失败。此时被跟踪进程已 wait 结束，端口上残留者即
-        孤儿进程，直接 SIGKILL。
+        has already been waited on, so anything still LISTENing on the port is
+        an orphan.
+
+        Crucially we filter ``lsof`` to ``-sTCP:LISTEN`` so we only target
+        the server-side listener — *not* established or CLOSE_WAIT connections
+        from clients that happen to be talking to that port (a browser tab
+        open on http://localhost:<port> shows up here as the Chrome
+        NetworkService process). Without this filter we'd SIGKILL Chrome's
+        NetworkService every time the user restarted the frontend, dropping
+        every tab and showing a blank page after each restart.
+
+        当包装/孙子进程（如脱离的 Vite）逃过进程组信号、仍 LISTEN 端口时兜底
+        清理，避免下次重启因端口占用失败。被跟踪进程已 wait 结束，仍在 LISTEN
+        的进程即为孤儿，直接 SIGKILL。
+
+        关键：``lsof`` 必须加 ``-sTCP:LISTEN`` 过滤，只针对服务端监听，
+        **不要**误杀客户端连接（浏览器里打开 http://localhost:<port> 时，
+        ``lsof -ti tcp:<port>`` 会同时列出 Chrome NetworkService 进程）。
+        没有该过滤会导致每次重启前端都把 Chrome NetworkService 杀掉，
+        所有标签页瞬间断网、显示白屏。
         """
         if self.port is None or os.name == "nt":
             return
         for attempt in range(3):
             try:
                 out = subprocess.run(
-                    ["lsof", "-ti", f"tcp:{self.port}"],
+                    # ``-sTCP:LISTEN`` restricts the match to processes that
+                    # have the port in LISTEN state — i.e. the dev server
+                    # itself, never the browser that's connected to it.
+                    # ``-sTCP:LISTEN`` 仅匹配处于 LISTEN 状态的进程，即开发
+                    # 服务器本身，绝不包含连接到它的浏览器。
+                    ["lsof", "-tiTCP:" + str(self.port), "-sTCP:LISTEN"],
                     capture_output=True, text=True, timeout=5,
                 ).stdout
             except (OSError, subprocess.TimeoutExpired):
