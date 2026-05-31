@@ -1,5 +1,8 @@
 import apiClient from "./client";
-import { createPreviewResource } from "./system";
+import {
+  createPreviewResource,
+  type PreviewResourceUploadProgress,
+} from "./system";
 import type {
   ConfirmPaletteRequest,
   ExtractResponse,
@@ -239,9 +242,13 @@ export async function colorcheckerNormalizeReference(params: {
 /** Upload the ColorChecker source image once and receive a bounded preview. */
 export async function colorcheckerPrepareSource(
   image: File,
+  options: {
+    onUploadProgress?: (progress: PreviewResourceUploadProgress) => void;
+  } = {},
 ): Promise<ColorcheckerSourceResponse> {
   const response = await createPreviewResource(image, "colorchecker", {
     timeoutMs: COLORCHECKER_SOURCE_PREVIEW_TIMEOUT_MS,
+    onUploadProgress: options.onUploadProgress,
   });
   return {
     colorchecker_source_file_id: response.resource_id,
