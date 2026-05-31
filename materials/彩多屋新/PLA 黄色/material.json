@@ -2,9 +2,9 @@
   "schema_version": "1.1",
   "kind": "lumina_stage_a_material",
   "material_name": "PLA 黄色",
-  "brand": "彩多屋新",
+  "brand": "彩多屋",
   "created_at": "2026-05-29T13:41:32.975622+00:00",
-  "updated_at": "2026-05-29T13:41:33.033153+00:00",
+  "updated_at": "2026-05-31T01:24:55.958137+00:00",
   "stage_a_params_file": "stage_A_parameters.json",
   "fit_summary": {
     "substrate_count": 2,

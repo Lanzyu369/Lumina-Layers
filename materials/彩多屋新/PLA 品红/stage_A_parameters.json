@@ -17,8 +17,14 @@
       "strategy": "manual_red_channel_graft",
       "note": "红通道 E/k 取自彩多屋(旧)'PLA 品红(调整)'人工修正值，绿/蓝通道保留本次 restored 自动拟合结果。Red channel E/k grafted from legacy 'PLA 品红(调整)'; green/blue kept from this restored fit.",
       "channel_index": 0,
-      "before": {"E_red": 0.539389, "k_red": 1.839797},
-      "after": {"E_red": 0.573512, "k_red": 2.2}
+      "before": {
+        "E_red": 0.539389,
+        "k_red": 1.839797
+      },
+      "after": {
+        "E_red": 0.573512,
+        "k_red": 2.2
+      }
     },
     "selection": {
       "selected_indices": [],
