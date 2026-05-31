@@ -75,6 +75,8 @@ def st_convert_preview_request(draw: st.DrawFn) -> ConvertPreviewRequest:
         modeling_mode=draw(st_modeling_mode),
         quantize_colors=draw(st.integers(min_value=8, max_value=256)),
         enable_cleanup=draw(st.booleans()),
+        enable_outline=draw(st.booleans()),
+        outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
     )
 
 
@@ -482,6 +484,8 @@ OPTIONAL_DEFAULTS: List[Tuple[Type[BaseModel], Dict[str, Any], str, Any]] = [
     (ConvertPreviewRequest, {"lut_name": "x"}, "target_width_mm", 60.0),
     (ConvertPreviewRequest, {"lut_name": "x"}, "quantize_colors", 48),
     (ConvertPreviewRequest, {"lut_name": "x"}, "enable_cleanup", True),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "enable_outline", False),
+    (ConvertPreviewRequest, {"lut_name": "x"}, "outline_width", 2.0),
     (ConvertPreviewRequest, {"lut_name": "x"}, "svg_pixels_per_mm", 10.0),
     # ConvertGenerateRequest
     (ConvertGenerateRequest, {"lut_name": "x"}, "target_width_mm", 60.0),

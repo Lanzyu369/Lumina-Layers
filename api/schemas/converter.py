@@ -284,6 +284,10 @@ class ConvertPreviewRequest(LutSourceSelection):
             K-Means 色彩细节（仅高保真模式生效）。
         enable_cleanup: Whether to clean up isolated pixels.
             是否启用孤立像素清理。
+        enable_outline: Whether to request outline metadata in vector preview.
+            是否在矢量预览中请求描边元数据。
+        outline_width: Outline stroke width in millimeters.
+            描边宽度 (mm)。
 
     Note:
         Legacy clients that still send ``auto_bg``/``bg_tol`` are accepted
@@ -303,6 +307,8 @@ class ConvertPreviewRequest(LutSourceSelection):
     model_margin: float | None = Field(None, description="模型回退边距；空值或负数表示使用运行时默认值")
     quantize_colors: int = Field(48, ge=8, le=8192, description="K-Means 色彩细节（仅高保真模式生效）")
     enable_cleanup: bool = Field(True, description="孤立像素清理")
+    enable_outline: bool = Field(False, description="启用描边")
+    outline_width: float = Field(2.0, ge=0.5, le=10.0, description="描边宽度 (mm)")
     svg_pixels_per_mm: float = Field(
         SVG_PIXELS_PER_MM_DEFAULT,
         ge=SVG_PIXELS_PER_MM_MIN,

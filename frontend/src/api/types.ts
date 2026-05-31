@@ -85,6 +85,8 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   enable_cleanup: boolean;
+  enable_outline?: boolean;
+  outline_width?: number;
   svg_pixels_per_mm?: number;
   hue_weight?: number;
   chroma_gate?: number;

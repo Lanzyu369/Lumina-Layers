@@ -461,6 +461,8 @@ def worker_generate_preview(
     layer_height_mm: float | None,
     quantize_colors: int,
     enable_cleanup: bool,
+    enable_outline: bool = False,
+    outline_width: float = 2.0,
     is_dark: bool = True,
     model_enable: bool = False,
     model_only: bool = False,
@@ -492,6 +494,9 @@ def worker_generate_preview(
         modeling_mode (str): Modeling mode string value, e.g. "high-fidelity". (建模模式字符串)
         quantize_colors (int): Number of K-Means quantization colors. (仅高保真模式生效)
         enable_cleanup (bool): Enable isolated-pixel cleanup. (启用孤立像素清理)
+        enable_outline (bool): Enable vector outline metadata during preview.
+            (预览时启用矢量描边元数据)
+        outline_width (float): Outline width in millimeters. (描边宽度，毫米)
         svg_pixels_per_mm (float): High-fidelity SVG raster density in px/mm.
             (高保真 SVG 光栅化采样密度，单位 px/mm)
         is_dark (bool): Dark theme flag for 2D preview bed colors. (深色主题标志)
@@ -536,6 +541,8 @@ def worker_generate_preview(
             "layer_height_mm": layer_height_mm,
             "quantize_colors": quantize_colors,
             "enable_cleanup": enable_cleanup,
+            "enable_outline": enable_outline,
+            "outline_width": outline_width,
             "svg_pixels_per_mm": svg_pixels_per_mm,
             "material_source": material_source,
             "selected_material_count": len(selected_materials or []),
@@ -559,6 +566,8 @@ def worker_generate_preview(
             model_margin=model_margin,
             quantize_colors=quantize_colors,
             enable_cleanup=enable_cleanup,
+            enable_outline=enable_outline,
+            outline_width=outline_width,
             svg_pixels_per_mm=svg_pixels_per_mm,
             is_dark=is_dark,
             hue_weight=hue_weight,

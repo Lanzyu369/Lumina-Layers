@@ -47,6 +47,8 @@ describe("convertPreview", () => {
     modeling_mode: ModelingMode.HIGH_FIDELITY,
     quantize_colors: 48,
     enable_cleanup: true,
+    enable_outline: true,
+    outline_width: 2.5,
     svg_pixels_per_mm: 25.5,
     hue_weight: 0,
     chroma_gate: 0,
@@ -80,6 +82,8 @@ describe("convertPreview", () => {
     expect(fd.get("modeling_mode")).toBe(ModelingMode.HIGH_FIDELITY);
     expect(fd.get("quantize_colors")).toBe("48");
     expect(fd.get("enable_cleanup")).toBe("true");
+    expect(fd.get("enable_outline")).toBe("true");
+    expect(fd.get("outline_width")).toBe("2.5");
     expect(fd.get("svg_pixels_per_mm")).toBe("25.5");
 
     // 不应设置 responseType: blob（后端返回 JSON）
