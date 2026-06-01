@@ -346,7 +346,9 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     const file = new File(["test-data"], "calibration.png", {
       type: "image/png",
     });
-    let resolveExtract: ((value: ExtractResponse) => void) | null = null;
+    let resolveExtract: (value: ExtractResponse) => void = () => {
+      throw new Error("extract promise resolver was not initialized");
+    };
     mockedExtractColors.mockReturnValueOnce(
       new Promise<ExtractResponse>((resolve) => {
         resolveExtract = resolve;
@@ -392,7 +394,9 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     const file = new File(["test-data"], "calibration.png", {
       type: "image/png",
     });
-    let resolveExtract: ((value: ExtractResponse) => void) | null = null;
+    let resolveExtract: (value: ExtractResponse) => void = () => {
+      throw new Error("extract promise resolver was not initialized");
+    };
     mockedExtractColors.mockReturnValueOnce(
       new Promise<ExtractResponse>((resolve) => {
         resolveExtract = resolve;
@@ -550,15 +554,15 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
   it("confirms a replacement ColorChecker id before releasing the previous one", async () => {
     const OriginalImage = globalThis.Image;
-    let createdImage:
-      | {
-          onload: (() => void) | null;
-          onerror: (() => void) | null;
-          naturalWidth: number;
-          naturalHeight: number;
-          src: string;
-        }
-      | null = null;
+    const createdImage: {
+      current: {
+        onload: (() => void) | null;
+        onerror: (() => void) | null;
+        naturalWidth: number;
+        naturalHeight: number;
+        src: string;
+      } | null;
+    } = { current: null };
     class MockImage {
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
@@ -568,7 +572,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
       constructor() {
         // eslint-disable-next-line @typescript-eslint/no-this-alias
-        createdImage = this;
+        createdImage.current = this;
       }
     }
     globalThis.Image = MockImage as unknown as typeof Image;
@@ -610,8 +614,8 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
         ),
       );
       expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
-      expect(createdImage?.src).toBe("/api/files/fresh-calibrated.jpg");
-      createdImage?.onload?.();
+      expect(createdImage.current?.src).toBe("/api/files/fresh-calibrated.jpg");
+      createdImage.current?.onload?.();
 
       const state = useExtractorStore.getState();
       expect(mockedColorcheckerRelease).toHaveBeenCalledWith("old-full-id");
@@ -639,15 +643,15 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
   it("does not accept or release the previous ColorChecker id when preview loading fails", async () => {
     const OriginalImage = globalThis.Image;
-    let createdImage:
-      | {
-          onload: (() => void) | null;
-          onerror: (() => void) | null;
-          naturalWidth: number;
-          naturalHeight: number;
-          src: string;
-        }
-      | null = null;
+    const createdImage: {
+      current: {
+        onload: (() => void) | null;
+        onerror: (() => void) | null;
+        naturalWidth: number;
+        naturalHeight: number;
+        src: string;
+      } | null;
+    } = { current: null };
     class MockImage {
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
@@ -657,7 +661,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
       constructor() {
         // eslint-disable-next-line @typescript-eslint/no-this-alias
-        createdImage = this;
+        createdImage.current = this;
       }
     }
     globalThis.Image = MockImage as unknown as typeof Image;
@@ -679,7 +683,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
           "/api/files/new-calibrated.jpg",
         ),
       );
-      createdImage?.onerror?.();
+      createdImage.current?.onerror?.();
 
       const state = useExtractorStore.getState();
       expect(mockedColorcheckerRelease).not.toHaveBeenCalledWith("old-full-id");
@@ -695,15 +699,15 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
   it("keeps the previous ColorChecker id when rejecting after confirm but before preview load", async () => {
     const OriginalImage = globalThis.Image;
-    let createdImage:
-      | {
-          onload: (() => void) | null;
-          onerror: (() => void) | null;
-          naturalWidth: number;
-          naturalHeight: number;
-          src: string;
-        }
-      | null = null;
+    const createdImage: {
+      current: {
+        onload: (() => void) | null;
+        onerror: (() => void) | null;
+        naturalWidth: number;
+        naturalHeight: number;
+        src: string;
+      } | null;
+    } = { current: null };
     class MockImage {
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
@@ -713,7 +717,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
       constructor() {
         // eslint-disable-next-line @typescript-eslint/no-this-alias
-        createdImage = this;
+        createdImage.current = this;
       }
     }
     globalThis.Image = MockImage as unknown as typeof Image;
@@ -735,7 +739,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
         ),
       );
       useExtractorStore.getState().rejectCalibrated();
-      createdImage?.onload?.();
+      createdImage.current?.onload?.();
 
       const state = useExtractorStore.getState();
       expect(mockedColorcheckerRelease).toHaveBeenCalledWith("new-full-id");
@@ -802,9 +806,11 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
   it("releases calibration responses that arrive during image rotation", async () => {
     const file = new File(["raw"], "calibration.png", { type: "image/png" });
-    let resolveRotate:
-      | ((value: Awaited<ReturnType<typeof rotateExtractorImage>>) => void)
-      | null = null;
+    let resolveRotate: (
+      value: Awaited<ReturnType<typeof rotateExtractorImage>>
+    ) => void = () => {
+      throw new Error("rotate promise resolver was not initialized");
+    };
     mockedRotateExtractorImage.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveRotate = resolve;
@@ -840,7 +846,7 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
 
     expect(mockedColorcheckerRelease).toHaveBeenCalledWith("stale-full-id");
 
-    resolveRotate?.({
+    resolveRotate({
       preview_url: "/api/files/rotated.png",
       width: 100,
       height: 100,

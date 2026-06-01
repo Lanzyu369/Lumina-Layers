@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
 import { resolveDevServerConfig } from './devServerConfig'
@@ -83,11 +83,6 @@ export default defineConfig({
     // Default would be `maxForks = CPU count` (~10 workers * ~1GB each).
     // Override via env LUMINA_VITEST_MAX_FORKS if a release sweep needs more.
     pool: "forks",
-    poolOptions: {
-      forks: {
-        maxForks: Number(process.env.LUMINA_VITEST_MAX_FORKS ?? 2),
-        minForks: 1,
-      },
-    },
+    maxWorkers: Number(process.env.LUMINA_VITEST_MAX_FORKS ?? 2),
   },
 })

@@ -39,6 +39,7 @@ function buildSnapshot(overrides: Partial<WorkflowSnapshot> = {}): WorkflowSnaps
     material_layer_count: null,
     material_layer_height_mm: null,
     material_backing_material_dir_name: null,
+    advanced_params: null,
     active_tab: "converter",
     ...overrides,
   };
@@ -52,12 +53,13 @@ function buildSnapshot(overrides: Partial<WorkflowSnapshot> = {}): WorkflowSnaps
 // jsdom 的 window.sessionStorage 是特殊的 getter-backed 对象，部分版本下
 // 无法被 vi.spyOn 正确拦截；这里用一个纯内存 storage 完全替换它，方便断言。
 
-interface MockStorage extends Storage {
+interface MockStorage {
   getItem: ReturnType<typeof vi.fn>;
   setItem: ReturnType<typeof vi.fn>;
   removeItem: ReturnType<typeof vi.fn>;
   clear: ReturnType<typeof vi.fn>;
   key: ReturnType<typeof vi.fn>;
+  readonly length: number;
 }
 
 function createMockStorage(): MockStorage {
