@@ -249,6 +249,26 @@ class TestProtectedMode:
         body = resp.json()
         assert body.get("error_code") == "mls_write_password_required"
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/api/five-color/clear-cache",
+            "/api/five-color/generate-swatch",
+        ),
+    )
+    def test_five_color_writes_blocked_without_header(
+        self,
+        protected_mode,
+        path: str,
+    ) -> None:
+        """Five-color cache and swatch writes require the MLS password.
+        五色缓存与色卡写操作必须携带 MLS 写入密码。
+        """
+        resp = _client().post(path)
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error_code") == "mls_write_password_required"
+
     def test_read_endpoint_stays_open(self, protected_mode) -> None:
         """``GET /api/mls/materials`` is reachable without a password.
         ``GET /api/mls/materials`` 在无密码时也可访问。

@@ -123,6 +123,10 @@ _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     # 复用的旧 LUT 生命周期端点（无 ``/api/mls`` 前缀）。
     ("POST", "/api/lut/upload"),
     ("POST", "/api/lut/merge"),
+    # Reused five-color writes.
+    # 复用的五色写操作。
+    ("POST", "/api/five-color/clear-cache"),
+    ("POST", "/api/five-color/generate-swatch"),
     # System-wide writes.
     # 全局写操作。
     ("POST", "/api/calibration/generate"),
