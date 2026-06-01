@@ -21,6 +21,8 @@ import type {
   StageAFitResponse,
 } from "./types";
 
+const COLORCHECKER_SOURCE_PREVIEW_TIMEOUT_MS = 3_600_000;
+
 /** 提取颜色 - multipart/form-data */
 export async function extractColors(
   image: File | null,
@@ -238,7 +240,9 @@ export async function colorcheckerNormalizeReference(params: {
 export async function colorcheckerPrepareSource(
   image: File,
 ): Promise<ColorcheckerSourceResponse> {
-  const response = await createPreviewResource(image, "colorchecker");
+  const response = await createPreviewResource(image, "colorchecker", {
+    timeoutMs: COLORCHECKER_SOURCE_PREVIEW_TIMEOUT_MS,
+  });
   return {
     colorchecker_source_file_id: response.resource_id,
     source_preview_file_id: response.preview_id,
