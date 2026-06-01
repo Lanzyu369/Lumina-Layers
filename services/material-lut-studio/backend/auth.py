@@ -76,6 +76,7 @@ _PASSWORD_HEADER_CANONICAL = "X-MLS-Password"
 _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     # MLS-native material-archive lifecycle (POST endpoints with no path
     # parameter). MLS 原生耗材生命周期：无路径参数的 POST 端点。
+    ("POST", "/api/mls/materials/export"),
     ("POST", "/api/mls/materials/import"),
     # MLS-native LUT lifecycle (POST endpoints with no path parameter).
     # MLS 原生 LUT 生命周期：无路径参数的 POST 端点。
@@ -87,10 +88,29 @@ _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/mls/solver-cache/delete"),
     # Reused single-stage / extractor write POSTs without path parameters.
     # 复用的提取器写 POST：无路径参数。
+    ("POST", "/api/extractor/extract-single-stage"),
+    ("POST", "/api/extractor/fit-stage-a"),
+    ("POST", "/api/extractor/extract-gradient-card-stage-a"),
     ("POST", "/api/extractor/save-gradient-card-material"),
+    ("POST", "/api/extractor/gradient-card-materials/export"),
     ("POST", "/api/extractor/gradient-card-materials/import"),
+    ("POST", "/api/extractor/generate-material-swatch"),
     ("POST", "/api/extractor/material-solver-cache/build"),
     ("POST", "/api/extractor/material-solver-cache/delete"),
+    # Reused extractor image/ColorChecker helper endpoints all upload,
+    # register, transform, delete, or otherwise mutate temp/session resources.
+    # 复用的提取器图片 / ColorChecker 辅助端点会上传、注册、转换、删除或修改
+    # 临时 / 会话资源。
+    ("POST", "/api/extractor/rotate"),
+    ("POST", "/api/extractor/preview-wb"),
+    ("POST", "/api/extractor/colorchecker-source"),
+    ("POST", "/api/extractor/colorchecker-reference-normalize"),
+    ("POST", "/api/extractor/colorchecker-warp-preview"),
+    ("POST", "/api/extractor/colorchecker-detect-chart"),
+    ("POST", "/api/extractor/colorchecker-calibrate"),
+    ("POST", "/api/extractor/colorchecker-release"),
+    ("POST", "/api/extractor/colorchecker-confirm"),
+    ("POST", "/api/extractor/colorchecker-touch"),
     # Reused extractor LUT persistence flow: extract/repair/merge/confirm
     # all write a LUT JSON on disk (session output or caller-supplied path).
     # 复用的提取器 LUT 持久化流程：提取、修格点、合并、确认调色板都会改写磁盘 LUT。
@@ -105,6 +125,11 @@ _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/lut/merge"),
     # System-wide writes.
     # 全局写操作。
+    ("POST", "/api/calibration/generate"),
+    ("POST", "/api/calibration/generate-single-stage-kit"),
+    ("POST", "/api/system/image-preview"),
+    ("POST", "/api/system/preview-resources"),
+    ("POST", "/api/system/preview-artifacts"),
     ("POST", "/api/system/clear-cache"),
     ("POST", "/api/system/settings"),
 )

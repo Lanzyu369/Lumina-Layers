@@ -210,6 +210,45 @@ class TestProtectedMode:
         body = resp.json()
         assert body.get("error_code") == "mls_write_password_required"
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/api/mls/materials/export",
+            "/api/extractor/extract-single-stage",
+            "/api/extractor/fit-stage-a",
+            "/api/extractor/extract-gradient-card-stage-a",
+            "/api/extractor/gradient-card-materials/export",
+            "/api/extractor/generate-material-swatch",
+            "/api/extractor/rotate",
+            "/api/extractor/preview-wb",
+            "/api/extractor/colorchecker-source",
+            "/api/extractor/colorchecker-reference-normalize",
+            "/api/extractor/colorchecker-warp-preview",
+            "/api/extractor/colorchecker-detect-chart",
+            "/api/extractor/colorchecker-calibrate",
+            "/api/extractor/colorchecker-release",
+            "/api/extractor/colorchecker-confirm",
+            "/api/extractor/colorchecker-touch",
+            "/api/calibration/generate",
+            "/api/calibration/generate-single-stage-kit",
+            "/api/system/image-preview",
+            "/api/system/preview-resources",
+            "/api/system/preview-artifacts",
+        ),
+    )
+    def test_generation_upload_and_temp_resource_writes_blocked_without_header(
+        self,
+        protected_mode,
+        path: str,
+    ) -> None:
+        """Generation, upload, and temp-resource writes require the password.
+        生成、上传与临时资源写入必须携带 MLS 写入密码。
+        """
+        resp = _client().post(path)
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error_code") == "mls_write_password_required"
+
     def test_read_endpoint_stays_open(self, protected_mode) -> None:
         """``GET /api/mls/materials`` is reachable without a password.
         ``GET /api/mls/materials`` 在无密码时也可访问。
