@@ -14,7 +14,6 @@ import time
 import numpy as np
 import cv2
 from scipy.spatial import KDTree
-from scipy.spatial.distance import cdist
 
 _log = get_logger(__name__)
 
@@ -40,6 +39,35 @@ def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
 KMEANS_PIXEL_THRESHOLD = 500_000
 
 
+def _nearest_center_sq(
+    points_lab: np.ndarray,
+    centers_lab: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return squared nearest-center distances and labels using KDTree.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: ``(dist_sq, labels)`` with one entry
+        per point. Uses KDTree to avoid dense ``points * centers`` matrices.
+    """
+
+    center_tree = KDTree(centers_lab)
+    distances, labels = center_tree.query(points_lab)
+    return np.square(distances), labels.astype(np.intp, copy=False)
+
+
+def _map_rgb_to_lut_nearest(
+    rgb: np.ndarray,
+    lut_rgb: np.ndarray,
+    lut_tree: KDTree,
+) -> np.ndarray:
+    """Map every RGB pixel to its nearest LUT RGB row in Lab space."""
+
+    h, w = rgb.shape[:2]
+    full_pixels_lab = _rgb_to_lab_quantize(rgb.reshape(-1, 3).astype(np.float32))
+    _, nearest_lut_indices = lut_tree.query(full_pixels_lab)
+    return lut_rgb[nearest_lut_indices].reshape(h, w, 3)
+
+
 def _lut_constrained_quantize(
     rgb: np.ndarray,
     n_colors: int,
@@ -62,6 +90,12 @@ def _lut_constrained_quantize(
         _log.info(
             "LUT-Constrained K-Means: K clamped from %s to %s (LUT has %s entries)",
             n_colors, effective_k, lut_count,
+            extra={
+                "event": "lut_constrained_kmeans_k_clamped",
+                "requested_k": int(n_colors),
+                "effective_k": int(effective_k),
+                "lut_count": int(lut_count),
+            },
         )
 
     if effective_k <= 0:
@@ -76,6 +110,24 @@ def _lut_constrained_quantize(
     if _cache_key in _kmeans_cache:
         _log.debug("LUT-Constrained K-Means cache hit: %s", _cache_key)
         return _kmeans_cache[_cache_key].copy()
+
+    if effective_k == lut_count:
+        _log.info(
+            "LUT-Constrained K-Means: direct LUT nearest-neighbor mapping "
+            "because effective_k covers all %s LUT entries",
+            lut_count,
+            extra={
+                "event": "lut_constrained_kmeans_direct_map",
+                "effective_k": int(effective_k),
+                "lut_count": int(lut_count),
+            },
+        )
+        quantized_image = _map_rgb_to_lut_nearest(rgb, lut_rgb, lut_tree)
+        if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
+            oldest = next(iter(_kmeans_cache))
+            del _kmeans_cache[oldest]
+        _kmeans_cache[_cache_key] = quantized_image.copy()
+        return quantized_image
 
     rng = np.random.RandomState(seed)
 
@@ -96,7 +148,6 @@ def _lut_constrained_quantize(
 
     work_pixels_rgb = work_rgb.reshape(-1, 3).astype(np.float32)
     work_pixels_lab = _rgb_to_lab_quantize(work_pixels_rgb)
-    n_work = work_pixels_lab.shape[0]
 
     _, nearest_lut_indices = lut_tree.query(work_pixels_lab)
     lut_pixel_counts = np.bincount(nearest_lut_indices, minlength=lut_count).astype(np.float64)
@@ -112,7 +163,7 @@ def _lut_constrained_quantize(
 
         cur_centers_lab = lut_lab[centers_idx[:1]].copy()
         for c in range(1, effective_k):
-            dist_sq = cdist(lut_lab, cur_centers_lab, 'sqeuclidean').min(axis=1)
+            dist_sq, _ = _nearest_center_sq(lut_lab, cur_centers_lab)
             weighted_dist_sq = dist_sq * lut_pixel_counts
             total_weight = weighted_dist_sq.sum()
             if total_weight <= 0:
@@ -124,8 +175,7 @@ def _lut_constrained_quantize(
         cur_centers_lab = lut_lab[centers_idx].copy()
 
         for _iter in range(20):
-            dist_sq = cdist(work_pixels_lab, cur_centers_lab, 'sqeuclidean')
-            labels = dist_sq.argmin(axis=1)
+            _, labels = _nearest_center_sq(work_pixels_lab, cur_centers_lab)
 
             new_centers_lab = cur_centers_lab.copy()
             any_changed = False
@@ -145,12 +195,14 @@ def _lut_constrained_quantize(
                 break
             cur_centers_lab = new_centers_lab
 
-        dist_sq = cdist(work_pixels_lab, cur_centers_lab, 'sqeuclidean')
-        labels = dist_sq.argmin(axis=1)
-        sse = dist_sq[np.arange(n_work), labels].sum()
+        dist_sq, _ = _nearest_center_sq(work_pixels_lab, cur_centers_lab)
+        sse = dist_sq.sum()
         if sse < best_sse:
             best_sse = sse
             best_centers_lab = cur_centers_lab.copy()
+
+    if best_centers_lab is None:
+        return rgb.copy()
 
     # Map best Lab centers to LUT RGB
     _, best_center_indices = lut_tree.query(best_centers_lab)
@@ -158,11 +210,9 @@ def _lut_constrained_quantize(
 
     if total_pixels > KMEANS_PIXEL_THRESHOLD:
         full_pixels_lab = _rgb_to_lab_quantize(full_rgb.reshape(-1, 3).astype(np.float32))
-        dist_sq = cdist(full_pixels_lab, best_centers_lab, 'sqeuclidean')
-        labels = dist_sq.argmin(axis=1)
+        _, labels = _nearest_center_sq(full_pixels_lab, best_centers_lab)
     else:
-        dist_sq = cdist(work_pixels_lab, best_centers_lab, 'sqeuclidean')
-        labels = dist_sq.argmin(axis=1)
+        _, labels = _nearest_center_sq(work_pixels_lab, best_centers_lab)
 
     quantized_image = centers_rgb[labels].reshape(h, w, 3)
 

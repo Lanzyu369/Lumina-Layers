@@ -47,7 +47,7 @@ from core.image_preprocessor import ImagePreprocessor
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
-from .async_glb import get_glb_status
+from .async_glb import get_glb_status, schedule_glb_build
 from .common import (
     EPHEMERAL_PREVIEW_TTL_SECONDS,
     NON_FATAL_GLB_ERRORS,
@@ -62,6 +62,37 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+_DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
+
+
+def _schedule_or_run_preview_glb_build(
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    cache: dict,
+) -> str | None:
+    """Schedule preview GLB generation, preserving inline test overrides.
+
+    Production uses the shared async scheduler so the preview request can
+    return once the PNG/cache payload is ready. Unit tests in this module
+    historically monkeypatch ``generate_segmented_glb``; when that override
+    is present, run it inline to preserve those narrow test contracts without
+    starting real background mesh work.
+    """
+
+    if generate_segmented_glb is _DEFAULT_GENERATE_SEGMENTED_GLB:
+        schedule_glb_build(session_id, store, registry, cache)
+        return None
+
+    target_path = os.path.join(
+        OUTPUT_DIR,
+        generate_segmented_glb_filename(session_id),
+    )
+    glb_path = generate_segmented_glb(cache, output_path=target_path)
+    if glb_path and os.path.exists(glb_path):
+        glb_id = registry.register_path(session_id, glb_path)
+        return f"/api/files/{glb_id}"
+    return None
 
 
 def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str:
@@ -721,22 +752,20 @@ async def convert_preview(
         raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
         preview_raw_url = f"/api/files/{raw_id}"
 
-    # Generate segmented GLB (one Mesh per color)
+    # Schedule segmented GLB (one Mesh per color) without blocking preview.
     _t = time.perf_counter()
     preview_glb_url: str | None = None
     try:
-        target_path = os.path.join(
-            OUTPUT_DIR,
-            generate_segmented_glb_filename(session_id),
+        preview_glb_url = _schedule_or_run_preview_glb_build(
+            session_id,
+            store,
+            registry,
+            cache_data,
         )
-        glb_path = generate_segmented_glb(cache_data, output_path=target_path)
-        if glb_path and os.path.exists(glb_path):
-            glb_id = registry.register_path(session_id, glb_path)
-            preview_glb_url = f"/api/files/{glb_id}"
     except NON_FATAL_GLB_ERRORS as e:
         # Non-fatal: log and continue without GLB
         log.warning(
-            "Segmented GLB generation failed",
+            "Segmented GLB scheduling failed",
             extra={
                 "event": "converter_segmented_glb_failed",
                 "error_type": type(e).__name__,
@@ -1096,13 +1125,16 @@ def get_segmented_glb_status(
         - ``ready``   — 新 GLB 已写入 FileRegistry，URL 在 ``glb_url`` 中。
         - ``error``   — 后台构建抛错；错误类型/消息在 ``error`` 中。
 
-    The payload is ``{ status, glb_url, job_token, error }``. ``glb_url``
-    is the same ``/api/files/<id>`` form the synchronous code used to
-    return, so the frontend can feed it straight into ``previewGlbUrl``
-    without any rewriting.
-    返回体字段：``status`` / ``glb_url`` / ``job_token`` / ``error``；
-    ``glb_url`` 与原同步路径返回的格式一致，前端无需额外处理即可直接
-    写入 ``previewGlbUrl``。
+    The payload is ``{ status, glb_url, job_token, error, color_contours }``.
+    ``glb_url`` is the same ``/api/files/<id>`` form the synchronous code
+    used to return, so the frontend can feed it straight into
+    ``previewGlbUrl`` without any rewriting. ``color_contours`` is included
+    when ready so async preview keeps the same highlight data the synchronous
+    response used to expose.
+    返回体字段：``status`` / ``glb_url`` / ``job_token`` / ``error`` /
+    ``color_contours``；``glb_url`` 与原同步路径返回的格式一致，前端无需
+    额外处理即可直接写入 ``previewGlbUrl``。ready 时附带
+    ``color_contours``，保证异步 preview 仍能拿到原同步响应提供的高亮轮廓。
     """
 
     session_data = _require_session(store, session_id)
@@ -1127,6 +1159,11 @@ def get_segmented_glb_status(
         "glb_url": snapshot.get("glb_url"),
         "job_token": snapshot.get("job_token"),
         "error": snapshot.get("error"),
+        "color_contours": (
+            cache.get("color_contours")
+            if snapshot.get("status") == "ready"
+            else None
+        ),
     }
 
 

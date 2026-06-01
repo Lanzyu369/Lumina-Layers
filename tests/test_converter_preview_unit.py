@@ -406,6 +406,47 @@ class TestResponseContainsPaletteAndDimensions:
         assert body["dimensions"]["height"] == 80
         assert body["warnings"] == []
 
+    def test_preview_schedules_segmented_glb_asynchronously(self) -> None:
+        """Preview should return after PNG/cache work and schedule GLB async."""
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.schedule_glb_build",
+                return_value="job-token",
+            ) as mock_schedule,
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["preview_glb_url"] is None
+        mock_schedule.assert_called_once()
+        session_id, store, registry, cache = mock_schedule.call_args.args
+        assert session_id == body["session_id"]
+        assert store is _test_store
+        assert registry is _test_registry
+        assert cache["target_w"] == 120
+        assert cache["target_h"] == 80
+
 
 class TestSvgLargeFormatWarnings:
     """Verify preview records SVG native large-format compatibility warnings."""

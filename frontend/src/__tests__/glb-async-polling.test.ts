@@ -66,6 +66,9 @@ describe("converter store: async GLB polling", () => {
       glb_url: "/api/files/fresh.glb",
       job_token: "token-1",
       error: null,
+      color_contours: {
+        ff0000: [[[0, 0], [1, 0], [1, 1]]],
+      },
     });
 
     useConverterStore.getState()._pollAsyncGlb();
@@ -78,6 +81,9 @@ describe("converter store: async GLB polling", () => {
     expect(useConverterStore.getState().previewGlbUrl).toBe(
       "/api/files/fresh.glb",
     );
+    expect(useConverterStore.getState().colorContours).toEqual({
+      ff0000: [[[0, 0], [1, 0], [1, 1]]],
+    });
 
     // Second advance: should not trigger another poll since we're done.
     // 再推进一次间隔，不应再发生新的请求。

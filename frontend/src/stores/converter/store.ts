@@ -2308,7 +2308,10 @@ let _glbPollSequence = 0;
 
 function _startGlbStatusPolling(
   sessionId: string,
-  applyGlbUrl: (url: string) => void,
+  applyGlbResult: (
+    url: string,
+    colorContours?: Record<string, number[][][]> | null,
+  ) => void,
   getCurrentSessionId: () => string | null,
 ): void {
   _glbPollSequence += 1;
@@ -2336,7 +2339,7 @@ function _startGlbStatusPolling(
       if (status.status === "ready" && status.glb_url) {
         const normalized = normalizeResourceUrl(status.glb_url);
         if (normalized) {
-          applyGlbUrl(normalized);
+          applyGlbResult(normalized, status.color_contours ?? null);
         }
         return;
       }
@@ -4587,7 +4590,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (!sid) return;
       _startGlbStatusPolling(
         sid,
-        (url) => set({ previewGlbUrl: url }),
+        (url, colorContours) =>
+          set({
+            previewGlbUrl: url,
+            ...(colorContours ? { colorContours } : {}),
+          }),
         () => _get().sessionId,
       );
     },
@@ -5391,6 +5398,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsSessionId: null,
           gradientSelection: null,
         });
+        if (!glbUrl) {
+          _get()._pollAsyncGlb();
+        }
         console.log(
           "[DEBUG] submitPreview success: cleared layerImages for new sessionId",
         );

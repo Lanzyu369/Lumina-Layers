@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
   applyRecipeOverride: vi.fn(),
+  getGlbStatus: vi.fn(),
 }));
 
 vi.mock("../../api/converter", async () => {
@@ -26,6 +27,7 @@ vi.mock("../../api/converter", async () => {
     convertGenerateLargeFormat: mocks.convertGenerateLargeFormat,
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
     applyRecipeOverride: mocks.applyRecipeOverride,
+    getGlbStatus: mocks.getGlbStatus,
   };
 });
 
@@ -134,6 +136,11 @@ function makeLegacyDetailsCatalog() {
   };
 }
 
+function flushGlbPoll(timerStep = 600): Promise<void> {
+  vi.advanceTimersByTime(timerStep);
+  return Promise.resolve().then(() => Promise.resolve());
+}
+
 describe("native bundle converter flow", () => {
   beforeEach(() => {
     resetStore();
@@ -142,6 +149,7 @@ describe("native bundle converter flow", () => {
     mocks.convertGenerateLargeFormat.mockReset();
     mocks.convertGeneratePuzzle.mockReset();
     mocks.applyRecipeOverride.mockReset();
+    mocks.getGlbStatus.mockReset();
   });
 
   it("resets selected DBs to the brand defaults when the brand changes", () => {
@@ -734,6 +742,62 @@ describe("native bundle converter flow", () => {
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
+  });
+
+  it("polls async preview GLB after preview returns no GLB URL", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.convertPreview.mockResolvedValueOnce({
+        session_id: "session-preview-async",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/native-preview",
+        preview_glb_url: null,
+        palette: [],
+        dimensions: { width: 200, height: 160 },
+      });
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-preview-async",
+        status: "ready",
+        glb_url: "/api/files/preview-ready.glb",
+        job_token: "token-preview",
+        error: null,
+        color_contours: {
+          ff0000: [[[0, 0], [1, 0], [1, 1]]],
+        },
+      });
+
+      useConverterStore.setState({
+        imageFile: new File(["png"], "native.png", { type: "image/png" }),
+        source_version: "native",
+        lut_name: "",
+        target_width_mm: 90,
+        color_mode: ColorMode.FOUR_COLOR_RYBW,
+        modeling_mode: ModelingMode.HIGH_FIDELITY,
+        color_layers: 5,
+        layer_height_mm: 0.08,
+        quantize_colors: 48,
+        enable_cleanup: true,
+        hue_enable: false,
+        selectedNativeBrandKey: "brand-a",
+        selectedNativeDbNames: ["A2"],
+        nativeBrandGroups: [makePredictiveBrand()],
+      } as never);
+
+      await useConverterStore.getState().submitPreview();
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith("session-preview-async");
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/preview-ready.glb",
+      );
+      expect(useConverterStore.getState().colorContours).toEqual({
+        ff0000: [[[0, 0], [1, 0], [1, 1]]],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("submitPreview omits model fields for non-predictive native brands", async () => {

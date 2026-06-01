@@ -64,7 +64,7 @@ def test_sha256_nonexistent_raises_file_not_found(tmp_path: Path) -> None:
 
 
 def test_sha256_directory_raises_is_a_directory(tmp_path: Path) -> None:
-    """A directory path surfaces :class:`IsADirectoryError` unchanged."""
+    """A directory path consistently raises :class:`IsADirectoryError`."""
     with pytest.raises(IsADirectoryError):
         file_sha256(str(tmp_path))
 
@@ -114,7 +114,7 @@ def test_sha256_rejects_non_positive_chunk_size(tmp_path: Path) -> None:
     ],
 )
 def test_guess_mime_common_types(filename: str, expected: str) -> None:
-    """Common web-standard extensions resolve via the stdlib MIME database."""
+    """Common web-standard extensions resolve to stable MIME labels."""
     assert guess_mime(filename) == expected
 
 
