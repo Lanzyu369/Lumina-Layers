@@ -5,19 +5,18 @@
  * Placed below the header so its height changes never affect the header,
  * eliminating layout shifts / bouncing at the top of the viewport.
  * 放在顶栏下方，其高度变化不影响顶栏，消除画面抖动。
+ *
+ * Only the converter tab keeps an in-app secondary tab row. The LUT / material
+ * secondary tabs were removed when those workflows moved to the standalone
+ * Material-LUT Studio (MLS) service (Route B).
+ * 现在只有转换器标签保留应用内二级标签行；LUT/耗材二级标签随相关流程迁移到
+ * 独立的 Material-LUT Studio (MLS) 服务而移除。
  */
 import { useI18n } from '../../i18n/context';
 import type { TabId, ConverterSubTabId } from '../../types/widget';
 import { resolvePrimaryTab } from './TabNavBar';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { motion } from 'framer-motion';
-
-type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-details' | 'lut-compare' | 'five-color';
-type MaterialSubTabId =
-  | 'gradient-card-generate'
-  | 'gradient-card-extract'
-  | 'material-library'
-  | 'material-recipe';
 
 const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
   core: (
@@ -38,107 +37,26 @@ const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
   ),
 };
 
-const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNode> = {
-  'calibration': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-    </svg>
-  ),
-  'extractor': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-    </svg>
-  ),
-  'lut-manager': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
-    </svg>
-  ),
-  'lut-details': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10 6h8m-8 6h8m-8 6h8M6 6h.01M6 12h.01M6 18h.01" />
-    </svg>
-  ),
-  'lut-compare': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8M8 17h8M5 7l-2 2m0 0l2 2m-2-2h10M19 17l2-2m0 0l-2-2m2 2H11" />
-    </svg>
-  ),
-  'five-color': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-    </svg>
-  ),
-  'gradient-card-generate': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m6-6H6m12-7H6a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2z" />
-    </svg>
-  ),
-  'gradient-card-extract': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 12l-4-4m4 4l4-4M6 20h12" />
-    </svg>
-  ),
-  'material-library': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H9l1.5 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
-    </svg>
-  ),
-  'material-recipe': (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
-      <circle cx="18" cy="18" r="3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-};
-
 const CONVERTER_SUB_TAB_LIST: { id: ConverterSubTabId; titleKey: string }[] = [
   { id: 'core', titleKey: 'tab.converterCore' },
   { id: 'color', titleKey: 'tab.converterColor' },
   { id: 'advanced', titleKey: 'tab.converterAdvanced' },
 ];
 
-const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
-  { id: 'calibration', titleKey: 'tab.calibration' },
-  { id: 'extractor', titleKey: 'tab.extractor' },
-  { id: 'lut-manager', titleKey: 'tab.lutManager' },
-  { id: 'lut-details', titleKey: 'tab.lutDetails' },
-  { id: 'lut-compare', titleKey: 'tab.lutCompare' },
-  { id: 'five-color', titleKey: 'tab.fiveColor' },
-];
-
-const MATERIAL_SECONDARY_TAB_LIST: { id: MaterialSubTabId; titleKey: string }[] = [
-  { id: 'material-library', titleKey: 'tab.materialLibrary' },
-  { id: 'gradient-card-generate', titleKey: 'tab.gradientCardGenerate' },
-  { id: 'gradient-card-extract', titleKey: 'tab.gradientCardExtract' },
-  { id: 'material-recipe', titleKey: 'tab.materialRecipe' },
-];
-
 interface SubTabBarProps {
   activeTab: TabId;
-  onTabChange: (tab: TabId) => void;
   compact?: boolean;
 }
 
-export default function SubTabBar({ activeTab, onTabChange, compact = false }: SubTabBarProps) {
+export default function SubTabBar({ activeTab, compact = false }: SubTabBarProps) {
   const { t } = useI18n();
   const primaryTab = resolvePrimaryTab(activeTab);
   const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveConverterSubTab = useWidgetStore((s) => s.setActiveConverterSubTab);
 
-  const showConverterSecondary = primaryTab === 'converter';
-  const showLutSubTabs = primaryTab === 'lut-management';
-  const showMaterialSubTabs = primaryTab === 'material-management';
-
-  if (!showConverterSecondary && !showLutSubTabs && !showMaterialSubTabs) {
+  if (primaryTab !== 'converter') {
     return null;
   }
-
-  const secondaryTabList = showLutSubTabs
-    ? LUT_SECONDARY_TAB_LIST
-    : showMaterialSubTabs
-      ? MATERIAL_SECONDARY_TAB_LIST
-      : null;
 
   return (
     <nav
@@ -146,72 +64,37 @@ export default function SubTabBar({ activeTab, onTabChange, compact = false }: S
       className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}
     >
       <div className="flex min-w-max items-center gap-1">
-        {showConverterSecondary
-          ? CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => {
-              const isActive = id === activeConverterSubTab;
-              return (
-                <button
-                  key={id}
-                  role="tab"
-                  aria-selected={isActive}
-                  data-testid={`subtab-converter-${id}`}
-                  onClick={() => setActiveConverterSubTab(id)}
-                  className={`
-                    relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                    ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                    ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
-                  `}
-                  style={{ WebkitTapHighlightColor: 'transparent' }}
-                >
-                  {isActive && (
-                    <motion.div
-                      layoutId="active-converter-sub-tab-indicator"
-                      className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
-                      transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                      style={{ zIndex: -1 }}
-                    />
-                  )}
-                  <span className="relative z-10 flex items-center gap-2">
-                    <span className="flex items-center justify-center">{CONVERTER_SUB_TAB_ICONS[id]}</span>
-                    <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
-                  </span>
-                </button>
-              );
-            })
-          : secondaryTabList
-            ? secondaryTabList.map(({ id, titleKey }) => {
-                const isActive = id === activeTab;
-                return (
-                  <button
-                    key={id}
-                    role="tab"
-                    aria-selected={isActive}
-                    data-testid={`subtab-${id}`}
-                    onClick={() => onTabChange(id)}
-                    className={`
-                      relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
-                      ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
-                      ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
-                    `}
-                    style={{ WebkitTapHighlightColor: 'transparent' }}
-                  >
-                    {isActive && (
-                      <motion.div
-                        layoutId="active-secondary-tab-indicator"
-                        className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
-                        transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-                        style={{ zIndex: -1 }}
-                      />
-                    )}
-                    <span className="relative z-10 flex items-center gap-2">
-                      <span className="flex items-center justify-center">{SECONDARY_TAB_ICONS[id]}</span>
-                      <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
-                    </span>
-                  </button>
-                );
-              })
-            : null
-        }
+        {CONVERTER_SUB_TAB_LIST.map(({ id, titleKey }) => {
+          const isActive = id === activeConverterSubTab;
+          return (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={isActive}
+              data-testid={`subtab-converter-${id}`}
+              onClick={() => setActiveConverterSubTab(id)}
+              className={`
+                relative z-10 shrink-0 rounded-xl font-semibold tracking-wide transition-colors duration-300 outline-none
+                ${compact ? "px-2.5 py-2 text-xs sm:px-3" : "px-3 py-2 text-sm sm:px-4"}
+                ${isActive ? 'text-blue-700 dark:text-blue-400' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}
+              `}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              {isActive && (
+                <motion.div
+                  layoutId="active-converter-sub-tab-indicator"
+                  className="absolute inset-0 rounded-xl border border-slate-200/80 bg-slate-100/95 dark:border-slate-700/80 dark:bg-slate-900/85"
+                  transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                  style={{ zIndex: -1 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-2">
+                <span className="flex items-center justify-center">{CONVERTER_SUB_TAB_ICONS[id]}</span>
+                <span className={`whitespace-nowrap ${compact ? "hidden sm:inline" : ""}`}>{t(titleKey)}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
     </nav>
   );

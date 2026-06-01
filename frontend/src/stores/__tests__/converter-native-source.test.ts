@@ -615,6 +615,7 @@ describe("native bundle converter flow", () => {
           name: "legacy-b",
           color_mode: ColorMode.EIGHT_COLOR,
           path: "/legacy-b.npy",
+          fingerprint: "legacy-b-fp",
         },
       ],
     });

@@ -105,6 +105,9 @@ describe("Button", () => {
       }
     }
     expect(labelNode).toBeTruthy();
+    if (!labelNode) {
+      throw new Error("button label text node was not found");
+    }
 
     const translatedWrapper = document.createElement("font");
     translatedWrapper.textContent = labelNode.textContent;

@@ -38,7 +38,7 @@ This document defines the lint guardrails added for i18n and theme-token converg
 Use:
 
 ```bash
-npm run lint:debt
+pnpm run lint:debt
 ```
 
 Current output keys:

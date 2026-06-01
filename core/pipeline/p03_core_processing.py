@@ -130,8 +130,8 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     from core.material_cache import (
         DEFAULT_GRID_RESOLUTION,
         build_material_solver_cache,
-        load_material_solver_cache_with_fallback,
     )
+    from core.material_lut_provider import load_solver_cache
     from core.material_lut_synthesis import (
         ensure_not_worse_than_smaller_N,
         map_pixels_to_materials,
@@ -193,7 +193,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # Pre-load the solver cache before quantization so auto dynamic range can
     # derive target L* from ``cache.lab_centers``; the recipe lookup below
     # reuses ``cache`` / ``actual_grid`` to avoid a second disk read.
-    cache, actual_grid = load_material_solver_cache_with_fallback(
+    cache, actual_grid = load_solver_cache(
         materials=materials,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,

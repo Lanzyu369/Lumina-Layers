@@ -24,9 +24,9 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 ## Common Commands
 
 - `pip install -r requirements.txt`
-- Frontend setup: from `frontend/`, run `npm install`
+- Frontend setup: from `frontend/`, run `pnpm install` (the project uses **pnpm**; do not use `npm`/`yarn`. pnpm version is pinned via the `packageManager` field — enable it with `corepack enable`)
 - Start the backend: `python api_server.py` or `python start_dev.py`
-- Frontend scripts: from `frontend/`, run `npm run dev`, `npm run build`, or `npm run lint`
+- Frontend scripts: from `frontend/`, run `pnpm dev`, `pnpm build`, or `pnpm lint`
 - `python -m pytest tests/ -v`
 - `python -m pytest tests/ --hypothesis-show-statistics`
 - `python scripts/run_vitest.py run`
@@ -132,8 +132,8 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - Keep gate layering: `smoke` for fast pre-push checks, `full` for release-level regression, `watch` for local feedback loops
 - Keep performance checks reproducible via `profile_stage3` + `check_perf_regression`; default regression decisions should use warm runs (run2/run3)
 - Maintain governance tests (`tests/test_logging_exception_governance_unit.py`, URL/resource contract guards) when changing logging, exception boundaries, or URL semantics
-- Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>`; do not call `npx vitest run` directly
-- The Vitest wrapper binds the run to a Windows Job Object and sweeps orphan fork workers before each run. Watch-mode commands (`run_realtime_tests.py`, `npm run test:watch:core`) are unaffected, and `frontend/vite.config.ts` caps fork workers through `LUMINA_VITEST_MAX_FORKS` (default `2`)
+- Always invoke non-watch frontend tests through `python scripts/run_vitest.py <args>`; do not call `pnpm exec vitest run` directly
+- The Vitest wrapper binds the run to a Windows Job Object and sweeps orphan fork workers before each run. Watch-mode commands (`run_realtime_tests.py`, `pnpm test:watch:core`) are unaffected, and `frontend/vite.config.ts` caps fork workers through `LUMINA_VITEST_MAX_FORKS` (default `2`)
 
 ## Destructive Git Operations & Data Safety
 

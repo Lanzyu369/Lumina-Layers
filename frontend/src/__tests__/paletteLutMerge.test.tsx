@@ -13,6 +13,8 @@ import {
   TAB_WIDGET_MAP,
   WIDGET_REGISTRY,
   DEFAULT_LAYOUT,
+  MAIN_RENDERABLE_TABS,
+  isMainRenderableTab,
 } from '../stores/widgetStore';
 import type { TabId } from '../types/widget';
 
@@ -68,12 +70,72 @@ describe('Palette-LUT Merge Unit Tests', () => {
 
   // ===== Persist version 验证 =====
   describe('Persist version', () => {
-    it('persist version is 7', () => {
-      // 颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed -> bump v7
+    it('persist version is 8', () => {
+      // v6 -> v7: colour entry moved to a top-level secondary tab; dropped
+      // colorWorkstationCollapsed.
+      // v7 -> v8: persisted ``activeTab`` could point at a tab that was
+      // removed during the MLS decouple (gradient-card-extract / -generate
+      // / extractor / calibration), causing TAB_WIDGET_MAP[activeTab] to
+      // return undefined and crashing App.tsx; the migrate now sanitizes
+      // unknown tab ids back to "converter".
+      // v6→v7：颜色入口迁移到顶部二级 tab，丢弃 colorWorkstationCollapsed。
+      // v7→v8：MLS 解耦后持久化 activeTab 可能指向已删 tab，迁移时清回 "converter"。
       const options = (
         useWidgetStore.persist as unknown as { getOptions: () => { version: number } }
       ).getOptions();
-      expect(options.version).toBe(7);
+      expect(options.version).toBe(8);
+    });
+  });
+
+  // ===== Main-app renderable-tab boundary =====
+  // Regression for the MLS-decouple stale-activeTab bug: the shared widget
+  // store keeps MLS-only tab ids valid (the MLS frontend reuses this store as
+  // its router), so a persisted ``activeTab`` like "calibration" survives the
+  // v8 migration. The main app must coerce such non-renderable tabs to
+  // "converter" at its boundary, otherwise it renders an empty workspace.
+  // 共享 store 保留 MLS 标签 id 有效（MLS 前端复用此 store 作路由），故持久化的
+  // activeTab（如 "calibration"）在 v8 迁移后仍有效；主应用须在边界把这类不可渲染
+  // 标签归位到 "converter"，否则渲染空工作区。
+  describe('Main-app renderable tabs', () => {
+    it('MAIN_RENDERABLE_TABS holds exactly converter / vectorizer / settings', () => {
+      expect([...MAIN_RENDERABLE_TABS].sort()).toEqual(
+        ['converter', 'settings', 'vectorizer'],
+      );
+    });
+
+    it('isMainRenderableTab accepts the three main tabs', () => {
+      expect(isMainRenderableTab('converter')).toBe(true);
+      expect(isMainRenderableTab('vectorizer')).toBe(true);
+      expect(isMainRenderableTab('settings')).toBe(true);
+    });
+
+    it('isMainRenderableTab rejects MLS-only material/LUT tabs', () => {
+      const mlsOnly: TabId[] = [
+        'calibration',
+        'extractor',
+        'gradient-card-generate',
+        'gradient-card-extract',
+        'material-library',
+        'material-recipe',
+        'lut-manager',
+        'lut-details',
+        'lut-compare',
+        'five-color',
+      ];
+      for (const tab of mlsOnly) {
+        expect(isMainRenderableTab(tab)).toBe(false);
+      }
+    });
+
+    it('every MLS-only tab is still a valid TAB_WIDGET_MAP key (shared router contract)', () => {
+      // The coercion lives at the app boundary precisely because the shared
+      // store cannot drop these ids without breaking the MLS frontend.
+      // 归位逻辑放在应用边界，正是因为共享 store 不能删除这些 id（否则破坏 MLS 前端）。
+      const mlsOnly: TabId[] = ['calibration', 'lut-manager', 'material-library'];
+      for (const tab of mlsOnly) {
+        expect(Object.keys(TAB_WIDGET_MAP)).toContain(tab);
+        expect(isMainRenderableTab(tab)).toBe(false);
+      }
     });
   });
 });

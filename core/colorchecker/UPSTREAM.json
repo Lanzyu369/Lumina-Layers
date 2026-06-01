@@ -1,0 +1,15 @@
+{
+  "upstream_url": "git@github.com:lumina-layer-studio/ColorChecker.git",
+  "upstream_https_url": "https://github.com/lumina-layer-studio/ColorChecker.git",
+  "pinned_commit": "85a028abdc32bb5a62e2a45bd0b52ffc91aed62c",
+  "pinned_date": "2026-05-09",
+  "relationship": "downstream-fork",
+  "note": "core/colorchecker/ is a heavily extended fork of upstream, not a verbatim copy. Upstream ships a web app (app.py + thin colorchecker/ package); we split app.py into focused modules and added auto-detection, orientation, strict pipeline, diagnostics, and reference management. Sync = review upstream changes to the tracked source files and port relevant bits by hand. Do NOT blindly overwrite.",
+  "tracked_upstream_files": [
+    "calibration_core.py",
+    "app.py",
+    "colorchecker/__init__.py",
+    "colorchecker/api.py",
+    "desc.txt"
+  ]
+}

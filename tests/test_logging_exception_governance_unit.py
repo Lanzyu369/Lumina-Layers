@@ -172,6 +172,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "material_solver_cache_status_done",
     "material_solver_cache_build_done",
     "material_solver_cache_delete_done",
+    "material_solver_cache_details_done",
     "material_solver_cache_suggest_colors_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
@@ -193,6 +194,13 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_puzzle_generate_done",
     "converter_auto_detect_colors_done",
     "converter_cleanup_session_files_done",
+    # Auxiliary material-archive usage tracking. The success path has no
+    # dedicated event (per-archive bookkeeping piggybacks on the existing
+    # ``converter_generate_*`` events); only the failure path is logged so
+    # operators can see when the sidecar write fell through.
+    # 耗材使用次数辅助统计：成功路径靠生成端点既有 done 事件覆盖；这里只记录
+    # 边车写入失败的 WARNING 事件。
+    "material_usage_record_failed",
     # Batch merge 3MF structured events (批量合并 3MF 流程日志)
     "batch_merge_3mf_init",
     "batch_merge_3mf_done",

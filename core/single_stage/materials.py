@@ -1198,6 +1198,7 @@ def _material_summary_from_saved_archive(
         selection_value = aggregation.get("selection")
         if isinstance(selection_value, dict):
             aggregation_selection = _json_clone(selection_value)
+    usage_payload = _load_usage_payload(material_dir)
     return {
         "material_name": str(payload.get("material_name") or material_dir.name),
         "directory_name": relative_directory_name,
@@ -1213,6 +1214,10 @@ def _material_summary_from_saved_archive(
         # (聚合诊断信息透传给前端用于"合并诊断"折叠区)
         "aggregation_method": aggregation_method,
         "aggregation_selection": aggregation_selection,
+        "usage_total": int(usage_payload.get("total") or 0),
+        "usage_by_color_mode": dict(usage_payload.get("by_color_mode") or {}),
+        "usage_last_used_at": usage_payload.get("last_used_at"),
+        "usage_last_used_color_mode": usage_payload.get("last_used_color_mode"),
     }
 
 
@@ -1255,6 +1260,7 @@ def _saved_material_library_item_from_archive(
         archive_payload,
         relative_directory_name,
     )
+    usage_payload = _load_usage_payload(material_dir)
     return {
         "material_name": str(
             archive_payload.get("material_name") or material_dir.name
@@ -1273,6 +1279,12 @@ def _saved_material_library_item_from_archive(
         "mean_delta_e": overall_validation.get("mean_delta_e"),
         "verification_count": verification_count,
         "verification_history": verification_history,
+        # Usage statistics (sidecar file, never gates main flow):
+        # 使用次数（边车文件，缺失/损坏时回退为 0，不阻塞主流程）
+        "usage_total": int(usage_payload.get("total") or 0),
+        "usage_by_color_mode": dict(usage_payload.get("by_color_mode") or {}),
+        "usage_last_used_at": usage_payload.get("last_used_at"),
+        "usage_last_used_color_mode": usage_payload.get("last_used_color_mode"),
     }
 
 
@@ -3364,3 +3376,206 @@ def list_saved_stage_a_material_archives(
             )
         )
     return items
+
+
+# ---------------------------------------------------------------------------
+# Material usage tracking (per-material usage_stats.json sidecar)
+# 耗材使用次数追踪（每个耗材目录下的 usage_stats.json 边车文件）
+# ---------------------------------------------------------------------------
+
+_MATERIAL_USAGE_FILENAME = "usage_stats.json"
+_MATERIAL_USAGE_SCHEMA_VERSION = "1.0"
+_MATERIAL_USAGE_HISTORY_LIMIT = 50
+"""Maximum number of recent usage events kept in ``usage_stats.json``.
+Older events are trimmed; aggregated counters in ``total`` / ``by_color_mode``
+are never reset.
+``usage_stats.json`` 中保留的最近使用事件数量上限；超出后旧事件会被裁剪，
+但 ``total`` / ``by_color_mode`` 这些累计计数不会被重置。
+"""
+
+
+def _normalize_color_mode_for_usage(color_mode: Any) -> str:
+    """Coerce a color_mode value to a clean string for usage bucketing.
+    将 color_mode 值规范为用于使用次数分桶的干净字符串。
+
+    Accepts enum members (with ``.value``), strings, and other primitives.
+    Returns ``"unknown"`` for empty / non-stringifiable values.
+    支持枚举（取 ``.value``）、字符串及其他基础类型；无效或空值返回 ``"unknown"``。
+    """
+    if color_mode is None:
+        return "unknown"
+    raw = getattr(color_mode, "value", color_mode)
+    text = str(raw).strip()
+    return text or "unknown"
+
+
+def _empty_usage_payload() -> dict[str, Any]:
+    """Build a fresh, zeroed usage_stats payload.
+    构造一份初始化为零的 usage_stats 数据。
+    """
+    return {
+        "schema_version": _MATERIAL_USAGE_SCHEMA_VERSION,
+        "total": 0,
+        "by_color_mode": {},
+        "last_used_at": None,
+        "last_used_color_mode": None,
+        "history": [],
+    }
+
+
+def _load_usage_payload(material_dir: Path) -> dict[str, Any]:
+    """Load and normalize ``usage_stats.json`` from a material directory.
+    从耗材目录读取并规范化 ``usage_stats.json``。
+
+    Tolerates missing / corrupt files by falling back to an empty payload —
+    usage stats are diagnostics, never primary archive data, so a corrupted
+    sidecar must not block the rest of the workflow.
+    缺失或损坏的文件会回退为空 payload；usage 仅用于诊断展示，不应阻塞主流程。
+    """
+    usage_path = material_dir / _MATERIAL_USAGE_FILENAME
+    if not usage_path.is_file():
+        return _empty_usage_payload()
+    try:
+        raw = json.loads(usage_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return _empty_usage_payload()
+    if not isinstance(raw, dict):
+        return _empty_usage_payload()
+
+    normalized = _empty_usage_payload()
+    try:
+        normalized["total"] = max(0, int(raw.get("total") or 0))
+    except (TypeError, ValueError):
+        normalized["total"] = 0
+
+    by_mode_raw = raw.get("by_color_mode")
+    if isinstance(by_mode_raw, dict):
+        cleaned: dict[str, int] = {}
+        for key, value in by_mode_raw.items():
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if count <= 0:
+                continue
+            cleaned[str(key)] = count
+        normalized["by_color_mode"] = cleaned
+
+    last_at = raw.get("last_used_at")
+    if isinstance(last_at, str) and last_at.strip():
+        normalized["last_used_at"] = last_at
+    last_mode = raw.get("last_used_color_mode")
+    if isinstance(last_mode, str) and last_mode.strip():
+        normalized["last_used_color_mode"] = last_mode
+
+    history_raw = raw.get("history")
+    if isinstance(history_raw, list):
+        cleaned_history: list[dict[str, Any]] = []
+        for entry in history_raw[-_MATERIAL_USAGE_HISTORY_LIMIT:]:
+            if not isinstance(entry, dict):
+                continue
+            mode = entry.get("color_mode")
+            used_at = entry.get("used_at")
+            if not isinstance(mode, str) or not isinstance(used_at, str):
+                continue
+            cleaned_history.append({"color_mode": mode, "used_at": used_at})
+        normalized["history"] = cleaned_history
+    return normalized
+
+
+def get_material_usage(material_dir: Path | str) -> dict[str, Any]:
+    """Public read accessor for a material's usage statistics.
+    对外暴露的耗材使用统计读取函数。
+
+    Args:
+        material_dir: Path to the saved-material directory containing
+            ``material.json``. (耗材档案目录)
+
+    Returns:
+        Normalized usage payload (always a dict; counters default to 0).
+        规范化后的 usage payload，计数缺省为 0。
+    """
+    return _load_usage_payload(Path(material_dir))
+
+
+def record_material_usage(
+    directory_names: Sequence[str],
+    color_mode: Any,
+    *,
+    materials_dir: str | None = None,
+    used_at: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Record one usage event for each given material directory.
+    为每个给定的耗材目录追加一次使用记录。
+
+    Increments ``total`` and ``by_color_mode[color_mode]`` for each material,
+    appends a history entry, and writes the sidecar back atomically (best
+    effort: a per-material I/O failure is logged into the result dict but
+    does not raise — usage tracking is auxiliary).
+
+    Args:
+        directory_names: Material directory_name values used in the build.
+            (本次生成中使用的耗材目录名)
+        color_mode: Color mode the build was generated under (enum or string).
+            (本次生成使用的颜色模式)
+        materials_dir: Optional override for the materials root directory.
+            (可选的 materials 根目录覆盖)
+        used_at: Optional ISO-8601 timestamp; defaults to now (UTC).
+            (可选的 ISO-8601 时间戳；默认 UTC 当前时间)
+
+    Returns:
+        Mapping ``{directory_name: updated_usage_payload | {"error": "..."}}``
+        for diagnostic purposes. 仅用于诊断。
+    """
+    if not directory_names:
+        return {}
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    timestamp = used_at if isinstance(used_at, str) and used_at.strip() else _now_iso()
+    color_mode_label = _normalize_color_mode_for_usage(color_mode)
+
+    seen: set[str] = set()
+    results: dict[str, dict[str, Any]] = {}
+    for raw_name in directory_names:
+        if not isinstance(raw_name, str):
+            continue
+        try:
+            normalized_name = _normalize_relative_directory_name(raw_name)
+        except ValueError:
+            results[str(raw_name)] = {"error": "invalid_directory_name"}
+            continue
+        if normalized_name in seen:
+            continue
+        seen.add(normalized_name)
+        try:
+            material_dir = resolve_saved_material_dir(target_root, normalized_name)
+        except (ValueError, FileNotFoundError):
+            results[normalized_name] = {"error": "material_not_found"}
+            continue
+        if not (material_dir / "material.json").is_file():
+            results[normalized_name] = {"error": "material_archive_missing"}
+            continue
+
+        payload = _load_usage_payload(material_dir)
+        payload["total"] = int(payload.get("total") or 0) + 1
+        by_mode = payload.setdefault("by_color_mode", {})
+        by_mode[color_mode_label] = int(by_mode.get(color_mode_label, 0) or 0) + 1
+        payload["last_used_at"] = timestamp
+        payload["last_used_color_mode"] = color_mode_label
+        history = payload.setdefault("history", [])
+        history.append({"color_mode": color_mode_label, "used_at": timestamp})
+        if len(history) > _MATERIAL_USAGE_HISTORY_LIMIT:
+            del history[: len(history) - _MATERIAL_USAGE_HISTORY_LIMIT]
+        payload["schema_version"] = _MATERIAL_USAGE_SCHEMA_VERSION
+
+        usage_path = material_dir / _MATERIAL_USAGE_FILENAME
+        try:
+            usage_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            results[normalized_name] = payload
+        except OSError as exc:
+            # Auxiliary tracking must never break a successful generation.
+            # 辅助统计写入失败时不应影响生成主流程。
+            results[normalized_name] = {"error": f"write_failed: {exc}"}
+    return results

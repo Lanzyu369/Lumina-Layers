@@ -223,10 +223,8 @@ def _apply_material_archive_color_replacements(
     # to the strict MITM solver otherwise.
     # 优先走持久化缓存；无缓存时退回严格 MITM 求解器。
     try:
-        from core.material_cache import (
-            DEFAULT_GRID_RESOLUTION,
-            load_material_solver_cache_with_fallback,
-        )
+        from core.material_cache import DEFAULT_GRID_RESOLUTION
+        from core.material_lut_provider import load_solver_cache
         from core.material_lut_synthesis import (
             ensure_not_worse_than_smaller_N,
             solve_image_colors_optimal,
@@ -239,7 +237,7 @@ def _apply_material_archive_color_replacements(
         return matched_rgb, material_matrix, 0
 
     effective_grid = int(grid_resolution or DEFAULT_GRID_RESOLUTION)
-    cache, _actual_grid = load_material_solver_cache_with_fallback(
+    cache, _actual_grid = load_solver_cache(
         materials=materials,
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,

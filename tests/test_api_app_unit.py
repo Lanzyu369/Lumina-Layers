@@ -30,9 +30,15 @@ EXPECTED_PATHS: List[str] = [
     "/api/convert/batch",
     "/api/convert/replace-color",
     "/api/convert/merge-colors",
-    "/api/extractor/extract",
-    "/api/extractor/manual-fix",
-    "/api/calibration/generate",
+]
+
+# Endpoints that were moved to the standalone Material-LUT Studio (MLS) service
+# (Route B) and must NOT be present on the main app anymore.
+# 已迁移到独立 Material-LUT Studio (MLS) 服务的端点，主应用不应再暴露。
+MIGRATED_TO_MLS_PREFIXES: List[str] = [
+    "/api/extractor/",
+    "/api/calibration/",
+    "/api/five-color/",
 ]
 
 
@@ -97,6 +103,23 @@ class TestOpenAPIJSON:
             assert expected_path in paths, (
                 f"Missing endpoint {expected_path!r} in OpenAPI paths. " f"Found: {sorted(paths.keys())}"
             )
+
+    def test_migrated_endpoints_absent_from_main_app(self, client: TestClient) -> None:
+        """Material/LUT extract/generate/query endpoints moved to MLS (Route B).
+        提取/生成/查询端点已迁移到 MLS，主应用不应再暴露这些前缀。
+        """
+        resp = client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+        offenders = [
+            path
+            for path in paths
+            for prefix in MIGRATED_TO_MLS_PREFIXES
+            if path.startswith(prefix)
+        ]
+        assert not offenders, (
+            "Endpoints migrated to MLS must not be registered on the main app; "
+            f"found: {sorted(offenders)}"
+        )
 
     def test_openapi_json_has_correct_title(self, client: TestClient) -> None:
         """OpenAPI JSON should have title 'Lumina Studio API'.

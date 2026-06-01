@@ -5,6 +5,7 @@ import type { BaseColorEntry, FiveColorMatchResponse, FiveColorQueryResponse } f
 import { useFiveColorStore } from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
 import Dropdown from "./ui/Dropdown"
+import { useMlsReadOnly } from "../hooks/useMlsReadOnly"
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode"
 import { useI18n } from "../i18n/context"
 import FiveColorCanvas from "./FiveColorCanvas"
@@ -19,6 +20,7 @@ import {
 export default function FiveColorQueryPanel() {
   const { t } = useI18n()
   const workspace = useWorkspaceMode()
+  const isMlsReadOnly = useMlsReadOnly()
   const [targetHex, setTargetHex] = useState("")
   const {
     lutName, baseColors, combinations, selectedIndices, queryResult,
@@ -317,103 +319,107 @@ export default function FiveColorQueryPanel() {
 
             {collectedRecipes.length > 0 && (
               <div className="flex flex-col gap-3 pt-1">
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_block_size")}</span>
-                    <input
-                      type="number"
-                      min={5}
-                      max={50}
-                      step={1}
-                      value={swatchBlockSize}
-                      onChange={(e) => setSwatchBlockSize(Number(e.target.value))}
-                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_gap")}</span>
-                    <input
-                      type="number"
-                      min={0.5}
-                      max={10}
-                      step={0.5}
-                      value={swatchGap}
-                      onChange={(e) => setSwatchGap(Number(e.target.value))}
-                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_cols")}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={20}
-                      step={1}
-                      value={swatchCols}
-                      onChange={(e) => setSwatchCols(Number(e.target.value))}
-                      className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                    />
-                  </label>
-                </div>
+                {!isMlsReadOnly && (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_block_size")}</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={50}
+                          step={1}
+                          value={swatchBlockSize}
+                          onChange={(e) => setSwatchBlockSize(Number(e.target.value))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_gap")}</span>
+                        <input
+                          type="number"
+                          min={0.5}
+                          max={10}
+                          step={0.5}
+                          value={swatchGap}
+                          onChange={(e) => setSwatchGap(Number(e.target.value))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_cols")}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          step={1}
+                          value={swatchCols}
+                          onChange={(e) => setSwatchCols(Number(e.target.value))}
+                          className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        />
+                      </label>
+                    </div>
 
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_structure")}</span>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {(["Single-sided", "Double-sided"] as const).map((mode) => {
-                      const isActive = swatchStructureMode === mode
-                      const labelKey = mode === "Single-sided" ? "five_color_swatch_single_sided" : "five_color_swatch_double_sided"
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setSwatchStructureMode(mode)}
-                          className={`h-9 rounded-lg border text-xs font-medium transition-all ${
-                            isActive
-                              ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
-                              : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
-                          }`}
-                        >
-                          {t(labelKey)}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_structure")}</span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(["Single-sided", "Double-sided"] as const).map((mode) => {
+                          const isActive = swatchStructureMode === mode
+                          const labelKey = mode === "Single-sided" ? "five_color_swatch_single_sided" : "five_color_swatch_double_sided"
+                          return (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setSwatchStructureMode(mode)}
+                              className={`h-9 rounded-lg border text-xs font-medium transition-all ${
+                                isActive
+                                  ? "border-blue-400 bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/20 dark:border-blue-500 dark:text-blue-400"
+                                  : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
+                              }`}
+                            >
+                              {t(labelKey)}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    onClick={() => void generateSwatch()}
-                    disabled={isGeneratingSwatch}
-                    loading={isGeneratingSwatch}
-                    label={isGeneratingSwatch ? t("five_color_generating_swatch") : t("five_color_generate_swatch")}
-                  />
-                  {swatchDownloadUrl && (
-                    <Button
-                      onClick={handleDownloadSwatch}
-                      label={t("five_color_download_swatch")}
-                      variant="secondary"
-                    />
-                  )}
-                  {!swatchDownloadUrl && (
-                    <Button
-                      onClick={clearCollection}
-                      label={t("five_color_collection_clear")}
-                      variant="secondary"
-                    />
-                  )}
-                </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        onClick={() => void generateSwatch()}
+                        disabled={isGeneratingSwatch}
+                        loading={isGeneratingSwatch}
+                        label={isGeneratingSwatch ? t("five_color_generating_swatch") : t("five_color_generate_swatch")}
+                      />
+                      {swatchDownloadUrl && (
+                        <Button
+                          onClick={handleDownloadSwatch}
+                          label={t("five_color_download_swatch")}
+                          variant="secondary"
+                        />
+                      )}
+                      {!swatchDownloadUrl && (
+                        <Button
+                          onClick={clearCollection}
+                          label={t("five_color_collection_clear")}
+                          variant="secondary"
+                        />
+                      )}
+                    </div>
 
-                {swatchPreviewUrl && (
-                  <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
-                    <img
-                      src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
-                      alt={t("five_color_swatch_legend_alt")}
-                      className="w-full h-auto"
-                    />
-                  </div>
+                    {swatchPreviewUrl && (
+                      <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
+                        <img
+                          src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
+                          alt={t("five_color_swatch_legend_alt")}
+                          className="w-full h-auto"
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
 
-                {swatchDownloadUrl && (
+                {(isMlsReadOnly || swatchDownloadUrl) && (
                   <Button
                     onClick={clearCollection}
                     label={t("five_color_collection_clear")}
@@ -695,4 +701,3 @@ function ColorMatchChip({
     </div>
   )
 }
-

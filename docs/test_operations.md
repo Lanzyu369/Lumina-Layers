@@ -102,7 +102,7 @@
   - plugin/runner initialization errors
 - First commands:
   - `pip install -r requirements.txt`
-  - `cd frontend && npm install`
+  - `cd frontend && pnpm install`
   - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
 
 ### B. Smoke failed, full not run yet
@@ -115,15 +115,15 @@
 - Path:
   1. Re-run only failed suite:
      - backend: `python -m pytest tests -q`
-     - frontend: `cd frontend && npx vitest --run`
+     - frontend: `python scripts/run_vitest.py run`
   2. Check contract guardrails:
      - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
-     - `cd frontend && npx vitest --run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
+     - `python scripts/run_vitest.py run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
   3. Re-run full gate.
 
 ### D. Contract drift suspicion (URL / exception boundary)
 - URL drift checks:
-  - `cd frontend && npx vitest --run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
+  - `python scripts/run_vitest.py run src/__tests__/resource-url.test.ts src/__tests__/url-localhost-guard.test.ts`
 - Exception governance check:
   - `python -m pytest tests/test_logging_exception_governance_unit.py -q`
 - If behavior changed intentionally, update:

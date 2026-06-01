@@ -1,11 +1,26 @@
-import apiClient from "./client";
+import mlsClient from "./mlsClient";
 import type {
   MaterialColorSuggestionsResponse,
   MaterialSolverCacheBuildResponse,
   MaterialSolverCacheDeleteResponse,
+  MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheListResponse,
   MaterialSolverCacheStatusResponse,
 } from "./types";
+
+/**
+ * Material solver-cache client.
+ * 耗材求解器缓存客户端。
+ *
+ * Route B / 做法一: solver-cache management moved to the standalone
+ * Material-LUT Studio (MLS) service. The converter still calls these at
+ * runtime (material-archive color suggestions + the inline cache management
+ * card), so requests go to MLS via ``mlsClient`` against ``/api/mls/solver-cache``.
+ * 求解缓存管理已迁移到独立 MLS 服务；转换器运行时仍调用它们，因此通过
+ * ``mlsClient`` 访问 MLS 的 ``/api/mls/solver-cache`` 端点。
+ */
+
+const PREFIX = "/api/mls/solver-cache";
 
 /**
  * Parameters identifying a specific solver-cache combination.
@@ -50,8 +65,8 @@ export async function fetchMaterialSolverCacheStatus(
   if (options?.gridResolution != null) {
     extra.grid_resolution = String(options.gridResolution);
   }
-  const response = await apiClient.post<MaterialSolverCacheStatusResponse>(
-    "/extractor/material-solver-cache/status",
+  const response = await mlsClient.post<MaterialSolverCacheStatusResponse>(
+    `${PREFIX}/status`,
     _formData(key, extra),
     { timeout: 3_600_000 },
   );
@@ -72,8 +87,8 @@ export async function buildMaterialSolverCache(
   if (options?.gridResolution != null) {
     extra.grid_resolution = String(options.gridResolution);
   }
-  const response = await apiClient.post<MaterialSolverCacheBuildResponse>(
-    "/extractor/material-solver-cache/build",
+  const response = await mlsClient.post<MaterialSolverCacheBuildResponse>(
+    `${PREFIX}/build`,
     _formData(key, extra),
     { timeout: options?.timeoutMs ?? 3_600_000 },
   );
@@ -92,8 +107,8 @@ export async function deleteMaterialSolverCache(
   if (options?.gridResolution != null) {
     extra.grid_resolution = String(options.gridResolution);
   }
-  const response = await apiClient.post<MaterialSolverCacheDeleteResponse>(
-    "/extractor/material-solver-cache/delete",
+  const response = await mlsClient.post<MaterialSolverCacheDeleteResponse>(
+    `${PREFIX}/delete`,
     _formData(key, extra),
     { timeout: 3_600_000 },
   );
@@ -105,9 +120,38 @@ export async function deleteMaterialSolverCache(
  * 列出所有已持久化的求解器缓存及其元数据。
  */
 export async function listMaterialSolverCaches(): Promise<MaterialSolverCacheListResponse> {
-  const response = await apiClient.get<MaterialSolverCacheListResponse>(
-    "/extractor/material-solver-caches",
+  const response = await mlsClient.get<MaterialSolverCacheListResponse>(
+    PREFIX,
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Fetch the LUT-details-shaped color-distribution payload for a built cache.
+ * 拉取已构建缓存的色彩分布图载荷（结构与 LUT 详情同构）。
+ *
+ * Used by :class:`MaterialSolverCacheStatusCard` to render the four scatter
+ * charts (Lab a-b plane, RGB isometric projection, Hue x Lightness, Hue x
+ * Saturation) verbatim from the existing LUT-details components.
+ *
+ * 由 :class:`MaterialSolverCacheStatusCard` 调用，复用 LUT 详情组件渲染四张散点图。
+ */
+export async function fetchMaterialSolverCacheDetails(
+  key: MaterialSolverCacheKey,
+  options?: { gridResolution?: number; maxPoints?: number; signal?: AbortSignal },
+): Promise<MaterialSolverCacheDetailsResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.gridResolution != null) {
+    extra.grid_resolution = String(options.gridResolution);
+  }
+  if (options?.maxPoints != null) {
+    extra.max_points = String(options.maxPoints);
+  }
+  const response = await mlsClient.post<MaterialSolverCacheDetailsResponse>(
+    `${PREFIX}/details`,
+    _formData(key, extra),
+    { timeout: 3_600_000, signal: options?.signal },
   );
   return response.data;
 }
@@ -163,8 +207,8 @@ export async function fetchMaterialColorSuggestions(
   if (options?.gridResolution != null) {
     extra.grid_resolution = String(options.gridResolution);
   }
-  const response = await apiClient.post<MaterialColorSuggestionsResponse>(
-    "/extractor/material-solver-cache/suggest-colors",
+  const response = await mlsClient.post<MaterialColorSuggestionsResponse>(
+    `${PREFIX}/suggest-colors`,
     _formData(key, extra),
     {
       timeout: options?.timeoutMs ?? 3_600_000,

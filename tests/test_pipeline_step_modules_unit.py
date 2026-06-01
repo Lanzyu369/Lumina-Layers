@@ -137,13 +137,15 @@ class TestS01InputValidation:
         ctx["selected_materials"] = ["fake/material"]
 
         # Phase 0 Sub-PR C (PR #128) extracted the material-archive branch into
-        # core.pipeline._input_validation_common, so the mock targets follow the
-        # symbol's new physical location rather than the s01 caller module.
-        # PR #128 Phase 0 Sub-PR C 把 material-archive 分支抽到了
-        # core.pipeline._input_validation_common, 因此 mock 路径要跟随符号实际
-        # 位置, 而不是 s01 调用方模块。
+        # core.pipeline._input_validation_common. Route B then routed the
+        # material load through core.material_lut_provider.load_materials (a
+        # prefetch + local-cache seam), which the validation module imports as
+        # ``load_materials``; mock that name at the caller module.
+        # PR #128 把 material-archive 分支抽到了 _input_validation_common；路线 B
+        # 又将耗材加载改为经 core.material_lut_provider.load_materials（预取+本地
+        # 缓存接缝），验证模块以 ``load_materials`` 导入，故在调用方 mock 该名字。
         with patch(
-            "core.pipeline._input_validation_common.load_multiple_materials",
+            "core.pipeline._input_validation_common.load_materials",
             return_value=[object()],
         ), patch(
             "core.pipeline._input_validation_common.build_material_slot_names",
@@ -164,7 +166,7 @@ class TestS01InputValidation:
         ctx["selected_materials"] = ["PLA Green", "PLA White"]
 
         with patch(
-            "core.pipeline._input_validation_common.load_multiple_materials",
+            "core.pipeline._input_validation_common.load_materials",
             return_value=[object(), object()],
         ), patch(
             "core.pipeline._input_validation_common.build_material_slot_names",
