@@ -16,17 +16,17 @@
 - Modify: `core/pipeline/processing_ops/kmeans_quantizer.py`
 - Test: `tests/test_kmeans_quantizer_lut_constrained_unit.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a test that monkeypatches `kmeans_quantizer.cdist` to raise if the LUT-constrained path tries to build a dense matrix. Use a small synthetic image and LUT so the test is fast but still exercises center initialization, iterative assignment, SSE scoring, and final image mapping.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_kmeans_quantizer_lut_constrained_unit.py::TestLowLevelLutConstrained::test_uses_kdtree_not_dense_cdist -v`
 
 Expected: FAIL with the monkeypatched `AssertionError`, proving the old path still calls `cdist`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `kmeans_quantizer.py`, remove the `scipy.spatial.distance.cdist` import and add helper functions that use `KDTree(...).query(...)` for:
 - nearest selected center for every work pixel,
@@ -35,7 +35,7 @@ In `kmeans_quantizer.py`, remove the `scipy.spatial.distance.cdist` import and a
 
 Keep the output contract unchanged: output shape and dtype match input, every output RGB belongs to `lut_rgb`, and the number of output colors stays at or below `effective_k`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_kmeans_quantizer_lut_constrained_unit.py::TestLowLevelLutConstrained::test_uses_kdtree_not_dense_cdist -v`
 
@@ -47,21 +47,21 @@ Expected: PASS.
 - Modify: `api/routers/converter/preview.py`
 - Test: `tests/test_converter_preview_unit.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a preview endpoint test that patches `api.routers.converter.preview.schedule_glb_build` and `api.routers.converter.preview.generate_segmented_glb`. The test must assert preview returns `preview_glb_url: null`, schedules one background GLB job with the current session/cache, and does not call `generate_segmented_glb` inline.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_converter_preview_unit.py::TestResponseContainsPaletteAndDimensions::test_preview_schedules_segmented_glb_asynchronously -v`
 
 Expected: FAIL because preview currently calls `generate_segmented_glb` synchronously and has no `schedule_glb_build` import.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Import `schedule_glb_build` from `.async_glb`. Replace the synchronous GLB block in `convert_preview` with a scheduler call after `cache_data` is stored and the preview PNG/raw URLs are registered. Log `segmented_glb_ms` as scheduler overhead, not mesh-build time.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_converter_preview_unit.py::TestResponseContainsPaletteAndDimensions::test_preview_schedules_segmented_glb_asynchronously -v`
 
@@ -73,21 +73,21 @@ Expected: PASS.
 - Modify: `frontend/src/stores/converter/store.ts`
 - Test: `frontend/src/stores/__tests__/converter-native-source.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend the converter API mock with `getGlbStatus`. Add a `submitPreview` test where backend preview returns `preview_glb_url: null`, the mocked GLB status returns `ready`, and fake timers advance until `previewGlbUrl` becomes the returned GLB URL.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python scripts/run_vitest.py run src/stores/__tests__/converter-native-source.test.ts -t "polls async preview GLB after preview returns no GLB URL"`
 
 Expected: FAIL because `submitPreview` currently does not start `_pollAsyncGlb`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 After preview state is set and the new `sessionId` is available, call `_get()._pollAsyncGlb()` when `response.preview_glb_url` is missing. Keep the existing direct `previewGlbUrl` assignment when the backend returns a URL.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python scripts/run_vitest.py run src/stores/__tests__/converter-native-source.test.ts -t "polls async preview GLB after preview returns no GLB URL"`
 
@@ -100,19 +100,19 @@ Expected: PASS.
 - Review: `api/routers/converter/preview.py`
 - Review: `frontend/src/stores/converter/store.ts`
 
-- [ ] **Step 1: Run backend target tests**
+- [x] **Step 1: Run backend target tests**
 
 Run: `python -m pytest tests/test_kmeans_quantizer_lut_constrained_unit.py tests/test_converter_preview_unit.py tests/test_async_glb_unit.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 2: Run frontend target tests**
+- [x] **Step 2: Run frontend target tests**
 
 Run: `python scripts/run_vitest.py run src/__tests__/glb-async-polling.test.ts src/stores/__tests__/converter-native-source.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 3: Run diff review**
+- [x] **Step 3: Run diff review**
 
 Review `git diff --check`, `git diff --stat`, and changed hunks. Confirm there are no dense `cdist` calls in `kmeans_quantizer.py`, no synchronous preview GLB call in `convert_preview`, and no frontend polling race where an old preview can overwrite a newer session.
 
@@ -123,16 +123,26 @@ Review `git diff --check`, `git diff --stat`, and changed hunks. Confirm there a
 - Push branch `Min/fix/preview-glb-and-lut-kmeans-memory`.
 - Open PR against `dev-refactor`.
 
-- [ ] **Step 1: Commit**
+- [x] **Step 1: Commit**
 
 Run: `git status --short`, then stage only the plan, code, and tests for this fix. Commit using Conventional Commit:
 
 `fix(converter): avoid preview glb stalls and lut kmeans oom`
 
-- [ ] **Step 2: Push**
+- [x] **Step 2: Push**
 
 Run: `git push -u origin Min/fix/preview-glb-and-lut-kmeans-memory`
 
-- [ ] **Step 3: Create PR**
+- [x] **Step 3: Create PR**
 
 Create a PR targeting `dev-refactor` with an English summary first and Chinese summary second. Include the tests run and note that the user should verify a large preview with `use_lut_constrained=true`.
+
+### Verification Notes
+
+- `python -m pytest tests/test_feedback_fingerprint_unit.py tests/test_kmeans_quantizer_lut_constrained_unit.py tests/test_converter_preview_unit.py tests/test_async_glb_unit.py -v`: 72 passed.
+- `python scripts/run_vitest.py run src/__tests__/glb-async-polling.test.ts src/stores/__tests__/converter-native-source.test.ts`: exit 0.
+- `python scripts/run_vitest.py run`: exit 0.
+- `python scripts/run_smoke_tests.py`: 88 backend smoke tests passed; frontend selected tests passed; lint reported 0 errors and 8 existing warnings.
+- `python -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v`: 21 passed.
+- `python scripts/log_quality_check.py --mode fast --workflow startup,lut_list,lut_colors,preview,generate,replace`: PASS.
+- `python scripts/run_full_tests.py`: 3300 passed, 15 skipped, 3 failed. The only failures are frozen raster baseline cases `high-fidelity__4c_cmyw`, `high-fidelity__6c_cmyw`, and `pixel__4c_rybw`; the same three failures reproduce on a clean `origin/dev-refactor` worktree with identical diff ratios, so they are tracked as pre-existing baseline/environment drift rather than a PR #221 regression.

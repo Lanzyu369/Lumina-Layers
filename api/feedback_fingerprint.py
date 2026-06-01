@@ -50,6 +50,8 @@ __all__ = ["file_sha256", "guess_mime"]
 # 映射表。键为带点的小写后缀。
 _FEEDBACK_EXTENSION_MIME: dict[str, str] = {
     ".3mf": "model/3mf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
     ".npy": "application/x-numpy",
     ".msgpack": "application/x-msgpack",
     # NPZ is a zip archive of numpy arrays; treat it as a generic zip for
@@ -57,6 +59,7 @@ _FEEDBACK_EXTENSION_MIME: dict[str, str] = {
     # NPZ 本质是打包 numpy 数组的 zip 文件，按通用 zip 标注即可，
     # 让邮件客户端/浏览器按压缩包正常处理。
     ".npz": "application/zip",
+    ".zip": "application/zip",
 }
 
 
@@ -89,7 +92,8 @@ def file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
         FileNotFoundError: If ``path`` does not exist. Raised by
             :func:`builtins.open` and deliberately not swallowed.
         IsADirectoryError: If ``path`` refers to a directory rather than a
-            regular file. Also raised by :func:`builtins.open`.
+            regular file. Raised explicitly so Windows and POSIX callers see
+            the same exception type.
         PermissionError: If the current process is not allowed to read
             ``path``. Propagated from the underlying ``open`` call.
         ValueError: If ``chunk_size`` is not a positive integer.
@@ -98,6 +102,9 @@ def file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
         raise ValueError(
             f"chunk_size must be a positive int, got {chunk_size!r}"
         )
+
+    if Path(path).is_dir():
+        raise IsADirectoryError(str(path))
 
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -111,17 +118,17 @@ def guess_mime(path: str | Path) -> str:
 
     根据 ``path`` 的后缀推断 MIME 类型。
 
-    The stdlib :func:`mimetypes.guess_type` is consulted first. When it
-    returns ``None`` — which happens for a handful of feedback-specific
-    binary formats that are not in the system MIME database on every OS —
-    the function consults a small built-in table covering ``.3mf``,
-    ``.npy``, ``.npz`` and ``.msgpack``. If nothing matches, the caller
-    receives the safe generic fallback ``application/octet-stream``.
+    A small deterministic extension table is consulted first for common
+    attachment types whose stdlib mapping can vary across operating systems
+    (for example ``.jpg`` and ``.zip`` on Windows). When it has no match,
+    the stdlib :func:`mimetypes.guess_type` covers the long tail. If nothing
+    matches, the caller receives the safe generic fallback
+    ``application/octet-stream``.
 
-    先调用标准库的 :func:`mimetypes.guess_type`；若返回 ``None``——部分
-    平台上 ``.3mf`` / ``.npy`` 等后缀不在系统 MIME 库里——再查一张内置
-    小表，覆盖 ``.3mf`` / ``.npy`` / ``.npz`` / ``.msgpack``。都不命中时
-    返回通用回退值 ``application/octet-stream``。
+    先查一张确定性的后缀表，覆盖在不同操作系统上标准库映射可能不同的
+    常见附件类型（例如 Windows 上的 ``.jpg`` / ``.zip``）。未命中时再调用
+    标准库的 :func:`mimetypes.guess_type` 处理长尾格式。都不命中时返回通用
+    回退值 ``application/octet-stream``。
 
     This function never raises: MIME guessing is a labelling aid for
     manifests, not a validation gate, so invalid or empty paths quietly
@@ -141,17 +148,14 @@ def guess_mime(path: str | Path) -> str:
         ``"application/octet-stream"`` when the extension is unknown.
     """
     path_str = str(path)
+    suffix = Path(path_str).suffix.lower()
+    if suffix in _FEEDBACK_EXTENSION_MIME:
+        return _FEEDBACK_EXTENSION_MIME[suffix]
 
     # Try the stdlib first; it covers the long tail (image/png, image/jpeg,
     # application/zip, application/json, text/plain, ...).
     guessed, _encoding = mimetypes.guess_type(path_str)
     if guessed:
         return guessed
-
-    # Fall back to our feedback-specific extension table. Use Path.suffix so
-    # that multi-dotted paths (e.g. "foo.tar.npy") still resolve correctly.
-    suffix = Path(path_str).suffix.lower()
-    if suffix in _FEEDBACK_EXTENSION_MIME:
-        return _FEEDBACK_EXTENSION_MIME[suffix]
 
     return "application/octet-stream"
