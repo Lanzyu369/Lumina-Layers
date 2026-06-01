@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-06-02",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "很慢的预览或生成任务现在会在超时后自动回收，不会一直占住后台处理能力拖慢后续操作。",
+            en: "Very slow preview or 3MF generation jobs are now cleaned up after timing out, so later actions are not left waiting behind them.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-29",
     title: {
       zh: "Lumina Layers — 近期更新速览",

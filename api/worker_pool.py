@@ -8,11 +8,13 @@ to a process pool, with timeout support and graceful shutdown.
 """
 
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Callable, TypeVar
 import asyncio
 import io
 import os
 import sys
+import threading
 
 from api.structured_logging import get_logger
 
@@ -23,6 +25,7 @@ _log = get_logger(__name__)
 _ENV_MAX_TASKS_PER_CHILD = "LUMINA_WORKER_MAX_TASKS_PER_CHILD"
 _DEFAULT_MAX_TASKS_PER_CHILD = 20
 _DARWIN_DEFAULT_MAX_TASKS_PER_CHILD = 1
+_TERMINATE_GRACE_SECONDS = 1.0
 
 
 def _default_max_tasks_per_child() -> int:
@@ -62,6 +65,9 @@ def _resolve_max_tasks_per_child() -> int | None:
                 "event": "worker_pool_max_tasks_invalid",
                 "raw_value": raw,
                 "error_type": "ValueError",
+                "error_message": (
+                    f"{_ENV_MAX_TASKS_PER_CHILD} must be an integer; got {raw!r}"
+                ),
                 "fallback": fallback,
             },
         )
@@ -112,6 +118,76 @@ def _run_in_worker_with_context(
     return fn(*args)
 
 
+def _normalize_timeout(timeout: float | None) -> float | None:
+    """Normalize non-positive task timeouts to disabled.
+
+    将非正数任务超时归一化为禁用状态。
+    """
+    if timeout is None:
+        return None
+    value = float(timeout)
+    if value <= 0:
+        return None
+    return value
+
+
+def _shutdown_executor(
+    executor: ProcessPoolExecutor,
+    *,
+    wait: bool,
+    cancel_futures: bool,
+) -> None:
+    """Shutdown a process executor while supporting older Python signatures."""
+
+    try:
+        executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+    except TypeError:
+        executor.shutdown(wait=wait)
+
+
+def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
+    """Terminate worker processes owned by a ProcessPoolExecutor.
+
+    ``asyncio.wait_for`` can cancel the parent-side wait, but it cannot stop
+    the child process that is already executing. We intentionally use the
+    executor's private process table here because Python 3.12 does not expose
+    ``terminate_workers()`` / ``kill_workers()`` yet.
+
+    ``asyncio.wait_for`` 只能取消父进程等待，不能停止已经执行中的子进程。
+    Python 3.12 尚未提供公开的 terminate/kill worker API，因此这里有意
+    使用 executor 的私有进程表。
+    """
+
+    processes = getattr(executor, "_processes", None)
+    if not processes:
+        return 0
+
+    terminated = 0
+    for proc in list(processes.values()):
+        if proc is None or not proc.is_alive():
+            continue
+        try:
+            proc.terminate()
+            proc.join(timeout=_TERMINATE_GRACE_SECONDS)
+            if proc.is_alive():
+                kill = getattr(proc, "kill", None)
+                if callable(kill):
+                    kill()
+                    proc.join(timeout=_TERMINATE_GRACE_SECONDS)
+            terminated += 1
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log.warning(
+                "Failed to terminate timed-out worker process",
+                extra={
+                    "event": "worker_pool_process_terminate_failed",
+                    "pid": getattr(proc, "pid", None),
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+    return terminated
+
+
 class WorkerPoolManager:
     """Manage a ProcessPoolExecutor for CPU-bound tasks.
     管理用于 CPU 密集型任务的进程池。
@@ -124,13 +200,20 @@ class WorkerPoolManager:
         _pool (ProcessPoolExecutor | None): The underlying executor. (底层执行器)
     """
 
-    def __init__(self, max_workers: int | None = None) -> None:
+    def __init__(
+        self,
+        max_workers: int | None = None,
+        default_task_timeout: float | None = None,
+    ) -> None:
         """Initialize WorkerPoolManager.
         初始化 WorkerPoolManager。
 
         Args:
             max_workers (int | None): Max worker processes. Defaults to min(cpu_count, 4).
                                       (最大工作进程数，默认 min(cpu_count, 4))
+            default_task_timeout (float | None): Default seconds before a task
+                times out. Non-positive values disable the default timeout.
+                (默认任务超时秒数；非正数表示禁用默认超时)
 
         The per-child recycle threshold is read once from
         ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` (default 20) so each pool instance
@@ -140,19 +223,58 @@ class WorkerPoolManager:
         """
         self._max_workers: int = max_workers or min(os.cpu_count() or 2, 4)
         self._max_tasks_per_child: int | None = _resolve_max_tasks_per_child()
+        self._default_task_timeout: float | None = _normalize_timeout(
+            default_task_timeout
+        )
         self._pool: ProcessPoolExecutor | None = None
+        self._pool_lock = threading.RLock()
 
     def start(self) -> None:
         """Initialize the process pool.
         初始化进程池。
         """
-        if self._pool is not None:
-            return
-        self._pool = ProcessPoolExecutor(
-            max_workers=self._max_workers,
-            initializer=_worker_init,
-            max_tasks_per_child=self._max_tasks_per_child,
+        with self._pool_lock:
+            if self._pool is not None:
+                return
+            self._pool = ProcessPoolExecutor(
+                max_workers=self._max_workers,
+                initializer=_worker_init,
+                max_tasks_per_child=self._max_tasks_per_child,
+            )
+
+    def _restart_after_failed_pool(
+        self,
+        failed_pool: ProcessPoolExecutor,
+        *,
+        reason: str,
+        timeout: float | None = None,
+    ) -> None:
+        """Replace a failed executor with a fresh process pool."""
+
+        error_message = (
+            f"Task exceeded {timeout:.3f}s timeout; worker pool restarted"
+            if reason == "task_timeout" and timeout is not None
+            else f"Worker pool restarted after {reason}"
         )
+        with self._pool_lock:
+            if self._pool is not failed_pool:
+                return
+            terminated = _terminate_executor_workers(failed_pool)
+            _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
+            self._pool = None
+            _log.warning(
+                "Worker pool restarted after failed task",
+                extra={
+                    "event": "worker_pool_restarted",
+                    "reason": reason,
+                    "timeout_s": timeout,
+                    "terminated_workers": terminated,
+                    "max_workers": self._max_workers,
+                    "error_type": reason,
+                    "error_message": error_message,
+                },
+            )
+            self.start()
 
     async def submit(
         self,
@@ -184,22 +306,38 @@ class WorkerPoolManager:
         父进程当前的 request_id / session_id 会在调用时被快照，并在 worker
         子进程内重放，使得 worker 发出的日志可与 endpoint 的请求关联。
         """
-        if self._pool is None:
+        pool = self._pool
+        if pool is None:
             raise RuntimeError("WorkerPool not started")
         from api.structured_logging import get_request_id, get_session_id
 
         loop = asyncio.get_running_loop()
         request_id = get_request_id()
         session_id = get_session_id()
+        effective_timeout = _normalize_timeout(
+            timeout if timeout is not None else self._default_task_timeout
+        )
         future = loop.run_in_executor(
-            self._pool,
+            pool,
             _run_in_worker_with_context,
             fn,
             request_id,
             session_id,
             *args,
         )
-        return await asyncio.wait_for(future, timeout=timeout)
+        try:
+            return await asyncio.wait_for(future, timeout=effective_timeout)
+        except asyncio.TimeoutError:
+            future.cancel()
+            self._restart_after_failed_pool(
+                pool,
+                reason="task_timeout",
+                timeout=effective_timeout,
+            )
+            raise
+        except BrokenProcessPool:
+            self._restart_after_failed_pool(pool, reason="broken_process_pool")
+            raise
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the pool gracefully.
@@ -209,9 +347,14 @@ class WorkerPoolManager:
             wait (bool): Whether to wait for pending tasks to complete.
                          (是否等待待处理任务完成)
         """
-        if self._pool is not None:
-            self._pool.shutdown(wait=wait)
-            self._pool = None
+        with self._pool_lock:
+            if self._pool is not None:
+                _shutdown_executor(
+                    self._pool,
+                    wait=wait,
+                    cancel_futures=not wait,
+                )
+                self._pool = None
 
     @property
     def is_alive(self) -> bool:
@@ -244,3 +387,10 @@ class WorkerPoolManager:
                 (子进程被回收前可处理的最大任务数，``None`` 表示禁用回收)
         """
         return self._max_tasks_per_child
+
+    @property
+    def default_task_timeout(self) -> float | None:
+        """Get the default task timeout in seconds, or None when disabled.
+        获取默认任务超时秒数；禁用时返回 None。
+        """
+        return self._default_task_timeout
