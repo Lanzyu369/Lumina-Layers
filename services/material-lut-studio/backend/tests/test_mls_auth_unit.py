@@ -187,6 +187,29 @@ class TestProtectedMode:
         body = resp.json()
         assert body.get("error_code") == "mls_write_password_required"
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/api/extractor/extract",
+            "/api/extractor/manual-fix",
+            "/api/extractor/merge-5color-extended",
+            "/api/extractor/merge-8color",
+            "/api/extractor/confirm-palette",
+        ),
+    )
+    def test_extractor_lut_persistence_writes_blocked_without_header(
+        self,
+        protected_mode,
+        path: str,
+    ) -> None:
+        """Extractor LUT persistence endpoints require the MLS write password.
+        提取器 LUT 持久化写操作必须携带 MLS 写入密码。
+        """
+        resp = _client().post(path)
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error_code") == "mls_write_password_required"
+
     def test_read_endpoint_stays_open(self, protected_mode) -> None:
         """``GET /api/mls/materials`` is reachable without a password.
         ``GET /api/mls/materials`` 在无密码时也可访问。

@@ -91,6 +91,14 @@ _WRITE_EXACT_PATHS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/extractor/gradient-card-materials/import"),
     ("POST", "/api/extractor/material-solver-cache/build"),
     ("POST", "/api/extractor/material-solver-cache/delete"),
+    # Reused extractor LUT persistence flow: extract/repair/merge/confirm
+    # all write a LUT JSON on disk (session output or caller-supplied path).
+    # 复用的提取器 LUT 持久化流程：提取、修格点、合并、确认调色板都会改写磁盘 LUT。
+    ("POST", "/api/extractor/extract"),
+    ("POST", "/api/extractor/manual-fix"),
+    ("POST", "/api/extractor/merge-5color-extended"),
+    ("POST", "/api/extractor/merge-8color"),
+    ("POST", "/api/extractor/confirm-palette"),
     # Reused legacy LUT lifecycle (without ``/api/mls`` prefix).
     # 复用的旧 LUT 生命周期端点（无 ``/api/mls`` 前缀）。
     ("POST", "/api/lut/upload"),
