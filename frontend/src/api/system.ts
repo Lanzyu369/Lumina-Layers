@@ -82,10 +82,17 @@ export interface PreviewResourceResponse {
   source_type?: string | null;
 }
 
+export interface PreviewResourceOptions {
+  timeoutMs?: number;
+}
+
+const DEFAULT_PREVIEW_RESOURCE_TIMEOUT_MS = 120_000;
+
 /** 上传图片为私有资源，只返回受限尺寸的小预览 URL。 */
 export async function createPreviewResource(
   file: File,
   context: string,
+  options: PreviewResourceOptions = {},
 ): Promise<PreviewResourceResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -95,7 +102,7 @@ export async function createPreviewResource(
     formData,
     {
       headers: { "Content-Type": "multipart/form-data" },
-      timeout: 120_000,
+      timeout: options.timeoutMs ?? DEFAULT_PREVIEW_RESOURCE_TIMEOUT_MS,
     },
   );
   return response.data;
