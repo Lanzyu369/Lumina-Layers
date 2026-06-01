@@ -156,7 +156,9 @@ describe("submitGenerate vector outline payload anchor (Task 1.2)", () => {
     vi.spyOn(converterApi, "fetchGradientGroups").mockResolvedValueOnce({
       groups: [],
     } as never);
-    vi.spyOn(lutApi, "fetchSessionLutInfo").mockResolvedValueOnce(null);
+    vi.spyOn(lutApi, "fetchSessionLutInfo").mockRejectedValueOnce(
+      new Error("session LUT info unavailable"),
+    );
 
     seedVectorPreviewState(2.0);
     await useConverterStore.getState().submitPreview();
