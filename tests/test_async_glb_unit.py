@@ -241,8 +241,11 @@ class TestGlbStatusLifecycle:
         # A slow-ish stub ensures we can observe a pending snapshot
         # between scheduling and completion without racing.
         # 让 stub 延迟一点，确保 pending 状态能被观察到（否则太快直接 ready）。
-        def slow_builder(_cache: dict) -> str:
+        def slow_builder(cache: dict) -> str:
             time.sleep(0.05)
+            cache["color_contours"] = {
+                "#ff0000": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]]
+            }
             return str(stub_glb_path)
 
         _install_glb_stub(monkeypatch, slow_builder)
@@ -262,6 +265,9 @@ class TestGlbStatusLifecycle:
         assert final["glb_url"].startswith("/api/files/")
         assert isinstance(final["job_token"], str)
         assert final["error"] is None
+        assert final["color_contours"] == {
+            "#ff0000": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]]
+        }
 
     def test_error_propagated_to_status(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

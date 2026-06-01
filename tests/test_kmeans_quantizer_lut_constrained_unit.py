@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from scipy.spatial import KDTree
 
+from core.pipeline.processing_ops import kmeans_quantizer
 from core.pipeline.processing_ops.kmeans_quantizer import (
     _lut_constrained_quantize,
     quantize_colors,
@@ -304,6 +305,39 @@ class TestLowLevelLutConstrained:
         assert out.shape == (20, 20, 3)
         unique = np.unique(out.reshape(-1, 3), axis=0).shape[0]
         assert unique >= 1
+
+    def test_uses_kdtree_not_dense_cdist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The LUT-constrained path must not allocate dense pixel-by-K matrices.
+
+        This blocks regressions where ``cdist(work_pixels, centers)`` or
+        ``cdist(full_pixels, centers)`` scales as ``pixels * effective_k`` and
+        OOMs large 4096-entry LUT previews.
+        LUT 约束路径不得构造 ``像素数 × effective_k`` 的稠密距离矩阵。
+        """
+
+        def _blocked_cdist(*_args: object, **_kwargs: object) -> np.ndarray:
+            raise AssertionError("dense cdist must not be used")
+
+        monkeypatch.setattr(kmeans_quantizer, "cdist", _blocked_cdist, raising=False)
+
+        pal_rgb, pal_lab, pal_tree = _build_mini_lut(32)
+        img = _synthetic_image(pal_rgb, h=48, w=48, seed=14)
+
+        out = _lut_constrained_quantize(
+            img,
+            n_colors=16,
+            seed=42,
+            lut_lab=pal_lab,
+            lut_rgb=pal_rgb,
+            lut_tree=pal_tree,
+        )
+
+        assert out.shape == img.shape
+        assert out.dtype == np.uint8
+        out_set = {tuple(row) for row in out.reshape(-1, 3)}
+        lut_set = {tuple(row) for row in pal_rgb}
+        assert out_set.issubset(lut_set)
+        assert len(out_set) <= 16
 
 
 class TestPreScalingLutConstrained:

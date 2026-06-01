@@ -562,7 +562,8 @@ export async function regionRequantize(
  * null`` (the server now runs ``generate_segmented_glb`` off the request
  * thread to cut perceived replace latency by ~75%). When ``status`` goes
  * to ``"ready"`` the caller should drop the ``glb_url`` into
- * ``previewGlbUrl`` and stop polling.
+ * ``previewGlbUrl`` and stop polling. ``color_contours`` may be present
+ * on ready snapshots so async preview can restore highlight contours.
  * 后端异步 GLB 构建状态快照：因为 replace 端点不再同步等 GLB，前端通过
  * 这个端点轮询拿 ``glb_url``，``status`` 切到 ready 后更新 previewGlbUrl。
  */
@@ -572,6 +573,7 @@ export interface GlbStatusResponse {
   glb_url: string | null;
   job_token: string | null;
   error: string | null;
+  color_contours?: Record<string, number[][][]> | null;
 }
 
 /**
