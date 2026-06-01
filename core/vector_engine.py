@@ -42,6 +42,18 @@ MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
 _MAX_BEZIER_DEPTH = 16
 
+# Supersample factor for the hard membership masks (mask_solid / matched_rgb /
+# quantized_image / material_matrix) built in ``build_preview_cache``. Plain
+# ``cv2.fillPoly`` truncates float vertices to int at base resolution and can
+# drop geometry-covered pixels along edges / thin interior-hole borders,
+# producing the 1px seams users saw as "holes" in the hair (clickable as
+# background, exported as air). Filling on an N× sub-grid restricted to each
+# shape's bbox and center-sampling decides membership by "pixel center inside
+# geometry", eliminating those seams. 4 reduces the reported seam from 208 to
+# only sub-pixel boundary jitter (<1px) while keeping cost ~shape_area*16.
+# 外观面归属掩膜的超采样倍率：修复 fillPoly 整数截断导致的 1px 缝。
+_MASK_SUPERSAMPLE = 4
+
 
 def _color_object_to_hex(color_obj):
     """Return a lowercase hex string for svgelements Color objects."""
@@ -2608,21 +2620,117 @@ class VectorProcessor:
                 return None
             return pts
 
-        def _polygon_mask(poly, height, width, scale):
+        def _polygon_mask_plain(poly, height, width, scale):
+            """Original int-truncated single-resolution fill.
+            原始的整数截断、单分辨率填充。
+
+            Retained for the ``preview_rgba`` path, which already rasterises
+            on a supersampled grid and then box-filter downsamples, so its
+            edges are anti-aliased and the 1px seam averages out visually.
+            Re-supersampling there would multiply cost for no membership-mask
+            gain (``preview_rgba`` is display-only, not a membership mask).
+
+            保留给 ``preview_rgba`` 路径：它本身已在超采样网格上栅格化并做
+            INTER_AREA 降采样，边缘已抗锯齿、缝会被视觉平均掉，无需再次
+            超采样（``preview_rgba`` 仅用于显示，不作为归属掩膜）。
+            """
             region = np.zeros((height, width), dtype=np.uint8)
-            ext_coords = np.array(poly.exterior.coords)
-            ext_pts = _coords_to_pts(ext_coords, scale)
+            ext_pts = _coords_to_pts(np.array(poly.exterior.coords), scale)
             if ext_pts is None:
                 return None
             cv2.fillPoly(region, [ext_pts], 255)
-
             for interior in poly.interiors:
-                hole_coords = np.array(interior.coords)
-                hole_pts = _coords_to_pts(hole_coords, scale)
+                hole_pts = _coords_to_pts(np.array(interior.coords), scale)
                 if hole_pts is not None:
                     cv2.fillPoly(region, [hole_pts], 0)
-
             return region.astype(bool)
+
+        def _polygon_mask(poly, height, width, scale):
+            """Rasterise one polygon's footprint into a boolean membership mask.
+            将单个多边形栅格化为布尔归属掩膜。
+
+            Sub-pixel-accurate: the polygon (exterior minus interior holes)
+            is filled on a supersampled sub-grid restricted to the polygon's
+            pixel bounding box, then downsampled by sampling each output
+            pixel's *center* sub-cell. This decides ``mask_solid`` membership
+            by "is the pixel center inside the geometry", which fixes the 1px
+            seams that plain ``cv2.fillPoly`` left when float vertex
+            coordinates were truncated to ``int32`` at the base resolution
+            (a geometry-covered pixel whose center sat just inside the shape
+            could be dropped, surfacing as a "background area" hole in the
+            colour-adjust click flow and as air in the generated 3MF).
+
+            Boundary safety: the supersampled fill also subtracts interior
+            holes, and only the polygon's own bbox is touched, so the
+            transparent SVG background outside the silhouette can never be
+            over-filled. The sub-grid is confined to the bbox so cost stays
+            proportional to ``shape_area * ss^2`` instead of
+            ``full_grid * ss^2``.
+
+            亚像素精度栅格化：在多边形像素 bbox 内的超采样子网格上填充
+            （外环减去内洞），再按每个输出像素的"中心"子格降采样，使
+            ``mask_solid`` 的判据变为"像素中心是否落在几何内"。这修复了
+            原先把浮点顶点直接 ``int32`` 截断导致的 1px 缝（几何覆盖、
+            但被漏填，表现为颜色调整里点击破洞被判背景、3MF 里成空气）。
+            边界安全：填充同样扣除内洞，且只触碰多边形自身 bbox，绝不会
+            把轮廓外的透明背景误填实。
+            """
+            ext_coords = np.array(poly.exterior.coords)
+            if len(ext_coords) < 3:
+                return None
+
+            ss = _MASK_SUPERSAMPLE
+            if ss <= 1:
+                return _polygon_mask_plain(poly, height, width, scale)
+
+            # Pixel-space bbox of the polygon, clamped to the grid. The +1
+            # margin guards against boundary rounding at the bbox edge.
+            # 多边形的像素 bbox（夹到网格内）；+1 余量防止 bbox 边缘取整丢边。
+            xs = ext_coords[:, 0] * scale
+            ys = ext_coords[:, 1] * scale
+            x0 = max(0, int(np.floor(xs.min())) - 1)
+            y0 = max(0, int(np.floor(ys.min())) - 1)
+            x1 = min(width, int(np.ceil(xs.max())) + 1)
+            y1 = min(height, int(np.ceil(ys.max())) + 1)
+            if x1 <= x0 or y1 <= y0:
+                return None
+
+            bw = x1 - x0
+            bh = y1 - y0
+            sub = np.zeros((bh * ss, bw * ss), dtype=np.uint8)
+
+            def _sub_pts(coords):
+                # Map into the supersampled, bbox-local sub-grid.
+                # 映射到 bbox 局部的超采样子网格坐标。
+                p = np.column_stack(
+                    [
+                        (coords[:, 0] * scale - x0) * ss,
+                        (coords[:, 1] * scale - y0) * ss,
+                    ]
+                )
+                if len(p) < 3:
+                    return None
+                return np.round(p).astype(np.int32)
+
+            ext_sub = _sub_pts(ext_coords)
+            if ext_sub is None:
+                return None
+            cv2.fillPoly(sub, [ext_sub], 255)
+            for interior in poly.interiors:
+                hole_sub = _sub_pts(np.array(interior.coords))
+                if hole_sub is not None:
+                    cv2.fillPoly(sub, [hole_sub], 0)
+
+            # Center sub-cell of each output pixel decides membership.
+            # 取每个输出像素的中心子格判定归属。
+            off = ss // 2
+            local = sub[off::ss, off::ss][:bh, :bw].astype(bool)
+            if not np.any(local):
+                return None
+
+            region = np.zeros((height, width), dtype=bool)
+            region[y0:y1, x0:x1] = local
+            return region
 
         backing_geom = getattr(analysis, "image_vectorizer_bounds", None)
         if backing_geom is None or getattr(backing_geom, "is_empty", True):
@@ -2696,7 +2804,12 @@ class VectorProcessor:
                 material_matrix[region_mask] = recipe_full
 
                 if preview_rgba_ss is not None:
-                    ss_mask = _polygon_mask(poly, ss_h, ss_w, ss_coord_scale)
+                    # preview_rgba is display-only and already supersampled +
+                    # INTER_AREA downsampled, so use the plain fill here and
+                    # avoid nesting another supersample pass.
+                    # preview_rgba 仅用于显示且已超采样 + INTER_AREA 降采样，
+                    # 这里用普通填充，避免再嵌套一层超采样。
+                    ss_mask = _polygon_mask_plain(poly, ss_h, ss_w, ss_coord_scale)
                     if ss_mask is not None and np.any(ss_mask):
                         preview_rgba_ss[ss_mask, :3] = matched_color
                         preview_rgba_ss[ss_mask, 3] = 255
@@ -2705,6 +2818,26 @@ class VectorProcessor:
             preview_rgba = cv2.resize(
                 preview_rgba_ss, (w_px, h_px), interpolation=cv2.INTER_AREA,
             )
+            # The supersampled alpha is filled per shape, so the thin seams
+            # between adjacent shapes (and the borders of occlusion-carved
+            # interior holes) land on partially-covered output pixels and
+            # downsample to alpha ~128 — a semi-transparent gap that shows the
+            # page background through solid artwork (the "透明破洞" users saw in
+            # the hair). ``mask_solid`` is the seam-free sub-pixel membership
+            # mask, so force full opacity (and the seam-free colour) wherever a
+            # pixel is solid. Exterior anti-aliasing is preserved because
+            # ``mask_solid`` is False in the outer AA band, leaving its blended
+            # alpha untouched. Boundary safety: pixels outside the silhouette
+            # keep ``mask_solid == False`` and are never forced opaque.
+            # 超采样 alpha 逐 shape 填充，相邻 shape 之间的细缝与遮挡洞边界落在
+            # 部分覆盖的输出像素上，降采样后 alpha≈128，合成时透出页面底色，
+            # 即用户看到的头发"透明破洞"。``mask_solid`` 是无缝的亚像素归属掩膜，
+            # 因此在其为实体处强制不透明并取无缝颜色；轮廓外 ``mask_solid`` 为
+            # False，外缘抗锯齿保留、背景不会被误填。
+            seam = mask_solid & (preview_rgba[:, :, 3] < 255)
+            if np.any(seam):
+                preview_rgba[seam, :3] = matched_rgb[seam]
+                preview_rgba[seam, 3] = 255
         else:
             preview_rgba = np.zeros((h_px, w_px, 4), dtype=np.uint8)
             preview_rgba[mask_solid, :3] = matched_rgb[mask_solid]
