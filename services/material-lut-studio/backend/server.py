@@ -20,7 +20,6 @@ object directly (dev launcher runs with ``reload=False``).
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -32,6 +31,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 for _p in (str(_SERVICE_DIR), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import os  # noqa: E402
+from backend import bootstrap  # noqa: E402
+
+bootstrap.configure_blas_thread_limits()
+bootstrap.ensure_repo_on_path()
 
 import uvicorn  # noqa: E402
 

@@ -53,11 +53,23 @@ from core.single_stage import (  # noqa: E402
 )
 
 from ..dependencies import get_file_registry
+from .data import evict_material_cache
 
 router = APIRouter(prefix="/api/mls/materials", tags=["MLS Materials"])
 log = get_logger(__name__)
 
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
+
+
+def _saved_material_directory_name(material_summary: object, fallback: str) -> str:
+    """Return the normalized saved-material directory name from a result.
+    从结果摘要中返回规范化的已保存耗材目录名。
+    """
+    if isinstance(material_summary, dict):
+        directory_name = material_summary.get("directory_name")
+        if isinstance(directory_name, str) and directory_name.strip():
+            return directory_name.strip()
+    return fallback
 
 
 def _rollback_imported_materials(directory_names: list[str]) -> None:
@@ -176,11 +188,16 @@ async def update_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
+    normalized_directory_name = _saved_material_directory_name(
+        result.material_summary,
+        directory_name,
+    )
+    evict_material_cache(normalized_directory_name)
     log.info(
         "MLS material metadata updated",
         extra={
             "event": "mls_material_update_done",
-            "directory_name": directory_name,
+            "directory_name": normalized_directory_name,
             "material_name": material_name,
             "metadata_keys_updated": metadata_keys_updated,
         },
@@ -291,6 +308,8 @@ async def import_materials(
             "archives_received": len(archives),
         },
     )
+    for dn in imported_directory_names:
+        evict_material_cache(dn)
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",
@@ -311,6 +330,7 @@ async def delete_material(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    evict_material_cache(result.directory_name)
     log.info(
         "MLS material deleted",
         extra={

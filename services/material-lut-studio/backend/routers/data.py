@@ -21,8 +21,13 @@ bytes with a fingerprint the caller uses to cache locally and avoid refetching.
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -44,6 +49,168 @@ from .. import data_root  # noqa: E402
 
 router = APIRouter(prefix="/api/mls/data", tags=["MLS Data"])
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Process-level material cache (TTL-based)
+# 进程级耗材缓存（TTL 淘汰）
+#
+# load_multiple_materials() reads archive files + allocates numpy arrays on
+# every call.  Under concurrent requests this creates O(requests × BLAS)
+# threads and accumulates unbounded memory.  A short TTL cache serves the
+# hot path without ever holding stale data longer than _MATERIAL_CACHE_TTL.
+# ---------------------------------------------------------------------------
+
+_MATERIAL_CACHE_TTL: float = float(os.environ.get("MLS_MATERIAL_CACHE_TTL", "120"))
+_MATERIAL_CACHE_MAX: int = 64  # evict LRU when over this many distinct keys
+
+_material_cache: dict[tuple[str, ...], tuple[float, Any]] = {}
+# Per-directory eviction epoch (not per-palette-key).  Keyed by a single
+# directory_name string so evict_material_cache() works even when the palette
+# key is not in _material_cache yet (cold-cache / TTL-expiry in-flight leader).
+_material_epoch: dict[str, int] = {}
+_material_cache_lock = threading.Lock()  # guards _material_cache and _material_epoch
+
+# Single-flight: prevents concurrent misses for the same key from each
+# triggering a separate load_multiple_materials() call (thundering herd).
+# In-flight entries carry their material epoch snapshot so post-write readers
+# do not join a pre-write load.
+
+
+@dataclass(frozen=True)
+class _InflightLoad:
+    """In-flight material load plus the epoch snapshot it was started under."""
+
+    future: concurrent.futures.Future
+    epoch_snapshot: dict[str, int]
+
+
+_inflight: dict[tuple[str, ...], _InflightLoad] = {}
+_inflight_lock = threading.Lock()
+
+
+def _snapshot_material_epochs(key: tuple[str, ...]) -> dict[str, int]:
+    """Return the current per-directory epochs for *key*.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    return {dn: _material_epoch.get(dn, 0) for dn in key}
+
+
+def _material_epochs_match(
+    key: tuple[str, ...],
+    epoch_snapshot: dict[str, int],
+) -> bool:
+    """Return whether *key* still matches a prior epoch snapshot.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    return all(_material_epoch.get(dn, 0) == epoch_snapshot[dn] for dn in key)
+
+
+def _bump_material_epochs(key: tuple[str, ...]) -> None:
+    """Advance all per-directory epochs for *key*.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    for dn in key:
+        _material_epoch[dn] = _material_epoch.get(dn, 0) + 1
+
+
+def _load_materials_cached(directory_names: list[str]) -> list:
+    """Return MaterialParams for *directory_names*, loading from disk only on
+    a cache miss or TTL expiry.  Concurrent requests for the same key share
+    a single in-flight load (single-flight pattern).  Cache hits return shared
+    list/MaterialParams objects; callers must treat them and their numpy
+    arrays as immutable.
+    缓存命中时直接返回；未命中时只有一个 leader 真正加载，其余 waiter 等待
+    同一个结果，避免并发 miss 重复分配 numpy 内存（thundering herd）。
+    缓存命中返回共享的列表与 MaterialParams 对象；调用方不得原地修改其中的
+    numpy 数组。
+    """
+    key = tuple(directory_names)
+    while True:
+        now = time.monotonic()
+
+        with _material_cache_lock:
+            entry = _material_cache.get(key)
+            if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
+                return entry[1]
+            # Snapshot per-directory epochs before leaving the lock.  Using
+            # per-directory (not per-tuple) granularity means evict_material_cache()
+            # can bump the epoch even when this palette key isn't cached yet.
+            epoch_snapshot = _snapshot_material_epochs(key)
+
+        # Elect a leader for this key; waiters get the existing Future.
+        with _inflight_lock:
+            inflight = _inflight.get(key)
+            if inflight is not None and inflight.epoch_snapshot == epoch_snapshot:
+                future = inflight.future
+                is_leader = False
+            else:
+                future = concurrent.futures.Future()
+                _inflight[key] = _InflightLoad(
+                    future=future,
+                    epoch_snapshot=epoch_snapshot,
+                )
+                is_leader = True
+
+        if not is_leader:
+            # Waiters should not block longer than the cache can remain valid.
+            # If the leader exceeds the TTL, invalidate that generation and
+            # retry as a fresh reader/leader candidate.
+            try:
+                return future.result(timeout=_MATERIAL_CACHE_TTL)
+            except concurrent.futures.TimeoutError:
+                with _material_cache_lock:
+                    _bump_material_epochs(key)
+                with _inflight_lock:
+                    inflight = _inflight.get(key)
+                    if inflight is not None and inflight.future is future:
+                        _inflight.pop(key, None)
+                continue
+
+        # Leader: load outside both locks so other keys aren't blocked.
+        try:
+            materials = load_multiple_materials(
+                list(directory_names), materials_dir=str(data_root.materials_root())
+            )
+            with _material_cache_lock:
+                # Skip the cache write if any constituent directory was evicted
+                # while we were loading (PATCH / DELETE / import raced with us).
+                if _material_epochs_match(key, epoch_snapshot):
+                    _material_cache[key] = (time.monotonic(), materials)
+                    if len(_material_cache) > _MATERIAL_CACHE_MAX:
+                        oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
+                        _material_cache.pop(oldest, None)
+            future.set_result(materials)
+            return materials
+        except Exception as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with _inflight_lock:
+                inflight = _inflight.get(key)
+                if inflight is not None and inflight.future is future:
+                    _inflight.pop(key, None)
+
+
+def evict_material_cache(directory_name: str) -> int:
+    """Remove every cache entry whose key contains *directory_name* and bump
+    the per-directory epoch so any in-flight leader for a palette that includes
+    this directory discards its result — even if the key was not cached yet.
+    删除包含指定目录名的缓存条目，并无条件递增该目录的 epoch，
+    确保正在飞的 leader（冷缓存场景）也会放弃写入。
+
+    Returns the number of cache entries evicted.
+    """
+    with _material_cache_lock:
+        to_evict = [k for k in _material_cache if directory_name in k]
+        for k in to_evict:
+            del _material_cache[k]
+        # Bump unconditionally: works whether the key is cached or not.
+        _bump_material_epochs((directory_name,))
+    return len(to_evict)
+
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +264,7 @@ def _serialize_materials(directory_names: list[str]) -> MaterialParamsResponse:
             （耗材缺失返回 404，档案无效返回 422）
     """
     try:
-        materials = load_multiple_materials(
-            directory_names, materials_dir=str(data_root.materials_root())
-        )
+        materials = _load_materials_cached(directory_names)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
@@ -224,9 +389,7 @@ def get_solver_cache_file(
     if which not in ("npz", "meta"):
         raise HTTPException(status_code=422, detail="which must be 'npz' or 'meta'")
     try:
-        materials = load_multiple_materials(
-            directory_names, materials_dir=str(data_root.materials_root())
-        )
+        materials = _load_materials_cached(directory_names)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
