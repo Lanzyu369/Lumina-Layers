@@ -571,7 +571,6 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage.current = this;
       }
     }
@@ -660,7 +659,6 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage.current = this;
       }
     }
@@ -716,7 +714,6 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
       src = "";
 
       constructor() {
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
         createdImage.current = this;
       }
     }
