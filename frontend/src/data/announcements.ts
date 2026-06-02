@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-06-02",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "打开分层预览时，如果作品暂时没有可用的颜色信息，之前可能直接报错；现在会用灰色兜底继续显示，不会打断预览。",
+            en: "Layer previews could fail when an artwork temporarily had no usable colour information. They now fall back to grey and keep the preview open.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-29",
     title: {
       zh: "Lumina Layers — 近期更新速览",
