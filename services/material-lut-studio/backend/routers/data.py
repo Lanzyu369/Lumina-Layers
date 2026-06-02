@@ -63,11 +63,11 @@ _MATERIAL_CACHE_TTL: float = float(os.environ.get("MLS_MATERIAL_CACHE_TTL", "120
 _MATERIAL_CACHE_MAX: int = 64  # evict LRU when over this many distinct keys
 
 _material_cache: dict[tuple[str, ...], tuple[float, Any]] = {}
-# Per-key eviction epoch: incremented by evict_material_cache so that an
-# in-flight leader can detect a write happened during its load and skip the
-# cache write, preventing stale data from being re-instated after a PATCH/DELETE.
-_evict_epoch: dict[tuple[str, ...], int] = {}
-_material_cache_lock = threading.Lock()  # guards both _material_cache and _evict_epoch
+# Per-directory eviction epoch (not per-palette-key).  Keyed by a single
+# directory_name string so evict_material_cache() works even when the palette
+# key is not in _material_cache yet (cold-cache / TTL-expiry in-flight leader).
+_material_epoch: dict[str, int] = {}
+_material_cache_lock = threading.Lock()  # guards _material_cache and _material_epoch
 
 # Single-flight: prevents concurrent misses for the same key from each
 # triggering a separate load_multiple_materials() call (thundering herd).
@@ -91,9 +91,10 @@ def _load_materials_cached(directory_names: list[str]) -> list:
         entry = _material_cache.get(key)
         if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
             return entry[1]
-        # Snapshot the epoch before we leave the lock so we can detect an
-        # evict that races with our load.
-        epoch = _evict_epoch.get(key, 0)
+        # Snapshot per-directory epochs before leaving the lock.  Using
+        # per-directory (not per-tuple) granularity means evict_material_cache()
+        # can bump the epoch even when this palette key isn't cached yet.
+        epoch_snapshot = {dn: _material_epoch.get(dn, 0) for dn in key}
 
     # Elect a leader for this key; waiters get the existing Future.
     with _inflight_lock:
@@ -116,10 +117,12 @@ def _load_materials_cached(directory_names: list[str]) -> list:
             list(directory_names), materials_dir=str(data_root.materials_root())
         )
         with _material_cache_lock:
-            # Only write to cache if no evict happened while we were loading.
-            # If epoch changed, a PATCH/DELETE ran during our load; the data
-            # we hold is stale — drop it so the next request reloads fresh.
-            if _evict_epoch.get(key, 0) == epoch:
+            # Skip the cache write if any constituent directory was evicted
+            # while we were loading (PATCH / DELETE / import raced with us).
+            epoch_changed = any(
+                _material_epoch.get(dn, 0) != epoch_snapshot[dn] for dn in key
+            )
+            if not epoch_changed:
                 _material_cache[key] = (time.monotonic(), materials)
                 if len(_material_cache) > _MATERIAL_CACHE_MAX:
                     oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
@@ -135,18 +138,20 @@ def _load_materials_cached(directory_names: list[str]) -> list:
 
 
 def evict_material_cache(directory_name: str) -> int:
-    """Remove every cache entry whose key contains *directory_name*.
-    删除所有包含指定目录名的缓存条目，供写路径（PATCH / DELETE / import）调用。
-    Also bumps the per-key eviction epoch so any in-flight leader skips its
-    cache write and the next request reloads fresh data from disk.
+    """Remove every cache entry whose key contains *directory_name* and bump
+    the per-directory epoch so any in-flight leader for a palette that includes
+    this directory discards its result — even if the key was not cached yet.
+    删除包含指定目录名的缓存条目，并无条件递增该目录的 epoch，
+    确保正在飞的 leader（冷缓存场景）也会放弃写入。
 
-    Returns the number of entries evicted.
+    Returns the number of cache entries evicted.
     """
     with _material_cache_lock:
         to_evict = [k for k in _material_cache if directory_name in k]
         for k in to_evict:
             del _material_cache[k]
-            _evict_epoch[k] = _evict_epoch.get(k, 0) + 1
+        # Bump unconditionally: works whether the key is cached or not.
+        _material_epoch[directory_name] = _material_epoch.get(directory_name, 0) + 1
     return len(to_evict)
 
 
