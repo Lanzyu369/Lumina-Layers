@@ -53,6 +53,7 @@ from core.single_stage import (  # noqa: E402
 )
 
 from ..dependencies import get_file_registry
+from .data import evict_material_cache
 
 router = APIRouter(prefix="/api/mls/materials", tags=["MLS Materials"])
 log = get_logger(__name__)
@@ -176,6 +177,7 @@ async def update_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
+    evict_material_cache(directory_name)
     log.info(
         "MLS material metadata updated",
         extra={
@@ -291,6 +293,8 @@ async def import_materials(
             "archives_received": len(archives),
         },
     )
+    for dn in imported_directory_names:
+        evict_material_cache(dn)
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",
@@ -311,6 +315,7 @@ async def delete_material(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    evict_material_cache(result.directory_name)
     log.info(
         "MLS material deleted",
         extra={

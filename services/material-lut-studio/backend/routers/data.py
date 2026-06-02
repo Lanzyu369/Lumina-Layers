@@ -93,6 +93,19 @@ def _load_materials_cached(directory_names: list[str]) -> list:
     return materials
 
 
+def evict_material_cache(directory_name: str) -> int:
+    """Remove every cache entry whose key contains *directory_name*.
+    删除所有包含指定目录名的缓存条目，供写路径（PATCH / DELETE / import）调用。
+
+    Returns the number of entries evicted.
+    """
+    with _material_cache_lock:
+        to_evict = [k for k in _material_cache if directory_name in k]
+        for k in to_evict:
+            del _material_cache[k]
+    return len(to_evict)
+
+
 # ---------------------------------------------------------------------------
 # Material Beer-Lambert params
 # 耗材 Beer-Lambert 参数
