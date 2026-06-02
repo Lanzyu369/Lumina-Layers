@@ -2800,6 +2800,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "正在生成校色预览",
     en: "Preparing calibration preview",
   },
+  ext_cc_upload_progress: {
+    zh: "正在上传原图 {percent}%",
+    en: "Uploading source image {percent}%",
+  },
+  ext_cc_upload_progress_label: {
+    zh: "原图上传进度",
+    en: "Source image upload progress",
+  },
+  ext_cc_source_prepare_timeout: {
+    zh: "校色器原图上传或预览生成超时。图片较大或网络较慢时可能发生，请重试或使用更快网络。",
+    en: "Timed out while uploading the source image or preparing its preview. This can happen with large images or slow networks. Please retry or use a faster connection.",
+  },
+  ext_cc_auto_detect_timeout: {
+    zh: "ColorChecker 自动识别超时。请重试，或手动点选四个色卡角点。",
+    en: "ColorChecker auto detection timed out. Please retry or mark the four chart corners manually.",
+  },
+  ext_cc_warp_timeout: {
+    zh: "ColorChecker 透视预览生成超时。请重试，或检查角点是否框住完整色卡。",
+    en: "ColorChecker warp preview generation timed out. Please retry or check that the corners bound the full chart.",
+  },
+  ext_cc_calibrate_timeout: {
+    zh: "ColorChecker 校色计算超时。请重试；大 RAW/DNG 图片可能需要更长处理时间。",
+    en: "ColorChecker calibration timed out. Please retry; large RAW/DNG images can need more processing time.",
+  },
   ext_cc_warp_ready: {
     zh: "透视预览已生成，可执行校色",
     en: "Warp preview is ready. You can calibrate now.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from pathlib import Path
@@ -459,3 +460,24 @@ class TestVectorizeImageCanary:
         assert record.height == 64
         assert record.palette_size == 3
         assert "session_id" not in record.__dict__
+
+    def test_timeout_returns_504(self) -> None:
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(side_effect=asyncio.TimeoutError())
+        )
+        app = create_app()
+        registry = FileRegistry()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": "{}"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 504
+        assert response.json()["detail"] == "Vectorization timed out"

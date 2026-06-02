@@ -26,6 +26,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
+            zh: "很慢的预览或生成任务现在会在超时后自动回收，不会一直占住后台处理能力拖慢后续操作。",
+            en: "Very slow preview or 3MF generation jobs are now cleaned up after timing out, so later actions are not left waiting behind them.",
+          },
+          {
             zh: "打开分层预览时，如果作品暂时没有可用的颜色信息，之前可能直接报错；现在会用灰色兜底继续显示，不会打断预览。",
             en: "Layer previews could fail when an artwork temporarily had no usable colour information. They now fall back to grey and keep the preview open.",
           },

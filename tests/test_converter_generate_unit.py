@@ -22,6 +22,7 @@ import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import numpy as np
 from PIL import Image
@@ -1494,6 +1495,58 @@ class TestLargeFormatDimensionsAndRouting:
         finally:
             store.clear_all()
             for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_raster_tile_timeout_is_reported_per_tile(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(
+                    _generate_large_format_raster(
+                        image_path=image_path,
+                        lut_path=lut_path,
+                        source_basename="poster",
+                        recipe_overrides=None,
+                        recipe_override_masks_path=None,
+                        material_matrix_path=None,
+                        total_width_mm=40.0,
+                        total_height_mm=40.0,
+                        tile_width_mm=40.0,
+                        tile_height_mm=40.0,
+                        request=request,
+                        session_data={},
+                        sid=sid,
+                        store=store,
+                        registry=registry,
+                        pool=mock_pool,
+                    )
+                )
+
+            assert exc_info.value.status_code == 500
+            assert "All tiles failed" in str(exc_info.value.detail)
+            assert "generation timed out" in str(exc_info.value.detail)
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path):
                 if os.path.exists(path):
                     os.unlink(path)
 
