@@ -343,6 +343,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _build_fast_mode_app():
+    """Build the in-process app used by the fast log gate.
+    构建快速日志质量门使用的进程内应用。
+    """
+    from api.app import create_app
+    from api.routers import (
+        calibration_router,
+        extractor_router,
+        five_color_router,
+        single_stage_router,
+    )
+
+    app = create_app()
+    app.include_router(extractor_router)
+    app.include_router(single_stage_router)
+    app.include_router(calibration_router)
+    app.include_router(five_color_router)
+    return app
+
+
 def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
     """Run the workflow through FastAPI TestClient with mocked workers.
 
@@ -368,12 +388,12 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
     console_capture = io.StringIO()
     with redirect_stdout(console_capture):
         import api.app as api_app_module
-        from api.app import app
         from api.dependencies import get_file_registry, get_session_store, get_worker_pool
         from api.file_registry import FileRegistry
         from api.session_store import SessionStore
         from api.worker_pool import WorkerPoolManager
 
+        app = _build_fast_mode_app()
         created_paths: list[Path] = []
         test_store = SessionStore(ttl=1800)
         test_registry = FileRegistry()

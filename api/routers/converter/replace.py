@@ -474,10 +474,15 @@ def _sync_material_archive_matrix_for_diff(
     if recipes.shape[1] > 1:
         recipes = np.ascontiguousarray(recipes[:, ::-1])
 
-    new_material_matrix = _upgrade_material_matrix_layers(
-        np.asarray(material_matrix),
-        int(recipes.shape[1]),
-    )
+    recipe_layers = int(recipes.shape[1])
+    material_matrix_arr = np.asarray(material_matrix)
+    if material_matrix_arr.shape[2] > recipe_layers:
+        new_material_matrix = material_matrix_arr[:, :, :recipe_layers].copy()
+    else:
+        new_material_matrix = _upgrade_material_matrix_layers(
+            material_matrix_arr,
+            recipe_layers,
+        )
     color_masks = [
         np.all(updated_rgb == color, axis=-1) & diff_mask for color in target_rgbs
     ]

@@ -18,6 +18,7 @@ from core.native_reference import SOURCE_KIND_PACKAGE, SOURCE_KIND_STAGE_MODEL
 from core.predictive_lut import _rgb_to_runtime_opencv_lab, match_unique_colors_with_runtime
 
 _log = get_logger(__name__)
+_TIE_DISTANCE_ATOL = 1e-12
 
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
@@ -32,6 +33,65 @@ def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     if len(original_shape) == 2:
         return lab.reshape(original_shape)
     return lab
+
+
+def _break_nearest_ties_by_rgb_distance(
+    unique_colors: np.ndarray,
+    unique_lab: np.ndarray,
+    lut_lab: np.ndarray,
+    lut_rgb: np.ndarray | None,
+    kdtree: KDTree,
+    distances: np.ndarray,
+    indices: np.ndarray,
+) -> np.ndarray:
+    if len(lut_lab) <= 1 or len(unique_lab) == 0:
+        return indices
+
+    neighbour_distances, _neighbour_indices = kdtree.query(unique_lab, k=2)
+    tie_rows = np.flatnonzero(
+        np.isfinite(neighbour_distances[:, 1])
+        & np.isclose(
+            neighbour_distances[:, 1],
+            distances,
+            rtol=0.0,
+            atol=_TIE_DISTANCE_ATOL,
+        )
+    )
+    if tie_rows.size == 0:
+        return indices
+
+    resolved = np.asarray(indices, dtype=np.int32).copy()
+    has_rgb = lut_rgb is not None and lut_rgb.size > 0 and lut_rgb.reshape(-1, 3).shape[0] == len(lut_lab)
+    flat_lut_rgb = lut_rgb.reshape(-1, 3) if has_rgb else None
+
+    for row in tie_rows:
+        candidates = np.asarray(
+            kdtree.query_ball_point(unique_lab[row], float(distances[row] + _TIE_DISTANCE_ATOL)),
+            dtype=np.int32,
+        )
+        if candidates.size <= 1:
+            continue
+
+        candidate_distances = np.linalg.norm(lut_lab[candidates] - unique_lab[row], axis=1)
+        tied = candidates[
+            np.isclose(
+                candidate_distances,
+                distances[row],
+                rtol=0.0,
+                atol=_TIE_DISTANCE_ATOL,
+            )
+        ]
+        if tied.size <= 1:
+            continue
+
+        if flat_lut_rgb is not None:
+            rgb_delta = flat_lut_rgb[tied].astype(np.int32) - unique_colors[row].astype(np.int32)
+            rgb_distances = np.sum(rgb_delta * rgb_delta, axis=1)
+            tied = tied[rgb_distances == np.min(rgb_distances)]
+
+        resolved[row] = int(np.min(tied))
+
+    return resolved
 
 
 def _match_colors_to_db(
@@ -54,6 +114,7 @@ def _match_colors_to_db(
         db_lab = _rgb_to_runtime_opencv_lab(lut_rgb, predictive_runtime.pred_lab).astype(np.float32, copy=False)
         db_tree = KDTree(db_lab)
         distances, indices = db_tree.query(unique_lab)
+        indices = _break_nearest_ties_by_rgb_distance(unique_colors, unique_lab, db_lab, lut_rgb, db_tree, distances, indices)
         return np.asarray(indices, dtype=np.int32), np.asarray(distances, dtype=np.float32)
 
     unique_lab = _rgb_to_lab(unique_colors)
@@ -68,6 +129,7 @@ def _match_colors_to_db(
         raise ValueError("KDTree is required for DB LUT matching")
 
     distances, indices = kdtree.query(unique_lab)
+    indices = _break_nearest_ties_by_rgb_distance(unique_colors, unique_lab, lut_lab, lut_rgb, kdtree, distances, indices)
     return np.asarray(indices, dtype=np.int32), np.asarray(distances, dtype=np.float32)
 
 
@@ -85,7 +147,7 @@ def _native_model_assisted_match(
 ) -> np.ndarray | dict[str, object]:
     """Apply DB-first + model fallback semantics for native predictive sources."""
     if predictive_runtime is None:
-        return _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher)[0]
+        return _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher, lut_rgb=lut_rgb)[0]
 
     model_result = match_unique_colors_with_runtime(unique_colors, predictive_runtime)
 
@@ -177,7 +239,7 @@ def match_colors_to_lut(
     elif predictive_runtime is not None:
         result = match_unique_colors_with_runtime(unique_colors, predictive_runtime)
     else:
-        result = _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher)[0]
+        result = _match_colors_to_db(unique_colors, lut_lab, kdtree, hue_matcher, lut_rgb=lut_rgb)[0]
 
     if isinstance(result, dict):
         _log.debug(

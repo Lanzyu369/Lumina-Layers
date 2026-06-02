@@ -18,6 +18,17 @@ from api.worker_pool import WorkerPoolManager
 from config import WorkerPoolConfig
 
 
+@pytest.fixture(autouse=True)
+def _clear_logging_context_between_tests():
+    from api.structured_logging import bind_session_id, set_request_id
+
+    set_request_id(None)
+    bind_session_id(None)
+    yield
+    set_request_id(None)
+    bind_session_id(None)
+
+
 # ---------------------------------------------------------------------------
 # Helpers — top-level picklable functions for process pool
 # ---------------------------------------------------------------------------

@@ -759,9 +759,19 @@ def run(ctx: dict) -> dict:
             structure_mode = "单面"
 
             # Extract wireframe mask from matched colours
-            processor = ctx["processor"]
-            target_w = ctx["target_w"]
-            mask_wireframe = processor._extract_wireframe_mask(matched_rgb, target_w, pixel_scale, wire_width_mm)
+            processor = ctx.get("processor")
+            if processor is not None and hasattr(processor, "_extract_wireframe_mask"):
+                target_w = ctx.get("target_w", matched_rgb.shape[1])
+                mask_wireframe = processor._extract_wireframe_mask(
+                    matched_rgb,
+                    target_w,
+                    pixel_scale,
+                    wire_width_mm,
+                )
+            else:
+                from core.pipeline.processing_ops.wireframe_extractor import extract_wireframe_mask
+
+                mask_wireframe = extract_wireframe_mask(matched_rgb, pixel_scale, wire_width_mm)
 
             full_matrix, backing_metadata = _build_cloisonne_voxel_matrix(
                 material_matrix,
