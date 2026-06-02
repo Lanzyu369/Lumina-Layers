@@ -266,6 +266,34 @@ class TestLayerImagesCache:
     相同（命中）；matrix 改动必须使缓存失效并重新编码（miss）。
     """
 
+    def test_empty_palette_negative_material_ids_fall_back_to_body_grey(self) -> None:
+        """Empty-palette previews should not crash on ``-1`` material ids."""
+        sid = _test_store.create()
+        material_matrix = np.full((2, 2, 1), -1, dtype=np.int16)
+        cache = {
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "material_matrix": material_matrix,
+            "color_conf": {"preview": {}, "slots": []},
+            "preview_colors": {},
+            "slot_names": [],
+        }
+        _test_store.put(sid, "preview_cache", cache)
+
+        response = client.get(f"/api/convert/layer-images/{sid}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["session_id"] == sid
+        assert len(payload["layers"]) == 1
+        assert payload["layers"][0]["layer_index"] == 0
+        assert payload["layers"][0]["name"] == "Layer 0"
+        assert payload["layers"][0]["url"].startswith("/api/files/")
+        layer = _decode_layer_png(payload["layers"][0]["url"])
+        np.testing.assert_array_equal(
+            layer[0, 0],
+            np.asarray([220, 220, 220], dtype=np.uint8),
+        )
+
     def test_second_call_returns_identical_png_bytes(self, tmp_path: Path) -> None:
         sid = _create_lut_session(tmp_path)
 

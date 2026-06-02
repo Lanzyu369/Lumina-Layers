@@ -1005,7 +1005,9 @@ def get_layer_images(
     # keeps the old visual.
     # 向量化调色板：把 N_materials×N_layers 的嵌套 mask 计算替换成单次
     # fancy indexing，层生成耗时从秒级降到几十毫秒。
-    max_mat_id = int(material_matrix.max()) if material_matrix.size > 0 else 0
+    max_mat_id = (
+        max(0, int(material_matrix.max())) if material_matrix.size > 0 else 0
+    )
     palette_arr = np.full((max_mat_id + 1, 3), 220, dtype=np.uint8)
     for mat_id, rgba in mat_id_to_rgba.items():
         if 0 <= mat_id <= max_mat_id:
