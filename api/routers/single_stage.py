@@ -122,6 +122,17 @@ def get_material_cache_evictor() -> MaterialCacheEvictor:
     return _noop_material_cache_evictor
 
 
+def _saved_material_directory_name(material_summary: Any, fallback: str) -> str:
+    """Return the normalized saved-material directory name from a result.
+    从结果摘要中返回规范化的已保存耗材目录名。
+    """
+    if isinstance(material_summary, dict):
+        directory_name = material_summary.get("directory_name")
+        if isinstance(directory_name, str) and directory_name.strip():
+            return directory_name.strip()
+    return fallback
+
+
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
     try:
         points = json.loads(raw_points)
@@ -710,12 +721,16 @@ async def extractor_update_gradient_card_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
-    evict_material_cache(directory_name)
+    normalized_directory_name = _saved_material_directory_name(
+        result.material_summary,
+        directory_name,
+    )
+    evict_material_cache(normalized_directory_name)
     log.info(
         "Gradient card material metadata updated",
         extra={
             "event": "extractor_update_gradient_card_material_done",
-            "directory_name": directory_name,
+            "directory_name": normalized_directory_name,
             "material_name": material_name,
             "metadata_keys_updated": metadata_keys_updated,
         },

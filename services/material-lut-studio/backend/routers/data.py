@@ -107,6 +107,15 @@ def _material_epochs_match(
     return all(_material_epoch.get(dn, 0) == epoch_snapshot[dn] for dn in key)
 
 
+def _bump_material_epochs(key: tuple[str, ...]) -> None:
+    """Advance all per-directory epochs for *key*.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    for dn in key:
+        _material_epoch[dn] = _material_epoch.get(dn, 0) + 1
+
+
 def _load_materials_cached(directory_names: list[str]) -> list:
     """Return MaterialParams for *directory_names*, loading from disk only on
     a cache miss or TTL expiry.  Concurrent requests for the same key share
@@ -119,59 +128,70 @@ def _load_materials_cached(directory_names: list[str]) -> list:
     numpy 数组。
     """
     key = tuple(directory_names)
-    now = time.monotonic()
+    while True:
+        now = time.monotonic()
 
-    with _material_cache_lock:
-        entry = _material_cache.get(key)
-        if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
-            return entry[1]
-        # Snapshot per-directory epochs before leaving the lock.  Using
-        # per-directory (not per-tuple) granularity means evict_material_cache()
-        # can bump the epoch even when this palette key isn't cached yet.
-        epoch_snapshot = _snapshot_material_epochs(key)
-
-    # Elect a leader for this key; waiters get the existing Future.
-    with _inflight_lock:
-        inflight = _inflight.get(key)
-        if inflight is not None and inflight.epoch_snapshot == epoch_snapshot:
-            future = inflight.future
-            is_leader = False
-        else:
-            future = concurrent.futures.Future()
-            _inflight[key] = _InflightLoad(
-                future=future,
-                epoch_snapshot=epoch_snapshot,
-            )
-            is_leader = True
-
-    if not is_leader:
-        # Blocks until leader calls set_result / set_exception; re-raises
-        # any exception the leader encountered.
-        return future.result()
-
-    # Leader: load outside both locks so other keys aren't blocked.
-    try:
-        materials = load_multiple_materials(
-            list(directory_names), materials_dir=str(data_root.materials_root())
-        )
         with _material_cache_lock:
-            # Skip the cache write if any constituent directory was evicted
-            # while we were loading (PATCH / DELETE / import raced with us).
-            if _material_epochs_match(key, epoch_snapshot):
-                _material_cache[key] = (time.monotonic(), materials)
-                if len(_material_cache) > _MATERIAL_CACHE_MAX:
-                    oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
-                    _material_cache.pop(oldest, None)
-        future.set_result(materials)
-        return materials
-    except Exception as exc:
-        future.set_exception(exc)
-        raise
-    finally:
+            entry = _material_cache.get(key)
+            if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
+                return entry[1]
+            # Snapshot per-directory epochs before leaving the lock.  Using
+            # per-directory (not per-tuple) granularity means evict_material_cache()
+            # can bump the epoch even when this palette key isn't cached yet.
+            epoch_snapshot = _snapshot_material_epochs(key)
+
+        # Elect a leader for this key; waiters get the existing Future.
         with _inflight_lock:
             inflight = _inflight.get(key)
-            if inflight is not None and inflight.future is future:
-                _inflight.pop(key, None)
+            if inflight is not None and inflight.epoch_snapshot == epoch_snapshot:
+                future = inflight.future
+                is_leader = False
+            else:
+                future = concurrent.futures.Future()
+                _inflight[key] = _InflightLoad(
+                    future=future,
+                    epoch_snapshot=epoch_snapshot,
+                )
+                is_leader = True
+
+        if not is_leader:
+            # Waiters should not block longer than the cache can remain valid.
+            # If the leader exceeds the TTL, invalidate that generation and
+            # retry as a fresh reader/leader candidate.
+            try:
+                return future.result(timeout=_MATERIAL_CACHE_TTL)
+            except concurrent.futures.TimeoutError:
+                with _material_cache_lock:
+                    _bump_material_epochs(key)
+                with _inflight_lock:
+                    inflight = _inflight.get(key)
+                    if inflight is not None and inflight.future is future:
+                        _inflight.pop(key, None)
+                continue
+
+        # Leader: load outside both locks so other keys aren't blocked.
+        try:
+            materials = load_multiple_materials(
+                list(directory_names), materials_dir=str(data_root.materials_root())
+            )
+            with _material_cache_lock:
+                # Skip the cache write if any constituent directory was evicted
+                # while we were loading (PATCH / DELETE / import raced with us).
+                if _material_epochs_match(key, epoch_snapshot):
+                    _material_cache[key] = (time.monotonic(), materials)
+                    if len(_material_cache) > _MATERIAL_CACHE_MAX:
+                        oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
+                        _material_cache.pop(oldest, None)
+            future.set_result(materials)
+            return materials
+        except Exception as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with _inflight_lock:
+                inflight = _inflight.get(key)
+                if inflight is not None and inflight.future is future:
+                    _inflight.pop(key, None)
 
 
 def evict_material_cache(directory_name: str) -> int:
@@ -188,7 +208,7 @@ def evict_material_cache(directory_name: str) -> int:
         for k in to_evict:
             del _material_cache[k]
         # Bump unconditionally: works whether the key is cached or not.
-        _material_epoch[directory_name] = _material_epoch.get(directory_name, 0) + 1
+        _bump_material_epochs((directory_name,))
     return len(to_evict)
 
 

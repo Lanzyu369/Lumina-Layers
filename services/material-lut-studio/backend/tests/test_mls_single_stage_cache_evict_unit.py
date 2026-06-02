@@ -124,6 +124,78 @@ def test_update_gradient_card_material_evicts_mls_data_cache(monkeypatch, tmp_pa
     assert evicted == ["brand/mat"]
 
 
+def test_legacy_update_evicts_normalized_directory_name(monkeypatch, tmp_path) -> None:
+    """Legacy update evicts the normalized directory returned by core."""
+    from api.routers import single_stage as single_stage_router
+
+    archive_path, params_path = _write_material_files(tmp_path)
+    evicted: list[str] = []
+
+    def fake_update_saved_stage_a_material_archive_metadata(
+        **_kwargs,
+    ) -> MaterialArchiveUpdateResult:
+        return MaterialArchiveUpdateResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(params_path),
+            material_summary=_material_summary(archive_path, params_path),
+        )
+
+    monkeypatch.setattr(
+        single_stage_router,
+        "update_saved_stage_a_material_archive_metadata",
+        fake_update_saved_stage_a_material_archive_metadata,
+    )
+    monkeypatch.setattr(
+        data_module,
+        "evict_material_cache",
+        lambda directory_name: evicted.append(directory_name) or 0,
+    )
+
+    response = TestClient(create_app()).patch(
+        "/api/extractor/gradient-card-materials/brand%5Cmat",
+        json={"material_name": "Mat"},
+    )
+
+    assert response.status_code == 200
+    assert evicted == ["brand/mat"]
+
+
+def test_native_update_evicts_normalized_directory_name(monkeypatch, tmp_path) -> None:
+    """MLS-native update evicts the normalized directory returned by core."""
+    from backend.routers import materials as materials_router
+
+    archive_path, params_path = _write_material_files(tmp_path)
+    evicted: list[str] = []
+
+    def fake_update_saved_stage_a_material_archive_metadata(
+        **_kwargs,
+    ) -> MaterialArchiveUpdateResult:
+        return MaterialArchiveUpdateResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(params_path),
+            material_summary=_material_summary(archive_path, params_path),
+        )
+
+    monkeypatch.setattr(
+        materials_router,
+        "update_saved_stage_a_material_archive_metadata",
+        fake_update_saved_stage_a_material_archive_metadata,
+    )
+    monkeypatch.setattr(
+        materials_router,
+        "evict_material_cache",
+        lambda directory_name: evicted.append(directory_name) or 0,
+    )
+
+    response = TestClient(create_app()).patch(
+        "/api/mls/materials/brand%5Cmat",
+        json={"material_name": "Mat"},
+    )
+
+    assert response.status_code == 200
+    assert evicted == ["brand/mat"]
+
+
 def test_delete_gradient_card_material_evicts_mls_data_cache(monkeypatch) -> None:
     """MLS-hosted legacy delete endpoint evicts the deleted material."""
     from api.routers import single_stage as single_stage_router

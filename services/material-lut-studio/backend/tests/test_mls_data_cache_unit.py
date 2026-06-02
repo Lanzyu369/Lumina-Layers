@@ -111,3 +111,53 @@ def test_same_generation_waiters_share_inflight_load(monkeypatch) -> None:
     finally:
         release_load.set()
         _reset_material_cache_state()
+
+
+def test_waiter_timeout_retries_and_disallows_stale_leader_cache_write(
+    monkeypatch,
+) -> None:
+    """A timed-out waiter starts a new load and the old leader cannot cache.
+    waiter 超时后自行重试，旧 leader 不能再回写缓存。
+    """
+    _reset_material_cache_state()
+    monkeypatch.setattr(data_router, "_MATERIAL_CACHE_TTL", 0.02)
+    first_load_entered = threading.Event()
+    release_first_load = threading.Event()
+    call_lock = threading.Lock()
+    calls: list[list[str]] = []
+
+    def fake_load_multiple_materials(
+        directory_names: list[str], materials_dir: str
+    ) -> list[str]:
+        del materials_dir
+        with call_lock:
+            calls.append(list(directory_names))
+            call_number = len(calls)
+        if call_number == 1:
+            first_load_entered.set()
+            if not release_first_load.wait(timeout=2.0):
+                raise AssertionError("timed out waiting to release first load")
+            return ["old"]
+        return ["fresh"]
+
+    monkeypatch.setattr(
+        data_router, "load_multiple_materials", fake_load_multiple_materials
+    )
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            old_future = pool.submit(data_router._load_materials_cached, ["mat"])
+            assert first_load_entered.wait(timeout=2.0)
+
+            retry_future = pool.submit(data_router._load_materials_cached, ["mat"])
+            try:
+                assert retry_future.result(timeout=1.0) == ["fresh"]
+            finally:
+                release_first_load.set()
+            assert old_future.result(timeout=1.0) == ["old"]
+
+        assert len(calls) == 2
+        assert data_router._load_materials_cached(["mat"]) == ["fresh"]
+    finally:
+        release_first_load.set()
+        _reset_material_cache_state()
