@@ -24,6 +24,20 @@ import os
 import sys
 from pathlib import Path
 
+# Limit BLAS/OpenMP thread spawning before numpy/scipy are imported.
+# Without this each concurrent request spawns O(cpu_count) BLAS worker
+# threads, which multiplies into hundreds of threads and causes memory/GIL
+# pressure that can freeze the event loop (including /health).
+# Use setdefault so operators can still override via the environment.
+for _blas_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(_blas_var, "1")
+
 # services/material-lut-studio/backend/server.py
 #   parents[1] -> services/material-lut-studio   (so ``import backend`` works)
 #   parents[3] -> repo root                       (so ``import core/config`` works)

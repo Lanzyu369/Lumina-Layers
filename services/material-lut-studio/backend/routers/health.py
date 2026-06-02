@@ -22,7 +22,7 @@ _START_TIME: float = time.time()
 
 
 @router.get("/health")
-def health_check() -> dict:
+async def health_check() -> dict:
     """Return service liveness, version, uptime, and resolved data roots.
     返回服务存活状态、版本号、运行时间和已解析的数据根目录。
 

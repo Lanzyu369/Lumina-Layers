@@ -22,7 +22,10 @@ bytes with a fingerprint the caller uses to cache locally and avoid refetching.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -44,6 +47,50 @@ from .. import data_root  # noqa: E402
 
 router = APIRouter(prefix="/api/mls/data", tags=["MLS Data"])
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Process-level material cache (TTL-based)
+# 进程级耗材缓存（TTL 淘汰）
+#
+# load_multiple_materials() reads archive files + allocates numpy arrays on
+# every call.  Under concurrent requests this creates O(requests × BLAS)
+# threads and accumulates unbounded memory.  A short TTL cache serves the
+# hot path without ever holding stale data longer than _MATERIAL_CACHE_TTL.
+# ---------------------------------------------------------------------------
+
+_MATERIAL_CACHE_TTL: float = float(os.environ.get("MLS_MATERIAL_CACHE_TTL", "120"))
+_MATERIAL_CACHE_MAX: int = 64  # evict LRU when over this many distinct keys
+
+_material_cache: dict[tuple[str, ...], tuple[float, Any]] = {}
+_material_cache_lock = threading.Lock()
+
+
+def _load_materials_cached(directory_names: list[str]) -> list:
+    """Return MaterialParams for *directory_names*, loading from disk only on
+    a cache miss or TTL expiry.
+    缓存命中时直接返回已加载结果；未命中或 TTL 过期时重新加载。
+    """
+    key = tuple(directory_names)
+    now = time.monotonic()
+
+    with _material_cache_lock:
+        entry = _material_cache.get(key)
+        if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
+            return entry[1]
+
+    # Load outside the lock: two concurrent misses may both load, but the
+    # result is deterministic and neither will block the other.
+    materials = load_multiple_materials(
+        list(directory_names), materials_dir=str(data_root.materials_root())
+    )
+
+    with _material_cache_lock:
+        _material_cache[key] = (time.monotonic(), materials)
+        if len(_material_cache) > _MATERIAL_CACHE_MAX:
+            oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
+            _material_cache.pop(oldest, None)
+
+    return materials
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +144,7 @@ def _serialize_materials(directory_names: list[str]) -> MaterialParamsResponse:
             （耗材缺失返回 404，档案无效返回 422）
     """
     try:
-        materials = load_multiple_materials(
-            directory_names, materials_dir=str(data_root.materials_root())
-        )
+        materials = _load_materials_cached(directory_names)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
@@ -224,9 +269,7 @@ def get_solver_cache_file(
     if which not in ("npz", "meta"):
         raise HTTPException(status_code=422, detail="which must be 'npz' or 'meta'")
     try:
-        materials = load_multiple_materials(
-            directory_names, materials_dir=str(data_root.materials_root())
-        )
+        materials = _load_materials_cached(directory_names)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
