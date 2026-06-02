@@ -38,7 +38,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
 import { useSingleStageStore } from "./stores/singleStageStore";
 import { useExtractorStore } from "./stores/extractorStore";
-import { useConverterStore } from "./stores/converter";
+import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { useElectronLanguageSync } from "./integrations/electron";
@@ -212,12 +212,15 @@ function AppContent() {
   const { t } = useI18n();
   const announcement = useAnnouncement();
   const converterSessionId = useConverterStore((s) => s.sessionId);
+  const converterKeepFileIds = useConverterStore(
+    useShallow((s) => collectConverterKeepFileIds(s)),
+  );
   const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
   const hydrateDeviceSettingsFromBackend = useSettingsStore(
     (s) => s.hydrateDeviceSettingsFromBackend,
   );
 
-  useSessionLease(converterSessionId);
+  useSessionLease(converterSessionId, "converter", converterKeepFileIds);
   useSessionLease(singleStageSessionId, "single_stage");
   useActionHistoryBootstrap();
   useAutoPreview();

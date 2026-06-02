@@ -1143,6 +1143,32 @@ function collectKeepFileIds(urls: Array<string | null | undefined>): string[] {
   return Array.from(keepIds);
 }
 
+export function collectConverterKeepFileIds(state: {
+  downloadUrl: string | null;
+  previewImageUrl: string | null;
+  previewBaseImageUrl: string | null;
+  originalPreviewUrl: string | null;
+  previewGlbUrl: string | null;
+  puzzleOverlayUrl: string | null;
+  batchPreviewItems: Array<{ url: string | null }>;
+  regionData: { previewUrl: string | null } | null;
+  selectedRegions: Array<{ previewUrl: string | null }>;
+  layerImages: Array<{ url: string | null }>;
+}): string[] {
+  return collectKeepFileIds([
+    state.downloadUrl,
+    state.previewImageUrl,
+    state.previewBaseImageUrl,
+    state.originalPreviewUrl,
+    state.previewGlbUrl,
+    state.puzzleOverlayUrl,
+    ...state.batchPreviewItems.map((item) => item.url),
+    state.regionData?.previewUrl ?? null,
+    ...state.selectedRegions.map((region) => region.previewUrl),
+    ...state.layerImages.map((layer) => layer.url),
+  ]);
+}
+
 const VALID_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -6463,19 +6489,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (!state.sessionId) return;
       // Preserve download, preview, and GLB files so share card export
       // and 3D viewer still work after slicer launch / download.
-      const urlsToKeep = [
-        state.downloadUrl,
-        state.previewImageUrl,
-        state.previewBaseImageUrl,
-        state.originalPreviewUrl,
-        state.previewGlbUrl,
-        state.puzzleOverlayUrl,
-        ...state.batchPreviewItems.map((item) => item.url),
-        state.regionData?.previewUrl ?? null,
-        ...state.selectedRegions.map((region) => region.previewUrl),
-        ...state.layerImages.map((layer) => layer.url),
-      ];
-      const keepIds = collectKeepFileIds(urlsToKeep);
+      const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
       void apiCloseSession(state.sessionId, keepIds);
       set({ sessionId: null });

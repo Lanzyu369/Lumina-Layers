@@ -113,6 +113,71 @@ def test_session_close_preserves_requested_file_ids(
     os.unlink(keep_path)
 
 
+def test_session_close_preserved_file_ids_remain_downloadable(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """GET /api/files/{file_id} should still serve files explicitly kept on close."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    keep_path = _create_temp_file(b"download")
+    store.register_temp_file(session_id, keep_path)
+    keep_file_id = registry.register_path(session_id, keep_path, "download.3mf")
+
+    try:
+        close_response = client.post(
+            "/api/session/close",
+            json={"session_id": session_id, "keep_file_ids": [keep_file_id]},
+        )
+
+        assert close_response.status_code == 200
+        assert store.exists(session_id) is False
+
+        download_response = client.get(f"/api/files/{keep_file_id}")
+        assert download_response.status_code == 200
+        assert download_response.content == b"download"
+
+        kept_entry = registry.get_entry(keep_file_id)
+        assert kept_entry is not None
+        assert kept_entry["lifecycle"] == "ephemeral"
+        assert kept_entry["session_id"] is None
+    finally:
+        if os.path.exists(keep_path):
+            os.unlink(keep_path)
+
+
+def test_repeated_session_close_does_not_delete_preserved_file_ids(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """A later best-effort close without keep IDs must not reclaim detached kept files."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    keep_path = _create_temp_file(b"download")
+    store.register_temp_file(session_id, keep_path)
+    keep_file_id = registry.register_path(session_id, keep_path, "download.3mf")
+
+    try:
+        first_close = client.post(
+            "/api/session/close",
+            json={"session_id": session_id, "keep_file_ids": [keep_file_id]},
+        )
+        second_close = client.post(
+            "/api/session/close",
+            json={"session_id": session_id, "keep_file_ids": []},
+        )
+
+        assert first_close.status_code == 200
+        assert second_close.status_code == 200
+        assert os.path.exists(keep_path) is True
+        assert registry.resolve(keep_file_id) == (keep_path, "download.3mf")
+
+        download_response = client.get(f"/api/files/{keep_file_id}")
+        assert download_response.status_code == 200
+        assert download_response.content == b"download"
+    finally:
+        if os.path.exists(keep_path):
+            os.unlink(keep_path)
+
+
 def test_serve_file_touches_session_bound_session_lease(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
 ) -> None:

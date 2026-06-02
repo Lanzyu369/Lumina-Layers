@@ -188,6 +188,30 @@ class PostgresFileRegistryBackend(FileRegistry):
             )
             return int(result.rowcount or 0) > 0
 
+    def detach_files(self, file_ids: set[str], ttl_seconds: int) -> int:
+        """Detach files from their owning session and assign an expiry.
+        将文件从所属 session 解绑，并设置过期时间。
+        """
+        file_uuids = [
+            value for value in (self._file_uuid_or_none(fid) for fid in file_ids) if value is not None
+        ]
+        if not file_uuids:
+            return 0
+        now = self._now()
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(_FILES)
+                .where(_FILES.c.id.in_(file_uuids))
+                .values(
+                    session_id=None,
+                    owner_id=None,
+                    lifecycle="ephemeral",
+                    ttl_seconds=ttl_seconds,
+                    expires_at=self._expiry_from(now, ttl_seconds),
+                )
+            )
+            return int(result.rowcount or 0)
+
     def get_session_entries(self, session_id: str) -> dict[str, dict]:
         """Return shallow copies of all entries owned by a session.
         返回指定 session 拥有的所有条目的浅拷贝。

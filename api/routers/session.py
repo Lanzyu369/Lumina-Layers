@@ -17,6 +17,7 @@ from api.schemas.session import (
 from api.session_store import SessionStore
 
 router = APIRouter(prefix="/api/session", tags=["Session"])
+SESSION_CLOSE_KEEP_FILE_TTL_SECONDS = 3600
 
 
 @router.post("/heartbeat")
@@ -73,6 +74,10 @@ def close_session(
     }
     existing_paths = {path for path in candidate_paths if os.path.exists(path)}
 
+    registry.detach_files(
+        valid_keep_file_ids,
+        ttl_seconds=SESSION_CLOSE_KEEP_FILE_TTL_SECONDS,
+    )
     store.close_except(body.session_id, keep_paths=keep_paths or None)
     registry.cleanup_session_except(
         body.session_id,
