@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 import anyio
 import numpy as np
@@ -96,6 +96,30 @@ log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
+MaterialCacheEvictor = Callable[[str], int]
+
+
+def _noop_material_cache_evictor(_directory_name: str) -> int:
+    """Default material-cache eviction callback for the main app.
+    主应用默认的耗材缓存失效回调。
+    """
+    return 0
+
+
+def get_material_cache_evictor() -> MaterialCacheEvictor:
+    """Return the callback used after saved-material writes.
+    返回已保存耗材写入成功后使用的缓存失效回调。
+
+    The main Lumina app has no process-local MLS data cache, so this defaults
+    to a no-op. The MLS app overrides it with its data-router cache evictor.
+    主 Lumina 应用没有进程内 MLS data cache，因此默认 no-op；MLS 应用会将
+    该依赖覆盖为 data router 的缓存失效函数。
+
+    Returns:
+        MaterialCacheEvictor: Callback accepting a material directory name.
+            （接收耗材目录名的回调函数）
+    """
+    return _noop_material_cache_evictor
 
 
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
@@ -521,6 +545,7 @@ async def extractor_save_gradient_card_material(
     brand: str | None = Form(None),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialSaveResponse:
     """Persist a computed gradient-card Stage A material archive."""
     bind_session_id(session_id)
@@ -578,6 +603,7 @@ async def extractor_save_gradient_card_material(
             result.material_summary.get("directory_name")
             or os.path.splitext(os.path.basename(result.archive_path))[0]
         )
+    evict_material_cache(directory_name)
     log.info(
         "Gradient card material saved",
         extra={
@@ -606,6 +632,7 @@ async def extractor_save_gradient_card_material(
 @router.delete("/gradient-card-materials/{directory_name:path}")
 async def extractor_delete_gradient_card_material(
     directory_name: str,
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialDeleteResponse:
     """Delete a saved gradient-card material archive.
     删除已保存的梯度卡耗材档案。
@@ -617,6 +644,7 @@ async def extractor_delete_gradient_card_material(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    evict_material_cache(result.directory_name)
     log.info(
         "Gradient card material deleted",
         extra={
@@ -638,6 +666,7 @@ async def extractor_update_gradient_card_material(
     directory_name: str,
     payload: GradientCardMaterialUpdateRequest,
     registry: FileRegistry = Depends(get_file_registry),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialUpdateResponse:
     """Update saved gradient-card material metadata.
     更新已保存的梯度卡耗材元数据。
@@ -681,6 +710,7 @@ async def extractor_update_gradient_card_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
+    evict_material_cache(directory_name)
     log.info(
         "Gradient card material metadata updated",
         extra={
@@ -747,6 +777,7 @@ async def extractor_export_gradient_card_materials(
 @router.post("/gradient-card-materials/import")
 async def extractor_import_gradient_card_materials(
     archives: list[UploadFile] = File(...),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialBulkImportResponse:
     """Import one or more saved-material ZIP archives into the material library.
     导入一个或多个已保存耗材 ZIP 归档到耗材库。
@@ -800,6 +831,8 @@ async def extractor_import_gradient_card_materials(
             "archives_received": len(archives),
         },
     )
+    for dn in imported_directory_names:
+        evict_material_cache(dn)
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",

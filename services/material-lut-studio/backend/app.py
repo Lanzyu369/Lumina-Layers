@@ -35,6 +35,10 @@ from api.dependencies import (  # noqa: E402
 )
 from api.file_bridge import file_to_response  # noqa: E402
 from api.file_registry import FileRegistry  # noqa: E402
+from api.routers.single_stage import (  # noqa: E402
+    MaterialCacheEvictor,
+    get_material_cache_evictor as main_get_material_cache_evictor,
+)
 from api.routers import (  # noqa: E402
     calibration_router,
     extractor_router,
@@ -47,6 +51,7 @@ from api.structured_logging import configure_structured_logging, get_logger  # n
 
 from .dependencies import get_file_registry, get_session_store  # noqa: E402
 from .auth import install_write_auth_middleware, get_auth_state  # noqa: E402
+from .routers import data as data_router_module  # noqa: E402
 from .routers import (  # noqa: E402
     auth_router,
     data_router,
@@ -58,6 +63,13 @@ from .routers import (  # noqa: E402
 
 configure_structured_logging()
 log = get_logger(__name__)
+
+
+def _get_mls_material_cache_evictor() -> MaterialCacheEvictor:
+    """Return the MLS data-router material-cache evictor.
+    返回 MLS data router 的耗材缓存失效函数。
+    """
+    return data_router_module.evict_material_cache
 
 
 def create_app() -> FastAPI:
@@ -124,6 +136,9 @@ def create_app() -> FastAPI:
 
     app.dependency_overrides[main_get_session_store] = get_session_store
     app.dependency_overrides[main_get_file_registry] = get_file_registry
+    app.dependency_overrides[main_get_material_cache_evictor] = (
+        _get_mls_material_cache_evictor
+    )
 
     @app.get("/api/files/{file_id}")
     def serve_file(
