@@ -290,8 +290,9 @@ class WorkerPoolManager:
                                    (顶层函数，必须可序列化)
             *args (Any): Scalar args or file paths only.
                          (仅标量参数或文件路径)
-            timeout (float | None): Max seconds to wait, or None for no limit.
-                                    (最大等待秒数，None 表示不限时)
+            timeout (float | None): Max seconds to wait. ``None`` uses the
+                pool default; non-positive values disable timeout for this call.
+                (最大等待秒数；``None`` 使用池默认值；非正数表示本次调用不限时)
 
         Returns:
             T: Function return value. (函数返回值)
