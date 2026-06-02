@@ -110,9 +110,13 @@ def _material_epochs_match(
 def _load_materials_cached(directory_names: list[str]) -> list:
     """Return MaterialParams for *directory_names*, loading from disk only on
     a cache miss or TTL expiry.  Concurrent requests for the same key share
-    a single in-flight load (single-flight pattern).
+    a single in-flight load (single-flight pattern).  Cache hits return shared
+    list/MaterialParams objects; callers must treat them and their numpy
+    arrays as immutable.
     缓存命中时直接返回；未命中时只有一个 leader 真正加载，其余 waiter 等待
     同一个结果，避免并发 miss 重复分配 numpy 内存（thundering herd）。
+    缓存命中返回共享的列表与 MaterialParams 对象；调用方不得原地修改其中的
+    numpy 数组。
     """
     key = tuple(directory_names)
     now = time.monotonic()
