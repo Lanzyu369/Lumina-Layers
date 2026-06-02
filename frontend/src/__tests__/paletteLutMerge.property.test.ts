@@ -149,14 +149,14 @@ describe('Palette-LUT Merge Property-Based Tests', () => {
       //
       // Migration drops 'palette-panel', 'lut-color-grid' (legacy v6
       // removal) **and any widget id whose layout no longer exists in
-      // DEFAULT_LAYOUT** (added in the v8 sanitize pass when MLS-only
-      // tabs/widgets like ``lut-manager`` were removed from the
-      // converter app), then seeds every still-default widget. The
-      // pre-MLS expectation that only 'fridge-magnet-settings' +
-      // 'puzzle-settings' got injected no longer holds.
+      // DEFAULT_LAYOUT** (added in the v8 sanitize pass when retired
+      // tab-specific widgets like ``lut-manager`` were removed from the
+      // converter app), then seeds every still-default widget. The older
+      // expectation that only 'fridge-magnet-settings' + 'puzzle-settings'
+      // got injected no longer holds.
       // 迁移会丢弃 'palette-panel'、'lut-color-grid'（v6 旧迁移），并丢弃
-      // DEFAULT_LAYOUT 中已不存在的 widget（v8 sanitize 添加，对应 MLS 解耦
-      // 后从转换器移除的 widget），再补齐所有保留的默认 widget。
+      // DEFAULT_LAYOUT 中已不存在的 widget（v8 sanitize 添加，对应已退役的
+      // tab 专用 widget），再补齐所有保留的默认 widget。
       const expectedDefaultIds = new Set(Object.keys(DEFAULT_LAYOUT));
       fc.assert(
         fc.property(

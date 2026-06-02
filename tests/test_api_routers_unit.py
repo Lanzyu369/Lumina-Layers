@@ -20,7 +20,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import BaseModel
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_session_store
 from api.schemas.calibration import (
     MAX_BACKING_THICKNESS_MM,

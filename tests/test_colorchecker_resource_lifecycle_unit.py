@@ -13,7 +13,7 @@ from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.colorchecker_artifacts import (
     COLORCHECKER_FULL_PENDING_PURPOSE,
     COLORCHECKER_FULL_PURPOSE,

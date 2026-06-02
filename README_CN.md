@@ -250,17 +250,16 @@ cd Lumina-Layers
 
 使用 Docker 是运行 Lumina Studio 最简单的方法，无需担心系统级依赖项（如 `cairo` 或 `pkg-config`）。
 
-1. **构建镜像**：
-   ```bash
-   docker build -t lumina-layers .
+1. **构建并运行本地 Docker 部署**：
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
    ```
 
-2. **运行容器**：
-   ```bash
-   docker run -p 7860:7860 lumina-layers
-   ```
+2. 在浏览器中打开主前端：`http://localhost:4174`。
 
-3. 在浏览器中打开 `http://localhost:7860`。
+该脚本会启动 Lumina 主前端/后端，并使用主应用内置的本地耗材与 LUT 路由。
+运行时数据会挂载到 Docker 镜像之外；端口、E 盘运行时目录和自动更新设置见
+[Local Docker Deployment](docs/local-docker-deployment.md)。
 
 ### 选项 2：本地安装
 

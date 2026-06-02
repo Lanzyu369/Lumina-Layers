@@ -84,6 +84,35 @@ def test_session_close_cleans_session_and_registry_files(
     assert os.path.exists(registry_only_path) is False
 
 
+def test_session_close_preserves_requested_file_ids(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """POST /api/session/close can release session data while preserving downloads."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    keep_path = _create_temp_file(b"download")
+    delete_path = _create_temp_file(b"preview")
+    store.register_temp_file(session_id, keep_path)
+    store.register_temp_file(session_id, delete_path)
+    keep_file_id = registry.register_path(session_id, keep_path, "download.3mf")
+    delete_file_id = registry.register_path(session_id, delete_path, "preview.png")
+
+    response = client.post(
+        "/api/session/close",
+        json={"session_id": session_id, "keep_file_ids": [keep_file_id]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "cleaned_files": 1}
+    assert store.exists(session_id) is False
+    assert registry.resolve(keep_file_id) == (keep_path, "download.3mf")
+    assert registry.resolve(delete_file_id) is None
+    assert os.path.exists(keep_path) is True
+    assert os.path.exists(delete_path) is False
+
+    os.unlink(keep_path)
+
+
 def test_serve_file_touches_session_bound_session_lease(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
 ) -> None:

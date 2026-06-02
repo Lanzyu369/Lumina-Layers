@@ -17,9 +17,16 @@ export async function heartbeatSession(sessionId: string): Promise<void> {
 /**
  * Best-effort close for an active frontend session lease.
  */
-export async function closeSession(sessionId: string): Promise<void> {
+export async function closeSession(
+  sessionId: string,
+  keepFileIds: string[] = [],
+): Promise<void> {
   await apiClient
-    .post("/session/close", { session_id: sessionId }, { timeout: 3_600_000 })
+    .post(
+      "/session/close",
+      { session_id: sessionId, keep_file_ids: keepFileIds },
+      { timeout: 3_600_000 },
+    )
     .catch(() => {
       /* fire-and-forget: ignore close failures */
     });

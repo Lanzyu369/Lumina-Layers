@@ -16,6 +16,9 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
+.env.local
+.env.*.local
+user_settings.json
 .git
 .mypy_cache
 .pytest_cache

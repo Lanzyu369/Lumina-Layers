@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from types import SimpleNamespace
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
 from api.routers.five_color import _engine_cache

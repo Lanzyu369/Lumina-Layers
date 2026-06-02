@@ -7,7 +7,7 @@ import {
   StructureMode,
 } from "../../api/types";
 import type { SavedMaterialLibraryItem } from "../../api/types";
-import { listMaterials } from "../../api/mlsMaterials";
+import { listGradientCardMaterials } from "../../api/extractor";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
 import UnifiedUploader from "../ui/UnifiedUploader";
 import Checkbox from "../ui/Checkbox";
@@ -402,7 +402,7 @@ export default function BasicSettings() {
     if (source_version !== "material") return;
     let cancelled = false;
     setMaterialLibraryLoading(true);
-    listMaterials()
+    listGradientCardMaterials()
       .then((res) => {
         if (cancelled) return;
         const materials = res.materials ?? [];

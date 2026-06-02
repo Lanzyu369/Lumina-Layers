@@ -7,7 +7,6 @@ import {
   listGradientCardMaterials,
   previewMaterialRecipe,
 } from "../api/extractor";
-import { useMlsAuthStore } from "../stores/mlsAuthStore";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
@@ -41,12 +40,6 @@ const buildLibraryResponse = (count: number) => ({
 describe("MaterialRecipeQueryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useMlsAuthStore.setState({
-      password: "",
-      passwordRequired: false,
-      writeEnabled: true,
-      ready: true,
-    });
     vi.mocked(generateMaterialRecipeSwatch).mockResolvedValue({
       status: "ok",
       message: "Generated",
@@ -265,43 +258,6 @@ describe("MaterialRecipeQueryPanel", () => {
     });
     const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
     expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
-  });
-
-  it("hides swatch generation actions in MLS read-only mode", async () => {
-    useMlsAuthStore.setState({
-      password: "",
-      passwordRequired: true,
-      writeEnabled: false,
-      ready: true,
-    });
-    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
-    vi.mocked(previewMaterialRecipe).mockResolvedValue({
-      status: "ok",
-      layer_count: 2,
-      layer_height_mm: 0.08,
-      substrate: "white",
-      predicted_rgb: [180, 60, 90],
-      predicted_hex: "#B43C5A",
-      layers: [],
-    });
-
-    render(<MaterialRecipeQueryPanel />);
-    await waitFor(() => {
-      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(2);
-    });
-
-    const tiles = screen.getAllByTestId("material-recipe-palette-item");
-    fireEvent.click(tiles[0]);
-    fireEvent.click(tiles[1]);
-    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
-
-    expect(screen.queryByRole("button", { name: /生成验证色块|Generate swatch/ })).not.toBeInTheDocument();
-    expect(generateMaterialRecipeSwatch).not.toHaveBeenCalled();
   });
 
   it("disables reverse button when fewer than two layers are present", async () => {

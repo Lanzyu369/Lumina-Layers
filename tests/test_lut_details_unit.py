@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import msgpack
 import numpy as np
@@ -590,19 +591,99 @@ def test_catalog_indexer_refreshes_candidates_on_subsequent_catalog_builds(tmp_p
         parser=LutParser(),
     )
 
-    first_catalog = indexer.build_catalog()
-    assert {item.name for group in first_catalog.groups for item in group.items} == {
-        "Bambulab - PLA - first_refresh",
-    }
+    with patch("core.lut_details.catalog.time.monotonic", side_effect=[0.0, 31.0]):
+        first_catalog = indexer.build_catalog()
+        assert {item.name for group in first_catalog.groups for item in group.items} == {
+            "Bambulab - PLA - first_refresh",
+        }
 
-    second = preset_dir / "Bambulab" / "PLA" / "second_refresh.json"
-    _write_lut_json(second, manufacturer="Bambulab", material_type="PLA Basic")
+        second = preset_dir / "Bambulab" / "PLA" / "second_refresh.json"
+        _write_lut_json(second, manufacturer="Bambulab", material_type="PLA Basic")
 
-    second_catalog = indexer.build_catalog()
+        second_catalog = indexer.build_catalog()
     assert {item.name for group in second_catalog.groups for item in group.items} == {
         "Bambulab - PLA - first_refresh",
         "Bambulab - PLA - second_refresh",
     }
+
+
+def test_catalog_indexer_reuses_cached_catalog_until_file_signature_changes(tmp_path: Path) -> None:
+    alias_path = tmp_path / "lut_details_aliases.json"
+    preset_dir = tmp_path / "lut-preset"
+    _write_alias_config(alias_path)
+
+    lut_path = preset_dir / "Bambulab" / "PLA" / "cached.json"
+    _write_lut_json(lut_path, manufacturer="Bambulab", material_type="PLA Basic")
+
+    class CountingParser(LutParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.parse_count = 0
+
+        def parse(self, *, name: str, path: Path):
+            self.parse_count += 1
+            return super().parse(name=name, path=path)
+
+    parser = CountingParser()
+    indexer = LutCatalogIndexer(
+        preset_dir=preset_dir,
+        alias_resolver=AliasResolver.from_file(alias_path),
+        parser=parser,
+    )
+
+    with patch("core.lut_details.catalog.time.monotonic", side_effect=[0.0, 1.0, 31.0]):
+        first_catalog = indexer.build_catalog()
+        second_catalog = indexer.build_catalog()
+        _write_lut_json(
+            lut_path,
+            manufacturer="Bambulab",
+            material_type="PLA Basic",
+            extra={"cache_bust": "changed-signature"},
+        )
+        third_catalog = indexer.build_catalog()
+
+    assert first_catalog == second_catalog
+    assert {
+        item.name for group in third_catalog.groups for item in group.items
+    } == {"Bambulab - PLA - cached"}
+    assert parser.parse_count == 2
+
+
+def test_catalog_indexer_skips_candidate_discovery_within_hot_cache_window(tmp_path: Path) -> None:
+    alias_path = tmp_path / "lut_details_aliases.json"
+    preset_dir = tmp_path / "lut-preset"
+    _write_alias_config(alias_path)
+
+    lut_path = preset_dir / "Bambulab" / "PLA" / "hot_cache.json"
+    _write_lut_json(lut_path, manufacturer="Bambulab", material_type="PLA Basic")
+
+    class CountingParser(LutParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.parse_count = 0
+
+        def parse(self, *, name: str, path: Path):
+            self.parse_count += 1
+            return super().parse(name=name, path=path)
+
+    parser = CountingParser()
+    indexer = LutCatalogIndexer(
+        preset_dir=preset_dir,
+        alias_resolver=AliasResolver.from_file(alias_path),
+        parser=parser,
+    )
+
+    with patch.object(
+        indexer,
+        "_discover_file_candidates",
+        wraps=indexer._discover_file_candidates,
+    ) as mock_discover:
+        first_catalog = indexer.build_catalog()
+        second_catalog = indexer.build_catalog()
+
+    assert first_catalog == second_catalog
+    assert mock_discover.call_count == 1
+    assert parser.parse_count == 1
 
 
 def test_catalog_indexer_keeps_deeply_nested_same_stem_entries_distinct(tmp_path: Path) -> None:

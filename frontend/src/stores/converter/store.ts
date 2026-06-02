@@ -55,6 +55,7 @@ import {
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
 } from "../../api/converter";
+import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
@@ -6476,6 +6477,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       ];
       const keepIds = collectKeepFileIds(urlsToKeep);
       apiCleanupSessionFiles(state.sessionId, keepIds);
+      void apiCloseSession(state.sessionId, keepIds);
+      set({ sessionId: null });
     },
   })),
 );

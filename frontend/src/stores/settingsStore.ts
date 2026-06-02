@@ -34,22 +34,64 @@ export type SolverCacheGridResolution =
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
   [64, 128, 256, 512, 1024, 2048] as const;
 
+const SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS = 10;
+const SOLVER_CACHE_EXACT_MODE_MAX_LAYERS = 5;
+const SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS = 100_000;
+const SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO = 0.12;
+const SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL = 768;
+const SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024;
+export const SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024;
+
+export interface SolverCacheBuildBudgetEstimate {
+  totalCombinations: number;
+  totalBucketCount: number;
+  estimatedValidCellCount: number;
+  estimatedPeakBytes: number;
+  memoryLimitBytes: number;
+  isAllowed: boolean;
+}
+
+export function estimateSolverCacheBuildBudget(
+  materialCount: number,
+  layerCount: number,
+  gridResolution: SolverCacheGridResolution,
+): SolverCacheBuildBudgetEstimate {
+  const safeMaterialCount = Math.max(0, Math.trunc(materialCount));
+  const safeLayerCount = Math.max(0, Math.trunc(layerCount));
+  const safeGridResolution = Math.max(1, Math.trunc(gridResolution));
+  const totalCombinations =
+    safeMaterialCount > 0 && safeLayerCount > 0
+      ? Math.pow(safeMaterialCount, safeLayerCount)
+      : 0;
+  const totalBucketCount = Math.pow(safeGridResolution, 3);
+  const exactEligible =
+    safeMaterialCount <= SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS &&
+    safeLayerCount <= SOLVER_CACHE_EXACT_MODE_MAX_LAYERS &&
+    totalCombinations <= SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS;
+  const estimatedValidCellCount = exactEligible
+    ? totalCombinations
+    : Math.min(
+        totalCombinations,
+        totalBucketCount,
+        Math.ceil(totalCombinations * SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO),
+      );
+  const estimatedPeakBytes =
+    SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES +
+    estimatedValidCellCount * SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL;
+  return {
+    totalCombinations,
+    totalBucketCount,
+    estimatedValidCellCount,
+    estimatedPeakBytes,
+    memoryLimitBytes: SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
+    isAllowed: estimatedPeakBytes <= SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
+  };
+}
+
 export const SVG_PIXELS_PER_MM_DEFAULT = 10.0;
 export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;
 export const SVG_PIXELS_PER_MM_STEP = 0.1;
-
-/**
- * Default URLs of the standalone Material-LUT Studio (MLS) service.
- * The MLS dev frontend listens on :5180 (opened via the jump entry) and the
- * MLS backend API on :8100 (called by the converter at runtime). Both can be
- * overridden in Settings for separate-server deployments.
- * 解耦后的 Material-LUT Studio 独立服务默认地址：前端默认 :5180（通过跳转入口
- * 打开），后端 API 默认 :8100（转换器运行时调用）。两者均可在设置中覆盖，
- * 以支持前后端分开部署到不同服务器。
- */
-export const MLS_DEFAULT_BASE_URL = "http://localhost:5180";
-export const MLS_DEFAULT_BACKEND_URL = "http://localhost:8100";
 
 export interface SettingsState {
   language: "zh" | "en";
@@ -98,20 +140,6 @@ export interface SettingsState {
    * 内代表色（像素最多的那一个），一键去掉海带纹；默认关闭。
    */
   autoReplaceGradientBanding: boolean;
-  /**
-   * Material-LUT Studio (MLS) — the decoupled material/LUT management service.
-   * ``mlsBaseUrl`` is the standalone MLS **frontend** UI (opened via the jump
-   * entry); ``mlsBackendUrl`` is the MLS **backend** API the converter calls
-   * at runtime (solver cache, material list, color suggestions). They are
-   * separate so the frontend and backend can live on different servers. These
-   * are client-only preferences (no backend sync).
-   * 解耦后的耗材/LUT 管理服务。``mlsBaseUrl`` 为 MLS **前端**界面地址（跳转
-   * 入口打开）；``mlsBackendUrl`` 为 MLS **后端** API 地址（转换器运行时调用：
-   * 求解缓存、选材列表、取色建议）。两者分开，便于前后端部署在不同服务器。
-   * 仅客户端偏好，不与后端同步。
-   */
-  mlsBaseUrl: string;
-  mlsBackendUrl: string;
 }
 
 // ========== Actions Interface ==========
@@ -140,8 +168,6 @@ export interface SettingsActions {
   setSvgPixelsPerMm: (value: number) => void;
   resetSvgPixelsPerMm: () => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
-  setMlsBaseUrl: (url: string) => void;
-  setMlsBackendUrl: (url: string) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -174,11 +200,33 @@ export const DEFAULT_SETTINGS: SettingsState = {
   solverCacheGridResolution: 64,
   svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
   autoReplaceGradientBanding: false,
-  mlsBaseUrl: MLS_DEFAULT_BASE_URL,
-  mlsBackendUrl: MLS_DEFAULT_BACKEND_URL,
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
+
+const RETIRED_CLIENT_ONLY_SETTING_KEYS = [
+  "mlsBaseUrl",
+  "mlsBackendUrl",
+] as const;
+
+function stripRetiredClientOnlySettings(
+  snapshot: Record<string, unknown>,
+): PersistedSettingsSnapshot {
+  const migrated: Record<string, unknown> = { ...snapshot };
+  for (const key of RETIRED_CLIENT_ONLY_SETTING_KEYS) {
+    delete migrated[key];
+  }
+  return migrated as PersistedSettingsSnapshot;
+}
+
+function migratePersistedSettings(
+  persistedState: unknown,
+): PersistedSettingsSnapshot {
+  if (!persistedState || typeof persistedState !== "object") {
+    return {};
+  }
+  return stripRetiredClientOnlySettings(persistedState as Record<string, unknown>);
+}
 
 function readPersistedSettingsSnapshot(): PersistedSettingsSnapshot | null {
   try {
@@ -186,11 +234,16 @@ function readPersistedSettingsSnapshot(): PersistedSettingsSnapshot | null {
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as { state?: PersistedSettingsSnapshot };
-    if (!parsed || typeof parsed !== "object" || !parsed.state) {
+    const parsed = JSON.parse(raw) as { state?: Record<string, unknown> };
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !parsed.state ||
+      typeof parsed.state !== "object"
+    ) {
       return null;
     }
-    return parsed.state;
+    return stripRetiredClientOnlySettings(parsed.state);
   } catch {
     return null;
   }
@@ -373,10 +426,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setAutoReplaceGradientBanding: (enabled: boolean) =>
         set({ autoReplaceGradientBanding: enabled }),
 
-      setMlsBaseUrl: (url: string) => set({ mlsBaseUrl: url }),
-
-      setMlsBackendUrl: (url: string) => set({ mlsBackendUrl: url }),
-
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();
         const patch = deriveBackendDeviceSettingsPatch(
@@ -432,6 +481,16 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     }),
     {
       name: "lumina-settings",
+      version: 1,
+      migrate: migratePersistedSettings,
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...stripRetiredClientOnlySettings(
+          persistedState && typeof persistedState === "object"
+            ? (persistedState as Record<string, unknown>)
+            : {},
+        ),
+      }),
     },
   ),
 );
