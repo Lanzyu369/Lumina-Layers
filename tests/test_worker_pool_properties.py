@@ -133,6 +133,28 @@ class TestWorkerPoolConfigEnvOverrideProperty:
         assert cfg.MAX_WORKERS == n
         assert cfg.TASK_TIMEOUT == pytest.approx(f)
 
+    @given(
+        f=st.floats(
+            min_value=1.0,
+            max_value=3600.0,
+            allow_nan=False,
+            allow_infinity=False,
+        )
+    )
+    @settings(max_examples=25)
+    def test_configured_timeout_is_wired_to_pool_default(self, f: float) -> None:
+        """WorkerPoolConfig.TASK_TIMEOUT must become the pool's default timeout."""
+        cfg = WorkerPoolConfig()
+        cfg.MAX_WORKERS = 2
+        cfg.TASK_TIMEOUT = f
+
+        pool = WorkerPoolManager(
+            max_workers=cfg.MAX_WORKERS,
+            default_task_timeout=cfg.TASK_TIMEOUT,
+        )
+
+        assert pool.default_task_timeout == pytest.approx(f)
+
 
 # ---------------------------------------------------------------------------
 # Property 2: Worker 异常传播

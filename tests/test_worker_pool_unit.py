@@ -15,6 +15,7 @@ import pytest
 
 import api.worker_pool as worker_pool
 from api.worker_pool import WorkerPoolManager
+from config import WorkerPoolConfig
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,26 @@ class TestMaxWorkers:
         expected = min(os.cpu_count() or 2, 4)
         assert pool.max_workers == expected
 
+    def test_default_task_timeout_from_constructor(self) -> None:
+        pool = WorkerPoolManager(max_workers=2, default_task_timeout=12.5)
+        assert pool.default_task_timeout == 12.5
+
+    def test_zero_default_task_timeout_disables_timeout(self) -> None:
+        pool = WorkerPoolManager(max_workers=2, default_task_timeout=0)
+        assert pool.default_task_timeout is None
+
+    def test_dependency_factory_wires_configured_task_timeout(self) -> None:
+        from api.dependencies import _build_worker_pool
+
+        cfg = WorkerPoolConfig()
+        cfg.MAX_WORKERS = 3
+        cfg.TASK_TIMEOUT = 14.0
+
+        pool = _build_worker_pool(cfg)
+
+        assert pool.max_workers == 3
+        assert pool.default_task_timeout == 14.0
+
 
 # ---------------------------------------------------------------------------
 # submit tests
@@ -160,6 +181,37 @@ class TestSubmit:
         try:
             with pytest.raises(asyncio.TimeoutError):
                 await pool.submit(_slow_task, 10.0, timeout=0.3)
+        finally:
+            pool.shutdown(wait=False)
+
+    @pytest.mark.asyncio
+    async def test_timeout_restarts_pool_so_next_task_can_run(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A timed-out worker must not keep occupying the only pool slot."""
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        pool = WorkerPoolManager(max_workers=1, default_task_timeout=0.2)
+        pool.start()
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await pool.submit(_slow_task, 2.0)
+
+            result = await pool.submit(_add, 4, 5, timeout=2.0)
+            assert result == 9
+
+            restarts = [
+                record
+                for record in caplog.records
+                if getattr(record, "event", None) == "worker_pool_restarted"
+            ]
+            assert len(restarts) == 1
+            assert getattr(restarts[0], "reason", None) == "task_timeout"
+            assert getattr(restarts[0], "error_type", None) == "task_timeout"
+            assert getattr(restarts[0], "error_message", None)
+            assert getattr(restarts[0], "terminated_workers", None) == 1
         finally:
             pool.shutdown(wait=False)
 
@@ -358,6 +410,7 @@ class TestMaxTasksPerChild:
         assert getattr(warnings[0], "raw_value", None) == "abc"
         assert getattr(warnings[0], "fallback", None) == expected
         assert getattr(warnings[0], "error_type", None) == "ValueError"
+        assert getattr(warnings[0], "error_message", None)
 
     def test_start_passes_param_to_executor(
         self, monkeypatch: pytest.MonkeyPatch

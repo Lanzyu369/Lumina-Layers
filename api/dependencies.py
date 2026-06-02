@@ -116,6 +116,16 @@ def _build_file_registry() -> FileRegistry:
     raise AssertionError(f"unreachable backend dispatch: {backend!r}")
 
 
+def _build_worker_pool(config: WorkerPoolConfig) -> WorkerPoolManager:
+    """Construct the global worker pool from resolved config.
+    根据解析后的配置构造全局 worker pool。
+    """
+    return WorkerPoolManager(
+        max_workers=config.MAX_WORKERS,
+        default_task_timeout=config.TASK_TIMEOUT,
+    )
+
+
 # Global singletons. Instantiated at import time so existing callers
 # importing ``session_store`` / ``file_registry`` directly keep working
 # without API changes (lossless refactor per AGENTS.md L48-51).
@@ -125,7 +135,7 @@ session_store: SessionStore = _build_session_store()
 file_registry: FileRegistry = _build_file_registry()
 
 _worker_pool_config = WorkerPoolConfig.from_env()
-worker_pool: WorkerPoolManager = WorkerPoolManager(max_workers=_worker_pool_config.MAX_WORKERS)
+worker_pool: WorkerPoolManager = _build_worker_pool(_worker_pool_config)
 
 
 def get_session_store() -> SessionStore:

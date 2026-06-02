@@ -1424,6 +1424,8 @@ async def _generate_large_format_raster(
                     cleanup_paths.add(tp)
                 else:
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
+            except asyncio.TimeoutError:
+                errors.append(f"{label}: generation timed out")
             except ROUTER_HANDLED_ERRORS as e:
                 errors.append(f"{label}: {e}")
 
