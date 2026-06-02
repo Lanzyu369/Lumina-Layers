@@ -21,6 +21,7 @@ bytes with a fingerprint the caller uses to cache locally and avoid refetching.
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import threading
 import time
@@ -64,11 +65,20 @@ _MATERIAL_CACHE_MAX: int = 64  # evict LRU when over this many distinct keys
 _material_cache: dict[tuple[str, ...], tuple[float, Any]] = {}
 _material_cache_lock = threading.Lock()
 
+# Single-flight: prevents concurrent misses for the same key from each
+# triggering a separate load_multiple_materials() call (thundering herd).
+# leader sets _inflight[key]; waiters call future.result() and block until
+# the leader either set_result() or set_exception().
+_inflight: dict[tuple[str, ...], concurrent.futures.Future] = {}
+_inflight_lock = threading.Lock()
+
 
 def _load_materials_cached(directory_names: list[str]) -> list:
     """Return MaterialParams for *directory_names*, loading from disk only on
-    a cache miss or TTL expiry.
-    缓存命中时直接返回已加载结果；未命中或 TTL 过期时重新加载。
+    a cache miss or TTL expiry.  Concurrent requests for the same key share
+    a single in-flight load (single-flight pattern).
+    缓存命中时直接返回；未命中时只有一个 leader 真正加载，其余 waiter 等待
+    同一个结果，避免并发 miss 重复分配 numpy 内存（thundering herd）。
     """
     key = tuple(directory_names)
     now = time.monotonic()
@@ -78,19 +88,39 @@ def _load_materials_cached(directory_names: list[str]) -> list:
         if entry is not None and now - entry[0] < _MATERIAL_CACHE_TTL:
             return entry[1]
 
-    # Load outside the lock: two concurrent misses may both load, but the
-    # result is deterministic and neither will block the other.
-    materials = load_multiple_materials(
-        list(directory_names), materials_dir=str(data_root.materials_root())
-    )
+    # Elect a leader for this key; waiters get the existing Future.
+    with _inflight_lock:
+        if key in _inflight:
+            future: concurrent.futures.Future = _inflight[key]
+            is_leader = False
+        else:
+            future = concurrent.futures.Future()
+            _inflight[key] = future
+            is_leader = True
 
-    with _material_cache_lock:
-        _material_cache[key] = (time.monotonic(), materials)
-        if len(_material_cache) > _MATERIAL_CACHE_MAX:
-            oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
-            _material_cache.pop(oldest, None)
+    if not is_leader:
+        # Blocks until leader calls set_result / set_exception; re-raises
+        # any exception the leader encountered.
+        return future.result()
 
-    return materials
+    # Leader: load outside both locks so other keys aren't blocked.
+    try:
+        materials = load_multiple_materials(
+            list(directory_names), materials_dir=str(data_root.materials_root())
+        )
+        with _material_cache_lock:
+            _material_cache[key] = (time.monotonic(), materials)
+            if len(_material_cache) > _MATERIAL_CACHE_MAX:
+                oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
+                _material_cache.pop(oldest, None)
+        future.set_result(materials)
+        return materials
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _inflight_lock:
+            _inflight.pop(key, None)
 
 
 def evict_material_cache(directory_name: str) -> int:
