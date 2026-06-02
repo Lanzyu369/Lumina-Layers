@@ -101,6 +101,23 @@ type LuminaWindow = Window & {
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 
+function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
+  const text = String(label ?? "").trim().toLowerCase();
+  if (!text) return false;
+  if (text.includes("白")) return true;
+  const tokens = text
+    .replace(/\\/g, "/")
+    .replace(/\//g, " ")
+    .replace(/[-_]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  return tokens.includes("white") || tokens.includes("w");
+}
+
+function inferDefaultMaterialBackingDirName(names: string[]): string | null {
+  return names.find((name) => looksLikeWhiteMaterialLabel(name)) ?? names[0] ?? null;
+}
+
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
 // 材料档案可达色建议的模块级辅助状态（LRU + AbortController）
@@ -1075,11 +1092,14 @@ function buildMaterialSourceParams(
   const materialGridResolution = settingsState.enableSolverCacheGridSelection
     ? settingsState.solverCacheGridResolution
     : undefined;
-  const backingMaterialIndex = state.materialBackingMaterialDirName
-    ? state.selectedMaterialDirNames.indexOf(
-        state.materialBackingMaterialDirName,
-      )
-    : 0;
+  const resolvedBackingDirName =
+    state.materialBackingMaterialDirName &&
+    state.selectedMaterialDirNames.includes(state.materialBackingMaterialDirName)
+      ? state.materialBackingMaterialDirName
+      : inferDefaultMaterialBackingDirName(state.selectedMaterialDirNames);
+  const backingMaterialIndex = resolvedBackingDirName
+    ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
+    : -1;
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
@@ -2680,7 +2700,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const nextBacking =
           currentBacking && names.includes(currentBacking)
             ? currentBacking
-            : (names[0] ?? null);
+            : inferDefaultMaterialBackingDirName(names);
         persistMaterialBackingMaterialDirName(nextBacking);
         return {
           selectedMaterialDirNames: names,

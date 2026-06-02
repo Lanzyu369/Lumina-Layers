@@ -107,7 +107,10 @@ def run(ctx: dict) -> dict:
         separate_backing = False
 
     backing_color_id = ctx.get("backing_color_id", 0)
-    if material_source == "material_archive":
+    if (
+        material_source == "material_archive"
+        and ctx.get("material_backing_material_index") is None
+    ):
         backing_color_id = ctx.get("material_base_channel_idx", backing_color_id)
     separate_backing_color_id = ctx.get("separate_backing_color_id", backing_color_id)
     if separate_backing_color_id is None:

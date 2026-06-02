@@ -29,6 +29,7 @@ from config import (
     BedManager,
 )
 from utils import Stats
+from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 
 # ========== Re-exports from pipeline modules ==========
 # 保持 `from core.converter import XXX` 对所有现有调用方仍然有效
@@ -121,7 +122,12 @@ def _resolve_material_archive_backing_color_id(
     material_backing_material_index: Optional[int],
 ) -> int:
     if material_backing_material_index is None:
-        return 0
+        materials = (
+            list(selected_materials)
+            if isinstance(selected_materials, (list, tuple))
+            else []
+        )
+        return infer_material_archive_base_channel_idx(materials, [], {})
     try:
         backing_color_id = int(material_backing_material_index)
     except (TypeError, ValueError) as exc:
@@ -597,6 +603,7 @@ def generate_final_model(
         material_layer_count=material_layer_count,
         material_layer_height_mm=material_layer_height_mm,
         material_grid_resolution=material_grid_resolution,
+        material_backing_material_index=material_backing_material_index,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
         cover_source_path=cover_source_path,

@@ -15,6 +15,7 @@ from api.errors import to_http_exception
 from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.gradient_group_analyzer import (
     GradientGroupAnalysisParams,
     analyze_gradient_groups_with_region_id_map,
@@ -80,7 +81,7 @@ def _resolve_material_backing_index(
 ) -> int:
     materials = list(selected_materials) if isinstance(selected_materials, (list, tuple)) else []
     if requested_index is None:
-        index = 0
+        index = infer_material_archive_base_channel_idx(materials, [], {})
     else:
         try:
             index = int(requested_index)

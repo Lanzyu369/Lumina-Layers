@@ -183,6 +183,33 @@ class TestS01InputValidation:
         assert result["material_base_channel_idx"] == 1
         assert result["backing_color_id"] == 1
 
+    def test_material_archive_explicit_backing_channel_is_preserved(self):
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx["material_source"] = "material_archive"
+        ctx["selected_materials"] = ["PLA Green", "PLA White"]
+        ctx["backing_color_id"] = 0
+        ctx["material_backing_material_index"] = 0
+
+        with patch(
+            "core.pipeline._input_validation_common.load_materials",
+            return_value=[object(), object()],
+        ), patch(
+            "core.pipeline._input_validation_common.build_material_slot_names",
+            return_value=["PLA Green", "PLA White"],
+        ), patch(
+            "core.pipeline._input_validation_common.build_material_preview_colors",
+            return_value={
+                0: [0, 180, 0, 255],
+                1: [248, 248, 245, 255],
+            },
+        ):
+            result = run(ctx)
+
+        assert result["material_base_channel_idx"] == 1
+        assert result["backing_color_id"] == 0
+
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""
         from core.pipeline.s01_input_validation import run
