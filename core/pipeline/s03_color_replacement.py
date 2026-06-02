@@ -309,18 +309,22 @@ def _apply_material_archive_color_replacements(
         recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
 
     new_matched_rgb = matched_rgb.copy()
+    recipe_layers = int(recipes_unique.shape[1])
     new_material_matrix = material_matrix.copy()
 
-    # Upgrade material_matrix to the solver's layer count if needed so the
-    # (H, W, N) write does not broadcast-error for shorter source matrices.
-    # 若 material_matrix 的层数少于求解器层数，先在末尾补齐。
-    if new_material_matrix.shape[2] < recipes_unique.shape[1]:
-        pad_layers = recipes_unique.shape[1] - new_material_matrix.shape[2]
+    # Resize material_matrix to the solver's layer count before per-pixel
+    # writes. Short source matrices need padding; longer cached matrices need
+    # trimming so boolean-index writes do not broadcast-error.
+    # 写入前把 material_matrix 调整到求解器层数：短矩阵补齐，长矩阵裁剪。
+    if new_material_matrix.shape[2] < recipe_layers:
+        pad_layers = recipe_layers - new_material_matrix.shape[2]
         pad = np.zeros(
             (*new_material_matrix.shape[:2], pad_layers),
             dtype=new_material_matrix.dtype,
         )
         new_material_matrix = np.concatenate([new_material_matrix, pad], axis=2)
+    elif new_material_matrix.shape[2] > recipe_layers:
+        new_material_matrix = new_material_matrix[:, :, :recipe_layers].copy()
 
     applied = 0
     for job_idx, (orig_hex, _repl_rgb, orig_mask) in enumerate(jobs):

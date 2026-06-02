@@ -572,6 +572,7 @@ class TestRunVectorBranchWiring:
                 "printer_id": "bambu-h2d",
                 "slicer": "BambuStudio",
                 "nozzle_size": "0.4",
+                "svg_pixels_per_mm": 5.0,
                 "matched_rgb_path": str(matched_rgb_path),
                 "mask_solid_path": str(mask_solid_path),
                 "material_matrix_path": str(material_matrix_path),
@@ -585,6 +586,7 @@ class TestRunVectorBranchWiring:
         assert "matched_rgb" in kwargs
         assert "mask_solid" in kwargs
         assert "material_matrix" in kwargs
+        assert kwargs["pixels_per_mm"] == 5.0
         assert kwargs["material_matrix"].shape == (4, 4, 5)
         # img_processor must be the FakeVectorProcessor's stub attribute,
         # not some unrelated object — the helper relies on its KDTree.

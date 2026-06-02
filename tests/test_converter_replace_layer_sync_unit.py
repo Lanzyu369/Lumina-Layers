@@ -11,6 +11,7 @@ from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.routers.converter.preview import get_layer_images
 from api.session_store import SessionStore
+from api.structured_logging import bind_session_id, set_request_id
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -32,8 +33,18 @@ client: TestClient = TestClient(app)
 
 def setup_function() -> None:
     global _test_store, _test_registry
+    _clear_logging_context()
     _test_store = SessionStore(ttl=1800)
     _test_registry = FileRegistry()
+
+
+def teardown_function() -> None:
+    _clear_logging_context()
+
+
+def _clear_logging_context() -> None:
+    set_request_id(None)
+    bind_session_id(None)
 
 
 def _write_simple_lut(tmp_path: Path) -> str:
@@ -249,6 +260,74 @@ class TestMaterialArchiveReplaceLayerSync:
             updated_cache["matched_rgb"][0, 0],
             np.asarray([12, 34, 56], dtype=np.uint8),
         )
+        np.testing.assert_array_equal(
+            updated_cache["material_matrix"][0, 0],
+            np.asarray([4, 3, 2, 1, 0], dtype=np.int16),
+        )
+
+    def test_replace_color_trims_long_material_matrix_for_short_solver_recipe(self, monkeypatch) -> None:
+        sid = _test_store.create()
+        matched = np.zeros((2, 2, 3), dtype=np.uint8)
+        matched[:, :] = [10, 20, 30]
+        material_matrix = np.zeros((2, 2, 7), dtype=np.int16)
+        mask_solid = np.ones((2, 2), dtype=bool)
+        cache = {
+            "matched_rgb": matched.copy(),
+            "quantized_image": matched.copy(),
+            "mask_solid": mask_solid,
+            "material_matrix": material_matrix.copy(),
+            "preview_rgba": np.dstack(
+                [matched.copy(), np.full((2, 2), 255, dtype=np.uint8)]
+            ),
+            "preview_colors": {
+                0: [255, 0, 0, 255],
+                1: [0, 255, 0, 255],
+                2: [0, 0, 255, 255],
+                3: [255, 255, 0, 255],
+                4: [255, 255, 255, 255],
+            },
+            "slot_names": ["M0", "M1", "M2", "M3", "M4"],
+            "color_layers": 7,
+            "layer_height_mm": 0.08,
+        }
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "replacement_history", [])
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a"])
+        _test_store.put(sid, "material_layer_count", 5)
+        _test_store.put(sid, "material_layer_height_mm", 0.08)
+
+        monkeypatch.setattr(
+            "api.routers.converter.replace.load_multiple_materials",
+            lambda names: [object() for _ in names],
+        )
+        monkeypatch.setattr(
+            "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+            lambda *args, **kwargs: (None, None),
+        )
+        monkeypatch.setattr(
+            "api.routers.converter.replace.solve_image_colors_optimal",
+            lambda targets, materials, layer_count, layer_height_mm, substrate: (
+                np.asarray([[12, 34, 56]], dtype=np.uint8),
+                np.asarray([[0, 1, 2, 3, 4]], dtype=np.int16),
+                np.asarray([0.5], dtype=np.float64),
+            ),
+        )
+
+        response = client.post(
+            "/api/convert/replace-color",
+            json={
+                "session_id": sid,
+                "selected_color": "#0a141e",
+                "replacement_color": "#112233",
+            },
+        )
+
+        assert response.status_code == 200
+        updated_cache = _test_store.get(sid)["preview_cache"]
+        assert updated_cache["material_matrix"].shape == (2, 2, 5)
+        assert updated_cache["color_layers"] == 5
         np.testing.assert_array_equal(
             updated_cache["material_matrix"][0, 0],
             np.asarray([4, 3, 2, 1, 0], dtype=np.int16),

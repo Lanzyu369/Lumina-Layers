@@ -1377,7 +1377,13 @@ def _run_vector_branch(ctx: dict) -> dict:
     Returns:
         \u66f4\u65b0\u540e\u7684 PipelineContext \u5b57\u5178\uff08\u5305\u542b result_tuple\uff09
     """
-    from config import ColorSystem, MODELS_DIR, OUTPUT_DIR  # noqa: F401  -- ColorSystem kept for parity
+    from config import (  # noqa: F401  -- ColorSystem kept for parity
+        ColorSystem,
+        MODELS_DIR,
+        OUTPUT_DIR,
+        SVG_PIXELS_PER_MM_DEFAULT,
+        normalize_svg_pixels_per_mm,
+    )
     from core.naming import generate_model_filename, generate_preview_filename
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
     from utils import Stats
@@ -1399,6 +1405,12 @@ def _run_vector_branch(ctx: dict) -> dict:
     matched_rgb_path = ctx.get("matched_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    try:
+        vector_pixels_per_mm = normalize_svg_pixels_per_mm(
+            ctx.get("svg_pixels_per_mm", SVG_PIXELS_PER_MM_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        vector_pixels_per_mm = SVG_PIXELS_PER_MM_DEFAULT
     try:
         backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
     except (TypeError, ValueError):
@@ -1503,6 +1515,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     material_matrix=cached_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
+                    pixels_per_mm=vector_pixels_per_mm,
                 )
                 # Diagnostic 3/4: shape recipe[0] distribution after
                 # apply_matched_rgb_overrides_to_analysis.
@@ -1594,6 +1607,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         target_layers=requested_color_layers,
                         base_channel_idx=base_channel_idx,
                         img_processor=vec_processor.img_processor,
+                        pixels_per_mm=vector_pixels_per_mm,
                     )
 
                     # Diagnostic 4/4: shape recipe[0] distribution after

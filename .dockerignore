@@ -20,3 +20,15 @@ coverage.xml
 .mypy_cache
 .pytest_cache
 .hypotheses
+node_modules/
+frontend/node_modules/
+electron/node_modules/
+dist/
+build/
+output/
+tmp/
+logs/
+feedback/
+artifacts/
+*.bak
+*.tmp

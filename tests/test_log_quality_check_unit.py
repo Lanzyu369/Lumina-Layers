@@ -218,6 +218,17 @@ def test_extract_single_stage_workflow_step_is_first_class() -> None:
     )
 
 
+def test_fast_mode_app_mounts_migrated_mls_routes() -> None:
+    """Fast log gate must exercise routes moved out of the main app."""
+
+    app = log_quality_check._build_fast_mode_app()
+    paths = {route.path for route in app.routes}
+
+    assert "/api/extractor/extract-single-stage" in paths
+    assert "/api/extractor/extract" in paths
+    assert "/api/calibration/generate-single-stage-kit" in paths
+
+
 def test_fit_stage_a_workflow_step_is_first_class() -> None:
     workflow = _parse_workflow("fit_stage_a")
 

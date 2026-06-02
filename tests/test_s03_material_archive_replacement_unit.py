@@ -135,6 +135,39 @@ class TestApplyMaterialArchiveColorReplacements:
         # And the recipe should not be entirely zeros (implying an actual solve).
         assert np.any(updated_mat != 0)
 
+    def test_short_solver_recipe_trims_long_material_matrix(self):
+        matched = np.full((2, 2, 3), [200, 100, 50], dtype=np.uint8)
+        mat = np.zeros((2, 2, 7), dtype=np.int32)
+        mask = np.ones((2, 2), dtype=bool)
+
+        class _StubCache:
+            def lookup(self, unique_srgb, user_materials):
+                n = unique_srgb.shape[0]
+                return (
+                    np.full((n, 3), [10, 200, 20], dtype=np.uint8),
+                    np.asarray([[0, 1, 2, 3, 4]] * n, dtype=np.int32),
+                    np.full(n, 0.5, dtype=np.float32),
+                )
+
+        with patch(
+            "core.material_cache.load_material_solver_cache",
+            return_value=_StubCache(),
+        ), patch(
+            "core.material_lut_synthesis.solve_image_colors_optimal",
+            side_effect=AssertionError(
+                "MITM should not run when cache is available"
+            ),
+        ):
+            out_rgb, out_mat, applied = _apply_material_archive_color_replacements(
+                matched, mat, mask, {"#c86432": "#14c814"},
+                _SMALL_PALETTE, 5, 0.08, "white",
+            )
+
+        assert applied == 1
+        assert out_mat.shape == (2, 2, 5)
+        np.testing.assert_array_equal(out_rgb[0, 0], [10, 200, 20])
+        np.testing.assert_array_equal(out_mat[0, 0], [4, 3, 2, 1, 0])
+
     def test_ignores_invalid_hex_pairs(self):
         matched = np.full((2, 2, 3), [200, 100, 50], dtype=np.uint8)
         mat = np.zeros((2, 2, 5), dtype=np.int32)

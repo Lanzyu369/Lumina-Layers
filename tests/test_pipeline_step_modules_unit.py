@@ -380,6 +380,27 @@ class TestS06VoxelBuilding:
             backing_end - backing_start + 1
         )
 
+    def test_cloisonne_builds_wireframe_without_processor(self):
+        """Cloisonne mode must not require ctx["processor"] in material-archive flows."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 20, 20
+        ctx = self._make_valid_ctx()
+        ctx["material_matrix"] = np.zeros((h, w, 5), dtype=int)
+        ctx["mask_solid"] = np.ones((h, w), dtype=bool)
+        ctx["matched_rgb"] = np.zeros((h, w, 3), dtype=np.uint8)
+        ctx["matched_rgb"][:, w // 2 :] = [255, 255, 255]
+        ctx["enable_cloisonne"] = True
+        ctx["wire_width_mm"] = 0.4
+        ctx["wire_height_mm"] = 0.4
+        ctx.pop("processor", None)
+        ctx.pop("target_w", None)
+
+        result = run(ctx)
+
+        assert result["backing_metadata"]["is_cloisonne"] is True
+        assert np.any(result["full_matrix"] == -3)
+
     def test_missing_material_matrix_raises_key_error(self):
         """缺失 material_matrix 键应抛出 KeyError。"""
         from core.pipeline.s06_voxel_building import run
