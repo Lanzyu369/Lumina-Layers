@@ -46,6 +46,28 @@ describe("createPreviewResource", () => {
       timeout: 120_000,
     });
   });
+
+  it("reports normalized upload progress when requested", async () => {
+    mockPost.mockResolvedValueOnce({ data: previewResourceResponse });
+    const onUploadProgress = vi.fn();
+
+    const file = new File(["raw"], "chart.dng", {
+      type: "image/x-adobe-dng",
+    });
+
+    await createPreviewResource(file, "colorchecker", { onUploadProgress });
+
+    const config = mockPost.mock.calls[0][2] as {
+      onUploadProgress?: (event: { loaded: number; total?: number }) => void;
+    };
+    config.onUploadProgress?.({ loaded: 45, total: 100 });
+
+    expect(onUploadProgress).toHaveBeenCalledWith({
+      loaded: 45,
+      total: 100,
+      percent: 45,
+    });
+  });
 });
 
 describe("colorcheckerPrepareSource", () => {
@@ -56,7 +78,9 @@ describe("colorcheckerPrepareSource", () => {
       type: "image/x-adobe-dng",
     });
 
-    const result = await colorcheckerPrepareSource(file);
+    const onUploadProgress = vi.fn();
+
+    const result = await colorcheckerPrepareSource(file, { onUploadProgress });
 
     expect(mockPost).toHaveBeenCalledOnce();
     const [url, formData, config] = mockPost.mock.calls[0];
@@ -66,6 +90,15 @@ describe("colorcheckerPrepareSource", () => {
     expect(config).toMatchObject({
       headers: { "Content-Type": "multipart/form-data" },
       timeout: 3_600_000,
+    });
+    const requestConfig = config as {
+      onUploadProgress?: (event: { loaded: number; total?: number }) => void;
+    };
+    requestConfig.onUploadProgress?.({ loaded: 25, total: 100 });
+    expect(onUploadProgress).toHaveBeenCalledWith({
+      loaded: 25,
+      total: 100,
+      percent: 25,
     });
     expect(result).toEqual({
       colorchecker_source_file_id: "source-raw",

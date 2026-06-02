@@ -509,6 +509,24 @@ function ColorcheckerWarningCards({
   );
 }
 
+function isRequestTimeoutError(error: unknown): boolean {
+  const maybeError = error as { code?: unknown; message?: unknown } | null;
+  const message =
+    typeof maybeError?.message === "string" ? maybeError.message.toLowerCase() : "";
+  return maybeError?.code === "ECONNABORTED" || message.includes("timeout");
+}
+
+function resolveStageErrorMessage(
+  error: unknown,
+  timeoutMessage: string,
+  fallbackMessage: string,
+): string {
+  if (isRequestTimeoutError(error)) {
+    return timeoutMessage;
+  }
+  return error instanceof Error ? error.message : fallbackMessage;
+}
+
 export function ColorcheckerConfirmDialogInner({
   phase,
   colorcheckerTarget = null,
@@ -533,6 +551,7 @@ export function ColorcheckerConfirmDialogInner({
     target: "white" | "black" | null;
   } | null>(null);
   const [sourcePreparing, setSourcePreparing] = useState(false);
+  const [sourceUploadProgress, setSourceUploadProgress] = useState<number | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [corners, setCorners] = useState<CornerPoint[]>([]);
   const [activeCornerIndex, setActiveCornerIndex] = useState<number | null>(null);
@@ -606,6 +625,12 @@ export function ColorcheckerConfirmDialogInner({
       referenceId: serverReferenceKey || defaultReferenceId || DEFAULT_REFERENCE_ID,
     };
   }, [defaultReferenceId, selectedCustomReference, serverReferenceKey]);
+  const sourcePreparingLabel =
+    sourcePreparing && sourceUploadProgress !== null && sourceUploadProgress < 100
+      ? tRuntime("ext_cc_upload_progress", {
+          percent: sourceUploadProgress,
+        })
+      : t("ext_cc_status_preparing");
   const selectedReferenceMeta = selectedCustomReference
     ? selectedCustomReference.source
     : selectedServerReference?.source ?? {
@@ -755,6 +780,7 @@ export function ColorcheckerConfirmDialogInner({
     setSourceFileId(null);
     setSourcePreviewUrl(null);
     setSourceContext(null);
+    setSourceUploadProgress(null);
     setImageSize(null);
     if (!open || !imageFile) {
       setSourcePreparing(false);
@@ -763,8 +789,14 @@ export function ColorcheckerConfirmDialogInner({
     const requestImageFile = imageFile;
     const requestTarget = colorcheckerTarget;
     setSourcePreparing(true);
+    setSourceUploadProgress(0);
     setErrorMessage(null);
-    colorcheckerPrepareSource(imageFile)
+    colorcheckerPrepareSource(imageFile, {
+      onUploadProgress: (progress) => {
+        if (sourceRunRef.current !== runId) return;
+        setSourceUploadProgress(progress.percent);
+      },
+    })
       .then((result) => {
         registeredSourceId = result.colorchecker_source_file_id;
         const latest = latestCalibrationContext.current;
@@ -792,12 +824,19 @@ export function ColorcheckerConfirmDialogInner({
       })
       .catch((error) => {
         if (sourceRunRef.current === runId) {
-          setErrorMessage(error instanceof Error ? error.message : t("ext_cc_missing_image"));
+          setErrorMessage(
+            resolveStageErrorMessage(
+              error,
+              t("ext_cc_source_prepare_timeout"),
+              t("ext_cc_missing_image"),
+            ),
+          );
         }
       })
       .finally(() => {
         if (sourceRunRef.current === runId) {
           setSourcePreparing(false);
+          setSourceUploadProgress(null);
         }
       });
     return () => {
@@ -1021,7 +1060,13 @@ export function ColorcheckerConfirmDialogInner({
       }
     } catch (error) {
       if (detectionRunRef.current === runId) {
-        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_auto_detect_failed"));
+        setErrorMessage(
+          resolveStageErrorMessage(
+            error,
+            t("ext_cc_auto_detect_timeout"),
+            t("ext_cc_auto_detect_failed"),
+          ),
+        );
       }
     } finally {
       if (detectionRunRef.current === runId) {
@@ -1077,7 +1122,13 @@ export function ColorcheckerConfirmDialogInner({
       setStatusMessage(t("ext_cc_warp_ready"));
     } catch (error) {
       if (warpRunRef.current === runId) {
-        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_warp_failed"));
+        setErrorMessage(
+          resolveStageErrorMessage(
+            error,
+            t("ext_cc_warp_timeout"),
+            t("ext_cc_warp_failed"),
+          ),
+        );
       }
     } finally {
       if (warpRunRef.current === runId) {
@@ -1151,7 +1202,13 @@ export function ColorcheckerConfirmDialogInner({
       );
     } catch (error) {
       if (calibrationRunRef.current === runId) {
-        setErrorMessage(error instanceof Error ? error.message : t("ext_cc_calibrate_failed"));
+        setErrorMessage(
+          resolveStageErrorMessage(
+            error,
+            t("ext_cc_calibrate_timeout"),
+            t("ext_cc_calibrate_failed"),
+          ),
+        );
       }
     } finally {
       if (calibrationRunRef.current === runId) {
@@ -1250,9 +1307,26 @@ export function ColorcheckerConfirmDialogInner({
                     ))}
                   </div>
                 ) : (
-                  <span className="text-sm text-slate-500 dark:text-slate-400">
-                    {sourcePreparing ? t("ext_cc_status_preparing") : t("ext_cc_missing_image")}
-                  </span>
+                  <div className="flex w-full max-w-sm flex-col gap-2">
+                    <span className="text-sm text-slate-500 dark:text-slate-400">
+                      {sourcePreparing ? sourcePreparingLabel : t("ext_cc_missing_image")}
+                    </span>
+                    {sourcePreparing && sourceUploadProgress !== null && (
+                      <div
+                        aria-label={t("ext_cc_upload_progress_label")}
+                        aria-valuemax={100}
+                        aria-valuemin={0}
+                        aria-valuenow={sourceUploadProgress}
+                        className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+                        role="progressbar"
+                      >
+                        <div
+                          className="h-full rounded-full bg-blue-500 transition-[width]"
+                          style={{ width: `${sourceUploadProgress}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 

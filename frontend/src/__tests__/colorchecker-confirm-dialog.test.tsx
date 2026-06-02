@@ -67,6 +67,11 @@ const resolvePending = <T,>(resolver: ((value: T) => void) | null, value: T) => 
   resolver(value);
 };
 
+const makeTimeoutError = () =>
+  Object.assign(new Error("timeout of 120000ms exceeded"), {
+    code: "ECONNABORTED",
+  });
+
 const summary: ColorcheckerDisplaySummary = {
   deltaE00: {
     mean: 2.0362,
@@ -335,10 +340,90 @@ describe("ColorcheckerConfirmDialog", () => {
     expect(screen.getAllByText("需检查").length).toBeGreaterThan(0);
   });
 
+  it("shows source upload progress while preparing the ColorChecker preview", async () => {
+    let reportProgress:
+      | NonNullable<
+          NonNullable<Parameters<typeof colorcheckerPrepareSource>[1]>["onUploadProgress"]
+        >
+      | undefined;
+    vi.mocked(colorcheckerPrepareSource).mockImplementationOnce((_file, options) => {
+      reportProgress = options?.onUploadProgress;
+      return new Promise(() => undefined);
+    });
+
+    renderDialog();
+
+    await waitFor(() => expect(reportProgress).toBeDefined());
+    act(() => {
+      reportProgress?.({ loaded: 45, total: 100, percent: 45 });
+    });
+
+    expect(screen.getByText("正在上传原图 45%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "原图上传进度" })).toHaveAttribute(
+      "aria-valuenow",
+      "45",
+    );
+  });
+
+  it("uses stage-specific timeout copy while preparing the source preview", async () => {
+    vi.mocked(colorcheckerPrepareSource).mockRejectedValueOnce(makeTimeoutError());
+
+    renderDialog();
+
+    expect(
+      await screen.findByText(
+        "校色器原图上传或预览生成超时。图片较大或网络较慢时可能发生，请重试或使用更快网络。",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses stage-specific timeout copy during auto detection", async () => {
+    vi.mocked(colorcheckerDetectChart).mockRejectedValueOnce(makeTimeoutError());
+
+    renderDialog();
+
+    expect(
+      await screen.findByText("ColorChecker 自动识别超时。请重试，或手动点选四个色卡角点。"),
+    ).toBeInTheDocument();
+  });
+
+  it("uses stage-specific timeout copy during warp preview generation", async () => {
+    vi.mocked(colorcheckerWarpPreview).mockRejectedValueOnce(makeTimeoutError());
+    renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const warpButton = await screen.findByRole("button", { name: "生成预览" });
+    await waitFor(() => expect(warpButton).not.toBeDisabled());
+    fireEvent.click(warpButton);
+
+    expect(
+      await screen.findByText("ColorChecker 透视预览生成超时。请重试，或检查角点是否框住完整色卡。"),
+    ).toBeInTheDocument();
+  });
+
+  it("uses stage-specific timeout copy during calibration", async () => {
+    vi.mocked(colorcheckerCalibrate).mockRejectedValueOnce(makeTimeoutError());
+    renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const calibrateButton = await screen.findByRole("button", { name: "执行校色" });
+    await waitFor(() => expect(calibrateButton).not.toBeDisabled());
+    fireEvent.click(calibrateButton);
+
+    expect(
+      await screen.findByText("ColorChecker 校色计算超时。请重试；大 RAW/DNG 图片可能需要更长处理时间。"),
+    ).toBeInTheDocument();
+  });
+
   it("submits advanced algorithm options and dragged corner coordinates", async () => {
     renderDialog();
 
-    await waitFor(() => expect(colorcheckerPrepareSource).toHaveBeenCalledWith(imageFile));
+    await waitFor(() =>
+      expect(colorcheckerPrepareSource).toHaveBeenCalledWith(
+        imageFile,
+        expect.objectContaining({ onUploadProgress: expect.any(Function) }),
+      ),
+    );
     await expectDafanDetectCalled("source-chart.png");
 
     const image = screen.getByAltText("ColorChecker 色卡校色") as HTMLImageElement;

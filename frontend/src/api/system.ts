@@ -1,3 +1,4 @@
+import type { AxiosProgressEvent } from "axios";
 import apiClient from "./client";
 import type {
   ClearCacheResponse,
@@ -82,11 +83,35 @@ export interface PreviewResourceResponse {
   source_type?: string | null;
 }
 
+export interface PreviewResourceUploadProgress {
+  loaded: number;
+  total: number | null;
+  percent: number | null;
+}
+
 export interface PreviewResourceOptions {
   timeoutMs?: number;
+  onUploadProgress?: (progress: PreviewResourceUploadProgress) => void;
 }
 
 const DEFAULT_PREVIEW_RESOURCE_TIMEOUT_MS = 120_000;
+
+function normalizeUploadProgress(
+  event: AxiosProgressEvent,
+  fallbackTotal: number,
+): PreviewResourceUploadProgress {
+  const loaded = Math.max(0, event.loaded ?? 0);
+  const eventTotal =
+    typeof event.total === "number" && Number.isFinite(event.total) && event.total > 0
+      ? event.total
+      : null;
+  const total = eventTotal ?? (fallbackTotal > 0 ? fallbackTotal : null);
+  const percent =
+    total !== null
+      ? Math.max(0, Math.min(100, Math.round((loaded / total) * 100)))
+      : null;
+  return { loaded, total, percent };
+}
 
 /** 上传图片为私有资源，只返回受限尺寸的小预览 URL。 */
 export async function createPreviewResource(
@@ -103,6 +128,11 @@ export async function createPreviewResource(
     {
       headers: { "Content-Type": "multipart/form-data" },
       timeout: options.timeoutMs ?? DEFAULT_PREVIEW_RESOURCE_TIMEOUT_MS,
+      onUploadProgress: options.onUploadProgress
+        ? (event) => {
+            options.onUploadProgress?.(normalizeUploadProgress(event, file.size));
+          }
+        : undefined,
     },
   );
   return response.data;
