@@ -25,6 +25,7 @@ import concurrent.futures
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -71,10 +72,39 @@ _material_cache_lock = threading.Lock()  # guards _material_cache and _material_
 
 # Single-flight: prevents concurrent misses for the same key from each
 # triggering a separate load_multiple_materials() call (thundering herd).
-# leader sets _inflight[key]; waiters call future.result() and block until
-# the leader either set_result() or set_exception().
-_inflight: dict[tuple[str, ...], concurrent.futures.Future] = {}
+# In-flight entries carry their material epoch snapshot so post-write readers
+# do not join a pre-write load.
+
+
+@dataclass(frozen=True)
+class _InflightLoad:
+    """In-flight material load plus the epoch snapshot it was started under."""
+
+    future: concurrent.futures.Future
+    epoch_snapshot: dict[str, int]
+
+
+_inflight: dict[tuple[str, ...], _InflightLoad] = {}
 _inflight_lock = threading.Lock()
+
+
+def _snapshot_material_epochs(key: tuple[str, ...]) -> dict[str, int]:
+    """Return the current per-directory epochs for *key*.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    return {dn: _material_epoch.get(dn, 0) for dn in key}
+
+
+def _material_epochs_match(
+    key: tuple[str, ...],
+    epoch_snapshot: dict[str, int],
+) -> bool:
+    """Return whether *key* still matches a prior epoch snapshot.
+
+    Caller must hold ``_material_cache_lock``.
+    """
+    return all(_material_epoch.get(dn, 0) == epoch_snapshot[dn] for dn in key)
 
 
 def _load_materials_cached(directory_names: list[str]) -> list:
@@ -94,16 +124,20 @@ def _load_materials_cached(directory_names: list[str]) -> list:
         # Snapshot per-directory epochs before leaving the lock.  Using
         # per-directory (not per-tuple) granularity means evict_material_cache()
         # can bump the epoch even when this palette key isn't cached yet.
-        epoch_snapshot = {dn: _material_epoch.get(dn, 0) for dn in key}
+        epoch_snapshot = _snapshot_material_epochs(key)
 
     # Elect a leader for this key; waiters get the existing Future.
     with _inflight_lock:
-        if key in _inflight:
-            future: concurrent.futures.Future = _inflight[key]
+        inflight = _inflight.get(key)
+        if inflight is not None and inflight.epoch_snapshot == epoch_snapshot:
+            future = inflight.future
             is_leader = False
         else:
             future = concurrent.futures.Future()
-            _inflight[key] = future
+            _inflight[key] = _InflightLoad(
+                future=future,
+                epoch_snapshot=epoch_snapshot,
+            )
             is_leader = True
 
     if not is_leader:
@@ -119,10 +153,7 @@ def _load_materials_cached(directory_names: list[str]) -> list:
         with _material_cache_lock:
             # Skip the cache write if any constituent directory was evicted
             # while we were loading (PATCH / DELETE / import raced with us).
-            epoch_changed = any(
-                _material_epoch.get(dn, 0) != epoch_snapshot[dn] for dn in key
-            )
-            if not epoch_changed:
+            if _material_epochs_match(key, epoch_snapshot):
                 _material_cache[key] = (time.monotonic(), materials)
                 if len(_material_cache) > _MATERIAL_CACHE_MAX:
                     oldest = min(_material_cache, key=lambda k: _material_cache[k][0])
@@ -134,7 +165,9 @@ def _load_materials_cached(directory_names: list[str]) -> list:
         raise
     finally:
         with _inflight_lock:
-            _inflight.pop(key, None)
+            inflight = _inflight.get(key)
+            if inflight is not None and inflight.future is future:
+                _inflight.pop(key, None)
 
 
 def evict_material_cache(directory_name: str) -> int:
