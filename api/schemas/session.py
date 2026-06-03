@@ -6,11 +6,15 @@ from pydantic import BaseModel, Field
 
 
 class SessionRequest(BaseModel):
-    """Request model carrying a session identifier.
-    仅携带 Session ID 的请求模型。
+    """Request model carrying a session identifier and optional kept files.
+    携带 Session ID 与可选保留文件 ID 的请求模型。
     """
 
     session_id: str = Field(..., description="Session ID")
+    keep_file_ids: list[str] = Field(
+        default_factory=list,
+        description="File IDs to keep when closing the session",
+    )
 
 
 class SessionHeartbeatResponse(BaseModel):

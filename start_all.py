@@ -1,32 +1,28 @@
 #!/usr/bin/env python3
-"""Lumina + Material-LUT Studio — unified dev launcher.
-Lumina + Material-LUT Studio — 统一开发启动器。
+"""Lumina Studio main-app dev launcher.
+Lumina Studio 主应用开发启动器。
 
-Starts all four dev services as child processes and streams their logs with a
-colored, per-service prefix. Supports restarting any single service (or all of
-them) with a single keypress, without tearing down the others.
+Starts the main backend and main frontend as child processes and streams their
+logs with a colored, per-service prefix. Supports restarting either service
+with a single keypress.
 
-把四个开发服务作为子进程一起启动，按服务前缀汇总彩色日志输出。支持用单个按键
-重启任意一个服务（或全部），不影响其它服务。
+把主后端与主前端作为子进程一起启动，按服务前缀汇总彩色日志输出。支持用单个
+按键重启任意服务。
 
 Services (服务):
     [1] main-backend   python api_server.py                     -> :8000
     [2] main-frontend  pnpm dev (frontend/)                     -> :4174
-    [3] mls-backend    python services/.../backend/server.py    -> :8100
-    [4] mls-frontend   pnpm dev (services/.../frontend/)        -> :5180
 
 Hotkeys (热键, press the key then Enter):
-    1 / 2 / 3 / 4  restart that service          重启对应服务
-    b              restart both backends         重启两个后端
-    f              restart both frontends        重启两个前端
+    1 / 2          restart that service          重启对应服务
+    b              restart backend               重启后端
+    f              restart frontend              重启前端
     r              restart everything            重启全部
     s              show status                   查看状态
     q              quit (stop all)               退出并停止全部
 
 Usage (用法):
-    python start_all.py                 # all four services / 启动全部四个服务
-    python start_all.py --no-mls        # only the main app / 仅主应用
-    python start_all.py --only mls      # only MLS / 仅 MLS
+    python start_all.py
 """
 
 from __future__ import annotations
@@ -42,15 +38,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 FRONTEND_DIR = ROOT / "frontend"
-MLS_BACKEND_ENTRY = ROOT / "services" / "material-lut-studio" / "backend" / "server.py"
-# MLS frontend is a second Vite entry inside ``frontend/`` (Route B, option A):
-# it reuses the converter app's full panel + dependency tree, runs on :5180 via
-# ``vite.mls.config.ts``. The old standalone scaffold under services/.../frontend
-# is superseded by this entry.
-# MLS 前端是 ``frontend/`` 内的第二个 Vite 入口（选项 A），复用转换器应用的完整
-# 面板与依赖树，通过 ``vite.mls.config.ts`` 运行在 :5180。
-MLS_FRONTEND_DIR = FRONTEND_DIR
-MLS_VITE_CONFIG = "vite.mls.config.ts"
 
 # ── ANSI colors ──────────────────────────────────────────────────────────
 _R = "\033[0m"
@@ -59,8 +46,6 @@ _DIM = "\033[2m"
 _COLORS = {
     "main-backend": "\033[36m",   # cyan
     "main-frontend": "\033[34m",  # blue
-    "mls-backend": "\033[32m",    # green
-    "mls-frontend": "\033[35m",   # magenta
     "SYS": "\033[33m",            # yellow
     "ERR": "\033[31m",            # red
 }
@@ -114,7 +99,7 @@ def _find_node() -> str:
     return which("node") or "node"
 
 
-def _frontend_cmd(frontend_dir: Path, config: str | None = None) -> list[str]:
+def _frontend_cmd(frontend_dir: Path) -> list[str]:
     """Resolve the command to run a Vite dev server for ``frontend_dir``.
     解析在 ``frontend_dir`` 启动 Vite 开发服务器的命令。
 
@@ -122,18 +107,15 @@ def _frontend_cmd(frontend_dir: Path, config: str | None = None) -> list[str]:
     process we spawn *is* Vite — a single SIGTERM to its process group then
     reliably stops it. ``pnpm dev`` adds a wrapper child that can outlive a
     group signal and orphan the Vite server (leaving its port bound).
-    ``config`` selects an alternate Vite config (e.g. the MLS entry).
     优先用 ``node`` 直接跑 ``vite.js``，使启动的进程本身就是 Vite，便于一次进程组
-    信号可靠停止；``pnpm dev`` 会多一层包装子进程。``config`` 可指定备用 Vite 配置
-    （如 MLS 入口）。
+    信号可靠停止；``pnpm dev`` 会多一层包装子进程。
     """
     vite_js = frontend_dir / "node_modules" / "vite" / "bin" / "vite.js"
-    extra = ["--config", config] if config else []
     if vite_js.exists():
-        return [_find_node(), str(vite_js), *extra]
+        return [_find_node(), str(vite_js)]
     # Fallback: pnpm wrapper (less clean shutdown, see docstring above).
     # 回退：pnpm 包装（关闭不够干净，见上文）。
-    return ["pnpm", "exec", "vite", *extra] if config else ["pnpm", "dev"]
+    return ["pnpm", "dev"]
 
 
 class Service:
@@ -157,14 +139,12 @@ class Service:
         self.cwd = cwd
         self.url = url
         self.port = port        # bound TCP port, for a stop-time sweep fallback
-        # Vite-only field. Absolute path of the cache directory the matching
-        # Vite config writes to (e.g. ``frontend/node_modules/.vite`` for the
-        # converter, ``frontend/node_modules/.vite-mls`` for MLS). When set,
+        # Vite-only field. Absolute path of the cache directory the Vite config
+        # writes to (``frontend/node_modules/.vite``). When set,
         # restart() wipes it before relaunching so the new dev server boots
         # with a clean pre-bundle.
-        # Vite 专用字段。所对应 Vite 配置写入的缓存目录绝对路径（转换器为
-        # ``frontend/node_modules/.vite``，MLS 为 ``frontend/node_modules/.vite-mls``）。
-        # 设置后，restart() 在再次启动前清掉该目录，使新 dev server 从空预打包重启。
+        # Vite 专用字段。Vite 配置写入的缓存目录绝对路径
+        # ``frontend/node_modules/.vite``。设置后，restart() 在再次启动前清掉该目录。
         self.vite_cache_dir = vite_cache_dir
         self.proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
@@ -368,42 +348,24 @@ class Service:
         return self.proc is not None and self.proc.poll() is None
 
 
-def build_services(run_main: bool, run_mls: bool) -> list[Service]:
-    """Build the service list for the requested scope. (按范围构建服务列表)"""
+def build_services() -> list[Service]:
+    """Build the main-app service list. (构建主应用服务列表)"""
     services: list[Service] = []
-    # Each Vite entry has its own cache dir (matching the ``cacheDir`` config
-    # in the corresponding ``vite*.config.ts``). Restarting one frontend wipes
-    # only that cache, so the other frontend's running pre-bundle is never
-    # disturbed.
-    # 每个 Vite 入口拥有独立缓存目录（与对应 ``vite*.config.ts`` 的 ``cacheDir``
-    # 字段一致）。重启一个前端只清自己的缓存，不会干扰另一个前端正在使用的预打包。
     main_vite_cache = FRONTEND_DIR / "node_modules" / ".vite"
-    mls_vite_cache = FRONTEND_DIR / "node_modules" / ".vite-mls"
-    if run_main:
-        services.append(Service(
-            "1", "main-backend",
-            [PYTHON, "api_server.py"], ROOT, "http://localhost:8000", port=8000,
-        ))
-        services.append(Service(
-            "2", "main-frontend",
-            _frontend_cmd(FRONTEND_DIR), FRONTEND_DIR, "http://localhost:4174", port=4174,
-            vite_cache_dir=main_vite_cache,
-        ))
-    if run_mls:
-        services.append(Service(
-            "3", "mls-backend",
-            [PYTHON, str(MLS_BACKEND_ENTRY)], ROOT, "http://localhost:8100/api/mls/health", port=8100,
-        ))
-        services.append(Service(
-            "4", "mls-frontend",
-            _frontend_cmd(MLS_FRONTEND_DIR, MLS_VITE_CONFIG), MLS_FRONTEND_DIR, "http://localhost:5180", port=5180,
-            vite_cache_dir=mls_vite_cache,
-        ))
+    services.append(Service(
+        "1", "main-backend",
+        [PYTHON, "api_server.py"], ROOT, "http://localhost:8000", port=8000,
+    ))
+    services.append(Service(
+        "2", "main-frontend",
+        _frontend_cmd(FRONTEND_DIR), FRONTEND_DIR, "http://localhost:4174", port=4174,
+        vite_cache_dir=main_vite_cache,
+    ))
     return services
 
 
 def print_banner(services: list[Service]) -> None:
-    print(f"\n{_B}  Lumina + Material-LUT Studio — Dev Launcher{_R}")
+    print(f"\n{_B}  Lumina Studio — Dev Launcher{_R}")
     print(f"{_DIM}  python: {PYTHON}{_R}")
     print(f"{_DIM}  ──────────────────────────────────────────────{_R}")
     for svc in services:
@@ -412,32 +374,15 @@ def print_banner(services: list[Service]) -> None:
         print(f"   {color}[{svc.key}] {svc.name:<14}{_R} {url}")
     print(f"{_DIM}  ──────────────────────────────────────────────{_R}")
     print(
-        f"   {_B}1-4{_R}=restart one  {_B}b{_R}=backends  {_B}f{_R}=frontends  "
+        f"   {_B}1-2{_R}=restart one  {_B}b{_R}=backend  {_B}f{_R}=frontend  "
         f"{_B}r{_R}=all  {_B}s{_R}=status  {_B}q{_R}=quit"
     )
     print(f"{_DIM}  ──────────────────────────────────────────────{_R}\n")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Unified dev launcher for Lumina + MLS")
-    parser.add_argument("--no-mls", action="store_true", help="仅启动主应用前后端")
-    parser.add_argument("--no-main", action="store_true", help="仅启动 MLS 前后端")
-    parser.add_argument(
-        "--only",
-        choices=["main", "mls"],
-        help="只启动指定一组（main 或 mls）",
-    )
-    args = parser.parse_args()
-
-    run_main = True
-    run_mls = True
-    if args.only == "main" or args.no_mls:
-        run_mls = False
-    if args.only == "mls" or args.no_main:
-        run_main = False
-    if not run_main and not run_mls:
-        _err("Nothing to run: both groups disabled.")
-        return
+    parser = argparse.ArgumentParser(description="Dev launcher for the Lumina main app")
+    parser.parse_args()
 
     # Enable ANSI on Windows terminals.
     if os.name == "nt":
@@ -449,7 +394,7 @@ def main() -> None:
         except Exception:
             pass
 
-    services = build_services(run_main, run_mls)
+    services = build_services()
     by_key = {svc.key: svc for svc in services}
 
     print_banner(services)
@@ -476,7 +421,7 @@ def main() -> None:
 
     def show_status() -> None:
         for svc in services:
-            state = f"{_COLORS['mls-backend']}running{_R}" if svc.alive else f"{_COLORS['ERR']}stopped{_R}"
+            state = f"{_COLORS['main-backend']}running{_R}" if svc.alive else f"{_COLORS['ERR']}stopped{_R}"
             _log(svc.name, f"[{svc.key}] {state}")
 
     def input_loop() -> None:
@@ -506,7 +451,7 @@ def main() -> None:
                 shutdown()
                 os._exit(0)
             else:
-                _sys(f"unknown command: {cmd!r} (use 1-4 / b / f / r / s / q)")
+                _sys(f"unknown command: {cmd!r} (use 1-2 / b / f / r / s / q)")
 
     threading.Thread(target=input_loop, daemon=True).start()
 

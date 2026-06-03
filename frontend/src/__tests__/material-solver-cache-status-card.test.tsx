@@ -207,6 +207,47 @@ describe("MaterialSolverCacheStatusCard", () => {
     expect(screen.getByText("缓存已就绪")).toBeInTheDocument();
   });
 
+  it("disables cache build for issue 230 sized high-grid combinations", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 2048,
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={Array.from(
+          { length: 12 },
+          (_, idx) => `mat-${idx}`,
+        )}
+        layerCount={8}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    const buildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    expect(buildButton).toBeDisabled();
+    expect(
+      screen.getByText(/降低穷举数量或减少耗材\/层数/),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(buildButton);
+    });
+    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+  });
+
   it("deletes a cached entry after confirmation", async () => {
     vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
       status: "ok",

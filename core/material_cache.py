@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -164,6 +165,203 @@ _HASH_PREFIX_LEN: int = 16
 _CHUNK_TARGET_BYTES: int = 64 * 1024 * 1024
 """Per-chunk memory budget for the build pass (final linear RGB block).
 64 MiB chunks keep peak memory comfortable on 8 GB-class machines."""
+
+_SOLVER_CACHE_BUILD_MEMORY_LIMIT_ENV = "LUMINA_SOLVER_CACHE_BUILD_MEMORY_LIMIT_MB"
+_DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
+"""Default peak-memory budget for one bucketed solver-cache build.
+
+默认单次分桶求解缓存构建峰值内存预算。
+"""
+
+_ESTIMATED_VALID_CELL_RATIO = 0.12
+"""Conservative reachable-bucket estimate for high-resolution bucketed builds.
+
+Issue #230 observed ~8% unique buckets for a 12-material × 8-layer × 2048
+build. Using 12% gives the guard room for palette variance without needing
+to enumerate combinations first.
+
+Issue #230 中 12 耗材 × 8 层 × 2048 构建的独立桶约占组合数 8%。这里用
+12% 作为保守估算，避免真正枚举后才发现内存不可承受。
+"""
+
+_ESTIMATED_BYTES_PER_VALID_CELL = 768
+"""Approximate Python-object + numpy-array peak bytes per retained bucket.
+
+估算每个保留桶在构建高峰期对应的 Python 对象和 numpy 数组开销。
+"""
+
+_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024
+"""Fixed per-build overhead for MITM tables, chunks, and final arrays.
+
+MITM 表、分块临时数组和最终数组的固定构建开销估算。
+"""
+
+
+@dataclass(frozen=True)
+class MaterialSolverCacheBuildBudget:
+    """Estimated memory budget for a material solver-cache build.
+    耗材求解缓存构建的内存预算估算。
+
+    Attributes:
+        material_count: Number of selected materials. (耗材数量)
+        layer_count: Number of recipe layers. (配方层数)
+        grid_resolution: Lab grid resolution per axis. (Lab 网格分辨率)
+        total_combinations: Theoretical M**N recipe count. (理论配方总数)
+        total_bucket_count: Theoretical grid bucket count. (理论桶总数)
+        estimated_valid_cell_count: Estimated retained buckets. (估计保留桶数)
+        estimated_peak_bytes: Estimated peak build RSS. (估计峰值内存)
+        memory_limit_bytes: Configured safety limit. (配置的安全上限)
+        is_allowed: Whether the estimate fits the limit. (是否允许构建)
+    """
+
+    material_count: int
+    layer_count: int
+    grid_resolution: int
+    total_combinations: int
+    total_bucket_count: int
+    estimated_valid_cell_count: int
+    estimated_peak_bytes: int
+    memory_limit_bytes: int
+    is_allowed: bool
+
+
+class MaterialSolverCacheBudgetError(ValueError):
+    """Raised when a solver-cache build would exceed the memory budget.
+    当求解缓存构建预计超过内存预算时抛出。
+    """
+
+    def __init__(self, report: MaterialSolverCacheBuildBudget) -> None:
+        self.report = report
+        super().__init__(_format_solver_cache_budget_error(report))
+
+
+def _format_bytes_gib(value: int) -> str:
+    """Format bytes as GiB for user-facing budget messages."""
+
+    return f"{value / (1024 ** 3):.1f}GiB"
+
+
+def _format_solver_cache_budget_error(
+    report: MaterialSolverCacheBuildBudget,
+) -> str:
+    """Build an actionable validation message for unsafe cache builds."""
+
+    return (
+        "Unsafe material solver cache build: "
+        f"{report.material_count} materials x {report.layer_count} layers at "
+        f"grid_resolution={report.grid_resolution} estimates "
+        f"{report.estimated_valid_cell_count:,} retained buckets and "
+        f"{_format_bytes_gib(report.estimated_peak_bytes)} peak memory, above "
+        f"the configured {_format_bytes_gib(report.memory_limit_bytes)} limit. "
+        "Please lower grid_resolution or reduce the material/layer count."
+    )
+
+
+def _resolve_solver_cache_build_memory_limit(
+    memory_limit_bytes: int | None = None,
+) -> int:
+    """Resolve the build-memory limit from an explicit value or environment.
+    从显式入参或环境变量解析构建内存上限。
+    """
+
+    if memory_limit_bytes is not None:
+        return max(1, int(memory_limit_bytes))
+
+    raw_limit_mb = os.environ.get(_SOLVER_CACHE_BUILD_MEMORY_LIMIT_ENV)
+    if raw_limit_mb is None or raw_limit_mb.strip() == "":
+        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
+    try:
+        value_mb = int(raw_limit_mb)
+    except ValueError:
+        _log.warning(
+            "Invalid material solver cache memory budget; using default",
+            extra={
+                "event": "material_solver_cache_budget_invalid",
+                "raw_value": raw_limit_mb,
+                "fallback_bytes": _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
+            },
+        )
+        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
+    if value_mb <= 0:
+        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
+    return value_mb * 1024 * 1024
+
+
+def estimate_material_solver_cache_build_budget(
+    *,
+    material_count: int,
+    layer_count: int,
+    grid_resolution: int,
+    memory_limit_bytes: int | None = None,
+) -> MaterialSolverCacheBuildBudget:
+    """Estimate whether a bucketed solver-cache build fits the memory budget.
+    估算分桶求解缓存构建是否落在内存预算内。
+
+    The estimate intentionally runs before enumeration. It therefore uses a
+    conservative retained-bucket approximation instead of exact ``valid_count``.
+    This protects the API from issue #230-class OOMs without doing the costly
+    work first.
+
+    估算必须在枚举前完成，因此使用保守的保留桶近似值，而不是精确
+    ``valid_count``。这样可以在执行昂贵工作前拦截 issue #230 这类 OOM。
+    """
+
+    safe_material_count = max(0, int(material_count))
+    safe_layer_count = max(0, int(layer_count))
+    safe_grid_resolution = max(1, int(grid_resolution))
+    limit = _resolve_solver_cache_build_memory_limit(memory_limit_bytes)
+
+    total_combinations = (
+        safe_material_count ** safe_layer_count
+        if safe_material_count > 0 and safe_layer_count > 0
+        else 0
+    )
+    total_bucket_count = safe_grid_resolution ** 3
+    if _is_exact_mode_eligible(safe_material_count, safe_layer_count):
+        estimated_valid = total_combinations
+    else:
+        estimated_valid = min(
+            total_combinations,
+            total_bucket_count,
+            int(np.ceil(total_combinations * _ESTIMATED_VALID_CELL_RATIO)),
+        )
+    estimated_peak = (
+        _ESTIMATED_BUILD_BASE_BYTES
+        + int(estimated_valid) * _ESTIMATED_BYTES_PER_VALID_CELL
+    )
+    return MaterialSolverCacheBuildBudget(
+        material_count=safe_material_count,
+        layer_count=safe_layer_count,
+        grid_resolution=safe_grid_resolution,
+        total_combinations=int(total_combinations),
+        total_bucket_count=int(total_bucket_count),
+        estimated_valid_cell_count=int(estimated_valid),
+        estimated_peak_bytes=int(estimated_peak),
+        memory_limit_bytes=int(limit),
+        is_allowed=estimated_peak <= limit,
+    )
+
+
+def validate_material_solver_cache_build_budget(
+    *,
+    material_count: int,
+    layer_count: int,
+    grid_resolution: int,
+    memory_limit_bytes: int | None = None,
+) -> MaterialSolverCacheBuildBudget:
+    """Raise if a solver-cache build exceeds the configured memory budget.
+    如果求解缓存构建超过配置的内存预算则抛错。
+    """
+
+    report = estimate_material_solver_cache_build_budget(
+        material_count=material_count,
+        layer_count=layer_count,
+        grid_resolution=grid_resolution,
+        memory_limit_bytes=memory_limit_bytes,
+    )
+    if not report.is_allowed:
+        raise MaterialSolverCacheBudgetError(report)
+    return report
 
 
 def _is_exact_mode_eligible(num_materials: int, layer_count: int) -> bool:
@@ -1717,6 +1915,11 @@ def build_material_solver_cache(
             progress_callback=progress_callback,
             start_time=start_time,
         )
+    validate_material_solver_cache_build_budget(
+        material_count=len(materials),
+        layer_count=layer_count,
+        grid_resolution=grid_resolution,
+    )
 
     affines = _compute_material_affines(canonical_materials, layer_height_mm)
     substrate_linear = (
@@ -1881,23 +2084,18 @@ def build_material_solver_cache(
     sorted_keys = sorted(best.keys())
     valid_count = len(sorted_keys)
     if valid_count > 0:
-        lab_centers = np.stack(
-            [best[key][4] for key in sorted_keys], axis=0
-        ).astype(np.float32, copy=False)
-        recipes = np.stack(
-            [best[key][1] for key in sorted_keys], axis=0
-        )
-        achieved_srgb = np.stack(
-            [best[key][2] for key in sorted_keys], axis=0
-        )
-        achieved_lab = np.stack(
-            [best[key][3] for key in sorted_keys], axis=0
-        ).astype(np.float32, copy=False)
-        center_delta_e = np.fromiter(
-            (best[key][0] for key in sorted_keys),
-            dtype=np.float32,
-            count=valid_count,
-        )
+        lab_centers = np.empty((valid_count, 3), dtype=np.float32)
+        recipes = np.empty((valid_count, layer_count), dtype=np.int8)
+        achieved_srgb = np.empty((valid_count, 3), dtype=np.uint8)
+        achieved_lab = np.empty((valid_count, 3), dtype=np.float32)
+        center_delta_e = np.empty(valid_count, dtype=np.float32)
+        for row_idx, key in enumerate(sorted_keys):
+            delta_e, recipe, srgb, lab, center = best[key]
+            center_delta_e[row_idx] = float(delta_e)
+            recipes[row_idx] = recipe
+            achieved_srgb[row_idx] = srgb
+            achieved_lab[row_idx] = lab
+            lab_centers[row_idx] = center
     else:
         lab_centers = np.zeros((0, 3), dtype=np.float32)
         recipes = np.zeros((0, layer_count), dtype=np.int8)

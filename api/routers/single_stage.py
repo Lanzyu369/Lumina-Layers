@@ -57,6 +57,7 @@ from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
     DEFAULT_GRID_RESOLUTION,
+    MaterialSolverCacheBudgetError,
     build_material_solver_cache,
     cache_file_path,
     delete_cached_entry,
@@ -65,6 +66,7 @@ from core.material_cache import (
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
     save_material_solver_cache,
+    validate_material_solver_cache_build_budget,
 )
 from core.material_cache_visualization import build_material_cache_details
 from core.material_color_solver import (
@@ -110,10 +112,11 @@ def get_material_cache_evictor() -> MaterialCacheEvictor:
     """Return the callback used after saved-material writes.
     返回已保存耗材写入成功后使用的缓存失效回调。
 
-    The main Lumina app has no process-local MLS data cache, so this defaults
-    to a no-op. The MLS app overrides it with its data-router cache evictor.
-    主 Lumina 应用没有进程内 MLS data cache，因此默认 no-op；MLS 应用会将
-    该依赖覆盖为 data router 的缓存失效函数。
+    The local main app does not keep a separate router-level material cache, so
+    this defaults to a no-op. The hook remains so tests and future local cache
+    layers can inject a targeted evictor without changing write endpoints.
+    本地主应用没有单独的路由级耗材缓存，因此默认 no-op；保留这个 hook 方便
+    测试或后续本地缓存层注入定向失效函数，而无需改写写入端点。
 
     Returns:
         MaterialCacheEvictor: Callback accepting a material directory name.
@@ -1328,6 +1331,30 @@ async def material_solver_cache_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
+    try:
+        validate_material_solver_cache_build_budget(
+            material_count=len(materials),
+            layer_count=layer_count,
+            grid_resolution=grid_resolution,
+        )
+    except MaterialSolverCacheBudgetError as exc:
+        report = exc.report
+        log.warning(
+            "Material solver cache build rejected by memory budget",
+            extra={
+                "event": "material_solver_cache_build_rejected",
+                "material_count": report.material_count,
+                "layer_count": report.layer_count,
+                "grid_resolution": report.grid_resolution,
+                "total_combinations": report.total_combinations,
+                "estimated_valid_cell_count": report.estimated_valid_cell_count,
+                "estimated_peak_bytes": report.estimated_peak_bytes,
+                "memory_limit_bytes": report.memory_limit_bytes,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def _run_build():
         return build_material_solver_cache(
@@ -1340,7 +1367,7 @@ async def material_solver_cache_build(
 
     try:
         cache = await anyio.to_thread.run_sync(_run_build)
-    except (ValueError, TypeError, OSError) as exc:
+    except (MaterialSolverCacheBudgetError, ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -1521,13 +1548,11 @@ async def material_solver_cache_details(
     ``delete`` / ``suggest-colors`` endpoints (form-encoded, including a
     JSON-encoded ``material_directory_names`` array). It is **semantically
     read-only**: it loads the cache, computes derived statistics, and never
-    mutates disk state. The MLS write-auth allowlist therefore intentionally
-    excludes this path so it remains reachable in read-only mode.
+    mutates disk state.
 
     HTTP 语义说明：本端点用 ``POST`` 是为了与 ``status`` / ``build`` /
     ``delete`` / ``suggest-colors`` 兄弟端点保持参数风格一致（form-encoded，
     含 JSON 编码数组）。**语义上是只读的**：加载缓存并计算派生统计，从不改盘。
-    MLS 写入鉴权白名单刻意不收录此路径，使其在只读模式下仍可访问。
 
     Loads the cache for the given ``(palette, layer_count, layer_height_mm,
     substrate, grid_resolution)`` combination, projects its bucket centers

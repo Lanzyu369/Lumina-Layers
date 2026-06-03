@@ -17,4 +17,25 @@ describe("devServerConfig", () => {
       port: 6123,
     });
   });
+
+  it("allows all hosts only when explicitly requested", () => {
+    expect(resolveDevServerConfig({}).allowedHosts).toEqual([
+      "online.luminastudio.com.cn",
+    ]);
+    expect(
+      resolveDevServerConfig({ VITE_ALLOW_ALL_HOSTS: "true" }).allowedHosts,
+    ).toBe(true);
+  });
+
+  it("parses comma-separated allowed hosts from environment", () => {
+    expect(
+      resolveDevServerConfig({
+        VITE_ALLOWED_HOSTS: "example.test, tunnel.example.test ",
+      }).allowedHosts,
+    ).toEqual([
+      "online.luminastudio.com.cn",
+      "example.test",
+      "tunnel.example.test",
+    ]);
+  });
 });

@@ -136,21 +136,18 @@ describe('Widget Workspace Unit Tests', () => {
       expect(state.widgets['action-bar'].collapsed).toBe(false);
     });
 
-    it('has all 10 widgets in default layout', () => {
+    it('has all 14 widgets in default layout', () => {
       const state = useWidgetStore.getState();
       const widgetIds = Object.keys(state.widgets);
-      expect(widgetIds).toHaveLength(10);
+      expect(widgetIds).toHaveLength(14);
       expect(widgetIds).toContain('basic-settings');
       expect(widgetIds).toContain('fridge-magnet-settings');
       expect(widgetIds).toContain('puzzle-settings');
       expect(widgetIds).toContain('action-bar');
-      // Material/LUT widgets (calibration/extractor/lut-manager/five-color)
-      // moved to the standalone MLS service (Route B).
-      // 耗材/LUT widget 已迁移到独立 MLS 服务。
-      expect(widgetIds).not.toContain('calibration');
-      expect(widgetIds).not.toContain('extractor');
-      expect(widgetIds).not.toContain('lut-manager');
-      expect(widgetIds).not.toContain('five-color');
+      expect(widgetIds).toContain('calibration');
+      expect(widgetIds).toContain('extractor');
+      expect(widgetIds).toContain('lut-manager');
+      expect(widgetIds).toContain('five-color');
       // palette-panel and lut-color-grid have been merged into ColorWorkstation
       expect(widgetIds).not.toContain('palette-panel');
       expect(widgetIds).not.toContain('lut-color-grid');

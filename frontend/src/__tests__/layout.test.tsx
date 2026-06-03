@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import App from "../App";
 import { useWidgetStore } from "../stores/widgetStore";
 
@@ -26,6 +26,9 @@ import apiClient from "../api/client";
 describe("Widget Workspace Layout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 2400 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1200 });
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1 });
     vi.mocked(apiClient.get).mockResolvedValue({
       data: { status: "ok", version: "2.0", uptime_seconds: 100 },
     });
@@ -48,27 +51,42 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("panel-controls-toggle")).toBeInTheDocument();
   });
 
-  it("renders only converter / vectorizer / settings top-level tabs", () => {
+  it("renders the full main-app top-level navigation", () => {
     render(<App />);
     expect(screen.getByTestId("tab-converter")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-vectorizer")).toBeInTheDocument();
     expect(screen.getByTestId("tab-settings")).toBeInTheDocument();
-
-    // Material/LUT workflows moved to the standalone MLS service (Route B):
-    // their tabs/sub-tabs must be gone from the main app.
-    // 耗材/LUT 流程已迁移到独立 MLS 服务，其标签/子标签不应再出现在主应用。
-    expect(screen.queryByTestId("tab-lut-management")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("tab-material-management")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("tab-calibration")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("tab-extractor")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("subtab-calibration")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("subtab-extractor")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("subtab-lut-manager")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("subtab-five-color")).not.toBeInTheDocument();
   });
 
-  it("exposes a jump entry that opens the standalone Material-LUT Studio", () => {
+  it("keeps the top-level navigation in the legacy centered header column", () => {
     render(<App />);
-    expect(screen.getByTestId("tab-open-mls")).toBeInTheDocument();
+
+    const converterTab = screen.getByTestId("tab-converter");
+    const nav = converterTab.closest("nav");
+    const header = nav?.closest("header");
+    const tabWrapper = nav?.parentElement;
+
+    expect(header).toHaveClass("lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
+    expect(header).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]");
+    expect(tabWrapper).not.toHaveClass("w-full");
+  });
+
+  it("renders local LUT and material secondary tabs in the main app", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId("tab-lut-management"));
+    expect(screen.getByTestId("subtab-calibration")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-extractor")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-lut-manager")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-five-color")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("tab-material-management"));
+    expect(screen.getByTestId("subtab-material-library")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-material-recipe")).toBeInTheDocument();
+
+    expect(screen.queryByTestId("tab-calibration")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tab-extractor")).not.toBeInTheDocument();
   });
 });

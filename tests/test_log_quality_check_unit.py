@@ -218,8 +218,8 @@ def test_extract_single_stage_workflow_step_is_first_class() -> None:
     )
 
 
-def test_fast_mode_app_mounts_migrated_mls_routes() -> None:
-    """Fast log gate must exercise routes moved out of the main app."""
+def test_fast_mode_app_mounts_local_development_routes() -> None:
+    """Fast log gate must exercise the full local development route baseline."""
 
     app = log_quality_check._build_fast_mode_app()
     paths = {route.path for route in app.routes}

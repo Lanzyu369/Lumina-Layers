@@ -11,7 +11,6 @@ import type {
   MaterialRecipePreviewResponse,
   SavedMaterialLibraryItem,
 } from "../api/types";
-import { useMlsReadOnly } from "../hooks/useMlsReadOnly";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
@@ -105,7 +104,6 @@ const matchesQuery = (entry: PaletteEntry, query: string): boolean => {
 export default function MaterialRecipeQueryPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
-  const isMlsReadOnly = useMlsReadOnly();
   const [palette, setPalette] = useState<PaletteEntry[]>([]);
   const [paletteLoading, setPaletteLoading] = useState(true);
   const [paletteError, setPaletteError] = useState<string | null>(null);
@@ -164,7 +162,6 @@ export default function MaterialRecipeQueryPanel() {
   }, []);
 
   const handleGenerateSwatch = useCallback(async () => {
-    if (isMlsReadOnly) return;
     if (collectedRecipes.length === 0) return;
     setIsGeneratingSwatch(true);
     setError(null);
@@ -195,7 +192,7 @@ export default function MaterialRecipeQueryPanel() {
     } finally {
       setIsGeneratingSwatch(false);
     }
-  }, [isMlsReadOnly, collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
+  }, [collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
 
   const handleDownloadSwatch = useCallback(() => {
     if (swatchDownloadUrl) {
@@ -466,9 +463,8 @@ export default function MaterialRecipeQueryPanel() {
 
             {collectedRecipes.length > 0 && (
               <div className="flex flex-col gap-3 pt-1">
-                {!isMlsReadOnly && (
-                  <>
-                    <div className="grid grid-cols-3 gap-2">
+                <>
+                  <div className="grid grid-cols-3 gap-2">
                       <label className="flex flex-col gap-1">
                         <span className="text-xs text-slate-500 dark:text-slate-400">{t("material_recipe_swatch_block_size")}</span>
                         <input
@@ -505,9 +501,9 @@ export default function MaterialRecipeQueryPanel() {
                           className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
-                    </div>
+                  </div>
 
-                    <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-1">
                       <span className="text-xs text-slate-500 dark:text-slate-400">{t("material_recipe_swatch_structure")}</span>
                       <div className="grid grid-cols-2 gap-1.5">
                         {(["Single-sided", "Double-sided"] as const).map((mode) => {
@@ -529,9 +525,9 @@ export default function MaterialRecipeQueryPanel() {
                           );
                         })}
                       </div>
-                    </div>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                       <Button
                         onClick={() => void handleGenerateSwatch()}
                         disabled={isGeneratingSwatch}
@@ -551,21 +547,20 @@ export default function MaterialRecipeQueryPanel() {
                           variant="secondary"
                         />
                       )}
+                  </div>
+
+                  {swatchPreviewUrl && (
+                    <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
+                      <img
+                        src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
+                        alt={t("material_recipe_swatch_legend_alt")}
+                        className="w-full h-auto"
+                      />
                     </div>
+                  )}
+                </>
 
-                    {swatchPreviewUrl && (
-                      <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
-                        <img
-                          src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
-                          alt={t("material_recipe_swatch_legend_alt")}
-                          className="w-full h-auto"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {(isMlsReadOnly || swatchDownloadUrl) && (
+                {swatchDownloadUrl && (
                   <Button
                     onClick={handleClearCollection}
                     label={t("material_recipe_collection_clear")}

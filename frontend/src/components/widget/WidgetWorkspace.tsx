@@ -37,6 +37,10 @@ import KeychainLoopWidgetContent from './KeychainLoopWidgetContent';
 import FridgeMagnetSettingsWidgetContent from './FridgeMagnetSettingsWidgetContent';
 import PuzzleSettingsWidgetContent from './PuzzleSettingsWidgetContent';
 import ActionBarWidgetContent from './ActionBarWidgetContent';
+import CalibrationWidgetContent from './CalibrationWidgetContent';
+import ExtractorWidgetContent from './ExtractorWidgetContent';
+import LutManagerWidgetContent from './LutManagerWidgetContent';
+import FiveColorWidgetContent from './FiveColorWidgetContent';
 import Color2DOverlay from './Color2DOverlay';
 import { useConverterDataInit } from '../../hooks/useConverterDataInit';
 import { useWorkspaceMode } from '../../hooks/useWorkspaceMode';
@@ -60,6 +64,10 @@ const WIDGET_CONTENT_MAP: Record<WidgetId, ComponentType> = {
   'fridge-magnet-settings': FridgeMagnetSettingsWidgetContent,
   'puzzle-settings': PuzzleSettingsWidgetContent,
   'action-bar': ActionBarWidgetContent,
+  'calibration': CalibrationWidgetContent,
+  'extractor': ExtractorWidgetContent,
+  'lut-manager': LutManagerWidgetContent,
+  'five-color': FiveColorWidgetContent,
 };
 
 interface InsertPreviewState {

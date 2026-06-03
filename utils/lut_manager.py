@@ -3,6 +3,7 @@ Lumina Studio - LUT Preset Manager
 LUT preset management module
 """
 
+import copy
 from dataclasses import dataclass
 import hashlib
 import os
@@ -207,7 +208,12 @@ class LUTManager:
     _native_source_index_cache: tuple[_NativeBrandIndexItem, ...] | None = None
     _native_source_index_cache_at: float | None = None
     _native_source_index_lock = threading.Lock()
+    _source_catalog_cache: dict[str, list[dict]] | None = None
+    _source_catalog_cache_signature: tuple[Any, ...] | None = None
+    _source_catalog_cache_checked_at: float | None = None
+    _source_catalog_cache_lock = threading.Lock()
     NATIVE_SOURCE_INDEX_TTL_SECONDS = 30.0
+    SOURCE_CATALOG_SIGNATURE_TTL_SECONDS = 5.0
 
     @classmethod
     def _scan_roots(cls) -> list[tuple[str, str]]:
@@ -340,6 +346,7 @@ class LUTManager:
         with _lut_preset_cache_lock:
             _lut_preset_cache_at = None
             _lut_preset_cache_value = None
+        cls.invalidate_source_catalog_cache()
 
     @classmethod
     def get_lut_choices(cls):
@@ -638,6 +645,18 @@ class LUTManager:
         with cls._native_source_index_lock:
             cls._native_source_index_cache = None
             cls._native_source_index_cache_at = None
+        cls.invalidate_source_catalog_cache()
+
+    @classmethod
+    def invalidate_source_catalog_cache(cls) -> None:
+        """Clear cached source catalog groups.
+        清空源目录分组缓存。
+        """
+
+        with cls._source_catalog_cache_lock:
+            cls._source_catalog_cache = None
+            cls._source_catalog_cache_signature = None
+            cls._source_catalog_cache_checked_at = None
 
     @classmethod
     def _build_native_source_index(cls) -> tuple[_NativeBrandIndexItem, ...]:
@@ -782,6 +801,60 @@ class LUTManager:
             return cls._native_source_index_cache
 
     @classmethod
+    def _source_catalog_legacy_signature(cls) -> tuple[tuple[str, str, str, int, int], ...]:
+        signature: list[tuple[str, str, str, int, int]] = []
+        for root_label, root_dir in cls._scan_legacy_roots():
+            patterns = [
+                os.path.join(root_dir, "**", "*.npy"),
+                os.path.join(root_dir, "**", "*.json"),
+                os.path.join(root_dir, "**", "*.npz"),
+                os.path.join(root_dir, "**", "*.msgpack"),
+            ]
+            seen: set[str] = set()
+            for pattern in patterns:
+                for file_path in glob.glob(pattern, recursive=True):
+                    resolved_path = str(Path(file_path).resolve())
+                    if resolved_path in seen:
+                        continue
+                    seen.add(resolved_path)
+                    try:
+                        stat = Path(resolved_path).stat()
+                        mtime_ns = int(stat.st_mtime_ns)
+                        size = int(stat.st_size)
+                    except OSError:
+                        mtime_ns = -1
+                        size = -1
+                    signature.append((root_label, root_dir, resolved_path, mtime_ns, size))
+        return tuple(sorted(signature))
+
+    @staticmethod
+    def _native_source_index_signature(
+        native_index: tuple[_NativeBrandIndexItem, ...],
+    ) -> tuple[tuple[Any, ...], ...]:
+        return tuple(
+            (
+                item.brand_key,
+                item.material_type,
+                item.vendor,
+                item.display_name,
+                tuple(
+                    (
+                        option.name,
+                        option.path,
+                        option.color_mode,
+                        option.fingerprint,
+                    )
+                    for option in item.db_options
+                ),
+                item.default_db_names,
+                item.package_name,
+                item.model_name,
+                item.supported_modes,
+            )
+            for item in native_index
+        )
+
+    @classmethod
     def _build_legacy_catalog_groups(cls) -> list[dict]:
         groups: dict[str, list[dict]] = {}
         for root_label, root_dir in cls._scan_legacy_roots():
@@ -818,9 +891,12 @@ class LUTManager:
         return legacy_groups
 
     @classmethod
-    def _build_native_brand_catalog_groups(cls) -> list[dict]:
+    def _build_native_brand_catalog_groups_from_index(
+        cls,
+        native_index: tuple[_NativeBrandIndexItem, ...],
+    ) -> list[dict]:
         native_groups: list[dict] = []
-        for item in cls._get_native_source_index():
+        for item in native_index:
             native_groups.append(
                 {
                     "brand_key": item.brand_key,
@@ -843,6 +919,10 @@ class LUTManager:
                 }
             )
         return native_groups
+
+    @classmethod
+    def _build_native_brand_catalog_groups(cls) -> list[dict]:
+        return cls._build_native_brand_catalog_groups_from_index(cls._get_native_source_index())
 
     @classmethod
     def _bundle_selection_temp_path(
@@ -892,12 +972,41 @@ class LUTManager:
 
     @classmethod
     def get_source_catalog(cls) -> dict[str, list[dict]]:
-        """Return legacy and native source catalog groupings."""
+        """Return legacy and native source catalog groupings.
+        返回传统源与原生源的分组目录。
+        """
 
-        return {
+        now = time.monotonic()
+        with cls._source_catalog_cache_lock:
+            if (
+                cls._source_catalog_cache is not None
+                and cls._source_catalog_cache_checked_at is not None
+                and now - cls._source_catalog_cache_checked_at <= float(cls.SOURCE_CATALOG_SIGNATURE_TTL_SECONDS)
+            ):
+                return copy.deepcopy(cls._source_catalog_cache)
+
+        native_index = cls._get_native_source_index()
+        signature = (
+            cls._source_catalog_legacy_signature(),
+            cls._native_source_index_signature(native_index),
+        )
+        with cls._source_catalog_cache_lock:
+            if (
+                cls._source_catalog_cache is not None
+                and cls._source_catalog_cache_signature == signature
+            ):
+                cls._source_catalog_cache_checked_at = now
+                return copy.deepcopy(cls._source_catalog_cache)
+
+        catalog = {
             "legacy_groups": cls._build_legacy_catalog_groups(),
-            "native_brand_groups": cls._build_native_brand_catalog_groups(),
+            "native_brand_groups": cls._build_native_brand_catalog_groups_from_index(native_index),
         }
+        with cls._source_catalog_cache_lock:
+            cls._source_catalog_cache_signature = signature
+            cls._source_catalog_cache = copy.deepcopy(catalog)
+            cls._source_catalog_cache_checked_at = now
+        return catalog
 
     @classmethod
     def resolve_source_selection(

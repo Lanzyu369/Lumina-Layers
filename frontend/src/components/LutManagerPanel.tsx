@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useLutManagerStore } from "../stores/lutManagerStore";
 import { useI18n } from "../i18n/context";
-import { useMlsReadOnly } from "../hooks/useMlsReadOnly";
 import Dropdown from "./ui/Dropdown";
 import Slider from "./ui/Slider";
 import Button from "./ui/Button";
@@ -90,7 +89,6 @@ function renderLutInfoDetail(
 export default function LutManagerPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
-  const readOnly = useMlsReadOnly();
   const {
     lutList,
     lutListLoading,
@@ -202,7 +200,7 @@ export default function LutManagerPanel() {
             onClick={() => void executeMerge()}
             disabled={mergeDisabled}
             loading={merging}
-            className={`w-full xl:w-auto ${readOnly ? "hidden" : ""}`}
+            className="w-full xl:w-auto"
           />
 
           {mergeResult && (

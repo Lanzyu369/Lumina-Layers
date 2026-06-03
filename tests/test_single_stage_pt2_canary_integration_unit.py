@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 import numpy as np
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
@@ -412,6 +412,49 @@ class TestMaterialSolverCacheSuggestColorsCanary:
 
 
 class TestMaterialSolverCacheBuildCanary:
+    def test_material_solver_cache_build_rejects_unsafe_budget_before_build(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        build_called = False
+        material_names = [f"mat_{idx}" for idx in range(12)]
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+
+        def _build_should_not_run(*args, **kwargs):
+            nonlocal build_called
+            build_called = True
+            return SimpleNamespace(metadata=_solver_cache_metadata())
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_solver_cache",
+            _build_should_not_run,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-cache/build",
+            data={
+                "material_directory_names": json.dumps(material_names),
+                "layer_count": "8",
+                "layer_height_mm": "0.04",
+                "substrate": "white",
+                "grid_resolution": "2048",
+            },
+        )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "12 materials" in detail
+        assert "8 layers" in detail
+        assert "grid_resolution=2048" in detail
+        assert "lower grid_resolution" in detail
+        assert build_called is False
+
     def test_material_solver_cache_build_logs_sessionless_canary(
         self,
         monkeypatch: pytest.MonkeyPatch,

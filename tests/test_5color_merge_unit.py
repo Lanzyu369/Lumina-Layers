@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from tests._migrated_app import app
+from api.app import app
 
 client: TestClient = TestClient(app)
 

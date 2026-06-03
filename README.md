@@ -261,19 +261,18 @@ cd Lumina-Layers
 
 Using Docker is the easiest way to run Lumina Studio without worrying about system-level dependencies (like `cairo` or `pkg-config`).
 
-1. **Build the image**:
+1. **Build and run the local Docker deployment**:
 
-   ```bash
-   docker build -t lumina-layers .
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
    ```
 
-2. **Run the container**:
+2. Open the main frontend at `http://localhost:4174`.
 
-   ```bash
-   docker run -p 7860:7860 lumina-layers
-   ```
-
-3. Open your browser to `http://localhost:7860`.
+This starts the main Lumina frontend/backend with the local material and LUT
+routes enabled. Runtime data is bind-mounted outside the Docker image; see
+[Local Docker Deployment](docs/local-docker-deployment.md) for ports, E-drive
+runtime paths, and auto-update setup.
 
 ### Option 2: Local Installation
 

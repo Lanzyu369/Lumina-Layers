@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import glob
 from pathlib import Path
 import re
+import time
 
 from core.lut_details.aliases import AliasResolver, normalize_lookup_token
 from core.lut_details.parser import LutParser, ParsedLut
@@ -90,6 +91,8 @@ class LutCatalogIndexer:
         parser: LUT parser. (LUT 解析器)
     """
 
+    CATALOG_SIGNATURE_TTL_SECONDS = 5.0
+
     def __init__(self, *, preset_dir: Path, alias_resolver: AliasResolver, parser: LutParser) -> None:
         self._preset_dir = Path(preset_dir)
         self._alias_resolver = alias_resolver
@@ -97,6 +100,9 @@ class LutCatalogIndexer:
         self._candidate_cache: dict[str, tuple[Path, ...]] | None = None
         self._resolved_path_cache: dict[str, Path] = {}
         self._resolved_path_signature_cache: dict[str, tuple[int, int]] = {}
+        self._catalog_cache_signature: tuple[tuple[str, tuple[tuple[str, int, int], ...]], ...] | None = None
+        self._catalog_cache_checked_at: float | None = None
+        self._catalog_cache_value: LutDetailsCatalog | None = None
 
     def build_catalog(self) -> LutDetailsCatalog:
         """Build the manufacturer-grouped details catalog.
@@ -106,12 +112,28 @@ class LutCatalogIndexer:
             LutDetailsCatalog: Indexed catalog. (索引后的目录)
         """
 
-        self._candidate_cache = None
+        now = time.monotonic()
+        if (
+            self._catalog_cache_value is not None
+            and self._catalog_cache_checked_at is not None
+            and now - self._catalog_cache_checked_at <= self.CATALOG_SIGNATURE_TTL_SECONDS
+        ):
+            return self._catalog_cache_value
+
+        candidates_by_name = self._discover_file_candidates(refresh=True)
+        catalog_signature = self._catalog_signature(candidates_by_name)
+        if (
+            self._catalog_cache_value is not None
+            and self._catalog_cache_signature == catalog_signature
+        ):
+            self._catalog_cache_checked_at = now
+            return self._catalog_cache_value
+
         grouped: dict[str, list[LutCatalogItemSummary]] = {}
         resolved_paths: dict[str, Path] = {}
         resolved_signatures: dict[str, tuple[int, int]] = {}
         parse_failure_count = 0
-        for name, candidates in self._discover_file_candidates().items():
+        for name, candidates in candidates_by_name.items():
             parsed: ParsedLut | None = None
             resolved_path: Path | None = None
             for path in candidates:
@@ -153,7 +175,11 @@ class LutCatalogIndexer:
             raise RuntimeError("All discovered LUT detail files failed to parse")
         self._resolved_path_cache = resolved_paths
         self._resolved_path_signature_cache = resolved_signatures
-        return LutDetailsCatalog(groups=groups)
+        catalog = LutDetailsCatalog(groups=groups)
+        self._catalog_cache_signature = catalog_signature
+        self._catalog_cache_checked_at = now
+        self._catalog_cache_value = catalog
+        return catalog
 
     def find_path_by_name(self, name: str) -> Path | None:
         """Resolve one catalog display name to a file path.
@@ -167,6 +193,7 @@ class LutCatalogIndexer:
             self._resolved_path_cache.pop(name, None)
             self._resolved_path_signature_cache.pop(name, None)
             self._candidate_cache = None
+            self._clear_catalog_cache()
         candidates = self._discover_file_candidates().get(name, ())
         had_existing_candidate = False
         for candidate in candidates:
@@ -215,8 +242,13 @@ class LutCatalogIndexer:
             material_raw=material_raw,
         )
 
-    def _discover_file_candidates(self) -> dict[str, tuple[Path, ...]]:
-        if self._candidate_cache is not None:
+    def _clear_catalog_cache(self) -> None:
+        self._catalog_cache_signature = None
+        self._catalog_cache_checked_at = None
+        self._catalog_cache_value = None
+
+    def _discover_file_candidates(self, *, refresh: bool = False) -> dict[str, tuple[Path, ...]]:
+        if self._candidate_cache is not None and not refresh:
             return self._candidate_cache
         discovered: dict[str, list[Path]] = {}
         for ext in _ALLOWED_EXTENSIONS:
@@ -240,8 +272,26 @@ class LutCatalogIndexer:
         self._candidate_cache = dict(sorted(candidates.items(), key=lambda entry: entry[0].casefold()))
         return self._candidate_cache
 
+    def _catalog_signature(
+        self,
+        candidates_by_name: dict[str, tuple[Path, ...]],
+    ) -> tuple[tuple[str, tuple[tuple[str, int, int], ...]], ...]:
+        return tuple(
+            (
+                name,
+                tuple(
+                    (str(path), *self._path_signature(path))
+                    for path in candidates
+                ),
+            )
+            for name, candidates in candidates_by_name.items()
+        )
+
     def _path_signature(self, path: Path) -> tuple[int, int]:
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except OSError:
+            return (-1, -1)
         return (stat.st_mtime_ns, stat.st_size)
 
     def _display_name_for_path(self, path: Path) -> str:
