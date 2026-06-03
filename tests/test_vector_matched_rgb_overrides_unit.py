@@ -344,6 +344,36 @@ class TestApplyMatchedRgbOverrides:
         assert analysis.matched_shapes[0]["matched_rgb"] == (255, 0, 0)
         assert analysis.matched_shapes[0]["recipe"] == [3, 1, 1, 1, 1]
 
+    def test_short_cached_material_stack_is_padded_to_requested_layers(self):
+        """A stale/short cached stack must not leave requested vector layers as air."""
+        analysis = _make_two_shape_analysis()
+        analysis.num_layers = 10
+        analysis.matched_shapes[0]["recipe"] = [1] * 10
+        analysis.matched_shapes[1]["recipe"] = [2] * 10
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.zeros((h_px, w_px, 5), dtype=np.int32)
+        material_matrix[: h_px // 2, :, :] = 3
+        material_matrix[h_px // 2 :, :, :] = 2
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+        )
+
+        assert changed == 1
+        assert analysis.matched_shapes[0]["recipe"] == [3] * 10
+        assert analysis.matched_shapes[1]["recipe"] == [2] * 10
+        runs = _ve.VectorProcessor._build_channel_runs(
+            analysis.matched_shapes[0]["recipe"],
+            analysis.num_layers,
+            analysis.num_channels,
+        )
+        assert runs[3] == [(0, 9)]
+
     def test_pixels_outside_mask_solid_are_ignored(self):
         """Mutations on background pixels (``mask_solid == False``) must
         not influence the per-shape dominant colour vote.
