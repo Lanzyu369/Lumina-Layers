@@ -416,6 +416,60 @@ def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     assert float(mesh_max_y) <= max_y + outline_width + eps
 
 
+def test_vector_outline_matches_single_sided_export_transform() -> None:
+    """Single-sided vector Outline must use the same XY transform as body meshes.
+
+    Regression for LUM-20260602-001: the body meshes are flipped from SVG
+    Y-down coordinates and mirrored on X for single-sided export, while the
+    outline used to stay in raw SVG coordinates. Bambu Studio then showed the
+    outline rotated/misaligned relative to the model.
+
+    LUM-20260602-001 回归：单面 vector 主体会做 SVG Y 轴翻转和 X 镜像，
+    Outline 也必须做同样变换，否则导出的 3MF 中外轮廓和本体错位。
+    """
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+
+    shape = box(10.0, 15.0, 70.0, 60.0)
+    analysis = MagicMock()
+    analysis.matched_shapes = [
+        {
+            "geometry": shape,
+            "color": (255, 0, 0),
+            "matched_rgb": (255, 0, 0),
+            "recipe": [1, 0, 0, 0],
+            "draw_order": 0,
+        }
+    ]
+    analysis.scale_factor = 1.0
+    analysis.num_layers = 4
+    analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+    outline_width = 5.0
+
+    outline_mesh = _generate_vector_outline_mesh(
+        analysis=analysis,
+        outline_width_mm=outline_width,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="PLA White",
+        ctx={
+            "spacer_thick": 1.6,
+            "structure_mode": "Single-sided",
+            "color_mode": "4-Color RYBW",
+            "material_source": "material_archive",
+            "enable_coating": False,
+        },
+    )
+
+    assert outline_mesh is not None
+    # Body transform order in VectorProcessor.build_mesh:
+    #   1. Y flip: y -> svg_height - y
+    #   2. Single-sided X mirror: x -> svg_width - x
+    # The ring expands that transformed body bbox by outline_width.
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+
+
 @settings(max_examples=200, deadline=None)
 @given(
     outline_width=_OUTLINE_WIDTH,
