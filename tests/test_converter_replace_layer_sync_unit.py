@@ -9,6 +9,11 @@ from PIL import Image
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    externalize_preview_cache,
+    is_preview_cache_artifact_ref,
+    save_preview_cache_fields,
+)
 from api.routers.converter.preview import get_layer_images
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, set_request_id
@@ -118,6 +123,20 @@ def _create_lut_session(tmp_path: Path) -> str:
     return sid
 
 
+def _create_artifact_lut_session(tmp_path: Path) -> str:
+    sid = _create_lut_session(tmp_path)
+    session_data = _test_store.get(sid)
+    cache = session_data["preview_cache"]
+    cache_ref = externalize_preview_cache(
+        sid,
+        _test_store,
+        cache,
+        root_dir=tmp_path,
+    )
+    _test_store.put(sid, "preview_cache", cache_ref)
+    return sid
+
+
 class TestReplaceColorLayerSync:
     def test_replace_color_updates_material_matrix_and_layer_images(self, tmp_path: Path) -> None:
         sid = _create_lut_session(tmp_path)
@@ -166,6 +185,39 @@ class TestReplaceColorLayerSync:
         expected_stack = np.asarray([1, 1], dtype=np.int16)
         np.testing.assert_array_equal(cache["material_matrix"][0, 0], expected_stack)
         np.testing.assert_array_equal(cache["material_matrix"][2, 2], np.asarray([0, 0], dtype=np.int16))
+
+    def test_region_replace_artifact_cache_avoids_common_full_hydrate(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+        region_mask = np.zeros((3, 3), dtype=bool)
+        region_mask[:2, :2] = True
+        _test_store.put(sid, "selected_region_mask", region_mask)
+        _test_store.put(sid, "selected_region_id", "region-a")
+
+        from unittest.mock import patch
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("region-replace must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/region-replace",
+                json={
+                    "session_id": sid,
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        cache_ref = _test_store.get(sid)["preview_cache"]
+        assert is_preview_cache_artifact_ref(cache_ref)
+        assert cache_ref["fields"]["matched_rgb"]["revision"] == 2
+        assert cache_ref["fields"]["material_matrix"]["revision"] == 2
 
     def test_reset_replacements_restores_original_material_matrix(self, tmp_path: Path) -> None:
         sid = _create_lut_session(tmp_path)
@@ -423,6 +475,70 @@ class TestLayerImagesCache:
         assert first_bytes != second_bytes, (
             "matrix mutation must invalidate the cache and re-encode layers"
         )
+
+    def test_artifact_cache_hit_uses_private_png_paths_without_hydrating(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+
+        first = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        first_bytes = [_read_bytes(entry["url"]) for entry in first["layers"]]
+
+        cached_entry = _test_store.get(sid)["layer_images_cache"]
+        tracked_paths = set(_test_store.get_temp_file_paths(sid))
+        assert cached_entry["layers"]
+        for item in cached_entry["layers"]:
+            assert "png_bytes" not in item
+            assert Path(item["path"]).exists()
+            assert item["path"] in tracked_paths
+
+        from unittest.mock import patch
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("cache hit must not hydrate artifact arrays"),
+        ):
+            second = get_layer_images(
+                session_id=sid, store=_test_store, registry=_test_registry
+            )
+
+        second_bytes = [_read_bytes(entry["url"]) for entry in second["layers"]]
+        assert first_bytes == second_bytes
+
+    def test_artifact_material_matrix_revision_invalidates_layer_cache(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+
+        first = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        first_bytes = [_read_bytes(entry["url"]) for entry in first["layers"]]
+        old_key = _test_store.get(sid)["layer_images_cache"]["key"]
+
+        cache_ref = _test_store.get(sid)["preview_cache"]
+        updated_matrix = np.zeros((3, 3, 2), dtype=np.int16)
+        updated_matrix[0, 0, 0] = 1
+        updated_ref = save_preview_cache_fields(
+            sid,
+            _test_store,
+            cache_ref,
+            {"material_matrix": updated_matrix},
+        )
+        _test_store.put(sid, "preview_cache", updated_ref)
+
+        second = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        second_bytes = [_read_bytes(entry["url"]) for entry in second["layers"]]
+        new_key = _test_store.get(sid)["layer_images_cache"]["key"]
+
+        assert old_key != new_key
+        assert first_bytes != second_bytes
 
 
 def _read_bytes(url: str) -> bytes:

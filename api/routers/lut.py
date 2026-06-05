@@ -17,6 +17,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api.dependencies import get_session_store
+from api.preview_cache_artifacts import is_preview_cache_artifact_ref
 from api.session_store import SessionStore
 from api.services.lut_presentation import (
     build_lut_info_from_path as _build_lut_info_from_path,
@@ -681,6 +682,8 @@ def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
         )
 
     cache = session_data.get("preview_cache") or {}
+    if is_preview_cache_artifact_ref(cache):
+        cache = cache.get("metadata") or {}
     if not isinstance(cache, dict):
         cache = {}
     raw_slot_names = cache.get("slot_names") or []

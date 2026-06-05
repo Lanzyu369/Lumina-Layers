@@ -18,6 +18,7 @@ from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 
@@ -170,6 +171,33 @@ class TestValidHeightmapUpload:
         body = response.json()
         assert body["status"] == "ok"
         assert len(body["color_height_map"]) == 2
+
+    def test_artifact_preview_cache_avoids_common_full_hydrate(self, tmp_path) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        session_data = _test_store.get(session_id)
+        cache_ref = externalize_preview_cache(
+            session_id,
+            _test_store,
+            session_data["preview_cache"],
+            root_dir=tmp_path,
+        )
+        _test_store.put(session_id, "preview_cache", cache_ref)
+        buf = _make_grayscale_png(100, 100)
+
+        from unittest.mock import patch
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("heightmap must not fully hydrate artifact cache"),
+        ):
+            response = client.post(
+                "/api/convert/upload-heightmap",
+                files={"heightmap": ("heightmap.png", buf, "image/png")},
+                data={"session_id": session_id, "max_relief_height": "2.0"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert set(response.json()["color_height_map"]) == {"ff0000", "00ff00"}
 
 
 # =========================================================================

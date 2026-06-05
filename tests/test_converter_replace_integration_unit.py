@@ -13,6 +13,11 @@ from PIL import Image
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    externalize_preview_cache,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.session_store import SessionStore
 
 client: TestClient = TestClient(app)
@@ -53,6 +58,36 @@ def _seed_preview_session(store: SessionStore) -> str:
         },
     )
     store.put(session_id, "original_matched_rgb", matched_rgb.copy())
+    store.put(session_id, "material_source", "lut")
+    return session_id
+
+
+def _seed_artifact_preview_session(store: SessionStore, tmp_path) -> str:
+    """Create a preview-like artifact-backed session without top-level originals."""
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[:2, :, :] = [255, 255, 255]
+    matched_rgb[2:, :, :] = [255, 0, 0]
+    mask_solid = np.ones((4, 4), dtype=bool)
+    cache = {
+        "matched_rgb": matched_rgb.copy(),
+        "original_matched_rgb": matched_rgb.copy(),
+        "quantized_image": matched_rgb.copy(),
+        "mask_solid": mask_solid,
+        "target_w": 4,
+        "target_h": 4,
+        "target_width_mm": 40.0,
+        "color_palette": [],
+    }
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", ref)
+    store.put(session_id, "replacement_regions", [])
+    store.put(session_id, "replacement_history", [])
     store.put(session_id, "material_source", "lut")
     return session_id
 
@@ -190,6 +225,44 @@ class TestReplaceColorCanary:
         assert record.replacement_count == 1
         assert record.diff_pixel_count == 8
 
+    def test_replace_color_keeps_artifact_preview_cache_externalized(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("replace-color must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert "matched_rgb" not in stored["metadata"]
+        assert stored["fields"]["matched_rgb"]["revision"] == 2
+        hydrated = hydrate_preview_cache(
+            stored,
+            fields={"matched_rgb", "original_matched_rgb"},
+        )
+        assert int(np.all(hydrated["matched_rgb"] == [0, 0, 255], axis=-1).sum()) == 8
+        assert int(
+            np.all(hydrated["original_matched_rgb"] == [255, 255, 255], axis=-1).sum()
+        ) == 8
+
 
 class TestResetReplacementsCanary:
     """Successful reset-replacements requests emit the structured done canary."""
@@ -239,6 +312,48 @@ class TestResetReplacementsCanary:
         assert record.session_id == session_id
         assert record.regions_cleared == 1
         assert record.history_truncated == 0
+
+    def test_reset_replacements_restores_artifact_original_snapshot(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("reset-replacements must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            replace_response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+            reset_response = client.post(
+                "/api/convert/reset-replacements",
+                json={"session_id": session_id},
+            )
+
+        assert replace_response.status_code == 200, replace_response.text
+        assert reset_response.status_code == 200, reset_response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert "original_matched_rgb" not in store.get(session_id)
+        hydrated = hydrate_preview_cache(
+            stored,
+            fields={"matched_rgb", "original_matched_rgb"},
+        )
+        np.testing.assert_array_equal(
+            hydrated["matched_rgb"],
+            hydrated["original_matched_rgb"],
+        )
 
 
 class TestSourceColorPickCanary:
@@ -438,6 +553,69 @@ class TestRegionRequantizeCanary:
         assert record.region_pixel_count == 64
         assert record.output_color_count >= 1
 
+    def test_region_requantize_artifact_cache_avoids_common_full_hydrate(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_region_requantize_session(store, tmp_path)
+        session_data = store.get(session_id)
+        cache_ref = externalize_preview_cache(
+            session_id,
+            store,
+            session_data["preview_cache"],
+            root_dir=tmp_path,
+        )
+        store.put(session_id, "preview_cache", cache_ref)
+
+        def _fake_requantize(*, matched_rgb, original_source_rgb, region_id_map, **_kwargs):
+            assert original_source_rgb is not None
+            updated = np.asarray(matched_rgb, dtype=np.uint8).copy()
+            mask = np.asarray(region_id_map) == 1001
+            updated[mask] = [90, 120, 150]
+            return updated, int(mask.sum())
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("region-requantize must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.load_multiple_materials",
+            return_value=[],
+        ), patch(
+            "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+            return_value=(object(), 64),
+        ), patch(
+            "api.routers.converter.replace.requantize_gradient_regions",
+            side_effect=_fake_requantize,
+        ), patch(
+            "api.routers.converter.replace._sync_material_matrix_after_rgb_change",
+        ), patch(
+            "api.routers.converter.replace.recompute_gradient_groups_into_session",
+            return_value=[],
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/region-requantize",
+                json={
+                    "session_id": session_id,
+                    "targets": [
+                        {
+                            "gradient_group_index": 1,
+                            "gradient_region_index": 1,
+                        }
+                    ],
+                    "local_quantize_colors": 12,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert stored["fields"]["matched_rgb"]["revision"] == 2
+
 
 class TestReplaceColorsBatchCanary:
     """Successful replace-colors-batch requests emit the structured done canary."""
@@ -496,6 +674,43 @@ class TestReplaceColorsBatchCanary:
         assert record.diff_pixel_count == 16
         assert record.replacement_count == 2
 
+    def test_replace_colors_batch_artifact_cache_avoids_common_full_hydrate(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("replace-colors-batch must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/replace-colors-batch",
+                json={
+                    "session_id": session_id,
+                    "replacements": [
+                        {
+                            "selected_color": "#ffffff",
+                            "replacement_color": "#0000ff",
+                        },
+                        {
+                            "selected_color": "#ff0000",
+                            "replacement_color": "#00ff00",
+                        },
+                    ],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert stored["fields"]["matched_rgb"]["revision"] == 2
+
 
 class TestRegionReplaceBatchCanary:
     """Successful region-replace-batch requests emit the structured done canary."""
@@ -549,6 +764,40 @@ class TestRegionReplaceBatchCanary:
         assert record.item_count == 1
         assert record.diff_pixel_count == 8
         assert record.any_click_mask_used is True
+
+    def test_region_replace_batch_artifact_cache_avoids_common_full_hydrate(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("region-replace-batch must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/region-replace-batch",
+                json={
+                    "session_id": session_id,
+                    "items": [
+                        {
+                            "replacement_color": "#0000ff",
+                            "click_x": 0,
+                            "click_y": 0,
+                        }
+                    ],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert stored["fields"]["matched_rgb"]["revision"] == 2
 
 
 class TestPredictRecipeCanary:
@@ -650,6 +899,47 @@ class TestApplyRecipeOverrideCanary:
         assert record.recipe_layer_count == 3
         assert record.override_count == 1
         assert record.prediction_source == "material_archive_preview"
+
+    def test_apply_recipe_override_artifact_cache_avoids_common_full_hydrate(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_recipe_session(store)
+        session_data = store.get(session_id)
+        cache_ref = externalize_preview_cache(
+            session_id,
+            store,
+            session_data["preview_cache"],
+            root_dir=tmp_path,
+        )
+        store.put(session_id, "preview_cache", cache_ref)
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("apply-recipe-override must not fully hydrate artifact cache"),
+        ), patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/apply-recipe-override",
+                json={
+                    "session_id": session_id,
+                    "region_ids": ["region-1"],
+                    "recipe": [0, 1, 0],
+                    "layer_height_mm": 0.08,
+                    "color_layers": 3,
+                    "layer_order": "Top2Bottom",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        stored = store.get(session_id)["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored)
+        assert stored["fields"]["matched_rgb"]["revision"] == 2
+        assert stored["fields"]["material_matrix"]["revision"] == 2
 
 
 class TestRegionRecipeCanary:

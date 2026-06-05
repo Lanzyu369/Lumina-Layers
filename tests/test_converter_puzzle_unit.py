@@ -24,6 +24,7 @@ import config as runtime_config
 from api.workers.converter_workers import worker_generate_model
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter import puzzle as puzzle_router
 from api.routers.converter.puzzle import _crop_piece_arrays, _submit_puzzle_worker
 from api.session_store import SessionStore
@@ -102,6 +103,18 @@ def _make_session() -> tuple[str, dict[str, Any]]:
     _test_store.put(session_id, "preview_cache", preview_cache)
     _test_store.register_temp_file(session_id, image_path)
     _test_store.register_temp_file(session_id, lut_path)
+    return session_id, preview_cache
+
+
+def _make_artifact_session(tmp_path: Path) -> tuple[str, dict[str, Any]]:
+    session_id, preview_cache = _make_session()
+    cache_ref = externalize_preview_cache(
+        session_id,
+        _test_store,
+        preview_cache,
+        root_dir=tmp_path,
+    )
+    _test_store.put(session_id, "preview_cache", cache_ref)
     return session_id, preview_cache
 
 
@@ -203,6 +216,41 @@ def test_puzzle_layout_preview_returns_overlay_and_grid_summary() -> None:
     assert body["piece_count"] == 6
     assert body["grid_rows"] == 2
     assert body["grid_cols"] == 3
+
+
+def test_puzzle_layout_preview_artifact_cache_avoids_common_full_hydrate(
+    tmp_path: Path,
+) -> None:
+    session_id, _preview_cache = _make_artifact_session(tmp_path)
+
+    with patch(
+        "api.routers.converter.common.hydrate_preview_cache",
+        side_effect=AssertionError("puzzle layout must not fully hydrate artifact cache"),
+    ):
+        response = client.post(
+            "/api/convert/puzzle-layout-preview",
+            json={
+                "session_id": session_id,
+                "params": {
+                    "target_height_mm": 60.0,
+                    "puzzle_style": "regular",
+                    "sizing_mode": "grid",
+                    "piece_width_mm": 20.0,
+                    "piece_height_mm": 20.0,
+                    "rows": 2,
+                    "cols": 3,
+                    "target_piece_count": 6,
+                    "seed": 7,
+                    "connector_style": "classic",
+                    "labels_enabled": True,
+                    "engrave_back_labels": False,
+                    "irregularity_strength": 0.35,
+                    "min_neck_width_mm": 1.2,
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
 
 
 def test_puzzle_layout_preview_reuses_cached_layout_and_overlay() -> None:
