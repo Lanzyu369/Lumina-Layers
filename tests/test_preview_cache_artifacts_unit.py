@@ -32,6 +32,15 @@ def _make_cache() -> dict:
     }
 
 
+def _make_cache_with_nested_metadata() -> dict:
+    cache = _make_cache()
+    cache["color_conf"] = {
+        "slots": ["white", "black"],
+        "preview": {"white": [255, 255, 255, 255]},
+    }
+    return cache
+
+
 def test_externalize_preview_cache_writes_arrays_and_manifest(
     tmp_path: Path,
 ) -> None:
@@ -94,11 +103,56 @@ def test_save_preview_cache_fields_updates_only_dirty_field(
 
     assert updated["manifest_revision"] == 2
     assert updated["fields"]["matched_rgb"]["revision"] == 2
+    assert updated["fields"]["matched_rgb"]["path"] != ref["fields"]["matched_rgb"]["path"]
     assert updated["fields"]["material_matrix"] == original_matrix_field
     np.testing.assert_array_equal(
         np.load(updated["fields"]["matched_rgb"]["path"]),
         new_rgb,
     )
+
+
+def test_save_preview_cache_fields_preserves_old_path_while_mmap_reader_lives(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-dirty-mmap")
+    cache = _make_cache()
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+    old_path = ref["fields"]["matched_rgb"]["path"]
+    old_reader = np.load(old_path, mmap_mode="r", allow_pickle=False)
+    new_rgb = np.full((2, 2, 3), 7, dtype=np.uint8)
+
+    try:
+        updated = save_preview_cache_fields(
+            session_id,
+            store,
+            ref,
+            {"matched_rgb": new_rgb},
+        )
+
+        new_path = updated["fields"]["matched_rgb"]["path"]
+        assert new_path != old_path
+        tracked_paths = set(store.get_temp_file_paths(session_id))
+        assert old_path in tracked_paths
+        assert new_path in tracked_paths
+        np.testing.assert_array_equal(old_reader, cache["matched_rgb"])
+        np.testing.assert_array_equal(
+            np.load(old_path, allow_pickle=False),
+            cache["matched_rgb"],
+        )
+        np.testing.assert_array_equal(
+            np.load(new_path, allow_pickle=False),
+            new_rgb,
+        )
+    finally:
+        mmap_handle = getattr(old_reader, "_mmap", None)
+        if mmap_handle is not None:
+            mmap_handle.close()
 
 
 def test_hydrate_preview_cache_loads_requested_fields_only(
@@ -121,6 +175,35 @@ def test_hydrate_preview_cache_loads_requested_fields_only(
     assert "matched_rgb" in hydrated
     assert "material_matrix" not in hydrated
     np.testing.assert_array_equal(hydrated["matched_rgb"], cache["matched_rgb"])
+
+
+def test_hydrate_preview_cache_deep_copies_nested_metadata(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-hydrate-metadata")
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        _make_cache_with_nested_metadata(),
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", ref)
+
+    hydrated = hydrate_preview_cache(ref, fields=set())
+    hydrated["slot_names"].append("red")
+    hydrated["color_conf"]["slots"].append("red")
+    hydrated["color_conf"]["preview"]["white"].append(0)
+
+    stored_metadata = store.get(session_id)["preview_cache"]["metadata"]
+    assert stored_metadata["slot_names"] == ["white", "black"]
+    assert stored_metadata["color_conf"]["slots"] == ["white", "black"]
+    assert stored_metadata["color_conf"]["preview"]["white"] == [
+        255,
+        255,
+        255,
+        255,
+    ]
 
 
 def test_hydrate_preview_cache_for_worker_uses_mmap_for_artifacts(
@@ -148,7 +231,7 @@ def test_estimate_preview_cache_bytes_includes_original_snapshots() -> None:
         height=5,
         layers=3,
         include_original=True,
-    ) == 1150
+    ) == 1750
 
 
 def test_persist_preview_cache_keeps_artifact_session_externalized(
@@ -351,3 +434,49 @@ def test_preview_cache_transaction_rejects_dirty_field_revision_conflict(
         np.load(stored["fields"]["matched_rgb"]["path"]),
         concurrent_rgb,
     )
+
+
+def test_preview_cache_transaction_conflict_does_not_leak_nested_metadata(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-transaction-metadata-conflict")
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        _make_cache_with_nested_metadata(),
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", ref)
+    session_data = store.get(session_id)
+    concurrent_rgb = np.full((2, 2, 3), 17, dtype=np.uint8)
+
+    with preview_cache_transaction(
+        session_id,
+        store,
+        session_data,
+        fields={"matched_rgb"},
+    ) as cache:
+        latest_ref = store.get(session_id)["preview_cache"]
+        concurrent_ref = save_preview_cache_fields(
+            session_id,
+            store,
+            latest_ref,
+            {"matched_rgb": concurrent_rgb},
+        )
+        store.put(session_id, "preview_cache", concurrent_ref)
+        cache["matched_rgb"] = np.full((2, 2, 3), 19, dtype=np.uint8)
+        cache["color_conf"]["slots"].append("red")
+
+        try:
+            cache.commit(
+                {"matched_rgb"},
+                metadata_fields={"color_conf"},
+            )
+        except PreviewCacheRevisionConflict:
+            pass
+        else:
+            raise AssertionError("Expected matched_rgb revision conflict")
+
+    stored_metadata = store.get(session_id)["preview_cache"]["metadata"]
+    assert stored_metadata["color_conf"]["slots"] == ["white", "black"]

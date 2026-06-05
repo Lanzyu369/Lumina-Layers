@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager
+from copy import deepcopy
 import hashlib
 import os
 import tempfile
@@ -266,7 +267,7 @@ def externalize_preview_cache(
             store.register_temp_file(session_id, path)
             fields[key] = field_ref
         else:
-            metadata[key] = value
+            metadata[key] = deepcopy(value)
 
     return {
         "schema": ARTIFACT_SCHEMA,
@@ -298,7 +299,7 @@ def hydrate_preview_cache(
         arrays. 包含元数据和请求数组的缓存字典。
     """
     _require_artifact_ref(ref)
-    hydrated = dict(ref.get("metadata", {}))
+    hydrated = deepcopy(ref.get("metadata", {}))
     selected_fields = set(ref.get("fields", {})) if fields is None else fields
     for field_name in selected_fields:
         field_ref = ref.get("fields", {}).get(field_name)
@@ -368,7 +369,7 @@ def estimate_preview_cache_bytes(
     matched = pixel_count * 3
     rgba = pixel_count * 4
     mask = pixel_count
-    matrix = pixel_count * safe_layers * 2
+    matrix = pixel_count * safe_layers * np.dtype(np.int32).itemsize
     original = matched + matrix if include_original else 0
     return matched + rgba + mask + matrix + original
 
@@ -405,7 +406,7 @@ def get_preview_cache_metadata(cache_or_ref: dict[str, Any]) -> dict[str, Any]:
         dict[str, Any]: Metadata-only cache view. 元数据缓存视图。
     """
     if is_preview_cache_artifact_ref(cache_or_ref):
-        return dict(cache_or_ref.get("metadata", {}))
+        return deepcopy(cache_or_ref.get("metadata", {}))
     return cache_or_ref
 
 
@@ -464,17 +465,14 @@ def save_preview_cache_fields(
         if not isinstance(array, np.ndarray):
             raise TypeError(f"Preview cache field {field_name!r} must be a NumPy array")
         existing = updated["fields"].get(field_name)
-        if existing is None:
-            path, field_ref = _write_new_array_field(field_name, array, artifact_dir)
-            store.register_temp_file(session_id, path)
-        else:
-            path = existing["path"]
-            _write_array_atomic(path, array)
-            field_ref = _build_field_ref(
-                path,
-                array,
-                revision=int(existing.get("revision", 0)) + 1,
-            )
+        revision = int(existing.get("revision", 0)) + 1 if existing else 1
+        path, field_ref = _write_new_array_field(
+            field_name,
+            array,
+            artifact_dir,
+            revision=revision,
+        )
+        store.register_temp_file(session_id, path)
         updated["fields"][field_name] = field_ref
 
     return updated
@@ -547,7 +545,7 @@ def merge_preview_cache_metadata(
     _require_artifact_ref(ref)
     updated = _copy_ref(ref)
     updated["manifest_revision"] = int(updated.get("manifest_revision", 0)) + 1
-    updated["metadata"].update(metadata)
+    updated["metadata"].update(deepcopy(metadata))
     return updated
 
 
@@ -564,7 +562,7 @@ def _copy_ref(ref: dict[str, Any]) -> dict[str, Any]:
             field_name: dict(field_ref)
             for field_name, field_ref in ref.get("fields", {}).items()
         },
-        "metadata": dict(ref.get("metadata", {})),
+        "metadata": deepcopy(ref.get("metadata", {})),
     }
 
 
@@ -587,6 +585,8 @@ def _write_new_array_field(
     field_name: str,
     array: np.ndarray,
     artifact_dir: Path,
+    *,
+    revision: int = 1,
 ) -> tuple[str, dict[str, Any]]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     safe_name = _safe_field_name(field_name)
@@ -604,24 +604,7 @@ def _write_new_array_field(
         _delete_if_exists(tmp_path)
         _delete_if_exists(final_path)
         raise
-    return final_path, _build_field_ref(final_path, array, revision=1)
-
-
-def _write_array_atomic(path: str, array: np.ndarray) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{target.stem}_",
-        suffix=".tmp",
-        dir=str(target.parent),
-    )
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            np.save(handle, array, allow_pickle=False)
-        os.replace(tmp_path, path)
-    except BaseException:
-        _delete_if_exists(tmp_path)
-        raise
+    return final_path, _build_field_ref(final_path, array, revision=revision)
 
 
 def _build_field_ref(
