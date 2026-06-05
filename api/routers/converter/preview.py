@@ -6,8 +6,10 @@ import asyncio
 import json
 import os
 import pickle
+import tempfile
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +20,19 @@ from pydantic import ValidationError
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile, ndarray_to_png_bytes
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    estimate_preview_cache_bytes,
+    externalize_preview_cache,
+    get_preview_cache_max_bytes,
+    get_preview_cache_metadata,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
+from api.preview_cache_memory import (
+    build_preview_cache_memory_profile,
+    get_process_rss_bytes,
+    should_log_preview_cache_memory_profile_at_info,
+)
 from api.schemas.converter import BedSizeItem, BedSizeListResponse
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
@@ -108,6 +123,167 @@ def _resolve_upload_source_basename(filename: str | None, temp_path: str) -> str
             return source_basename
     fallback_basename = os.path.splitext(os.path.basename(temp_path))[0]
     return normalize_large_format_source_basename(fallback_basename) or fallback_basename
+
+
+def _estimate_preview_layers(
+    *,
+    color_layers: int | None,
+    material_layer_count: int | None,
+    material_source: str,
+) -> int:
+    """Return a conservative layer count for preview-cache size estimates.
+
+    返回用于 preview-cache 大小估算的保守叠色层数。
+    """
+    if material_source == "material_archive" and material_layer_count:
+        return max(1, int(material_layer_count))
+    if color_layers:
+        return max(1, int(color_layers))
+    return 5
+
+
+def _parse_svg_length(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value or value.endswith("%"):
+        return None
+    number_chars: list[str] = []
+    for char in value:
+        if char.isdigit() or char in {".", "+", "-", "e", "E"}:
+            number_chars.append(char)
+        else:
+            break
+    if not number_chars:
+        return None
+    try:
+        return float("".join(number_chars))
+    except ValueError:
+        return None
+
+
+def _parse_svg_aspect_ratio(svg_path: str) -> float | None:
+    """Return SVG height/width ratio when simple metadata is available.
+
+    在 SVG 简单尺寸元数据可用时返回 height/width 比例。
+    """
+    try:
+        root = ET.parse(svg_path).getroot()
+    except (ET.ParseError, OSError):
+        return None
+
+    view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+    if view_box:
+        parts = view_box.replace(",", " ").split()
+        if len(parts) == 4:
+            try:
+                width = float(parts[2])
+                height = float(parts[3])
+            except ValueError:
+                return None
+            if width > 0 and height > 0:
+                return height / width
+
+    width = _parse_svg_length(root.attrib.get("width"))
+    height = _parse_svg_length(root.attrib.get("height"))
+    if width is None or height is None or width <= 0 or height <= 0:
+        return None
+    return height / width
+
+
+def _estimate_preview_target_dimensions(
+    image_path: str,
+    *,
+    target_width_mm: float,
+    modeling_mode: str,
+    svg_pixels_per_mm: float,
+) -> tuple[int, int] | None:
+    """Estimate preview cache dimensions before the worker runs.
+
+    在 worker 执行前估算 preview cache 像素尺寸。
+    """
+    if image_path.lower().endswith(".svg"):
+        pixels_per_mm = (
+            svg_pixels_per_mm
+            if modeling_mode == "high-fidelity"
+            else SVG_PIXELS_PER_MM_DEFAULT
+        )
+        width = max(1, int(float(target_width_mm) * float(pixels_per_mm)))
+        aspect_ratio = _parse_svg_aspect_ratio(image_path)
+        if aspect_ratio is None:
+            return None
+        return width, max(1, int(width * aspect_ratio))
+
+    try:
+        with Image.open(image_path) as img:
+            source_width, source_height = img.size
+    except (OSError, ValueError):
+        return None
+    if source_width <= 0 or source_height <= 0:
+        return None
+
+    if modeling_mode == "high-fidelity":
+        width = int(float(target_width_mm) * 10)
+    else:
+        width = int(float(target_width_mm) / PrinterConfig.NOZZLE_WIDTH)
+    width = max(1, width)
+    height = max(1, int(width * source_height / source_width))
+    return width, height
+
+
+def _enforce_preview_cache_size_limit(
+    *,
+    image_path: str,
+    target_width_mm: float,
+    modeling_mode: str,
+    svg_pixels_per_mm: float,
+    color_layers: int | None,
+    material_layer_count: int | None,
+    material_source: str,
+) -> None:
+    """Reject previews whose estimated cache arrays exceed the guardrail.
+
+    拒绝预计 preview cache 大数组超过上限的预览请求。
+    """
+    dimensions = _estimate_preview_target_dimensions(
+        image_path,
+        target_width_mm=target_width_mm,
+        modeling_mode=modeling_mode,
+        svg_pixels_per_mm=svg_pixels_per_mm,
+    )
+    if dimensions is None:
+        return
+
+    width, height = dimensions
+    layers = _estimate_preview_layers(
+        color_layers=color_layers,
+        material_layer_count=material_layer_count,
+        material_source=material_source,
+    )
+    estimate_bytes = estimate_preview_cache_bytes(
+        width,
+        height,
+        layers,
+        include_original=True,
+    )
+    max_bytes = get_preview_cache_max_bytes()
+    if estimate_bytes <= max_bytes:
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error": "preview_cache_size_limit_exceeded",
+            "message": (
+                "Estimated preview cache arrays exceed the configured limit."
+            ),
+            "estimate_bytes": estimate_bytes,
+            "max_bytes": max_bytes,
+            "estimated_width": width,
+            "estimated_height": height,
+            "estimated_layers": layers,
+        },
+    )
 
 
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
@@ -484,6 +660,15 @@ async def convert_preview(
         temp_path = await ensure_png_tempfile(image)
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
+        _enforce_preview_cache_size_limit(
+            image_path=temp_path,
+            target_width_mm=target_width_mm,
+            modeling_mode=modeling_mode,
+            svg_pixels_per_mm=svg_pixels_per_mm,
+            color_layers=color_layers,
+            material_layer_count=material_layer_count,
+            material_source=material_source,
+        )
         if modeling_mode == "vector" and is_svg_upload:
             svg_large_format_policy = {
                 **inspect_svg_large_format_support(temp_path),
@@ -679,7 +864,34 @@ async def convert_preview(
     # 复用 worker submit 前生成的 session_id，确保 worker 日志与返回会话同 id；
     # 若 id 与现有会话冲突，SessionStore.create() 会自动改用新 UUID。
     session_id = store.create(session_id=preview_session_id)
-    store.put(session_id, "preview_cache", cache_data)
+    memory_profile = build_preview_cache_memory_profile(
+        cache_data,
+        session_id=session_id,
+        modeling_mode=modeling_mode,
+        cache_data_bytes=(
+            os.path.getsize(worker_cache_data_path)
+            if worker_cache_data_path and os.path.exists(worker_cache_data_path)
+            else None
+        ),
+        process_rss_bytes=get_process_rss_bytes(),
+    )
+    if should_log_preview_cache_memory_profile_at_info():
+        log.info("Preview cache memory profile", extra=memory_profile)
+    else:
+        log.debug("Preview cache memory profile", extra=memory_profile)
+    cache_session_value: dict | None = None
+    if cache_data is not None:
+        cache_with_originals = dict(cache_data)
+        if "matched_rgb" in cache_data:
+            cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
+        if "material_matrix" in cache_data:
+            cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+        cache_session_value = externalize_preview_cache(
+            session_id,
+            store,
+            cache_with_originals,
+        )
+    store.put(session_id, "preview_cache", cache_session_value)
     # Synchronously compute gradient-banding groups so the Color Workstation
     # can surface them (group-level multi-select + optional auto-replace)
     # without a second round-trip. Best-effort: failures are logged and do
@@ -723,15 +935,6 @@ async def convert_preview(
     store.put(session_id, "free_color_set", set())
     if svg_large_format_policy is not None:
         store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
-    # Save a pristine copy of matched_rgb for reset-replacements
-    if cache_data and "matched_rgb" in cache_data:
-        store.put(session_id, "original_matched_rgb", cache_data["matched_rgb"].copy())
-    if cache_data and "material_matrix" in cache_data:
-        store.put(
-            session_id,
-            "original_material_matrix",
-            cache_data["material_matrix"].copy(),
-        )
     store.register_temp_file(session_id, temp_path)
     if temp_native_bundle_path is not None:
         store.register_temp_file(session_id, temp_native_bundle_path)
@@ -760,7 +963,7 @@ async def convert_preview(
             session_id,
             store,
             registry,
-            cache_data,
+            cache_session_value if cache_session_value is not None else cache_data,
         )
     except NON_FATAL_GLB_ERRORS as e:
         # Non-fatal: log and continue without GLB
@@ -878,23 +1081,40 @@ async def convert_preview(
 
 
 def _compute_layer_images_cache_key(
-    material_matrix: np.ndarray,
+    material_matrix: np.ndarray | None,
     preview_colors_src: object,
     slots_src: object,
+    *,
+    material_matrix_ref: dict | None = None,
 ) -> str:
     """Hash key derived from the inputs that determine the rendered layer PNGs.
-    Key = sha1(material_matrix bytes + shape + preview_colors repr + slots repr).
+    Artifact-backed caches use the material_matrix field revision/hash instead
+    of reading and hashing matrix bytes.
     基于决定层图像素内容的输入计算缓存 key；material_matrix / 调色板没变就命中。
     """
     import hashlib
 
     hasher = hashlib.sha1()
-    # material_matrix is dtype-stable (int16) and its bytes uniquely identify
-    # the per-pixel per-layer material id distribution. Include shape so two
-    # different-shaped matrices can't collide.
-    # material_matrix 是决定每层可视内容的唯一数据源；shape 避免不同形状冲突。
-    hasher.update(bytes(str(material_matrix.shape), "ascii"))
-    hasher.update(material_matrix.tobytes())
+    if material_matrix_ref is not None:
+        hasher.update(
+            repr(
+                {
+                    "shape": material_matrix_ref.get("shape"),
+                    "dtype": material_matrix_ref.get("dtype"),
+                    "revision": material_matrix_ref.get("revision"),
+                    "sha256": material_matrix_ref.get("sha256"),
+                }
+            ).encode("utf-8", errors="replace")
+        )
+    else:
+        if material_matrix is None:
+            raise ValueError("material_matrix is required for legacy layer cache keys")
+        # Legacy in-memory sessions have no field revision; keep byte hashing
+        # only for that compatibility path. New preview sessions are artifact
+        # backed and use the branch above.
+        # 旧内存 session 没有字段 revision，仅兼容路径继续 hash bytes。
+        hasher.update(bytes(str(material_matrix.shape), "ascii"))
+        hasher.update(material_matrix.tobytes())
     # preview_colors + slots affect only the colour mapping but are cheap to
     # serialise and small, so include them to stay correct when a caller
     # rebinds colours in-place without touching material_matrix.
@@ -902,6 +1122,71 @@ def _compute_layer_images_cache_key(
     hasher.update(repr(preview_colors_src).encode("utf-8", errors="replace"))
     hasher.update(repr(slots_src).encode("utf-8", errors="replace"))
     return hasher.hexdigest()
+
+
+def _require_preview_cache_for_layer_images(
+    session_data: dict,
+) -> tuple[dict, dict | None]:
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(status_code=400, detail="Invalid preview cache")
+    if is_preview_cache_artifact_ref(cache):
+        return get_preview_cache_metadata(cache), cache
+    return cache, None
+
+
+def _require_preview_cache_for_heightmap(session_data: dict) -> dict:
+    cache, cache_ref = _require_preview_cache_for_layer_images(session_data)
+    if cache_ref is None:
+        return cache
+    hydrated = hydrate_preview_cache(
+        cache_ref,
+        fields={"matched_rgb", "mask_solid"},
+        mmap_mode="r",
+    )
+    cache.update(hydrated)
+    return cache
+
+
+def _register_cached_layer_path(
+    *,
+    session_id: str,
+    registry: FileRegistry,
+    layer_idx: int,
+    path: str,
+) -> str:
+    file_id = registry.register_path(
+        session_id,
+        path,
+        filename=f"layer_{layer_idx}.png",
+        purpose="layer_image",
+    )
+    return f"/api/files/{file_id}"
+
+
+def _write_private_layer_png(
+    *,
+    session_id: str,
+    store: SessionStore,
+    png_bytes: bytes,
+) -> str:
+    fd, path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(png_bytes)
+    except BaseException:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        raise
+    store.register_temp_file(session_id, path)
+    return path
 
 
 @router.get("/layer-images/{session_id}")
@@ -917,16 +1202,11 @@ def get_layer_images(
     返回每层图片 URL 和材料名称列表。
     """
     session_data = _require_session(store, session_id)
-    cache = _require_preview_cache(session_data)
+    cache, cache_ref = _require_preview_cache_for_layer_images(session_data)
 
-    material_matrix = cache.get("material_matrix")
-    mask_solid = cache.get("mask_solid")
     color_conf = cache.get("color_conf")
-    if material_matrix is None or mask_solid is None or color_conf is None:
+    if color_conf is None:
         raise HTTPException(status_code=400, detail="Preview cache missing required data")
-
-    h, w = material_matrix.shape[:2]
-    n_layers = material_matrix.shape[2]
 
     # For Merged LUTs, use the corrected preview_colors and slot_names from cache
     # (constructed in P01 from LUT palette), otherwise fall back to color_conf
@@ -943,8 +1223,17 @@ def get_layer_images(
     # re-encoded every layer as PNG. Reuse cached PNG bytes when the inputs
     # that drive pixel content (material_matrix + palette) haven't changed.
     # 缓存命中：matched_rgb/调色板没改就复用已编码的 PNG bytes，免去 6 秒重算。
+    material_matrix_ref = (
+        cache_ref.get("fields", {}).get("material_matrix")
+        if cache_ref is not None
+        else None
+    )
+    material_matrix = None if cache_ref is not None else cache.get("material_matrix")
     cache_key = _compute_layer_images_cache_key(
-        material_matrix, preview_colors, slots
+        material_matrix,
+        preview_colors,
+        slots,
+        material_matrix_ref=material_matrix_ref,
     )
     cached_entry = session_data.get("layer_images_cache")
     if (
@@ -956,21 +1245,34 @@ def get_layer_images(
         layers_out: list[dict] = []
         for idx, item in enumerate(cached_entry["layers"]):
             png_bytes = item.get("png_bytes")
+            png_path = item.get("path")
             slot_name = item.get("name", f"Layer {idx}")
-            if not isinstance(png_bytes, (bytes, bytearray)):
+            if isinstance(png_path, str) and os.path.exists(png_path):
+                layer_url = _register_cached_layer_path(
+                    session_id=session_id,
+                    registry=registry,
+                    layer_idx=idx,
+                    path=png_path,
+                )
+            elif isinstance(png_bytes, (bytes, bytearray)):
+                file_id = registry.register_bytes(
+                    session_id,
+                    bytes(png_bytes),
+                    f"layer_{idx}.png",
+                    purpose="layer_image",
+                )
+                layer_url = f"/api/files/{file_id}"
+            else:
                 # Defensive: if somehow malformed, fall through to full recompute
                 # 防御性：cache 坏了就走 miss 路径全量重算，不让端点崩掉。
                 cached_entry = None
                 layers_out = []
                 break
-            file_id = registry.register_bytes(
-                session_id, bytes(png_bytes), f"layer_{idx}.png"
-            )
             layers_out.append(
                 {
                     "layer_index": idx,
                     "name": slot_name,
-                    "url": f"/api/files/{file_id}",
+                    "url": layer_url,
                 }
             )
         if cached_entry is not None and layers_out:
@@ -983,6 +1285,25 @@ def get_layer_images(
                 },
             )
             return {"session_id": session_id, "layers": layers_out}
+
+    if cache_ref is not None:
+        hydrated = hydrate_preview_cache(
+            cache_ref,
+            fields={"material_matrix", "mask_solid"},
+            mmap_mode="r",
+        )
+        material_matrix = hydrated.get("material_matrix")
+        mask_solid = hydrated.get("mask_solid")
+    else:
+        material_matrix = cache.get("material_matrix")
+        mask_solid = cache.get("mask_solid")
+    if material_matrix is None or mask_solid is None:
+        raise HTTPException(status_code=400, detail="Preview cache missing required data")
+
+    material_matrix = np.asarray(material_matrix)
+    mask_solid = np.asarray(mask_solid, dtype=bool)
+    h, w = material_matrix.shape[:2]
+    n_layers = material_matrix.shape[2]
 
     # Build material_id -> rgba mapping
     # preview_colors can be either dict[str, rgba] (Merged LUT) or dict[int, rgba] (standard)
@@ -1067,8 +1388,10 @@ def get_layer_images(
     layers: list[dict] = []
     cached_layers: list[dict] = []
     for layer_idx, png_bytes in enumerate(encoded_bytes):
-        file_id = registry.register_bytes(
-            session_id, png_bytes, f"layer_{layer_idx}.png"
+        png_path = _write_private_layer_png(
+            session_id=session_id,
+            store=store,
+            png_bytes=png_bytes,
         )
         slot_name = (
             slots[layer_idx] if layer_idx < len(slots) else f"Layer {layer_idx}"
@@ -1077,10 +1400,15 @@ def get_layer_images(
             {
                 "layer_index": layer_idx,
                 "name": slot_name,
-                "url": f"/api/files/{file_id}",
+                "url": _register_cached_layer_path(
+                    session_id=session_id,
+                    registry=registry,
+                    layer_idx=layer_idx,
+                    path=png_path,
+                ),
             }
         )
-        cached_layers.append({"name": slot_name, "png_bytes": png_bytes})
+        cached_layers.append({"name": slot_name, "path": png_path})
 
     # Persist the newly built PNGs so the next call with the same inputs
     # hits the fast path above.
@@ -1155,6 +1483,7 @@ def get_segmented_glb_status(
         }
 
     snapshot = get_glb_status(cache)
+    cache_state = cache.get("metadata", {}) if is_preview_cache_artifact_ref(cache) else cache
     return {
         "session_id": session_id,
         "status": snapshot.get("status", "idle"),
@@ -1162,7 +1491,7 @@ def get_segmented_glb_status(
         "job_token": snapshot.get("job_token"),
         "error": snapshot.get("error"),
         "color_contours": (
-            cache.get("color_contours")
+            cache_state.get("color_contours")
             if snapshot.get("status") == "ready"
             else None
         ),
@@ -1196,7 +1525,7 @@ async def upload_heightmap(
     session_data = _require_session(store, session_id)
 
     # 2. Validate preview_cache exists
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_for_heightmap(session_data)
 
     # 3. Read uploaded file and save to temp
     temp_path = await ensure_png_tempfile(heightmap)

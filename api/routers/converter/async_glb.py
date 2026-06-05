@@ -36,6 +36,11 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, TypedDict
 
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    hydrate_preview_cache_for_worker,
+    is_preview_cache_artifact_ref,
+    merge_preview_cache_metadata,
+)
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from config import OUTPUT_DIR
@@ -45,6 +50,24 @@ from core.naming import generate_segmented_glb_filename
 from .common import NON_FATAL_GLB_ERRORS
 
 log = get_logger(__name__)
+
+
+def _cache_state(cache: dict) -> dict:
+    if is_preview_cache_artifact_ref(cache):
+        metadata = cache.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
+    return cache
+
+
+def _cache_value(cache: dict, key: str) -> object:
+    return _cache_state(cache).get(key)
+
+
+def _with_cache_metadata(cache: dict, metadata: dict[str, object]) -> dict:
+    if is_preview_cache_artifact_ref(cache):
+        return merge_preview_cache_metadata(cache, metadata)
+    cache.update(metadata)
+    return cache
 
 
 # Module-level executor shared by every session. ``max_workers=2`` keeps the
@@ -99,12 +122,18 @@ def schedule_glb_build(
     """
 
     job_token = uuid.uuid4().hex
-    cache["glb_job_token"] = job_token
-    # Clear any previous outcome so the status endpoint reports "pending"
-    # until this new job completes. 清空旧结果让状态查询立即返回 pending。
-    cache["glb_url"] = None
-    cache["glb_error"] = None
-    cache["glb_started_at"] = time.time()
+    cache = _with_cache_metadata(
+        cache,
+        {
+            "glb_job_token": job_token,
+            # Clear any previous outcome so the status endpoint reports
+            # "pending" until this new job completes.
+            # 清空旧结果让状态查询立即返回 pending。
+            "glb_url": None,
+            "glb_error": None,
+            "glb_started_at": time.time(),
+        },
+    )
     store.put(session_id, "preview_cache", cache)
 
     _GLB_EXECUTOR.submit(
@@ -163,14 +192,14 @@ def _run_glb_build_job(
                 },
             )
             return
-        if latest_cache.get("glb_job_token") != job_token:
+        if _cache_value(latest_cache, "glb_job_token") != job_token:
             log.debug(
                 "GLB build aborted: superseded by newer job",
                 extra={
                     "event": "converter_glb_aborted_superseded",
                     "session_id": session_id,
                     "job_token": job_token,
-                    "current_job_token": latest_cache.get("glb_job_token"),
+                    "current_job_token": _cache_value(latest_cache, "glb_job_token"),
                 },
             )
             return
@@ -179,7 +208,12 @@ def _run_glb_build_job(
             OUTPUT_DIR,
             generate_segmented_glb_filename(session_id),
         )
-        glb_path = generate_segmented_glb(latest_cache, output_path=target_path)
+        build_cache = (
+            hydrate_preview_cache_for_worker(latest_cache)
+            if is_preview_cache_artifact_ref(latest_cache)
+            else latest_cache
+        )
+        glb_path = generate_segmented_glb(build_cache, output_path=target_path)
 
         # Re-check the token post-build: another replace might have landed
         # while the heavy Shapely/trimesh work was running. Honour the
@@ -190,30 +224,33 @@ def _run_glb_build_job(
         latest_cache = session_data.get("preview_cache") if session_data else None
         if latest_cache is None:
             return
-        if latest_cache.get("glb_job_token") != job_token:
+        if _cache_value(latest_cache, "glb_job_token") != job_token:
             log.debug(
                 "GLB build result discarded: superseded after completion",
                 extra={
                     "event": "converter_glb_discarded_after_build",
                     "session_id": session_id,
                     "job_token": job_token,
-                    "current_job_token": latest_cache.get("glb_job_token"),
+                    "current_job_token": _cache_value(latest_cache, "glb_job_token"),
                 },
             )
             return
 
+        cache_updates: dict[str, object] = {}
         if glb_path and os.path.exists(glb_path):
             glb_id = registry.register_path(session_id, glb_path)
-            latest_cache["glb_url"] = f"/api/files/{glb_id}"
-            latest_cache["glb_error"] = None
+            cache_updates["glb_url"] = f"/api/files/{glb_id}"
+            cache_updates["glb_error"] = None
             # color_contours is populated as a side effect of
             # generate_segmented_glb; re-expose it here so follow-up calls
             # can pick up contour highlights without another round-trip.
             # generate_segmented_glb 会在 cache["color_contours"] 写入轮廓；
             # 这里无需额外动作即可被后续流程读取。
+            if "color_contours" in build_cache:
+                cache_updates["color_contours"] = build_cache["color_contours"]
         else:
-            latest_cache["glb_url"] = None
-            latest_cache["glb_error"] = "generate_segmented_glb returned no path"
+            cache_updates["glb_url"] = None
+            cache_updates["glb_error"] = "generate_segmented_glb returned no path"
             log.warning(
                 "GLB build produced no output path",
                 extra={
@@ -223,7 +260,8 @@ def _run_glb_build_job(
                 },
             )
 
-        latest_cache["glb_completed_at"] = time.time()
+        cache_updates["glb_completed_at"] = time.time()
+        latest_cache = _with_cache_metadata(latest_cache, cache_updates)
         store.put(session_id, "preview_cache", latest_cache)
         log.info(
             "GLB build completed",
@@ -232,7 +270,7 @@ def _run_glb_build_job(
                 "session_id": session_id,
                 "job_token": job_token,
                 "duration_ms": round((time.perf_counter() - t_start) * 1000, 1),
-                "glb_url_set": latest_cache["glb_url"] is not None,
+                "glb_url_set": cache_updates.get("glb_url") is not None,
             },
         )
     except NON_FATAL_GLB_ERRORS as exc:
@@ -255,11 +293,16 @@ def _run_glb_build_job(
         latest_cache = session_data.get("preview_cache") if session_data else None
         if latest_cache is None:
             return
-        if latest_cache.get("glb_job_token") != job_token:
+        if _cache_value(latest_cache, "glb_job_token") != job_token:
             return
-        latest_cache["glb_url"] = None
-        latest_cache["glb_error"] = f"{type(exc).__name__}: {exc}"
-        latest_cache["glb_completed_at"] = time.time()
+        latest_cache = _with_cache_metadata(
+            latest_cache,
+            {
+                "glb_url": None,
+                "glb_error": f"{type(exc).__name__}: {exc}",
+                "glb_completed_at": time.time(),
+            },
+        )
         store.put(session_id, "preview_cache", latest_cache)
 
 
@@ -273,9 +316,10 @@ def get_glb_status(cache: dict) -> GlbStatus:
         - ``idle``    : no job has ever been scheduled for this cache.
     """
 
-    token = cache.get("glb_job_token")
-    url = cache.get("glb_url")
-    err = cache.get("glb_error")
+    state = _cache_state(cache)
+    token = state.get("glb_job_token")
+    url = state.get("glb_url")
+    err = state.get("glb_error")
     if isinstance(url, str) and url:
         return {"status": "ready", "glb_url": url, "job_token": token, "error": None}
     if isinstance(err, str) and err:

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.dependencies import get_session_store
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.session_store import SessionStore
 
 
@@ -54,6 +55,25 @@ def _seed_preview_session(
     return sid
 
 
+def _seed_artifact_preview_session(store: SessionStore, tmp_path) -> str:
+    sid = store.create()
+    original = np.zeros((3, 3, 3), dtype=np.uint8)
+    original[:, :] = [255, 0, 0]
+    replaced = original.copy()
+    replaced[1, 1] = [0, 0, 255]
+    quantized = np.zeros((3, 3, 3), dtype=np.uint8)
+    quantized[:, :] = [240, 8, 8]
+    cache = {
+        "matched_rgb": replaced,
+        "original_matched_rgb": original,
+        "quantized_image": quantized,
+        "mask_solid": np.ones((3, 3), dtype=bool),
+    }
+    ref = externalize_preview_cache(sid, store, cache, root_dir=tmp_path)
+    store.put(sid, "preview_cache", ref)
+    return sid
+
+
 def test_source_color_pick_returns_original_source_color_after_replacement(
     client_with_store: tuple[TestClient, SessionStore],
 ) -> None:
@@ -64,6 +84,31 @@ def test_source_color_pick_returns_original_source_color_after_replacement(
         "/api/convert/source-color-pick",
         json={"session_id": sid, "x": 1, "y": 1},
     )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "source_matched_hex": "#ff0000",
+        "quantized_hex": "#f00808",
+    }
+
+
+def test_source_color_pick_reads_original_from_artifact_cache(
+    client_with_store: tuple[TestClient, SessionStore],
+    tmp_path,
+) -> None:
+    client, store = client_with_store
+    sid = _seed_artifact_preview_session(store, tmp_path)
+
+    from unittest.mock import patch
+
+    with patch(
+        "api.routers.converter.common.hydrate_preview_cache",
+        side_effect=AssertionError("source-color-pick must not fully hydrate artifact cache"),
+    ):
+        response = client.post(
+            "/api/convert/source-color-pick",
+            json={"session_id": sid, "x": 1, "y": 1},
+        )
 
     assert response.status_code == 200
     assert response.json() == {

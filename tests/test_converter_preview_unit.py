@@ -26,6 +26,10 @@ from PIL import Image
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
+from api.preview_cache_artifacts import (
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.routers.converter.preview import (
     _parse_selected_materials,
     _resolve_upload_source_basename,
@@ -201,9 +205,65 @@ class TestSessionContainsPreviewCache:
         assert session_data is not None
         assert "preview_cache" in session_data
         # Verify cache_data was loaded from pickle (values match)
-        loaded_cache = session_data["preview_cache"]
+        loaded_cache = hydrate_preview_cache(
+            session_data["preview_cache"],
+            fields={"matched_rgb"},
+        )
         assert loaded_cache["target_w"] == 120
         assert loaded_cache["target_h"] == 80
+        np.testing.assert_array_equal(loaded_cache["matched_rgb"], _mock_matched_rgb)
+
+    def test_preview_externalizes_cache_arrays_and_original_snapshot(
+        self,
+    ) -> None:
+        """Preview cache arrays should be private artifacts, not session arrays."""
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+
+        assert is_preview_cache_artifact_ref(cache_ref)
+        assert cache_ref["metadata"]["target_w"] == 120
+        assert cache_ref["metadata"]["target_h"] == 80
+        assert "matched_rgb" in cache_ref["fields"]
+        assert "mask_solid" in cache_ref["fields"]
+        assert "quantized_image" in cache_ref["fields"]
+        assert "original_matched_rgb" in cache_ref["fields"]
+        assert "matched_rgb" not in cache_ref["metadata"]
+        assert "original_matched_rgb" not in session_data
+        assert "original_material_matrix" not in session_data
+        assert not any(
+            isinstance(value, np.ndarray)
+            for value in cache_ref["metadata"].values()
+        )
 
     def test_preview_binds_session_id_before_worker_submit_and_reuses_it(self) -> None:
         """Worker submit should see the same session_id returned by preview."""
@@ -279,7 +339,7 @@ class TestSessionContainsPreviewCache:
         body = response.json()
         session_data = _test_store.get(body["session_id"])
         assert session_data is not None
-        cache = session_data["preview_cache"]
+        cache = hydrate_preview_cache(session_data["preview_cache"])
 
         cached_hex = {entry["hex"].lower() for entry in cache["color_palette"]}
         source_hex = {
@@ -406,6 +466,99 @@ class TestResponseContainsPaletteAndDimensions:
         assert body["dimensions"]["height"] == 80
         assert body["warnings"] == []
 
+    def test_preview_logs_aggregate_preview_cache_memory_profile(
+        self, monkeypatch
+    ) -> None:
+        """Preview should emit one aggregate cache-memory profile at DEBUG."""
+        monkeypatch.delenv("LUMINA_PREVIEW_CACHE_MEMORY_PROFILE_INFO", raising=False)
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        logger_mock = MagicMock()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch("api.routers.converter.preview.log", logger_mock),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200
+        debug_profiles = [
+            call.kwargs["extra"]
+            for call in logger_mock.debug.call_args_list
+            if call.kwargs.get("extra", {}).get("event")
+            == "preview_cache_memory_profile"
+        ]
+        info_profiles = [
+            call.kwargs["extra"]
+            for call in logger_mock.info.call_args_list
+            if call.kwargs.get("extra", {}).get("event")
+            == "preview_cache_memory_profile"
+        ]
+
+        assert len(debug_profiles) == 1
+        assert info_profiles == []
+        profile = debug_profiles[0]
+        assert profile["session_id"] == response.json()["session_id"]
+        assert profile["modeling_mode"] == "high-fidelity"
+        assert profile["array_count"] == 3
+        assert profile["array_total_bytes"] == 67200
+        assert profile["cache_data_bytes"] > 0
+        assert profile["largest_arrays"][0]["field"] in {
+            "matched_rgb",
+            "quantized_image",
+        }
+
+    def test_preview_rejects_estimated_cache_over_limit_before_worker(
+        self, monkeypatch
+    ) -> None:
+        """Preview should reject pathological cache sizes before worker submit."""
+        monkeypatch.setenv("LUMINA_PREVIEW_CACHE_MAX_BYTES", "1024")
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
+
+        with patch(
+            "api.routers.converter.preview.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "target_width_mm": "200",
+                    "color_mode": "4-Color",
+                    "color_layers": "5",
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["error"] == "preview_cache_size_limit_exceeded"
+        assert detail["estimate_bytes"] > detail["max_bytes"]
+        assert detail["estimated_width"] == 2000
+        assert detail["estimated_height"] == 2000
+        _mock_pool.submit.assert_not_called()
+
     def test_preview_schedules_segmented_glb_asynchronously(self) -> None:
         """Preview should return after PNG/cache work and schedule GLB async."""
         buf = _make_test_image_buf()
@@ -444,8 +597,11 @@ class TestResponseContainsPaletteAndDimensions:
         assert session_id == body["session_id"]
         assert store is _test_store
         assert registry is _test_registry
-        assert cache["target_w"] == 120
-        assert cache["target_h"] == 80
+        assert is_preview_cache_artifact_ref(cache)
+        assert cache["metadata"]["target_w"] == 120
+        assert cache["metadata"]["target_h"] == 80
+        assert "matched_rgb" in cache["fields"]
+        assert "mask_solid" in cache["fields"]
 
 
 class TestSvgLargeFormatWarnings:

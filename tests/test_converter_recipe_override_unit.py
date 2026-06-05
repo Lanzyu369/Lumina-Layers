@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ from PIL import Image
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import externalize_preview_cache, hydrate_preview_cache
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import LUTMetadata
@@ -326,6 +327,86 @@ def test_apply_recipe_override_resolves_select_all_color_region_id(
             "layer_height_mm": 0.08,
         }
     ]
+
+
+def test_apply_recipe_override_artifact_resolves_select_all_color_region_id(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[0, 0] = [170, 0, 0]
+    matched_rgb[1, 1] = [170, 0, 0]
+    matched_rgb[2, 2] = [0, 170, 0]
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        {
+            "matched_rgb": matched_rgb.copy(),
+            "material_matrix": material_matrix.copy(),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "preview_cache", cache_ref)
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            np.zeros((0, 3), dtype=np.uint8),
+            None,
+            LUTMetadata(max_color_layers=5, layer_height_mm=0.08, base_channel_idx=0),
+        ),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        lambda metadata, recipe, layer_height_mm, color_layers, layer_order: {
+            "rgb": [200, 100, 50],
+            "lab": [55.0, 2.0, 3.0],
+            "source": "stage_model",
+            "runtime_mode_key": "0.08x5",
+        },
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with patch(
+        "api.routers.converter.common.hydrate_preview_cache",
+        side_effect=AssertionError("select-all recipe override must not fully hydrate artifact cache"),
+    ):
+        response = client.post(
+            "/api/convert/apply-recipe-override",
+            json={
+                "session_id": session_id,
+                "region_ids": ["__select_all_color__:aa0000"],
+                "recipe": [1, 1, 1, 1, 1],
+                "layer_order": "Top2Bottom",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    session_data = store.get(session_id)
+    assert session_data is not None
+    stored_mask = session_data["selected_region_masks"]["__select_all_color__:aa0000"]
+    assert int(np.count_nonzero(stored_mask)) == 2
+    updated_cache = hydrate_preview_cache(
+        session_data["preview_cache"],
+        fields={"matched_rgb", "material_matrix"},
+    )
+    assert np.all(updated_cache["matched_rgb"][stored_mask] == np.array([200, 100, 50], dtype=np.uint8))
+    assert np.all(updated_cache["material_matrix"][stored_mask] == np.array([1, 1, 1, 1, 1], dtype=np.int32))
 
 
 def test_apply_recipe_override_falls_back_to_pure_stack_when_forward_model_missing(
@@ -1954,6 +2035,46 @@ def test_region_recipe_endpoint_returns_current_stack_top2bottom() -> None:
     assert entry["recipe"] == [3, 2, 1, 0, 4]
     assert entry["color_layers"] == 5
     assert entry["layer_order"] == "Top2Bottom"
+
+
+def test_region_recipe_artifact_cache_avoids_common_full_hydrate(tmp_path: Path) -> None:
+    client, store, _registry = _client_with_state()
+    session_id = store.create()
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    material_matrix[:, :] = [3, 2, 1, 0, 4]
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        {
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "material_matrix": material_matrix,
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+
+    with patch(
+        "api.routers.converter.common.hydrate_preview_cache",
+        side_effect=AssertionError("region-recipe must not fully hydrate artifact cache"),
+    ):
+        response = client.post(
+            "/api/convert/region-recipe",
+            json={
+                "session_id": session_id,
+                "region_ids": ["region-1"],
+                "layer_order": "Top2Bottom",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    entry = response.json()["recipes"][0]
+    assert entry["recipe"] == [3, 2, 1, 0, 4]
     assert entry["layer_height_mm"] == 0.08
 
 

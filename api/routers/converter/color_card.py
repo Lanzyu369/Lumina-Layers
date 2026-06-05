@@ -20,6 +20,10 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    get_preview_cache_metadata,
+    is_preview_cache_artifact_ref,
+)
 from api.schemas.responses import GenerateResponse
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
@@ -31,12 +35,32 @@ from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
     ROUTER_HANDLED_ERRORS,
     _resolve_material_backing_index,
-    _require_preview_cache,
     _require_session,
 )
 
 router = APIRouter()
 log = get_logger(__name__)
+
+
+def _require_color_card_cache_metadata(session_data: dict) -> dict:
+    """Return preview-cache metadata needed for color-card generation.
+
+    返回色卡生成所需的 preview-cache 元数据。
+    """
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+        )
+    if is_preview_cache_artifact_ref(cache):
+        return get_preview_cache_metadata(cache)
+    return cache
 
 
 class ColorCardRequest(BaseModel):
@@ -76,7 +100,7 @@ async def generate_color_card(
 
     # 1. Session + cache validation
     session_data = _require_session(store, body.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_color_card_cache_metadata(session_data)
 
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")

@@ -22,6 +22,12 @@ from pydantic import BaseModel, ValidationError
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    get_preview_cache_field_path,
+    get_preview_cache_metadata,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.schemas.converter import ConvertGenerateRequest, LargeFormatGenerateRequest
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
@@ -72,7 +78,6 @@ from utils.lut_manager import LUTManager
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
     ROUTER_HANDLED_ERRORS,
-    _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
 )
@@ -161,6 +166,80 @@ def _remove_temp_paths(paths: list[str] | None) -> None:
         return
     for path in paths:
         _remove_temp_path(path)
+
+
+def _require_preview_cache_for_generate(
+    session_data: dict,
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Return metadata view and optional artifact ref for generate routes.
+
+    返回生成路由使用的 metadata 视图和可选 artifact 引用。
+    """
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+        )
+    if is_preview_cache_artifact_ref(cache):
+        return get_preview_cache_metadata(cache), cache
+    return cache, None
+
+
+def _cache_field_path_or_tempfile(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    field_name: str,
+    sid: str,
+    store: SessionStore,
+) -> str | None:
+    """Return an existing artifact field path or serialize a legacy array.
+
+    返回已有 artifact 字段路径；旧缓存数组则序列化为临时文件。
+    """
+    if cache_ref is not None:
+        field_path = get_preview_cache_field_path(cache_ref, field_name)
+        if field_path:
+            return field_path
+
+    value = cache.get(field_name)
+    if value is None:
+        return None
+    array = np.asarray(value)
+    fd, temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
+    os.close(fd)
+    np.save(temp_path, array)
+    store.register_temp_file(sid, temp_path)
+    return temp_path
+
+
+def _cache_field_array(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    field_name: str,
+    mmap_mode: str | None = None,
+) -> object | None:
+    """Load one cache field when a main-process mutation requires it.
+
+    主进程确实需要修改时，只加载一个缓存字段。
+    """
+    if field_name in cache:
+        return cache.get(field_name)
+    if cache_ref is None:
+        return None
+    hydrated = hydrate_preview_cache(
+        cache_ref,
+        fields={field_name},
+        mmap_mode=mmap_mode,
+    )
+    return hydrated.get(field_name)
 
 
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
@@ -346,7 +425,12 @@ def _recover_virtual_materials_from_preview_cache(
     """
     if not recipe:
         return None
-    cache = session_data.get("preview_cache") or {}
+    raw_cache = session_data.get("preview_cache") or {}
+    cache = (
+        get_preview_cache_metadata(raw_cache)
+        if isinstance(raw_cache, dict)
+        else {}
+    )
     if not isinstance(cache, dict):
         return None
 
@@ -505,6 +589,7 @@ def _resolve_recipe_overrides(
 def _prepare_recipe_override_worker_inputs(
     *,
     cache: dict,
+    cache_ref: dict | None = None,
     session_data: dict,
     recipe_overrides: list[dict[str, object]] | None,
     request: ConvertGenerateRequest,
@@ -516,7 +601,12 @@ def _prepare_recipe_override_worker_inputs(
     if not recipe_overrides:
         return None, None
 
-    cached_material_matrix = cache.get("material_matrix")
+    cached_material_matrix = _cache_field_array(
+        cache=cache,
+        cache_ref=cache_ref,
+        field_name="material_matrix",
+        mmap_mode="r",
+    )
     region_masks = session_data.get("selected_region_masks") or {}
     lut_metadata = cache.get("lut_metadata")
     if cached_material_matrix is None:
@@ -575,7 +665,12 @@ def _prepare_recipe_override_worker_inputs(
         # 扩展层要同时兼顾两件事：(a) mask_solid 外的透明背景保持 -1 空气，
         # 避免 S07 围着模型生成一圈白色 mesh；(b) mask_solid 内非 override
         # 像素保留 base channel，避免第 6 层塌成空层。
-        cached_mask_solid = cache.get("mask_solid")
+        cached_mask_solid = _cache_field_array(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="mask_solid",
+            mmap_mode="r",
+        )
         if cached_mask_solid is None:
             raise HTTPException(
                 status_code=409,
@@ -702,7 +797,7 @@ async def convert_generate(
 
     # 1. Session validation (main thread)
     session_data = _require_session(store, body.session_id)
-    cache = _require_preview_cache(session_data)
+    cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     request = body.params
 
@@ -799,21 +894,35 @@ async def convert_generate(
         },
     )
     if should_forward_cached_analysis:
-        cached_matched_rgb = cache.get("matched_rgb")
-        if cached_matched_rgb is not None:
-            fd, mr_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
-            os.close(fd)
-            np.save(mr_temp_path, cached_matched_rgb)
-            matched_rgb_path = mr_temp_path
-            store.register_temp_file(body.session_id, mr_temp_path)
+        matched_rgb_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="matched_rgb",
+            sid=body.session_id,
+            store=store,
+        )
+        if matched_rgb_path is not None:
+            cached_matched_rgb = cache.get("matched_rgb")
+            field_ref = (
+                (cache_ref or {}).get("fields", {}).get("matched_rgb", {})
+                if cache_ref is not None
+                else {}
+            )
             log.debug(
-                "Cached matched RGB saved for worker: shape=%s, dtype=%s",
-                cached_matched_rgb.shape,
-                cached_matched_rgb.dtype,
+                "Cached matched RGB prepared for worker",
                 extra={
-                    "event": "converter_generate_cached_matched_rgb_saved",
-                    "matched_rgb_shape": list(cached_matched_rgb.shape),
-                    "matched_rgb_dtype": str(cached_matched_rgb.dtype),
+                    "event": "converter_generate_cached_matched_rgb_prepared",
+                    "matched_rgb_shape": (
+                        list(cached_matched_rgb.shape)
+                        if hasattr(cached_matched_rgb, "shape")
+                        else field_ref.get("shape")
+                    ),
+                    "matched_rgb_dtype": (
+                        str(cached_matched_rgb.dtype)
+                        if hasattr(cached_matched_rgb, "dtype")
+                        else field_ref.get("dtype")
+                    ),
+                    "artifact_backed": cache_ref is not None,
                 },
             )
 
@@ -824,24 +933,25 @@ async def convert_generate(
             # silently drops every /region-replace mutation.
             # 把 mask_solid 与 matched_rgb 一起透传给 worker，让矢量分支
             # 可以在求交后回写颜色；不传就会丢掉用户的区域替换。
-            cached_mask_solid = cache.get("mask_solid")
-            if cached_mask_solid is not None:
-                fd, ms_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
-                os.close(fd)
-                np.save(ms_temp_path, cached_mask_solid)
-                mask_solid_path = ms_temp_path
-                store.register_temp_file(body.session_id, ms_temp_path)
+            mask_solid_path = _cache_field_path_or_tempfile(
+                cache=cache,
+                cache_ref=cache_ref,
+                field_name="mask_solid",
+                sid=body.session_id,
+                store=store,
+            )
 
-            cached_material_matrix = cache.get("material_matrix")
-            if cached_material_matrix is not None:
-                fd, mm_temp_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
-                os.close(fd)
-                np.save(mm_temp_path, cached_material_matrix)
-                material_matrix_path = mm_temp_path
-                store.register_temp_file(body.session_id, mm_temp_path)
+            material_matrix_path = _cache_field_path_or_tempfile(
+                cache=cache,
+                cache_ref=cache_ref,
+                field_name="material_matrix",
+                sid=body.session_id,
+                store=store,
+            )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
+        cache_ref=cache_ref,
         session_data=session_data,
         recipe_overrides=recipe_overrides,
         request=request,
@@ -1497,7 +1607,7 @@ async def convert_generate_large_format(
     """
     # 1. Session validation
     session_data = _require_session(store, body.session_id)
-    cache = _require_preview_cache(session_data)
+    cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     lf = body.params
     request = lf.params
@@ -1525,6 +1635,7 @@ async def convert_generate_large_format(
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
+        cache_ref=cache_ref,
         session_data=session_data,
         recipe_overrides=recipe_overrides,
         request=request,
