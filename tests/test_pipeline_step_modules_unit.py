@@ -946,6 +946,32 @@ class TestP04CacheBuilding:
         for key in expected_keys:
             assert key in cache, f"cache 缺少键: {key}"
 
+    def test_pixel_mode_uses_quantize_colors_as_glb_mesh_budget(self):
+        """Pixel previews should keep the user's high colour budget in GLB."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.PIXEL
+        ctx["quantize_colors"] = 256
+
+        cache = run(ctx)["cache"]
+
+        assert cache["modeling_mode"] == ModelingMode.PIXEL
+        assert cache["glb_max_meshes"] == 256
+
+    def test_high_fidelity_does_not_raise_glb_mesh_budget_from_quantize_colors(self):
+        """Only pixel mode should opt into the higher GLB colour budget."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.HIGH_FIDELITY
+        ctx["quantize_colors"] = 256
+
+        cache = run(ctx)["cache"]
+
+        assert cache["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert "glb_max_meshes" not in cache
+
     def test_missing_matched_rgb_raises_key_error(self):
         """缺失 matched_rgb 键应抛出 KeyError。"""
         from core.pipeline.p04_cache_building import run

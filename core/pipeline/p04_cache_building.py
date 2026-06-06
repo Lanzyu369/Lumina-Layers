@@ -16,6 +16,7 @@ from config import BedManager
 from core.pipeline.pipeline_utils import _ensure_quantized_image_in_cache
 
 _log = get_logger(__name__)
+_DEFAULT_GLB_MAX_MESHES = 64
 
 
 def run(ctx: dict) -> dict:
@@ -57,6 +58,7 @@ def run(ctx: dict) -> dict:
     layer_height_mm = ctx.get('layer_height_mm')
     color_conf = ctx['color_conf']
     color_mode = ctx['color_mode']
+    modeling_mode = ctx.get('modeling_mode')
     quantize_colors = ctx['quantize_colors']
     svg_pixels_per_mm = ctx.get('svg_pixels_per_mm')
     backing_color_id = ctx.get('backing_color_id', 0)
@@ -83,6 +85,7 @@ def run(ctx: dict) -> dict:
         'preview_rgba': preview_rgba.copy(),
         'color_conf': color_conf,
         'color_mode': color_mode,
+        'modeling_mode': modeling_mode,
         'quantize_colors': quantize_colors,
         'svg_pixels_per_mm': svg_pixels_per_mm,
         'backing_color_id': backing_color_id,
@@ -94,6 +97,14 @@ def run(ctx: dict) -> dict:
         'preview_colors': ctx.get('preview_colors'),
         'slot_names': ctx.get('slot_names'),
     }
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    if modeling_mode_value == "pixel":
+        try:
+            glb_mesh_budget = int(quantize_colors)
+        except (TypeError, ValueError):
+            glb_mesh_budget = 0
+        if glb_mesh_budget > _DEFAULT_GLB_MAX_MESHES:
+            cache['glb_max_meshes'] = glb_mesh_budget
 
     # 统一缓存契约：保证 quantized_image 始终可用
     cache['debug_data'] = debug_data
