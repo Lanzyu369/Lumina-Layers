@@ -401,8 +401,11 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
     expect(exhaustiveBuildButton).toBeDisabled();
 
+    expect(screen.getByText("智能配方缓存")).toBeInTheDocument();
+    expect(screen.getByText("配方缓存未构建")).toBeInTheDocument();
+
     const runtimeBuildButton = await screen.findByRole("button", {
-      name: "构建运行时",
+      name: "构建智能缓存",
     });
     expect(runtimeBuildButton).not.toBeDisabled();
 
@@ -426,7 +429,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       { candidateBudget: 33_554_432 },
     );
     expect(buildMaterialSolverCache).not.toHaveBeenCalled();
-    expect(screen.getByText("运行时已就绪")).toBeInTheDocument();
+    expect(screen.getByText("智能缓存已就绪")).toBeInTheDocument();
   });
 
   it("forwards selected runtime candidate budget to status build and delete calls", async () => {
@@ -483,7 +486,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("combobox", { name: "候选预算" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "缓存规模" }));
     fireEvent.click(await screen.findByRole("option", { name: /64M/ }));
 
     await waitFor(() => {
@@ -494,7 +497,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
 
     const rebuildButton = await screen.findByRole("button", {
-      name: "重新构建运行时",
+      name: "重建智能缓存",
     });
     await act(async () => {
       fireEvent.click(rebuildButton);
@@ -508,7 +511,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     );
 
     const deleteButton = await screen.findByRole("button", {
-      name: "删除运行时",
+      name: "删除智能缓存",
     });
     await act(async () => {
       fireEvent.click(deleteButton);
@@ -524,7 +527,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     confirmSpy.mockRestore();
   });
 
-  it("loads runtime color charts for a cached hybrid runtime", async () => {
+  it("loads recipe coverage charts for a cached smart recipe cache", async () => {
     vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
       status: "ok",
       message: "No cache found",
@@ -556,7 +559,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     );
 
     const chartsButton = await screen.findByRole("button", {
-      name: "查看运行时色彩分布图",
+      name: "查看配方覆盖图",
     });
     await act(async () => {
       fireEvent.click(chartsButton);
