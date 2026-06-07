@@ -9,7 +9,11 @@ import pytest
 
 from core.material_candidate_cache import (
     DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
+    LEGACY_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
     MaterialCandidateCacheConfig,
+    QUALITY_8M_CANDIDATE_BUDGET,
+    RECOMMENDED_PERSISTED_CANDIDATE_BUDGET,
     build_material_candidate_runtime,
     estimate_candidate_cache_memory,
 )
@@ -36,6 +40,25 @@ def _mat(
     )
 
 
+def _palette(size: int) -> list[MaterialParams]:
+    return [
+        _mat(
+            f"Mat{i:02d}",
+            E=(
+                0.05 + 0.9 * ((i * 37) % 255) / 255.0,
+                0.05 + 0.9 * ((i * 67) % 255) / 255.0,
+                0.05 + 0.9 * ((i * 97) % 255) / 255.0,
+            ),
+            k=(
+                0.5 + ((i * 11) % 30) / 5.0,
+                0.5 + ((i * 13) % 30) / 5.0,
+                0.5 + ((i * 17) % 30) / 5.0,
+            ),
+        )
+        for i in range(size)
+    ]
+
+
 RED = _mat("Red", E=(0.6, 0.05, 0.05), k=(4.0, 4.0, 4.0))
 BLUE = _mat("Blue", E=(0.05, 0.1, 0.6), k=(4.0, 4.0, 4.0))
 WHITE = _mat("White", E=(0.95, 0.95, 0.95), k=(0.5, 0.5, 0.5))
@@ -45,41 +68,96 @@ SMALL_PALETTE = [RED, BLUE, WHITE]
 MEDIUM_PALETTE = [RED, BLUE, WHITE, GREEN, BLACK]
 
 
-def test_default_candidate_config_uses_8g_build_budget() -> None:
+def test_default_candidate_config_keeps_8gib_build_guard() -> None:
+    import core.material_candidate_cache as candidate_cache
+
     config = MaterialCandidateCacheConfig.default_persisted()
     preview_config = MaterialCandidateCacheConfig.preview_safe()
 
-    assert config.candidate_budget == 4_194_304
-    assert config.candidate_pool_multiplier == 8
+    assert config.candidate_budget == RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
+    assert config.candidate_pool_multiplier == 2
     assert config.batch_recipe_count == 524_288
     assert config.build_memory_budget_bytes == 8 * 1024 * 1024 * 1024
     assert DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES == 8 * 1024 * 1024 * 1024
+    assert getattr(candidate_cache, "MAX_PERSISTED_CANDIDATE_BUDGET", 0) == (
+        MAX_PERSISTED_CANDIDATE_BUDGET
+    )
     assert preview_config.candidate_budget == 1_048_576
     assert preview_config.candidate_pool_multiplier == 1
 
 
-def test_default_candidate_memory_estimate_fits_8g_budget() -> None:
+def test_persisted_candidate_multiplier_scales_down_with_large_budgets() -> None:
+    assert (
+        MaterialCandidateCacheConfig.persisted_for_budget(
+            LEGACY_PERSISTED_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 8
+    )
+    assert (
+        MaterialCandidateCacheConfig.persisted_for_budget(
+            QUALITY_8M_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 4
+    )
+    assert (
+        MaterialCandidateCacheConfig.persisted_for_budget(
+            RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 2
+    )
+    assert (
+        MaterialCandidateCacheConfig.persisted_for_budget(
+            MAX_PERSISTED_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 1
+    )
+    assert (
+        MaterialCandidateCacheConfig(
+            candidate_budget=RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 2
+    )
+    assert (
+        MaterialCandidateCacheConfig(
+            candidate_budget=MAX_PERSISTED_CANDIDATE_BUDGET
+        ).candidate_pool_multiplier
+        == 1
+    )
+
+
+def test_default_candidate_memory_estimate_fits_8gib_build_guard() -> None:
     config = MaterialCandidateCacheConfig.default_persisted()
 
     report = estimate_candidate_cache_memory(
         candidate_budget=config.candidate_budget,
         layer_count=10,
-        material_count=22,
+        material_count=82,
     )
 
-    assert report.candidate_budget == 4_194_304
+    assert report.candidate_budget == 33_554_432
     assert report.estimated_peak_bytes < config.build_memory_budget_bytes
 
 
-def test_candidate_memory_estimate_uses_runtime_uint16_recipe_rows() -> None:
+def test_candidate_memory_estimate_uses_compact_recipe_rows() -> None:
     report = estimate_candidate_cache_memory(
         candidate_budget=1024,
         layer_count=10,
-        material_count=22,
+        material_count=82,
     )
 
-    expected_recipe_bytes = 1024 * 10 * np.dtype(np.uint16).itemsize
+    expected_recipe_bytes = 1024 * 10 * np.dtype(np.uint8).itemsize
     assert report.final_runtime_bytes >= expected_recipe_bytes
+    assert report.final_runtime_bytes < 1024 * (10 * 2 + 3 + 12 + 1)
+
+
+def test_max_candidate_memory_estimate_fits_8gib_build_guard() -> None:
+    report = estimate_candidate_cache_memory(
+        candidate_budget=67_108_864,
+        layer_count=10,
+        material_count=82,
+    )
+
+    assert report.estimated_peak_bytes < 8 * 1024 * 1024 * 1024
 
 
 def test_candidate_runtime_build_rejects_over_budget_configuration() -> None:
@@ -379,6 +457,148 @@ def test_candidate_runtime_uses_candidate_pool_multiplier_for_coverage_selection
 
     assert runtime.valid_cell_count == 128
     assert sum(requested_counts) >= 64
+    assert max(requested_counts) <= 16
+
+
+def test_candidate_runtime_build_uses_streaming_parallel_prediction(
+    monkeypatch,
+) -> None:
+    import core.material_candidate_cache as candidate_cache
+
+    def _forbidden_full_predict(*args, **kwargs):
+        raise AssertionError("streaming builder must not use full-array prediction")
+
+    monkeypatch.setattr(
+        candidate_cache,
+        "_predict_candidate_linear",
+        _forbidden_full_predict,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=MEDIUM_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            candidate_budget=128,
+            candidate_pool_multiplier=2,
+            batch_recipe_count=16,
+            seed=77,
+            enable_inverse_refinement=False,
+        ),
+    )
+
+    assert runtime.valid_cell_count == 128
+    assert runtime.metadata["build_mode"] == "streaming_parallel"
+    assert runtime.metadata["build_worker_count"] >= 1
+
+
+def test_candidate_runtime_exact_space_uses_chunked_prediction(
+    monkeypatch,
+) -> None:
+    import core.material_candidate_cache as candidate_cache
+
+    requested_counts: list[int] = []
+    original = candidate_cache._recipe_space_chunk
+
+    def _recording_recipe_space_chunk(*args, **kwargs):
+        requested_counts.append(int(kwargs["count"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        candidate_cache,
+        "_recipe_space_chunk",
+        _recording_recipe_space_chunk,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=4,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            candidate_budget=100,
+            batch_recipe_count=10,
+            build_worker_count=3,
+            enable_inverse_refinement=False,
+        ),
+    )
+
+    assert runtime.valid_cell_count == 81
+    assert len(requested_counts) > 1
+    assert max(requested_counts) <= 10
+    pinned_recipes = runtime.candidate_recipes[runtime.pinned_mask]
+    assert pinned_recipes.shape[0] == len(SMALL_PALETTE)
+    assert np.all(pinned_recipes == pinned_recipes[:, :1])
+
+
+def test_candidate_runtime_multi_worker_matches_single_worker() -> None:
+    base_config = {
+        "candidate_budget": 128,
+        "candidate_pool_multiplier": 2,
+        "batch_recipe_count": 16,
+        "seed": 77,
+        "enable_inverse_refinement": False,
+    }
+    single = build_material_candidate_runtime(
+        materials=MEDIUM_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            **base_config,
+            build_worker_count=1,
+        ),
+    )
+    parallel = build_material_candidate_runtime(
+        materials=MEDIUM_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            **base_config,
+            build_worker_count=4,
+        ),
+    )
+
+    np.testing.assert_array_equal(parallel.candidate_recipes, single.candidate_recipes)
+    np.testing.assert_array_equal(parallel.achieved_srgb, single.achieved_srgb)
+    np.testing.assert_allclose(parallel.achieved_lab, single.achieved_lab)
+    np.testing.assert_array_equal(parallel.pinned_mask, single.pinned_mask)
+
+
+def test_candidate_runtime_exact_space_multi_worker_matches_single_worker() -> None:
+    base_config = {
+        "candidate_budget": 100,
+        "batch_recipe_count": 10,
+        "seed": 77,
+        "enable_inverse_refinement": False,
+    }
+    single = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=4,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            **base_config,
+            build_worker_count=1,
+        ),
+    )
+    parallel = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=4,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            **base_config,
+            build_worker_count=4,
+        ),
+    )
+
+    np.testing.assert_array_equal(parallel.candidate_recipes, single.candidate_recipes)
+    np.testing.assert_array_equal(parallel.achieved_srgb, single.achieved_srgb)
+    np.testing.assert_allclose(parallel.achieved_lab, single.achieved_lab)
+    np.testing.assert_array_equal(parallel.pinned_mask, single.pinned_mask)
 
 
 def test_candidate_runtime_rebinds_recipes_to_user_material_order() -> None:
@@ -513,6 +733,45 @@ def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
         DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES
     )
     assert loaded.metadata["batch_recipe_count"] == 524_288
+
+
+def test_candidate_runtime_keeps_uint8_recipes_for_82_materials(
+    tmp_path: Path,
+) -> None:
+    from core.material_candidate_cache import (
+        load_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    palette = _palette(82)
+    runtime = build_material_candidate_runtime(
+        materials=palette,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            candidate_budget=256,
+            candidate_pool_multiplier=1,
+            batch_recipe_count=32,
+            seed=44,
+            enable_inverse_refinement=False,
+        ),
+    )
+    assert runtime.candidate_recipes.dtype == np.uint8
+
+    save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    loaded = load_material_candidate_runtime(
+        palette,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        candidate_budget=256,
+        cache_root=tmp_path,
+    )
+
+    assert loaded is not None
+    assert loaded.candidate_recipes.dtype == np.uint8
+    assert loaded.metadata["recipe_dtype"] == "uint8"
 
 
 def test_load_candidate_runtime_returns_none_when_absent_or_palette_mismatch(

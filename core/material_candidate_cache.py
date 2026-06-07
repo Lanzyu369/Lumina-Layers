@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,7 +27,11 @@ from core.material_cache import (
 from core.material_candidate_sampling import (
     CandidateRecipeBatch,
     _low_discrepancy_recipes,
-    generate_candidate_recipes,
+    _pair_ramp_recipes,
+    _recipe_space_chunk,
+    _safe_total_count,
+    _uniform_recipes,
+    _unique_rows_preserve_order,
 )
 from core.material_color_solver import (
     MaterialParams,
@@ -40,10 +47,25 @@ from core.material_inverse_refinement import (
 
 DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES = 8 * 1024 * 1024 * 1024
 PREVIEW_SAFE_CANDIDATE_BUDGET = 1_048_576
-DEFAULT_PERSISTED_CANDIDATE_BUDGET = 4_194_304
-QUALITY_8G_CANDIDATE_BUDGET = 8_388_608
+LEGACY_PERSISTED_CANDIDATE_BUDGET = 4_194_304
+QUALITY_8M_CANDIDATE_BUDGET = 8_388_608
+RECOMMENDED_PERSISTED_CANDIDATE_BUDGET = 33_554_432
+MAX_PERSISTED_CANDIDATE_BUDGET = 67_108_864
+DEFAULT_PERSISTED_CANDIDATE_BUDGET = RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
+DEFAULT_CANDIDATE_BUILD_WORKERS = max(1, min(16, os.cpu_count() or 1))
 HYBRID_CANDIDATE_SCHEMA_VERSION = "2.0"
 HYBRID_CANDIDATE_ALGORITHM_VERSION = "hybrid-v2"
+
+
+def _candidate_pool_multiplier_for_budget(candidate_budget: int) -> int:
+    budget = int(candidate_budget)
+    if budget <= LEGACY_PERSISTED_CANDIDATE_BUDGET:
+        return 8
+    if budget <= QUALITY_8M_CANDIDATE_BUDGET:
+        return 4
+    if budget <= RECOMMENDED_PERSISTED_CANDIDATE_BUDGET:
+        return 2
+    return 1
 
 
 @dataclass(frozen=True)
@@ -53,10 +75,12 @@ class MaterialCandidateCacheConfig:
 
     Attributes:
         candidate_budget: Final candidate row budget. (最终候选行数预算)
-        candidate_pool_multiplier: Reserved multiplier for future streaming
-            selection pools. (预留给后续流式选择池的候选倍数)
+        candidate_pool_multiplier: Optional evaluated-candidate multiplier.
+            ``None`` derives a budget-aware value. (可选评估候选倍数；
+            ``None`` 时按预算自动推导)
         build_memory_budget_bytes: Build-time memory budget. (构建期内存预算)
         batch_recipe_count: Forward-model batch size. (正向预测批大小)
+        build_worker_count: Parallel chunk worker count. (并行分块 worker 数)
         lab_grid_resolution: Diagnostic Lab resolution label. (诊断用 Lab 分辨率)
         seed: Deterministic sampling seed. (确定性采样种子)
         max_build_seconds: Optional build-time cap. (可选构建时间上限)
@@ -71,9 +95,10 @@ class MaterialCandidateCacheConfig:
     """
 
     candidate_budget: int
-    candidate_pool_multiplier: int = 8
+    candidate_pool_multiplier: int | None = None
     build_memory_budget_bytes: int = DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES
     batch_recipe_count: int = 524_288
+    build_worker_count: int | None = None
     lab_grid_resolution: int = 64
     seed: int = 0
     max_build_seconds: float | None = None
@@ -82,6 +107,15 @@ class MaterialCandidateCacheConfig:
     max_refine_top_suffixes: int = 4096
     max_refine_bottom_prefixes: int = 64
     refine_bottom_neighbors: int = 2
+
+    def __post_init__(self) -> None:
+        if self.candidate_pool_multiplier is None:
+            multiplier = _candidate_pool_multiplier_for_budget(
+                int(self.candidate_budget)
+            )
+        else:
+            multiplier = max(1, int(self.candidate_pool_multiplier))
+        object.__setattr__(self, "candidate_pool_multiplier", multiplier)
 
     @classmethod
     def preview_safe(cls) -> "MaterialCandidateCacheConfig":
@@ -98,6 +132,9 @@ class MaterialCandidateCacheConfig:
     def default_persisted(cls) -> "MaterialCandidateCacheConfig":
         return cls(
             candidate_budget=DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            candidate_pool_multiplier=_candidate_pool_multiplier_for_budget(
+                DEFAULT_PERSISTED_CANDIDATE_BUDGET
+            ),
             max_refine_materials=8,
             max_refine_top_suffixes=32_768,
             max_refine_bottom_prefixes=65_536,
@@ -105,9 +142,45 @@ class MaterialCandidateCacheConfig:
         )
 
     @classmethod
-    def quality_8g(cls) -> "MaterialCandidateCacheConfig":
+    def quality_8m(cls) -> "MaterialCandidateCacheConfig":
         return cls(
-            candidate_budget=QUALITY_8G_CANDIDATE_BUDGET,
+            candidate_budget=QUALITY_8M_CANDIDATE_BUDGET,
+            candidate_pool_multiplier=_candidate_pool_multiplier_for_budget(
+                QUALITY_8M_CANDIDATE_BUDGET
+            ),
+            max_refine_materials=8,
+            max_refine_top_suffixes=32_768,
+            max_refine_bottom_prefixes=65_536,
+            refine_bottom_neighbors=2,
+        )
+
+    @classmethod
+    def recommended_persisted(cls) -> "MaterialCandidateCacheConfig":
+        return cls.default_persisted()
+
+    @classmethod
+    def max_persisted(cls) -> "MaterialCandidateCacheConfig":
+        return cls(
+            candidate_budget=MAX_PERSISTED_CANDIDATE_BUDGET,
+            candidate_pool_multiplier=_candidate_pool_multiplier_for_budget(
+                MAX_PERSISTED_CANDIDATE_BUDGET
+            ),
+            max_refine_materials=8,
+            max_refine_top_suffixes=32_768,
+            max_refine_bottom_prefixes=65_536,
+            refine_bottom_neighbors=2,
+        )
+
+    @classmethod
+    def persisted_for_budget(
+        cls,
+        candidate_budget: int,
+    ) -> "MaterialCandidateCacheConfig":
+        return cls(
+            candidate_budget=int(candidate_budget),
+            candidate_pool_multiplier=_candidate_pool_multiplier_for_budget(
+                int(candidate_budget)
+            ),
             max_refine_materials=8,
             max_refine_top_suffixes=32_768,
             max_refine_bottom_prefixes=65_536,
@@ -135,11 +208,41 @@ class CandidateCacheMemoryEstimate:
     estimated_peak_bytes: int
 
 
+@dataclass(frozen=True)
+class CandidatePredictionBatch:
+    recipes: np.ndarray
+    achieved_srgb: np.ndarray
+    achieved_lab: np.ndarray
+
+
+@dataclass(frozen=True)
+class CandidateSelection:
+    recipes: np.ndarray
+    achieved_srgb: np.ndarray
+    achieved_lab: np.ndarray
+    pinned_mask: np.ndarray
+    worker_count: int
+
+
+def _recipe_dtype_for_material_count(material_count: int) -> np.dtype:
+    if int(material_count) <= np.iinfo(np.uint8).max + 1:
+        return np.dtype(np.uint8)
+    return np.dtype(np.uint16)
+
+
+def _resolve_candidate_build_worker_count(worker_count: int | None = None) -> int:
+    if worker_count is None:
+        return DEFAULT_CANDIDATE_BUILD_WORKERS
+    return max(1, int(worker_count))
+
+
 def estimate_candidate_cache_memory(
     *,
     candidate_budget: int,
     layer_count: int,
     material_count: int,
+    batch_recipe_count: int = MaterialCandidateCacheConfig.batch_recipe_count,
+    worker_count: int | None = None,
 ) -> CandidateCacheMemoryEstimate:
     """Estimate peak memory for bounded candidate-runtime construction.
     估算有预算候选运行时的构建峰值内存。
@@ -148,35 +251,43 @@ def estimate_candidate_cache_memory(
         candidate_budget: Candidate row budget. (候选行数预算)
         layer_count: Recipe layer count. (配方层数)
         material_count: Material count. (耗材数量)
+        batch_recipe_count: Streaming chunk size. (流式分块大小)
+        worker_count: Optional worker count override. (可选 worker 数覆盖)
 
     Returns:
         CandidateCacheMemoryEstimate: Final and peak memory estimate.
             (常驻与峰值内存估算)
     """
-    recipe_item_bytes = np.dtype(np.uint16).itemsize
+    recipe_item_bytes = _recipe_dtype_for_material_count(material_count).itemsize
+    resolved_workers = _resolve_candidate_build_worker_count(worker_count)
+    chunk_count = max(1, min(int(batch_recipe_count), int(candidate_budget)))
     recipe_bytes = int(candidate_budget) * int(layer_count) * recipe_item_bytes
     srgb_bytes = int(candidate_budget) * 3
     lab_bytes = int(candidate_budget) * 3 * 4
     pinned_bytes = int(candidate_budget)
     final_runtime_bytes = recipe_bytes + srgb_bytes + lab_bytes + pinned_bytes
-    sobol_points_bytes = int(candidate_budget) * int(layer_count) * 8
-    sobol_recipe_work_bytes = int(candidate_budget) * int(layer_count) * (
+    cell_key_bytes = int(candidate_budget) * np.dtype(np.int32).itemsize
+    chunk_recipe_bytes = chunk_count * int(layer_count) * recipe_item_bytes
+    chunk_sobol_bytes = chunk_count * int(layer_count) * 8
+    chunk_recipe_work_bytes = chunk_count * int(layer_count) * (
         8 + recipe_item_bytes
     )
-    dedupe_overhead_bytes = int(candidate_budget) * (
-        int(layer_count) * recipe_item_bytes + 8 + 8
+    chunk_forward_bytes = chunk_count * (3 * 8 + 3 * 8 + 3 * 4 + 3)
+    chunk_index_bytes = chunk_count * int(layer_count) * 8
+    per_worker_bytes = (
+        chunk_recipe_bytes
+        + chunk_sobol_bytes
+        + chunk_recipe_work_bytes
+        + chunk_forward_bytes
+        + chunk_index_bytes
     )
-    forward_work_bytes = int(candidate_budget) * (3 * 8 + 3 * 8 + 3 * 4 + 3)
-    kdtree_work_bytes = int(candidate_budget) * (3 * 8 + 32)
-    work_arrays_bytes = (
-        sobol_points_bytes
-        + sobol_recipe_work_bytes
-        + dedupe_overhead_bytes
-        + forward_work_bytes
-        + kdtree_work_bytes
+    safety_bytes = 512 * 1024 * 1024
+    estimated_peak_bytes = (
+        final_runtime_bytes
+        + cell_key_bytes
+        + resolved_workers * per_worker_bytes
+        + safety_bytes
     )
-    safety_bytes = 256 * 1024 * 1024
-    estimated_peak_bytes = final_runtime_bytes + work_arrays_bytes + safety_bytes
     return CandidateCacheMemoryEstimate(
         candidate_budget=int(candidate_budget),
         layer_count=int(layer_count),
@@ -279,6 +390,144 @@ def _predict_candidate_linear(
         start = end
 
     return np.clip(output, 0.0, 1.0)
+
+
+def _predict_candidate_srgb_lab(
+    *,
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    affines = _compute_material_affines(materials, float(layer_height_mm))
+    substrate_rgb = _substrate_linear(substrate)
+    recipe_arr = np.asarray(recipes)
+    colors = np.empty((recipe_arr.shape[0], 3), dtype=np.float64)
+    colors[:] = substrate_rgb
+
+    for layer_index in range(recipe_arr.shape[1]):
+        material_indices = recipe_arr[:, layer_index]
+        colors = (
+            affines.a[material_indices] * colors
+            + affines.b[material_indices]
+        )
+
+    achieved_srgb = linear_to_srgb_uint8(np.clip(colors, 0.0, 1.0))
+    achieved_lab = rgb_to_lab(achieved_srgb).astype(np.float32, copy=False)
+    return achieved_srgb, achieved_lab
+
+
+def _predict_recipe_batch(
+    *,
+    recipes: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+    recipe_dtype_name: str,
+) -> CandidatePredictionBatch:
+    recipe_dtype = np.dtype(recipe_dtype_name)
+    recipe_arr = np.asarray(recipes, dtype=recipe_dtype)
+    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+        recipes=recipe_arr,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    return CandidatePredictionBatch(
+        recipes=recipe_arr,
+        achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
+    )
+
+
+def _predict_recipe_space_batch(
+    *,
+    material_count: int,
+    layer_count: int,
+    start: int,
+    count: int,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+    recipe_dtype_name: str,
+) -> CandidatePredictionBatch:
+    recipe_dtype = np.dtype(recipe_dtype_name)
+    recipes = _recipe_space_chunk(
+        material_count,
+        layer_count,
+        start=int(start),
+        count=int(count),
+        dtype=recipe_dtype,
+    )
+    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+        recipes=recipes,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    return CandidatePredictionBatch(
+        recipes=recipes,
+        achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
+    )
+
+
+def _predict_low_discrepancy_recipe_batch(
+    *,
+    material_count: int,
+    layer_count: int,
+    count: int,
+    seed: int,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+    recipe_dtype_name: str,
+) -> CandidatePredictionBatch:
+    recipe_dtype = np.dtype(recipe_dtype_name)
+    recipes = _low_discrepancy_recipes(
+        material_count=int(material_count),
+        layer_count=int(layer_count),
+        count=int(count),
+        seed=int(seed),
+    ).astype(recipe_dtype, copy=False)
+    achieved_srgb, achieved_lab = _predict_candidate_srgb_lab(
+        recipes=recipes,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    return CandidatePredictionBatch(
+        recipes=recipes,
+        achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
+    )
+
+
+def _anchor_candidate_recipes(
+    *,
+    material_count: int,
+    layer_count: int,
+    budget: int,
+    recipe_dtype: np.dtype,
+) -> np.ndarray:
+    pinned = _uniform_recipes(int(material_count), int(layer_count))[: int(budget)]
+    ramps = _pair_ramp_recipes(
+        material_count=int(material_count),
+        layer_count=int(layer_count),
+        limit=max(0, int(budget) - pinned.shape[0]),
+    )
+    anchors = _unique_rows_preserve_order(np.vstack([pinned, ramps]))[: int(budget)]
+    return anchors.astype(recipe_dtype, copy=False)
+
+
+def _chunk_counts(total_count: int, chunk_size: int) -> list[int]:
+    remaining = int(total_count)
+    counts: list[int] = []
+    while remaining > 0:
+        count = min(int(chunk_size), remaining)
+        counts.append(count)
+        remaining -= count
+    return counts
 
 
 def _lab_cell_keys(lab: np.ndarray, grid_resolution: int) -> np.ndarray:
@@ -386,6 +635,252 @@ def _coverage_selected_recipes(
         chunk_index += 1
 
     return CandidateRecipeBatch(recipes=selected, pinned_mask=pinned)
+
+
+def _streaming_candidate_selection(
+    *,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    config: MaterialCandidateCacheConfig,
+    recipe_dtype: np.dtype,
+) -> CandidateSelection:
+    material_count = len(materials)
+    requested_budget = int(config.candidate_budget)
+    total_count = _safe_total_count(
+        material_count=material_count,
+        layer_count=int(layer_count),
+        limit=requested_budget + 1,
+    )
+    budget = min(requested_budget, total_count)
+    worker_count = _resolve_candidate_build_worker_count(config.build_worker_count)
+    chunk_size = max(1, int(config.batch_recipe_count))
+    build_started = time.monotonic()
+
+    def _raise_if_timed_out() -> None:
+        if config.max_build_seconds is None:
+            return
+        elapsed = time.monotonic() - build_started
+        if elapsed > float(config.max_build_seconds):
+            raise TimeoutError(
+                "candidate runtime build exceeded time budget: "
+                f"{elapsed:.3f}s > {float(config.max_build_seconds):.3f}s"
+            )
+
+    if total_count <= budget:
+        exact_count = int(total_count)
+        exact_recipes = np.empty((exact_count, int(layer_count)), dtype=recipe_dtype)
+        achieved_srgb = np.empty((exact_count, 3), dtype=np.uint8)
+        achieved_lab = np.empty((exact_count, 3), dtype=np.float32)
+        pinned_mask = np.zeros(exact_count, dtype=bool)
+        counts = _chunk_counts(exact_count, chunk_size)
+        starts: list[int] = []
+        offset = 0
+        for count in counts:
+            starts.append(offset)
+            offset += int(count)
+
+        if counts:
+            max_workers = min(worker_count, len(counts))
+            next_chunk_index = 0
+            pending: deque[tuple[int, Future[CandidatePredictionBatch]]] = deque()
+
+            def _submit_next(
+                executor: ThreadPoolExecutor,
+            ) -> None:
+                nonlocal next_chunk_index
+                _raise_if_timed_out()
+                if next_chunk_index >= len(counts):
+                    return
+                chunk_index = next_chunk_index
+                next_chunk_index += 1
+                start = starts[chunk_index]
+                pending.append(
+                    (
+                        start,
+                        executor.submit(
+                            _predict_recipe_space_batch,
+                            material_count=material_count,
+                            layer_count=int(layer_count),
+                            start=start,
+                            count=counts[chunk_index],
+                            materials=materials,
+                            layer_height_mm=float(layer_height_mm),
+                            substrate=substrate,
+                            recipe_dtype_name=recipe_dtype.name,
+                        ),
+                    )
+                )
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for _ in range(max_workers):
+                    _submit_next(executor)
+                while pending:
+                    start, future = pending.popleft()
+                    batch = future.result()
+                    end = start + batch.recipes.shape[0]
+                    dest = slice(start, end)
+                    exact_recipes[dest] = batch.recipes
+                    achieved_srgb[dest] = batch.achieved_srgb
+                    achieved_lab[dest] = batch.achieved_lab
+                    pinned_mask[dest] = np.all(
+                        batch.recipes == batch.recipes[:, :1],
+                        axis=1,
+                    )
+                    _raise_if_timed_out()
+                    _submit_next(executor)
+
+        return CandidateSelection(
+            recipes=exact_recipes,
+            achieved_srgb=achieved_srgb,
+            achieved_lab=achieved_lab,
+            pinned_mask=pinned_mask,
+            worker_count=worker_count,
+        )
+
+    selected = np.empty((budget, int(layer_count)), dtype=recipe_dtype)
+    selected_srgb = np.empty((budget, 3), dtype=np.uint8)
+    selected_lab = np.empty((budget, 3), dtype=np.float32)
+    pinned_mask = np.zeros(budget, dtype=bool)
+    cell_keys = np.full(budget, -1, dtype=np.int32)
+    cell_counts: dict[int, int] = {}
+    seen_cells: set[int] = set()
+    selected_count = 0
+    replace_cursor = budget - 1
+
+    def _record_cell(index: int, key: int) -> None:
+        key_int = int(key)
+        cell_keys[index] = key_int
+        cell_counts[key_int] = cell_counts.get(key_int, 0) + 1
+        seen_cells.add(key_int)
+
+    def _replaceable_index() -> int | None:
+        nonlocal replace_cursor
+        for _ in range(budget):
+            idx = replace_cursor
+            replace_cursor = (replace_cursor - 1) % budget
+            if pinned_mask[idx]:
+                continue
+            old_key = int(cell_keys[idx])
+            if cell_counts.get(old_key, 0) > 1:
+                return idx
+        for _ in range(budget):
+            idx = replace_cursor
+            replace_cursor = (replace_cursor - 1) % budget
+            if not pinned_mask[idx]:
+                return idx
+        return None
+
+    def _consume_batch(batch: CandidatePredictionBatch, *, pinned: bool) -> None:
+        nonlocal selected_count
+        if batch.recipes.shape[0] == 0:
+            return
+        keys = _lab_cell_keys(batch.achieved_lab, int(config.lab_grid_resolution)).astype(
+            np.int32,
+            copy=False,
+        )
+        offset = 0
+        if selected_count < budget:
+            take = min(budget - selected_count, batch.recipes.shape[0])
+            dest = slice(selected_count, selected_count + take)
+            selected[dest] = batch.recipes[:take]
+            selected_srgb[dest] = batch.achieved_srgb[:take]
+            selected_lab[dest] = batch.achieved_lab[:take]
+            pinned_mask[dest] = bool(pinned)
+            for local_index, key in enumerate(keys[:take]):
+                _record_cell(selected_count + local_index, int(key))
+            selected_count += take
+            offset = take
+
+        if selected_count < budget:
+            return
+        for local_index in range(offset, batch.recipes.shape[0]):
+            key = int(keys[local_index])
+            if key in seen_cells:
+                continue
+            idx = _replaceable_index()
+            if idx is None:
+                return
+            old_key = int(cell_keys[idx])
+            cell_counts[old_key] = max(0, cell_counts.get(old_key, 0) - 1)
+            if cell_counts[old_key] == 0:
+                seen_cells.discard(old_key)
+            selected[idx] = batch.recipes[local_index]
+            selected_srgb[idx] = batch.achieved_srgb[local_index]
+            selected_lab[idx] = batch.achieved_lab[local_index]
+            pinned_mask[idx] = False
+            _record_cell(idx, key)
+
+    anchors = _anchor_candidate_recipes(
+        material_count=material_count,
+        layer_count=int(layer_count),
+        budget=budget,
+        recipe_dtype=recipe_dtype,
+    )
+    if anchors.shape[0] > 0:
+        _raise_if_timed_out()
+        _consume_batch(
+            _predict_recipe_batch(
+                recipes=anchors,
+                materials=materials,
+                layer_height_mm=float(layer_height_mm),
+                substrate=substrate,
+                recipe_dtype_name=recipe_dtype.name,
+            ),
+            pinned=True,
+        )
+
+    total_stream_count = max(0, budget - selected_count)
+    multiplier = max(1, int(config.candidate_pool_multiplier))
+    if multiplier > 1:
+        total_stream_count += budget * (multiplier - 1)
+
+    counts = _chunk_counts(total_stream_count, chunk_size)
+    if counts:
+        max_workers = min(worker_count, len(counts))
+        next_chunk_index = 0
+        pending: deque[Future[CandidatePredictionBatch]] = deque()
+
+        def _submit_next(
+            executor: ThreadPoolExecutor,
+        ) -> None:
+            nonlocal next_chunk_index
+            _raise_if_timed_out()
+            if next_chunk_index >= len(counts):
+                return
+            chunk_index = next_chunk_index
+            next_chunk_index += 1
+            pending.append(
+                executor.submit(
+                    _predict_low_discrepancy_recipe_batch,
+                    material_count=material_count,
+                    layer_count=int(layer_count),
+                    count=counts[chunk_index],
+                    seed=int(config.seed) + chunk_index,
+                    materials=materials,
+                    layer_height_mm=float(layer_height_mm),
+                    substrate=substrate,
+                    recipe_dtype_name=recipe_dtype.name,
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for _ in range(max_workers):
+                _submit_next(executor)
+            while pending:
+                future = pending.popleft()
+                _consume_batch(future.result(), pinned=False)
+                _raise_if_timed_out()
+                _submit_next(executor)
+
+    return CandidateSelection(
+        recipes=selected[:selected_count].copy(),
+        achieved_srgb=selected_srgb[:selected_count].copy(),
+        achieved_lab=selected_lab[:selected_count].copy(),
+        pinned_mask=pinned_mask[:selected_count].copy(),
+        worker_count=worker_count,
+    )
 
 
 @dataclass
@@ -602,6 +1097,8 @@ def build_material_candidate_runtime(
         candidate_budget=int(cfg.candidate_budget),
         layer_count=int(layer_count),
         material_count=len(materials),
+        batch_recipe_count=int(cfg.batch_recipe_count),
+        worker_count=cfg.build_worker_count,
     )
     if memory.estimated_peak_bytes > int(cfg.build_memory_budget_bytes):
         raise ValueError(
@@ -611,28 +1108,15 @@ def build_material_candidate_runtime(
         )
     order = canonical_palette_order(materials)
     canonical_materials = [materials[index] for index in order]
-    generated = generate_candidate_recipes(
-        material_count=len(canonical_materials),
-        layer_count=int(layer_count),
-        candidate_budget=int(cfg.candidate_budget),
-        seed=int(cfg.seed),
-    )
-    generated = _coverage_selected_recipes(
-        initial=generated,
+    recipe_dtype = _recipe_dtype_for_material_count(len(canonical_materials))
+    selection = _streaming_candidate_selection(
         materials=canonical_materials,
+        layer_count=int(layer_count),
         layer_height_mm=float(layer_height_mm),
         substrate=str(substrate),
         config=cfg,
+        recipe_dtype=recipe_dtype,
     )
-    linear = _predict_candidate_linear(
-        recipes=generated.recipes,
-        materials=canonical_materials,
-        layer_height_mm=float(layer_height_mm),
-        substrate=str(substrate),
-        batch_recipe_count=int(cfg.batch_recipe_count),
-    )
-    achieved_srgb = linear_to_srgb_uint8(linear)
-    achieved_lab = rgb_to_lab(achieved_srgb).astype(np.float32, copy=False)
     metadata = {
         "mode": "candidate_hybrid",
         "palette_hash": fingerprint_palette(canonical_materials),
@@ -645,6 +1129,9 @@ def build_material_candidate_runtime(
         "candidate_pool_multiplier": int(cfg.candidate_pool_multiplier),
         "build_memory_budget_bytes": int(cfg.build_memory_budget_bytes),
         "batch_recipe_count": int(cfg.batch_recipe_count),
+        "build_worker_count": int(selection.worker_count),
+        "build_mode": "streaming_parallel",
+        "recipe_dtype": recipe_dtype.name,
         "seed": int(cfg.seed),
         "canonical_material_directory_names": [
             str(material.directory_name) for material in canonical_materials
@@ -665,10 +1152,10 @@ def build_material_candidate_runtime(
         },
     }
     return MaterialCandidateRuntime(
-        candidate_recipes=generated.recipes,
-        achieved_srgb=achieved_srgb,
-        achieved_lab=achieved_lab,
-        pinned_mask=generated.pinned_mask,
+        candidate_recipes=selection.recipes,
+        achieved_srgb=selection.achieved_srgb,
+        achieved_lab=selection.achieved_lab,
+        pinned_mask=selection.pinned_mask,
         metadata=metadata,
     )
 
@@ -774,7 +1261,9 @@ def load_material_candidate_runtime(
 
     try:
         with np.load(npz_path) as loaded:
-            candidate_recipes = loaded["candidate_recipes"].astype(np.uint16)
+            candidate_recipes = loaded["candidate_recipes"]
+            if candidate_recipes.dtype not in (np.uint8, np.uint16):
+                candidate_recipes = candidate_recipes.astype(np.uint16)
             achieved_srgb = loaded["achieved_srgb"].astype(np.uint8)
             achieved_lab = loaded["achieved_lab"].astype(np.float32)
             pinned_mask = loaded["pinned_mask"].astype(bool)

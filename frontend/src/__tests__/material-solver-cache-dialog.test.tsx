@@ -10,7 +10,7 @@ import {
 vi.mock("../api/materialCache", () => ({
   buildMaterialSolverCache: vi.fn(),
   buildMaterialSolverRuntime: vi.fn(),
-  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 4_194_304,
+  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 33_554_432,
   deleteMaterialSolverCache: vi.fn(),
   deleteMaterialSolverRuntime: vi.fn(),
   fetchMaterialSolverCacheStatus: vi.fn(),
@@ -19,6 +19,8 @@ vi.mock("../api/materialCache", () => ({
     1_048_576,
     4_194_304,
     8_388_608,
+    33_554_432,
+    67_108_864,
   ],
 }));
 
@@ -48,7 +50,7 @@ describe("MaterialSolverCacheDialog", () => {
       layer_count: 5,
       layer_height_mm: 0.08,
       substrate: "white",
-      candidate_budget: 4_194_304,
+      candidate_budget: 33_554_432,
       entry: null,
     });
   });

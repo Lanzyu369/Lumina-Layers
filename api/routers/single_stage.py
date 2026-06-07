@@ -6,7 +6,6 @@ import json
 import os
 import uuid
 import zipfile
-from dataclasses import replace
 from typing import Any, Callable
 
 import anyio
@@ -81,8 +80,8 @@ from core.material_cache_visualization import (
 from core.material_candidate_cache import (
     DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
     MaterialCandidateCacheConfig,
-    QUALITY_8G_CANDIDATE_BUDGET,
     build_material_candidate_runtime,
     candidate_cache_file_path,
     delete_material_candidate_runtime,
@@ -1224,12 +1223,12 @@ def _cache_entry_from_metadata(
 
 
 def _validate_candidate_budget(candidate_budget: int) -> None:
-    if candidate_budget <= 0 or candidate_budget > QUALITY_8G_CANDIDATE_BUDGET:
+    if candidate_budget <= 0 or candidate_budget > MAX_PERSISTED_CANDIDATE_BUDGET:
         raise HTTPException(
             status_code=422,
             detail=(
                 "candidate_budget must be in "
-                f"[1, {QUALITY_8G_CANDIDATE_BUDGET}], got {candidate_budget}"
+                f"[1, {MAX_PERSISTED_CANDIDATE_BUDGET}], got {candidate_budget}"
             ),
         )
 
@@ -1628,9 +1627,8 @@ async def material_solver_runtime_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
-    config = replace(
-        MaterialCandidateCacheConfig.default_persisted(),
-        candidate_budget=int(candidate_budget),
+    config = MaterialCandidateCacheConfig.persisted_for_budget(
+        int(candidate_budget)
     )
 
     def _run_build():

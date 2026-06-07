@@ -38,13 +38,15 @@ export interface MaterialSolverCacheKey {
 export type MaterialSolverRuntimeCandidateBudget =
   | 1_048_576
   | 4_194_304
-  | 8_388_608;
+  | 8_388_608
+  | 33_554_432
+  | 67_108_864;
 
 export const MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS: readonly MaterialSolverRuntimeCandidateBudget[] =
-  [1_048_576, 4_194_304, 8_388_608] as const;
+  [1_048_576, 4_194_304, 8_388_608, 33_554_432, 67_108_864] as const;
 
 export const DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: MaterialSolverRuntimeCandidateBudget =
-  4_194_304;
+  33_554_432;
 
 function _formData(
   key: MaterialSolverCacheKey,

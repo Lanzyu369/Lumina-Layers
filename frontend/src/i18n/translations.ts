@@ -3490,6 +3490,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高精度 8M",
     en: "High 8M",
   },
+  basic_material_runtime_budget_option_33554432: {
+    zh: "推荐 32M",
+    en: "Recommended 32M",
+  },
+  basic_material_runtime_budget_option_67108864: {
+    zh: "极高 64M",
+    en: "Extreme 64M",
+  },
   basic_material_runtime_missing_hint: {
     zh: "未构建运行时时，系统会按需临时生成候选运行时。",
     en: "When no runtime is persisted, the system builds a bounded runtime on demand.",

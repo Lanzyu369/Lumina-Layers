@@ -6,7 +6,9 @@ import numpy as np
 
 from core.material_candidate_cache import (
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
-    QUALITY_8G_CANDIDATE_BUDGET,
+    LEGACY_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
+    QUALITY_8M_CANDIDATE_BUDGET,
     MaterialCandidateRuntime,
 )
 from core.material_color_solver import MaterialParams
@@ -185,7 +187,11 @@ def test_load_solver_runtime_prefers_highest_persisted_candidate_budget(
         save_material_candidate_runtime,
     )
 
-    for budget in (DEFAULT_PERSISTED_CANDIDATE_BUDGET, QUALITY_8G_CANDIDATE_BUDGET):
+    for budget in (
+        DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+        QUALITY_8M_CANDIDATE_BUDGET,
+        MAX_PERSISTED_CANDIDATE_BUDGET,
+    ):
         saved_runtime = build_material_candidate_runtime(
             materials=PALETTE,
             layer_count=5,
@@ -214,7 +220,49 @@ def test_load_solver_runtime_prefers_highest_persisted_candidate_budget(
     )
 
     assert isinstance(runtime, MaterialCandidateRuntime)
-    assert runtime.metadata["candidate_budget"] == QUALITY_8G_CANDIDATE_BUDGET
+    assert runtime.metadata["candidate_budget"] == MAX_PERSISTED_CANDIDATE_BUDGET
+
+
+def test_load_solver_runtime_falls_back_to_legacy_4m_candidate_budget(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import core.material_lut_provider as provider
+    from core.material_candidate_cache import (
+        MaterialCandidateCacheConfig,
+        build_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    saved_runtime = build_material_candidate_runtime(
+        materials=PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=5),
+    )
+    saved_runtime.metadata["candidate_budget"] = LEGACY_PERSISTED_CANDIDATE_BUDGET
+    save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
+
+    monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(
+        provider,
+        "build_material_candidate_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted legacy runtime should load before build")
+        ),
+    )
+
+    runtime, _actual_grid = provider.load_solver_runtime(
+        PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        cache_root=tmp_path,
+    )
+
+    assert isinstance(runtime, MaterialCandidateRuntime)
+    assert runtime.metadata["candidate_budget"] == LEGACY_PERSISTED_CANDIDATE_BUDGET
 
 
 def test_load_solver_runtime_builds_preview_safe_candidate_when_no_persisted_runtime(

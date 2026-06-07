@@ -21,7 +21,7 @@ import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 vi.mock("../api/materialCache", () => ({
   buildMaterialSolverCache: vi.fn(),
   buildMaterialSolverRuntime: vi.fn(),
-  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 4_194_304,
+  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 33_554_432,
   deleteMaterialSolverCache: vi.fn(),
   deleteMaterialSolverRuntime: vi.fn(),
   fetchMaterialSolverCacheDetails: vi.fn(),
@@ -32,6 +32,8 @@ vi.mock("../api/materialCache", () => ({
     1_048_576,
     4_194_304,
     8_388_608,
+    33_554_432,
+    67_108_864,
   ],
 }));
 
@@ -68,9 +70,9 @@ function buildRuntimeEntry(
     layer_height_mm: 0.04,
     substrate: "white",
     mode: "candidate_hybrid",
-    candidate_budget: 4_194_304,
-    candidate_count: 4_194_304,
-    candidate_pool_multiplier: 8,
+    candidate_budget: 33_554_432,
+    candidate_count: 33_554_432,
+    candidate_pool_multiplier: 2,
     build_memory_budget_bytes: 8 * 1024 * 1024 * 1024,
     batch_recipe_count: 524_288,
     lab_grid_resolution: 64,
@@ -102,9 +104,9 @@ function buildRuntimeDetailsResponse() {
     substrate: "white",
     grid_resolution: 64,
     valid_cell_count: 1,
-    total_cell_count: 4_194_304,
-    candidate_budget: 4_194_304,
-    candidate_count: 4_194_304,
+    total_cell_count: 33_554_432,
+    candidate_budget: 33_554_432,
+    candidate_count: 33_554_432,
     coverage_stats: {
       entry_count: 1,
       plotted_point_count: 1,
@@ -149,7 +151,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       layer_count: 5,
       layer_height_mm: 0.08,
       substrate: "white",
-      candidate_budget: 4_194_304,
+      candidate_budget: 33_554_432,
       entry: null,
     });
     vi.mocked(fetchMaterialSolverRuntimeDetails).mockResolvedValue(
@@ -374,7 +376,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       layer_count: 8,
       layer_height_mm: 0.08,
       substrate: "white",
-      candidate_budget: 4_194_304,
+      candidate_budget: 33_554_432,
       entry: null,
     });
     vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
@@ -421,7 +423,7 @@ describe("MaterialSolverCacheStatusCard", () => {
         layerHeightMm: 0.08,
         substrate: "white",
       },
-      { candidateBudget: 4_194_304 },
+      { candidateBudget: 33_554_432 },
     );
     expect(buildMaterialSolverCache).not.toHaveBeenCalled();
     expect(screen.getByText("运行时已就绪")).toBeInTheDocument();
@@ -446,13 +448,13 @@ describe("MaterialSolverCacheStatusCard", () => {
       layer_count: 8,
       layer_height_mm: 0.04,
       substrate: "white",
-      candidate_budget: 8_388_608,
-      entry: buildRuntimeEntry({ candidate_budget: 8_388_608 }),
+      candidate_budget: 67_108_864,
+      entry: buildRuntimeEntry({ candidate_budget: 67_108_864 }),
     });
     vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
       status: "ok",
       message: "Built runtime",
-      entry: buildRuntimeEntry({ candidate_budget: 8_388_608 }),
+      entry: buildRuntimeEntry({ candidate_budget: 67_108_864 }),
     });
     vi.mocked(deleteMaterialSolverRuntime).mockResolvedValue({
       status: "ok",
@@ -462,7 +464,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       layer_count: 8,
       layer_height_mm: 0.04,
       substrate: "white",
-      candidate_budget: 8_388_608,
+      candidate_budget: 67_108_864,
     });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
@@ -477,17 +479,17 @@ describe("MaterialSolverCacheStatusCard", () => {
     await waitFor(() => {
       expect(fetchMaterialSolverRuntimeStatus).toHaveBeenCalledWith(
         expect.any(Object),
-        { candidateBudget: 4_194_304 },
+        { candidateBudget: 33_554_432 },
       );
     });
 
     fireEvent.click(screen.getByRole("combobox", { name: "候选预算" }));
-    fireEvent.click(await screen.findByRole("option", { name: /8M/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /64M/ }));
 
     await waitFor(() => {
       expect(fetchMaterialSolverRuntimeStatus).toHaveBeenLastCalledWith(
         expect.any(Object),
-        { candidateBudget: 8_388_608 },
+        { candidateBudget: 67_108_864 },
       );
     });
 
@@ -502,7 +504,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
     expect(buildMaterialSolverRuntime).toHaveBeenLastCalledWith(
       expect.any(Object),
-      { candidateBudget: 8_388_608 },
+      { candidateBudget: 67_108_864 },
     );
 
     const deleteButton = await screen.findByRole("button", {
@@ -516,7 +518,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
     expect(deleteMaterialSolverRuntime).toHaveBeenLastCalledWith(
       expect.any(Object),
-      { candidateBudget: 8_388_608 },
+      { candidateBudget: 67_108_864 },
     );
 
     confirmSpy.mockRestore();
@@ -541,7 +543,7 @@ describe("MaterialSolverCacheStatusCard", () => {
       layer_count: 8,
       layer_height_mm: 0.04,
       substrate: "white",
-      candidate_budget: 4_194_304,
+      candidate_budget: 33_554_432,
       entry: buildRuntimeEntry(),
     });
 
@@ -570,7 +572,7 @@ describe("MaterialSolverCacheStatusCard", () => {
         layerHeightMm: 0.04,
         substrate: "white",
       },
-      { candidateBudget: 4_194_304, maxPoints: 8000 },
+      { candidateBudget: 33_554_432, maxPoints: 8000 },
     );
     expect(
       screen.getByTestId("material-solver-runtime-charts-region"),

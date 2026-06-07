@@ -9,12 +9,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 import numpy as np
 
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from api.routers.single_stage import _validate_candidate_budget
 
 
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
@@ -165,7 +167,7 @@ def _solver_runtime_metadata(
         "lab_grid_resolution": 64,
         "candidate_budget": candidate_budget,
         "candidate_count": 32,
-        "candidate_pool_multiplier": 8,
+        "candidate_pool_multiplier": 2,
         "build_memory_budget_bytes": 8 * 1024 * 1024 * 1024,
         "batch_recipe_count": 524288,
         "seed": 0,
@@ -178,6 +180,13 @@ def _solver_runtime_metadata(
         },
         "built_at": "2024-01-01T00:00:00",
     }
+
+
+def test_material_solver_runtime_candidate_budget_accepts_64m_limit() -> None:
+    _validate_candidate_budget(67_108_864)
+
+    with pytest.raises(HTTPException):
+        _validate_candidate_budget(67_108_865)
 
 
 def _axis_range_stub(min_value: float, max_value: float) -> SimpleNamespace:

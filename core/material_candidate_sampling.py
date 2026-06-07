@@ -45,14 +45,32 @@ def _safe_total_count(
     return total
 
 
-def _all_recipe_space(material_count: int, layer_count: int, total: int) -> np.ndarray:
-    values = np.arange(int(total), dtype=np.uint64)
+def _recipe_space_chunk(
+    material_count: int,
+    layer_count: int,
+    start: int,
+    count: int,
+    dtype: np.dtype | type = np.uint16,
+) -> np.ndarray:
+    if count <= 0:
+        return np.zeros((0, int(layer_count)), dtype=dtype)
+    values = np.arange(int(start), int(start) + int(count), dtype=np.uint64)
     work = values.copy()
-    recipes = np.empty((int(total), int(layer_count)), dtype=np.uint16)
+    recipes = np.empty((int(count), int(layer_count)), dtype=dtype)
     for layer_index in range(int(layer_count)):
-        recipes[:, layer_index] = (work % int(material_count)).astype(np.uint16)
+        recipes[:, layer_index] = (work % int(material_count)).astype(dtype)
         work //= int(material_count)
     return recipes
+
+
+def _all_recipe_space(material_count: int, layer_count: int, total: int) -> np.ndarray:
+    return _recipe_space_chunk(
+        material_count,
+        layer_count,
+        start=0,
+        count=int(total),
+        dtype=np.uint16,
+    )
 
 
 def _pair_ramp_recipes(

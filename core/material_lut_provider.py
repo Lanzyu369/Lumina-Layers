@@ -27,8 +27,10 @@ from core.material_cache import DEFAULT_GRID_RESOLUTION
 from core.material_candidate_cache import (
     MaterialCandidateCacheConfig,
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    LEGACY_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
     PREVIEW_SAFE_CANDIDATE_BUDGET,
-    QUALITY_8G_CANDIDATE_BUDGET,
+    QUALITY_8M_CANDIDATE_BUDGET,
     build_material_candidate_runtime,
     load_material_candidate_runtime,
 )
@@ -239,8 +241,10 @@ def load_solver_runtime(
 
     if candidate_budget is None:
         for budget in (
-            QUALITY_8G_CANDIDATE_BUDGET,
+            MAX_PERSISTED_CANDIDATE_BUDGET,
             DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            QUALITY_8M_CANDIDATE_BUDGET,
+            LEGACY_PERSISTED_CANDIDATE_BUDGET,
             PREVIEW_SAFE_CANDIDATE_BUDGET,
         ):
             persisted_runtime = load_material_candidate_runtime(
@@ -255,7 +259,9 @@ def load_solver_runtime(
                 return persisted_runtime, persisted_runtime.grid_resolution
         config = MaterialCandidateCacheConfig.preview_safe()
     else:
-        config = MaterialCandidateCacheConfig(candidate_budget=int(candidate_budget))
+        config = MaterialCandidateCacheConfig.persisted_for_budget(
+            int(candidate_budget)
+        )
         persisted_runtime = load_material_candidate_runtime(
             materials,
             layer_count,

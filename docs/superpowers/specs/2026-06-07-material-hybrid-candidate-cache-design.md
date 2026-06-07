@@ -274,17 +274,19 @@ metadata
 
 ```text
 preview-safe      1,048,576 candidates   约 2^20，用于无持久缓存的交互 fallback
-default-persisted 4,194,304 candidates   约 2^22，默认持久 hybrid cache
-quality-8g        8,388,608 candidates   约 2^23，仅 explicit quality build
+legacy-persisted  4,194,304 candidates   约 2^22，兼容旧持久 hybrid cache
+quality-8m        8,388,608 candidates   约 2^23，显式质量档
+recommended       33,554,432 candidates  约 2^25，默认持久 hybrid cache
+max-persisted     67,108,864 candidates  约 2^26，显式极高质量上限
 ```
 
 推荐默认：
 
 - 交互式 preview fallback 使用 `preview-safe`，避免首次预览等待过长。
-- 用户显式构建持久 hybrid cache 时默认使用 `default-persisted`。
-- `quality-8g` 只在显式高精度构建中开放，并要求构建前估算 peak memory 小于 8GiB。
+- 用户显式构建持久 hybrid cache 时默认使用 `recommended`，即 32M 级候选行数。
+- `max-persisted` 只在显式极高精度构建中开放，并要求构建前估算 peak memory 小于 8GiB。
 
-`candidate_pool_multiplier` 默认使用 `8`。也就是说 `default-persisted` 会流式评估约 33.5M 条候选，但最终只保留约 4.19M 条。这个数量级不会接近 `22 ** 8`，但覆盖面已经比 ChromaPrint3D 的 65,536 候选高两个数量级。
+大预算不再固定使用 8 倍扫描。当前实现按最终候选预算降低扫描倍数：4M 级使用 8 倍，8M 级使用 4 倍，32M 推荐默认使用 2 倍，64M 上限使用 1 倍。实现不会一次性保留整个池，而是流式分块预测、在线去重和覆盖选择；32M/64M 指最终持久候选行数，不是构建期内存预算。构建期内存预算仍按 8GiB 保护线估算和拒绝。
 
 ### `core/material_inverse_refinement.py`
 
