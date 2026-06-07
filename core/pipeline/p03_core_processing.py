@@ -125,7 +125,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     from PIL import Image
 
     from core.material_cache import DEFAULT_GRID_RESOLUTION
-    from core.material_lut_provider import load_solver_runtime
+    from core.material_lut_provider import load_solver_cache, load_solver_runtime
     from core.material_lut_synthesis import (
         ensure_not_worse_than_smaller_N,
         map_pixels_to_materials,
@@ -181,14 +181,14 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     mask_transparent = alpha_arr < 10
     mask_solid = ~mask_transparent
 
-    # ---- Load solver runtime early for auto dynamic range L* targets ----
-    # 在量化前加载求解器运行时，使自动动态范围能用 cache.lab_centers 推断目标 L* 范围；
-    # 后续配方查询直接复用本地变量 ``cache`` / ``actual_grid``，避免重复加载磁盘缓存。
-    # Pre-load the solver runtime before quantization so auto dynamic range can
-    # derive target L* from ``cache.lab_centers``; the recipe lookup below
-    # reuses ``cache`` / ``actual_grid`` to avoid a second disk read.
+    # ---- Load persisted solver cache early for auto dynamic range L* targets ----
+    # 自动动态范围只需要已有 legacy cache 的 ``lab_centers``；不要在量化前构建
+    # candidate runtime，否则透明图/空色集也会提前分配大候选数组。
+    # Auto dynamic range only benefits from a persisted legacy cache's
+    # ``lab_centers``. Do not build a candidate runtime before quantization:
+    # transparent/empty inputs should not allocate candidate arrays at all.
     try:
-        cache, actual_grid = load_solver_runtime(
+        cache, actual_grid = load_solver_cache(
             materials=materials,
             layer_count=layer_count,
             layer_height_mm=layer_height_mm,
@@ -197,10 +197,10 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         )
     except (MemoryError, RuntimeError, ValueError) as exc:
         _log.error(
-            "Material solver runtime build failed: %s",
+            "Material solver cache load failed: %s",
             exc,
             extra={
-                "event": "material_solver_runtime_failed",
+                "event": "material_solver_cache_load_failed",
                 "material_count": len(materials),
                 "layer_count": layer_count,
                 "layer_height_mm": layer_height_mm,
@@ -210,9 +210,8 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             },
         )
         ctx["error"] = (
-            "[P03] 耗材求解运行时构建失败，请减少耗材/层数或先构建持久缓存。"
-            " / Material solver runtime build failed. Reduce materials/layers "
-            "or build a persisted cache first."
+            "[P03] 耗材求解缓存加载失败。"
+            " / Material solver cache load failed."
         )
         return ctx
 
@@ -307,9 +306,12 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         rgb_processed = apply_bilateral_filter(rgb_arr, 10)
         rgb_processed = apply_median_filter(rgb_processed, 0)
         quantized_image = kmeans_quantize(rgb_processed, quantize_colors_n)
-    unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
+    if np.any(mask_solid):
+        unique_colors = np.unique(quantized_image[mask_solid].reshape(-1, 3), axis=0)
+    else:
+        unique_colors = np.zeros((0, 3), dtype=np.uint8)
     _log.debug(
-        "%d unique colors after quantization (svg=%s)",
+        "%d visible unique colors after quantization (svg=%s)",
         len(unique_colors),
         is_svg,
     )
@@ -321,6 +323,35 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     solver_t0 = time.perf_counter()
     solver_path: str
     solver_meta: dict = {}
+    if cache is None and unique_colors.shape[0] > 0:
+        try:
+            cache, actual_grid = load_solver_runtime(
+                materials=materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                grid_resolution=requested_grid,
+            )
+        except (MemoryError, RuntimeError, ValueError) as exc:
+            _log.error(
+                "Material solver runtime build failed: %s",
+                exc,
+                extra={
+                    "event": "material_solver_runtime_failed",
+                    "material_count": len(materials),
+                    "layer_count": layer_count,
+                    "layer_height_mm": layer_height_mm,
+                    "substrate": substrate,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            ctx["error"] = (
+                "[P03] 耗材求解运行时构建失败，请减少耗材/层数或先构建持久缓存。"
+                " / Material solver runtime build failed. Reduce materials/layers "
+                "or build a persisted cache first."
+            )
+            return ctx
     if cache is not None and unique_colors.shape[0] > 0:
         cache_mode = str(getattr(cache, "mode", "bucketed"))
         cache_metadata = getattr(cache, "metadata", {}) or {}
@@ -459,24 +490,36 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
 
     # ---- Map pixels ----
-    matched_rgb, material_matrix = map_pixels_to_materials(
-        quantized_image, unique_colors, matched_rgb_unique, recipes_unique,
-        target_h, target_w,
-    )
-
-    # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
-    # Previously only the LUT pipeline ran cleanup — the material-archive
-    # branch silently ignored the checkbox even when ticked in the UI. The
-    # palette-preserving implementation in ``cleanup_isolated_pixels`` works
-    # in both pipelines (it copies stacks/RGB straight from the neighbour
-    # contributing the 8-neighbour mode), so the same call now serves both.
-    # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
-    # 函数不依赖 LUT，同一调用对两条路径都适用。）
-    if ctx.get("enable_cleanup", True):
-        from core.isolated_pixel_cleanup import cleanup_isolated_pixels
-        matched_rgb, material_matrix = cleanup_isolated_pixels(
-            material_matrix, matched_rgb
+    if unique_colors.shape[0] == 0:
+        matched_rgb = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        material_matrix = np.full(
+            (target_h, target_w, layer_count),
+            -1,
+            dtype=np.int32,
         )
+    else:
+        quantized_for_mapping = quantized_image
+        if np.any(mask_transparent):
+            quantized_for_mapping = quantized_image.copy()
+            quantized_for_mapping[mask_transparent] = unique_colors[0]
+        matched_rgb, material_matrix = map_pixels_to_materials(
+            quantized_for_mapping, unique_colors, matched_rgb_unique, recipes_unique,
+            target_h, target_w,
+        )
+
+        # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
+        # Previously only the LUT pipeline ran cleanup — the material-archive
+        # branch silently ignored the checkbox even when ticked in the UI. The
+        # palette-preserving implementation in ``cleanup_isolated_pixels`` works
+        # in both pipelines (it copies stacks/RGB straight from the neighbour
+        # contributing the 8-neighbour mode), so the same call now serves both.
+        # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
+        # 函数不依赖 LUT，同一调用对两条路径都适用。）
+        if ctx.get("enable_cleanup", True):
+            from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+            matched_rgb, material_matrix = cleanup_isolated_pixels(
+                material_matrix, matched_rgb
+            )
 
     # ---- Transparent pixels → -1 in material_matrix ----
     material_matrix[mask_transparent] = -1

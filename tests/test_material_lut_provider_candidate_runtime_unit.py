@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from core.material_candidate_cache import MaterialCandidateRuntime
+from core.material_candidate_cache import (
+    DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    QUALITY_8G_CANDIDATE_BUDGET,
+    MaterialCandidateRuntime,
+)
 from core.material_color_solver import MaterialParams
 
 
@@ -124,3 +128,118 @@ def test_load_solver_runtime_uses_persisted_candidate_before_building(
     assert isinstance(runtime, MaterialCandidateRuntime)
     assert runtime.valid_cell_count == saved_runtime.valid_cell_count
     assert actual_grid == runtime.grid_resolution
+
+
+def test_load_solver_runtime_uses_persisted_default_candidate_when_budget_unspecified(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import core.material_lut_provider as provider
+    from core.material_candidate_cache import (
+        MaterialCandidateCacheConfig,
+        build_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    saved_runtime = build_material_candidate_runtime(
+        materials=PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=5),
+    )
+    saved_runtime.metadata["candidate_budget"] = DEFAULT_PERSISTED_CANDIDATE_BUDGET
+    save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
+
+    monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(
+        provider,
+        "build_material_candidate_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted default runtime should load before build")
+        ),
+    )
+
+    runtime, actual_grid = provider.load_solver_runtime(
+        PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        cache_root=tmp_path,
+    )
+
+    assert isinstance(runtime, MaterialCandidateRuntime)
+    assert runtime.metadata["candidate_budget"] == DEFAULT_PERSISTED_CANDIDATE_BUDGET
+    assert runtime.valid_cell_count == saved_runtime.valid_cell_count
+    assert actual_grid == runtime.grid_resolution
+
+
+def test_load_solver_runtime_prefers_highest_persisted_candidate_budget(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import core.material_lut_provider as provider
+    from core.material_candidate_cache import (
+        MaterialCandidateCacheConfig,
+        build_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    for budget in (DEFAULT_PERSISTED_CANDIDATE_BUDGET, QUALITY_8G_CANDIDATE_BUDGET):
+        saved_runtime = build_material_candidate_runtime(
+            materials=PALETTE,
+            layer_count=5,
+            layer_height_mm=0.08,
+            substrate="white",
+            config=MaterialCandidateCacheConfig(candidate_budget=32, seed=budget),
+        )
+        saved_runtime.metadata["candidate_budget"] = budget
+        save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
+
+    monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(
+        provider,
+        "build_material_candidate_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted high-quality runtime should load before build")
+        ),
+    )
+
+    runtime, _actual_grid = provider.load_solver_runtime(
+        PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        cache_root=tmp_path,
+    )
+
+    assert isinstance(runtime, MaterialCandidateRuntime)
+    assert runtime.metadata["candidate_budget"] == QUALITY_8G_CANDIDATE_BUDGET
+
+
+def test_load_solver_runtime_builds_preview_safe_candidate_when_no_persisted_runtime(
+    monkeypatch,
+) -> None:
+    import core.material_lut_provider as provider
+
+    seen_budgets: list[int] = []
+
+    class _Runtime:
+        grid_resolution = 64
+
+    def _build_runtime_stub(*args, **kwargs):
+        seen_budgets.append(kwargs["config"].candidate_budget)
+        return _Runtime()
+
+    monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(provider, "load_material_candidate_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr(provider, "build_material_candidate_runtime", _build_runtime_stub)
+
+    provider.load_solver_runtime(
+        PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+    )
+
+    assert seen_budgets == [provider.MaterialCandidateCacheConfig.preview_safe().candidate_budget]

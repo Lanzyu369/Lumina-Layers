@@ -26,6 +26,9 @@ from core import material_lut_synthesis as _material_lut_synthesis
 from core.material_cache import DEFAULT_GRID_RESOLUTION
 from core.material_candidate_cache import (
     MaterialCandidateCacheConfig,
+    DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    PREVIEW_SAFE_CANDIDATE_BUDGET,
+    QUALITY_8G_CANDIDATE_BUDGET,
     build_material_candidate_runtime,
     load_material_candidate_runtime,
 )
@@ -234,21 +237,35 @@ def load_solver_runtime(
     if cache is not None:
         return cache, actual_grid
 
-    config = (
-        MaterialCandidateCacheConfig(candidate_budget=int(candidate_budget))
-        if candidate_budget is not None
-        else MaterialCandidateCacheConfig.preview_safe()
-    )
-    persisted_runtime = load_material_candidate_runtime(
-        materials,
-        layer_count,
-        layer_height_mm,
-        substrate,
-        candidate_budget=int(config.candidate_budget),
-        cache_root=cache_root,
-    )
-    if persisted_runtime is not None:
-        return persisted_runtime, persisted_runtime.grid_resolution
+    if candidate_budget is None:
+        for budget in (
+            QUALITY_8G_CANDIDATE_BUDGET,
+            DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            PREVIEW_SAFE_CANDIDATE_BUDGET,
+        ):
+            persisted_runtime = load_material_candidate_runtime(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+                candidate_budget=int(budget),
+                cache_root=cache_root,
+            )
+            if persisted_runtime is not None:
+                return persisted_runtime, persisted_runtime.grid_resolution
+        config = MaterialCandidateCacheConfig.preview_safe()
+    else:
+        config = MaterialCandidateCacheConfig(candidate_budget=int(candidate_budget))
+        persisted_runtime = load_material_candidate_runtime(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=int(config.candidate_budget),
+            cache_root=cache_root,
+        )
+        if persisted_runtime is not None:
+            return persisted_runtime, persisted_runtime.grid_resolution
 
     runtime = build_material_candidate_runtime(
         materials=materials,

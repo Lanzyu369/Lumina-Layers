@@ -70,18 +70,22 @@ def _pair_ramp_recipes(
             if bottom == top:
                 continue
 
-            top_one = np.full(int(layer_count), bottom, dtype=np.uint16)
-            top_one[-1] = top
-            recipes.append(top_one)
-            if len(recipes) >= limit:
-                return np.asarray(recipes, dtype=np.uint16)
-
-            top_half = np.full(int(layer_count), bottom, dtype=np.uint16)
-            split = max(1, int(layer_count) // 2)
-            top_half[-split:] = top
-            recipes.append(top_half)
-            if len(recipes) >= limit:
-                return np.asarray(recipes, dtype=np.uint16)
+            top_depths = [1]
+            top_depths.extend(
+                depth
+                for depth in (2, 3, max(1, int(layer_count) // 2))
+                if depth <= int(layer_count)
+            )
+            seen_depths: set[int] = set()
+            for depth in top_depths:
+                if depth in seen_depths:
+                    continue
+                seen_depths.add(depth)
+                top_heavy = np.full(int(layer_count), bottom, dtype=np.uint16)
+                top_heavy[-int(depth):] = top
+                recipes.append(top_heavy)
+                if len(recipes) >= limit:
+                    return np.asarray(recipes, dtype=np.uint16)
 
             alternating = np.empty(int(layer_count), dtype=np.uint16)
             alternating[0::2] = bottom
@@ -188,7 +192,7 @@ def generate_candidate_recipes(
     )
     anchors = _unique_rows_preserve_order(np.vstack([pinned, ramps]))[:budget]
     remaining = max(0, budget - anchors.shape[0])
-    sample_count = max(remaining * 2, remaining)
+    sample_count = remaining
     sampled = _low_discrepancy_recipes(
         material_count=int(material_count),
         layer_count=int(layer_count),
@@ -202,7 +206,7 @@ def generate_candidate_recipes(
         extra = _low_discrepancy_recipes(
             material_count=int(material_count),
             layer_count=int(layer_count),
-            count=max(missing * 4, 1),
+            count=max(missing, 1),
             seed=int(seed) + combined.shape[0] + 1,
         )
         next_combined = _unique_rows_preserve_order(

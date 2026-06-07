@@ -15,11 +15,17 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from core.material_cache import (
+    _hue_aware_rerank,
+    _neighbor_coherence_refine,
     canonical_palette_order,
     default_cache_directory,
     fingerprint_palette,
 )
-from core.material_candidate_sampling import generate_candidate_recipes
+from core.material_candidate_sampling import (
+    CandidateRecipeBatch,
+    _low_discrepancy_recipes,
+    generate_candidate_recipes,
+)
 from core.material_color_solver import (
     MaterialParams,
     _compute_material_affines,
@@ -81,6 +87,7 @@ class MaterialCandidateCacheConfig:
     def preview_safe(cls) -> "MaterialCandidateCacheConfig":
         return cls(
             candidate_budget=PREVIEW_SAFE_CANDIDATE_BUDGET,
+            candidate_pool_multiplier=1,
             max_refine_materials=8,
             max_refine_top_suffixes=4096,
             max_refine_bottom_prefixes=4096,
@@ -146,13 +153,28 @@ def estimate_candidate_cache_memory(
         CandidateCacheMemoryEstimate: Final and peak memory estimate.
             (常驻与峰值内存估算)
     """
-    recipe_item_bytes = 2 if material_count > 255 else 1
+    recipe_item_bytes = np.dtype(np.uint16).itemsize
     recipe_bytes = int(candidate_budget) * int(layer_count) * recipe_item_bytes
     srgb_bytes = int(candidate_budget) * 3
     lab_bytes = int(candidate_budget) * 3 * 4
     pinned_bytes = int(candidate_budget)
     final_runtime_bytes = recipe_bytes + srgb_bytes + lab_bytes + pinned_bytes
-    work_arrays_bytes = int(candidate_budget) * (3 * 8 + 3 * 8 + 32)
+    sobol_points_bytes = int(candidate_budget) * int(layer_count) * 8
+    sobol_recipe_work_bytes = int(candidate_budget) * int(layer_count) * (
+        8 + recipe_item_bytes
+    )
+    dedupe_overhead_bytes = int(candidate_budget) * (
+        int(layer_count) * recipe_item_bytes + 8 + 8
+    )
+    forward_work_bytes = int(candidate_budget) * (3 * 8 + 3 * 8 + 3 * 4 + 3)
+    kdtree_work_bytes = int(candidate_budget) * (3 * 8 + 32)
+    work_arrays_bytes = (
+        sobol_points_bytes
+        + sobol_recipe_work_bytes
+        + dedupe_overhead_bytes
+        + forward_work_bytes
+        + kdtree_work_bytes
+    )
     safety_bytes = 256 * 1024 * 1024
     estimated_peak_bytes = final_runtime_bytes + work_arrays_bytes + safety_bytes
     return CandidateCacheMemoryEstimate(
@@ -259,6 +281,113 @@ def _predict_candidate_linear(
     return np.clip(output, 0.0, 1.0)
 
 
+def _lab_cell_keys(lab: np.ndarray, grid_resolution: int) -> np.ndarray:
+    grid = max(1, int(grid_resolution))
+    lab_arr = np.asarray(lab, dtype=np.float64)
+    l_idx = np.clip(np.floor(lab_arr[:, 0] / 100.0 * grid), 0, grid - 1)
+    a_idx = np.clip(np.floor((lab_arr[:, 1] + 128.0) / 255.0 * grid), 0, grid - 1)
+    b_idx = np.clip(np.floor((lab_arr[:, 2] + 128.0) / 255.0 * grid), 0, grid - 1)
+    return (
+        l_idx.astype(np.int64) * grid * grid
+        + a_idx.astype(np.int64) * grid
+        + b_idx.astype(np.int64)
+    )
+
+
+def _coverage_selected_recipes(
+    *,
+    initial: CandidateRecipeBatch,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+    config: MaterialCandidateCacheConfig,
+) -> CandidateRecipeBatch:
+    budget = int(config.candidate_budget)
+    multiplier = max(1, int(config.candidate_pool_multiplier))
+    if (
+        multiplier <= 1
+        or initial.recipes.shape[0] == 0
+        or initial.recipes.shape[0] < budget
+    ):
+        return initial
+
+    selected = np.asarray(initial.recipes, dtype=np.uint16).copy()
+    pinned = np.asarray(initial.pinned_mask, dtype=bool).copy()
+    selected_linear = _predict_candidate_linear(
+        recipes=selected,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+        batch_recipe_count=int(config.batch_recipe_count),
+    )
+    selected_lab = rgb_to_lab(linear_to_srgb_uint8(selected_linear)).astype(np.float32)
+    cell_keys = _lab_cell_keys(selected_lab, int(config.lab_grid_resolution))
+    cell_counts: dict[int, int] = {}
+    for key in cell_keys:
+        cell_counts[int(key)] = cell_counts.get(int(key), 0) + 1
+    seen_cells = set(cell_counts)
+    replace_cursor = selected.shape[0] - 1
+
+    def _replaceable_index() -> int | None:
+        nonlocal replace_cursor
+        count = selected.shape[0]
+        for _ in range(count):
+            idx = replace_cursor
+            replace_cursor = (replace_cursor - 1) % count
+            if pinned[idx]:
+                continue
+            old_key = int(cell_keys[idx])
+            if cell_counts.get(old_key, 0) > 1:
+                return idx
+        for _ in range(count):
+            idx = replace_cursor
+            replace_cursor = (replace_cursor - 1) % count
+            if not pinned[idx]:
+                return idx
+        return None
+
+    extra_total = max(0, budget * (multiplier - 1))
+    scanned = 0
+    chunk_size = max(1, min(int(config.batch_recipe_count), budget))
+    chunk_index = 0
+    while scanned < extra_total:
+        count = min(chunk_size, extra_total - scanned)
+        chunk = _low_discrepancy_recipes(
+            material_count=len(materials),
+            layer_count=int(selected.shape[1]),
+            count=count,
+            seed=int(config.seed) + 10_000 + chunk_index,
+        )
+        chunk_linear = _predict_candidate_linear(
+            recipes=chunk,
+            materials=materials,
+            layer_height_mm=float(layer_height_mm),
+            substrate=substrate,
+            batch_recipe_count=int(config.batch_recipe_count),
+        )
+        chunk_lab = rgb_to_lab(linear_to_srgb_uint8(chunk_linear)).astype(np.float32)
+        chunk_cells = _lab_cell_keys(chunk_lab, int(config.lab_grid_resolution))
+        for row, key in zip(chunk, chunk_cells, strict=False):
+            key_int = int(key)
+            if key_int in seen_cells:
+                continue
+            idx = _replaceable_index()
+            if idx is None:
+                return CandidateRecipeBatch(recipes=selected, pinned_mask=pinned)
+            old_key = int(cell_keys[idx])
+            cell_counts[old_key] = max(0, cell_counts.get(old_key, 0) - 1)
+            if cell_counts[old_key] == 0:
+                seen_cells.discard(old_key)
+            selected[idx] = row
+            cell_keys[idx] = key_int
+            cell_counts[key_int] = cell_counts.get(key_int, 0) + 1
+            seen_cells.add(key_int)
+        scanned += count
+        chunk_index += 1
+
+    return CandidateRecipeBatch(recipes=selected, pinned_mask=pinned)
+
+
 @dataclass
 class MaterialCandidateRuntime:
     """Lookup-compatible bounded material runtime.
@@ -351,7 +480,6 @@ class MaterialCandidateRuntime:
             tuple[np.ndarray, np.ndarray, np.ndarray]: matched RGB, recipes in
             user order, and CIE76 delta-E. (匹配色、用户顺序配方、Delta-E)
         """
-        del hue_weight, neighbor_coherence
         targets = np.asarray(target_srgb, dtype=np.uint8)
         if targets.ndim != 2 or targets.shape[1] != 3:
             raise ValueError("target_srgb must have shape (C, 3)")
@@ -374,7 +502,15 @@ class MaterialCandidateRuntime:
 
         candidate_lab = self.achieved_lab[indices].astype(np.float64, copy=False)
         delta = np.linalg.norm(candidate_lab - target_lab[:, None, :], axis=2)
-        best_offsets = np.argmin(delta, axis=1)
+        if hue_weight > 0.0:
+            best_offsets = _hue_aware_rerank(
+                target_lab,
+                candidate_lab,
+                delta,
+                hue_weight,
+            )
+        else:
+            best_offsets = np.argmin(delta, axis=1)
         best_indices = indices[np.arange(targets.shape[0]), best_offsets]
 
         matched_rgb = self.achieved_srgb[best_indices].astype(np.uint8, copy=True)
@@ -414,6 +550,26 @@ class MaterialCandidateRuntime:
             np.int32,
             copy=False,
         )
+        if neighbor_coherence > 0.0 and targets.shape[0] >= 2:
+            coherence_candidate_indices = np.unique(indices.reshape(-1))
+            matched_rgb, recipes_user, best_delta = _neighbor_coherence_refine(
+                target_lab=target_lab,
+                matched_rgb=matched_rgb,
+                recipes_user_order=recipes_user,
+                delta_e=best_delta,
+                all_lab=self.achieved_lab[coherence_candidate_indices].astype(
+                    np.float64,
+                    copy=False,
+                ),
+                all_srgb=self.achieved_srgb[coherence_candidate_indices],
+                all_recipes=self.candidate_recipes[coherence_candidate_indices],
+                user_mapping=canonical_to_user,
+                coherence_weight=neighbor_coherence,
+                layer_count=self.layer_count,
+                uniform_lab=None,
+                uniform_srgb=None,
+                uniform_recipes=None,
+            )
         return matched_rgb, recipes_user, best_delta
 
 
@@ -442,6 +598,17 @@ def build_material_candidate_runtime(
     if not materials:
         raise ValueError("materials must not be empty")
     cfg = config or MaterialCandidateCacheConfig.preview_safe()
+    memory = estimate_candidate_cache_memory(
+        candidate_budget=int(cfg.candidate_budget),
+        layer_count=int(layer_count),
+        material_count=len(materials),
+    )
+    if memory.estimated_peak_bytes > int(cfg.build_memory_budget_bytes):
+        raise ValueError(
+            "candidate runtime build exceeds memory budget: "
+            f"estimated {memory.estimated_peak_bytes:,} bytes > "
+            f"{int(cfg.build_memory_budget_bytes):,} bytes"
+        )
     order = canonical_palette_order(materials)
     canonical_materials = [materials[index] for index in order]
     generated = generate_candidate_recipes(
@@ -449,6 +616,13 @@ def build_material_candidate_runtime(
         layer_count=int(layer_count),
         candidate_budget=int(cfg.candidate_budget),
         seed=int(cfg.seed),
+    )
+    generated = _coverage_selected_recipes(
+        initial=generated,
+        materials=canonical_materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        config=cfg,
     )
     linear = _predict_candidate_linear(
         recipes=generated.recipes,
@@ -468,7 +642,20 @@ def build_material_candidate_runtime(
         "grid_resolution": int(cfg.lab_grid_resolution),
         "lab_grid_resolution": int(cfg.lab_grid_resolution),
         "candidate_budget": int(cfg.candidate_budget),
+        "candidate_pool_multiplier": int(cfg.candidate_pool_multiplier),
+        "build_memory_budget_bytes": int(cfg.build_memory_budget_bytes),
+        "batch_recipe_count": int(cfg.batch_recipe_count),
         "seed": int(cfg.seed),
+        "canonical_material_directory_names": [
+            str(material.directory_name) for material in canonical_materials
+        ],
+        "canonical_materials": [
+            {
+                "name": str(material.name),
+                "directory_name": str(material.directory_name),
+            }
+            for material in canonical_materials
+        ],
         "inverse_refinement": {
             "enabled": bool(cfg.enable_inverse_refinement),
             "max_refine_materials": int(cfg.max_refine_materials),
