@@ -112,26 +112,20 @@ def _snap_svg_to_fill_palette(
 
 
 def _run_material_archive_branch(ctx: dict) -> dict:
-    """Material-archive processing: quantize image, solve recipes via cache or B&B.
-    耗材档案模式处理：量化图像，通过缓存命中或 B&B 最优求解器生成配方。
+    """Material-archive processing: quantize image, solve recipes via runtime.
+    耗材档案模式处理：量化图像，通过求解运行时生成配方。
 
     Solver selection:
-      1. Try to load a persisted :class:`core.material_cache.MaterialSolverCache`
-         that matches ``(palette, layer_count, layer_height_mm, substrate)``.
-      2. On cache hit, resolve recipes via :meth:`MaterialSolverCache.lookup`.
-      3. On cache miss, fall back to
-         :func:`core.material_color_solver.solve_image_colors_optimal` —
-         guaranteed globally optimal per image but slower.
+      1. Try to load a persisted :class:`core.material_cache.MaterialSolverCache`.
+      2. When no persisted cache exists, build a bounded candidate runtime.
+      3. Resolve recipes through the shared ``lookup`` duck-typed contract.
     The choice is recorded in ``ctx["material_solver_info"]`` so the UI can
     show whether the cache was used.
     """
     from PIL import Image
 
-    from core.material_cache import (
-        DEFAULT_GRID_RESOLUTION,
-        build_material_solver_cache,
-    )
-    from core.material_lut_provider import load_solver_cache
+    from core.material_cache import DEFAULT_GRID_RESOLUTION
+    from core.material_lut_provider import load_solver_runtime
     from core.material_lut_synthesis import (
         ensure_not_worse_than_smaller_N,
         map_pixels_to_materials,
@@ -187,19 +181,40 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     mask_transparent = alpha_arr < 10
     mask_solid = ~mask_transparent
 
-    # ---- Load solver cache early for auto dynamic range L* targets ----
-    # 在量化前加载求解器缓存，使自动动态范围能用 cache.lab_centers 推断目标 L* 范围；
+    # ---- Load solver runtime early for auto dynamic range L* targets ----
+    # 在量化前加载求解器运行时，使自动动态范围能用 cache.lab_centers 推断目标 L* 范围；
     # 后续配方查询直接复用本地变量 ``cache`` / ``actual_grid``，避免重复加载磁盘缓存。
-    # Pre-load the solver cache before quantization so auto dynamic range can
+    # Pre-load the solver runtime before quantization so auto dynamic range can
     # derive target L* from ``cache.lab_centers``; the recipe lookup below
     # reuses ``cache`` / ``actual_grid`` to avoid a second disk read.
-    cache, actual_grid = load_solver_cache(
-        materials=materials,
-        layer_count=layer_count,
-        layer_height_mm=layer_height_mm,
-        substrate=substrate,
-        grid_resolution=requested_grid,
-    )
+    try:
+        cache, actual_grid = load_solver_runtime(
+            materials=materials,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            grid_resolution=requested_grid,
+        )
+    except (MemoryError, RuntimeError, ValueError) as exc:
+        _log.error(
+            "Material solver runtime build failed: %s",
+            exc,
+            extra={
+                "event": "material_solver_runtime_failed",
+                "material_count": len(materials),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        ctx["error"] = (
+            "[P03] 耗材求解运行时构建失败，请减少耗材/层数或先构建持久缓存。"
+            " / Material solver runtime build failed. Reduce materials/layers "
+            "or build a persisted cache first."
+        )
+        return ctx
 
     # ---- Auto dynamic range (optional) ----
     if ctx.get("auto_dynamic_range"):
@@ -342,67 +357,36 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "unique_color_count": int(unique_colors.shape[0]),
             },
         )
-    else:
-        # No persisted cache found — build a temporary low-res (64³) cache
-        # in-memory and use it for lookup.  This avoids the MITM per-pixel
-        # solver whose delta_e broadcast (C, chunk, K_bot) can exceed
-        # available RAM for large palettes (e.g. M=8, N=10 → ~2.7 GiB).
-        # The cache builder uses a per-bucket approach that stays within
-        # ~100 MiB per chunk regardless of palette size.
-        # 没有持久化缓存时，现场构建一个最低分辨率（64³）的临时缓存用于匹配。
-        # 缓存构建器采用逐桶写入模式，内存可控，不会像 MITM 求解器那样 OOM。
-        _MIN_FALLBACK_GRID = 64
-        _log.debug(
-            "No cache found; building temporary grid=%d "
-            "cache in-memory (M=%d, N=%d) …",
-            _MIN_FALLBACK_GRID, len(materials), layer_count,
-        )
-        try:
-            cache = build_material_solver_cache(
-                materials=materials,
-                layer_count=layer_count,
-                layer_height_mm=layer_height_mm,
-                substrate=substrate,
-                grid_resolution=_MIN_FALLBACK_GRID,
-            )
-        except (MemoryError, ValueError) as exc:
-            _log.error(
-                "Temporary cache build failed: %s", exc
-            )
-            ctx["error"] = (
-                "[P03] 临时缓存构建失败，请先为该调色板构建穷举缓存。"
-                " / Temporary cache build failed. "
-                "Please build the solver cache for this palette first."
-            )
-            return ctx
-        _log.debug(
-            "Temporary cache built: %d valid cells, "
-            "mean_ΔE=%.2f, build=%.1fs",
-            cache.valid_cell_count,
-            float(cache.metadata.get("mean_delta_e", 0.0)),
-            float(cache.metadata.get("build_time_seconds", 0.0)),
-        )
-        if unique_colors.shape[0] > 0:
-            matched_rgb_unique, recipes_unique, delta_e = cache.lookup(
-                unique_colors, materials
-            )
-        else:
-            matched_rgb_unique = np.zeros((0, 3), dtype=np.uint8)
-            recipes_unique = np.zeros((0, layer_count), dtype=np.int32)
-            delta_e = np.zeros((0,), dtype=np.float64)
-        solver_path = "cache_built_on_the_fly"
+    elif unique_colors.shape[0] == 0:
+        matched_rgb_unique = np.zeros((0, 3), dtype=np.uint8)
+        recipes_unique = np.zeros((0, layer_count), dtype=np.int32)
+        delta_e = np.zeros((0,), dtype=np.float64)
+        solver_path = "cache"
         solver_meta = {
-            "palette_hash": cache.palette_hash,
+            "palette_hash": getattr(cache, "palette_hash", "") if cache else "",
             "requested_grid_resolution": requested_grid,
-            "grid_resolution": cache.grid_resolution,
-            "grid_fallback_used": True,
-            "valid_cell_count": cache.valid_cell_count,
-            "built_at": cache.metadata.get("built_at"),
-            "cache_mean_delta_e": float(cache.metadata.get("mean_delta_e", 0.0)),
-            "cache_max_delta_e": float(cache.metadata.get("max_delta_e", 0.0)),
-            "build_time_seconds": float(cache.metadata.get("build_time_seconds", 0.0)),
-            "reason": "no_persisted_cache",
+            "grid_resolution": (
+                getattr(cache, "grid_resolution", requested_grid)
+                if cache
+                else requested_grid
+            ),
+            "grid_fallback_used": False,
+            "valid_cell_count": (
+                int(getattr(cache, "valid_cell_count", 0)) if cache else 0
+            ),
+            "built_at": None,
+            "cache_mean_delta_e": 0.0,
+            "cache_max_delta_e": 0.0,
+            "cache_mode": (
+                str(getattr(cache, "mode", "candidate_hybrid")) if cache else "none"
+            ),
         }
+    else:
+        ctx["error"] = (
+            "[P03] 未能加载或构建耗材求解运行时。"
+            " / No material solver runtime could be loaded or built."
+        )
+        return ctx
     solver_elapsed = time.perf_counter() - solver_t0
     _log.debug(
         "Solver path=%s colors=%d mean_ΔE=%.2f max_ΔE=%.2f elapsed=%.2fs",
