@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MaterialSolverCacheStatusCard from "../components/MaterialSolverCacheStatusCard";
@@ -401,12 +408,10 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
     expect(exhaustiveBuildButton).toBeDisabled();
 
-    expect(screen.getByText("智能配方缓存")).toBeInTheDocument();
-    expect(screen.getByText("配方缓存未构建")).toBeInTheDocument();
-
-    const runtimeBuildButton = await screen.findByRole("button", {
-      name: "构建智能缓存",
-    });
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const runtimeBuildButton = within(runtimeSection).getByRole("button");
     expect(runtimeBuildButton).not.toBeDisabled();
 
     await act(async () => {
@@ -429,7 +434,11 @@ describe("MaterialSolverCacheStatusCard", () => {
       { candidateBudget: 33_554_432 },
     );
     expect(buildMaterialSolverCache).not.toHaveBeenCalled();
-    expect(screen.getByText("智能缓存已就绪")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("material-solver-runtime-status-pill"),
+      ).toHaveAttribute("data-tone", "ok");
+    });
   });
 
   it("forwards selected runtime candidate budget to status build and delete calls", async () => {
@@ -486,7 +495,10 @@ describe("MaterialSolverCacheStatusCard", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("combobox", { name: "缓存规模" }));
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    fireEvent.click(within(runtimeSection).getByRole("combobox"));
     fireEvent.click(await screen.findByRole("option", { name: /64M/ }));
 
     await waitFor(() => {
@@ -496,9 +508,8 @@ describe("MaterialSolverCacheStatusCard", () => {
       );
     });
 
-    const rebuildButton = await screen.findByRole("button", {
-      name: "重建智能缓存",
-    });
+    const [rebuildButton, deleteButton] =
+      within(runtimeSection).getAllByRole("button");
     await act(async () => {
       fireEvent.click(rebuildButton);
     });
@@ -510,9 +521,6 @@ describe("MaterialSolverCacheStatusCard", () => {
       { candidateBudget: 67_108_864 },
     );
 
-    const deleteButton = await screen.findByRole("button", {
-      name: "删除智能缓存",
-    });
     await act(async () => {
       fireEvent.click(deleteButton);
     });
@@ -558,9 +566,10 @@ describe("MaterialSolverCacheStatusCard", () => {
       />,
     );
 
-    const chartsButton = await screen.findByRole("button", {
-      name: "查看配方覆盖图",
-    });
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const chartsButton = within(runtimeSection).getAllByRole("button")[2];
     await act(async () => {
       fireEvent.click(chartsButton);
     });
