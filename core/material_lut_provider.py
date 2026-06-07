@@ -27,6 +27,7 @@ from core.material_cache import DEFAULT_GRID_RESOLUTION
 from core.material_candidate_cache import (
     MaterialCandidateCacheConfig,
     build_material_candidate_runtime,
+    load_material_candidate_runtime,
 )
 from core.material_color_solver import MaterialParams
 
@@ -238,6 +239,17 @@ def load_solver_runtime(
         if candidate_budget is not None
         else MaterialCandidateCacheConfig.preview_safe()
     )
+    persisted_runtime = load_material_candidate_runtime(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=int(config.candidate_budget),
+        cache_root=cache_root,
+    )
+    if persisted_runtime is not None:
+        return persisted_runtime, persisted_runtime.grid_resolution
+
     runtime = build_material_candidate_runtime(
         materials=materials,
         layer_count=int(layer_count),

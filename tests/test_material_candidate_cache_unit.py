@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from core.material_candidate_cache import (
@@ -10,7 +12,11 @@ from core.material_candidate_cache import (
     estimate_candidate_cache_memory,
 )
 from core.material_candidate_sampling import generate_candidate_recipes
-from core.material_color_solver import MaterialParams, forward_model, linear_to_srgb_uint8
+from core.material_color_solver import (
+    MaterialParams,
+    forward_model,
+    linear_to_srgb_uint8,
+)
 
 
 def _mat(
@@ -236,3 +242,101 @@ def test_candidate_runtime_inverse_refinement_improves_sparse_baseline() -> None
     assert refined_delta[0] < baseline_delta[0]
     np.testing.assert_array_equal(refined_rgb, target_srgb)
     assert refined_recipe.shape == (1, 4)
+
+
+def test_candidate_cache_file_path_uses_hybrid_budget_stem(tmp_path: Path) -> None:
+    from core.material_candidate_cache import candidate_cache_file_path
+
+    path = candidate_cache_file_path(
+        SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        candidate_budget=64,
+        cache_root=tmp_path,
+    )
+
+    assert path.name.endswith("-hybrid-v2-b64.npz")
+    assert "-g" not in path.stem
+
+
+def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
+    from core.material_candidate_cache import (
+        build_material_candidate_runtime,
+        load_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
+    )
+
+    npz_path = save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    loaded = load_material_candidate_runtime(
+        SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        candidate_budget=32,
+        cache_root=tmp_path,
+    )
+
+    assert npz_path.exists()
+    assert loaded is not None
+    np.testing.assert_array_equal(loaded.candidate_recipes, runtime.candidate_recipes)
+    np.testing.assert_array_equal(loaded.achieved_srgb, runtime.achieved_srgb)
+    np.testing.assert_array_equal(loaded.achieved_lab, runtime.achieved_lab)
+    np.testing.assert_array_equal(loaded.pinned_mask, runtime.pinned_mask)
+    assert loaded.metadata["schema_version"] == "2.0"
+    assert loaded.metadata["mode"] == "candidate_hybrid"
+    assert loaded.metadata["candidate_budget"] == 32
+    assert loaded.metadata["candidate_count"] == runtime.valid_cell_count
+
+
+def test_load_candidate_runtime_returns_none_when_absent_or_palette_mismatch(
+    tmp_path: Path,
+) -> None:
+    from core.material_candidate_cache import (
+        build_material_candidate_runtime,
+        load_material_candidate_runtime,
+        save_material_candidate_runtime,
+    )
+
+    assert (
+        load_material_candidate_runtime(
+            SMALL_PALETTE,
+            layer_count=5,
+            layer_height_mm=0.08,
+            substrate="white",
+            candidate_budget=32,
+            cache_root=tmp_path,
+        )
+        is None
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
+    )
+    save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    red_alt = _mat("RedAlt", E=(0.7, 0.05, 0.05), k=(4.0, 4.0, 4.0))
+    mismatched_palette = [red_alt, BLUE, WHITE]
+
+    assert (
+        load_material_candidate_runtime(
+            mismatched_palette,
+            layer_count=5,
+            layer_height_mm=0.08,
+            substrate="white",
+            candidate_budget=32,
+            cache_root=tmp_path,
+        )
+        is None
+    )

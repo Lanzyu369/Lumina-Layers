@@ -5,13 +5,20 @@
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from scipy.spatial import cKDTree
 
-from core.material_cache import canonical_palette_order, fingerprint_palette
+from core.material_cache import (
+    canonical_palette_order,
+    default_cache_directory,
+    fingerprint_palette,
+)
 from core.material_candidate_sampling import generate_candidate_recipes
 from core.material_color_solver import (
     MaterialParams,
@@ -29,6 +36,8 @@ DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES = 8 * 1024 * 1024 * 1024
 PREVIEW_SAFE_CANDIDATE_BUDGET = 1_048_576
 DEFAULT_PERSISTED_CANDIDATE_BUDGET = 4_194_304
 QUALITY_8G_CANDIDATE_BUDGET = 8_388_608
+HYBRID_CANDIDATE_SCHEMA_VERSION = "2.0"
+HYBRID_CANDIDATE_ALGORITHM_VERSION = "hybrid-v2"
 
 
 @dataclass(frozen=True)
@@ -153,6 +162,63 @@ def estimate_candidate_cache_memory(
         final_runtime_bytes=int(final_runtime_bytes),
         estimated_peak_bytes=int(estimated_peak_bytes),
     )
+
+
+def _height_to_str(layer_height_mm: float) -> str:
+    return f"{float(layer_height_mm):g}".replace(".", "_")
+
+
+def _candidate_cache_meta_path_for(npz_path: Path) -> Path:
+    return npz_path.with_name(npz_path.stem + ".meta.json")
+
+
+def _candidate_cache_file_stem(
+    *,
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    candidate_budget: int,
+) -> str:
+    return (
+        f"{palette_hash}-N{int(layer_count):02d}"
+        f"-t{_height_to_str(layer_height_mm)}-{substrate}"
+        f"-{HYBRID_CANDIDATE_ALGORITHM_VERSION}-b{int(candidate_budget)}"
+    )
+
+
+def candidate_cache_file_path(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    *,
+    candidate_budget: int,
+    cache_root: str | Path | None = None,
+) -> Path:
+    """Resolve the canonical ``.npz`` path for a hybrid candidate runtime.
+    返回 hybrid candidate runtime 的规范 ``.npz`` 路径。
+
+    Args:
+        materials: Material palette. (耗材调色板)
+        layer_count: Recipe layer count. (配方层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"`` substrate. (基底)
+        candidate_budget: Candidate budget encoded in the filename.
+            (写入文件名的候选预算)
+        cache_root: Optional cache directory override. (可选缓存目录)
+
+    Returns:
+        Path: Canonical candidate runtime file path. (规范候选运行时路径)
+    """
+    stem = _candidate_cache_file_stem(
+        palette_hash=fingerprint_palette(materials),
+        layer_count=int(layer_count),
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        candidate_budget=int(candidate_budget),
+    )
+    return default_cache_directory(cache_root) / f"{stem}.npz"
 
 
 def _substrate_linear(substrate: str) -> np.ndarray:
@@ -416,5 +482,148 @@ def build_material_candidate_runtime(
         achieved_srgb=achieved_srgb,
         achieved_lab=achieved_lab,
         pinned_mask=generated.pinned_mask,
+        metadata=metadata,
+    )
+
+
+def save_material_candidate_runtime(
+    runtime: MaterialCandidateRuntime,
+    *,
+    cache_root: str | Path | None = None,
+) -> Path:
+    """Persist a hybrid candidate runtime to its canonical file pair.
+    将 hybrid candidate runtime 保存到规范 ``.npz`` 与 ``.meta.json`` 文件。
+
+    Args:
+        runtime: Runtime to save. (要保存的运行时)
+        cache_root: Optional cache directory override. (可选缓存目录)
+
+    Returns:
+        Path: Written ``.npz`` path. (写入的 ``.npz`` 路径)
+    """
+    directory = default_cache_directory(cache_root)
+    directory.mkdir(parents=True, exist_ok=True)
+    candidate_budget = int(runtime.metadata["candidate_budget"])
+    stem = _candidate_cache_file_stem(
+        palette_hash=runtime.palette_hash,
+        layer_count=runtime.layer_count,
+        layer_height_mm=runtime.layer_height_mm,
+        substrate=runtime.substrate,
+        candidate_budget=candidate_budget,
+    )
+    npz_path = directory / f"{stem}.npz"
+    meta_path = _candidate_cache_meta_path_for(npz_path)
+
+    recipes = np.asarray(runtime.candidate_recipes)
+    recipe_dtype = "uint8" if int(recipes.max(initial=0)) <= 255 else "uint16"
+    recipes_to_save = recipes.astype(recipe_dtype, copy=False)
+    metadata = dict(runtime.metadata)
+    metadata.update(
+        {
+            "schema_version": HYBRID_CANDIDATE_SCHEMA_VERSION,
+            "algorithm_version": HYBRID_CANDIDATE_ALGORITHM_VERSION,
+            "candidate_count": int(runtime.valid_cell_count),
+            "recipe_dtype": str(recipes_to_save.dtype),
+            "built_at": metadata.get("built_at") or time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(),
+            ),
+        }
+    )
+
+    tmp_npz = npz_path.with_name(npz_path.name + ".tmp")
+    with tmp_npz.open("wb") as handle:
+        np.savez_compressed(
+            handle,
+            candidate_recipes=recipes_to_save,
+            achieved_srgb=runtime.achieved_srgb,
+            achieved_lab=runtime.achieved_lab,
+            pinned_mask=runtime.pinned_mask,
+        )
+    tmp_npz.replace(npz_path)
+    meta_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    runtime.metadata.update(metadata)
+    return npz_path
+
+
+def load_material_candidate_runtime(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    candidate_budget: int,
+    cache_root: str | Path | None = None,
+) -> MaterialCandidateRuntime | None:
+    """Load a persisted hybrid candidate runtime, returning ``None`` on miss.
+    加载持久化 hybrid candidate runtime；不存在或校验失败时返回 ``None``。
+
+    Args:
+        materials: Material palette used to validate the fingerprint. (耗材调色板)
+        layer_count: Recipe layer count. (配方层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"`` substrate. (基底)
+        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        cache_root: Optional cache directory override. (可选缓存目录)
+
+    Returns:
+        MaterialCandidateRuntime | None: Loaded runtime or ``None``.
+            (加载的运行时，或 ``None``)
+    """
+    npz_path = candidate_cache_file_path(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=int(candidate_budget),
+        cache_root=cache_root,
+    )
+    meta_path = _candidate_cache_meta_path_for(npz_path)
+    if not npz_path.exists() or not meta_path.exists():
+        return None
+
+    try:
+        with np.load(npz_path) as loaded:
+            candidate_recipes = loaded["candidate_recipes"].astype(np.uint16)
+            achieved_srgb = loaded["achieved_srgb"].astype(np.uint8)
+            achieved_lab = loaded["achieved_lab"].astype(np.float32)
+            pinned_mask = loaded["pinned_mask"].astype(bool)
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+
+    if metadata.get("schema_version") != HYBRID_CANDIDATE_SCHEMA_VERSION:
+        return None
+    if metadata.get("mode") != "candidate_hybrid":
+        return None
+    if metadata.get("palette_hash") != fingerprint_palette(materials):
+        return None
+    if int(metadata.get("layer_count", -1)) != int(layer_count):
+        return None
+    stored_layer_height = float(metadata.get("layer_height_mm", -1.0))
+    if abs(stored_layer_height - float(layer_height_mm)) > 1e-12:
+        return None
+    if str(metadata.get("substrate", "")) != str(substrate):
+        return None
+    if int(metadata.get("candidate_budget", -1)) != int(candidate_budget):
+        return None
+    if (
+        candidate_recipes.ndim != 2
+        or candidate_recipes.shape[1] != int(layer_count)
+        or achieved_srgb.shape != (candidate_recipes.shape[0], 3)
+        or achieved_lab.shape != (candidate_recipes.shape[0], 3)
+        or pinned_mask.shape != (candidate_recipes.shape[0],)
+    ):
+        return None
+
+    metadata["candidate_count"] = int(candidate_recipes.shape[0])
+    return MaterialCandidateRuntime(
+        candidate_recipes=candidate_recipes,
+        achieved_srgb=achieved_srgb,
+        achieved_lab=achieved_lab,
+        pinned_mask=pinned_mask,
         metadata=metadata,
     )
