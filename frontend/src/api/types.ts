@@ -1005,6 +1005,27 @@ export interface MaterialSolverRuntimeDeleteResponse {
   candidate_budget: number;
 }
 
+/** Visualization payload for one persisted hybrid runtime entry. */
+export interface MaterialSolverRuntimeDetailsResponse {
+  status: string;
+  message: string;
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  grid_resolution: number;
+  valid_cell_count: number;
+  total_cell_count: number;
+  candidate_budget: number;
+  candidate_count: number;
+  coverage_stats: LutDetailsCoverageStats;
+  lab_points: LutDetailsPoint[];
+  lab_points_3d: LutDetailsPoint3D[];
+  lab_hull: Array<{ x: number; y: number }>;
+  rgb_points: LutDetailsPoint[];
+}
+
 /**
  * Color-distribution visualization payload for one solver-cache entry.
  * Mirrors the LUT details ``lab_points`` / ``rgb_points`` / ``coverage_stats``

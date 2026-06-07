@@ -180,6 +180,73 @@ def _solver_runtime_metadata(
     }
 
 
+def _axis_range_stub(min_value: float, max_value: float) -> SimpleNamespace:
+    return SimpleNamespace(min=min_value, max=max_value)
+
+
+def _runtime_details_stub() -> SimpleNamespace:
+    coverage_stats = SimpleNamespace(
+        entry_count=32,
+        plotted_point_count=2,
+        l_range=_axis_range_stub(10.0, 90.0),
+        a_range=_axis_range_stub(-20.0, 30.0),
+        b_range=_axis_range_stub(-10.0, 40.0),
+        r_range=_axis_range_stub(1.0, 200.0),
+        g_range=_axis_range_stub(2.0, 210.0),
+        b_rgb_range=_axis_range_stub(3.0, 220.0),
+    )
+    lab_points = [
+        SimpleNamespace(
+            x=1.0,
+            y=2.0,
+            hex_color="#010203",
+            rgb=(1, 2, 3),
+            label="1",
+        ),
+        SimpleNamespace(
+            x=3.0,
+            y=4.0,
+            hex_color="#040506",
+            rgb=(4, 5, 6),
+            label="2",
+        ),
+    ]
+    lab_points_3d = [
+        SimpleNamespace(
+            l=10.0,
+            a=1.0,
+            b=2.0,
+            hex_color="#010203",
+            rgb=(1, 2, 3),
+            label="1",
+        ),
+        SimpleNamespace(
+            l=20.0,
+            a=3.0,
+            b=4.0,
+            hex_color="#040506",
+            rgb=(4, 5, 6),
+            label="2",
+        ),
+    ]
+    return SimpleNamespace(
+        palette_hash="stub_hash",
+        layer_count=8,
+        layer_height_mm=0.04,
+        substrate="white",
+        grid_resolution=64,
+        valid_cell_count=32,
+        total_cell_count=32,
+        candidate_budget=32,
+        candidate_count=32,
+        coverage_stats=coverage_stats,
+        lab_points=lab_points,
+        lab_points_3d=lab_points_3d,
+        lab_hull=((1.0, 2.0), (3.0, 4.0), (5.0, 6.0)),
+        rgb_points=lab_points,
+    )
+
+
 class _StubSuggestion:
     matched_rgb = np.array([255, 0, 0], dtype=np.uint8)
     delta_e = 1.5
@@ -732,6 +799,66 @@ class TestMaterialSolverRuntimeCanary:
         assert record.candidate_budget == 32
         assert record.candidate_count == 32
         assert record.cache_file_size_bytes == 64
+
+    def test_material_solver_runtime_details_logs_sessionless_canary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            lambda *args, **kwargs: SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_runtime_details",
+            lambda *args, **kwargs: _runtime_details_stub(),
+            raising=False,
+        )
+        target_logger = _capture_single_stage_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/extractor/material-solver-runtime/details",
+                data={**_solver_runtime_form_data(), "max_points": "512"},
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["palette_hash"] == "stub_hash"
+        assert body["candidate_budget"] == 32
+        assert body["candidate_count"] == 32
+        assert body["coverage_stats"]["entry_count"] == 32
+        assert len(body["lab_points"]) == 2
+        assert len(body["rgb_points"]) == 2
+
+        records = _records_for_event(caplog, "material_solver_runtime_details_done")
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert "session_id" not in record.__dict__
+        assert record.palette_hash == "stub_hash"
+        assert record.material_count == 2
+        assert record.candidate_budget == 32
+        assert record.candidate_count == 32
+        assert record.plotted_point_count == 2
 
     @pytest.mark.parametrize("deleted", [True, False])
     def test_material_solver_runtime_delete_logs_sessionless_canary(

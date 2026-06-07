@@ -577,6 +577,30 @@ class MaterialSolverRuntimeDeleteResponse(BaseModel):
     candidate_budget: int
 
 
+class MaterialSolverRuntimeDetailsResponse(BaseModel):
+    """Visualization payload for a hybrid runtime entry.
+    hybrid runtime 条目的可视化载荷。
+    """
+
+    status: str
+    message: str
+    palette_hash: str
+    material_directory_names: list[str] = Field(default_factory=list)
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    grid_resolution: int
+    valid_cell_count: int
+    total_cell_count: int
+    candidate_budget: int
+    candidate_count: int
+    coverage_stats: LutCoverageStatsResponse
+    lab_points: list[LutPlotPoint] = Field(default_factory=list)
+    lab_points_3d: list[LutPlotPoint3D] = Field(default_factory=list)
+    lab_hull: list[LutHullPoint] = Field(default_factory=list)
+    rgb_points: list[LutPlotPoint] = Field(default_factory=list)
+
+
 class MaterialSolverCacheDetailsResponse(BaseModel):
     """Visualization payload for a single solver-cache entry.
     单份求解器缓存的可视化载荷。

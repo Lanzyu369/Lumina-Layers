@@ -8,6 +8,7 @@ import {
   deleteMaterialSolverRuntime,
   fetchMaterialSolverCacheDetails,
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeDetails,
   fetchMaterialSolverRuntimeStatus,
   MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS,
   type MaterialSolverCacheKey,
@@ -16,6 +17,7 @@ import {
 import type {
   MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheEntry,
+  MaterialSolverRuntimeDetailsResponse,
   MaterialSolverRuntimeEntry,
 } from "../api/types";
 import { useI18n } from "../i18n/context";
@@ -99,6 +101,11 @@ export default function MaterialSolverCacheStatusCard({
   const [isRuntimeBuilding, setIsRuntimeBuilding] = useState(false);
   const [isRuntimeDeleting, setIsRuntimeDeleting] = useState(false);
   const [runtimeActionError, setRuntimeActionError] = useState<string | null>(null);
+  const [runtimeChartsExpanded, setRuntimeChartsExpanded] = useState(false);
+  const [runtimeChartsLoading, setRuntimeChartsLoading] = useState(false);
+  const [runtimeChartsError, setRuntimeChartsError] = useState<string | null>(null);
+  const [runtimeChartsData, setRuntimeChartsData] =
+    useState<MaterialSolverRuntimeDetailsResponse | null>(null);
 
   const enableSolverCacheGridSelection = useSettingsStore(
     (s) => s.enableSolverCacheGridSelection,
@@ -237,6 +244,13 @@ export default function MaterialSolverCacheStatusCard({
     setChartsExpanded(false);
   }, [cacheKey, effectiveGridResolution]);
 
+  useEffect(() => {
+    setRuntimeChartsData(null);
+    setRuntimeChartsError(null);
+    setRuntimeChartsLoading(false);
+    setRuntimeChartsExpanded(false);
+  }, [cacheKey, runtimeCandidateBudget]);
+
   const handleToggleCharts = useCallback(async () => {
     if (chartsExpanded) {
       setChartsExpanded(false);
@@ -262,6 +276,38 @@ export default function MaterialSolverCacheStatusCard({
       setChartsLoading(false);
     }
   }, [cacheKey, chartsData, chartsExpanded, chartsLoading, effectiveGridResolution]);
+
+  const handleToggleRuntimeCharts = useCallback(async () => {
+    if (runtimeChartsExpanded) {
+      setRuntimeChartsExpanded(false);
+      return;
+    }
+    setRuntimeChartsExpanded(true);
+    if (runtimeChartsData || runtimeChartsLoading) {
+      return;
+    }
+    setRuntimeChartsError(null);
+    setRuntimeChartsLoading(true);
+    try {
+      const response = await fetchMaterialSolverRuntimeDetails(cacheKey, {
+        candidateBudget: runtimeCandidateBudget,
+        maxPoints: 8000,
+      });
+      setRuntimeChartsData(response);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setRuntimeChartsError(message);
+    } finally {
+      setRuntimeChartsLoading(false);
+    }
+  }, [
+    cacheKey,
+    runtimeCandidateBudget,
+    runtimeChartsData,
+    runtimeChartsExpanded,
+    runtimeChartsLoading,
+  ]);
 
   const handleBuild = useCallback(async () => {
     if (materialDirectoryNames.length === 0) return;
@@ -634,6 +680,19 @@ export default function MaterialSolverCacheStatusCard({
                 onClick={handleDeleteRuntime}
                 className="px-3 text-xs"
               />
+              <Button
+                label={t(
+                  runtimeChartsExpanded
+                    ? "basic_material_runtime_charts_hide_button"
+                    : "basic_material_runtime_charts_show_button",
+                )}
+                variant="secondary"
+                disabled={materialDirectoryNames.length === 0}
+                loading={runtimeChartsLoading}
+                onClick={handleToggleRuntimeCharts}
+                className="px-3 text-xs"
+                data-testid="material-solver-runtime-charts-toggle"
+              />
             </>
           ) : (
             <Button
@@ -650,6 +709,37 @@ export default function MaterialSolverCacheStatusCard({
             />
           )}
         </div>
+
+        {runtimeChartsExpanded && runtimeState.phase === "cached" ? (
+          <div
+            data-testid="material-solver-runtime-charts-region"
+            className="mt-2 flex flex-col gap-3"
+          >
+            {runtimeChartsError ? (
+              <p className="text-xs text-rose-500">
+                {tRuntime("basic_material_runtime_charts_error", {
+                  message: runtimeChartsError,
+                })}
+              </p>
+            ) : runtimeChartsLoading ? (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                {t("basic_material_runtime_charts_loading")}
+              </p>
+            ) : runtimeChartsData ? (
+              <LutColorDistributionCharts
+                source={{
+                  fingerprint: runtimeChartsData.palette_hash,
+                  lab_points: runtimeChartsData.lab_points,
+                  lab_points_3d: runtimeChartsData.lab_points_3d,
+                  lab_hull: runtimeChartsData.lab_hull,
+                  rgb_points: runtimeChartsData.rgb_points,
+                  coverage_stats: runtimeChartsData.coverage_stats,
+                }}
+                workspaceMode={workspace.mode}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {chartsExpanded && state.phase === "cached" ? (

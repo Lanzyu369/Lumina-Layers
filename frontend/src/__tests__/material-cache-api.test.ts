@@ -4,6 +4,7 @@ import apiClient from "../api/client";
 import {
   buildMaterialSolverRuntime,
   deleteMaterialSolverRuntime,
+  fetchMaterialSolverRuntimeDetails,
   fetchMaterialSolverRuntimeStatus,
   type MaterialSolverCacheKey,
 } from "../api/materialCache";
@@ -65,6 +66,27 @@ describe("material solver runtime API client", () => {
     expect(fd.get("layer_height_mm")).toBe("0.04");
     expect(fd.get("substrate")).toBe("white");
     expect(fd.get("candidate_budget")).toBe("8388608");
+    expect(config).toMatchObject({ timeout: 3_600_000 });
+  });
+
+  it("posts details requests with candidate_budget and max_points", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { status: "ok", message: "details", lab_points: [] },
+    });
+
+    await fetchMaterialSolverRuntimeDetails(cacheKey, {
+      candidateBudget: 4_194_304,
+      maxPoints: 512,
+    });
+
+    expect(mockPost).toHaveBeenCalledOnce();
+    const [url, formData, config] = mockPost.mock.calls[0];
+    expect(url).toBe("/extractor/material-solver-runtime/details");
+    expect(formData).toBeInstanceOf(FormData);
+
+    const fd = formData as FormData;
+    expect(fd.get("candidate_budget")).toBe("4194304");
+    expect(fd.get("max_points")).toBe("512");
     expect(config).toMatchObject({ timeout: 3_600_000 });
   });
 });

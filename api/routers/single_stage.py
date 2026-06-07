@@ -44,6 +44,7 @@ from api.schemas.responses import (
     MaterialSolverCacheStatusResponse,
     MaterialSolverRuntimeBuildResponse,
     MaterialSolverRuntimeDeleteResponse,
+    MaterialSolverRuntimeDetailsResponse,
     MaterialSolverRuntimeEntryResponse,
     MaterialSolverRuntimeStatusResponse,
     SingleStageExtractResponse,
@@ -73,7 +74,10 @@ from core.material_cache import (
     save_material_solver_cache,
     validate_material_solver_cache_build_budget,
 )
-from core.material_cache_visualization import build_material_cache_details
+from core.material_cache_visualization import (
+    build_material_cache_details,
+    build_material_runtime_details,
+)
 from core.material_candidate_cache import (
     DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
@@ -1735,6 +1739,135 @@ async def material_solver_runtime_delete(
         layer_height_mm=layer_height_mm,
         substrate=substrate,
         candidate_budget=candidate_budget,
+    )
+
+
+@router.post("/material-solver-runtime/details")
+async def material_solver_runtime_details(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+    max_points: int = Form(8000, ge=128, le=50000),
+) -> MaterialSolverRuntimeDetailsResponse:
+    """Return a LUT-details-shaped payload for a built hybrid runtime.
+    返回已构建 hybrid runtime 的 LUT 详情同构可视化载荷。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_candidate_budget(candidate_budget)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+    runtime = load_material_candidate_runtime(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=candidate_budget,
+    )
+    if runtime is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No hybrid runtime found for this combination. Build the "
+                "runtime first via /material-solver-runtime/build."
+            ),
+        )
+
+    details = build_material_runtime_details(runtime, max_points=int(max_points))
+    log.info(
+        "Material solver runtime details rendered",
+        extra={
+            "event": "material_solver_runtime_details_done",
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "candidate_budget": candidate_budget,
+            "candidate_count": details.candidate_count,
+            "plotted_point_count": details.coverage_stats.plotted_point_count,
+        },
+    )
+
+    coverage = LutCoverageStatsResponse(
+        entry_count=details.coverage_stats.entry_count,
+        plotted_point_count=details.coverage_stats.plotted_point_count,
+        l_range=LutAxisRange(
+            min=details.coverage_stats.l_range.min,
+            max=details.coverage_stats.l_range.max,
+        ),
+        a_range=LutAxisRange(
+            min=details.coverage_stats.a_range.min,
+            max=details.coverage_stats.a_range.max,
+        ),
+        b_range=LutAxisRange(
+            min=details.coverage_stats.b_range.min,
+            max=details.coverage_stats.b_range.max,
+        ),
+        r_range=LutAxisRange(
+            min=details.coverage_stats.r_range.min,
+            max=details.coverage_stats.r_range.max,
+        ),
+        g_range=LutAxisRange(
+            min=details.coverage_stats.g_range.min,
+            max=details.coverage_stats.g_range.max,
+        ),
+        b_rgb_range=LutAxisRange(
+            min=details.coverage_stats.b_rgb_range.min,
+            max=details.coverage_stats.b_rgb_range.max,
+        ),
+    )
+    return MaterialSolverRuntimeDetailsResponse(
+        status="ok",
+        message=(
+            f"Runtime details for {len(dir_names)} materials, "
+            f"budget={candidate_budget}"
+        ),
+        palette_hash=palette_hash,
+        material_directory_names=list(dir_names),
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        grid_resolution=details.grid_resolution,
+        valid_cell_count=details.valid_cell_count,
+        total_cell_count=details.total_cell_count,
+        candidate_budget=details.candidate_budget,
+        candidate_count=details.candidate_count,
+        coverage_stats=coverage,
+        lab_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.lab_points
+        ],
+        lab_points_3d=[
+            LutPlotPoint3D(
+                l=point.l,
+                a=point.a,
+                b=point.b,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.lab_points_3d
+        ],
+        lab_hull=[LutHullPoint(x=x, y=y) for x, y in details.lab_hull],
+        rgb_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.rgb_points
+        ],
     )
 
 

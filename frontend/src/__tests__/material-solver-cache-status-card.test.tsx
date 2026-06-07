@@ -7,7 +7,9 @@ import {
   buildMaterialSolverRuntime,
   deleteMaterialSolverCache,
   deleteMaterialSolverRuntime,
+  fetchMaterialSolverCacheDetails,
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeDetails,
   fetchMaterialSolverRuntimeStatus,
 } from "../api/materialCache";
 import type {
@@ -22,7 +24,9 @@ vi.mock("../api/materialCache", () => ({
   DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 4_194_304,
   deleteMaterialSolverCache: vi.fn(),
   deleteMaterialSolverRuntime: vi.fn(),
+  fetchMaterialSolverCacheDetails: vi.fn(),
   fetchMaterialSolverCacheStatus: vi.fn(),
+  fetchMaterialSolverRuntimeDetails: vi.fn(),
   fetchMaterialSolverRuntimeStatus: vi.fn(),
   MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS: [
     1_048_576,
@@ -79,6 +83,54 @@ function buildRuntimeEntry(
   };
 }
 
+function buildRuntimeDetailsResponse() {
+  const range = { min: 0, max: 1 };
+  const point = {
+    x: 0,
+    y: 0,
+    hex_color: "#010203",
+    rgb: [1, 2, 3] as [number, number, number],
+    label: "1",
+  };
+  return {
+    status: "ok",
+    message: "Runtime details",
+    palette_hash: "0123456789abcdef",
+    material_directory_names: ["red", "white"],
+    layer_count: 8,
+    layer_height_mm: 0.04,
+    substrate: "white",
+    grid_resolution: 64,
+    valid_cell_count: 1,
+    total_cell_count: 4_194_304,
+    candidate_budget: 4_194_304,
+    candidate_count: 4_194_304,
+    coverage_stats: {
+      entry_count: 1,
+      plotted_point_count: 1,
+      l_range: range,
+      a_range: range,
+      b_range: range,
+      r_range: range,
+      g_range: range,
+      b_rgb_range: range,
+    },
+    lab_points: [point],
+    lab_points_3d: [
+      {
+        l: 10,
+        a: 0,
+        b: 0,
+        hex_color: "#010203",
+        rgb: [1, 2, 3] as [number, number, number],
+        label: "1",
+      },
+    ],
+    lab_hull: [],
+    rgb_points: [point],
+  };
+}
+
 describe("MaterialSolverCacheStatusCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,6 +152,9 @@ describe("MaterialSolverCacheStatusCard", () => {
       candidate_budget: 4_194_304,
       entry: null,
     });
+    vi.mocked(fetchMaterialSolverRuntimeDetails).mockResolvedValue(
+      buildRuntimeDetailsResponse(),
+    );
   });
 
   it("shows the idle state when no materials are selected", async () => {
@@ -465,6 +520,62 @@ describe("MaterialSolverCacheStatusCard", () => {
     );
 
     confirmSpy.mockRestore();
+  });
+
+  it("loads runtime color charts for a cached hybrid runtime", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "Runtime found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      candidate_budget: 4_194_304,
+      entry: buildRuntimeEntry(),
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={8}
+        layerHeightMm={0.04}
+      />,
+    );
+
+    const chartsButton = await screen.findByRole("button", {
+      name: "查看运行时色彩分布图",
+    });
+    await act(async () => {
+      fireEvent.click(chartsButton);
+    });
+
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeDetails).toHaveBeenCalledTimes(1);
+    });
+    expect(fetchMaterialSolverRuntimeDetails).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: ["red", "white"],
+        layerCount: 8,
+        layerHeightMm: 0.04,
+        substrate: "white",
+      },
+      { candidateBudget: 4_194_304, maxPoints: 8000 },
+    );
+    expect(
+      screen.getByTestId("material-solver-runtime-charts-region"),
+    ).toBeInTheDocument();
+    expect(fetchMaterialSolverCacheDetails).not.toHaveBeenCalled();
   });
 
   it("disables cache build for low-grid extreme combination counts", async () => {

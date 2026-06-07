@@ -8,6 +8,7 @@ import type {
   MaterialSolverCacheStatusResponse,
   MaterialSolverRuntimeBuildResponse,
   MaterialSolverRuntimeDeleteResponse,
+  MaterialSolverRuntimeDetailsResponse,
   MaterialSolverRuntimeStatusResponse,
 } from "./types";
 
@@ -183,6 +184,33 @@ export async function deleteMaterialSolverRuntime(
     "/extractor/material-solver-runtime/delete",
     _formData(key, extra),
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Fetch the LUT-details-shaped color-distribution payload for a runtime.
+ * 拉取有界 hybrid runtime 的色彩分布图载荷（结构与 LUT 详情同构）。
+ */
+export async function fetchMaterialSolverRuntimeDetails(
+  key: MaterialSolverCacheKey,
+  options?: {
+    candidateBudget?: number;
+    maxPoints?: number;
+    signal?: AbortSignal;
+  },
+): Promise<MaterialSolverRuntimeDetailsResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.candidateBudget != null) {
+    extra.candidate_budget = String(options.candidateBudget);
+  }
+  if (options?.maxPoints != null) {
+    extra.max_points = String(options.maxPoints);
+  }
+  const response = await apiClient.post<MaterialSolverRuntimeDetailsResponse>(
+    "/extractor/material-solver-runtime/details",
+    _formData(key, extra),
+    { timeout: 3_600_000, signal: options?.signal },
   );
   return response.data;
 }

@@ -3506,6 +3506,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除运行时",
     en: "Delete runtime",
   },
+  basic_material_runtime_charts_show_button: {
+    zh: "查看运行时色彩分布图",
+    en: "View runtime color charts",
+  },
+  basic_material_runtime_charts_hide_button: {
+    zh: "收起运行时色彩分布图",
+    en: "Hide runtime color charts",
+  },
+  basic_material_runtime_charts_loading: {
+    zh: "正在加载运行时色彩分布图…",
+    en: "Loading runtime color charts…",
+  },
+  basic_material_runtime_charts_error: {
+    zh: "运行时色彩分布图加载失败：{message}",
+    en: "Failed to load runtime color charts: {message}",
+  },
   basic_material_runtime_building_label: {
     zh: "正在构建运行时…",
     en: "Building runtime…",

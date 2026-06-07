@@ -28,9 +28,14 @@ from core.material_cache import (
     MaterialSolverCache,
     build_material_solver_cache,
 )
+from core.material_candidate_cache import (
+    MaterialCandidateCacheConfig,
+    build_material_candidate_runtime,
+)
 from core.material_cache_visualization import (
     MaterialSolverCacheDetails,
     build_material_cache_details,
+    build_material_runtime_details,
 )
 from core.material_color_solver import MaterialParams
 
@@ -183,3 +188,33 @@ class TestEmptyCacheEdgeCase:
         assert len(details.rgb_points) == 0
         assert len(details.lab_points_3d) == 0
         assert details.lab_hull == ()
+
+
+class TestBuildMaterialRuntimeDetails:
+    """Behavioural contract for hybrid runtime visualization payloads."""
+
+    def test_candidate_runtime_payload_is_lut_details_shaped(self) -> None:
+        runtime = build_material_candidate_runtime(
+            materials=_SMALL_PALETTE,
+            layer_count=5,
+            layer_height_mm=0.08,
+            substrate="white",
+            config=MaterialCandidateCacheConfig(
+                candidate_budget=64,
+                enable_inverse_refinement=False,
+            ),
+        )
+
+        details = build_material_runtime_details(runtime, max_points=32)
+
+        assert details.palette_hash == runtime.palette_hash
+        assert details.layer_count == 5
+        assert details.layer_height_mm == 0.08
+        assert details.substrate == "white"
+        assert details.candidate_budget == 64
+        assert details.candidate_count == runtime.valid_cell_count
+        assert details.coverage_stats.entry_count == runtime.valid_cell_count
+        assert details.coverage_stats.plotted_point_count <= 32
+        assert len(details.lab_points) <= 32
+        assert len(details.rgb_points) == len(details.lab_points)
+        assert len(details.lab_points_3d) == len(details.lab_points)
