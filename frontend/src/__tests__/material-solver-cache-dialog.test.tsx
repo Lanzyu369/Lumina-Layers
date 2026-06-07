@@ -2,12 +2,24 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MaterialSolverCacheDialog from "../components/MaterialSolverCacheDialog";
-import { fetchMaterialSolverCacheStatus } from "../api/materialCache";
+import {
+  fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeStatus,
+} from "../api/materialCache";
 
 vi.mock("../api/materialCache", () => ({
   buildMaterialSolverCache: vi.fn(),
+  buildMaterialSolverRuntime: vi.fn(),
+  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 4_194_304,
   deleteMaterialSolverCache: vi.fn(),
+  deleteMaterialSolverRuntime: vi.fn(),
   fetchMaterialSolverCacheStatus: vi.fn(),
+  fetchMaterialSolverRuntimeStatus: vi.fn(),
+  MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS: [
+    1_048_576,
+    4_194_304,
+    8_388_608,
+  ],
 }));
 
 // The open-button label comes from the zh translation of
@@ -28,6 +40,17 @@ describe("MaterialSolverCacheDialog", () => {
       substrate: "white",
       entry: null,
     });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "Runtime missing",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 4_194_304,
+      entry: null,
+    });
   });
 
   it("does not render the dialog content before the button is clicked", () => {
@@ -41,6 +64,7 @@ describe("MaterialSolverCacheDialog", () => {
     expect(screen.queryByTestId("material-solver-cache-dialog")).toBeNull();
     // Cache status card should not be queried while dialog is closed.
     expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(fetchMaterialSolverRuntimeStatus).not.toHaveBeenCalled();
   });
 
   it("opens the dialog and renders the cache status card when clicked", async () => {

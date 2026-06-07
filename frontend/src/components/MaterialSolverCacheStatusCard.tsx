@@ -2,14 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildMaterialSolverCache,
+  buildMaterialSolverRuntime,
+  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET,
   deleteMaterialSolverCache,
+  deleteMaterialSolverRuntime,
   fetchMaterialSolverCacheDetails,
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeStatus,
+  MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS,
   type MaterialSolverCacheKey,
+  type MaterialSolverRuntimeCandidateBudget,
 } from "../api/materialCache";
 import type {
   MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheEntry,
+  MaterialSolverRuntimeEntry,
 } from "../api/types";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
@@ -19,6 +26,7 @@ import {
 } from "../stores/settingsStore";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Button from "./ui/Button";
+import Dropdown from "./ui/Dropdown";
 import { LutColorDistributionCharts } from "./LutDetailsPanel";
 
 interface MaterialSolverCacheStatusCardProps {
@@ -40,7 +48,19 @@ interface InternalState {
   errorMessage: string | null;
 }
 
+interface RuntimeInternalState {
+  phase: Phase;
+  entry: MaterialSolverRuntimeEntry | null;
+  errorMessage: string | null;
+}
+
 const INITIAL_STATE: InternalState = {
+  phase: "idle",
+  entry: null,
+  errorMessage: null,
+};
+
+const INITIAL_RUNTIME_STATE: RuntimeInternalState = {
   phase: "idle",
   entry: null,
   errorMessage: null,
@@ -70,6 +90,15 @@ export default function MaterialSolverCacheStatusCard({
   const [chartsLoading, setChartsLoading] = useState(false);
   const [chartsError, setChartsError] = useState<string | null>(null);
   const [chartsData, setChartsData] = useState<MaterialSolverCacheDetailsResponse | null>(null);
+  const [runtimeCandidateBudget, setRuntimeCandidateBudget] =
+    useState<MaterialSolverRuntimeCandidateBudget>(
+      DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET,
+    );
+  const [runtimeState, setRuntimeState] =
+    useState<RuntimeInternalState>(INITIAL_RUNTIME_STATE);
+  const [isRuntimeBuilding, setIsRuntimeBuilding] = useState(false);
+  const [isRuntimeDeleting, setIsRuntimeDeleting] = useState(false);
+  const [runtimeActionError, setRuntimeActionError] = useState<string | null>(null);
 
   const enableSolverCacheGridSelection = useSettingsStore(
     (s) => s.enableSolverCacheGridSelection,
@@ -112,6 +141,16 @@ export default function MaterialSolverCacheStatusCard({
   // request is still relevant, to avoid state updates after unmount or stale
   // responses clobbering newer ones.
   const requestIdRef = useRef(0);
+  const runtimeRequestIdRef = useRef(0);
+
+  const runtimeBudgetOptions = useMemo(
+    () =>
+      MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS.map((budget) => ({
+        value: String(budget),
+        label: t(`basic_material_runtime_budget_option_${budget}`),
+      })),
+    [t],
+  );
 
   const refreshStatus = useCallback(async () => {
     if (materialDirectoryNames.length === 0) {
@@ -146,6 +185,44 @@ export default function MaterialSolverCacheStatusCard({
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  const refreshRuntimeStatus = useCallback(async () => {
+    if (materialDirectoryNames.length === 0) {
+      setRuntimeState(INITIAL_RUNTIME_STATE);
+      setRuntimeActionError(null);
+      return;
+    }
+    const thisRequest = ++runtimeRequestIdRef.current;
+    setRuntimeState((prev) => ({
+      ...prev,
+      phase: "checking",
+      errorMessage: null,
+    }));
+    try {
+      const response = await fetchMaterialSolverRuntimeStatus(cacheKey, {
+        candidateBudget: runtimeCandidateBudget,
+      });
+      if (runtimeRequestIdRef.current !== thisRequest) return;
+      if (response.cached && response.entry) {
+        setRuntimeState({
+          phase: "cached",
+          entry: response.entry,
+          errorMessage: null,
+        });
+      } else {
+        setRuntimeState({ phase: "missing", entry: null, errorMessage: null });
+      }
+    } catch (error) {
+      if (runtimeRequestIdRef.current !== thisRequest) return;
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setRuntimeState({ phase: "error", entry: null, errorMessage: message });
+    }
+  }, [materialDirectoryNames.length, cacheKey, runtimeCandidateBudget]);
+
+  useEffect(() => {
+    refreshRuntimeStatus();
+  }, [refreshRuntimeStatus]);
 
   // Whenever the cache key (palette, layer count, layer height, substrate, or
   // selected grid resolution) changes, drop any stale chart payload and
@@ -238,6 +315,61 @@ export default function MaterialSolverCacheStatusCard({
     }
   }, [cacheKey, materialDirectoryNames.length, effectiveGridResolution, t]);
 
+  const handleRuntimeBudgetChange = useCallback((value: string) => {
+    const parsed = Number(value) as MaterialSolverRuntimeCandidateBudget;
+    if (
+      MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS.includes(parsed)
+    ) {
+      setRuntimeCandidateBudget(parsed);
+    }
+  }, []);
+
+  const handleBuildRuntime = useCallback(async () => {
+    if (materialDirectoryNames.length === 0) return;
+    setRuntimeActionError(null);
+    setIsRuntimeBuilding(true);
+    try {
+      const response = await buildMaterialSolverRuntime(cacheKey, {
+        candidateBudget: runtimeCandidateBudget,
+      });
+      setRuntimeState({
+        phase: "cached",
+        entry: response.entry,
+        errorMessage: null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setRuntimeActionError(
+        tRuntime("basic_material_runtime_build_error", { message }),
+      );
+    } finally {
+      setIsRuntimeBuilding(false);
+    }
+  }, [cacheKey, materialDirectoryNames.length, runtimeCandidateBudget]);
+
+  const handleDeleteRuntime = useCallback(async () => {
+    if (materialDirectoryNames.length === 0) return;
+    const confirmed = window.confirm(t("basic_material_runtime_confirm_delete"));
+    if (!confirmed) return;
+    setRuntimeActionError(null);
+    setIsRuntimeDeleting(true);
+    try {
+      await deleteMaterialSolverRuntime(cacheKey, {
+        candidateBudget: runtimeCandidateBudget,
+      });
+      setRuntimeState({ phase: "missing", entry: null, errorMessage: null });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      setRuntimeActionError(
+        tRuntime("basic_material_runtime_delete_error", { message }),
+      );
+    } finally {
+      setIsRuntimeDeleting(false);
+    }
+  }, [cacheKey, materialDirectoryNames.length, runtimeCandidateBudget, t]);
+
   const combinationsEstimate = useMemo(
     () =>
       materialDirectoryNames.length > 0
@@ -271,6 +403,32 @@ export default function MaterialSolverCacheStatusCard({
     if (state.phase === "cached") return "ok" as const;
     if (state.phase === "error") return "error" as const;
     if (state.phase === "missing") return "warn" as const;
+    return "neutral" as const;
+  })();
+
+  const runtimeStatusText = (() => {
+    if (materialDirectoryNames.length === 0) {
+      return t("basic_material_runtime_status_idle");
+    }
+    if (runtimeState.phase === "checking") {
+      return t("basic_material_runtime_status_checking");
+    }
+    if (runtimeState.phase === "cached") {
+      return t("basic_material_runtime_status_ready");
+    }
+    if (runtimeState.phase === "missing") {
+      return t("basic_material_runtime_status_missing");
+    }
+    if (runtimeState.phase === "error") {
+      return t("basic_material_runtime_status_error");
+    }
+    return "";
+  })();
+
+  const runtimeStatusTone = (() => {
+    if (runtimeState.phase === "cached") return "ok" as const;
+    if (runtimeState.phase === "error") return "error" as const;
+    if (runtimeState.phase === "missing") return "warn" as const;
     return "neutral" as const;
   })();
 
@@ -400,6 +558,100 @@ export default function MaterialSolverCacheStatusCard({
         )}
       </div>
 
+      <div
+        data-testid="material-solver-runtime-section"
+        className="mt-3 flex flex-col gap-2 border-t pt-3"
+        style={{ borderColor: "var(--surface-outline)" }}
+      >
+        <header className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              {t("basic_material_runtime_section_title")}
+            </h4>
+            <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+              {t("basic_material_runtime_section_description")}
+            </p>
+          </div>
+          <StatusPill
+            tone={runtimeStatusTone}
+            label={runtimeStatusText}
+            testId="material-solver-runtime-status-pill"
+          />
+        </header>
+
+        <Dropdown
+          label={t("basic_material_runtime_budget_label")}
+          value={String(runtimeCandidateBudget)}
+          options={runtimeBudgetOptions}
+          onChange={handleRuntimeBudgetChange}
+          disabled={materialDirectoryNames.length === 0 || isRuntimeBuilding}
+        />
+
+        {runtimeState.phase === "error" && runtimeState.errorMessage ? (
+          <p className="text-xs text-rose-500">
+            {runtimeState.errorMessage}
+          </p>
+        ) : null}
+
+        {runtimeState.phase === "cached" && runtimeState.entry ? (
+          <RuntimeEntryDetails entry={runtimeState.entry} />
+        ) : null}
+
+        {runtimeState.phase === "missing" && materialDirectoryNames.length > 0 ? (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            {t("basic_material_runtime_missing_hint")}
+          </p>
+        ) : null}
+
+        {isRuntimeBuilding ? (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            {tRuntime("basic_material_runtime_building_hint", {
+              budget: formatCompactNumber(runtimeCandidateBudget),
+            })}
+          </p>
+        ) : null}
+
+        {runtimeActionError ? (
+          <p className="text-xs text-rose-500">{runtimeActionError}</p>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {runtimeState.phase === "cached" ? (
+            <>
+              <Button
+                label={t("basic_material_runtime_rebuild_button")}
+                variant="secondary"
+                disabled={materialDirectoryNames.length === 0}
+                loading={isRuntimeBuilding}
+                onClick={handleBuildRuntime}
+                className="px-3 text-xs"
+              />
+              <Button
+                label={t("basic_material_runtime_delete_button")}
+                variant="secondary"
+                disabled={materialDirectoryNames.length === 0}
+                loading={isRuntimeDeleting}
+                onClick={handleDeleteRuntime}
+                className="px-3 text-xs"
+              />
+            </>
+          ) : (
+            <Button
+              label={
+                isRuntimeBuilding
+                  ? t("basic_material_runtime_building_label")
+                  : t("basic_material_runtime_build_button")
+              }
+              variant="primary"
+              disabled={materialDirectoryNames.length === 0 || isRuntimeBuilding}
+              loading={isRuntimeBuilding}
+              onClick={handleBuildRuntime}
+              className="px-3 text-xs"
+            />
+          )}
+        </div>
+      </div>
+
       {chartsExpanded && state.phase === "cached" ? (
         <div
           data-testid="material-solver-cache-charts-region"
@@ -483,12 +735,62 @@ function CachedEntryDetails({ entry }: CachedEntryDetailsProps) {
   );
 }
 
+interface RuntimeEntryDetailsProps {
+  entry: MaterialSolverRuntimeEntry;
+}
+
+function RuntimeEntryDetails({ entry }: RuntimeEntryDetailsProps) {
+  const { t } = useI18n();
+  const items: Array<{ label: string; value: string }> = [];
+  if (entry.built_at) {
+    items.push({
+      label: t("basic_material_cache_built_at_label"),
+      value: formatTimestamp(entry.built_at),
+    });
+  }
+  items.push({
+    label: t("basic_material_cache_size_label"),
+    value: tRuntime("basic_material_cache_units_mb", {
+      mb: (entry.cache_file_size_bytes / (1024 * 1024)).toFixed(2),
+    }),
+  });
+  items.push({
+    label: t("basic_material_runtime_candidates_label"),
+    value: formatCompactNumber(entry.candidate_count),
+  });
+  items.push({
+    label: t("basic_material_runtime_budget_label"),
+    value: formatCompactNumber(entry.candidate_budget),
+  });
+  items.push({
+    label: t("basic_material_runtime_inverse_label"),
+    value: entry.inverse_refinement_enabled
+      ? t("basic_material_runtime_enabled")
+      : t("basic_material_runtime_disabled"),
+  });
+  return (
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300">
+      {items.map((item) => (
+        <div key={item.label} className="flex items-baseline justify-between gap-2">
+          <dt className="text-slate-500 dark:text-slate-400">{item.label}</dt>
+          <dd className="font-medium tabular-nums">{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 interface StatusPillProps {
   tone: "ok" | "warn" | "error" | "neutral";
   label: string;
+  testId?: string;
 }
 
-function StatusPill({ tone, label }: StatusPillProps) {
+function StatusPill({
+  tone,
+  label,
+  testId = "material-solver-cache-status-pill",
+}: StatusPillProps) {
   const toneClass = {
     ok: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
     warn: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
@@ -497,7 +799,7 @@ function StatusPill({ tone, label }: StatusPillProps) {
   }[tone];
   return (
     <span
-      data-testid="material-solver-cache-status-pill"
+      data-testid={testId}
       data-tone={tone}
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold flex-none ${toneClass}`}
     >

@@ -4,16 +4,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import MaterialSolverCacheStatusCard from "../components/MaterialSolverCacheStatusCard";
 import {
   buildMaterialSolverCache,
+  buildMaterialSolverRuntime,
   deleteMaterialSolverCache,
+  deleteMaterialSolverRuntime,
   fetchMaterialSolverCacheStatus,
+  fetchMaterialSolverRuntimeStatus,
 } from "../api/materialCache";
-import type { MaterialSolverCacheEntry } from "../api/types";
+import type {
+  MaterialSolverCacheEntry,
+  MaterialSolverRuntimeEntry,
+} from "../api/types";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/materialCache", () => ({
   buildMaterialSolverCache: vi.fn(),
+  buildMaterialSolverRuntime: vi.fn(),
+  DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: 4_194_304,
   deleteMaterialSolverCache: vi.fn(),
+  deleteMaterialSolverRuntime: vi.fn(),
   fetchMaterialSolverCacheStatus: vi.fn(),
+  fetchMaterialSolverRuntimeStatus: vi.fn(),
+  MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS: [
+    1_048_576,
+    4_194_304,
+    8_388_608,
+  ],
 }));
 
 function buildCacheEntry(
@@ -39,6 +54,31 @@ function buildCacheEntry(
   };
 }
 
+function buildRuntimeEntry(
+  overrides: Partial<MaterialSolverRuntimeEntry> = {},
+): MaterialSolverRuntimeEntry {
+  return {
+    palette_hash: "0123456789abcdef",
+    material_directory_names: ["red", "white"],
+    layer_count: 8,
+    layer_height_mm: 0.04,
+    substrate: "white",
+    mode: "candidate_hybrid",
+    candidate_budget: 4_194_304,
+    candidate_count: 4_194_304,
+    candidate_pool_multiplier: 8,
+    build_memory_budget_bytes: 8 * 1024 * 1024 * 1024,
+    batch_recipe_count: 524_288,
+    lab_grid_resolution: 64,
+    seed: 0,
+    inverse_refinement_enabled: true,
+    built_at: "2026-06-07T04:00:00Z",
+    cache_file_size_bytes: 268_435_456,
+    cache_file_path: "/tmp/hybrid.npz",
+    ...overrides,
+  };
+}
+
 describe("MaterialSolverCacheStatusCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,6 +88,17 @@ describe("MaterialSolverCacheStatusCard", () => {
       enableSolverCacheGridSelection:
         DEFAULT_SETTINGS.enableSolverCacheGridSelection,
       solverCacheGridResolution: DEFAULT_SETTINGS.solverCacheGridResolution,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "No runtime found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 4_194_304,
+      entry: null,
     });
   });
 
@@ -67,6 +118,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     const buildButton = screen.getByRole("button", { name: "立即构建缓存" });
     expect(buildButton).toBeDisabled();
     expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(fetchMaterialSolverRuntimeStatus).not.toHaveBeenCalled();
   });
 
   it("queries and shows ready state when a cache is found", async () => {
@@ -246,6 +298,173 @@ describe("MaterialSolverCacheStatusCard", () => {
       fireEvent.click(buildButton);
     });
     expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+  });
+
+  it("lets large palettes build the bounded hybrid runtime even when exhaustive cache is unsafe", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "No runtime found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 4_194_304,
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
+      status: "ok",
+      message: "Built runtime",
+      entry: buildRuntimeEntry({ layer_count: 8, layer_height_mm: 0.08 }),
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={Array.from(
+          { length: 22 },
+          (_, idx) => `mat-${idx}`,
+        )}
+        layerCount={8}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    const exhaustiveBuildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    expect(exhaustiveBuildButton).toBeDisabled();
+
+    const runtimeBuildButton = await screen.findByRole("button", {
+      name: "构建运行时",
+    });
+    expect(runtimeBuildButton).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(runtimeBuildButton);
+    });
+
+    await waitFor(() => {
+      expect(buildMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(buildMaterialSolverRuntime).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: Array.from(
+          { length: 22 },
+          (_, idx) => `mat-${idx}`,
+        ),
+        layerCount: 8,
+        layerHeightMm: 0.08,
+        substrate: "white",
+      },
+      { candidateBudget: 4_194_304 },
+    );
+    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+    expect(screen.getByText("运行时已就绪")).toBeInTheDocument();
+  });
+
+  it("forwards selected runtime candidate budget to status build and delete calls", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "Runtime found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      candidate_budget: 8_388_608,
+      entry: buildRuntimeEntry({ candidate_budget: 8_388_608 }),
+    });
+    vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
+      status: "ok",
+      message: "Built runtime",
+      entry: buildRuntimeEntry({ candidate_budget: 8_388_608 }),
+    });
+    vi.mocked(deleteMaterialSolverRuntime).mockResolvedValue({
+      status: "ok",
+      message: "Runtime deleted",
+      deleted: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      candidate_budget: 8_388_608,
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={8}
+        layerHeightMm={0.04}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeStatus).toHaveBeenCalledWith(
+        expect.any(Object),
+        { candidateBudget: 4_194_304 },
+      );
+    });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "候选预算" }));
+    fireEvent.click(await screen.findByRole("option", { name: /8M/ }));
+
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeStatus).toHaveBeenLastCalledWith(
+        expect.any(Object),
+        { candidateBudget: 8_388_608 },
+      );
+    });
+
+    const rebuildButton = await screen.findByRole("button", {
+      name: "重新构建运行时",
+    });
+    await act(async () => {
+      fireEvent.click(rebuildButton);
+    });
+    await waitFor(() => {
+      expect(buildMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(buildMaterialSolverRuntime).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { candidateBudget: 8_388_608 },
+    );
+
+    const deleteButton = await screen.findByRole("button", {
+      name: "删除运行时",
+    });
+    await act(async () => {
+      fireEvent.click(deleteButton);
+    });
+    await waitFor(() => {
+      expect(deleteMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(deleteMaterialSolverRuntime).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { candidateBudget: 8_388_608 },
+    );
+
+    confirmSpy.mockRestore();
   });
 
   it("disables cache build for low-grid extreme combination counts", async () => {

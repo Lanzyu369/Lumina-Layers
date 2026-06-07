@@ -3446,6 +3446,102 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除失败：{message}",
     en: "Delete failed: {message}",
   },
+  basic_material_runtime_section_title: {
+    zh: "候选运行时",
+    en: "Candidate Runtime",
+  },
+  basic_material_runtime_section_description: {
+    zh: "为大耗材组合构建有限候选库，配合反推精修进行查找。",
+    en: "Build a bounded candidate library for large material palettes with inverse refinement.",
+  },
+  basic_material_runtime_status_idle: {
+    zh: "请选择至少一种耗材后查看运行时状态。",
+    en: "Select at least one material to view runtime status.",
+  },
+  basic_material_runtime_status_checking: {
+    zh: "正在检查运行时…",
+    en: "Checking runtime…",
+  },
+  basic_material_runtime_status_ready: {
+    zh: "运行时已就绪",
+    en: "Runtime ready",
+  },
+  basic_material_runtime_status_missing: {
+    zh: "运行时未构建",
+    en: "Runtime not built",
+  },
+  basic_material_runtime_status_error: {
+    zh: "运行时状态查询失败",
+    en: "Failed to query runtime status",
+  },
+  basic_material_runtime_budget_label: {
+    zh: "候选预算",
+    en: "Candidate Budget",
+  },
+  basic_material_runtime_budget_option_1048576: {
+    zh: "快速 1M",
+    en: "Fast 1M",
+  },
+  basic_material_runtime_budget_option_4194304: {
+    zh: "标准 4M",
+    en: "Standard 4M",
+  },
+  basic_material_runtime_budget_option_8388608: {
+    zh: "高精度 8M",
+    en: "High 8M",
+  },
+  basic_material_runtime_missing_hint: {
+    zh: "未构建运行时时，系统会按需临时生成候选运行时。",
+    en: "When no runtime is persisted, the system builds a bounded runtime on demand.",
+  },
+  basic_material_runtime_build_button: {
+    zh: "构建运行时",
+    en: "Build runtime",
+  },
+  basic_material_runtime_rebuild_button: {
+    zh: "重新构建运行时",
+    en: "Rebuild runtime",
+  },
+  basic_material_runtime_delete_button: {
+    zh: "删除运行时",
+    en: "Delete runtime",
+  },
+  basic_material_runtime_building_label: {
+    zh: "正在构建运行时…",
+    en: "Building runtime…",
+  },
+  basic_material_runtime_building_hint: {
+    zh: "正在生成 {budget} 个候选并落盘。",
+    en: "Generating and saving {budget} candidates.",
+  },
+  basic_material_runtime_confirm_delete: {
+    zh: "确认删除当前组合的候选运行时？",
+    en: "Delete the candidate runtime for this combination?",
+  },
+  basic_material_runtime_candidates_label: {
+    zh: "候选数",
+    en: "Candidates",
+  },
+  basic_material_runtime_inverse_label: {
+    zh: "反推精修",
+    en: "Inverse refinement",
+  },
+  basic_material_runtime_enabled: {
+    zh: "启用",
+    en: "Enabled",
+  },
+  basic_material_runtime_disabled: {
+    zh: "关闭",
+    en: "Disabled",
+  },
+  basic_material_runtime_build_error: {
+    zh: "运行时构建失败：{message}",
+    en: "Runtime build failed: {message}",
+  },
+  basic_material_runtime_delete_error: {
+    zh: "运行时删除失败：{message}",
+    en: "Runtime delete failed: {message}",
+  },
   basic_source_kind_label: {
     zh: "颜色源类型",
     en: "Source Kind",
