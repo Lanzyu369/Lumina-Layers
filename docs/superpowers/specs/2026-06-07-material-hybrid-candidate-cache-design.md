@@ -126,6 +126,29 @@ core.material_lut_provider.load_solver_runtime(...)
 
 当前已有的 `load_solver_cache(...)` 应保持原 pass-through 语义，直到每个调用方被明确迁移。这样可以避免一次改动扩散到所有路径。
 
+### 旧穷举机制同步优化
+
+新的 hybrid runtime 落地后，旧穷举机制不能继续作为大 palette 的默认 fallback。旧逻辑应收缩为两个用途：
+
+1. **small exact engine**
+   - 当 `M ** N <= EXACT_MODE_MAX_COMBINATIONS`，继续构建完整 exact table。
+   - 这个路径用于小 palette、测试真值、回归校验。
+
+2. **legacy bucketed admin/test path**
+   - 只有显式 `mode="bucketed"`、测试、或管理员工具才允许调用旧 bucketed builder。
+   - 这个路径必须继续经过 `validate_material_solver_cache_build_budget(...)`。
+   - 生产 preview fallback 不允许再通过“低 grid”绕回旧 bucketed builder。
+
+因此，之前为了避免 OOM 加上的 `LUMINA_SOLVER_CACHE_BUILD_MAX_COMBINATIONS`、构建内存估算、线程/worker 限制，不应该被简单删除。它们应该从“用户主要路径的策略”降级为“legacy exhaustive/bucketed path 的最后安全阀”。
+
+具体要求：
+
+- `build_material_solver_cache(mode="auto")` 的语义保持兼容，但生产路径不再直接依赖它处理 unsafe palette。
+- 新增 `build_material_candidate_runtime(...)` 或 `load_solver_runtime(...)` 处理 unsafe palette。
+- API 文案中不再鼓励用户为 22-material x 8-layer 构建“穷举缓存”；应显示 hybrid candidate runtime。
+- 前端曾经暴露的 “Exhaustive density / grid_resolution” 只继续影响 legacy exact/bucketed cache；hybrid 阶段应新增独立的 “candidate budget / quality” 概念，不能复用 `grid_resolution`。
+- BLAS/OpenMP 线程限制仍可保留为全局数值稳定措施，因为它也保护其它 NumPy/SciPy 热路径；但不应该把“限制线程”当成解决组合爆炸的主要方案。
+
 ## 新模块
 
 ### `core/material_candidate_cache.py`
@@ -145,6 +168,8 @@ core.material_lut_provider.load_solver_runtime(...)
 class MaterialCandidateCacheConfig:
     candidate_budget: int
     candidate_pool_multiplier: int
+    build_memory_budget_bytes: int
+    batch_recipe_count: int
     lab_grid_resolution: int
     seed: int
     max_build_seconds: float | None
@@ -211,9 +236,11 @@ metadata
    - 原因是物理模型里 top suffix 的透射率通常更影响最终可见颜色。
 
 5. **低差异随机覆盖**
-   - 优先使用确定性的 Sobol 或类似低差异序列。
-   - 如果环境里没有低差异生成器，退回 `np.random.default_rng(seed)`。
-   - 配方按 batch 生成，并用 recipe bytes 去重。
+   - 使用仓库已有依赖 `scipy` 中的 `scipy.stats.qmc.Sobol`，不新增第三方库。
+   - 当前环境已确认 `scipy.stats.qmc.Sobol` 和 `Halton` 可用；Sobol 的方向数表由 SciPy 内置维护，不需要 Lumina 自己保存预计算序列表。
+   - 首选 `Sobol(d=layer_count, scramble=True, seed=seed).random_base2(m)`，因为 `random_base2` 保持 Sobol 序列的平衡性质。
+   - 生成的 `[0, 1)` 点按层映射为材料索引：`recipe[:, layer] = floor(point[:, layer] * material_count)`，然后按 recipe bytes 去重。
+   - 如果某个部署环境的 SciPy 不含 `qmc.Sobol`，退回一个仓库内极小实现：只支持 `layer_count <= 10` 的 Sobol 方向数表，或退回 `np.random.default_rng(seed)`。因为本仓库已经依赖 SciPy，正常实现不需要走这条 fallback。
 
 6. **历史和测量 seed**
    - 如果能加载旧缓存，使用旧缓存中的 recipe 作为 seed。
@@ -243,15 +270,21 @@ metadata
 - 如果 reservoir 总数超过最终预算，再在 cell representatives 上做近似 k-center / farthest-point 选择。
 - 最终输出行数必须小于等于 `candidate_budget`。
 
-建议默认预算：
+建议默认预算基于 8GiB 构建期内存上限，而不是之前偏保守的几十万候选。最终候选表本身很小，主要风险来自构建期是否使用 Python dict 存储大量中间对象，以及 k-center 是否误写成 O(B²)。
 
 ```text
-fast       65,536 candidates
-balanced 262,144 candidates
-quality  524,288 candidates
+preview-safe      1,048,576 candidates   约 2^20，用于无持久缓存的交互 fallback
+default-persisted 4,194,304 candidates   约 2^22，默认持久 hybrid cache
+quality-8g        8,388,608 candidates   约 2^23，仅 explicit quality build
 ```
 
-默认 preview fallback 是否使用 `balanced`，需要用真实服务主机测构建时间后决定。如果构建时间偏长，先默认 `fast`，再开启目标色反向精修补质量。
+推荐默认：
+
+- 交互式 preview fallback 使用 `preview-safe`，避免首次预览等待过长。
+- 用户显式构建持久 hybrid cache 时默认使用 `default-persisted`。
+- `quality-8g` 只在显式高精度构建中开放，并要求构建前估算 peak memory 小于 8GiB。
+
+`candidate_pool_multiplier` 默认使用 `8`。也就是说 `default-persisted` 会流式评估约 33.5M 条候选，但最终只保留约 4.19M 条。这个数量级不会接近 `22 ** 8`，但覆盖面已经比 ChromaPrint3D 的 65,536 候选高两个数量级。
 
 ### `core/material_inverse_refinement.py`
 
@@ -317,9 +350,11 @@ pinned_mask         bool,        shape (B,)
   "layer_count": 10,
   "layer_height_mm": 0.08,
   "substrate": "white",
-  "candidate_budget": 262144,
-  "candidate_count": 262144,
+  "candidate_budget": 4194304,
+  "candidate_count": 4194304,
   "candidate_pool_multiplier": 8,
+  "build_memory_budget_bytes": 8589934592,
+  "batch_recipe_count": 524288,
   "lab_grid_resolution": 96,
   "seed": 123456,
   "generator_version": "material_candidate_sampling_v1",
@@ -332,7 +367,7 @@ pinned_mask         bool,        shape (B,)
   },
   "total_combinations": 26559922791424,
   "scanned_combinations": 0,
-  "generated_candidate_count": 2097152,
+  "generated_candidate_count": 33554432,
   "pinned_candidate_count": 500,
   "build_time_seconds": 0.0,
   "built_at": "..."
@@ -477,6 +512,18 @@ hybrid runtime 对大 palette 是近似算法。精度由以下因素控制：
 - target-aware inverse refinement；
 - 最终 exact forward-model verification。
 
+精度目标不是靠重新接近 `M ** N` 的缓存数量实现，而是靠两层机制共同实现：
+
+1. **百万级 coverage cache**
+   - 默认持久缓存使用 4,194,304 条最终候选。
+   - 它保证全局色域覆盖和稳定快速查询。
+
+2. **目标色反向精修**
+   - 对当前图片真实出现的 unique colors 做局部反推。
+   - 它解决 coverage cache 即使很大仍可能错过局部最优的问题。
+
+如果实测发现 4,194,304 条候选仍不足，优先增加 inverse refinement 的 top/bottom 局部搜索质量；只有当 refinement 仍无法覆盖误差时，才把显式 quality budget 提高到 8,388,608。禁止通过恢复完整 `M ** N` 扫描来追求精度。
+
 质量门禁：
 
 1. 对小 palette，只要 exhaustive brute force 可行，exact mode 仍然是真值来源。
@@ -491,17 +538,54 @@ hybrid runtime 对大 palette 是近似算法。精度由以下因素控制：
 
 ### 构建内存
 
-当 `candidate_budget = 262,144` 且 `N = 10`：
+默认构建期内存预算按 8GiB 设计，但实现必须以估算器约束 batch size、candidate budget 和 selection reservoir。不能因为机器有 8GiB 可用就允许 Python dict 保存数百万个对象。
+
+当 `N = 10` 且 recipe 使用 `uint8` 时，最终缓存数组的裸数据估算如下：
 
 ```text
-candidate_recipes uint8  约 2.5 MB
-achieved_srgb uint8      约 0.8 MB
-achieved_lab float32     约 3.0 MB
-pinned_mask bool         约 0.3 MB
-KD-tree/runtime overhead 取决于实现，预计几十 MB
+候选数 B        最终数组裸数据       粗略运行时常驻估算
+1,048,576       约 26 MB             约 100-250 MB
+2,097,152       约 52 MB             约 200-500 MB
+4,194,304       约 104 MB            约 400 MB-1.5 GB
+8,388,608       约 208 MB            约 800 MB-3 GB
 ```
 
+这里的“最终数组裸数据”包括：
+
+```text
+candidate_recipes uint8  B * N bytes
+achieved_srgb uint8      B * 3 bytes
+achieved_lab float32     B * 3 * 4 bytes
+pinned_mask bool         B bytes
+```
+
+“粗略运行时常驻估算”额外考虑：
+
+- `cKDTree` 可能把 Lab points 转为 float64；
+- KD-tree 内部节点和索引结构；
+- selection reservoir；
+- 临时排序/groupby buffer。
+
 streaming build 可以评估多于最终预算的候选，例如 `budget * 8`，但必须按 bounded batches 评估。每个 batch 只短暂保存当前 recipe ids、linear RGB、sRGB、Lab 和 selection bookkeeping，然后释放。
+
+建议初始 batch size：
+
+```text
+batch_recipe_count = 262,144 或 524,288
+```
+
+如果使用 524,288 条 recipe、`N=10`、float64 linear RGB，单 batch 主要数组通常低于数百 MB。真正危险的是把每个候选或每个 cell 都变成 Python object，所以 selection 实现必须优先使用 NumPy arrays、排序、`np.unique`、`argpartition` 和定长 reservoir arrays。
+
+8GiB 预算下的推荐默认值：
+
+```text
+build_memory_budget_bytes = 8 * 1024 ** 3
+candidate_budget = 4,194,304
+candidate_pool_multiplier = 8
+batch_recipe_count = 524,288
+```
+
+这会流式评估约 33.5M 条候选。它远小于 `22 ** 8` 的 54.9B，不会出现之前那种夸张缓存数量；同时最终候选数达到百万级，配合 Lab 覆盖选择和目标色反向精修，可以把精度目标放得比 65k/262k 方案更高。
 
 ### 查询内存
 
@@ -574,10 +658,14 @@ material_inverse_refinement_done         默认 DEBUG
 新增 `tests/test_material_candidate_cache_unit.py`：
 
 - 固定 seed 时 candidate generation 确定；
+- SciPy 可用时使用 `scipy.stats.qmc.Sobol`，并且不引入新的第三方库；
+- Sobol fallback 路径在 monkeypatch 掉 `qmc.Sobol` 后仍能产生确定候选；
 - palette hash 变化会改变 seed/key；
 - pinned uniform recipes 永远存在；
 - candidate count 永远不超过 budget；
+- `candidate_budget=4_194_304` 的估算 peak memory 小于 8GiB；
 - unsafe 22-material palette 不调用 exhaustive builder；
+- 生产 fallback 对 unsafe palette 不调用 `build_material_solver_cache(...)`；
 - runtime `.lookup()` 返回和 `MaterialSolverCache.lookup()` 一致的 shape 和 dtype；
 - lookup 会校验 palette fingerprint；
 - save/load roundtrip 保留 arrays 和 metadata；
@@ -599,6 +687,7 @@ material_inverse_refinement_done         默认 DEBUG
 
 - 没有持久 cache 且 palette 不安全时，使用 hybrid runtime，而不是 `build_material_solver_cache`；
 - 安全小 palette 仍然使用 exact/bucketed 路径；
+- 旧 `grid_resolution` 不会被误用为 hybrid candidate budget；
 - output cache 继续包含 `matched_rgb`、`material_matrix`、`color_layers`、`layer_height_mm`；
 - layer order 符合现有 material matrix 预期。
 
