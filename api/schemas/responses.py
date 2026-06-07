@@ -512,6 +512,71 @@ class MaterialSolverCacheDeleteResponse(BaseModel):
     substrate: str
 
 
+class MaterialSolverRuntimeEntryResponse(BaseModel):
+    """Metadata for one persisted hybrid material runtime.
+    单个已持久化 hybrid 耗材运行时的元数据。
+    """
+
+    palette_hash: str
+    material_directory_names: list[str] = Field(default_factory=list)
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    mode: str
+    candidate_budget: int
+    candidate_count: int
+    candidate_pool_multiplier: int
+    build_memory_budget_bytes: int
+    batch_recipe_count: int
+    lab_grid_resolution: int
+    seed: int
+    inverse_refinement_enabled: bool
+    built_at: str | None = None
+    cache_file_size_bytes: int = 0
+    cache_file_path: str | None = None
+
+
+class MaterialSolverRuntimeStatusResponse(BaseModel):
+    """Status for a hybrid material runtime combination.
+    hybrid 耗材运行时组合状态。
+    """
+
+    status: str
+    message: str
+    cached: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    candidate_budget: int
+    entry: MaterialSolverRuntimeEntryResponse | None = None
+
+
+class MaterialSolverRuntimeBuildResponse(BaseModel):
+    """Response after explicit hybrid runtime build.
+    显式构建 hybrid runtime 后的响应。
+    """
+
+    status: str
+    message: str
+    entry: MaterialSolverRuntimeEntryResponse
+
+
+class MaterialSolverRuntimeDeleteResponse(BaseModel):
+    """Delete response for a hybrid runtime entry.
+    hybrid runtime 条目的删除响应。
+    """
+
+    status: str
+    message: str
+    deleted: bool
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    candidate_budget: int
+
+
 class MaterialSolverCacheDetailsResponse(BaseModel):
     """Visualization payload for a single solver-cache entry.
     单份求解器缓存的可视化载荷。

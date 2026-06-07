@@ -627,3 +627,45 @@ def load_material_candidate_runtime(
         pinned_mask=pinned_mask,
         metadata=metadata,
     )
+
+
+def delete_material_candidate_runtime(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    candidate_budget: int,
+    cache_root: str | Path | None = None,
+) -> bool:
+    """Delete one persisted hybrid candidate runtime file pair.
+    删除一组持久化 hybrid candidate runtime 文件。
+
+    Args:
+        materials: Material palette used to resolve the file path. (耗材调色板)
+        layer_count: Recipe layer count. (配方层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"`` substrate. (基底)
+        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        cache_root: Optional cache directory override. (可选缓存目录)
+
+    Returns:
+        bool: ``True`` if at least one file was removed. (是否删除了文件)
+    """
+    npz_path = candidate_cache_file_path(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=int(candidate_budget),
+        cache_root=cache_root,
+    )
+    targets = [npz_path, _candidate_cache_meta_path_for(npz_path)]
+    deleted = False
+    for path in targets:
+        try:
+            path.unlink()
+            deleted = True
+        except FileNotFoundError:
+            continue
+    return deleted
