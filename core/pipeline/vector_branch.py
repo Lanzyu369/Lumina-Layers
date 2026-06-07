@@ -666,6 +666,7 @@ def _apply_vector_outline_export_transform(
     analysis,
     ctx: dict,
     scale_factor: float,
+    export_color_mode: object | None = None,
 ) -> None:
     """Apply the same XY export transform used by vector body meshes.
     对 Outline 应用与 vector 主体网格一致的 XY 导出变换。
@@ -691,7 +692,16 @@ def _apply_vector_outline_export_transform(
     outline_mesh.apply_transform(y_flip)
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
-    color_mode_text = str(ctx.get("color_mode", "") or "")
+    # Match VectorProcessor.build_mesh(), which uses the processor's
+    # color_mode for the single-sided X mirror decision. In material-archive
+    # mode that value is "Material Archive", not the UI color_mode stored in
+    # ctx.
+    color_mode_source = (
+        export_color_mode
+        if export_color_mode is not None
+        else ctx.get("color_mode", "")
+    )
+    color_mode_text = str(color_mode_source or "")
     is_single_sided = "单面" in structure_mode_text or "Single" in structure_mode_text
     is_5color = "5-Color Extended" in color_mode_text
     if is_single_sided and not is_5color:
@@ -707,6 +717,7 @@ def _generate_vector_outline_mesh(
     base_aux_color: list[int],
     base_aux_material_name: str | None,
     ctx: dict,
+    export_color_mode: object | None = None,
 ) -> "trimesh.Trimesh | None":
     """Build a ring-shaped Outline mesh from ``analysis.matched_shapes``.
     从 ``analysis.matched_shapes`` 生成环形 Outline mesh。
@@ -928,6 +939,7 @@ def _generate_vector_outline_mesh(
         analysis=analysis,
         ctx=ctx,
         scale_factor=scale_factor,
+        export_color_mode=export_color_mode,
     )
 
     rgba = list(base_aux_color)
@@ -1405,6 +1417,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
             )
             if outline_mesh is not None:
                 cache["outline_geometry"] = outline_mesh
@@ -1900,6 +1913,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=vec_processor.color_mode,
             )
             if outline_mesh is not None:
                 outline_name = "Outline"

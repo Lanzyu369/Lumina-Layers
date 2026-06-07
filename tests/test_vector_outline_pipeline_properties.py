@@ -470,6 +470,53 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
 
 
+def test_vector_outline_material_archive_uses_processor_export_color_mode() -> None:
+    """Material-archive Outline must mirror exactly like body meshes.
+
+    Material-archive vector processors expose ``color_mode == "Material Archive"``
+    to ``VectorProcessor.build_mesh``. Even if the UI ctx still carries
+    ``"5-Color Extended"``, the Outline helper must use the processor/export
+    color mode so its X mirror decision matches the body scene.
+    """
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+
+    shape = box(10.0, 15.0, 70.0, 60.0)
+    analysis = MagicMock()
+    analysis.matched_shapes = [
+        {
+            "geometry": shape,
+            "color": (255, 0, 0),
+            "matched_rgb": (255, 0, 0),
+            "recipe": [1, 0, 0, 0, 0, 0],
+            "draw_order": 0,
+        }
+    ]
+    analysis.scale_factor = 1.0
+    analysis.num_layers = 6
+    analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+
+    outline_mesh = _generate_vector_outline_mesh(
+        analysis=analysis,
+        outline_width_mm=5.0,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="PLA White",
+        ctx={
+            "spacer_thick": 1.6,
+            "structure_mode": "Single-sided",
+            "color_mode": "5-Color Extended",
+            "material_source": "material_archive",
+            "enable_coating": False,
+        },
+        export_color_mode="Material Archive",
+    )
+
+    assert outline_mesh is not None
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+
+
 @settings(max_examples=200, deadline=None)
 @given(
     outline_width=_OUTLINE_WIDTH,
