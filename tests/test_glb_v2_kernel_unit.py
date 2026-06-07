@@ -18,9 +18,13 @@ Feature: glb-preview-mesh-kernel-optimization (v2)
 from __future__ import annotations
 
 import importlib.util
+import json
+import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
+import trimesh
 
 from core.pipeline import s11_glb_preview as s11
 
@@ -50,6 +54,14 @@ _skip_no_v2 = pytest.mark.skipif(
 
 _RGBA = np.array([255, 0, 0, 255], dtype=np.uint8)
 _RGBA_GREEN = np.array([0, 255, 128, 200], dtype=np.uint8)
+
+
+def _load_glb_json(path: Path) -> dict:
+    data = path.read_bytes()
+    assert data[:4] == b"glTF"
+    json_length, json_type = struct.unpack_from("<II", data, 12)
+    assert json_type == 0x4E4F534A
+    return json.loads(data[20 : 20 + json_length].decode("utf-8"))
 
 
 @pytest.fixture
@@ -170,6 +182,222 @@ def test_v2_face_colors_match_rgba_input():
 
 
 @_skip_no_v2
+def test_v2_can_skip_face_colors_for_material_only_export():
+    """Material-only exporters can avoid allocating per-face preview colors."""
+    mask = np.zeros((6, 6), dtype=bool)
+    mask[2:4, 2:4] = True
+    mesh = s11._build_color_extruded_mesh_v2(
+        mask,
+        height=6,
+        total_layers=2,
+        rgba=_RGBA_GREEN,
+        assign_face_colors=False,
+    )
+    assert mesh is not None
+    assert mesh.visual.kind is None
+    assert not mesh.visual.defined
+
+
+@_skip_no_v2
+def test_v2_mesh_builder_caches_optional_imports(monkeypatch):
+    """Repeated v2 mesh builds should not re-enter import machinery."""
+    import builtins as _builtins
+
+    s11._get_v2_mesh_kernel_modules.cache_clear()
+    original_import = _builtins.__import__
+    import_counts = {"rasterio.features": 0, "manifold3d": 0}
+
+    def counted_import(name, *args, **kwargs):
+        if name in import_counts:
+            import_counts[name] += 1
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins, "__import__", counted_import)
+
+    mask = np.zeros((6, 6), dtype=bool)
+    mask[2:4, 2:4] = True
+    first = s11._build_color_extruded_mesh_v2(mask, height=6, total_layers=2, rgba=_RGBA)
+    second = s11._build_color_extruded_mesh_v2(mask, height=6, total_layers=2, rgba=_RGBA)
+
+    assert first is not None
+    assert second is not None
+    assert import_counts == {"rasterio.features": 1, "manifold3d": 1}
+
+
+@_skip_no_v2
+def test_v2_multiple_components_extrude_once_after_cross_section_compose(
+    monkeypatch,
+):
+    """Disjoint components should compose in 2D, then extrude once.
+
+    This keeps geometry semantics unchanged while avoiding one native
+    ``CrossSection.extrude`` call per connected component on fragmented masks.
+    """
+    import manifold3d as m3d  # type: ignore
+
+    mask = np.zeros((24, 24), dtype=bool)
+    mask[2:6, 2:6] = True
+    mask[2:6, 12:16] = True
+    mask[14:18, 8:12] = True
+    real_extrude = m3d.CrossSection.extrude
+    call_count = {"n": 0}
+
+    def counted_extrude(self, *args, **kwargs):
+        call_count["n"] += 1
+        return real_extrude(self, *args, **kwargs)
+
+    monkeypatch.setattr(m3d.CrossSection, "extrude", counted_extrude)
+
+    mesh = s11._build_color_extruded_mesh_v2(
+        mask, height=24, total_layers=5, rgba=_RGBA
+    )
+
+    assert mesh is not None
+    assert mesh.volume == pytest.approx(float(mask.sum() * 5), rel=1e-6)
+    assert call_count["n"] == 1
+
+
+@_skip_no_v2
+def test_v2_multiple_components_can_compose_in_chunks(monkeypatch) -> None:
+    import manifold3d as m3d  # type: ignore
+
+    mask = np.zeros((24, 24), dtype=bool)
+    mask[2:6, 2:6] = True
+    mask[2:6, 12:16] = True
+    mask[14:18, 8:12] = True
+    real_extrude = m3d.CrossSection.extrude
+    call_count = {"n": 0}
+
+    def counted_extrude(self, *args, **kwargs):
+        call_count["n"] += 1
+        return real_extrude(self, *args, **kwargs)
+
+    monkeypatch.setattr(m3d.CrossSection, "extrude", counted_extrude)
+
+    mesh = s11._build_color_extruded_mesh_v2(
+        mask,
+        height=24,
+        total_layers=5,
+        rgba=_RGBA,
+        component_compose_chunk_size=2,
+    )
+
+    assert mesh is not None
+    assert mesh.volume == pytest.approx(float(mask.sum() * 5), rel=1e-6)
+    assert call_count["n"] == 2
+
+
+def test_v2_segmented_glb_postprocessor_sorts_triangle_indices_for_gzip() -> None:
+    original = np.asarray(
+        [
+            [5, 4, 3],
+            [0, 2, 1],
+            [2, 3, 0],
+        ],
+        dtype="<u2",
+    )
+    buffer_items = {0: original.reshape(-1).tobytes()}
+    tree = {
+        "accessors": {
+            0: {
+                "componentType": s11._GLTF_UINT16_COMPONENT_TYPE,
+                "count": int(original.size),
+                "bufferView": 0,
+                "type": "SCALAR",
+            }
+        },
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "indices": 0,
+                        "mode": 4,
+                    }
+                ]
+            }
+        ],
+    }
+
+    s11._sort_triangle_index_buffers_for_gzip(buffer_items, tree)
+
+    sorted_indices = np.frombuffer(buffer_items[0], dtype="<u2").reshape((-1, 3))
+    expected = np.asarray(
+        [
+            [0, 2, 1],
+            [2, 3, 0],
+            [5, 4, 3],
+        ],
+        dtype=np.uint16,
+    )
+    np.testing.assert_array_equal(sorted_indices, expected)
+    assert {tuple(row) for row in sorted_indices.tolist()} == {
+        tuple(row) for row in original.tolist()
+    }
+
+
+def test_v2_spatial_vertex_sort_preserves_mesh_geometry() -> None:
+    vertices = np.asarray(
+        [
+            [2.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray([[0, 2, 3], [1, 3, 2]], dtype=np.int64)
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+    sorted_mesh = s11._sort_mesh_vertices_spatially_for_gzip(mesh)
+
+    expected_order = np.asarray([1, 3, 2, 0], dtype=np.int64)
+    np.testing.assert_allclose(sorted_mesh.vertices, vertices[expected_order])
+    assert {tuple(row) for row in sorted_mesh.faces.tolist()} == {
+        (3, 2, 1),
+        (0, 1, 2),
+    }
+    np.testing.assert_allclose(sorted_mesh.bounds, mesh.bounds)
+
+
+@_skip_no_v2
+def test_v2_segmented_glb_uses_material_color_without_color_attribute(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("LUMINA_GLB_KERNEL", "v2")
+    matched_rgb = np.zeros((6, 6, 3), dtype=np.uint8)
+    matched_rgb[1:5, 1:5] = np.array([255, 0, 0], dtype=np.uint8)
+    mask_solid = np.zeros((6, 6), dtype=bool)
+    mask_solid[1:5, 1:5] = True
+    cache = {
+        "matched_rgb": matched_rgb,
+        "mask_solid": mask_solid,
+        "target_w": 6,
+        "target_h": 6,
+        "target_width_mm": 6.0,
+    }
+
+    out_path = tmp_path / "segmented-v2.glb"
+    result = s11.generate_segmented_glb(cache, output_path=str(out_path))
+
+    assert result == str(out_path)
+    gltf = _load_glb_json(out_path)
+    color_node = next(
+        node for node in gltf["nodes"] if str(node.get("name", "")).startswith("color_ff0000")
+    )
+    color_mesh = gltf["meshes"][color_node["mesh"]]
+    primitive = color_mesh["primitives"][0]
+    assert "COLOR_0" not in primitive["attributes"]
+    material = gltf["materials"][primitive["material"]]
+    assert material["pbrMetallicRoughness"]["baseColorFactor"] == [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+
+
+@_skip_no_v2
 def test_v2_invalid_mask_shape_returns_none():
     """1-D or 3-D mask is unsupported and must return None, not raise."""
     bad = np.zeros((3, 3, 3), dtype=bool)
@@ -223,6 +451,13 @@ def test_v2_atomic_per_component_failure_aborts_color(
     # extrude raises.
     monkeypatch.setattr(s11, "_V2_IMPORT_OK", True)
     real_extrude = m3d.CrossSection.extrude
+    monkeypatch.setattr(
+        m3d.CrossSection,
+        "compose",
+        lambda _sections: (_ for _ in ()).throw(
+            RuntimeError("simulated fast compose failure")
+        ),
+    )
     call_count = {"n": 0}
 
     def _flaky_extrude(self, *args, **kwargs):
@@ -415,7 +650,7 @@ def test_dispatcher_v2_runtime_returns_none_falls_back_with_warning(monkeypatch,
     monkeypatch.setattr(s11, "_V2_IMPORT_OK", True)
     monkeypatch.setattr(
         s11, "_build_color_extruded_mesh_v2",
-        lambda mask, height, total_layers, rgba: None,
+        lambda mask, height, total_layers, rgba, **_kwargs: None,
     )
 
     mesh = s11._build_color_extruded_mesh(_simple_mask(), height=8, total_layers=3, rgba=_RGBA)
@@ -430,7 +665,7 @@ def test_dispatcher_v2_returns_none_on_empty_does_not_fallback(monkeypatch, s11_
     monkeypatch.setattr(s11, "_V2_IMPORT_OK", True)
     monkeypatch.setattr(
         s11, "_build_color_extruded_mesh_v2",
-        lambda mask, height, total_layers, rgba: None,
+        lambda mask, height, total_layers, rgba, **_kwargs: None,
     )
 
     empty = np.zeros((8, 8), dtype=bool)

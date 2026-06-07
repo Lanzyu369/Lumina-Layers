@@ -13,6 +13,7 @@ _Requirements: 9.3, 9.4, 9.5_
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -52,6 +53,56 @@ def client() -> TestClient:
     为每个测试创建独立的 TestClient。
     """
     return TestClient(create_app())
+
+
+def test_frontend_dist_can_be_served_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docker/local deployment can serve the built SPA from FastAPI.
+    Docker/本地部署可由 FastAPI 服务已构建的前端 SPA。
+    """
+    dist_dir = tmp_path / "dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text(
+        '<!doctype html><script type="module" src="/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (assets_dir / "app.js").write_text("console.log('lumina-dist');", encoding="utf-8")
+    (dist_dir / "favicon.ico").write_bytes(b"ico")
+    hdr_dir = dist_dir / "hdr"
+    hdr_dir.mkdir()
+    (hdr_dir / "studio.hdr").write_bytes(b"hdr")
+
+    monkeypatch.setenv("LUMINA_SERVE_FRONTEND_DIST", "1")
+    monkeypatch.setenv("LUMINA_FRONTEND_DIST_DIR", str(dist_dir))
+
+    local_client = TestClient(create_app())
+
+    root_response = local_client.get("/")
+    assert root_response.status_code == 200
+    assert 'src="/assets/app.js"' in root_response.text
+
+    route_response = local_client.get("/converter")
+    assert route_response.status_code == 200
+    assert 'src="/assets/app.js"' in route_response.text
+
+    asset_response = local_client.get("/assets/app.js")
+    assert asset_response.status_code == 200
+    assert asset_response.text == "console.log('lumina-dist');"
+
+    favicon_response = local_client.get("/favicon.ico")
+    assert favicon_response.status_code == 200
+    assert favicon_response.content == b"ico"
+
+    nested_static_response = local_client.get("/hdr/studio.hdr")
+    assert nested_static_response.status_code == 200
+    assert nested_static_response.content == b"hdr"
+
+    missing_api_response = local_client.get("/api/does-not-exist")
+    assert missing_api_response.status_code == 404
+    assert "lumina-dist" not in missing_api_response.text
 
 
 # ===========================================================================

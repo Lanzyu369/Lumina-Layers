@@ -11,6 +11,7 @@ import {
   rasterizeColorMeshesToGrid,
   resetCloisonneWireGeometryDisposeForTests,
 } from "../components/CloisonneWire3D";
+import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 
 // ========== Helpers ==========
 
@@ -46,6 +47,47 @@ function createRectMesh(
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   return new THREE.Mesh(geometry);
+}
+
+function createBakedQuantizedRectMesh(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  topZ: number = 1.0,
+): THREE.Mesh {
+  const max = 65535;
+  const positions = new Uint16Array([
+    0, 0, 0,
+    max, 0, 0,
+    max, max, 0,
+    0, max, 0,
+    0, 0, max,
+    max, 0, max,
+    max, max, max,
+    0, max, max,
+  ]);
+  const indices = new Uint16Array([
+    0, 2, 1,  0, 3, 2,
+    4, 5, 6,  4, 6, 7,
+    0, 1, 5,  0, 5, 4,
+    2, 3, 7,  2, 7, 6,
+    0, 4, 7,  0, 7, 3,
+    1, 2, 6,  1, 6, 5,
+  ]);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3, true));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  const mesh = new THREE.Mesh(geometry);
+  mesh.position.set(x, y, 0);
+  mesh.scale.set(w, h, topZ);
+  mesh.updateWorldMatrix(true, false);
+  materializePositionAttributeForGeometryBake(geometry);
+  geometry.applyMatrix4(mesh.matrixWorld);
+  mesh.position.set(0, 0, 0);
+  mesh.scale.set(1, 1, 1);
+  mesh.updateMatrixWorld(true);
+  return mesh;
 }
 
 function createBackingPlateMesh(): THREE.Mesh {
@@ -228,6 +270,48 @@ describe("CloisonneWire3D — Unit Tests", () => {
       // With updated edge detection, single-color model produces zero edges
       // (out-of-bounds and -1 neighbors don't trigger edges)
       const edges = detectColorEdges(grid, gridW, gridH);
+      for (let i = 0; i < edges.length; i++) {
+        expect(edges[i]).toBe(0);
+      }
+    });
+
+    it("rasterizes baked quantized GLB color meshes using millimetre coordinates", () => {
+      const mesh = createBakedQuantizedRectMesh(2, 3, 4, 2, 0.4);
+      mesh.name = "color_ff0000_chunk001";
+      const posAttr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+      expect(posAttr.array).toBeInstanceOf(Float32Array);
+      expect(posAttr.normalized).toBe(false);
+
+      const grid = rasterizeColorMeshesToGrid([mesh], 1.0, 2, 3, 4, 2);
+
+      const coveredPixels = Array.from(grid).filter((value) => value >= 0);
+      expect(coveredPixels.length).toBeGreaterThan(0);
+      expect(new Set(coveredPixels)).toEqual(new Set([0]));
+      const edges = detectColorEdges(grid, 4, 2);
+      for (let i = 0; i < edges.length; i++) {
+        expect(edges[i]).toBe(0);
+      }
+    });
+
+    it("chunked meshes with the same color name do not create false internal edges", () => {
+      const leftChunk = createRectMesh(0, 0, 2, 2);
+      leftChunk.name = "color_ff0000_chunk001";
+      const rightChunk = createRectMesh(2, 0, 2, 2);
+      rightChunk.name = "color_ff0000_chunk002";
+
+      const grid = rasterizeColorMeshesToGrid(
+        [leftChunk, rightChunk],
+        1.0,
+        0,
+        0,
+        4,
+        2,
+      );
+
+      const coveredColors = new Set(Array.from(grid).filter((value) => value >= 0));
+      expect(coveredColors.size).toBe(1);
+
+      const edges = detectColorEdges(grid, 4, 2);
       for (let i = 0; i < edges.length; i++) {
         expect(edges[i]).toBe(0);
       }

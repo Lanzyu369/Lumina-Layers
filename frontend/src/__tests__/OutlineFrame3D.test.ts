@@ -20,6 +20,7 @@ import {
   resetOutlineFrameGeometryDisposeForTests,
 } from "../components/OutlineFrame3D";
 import { translations } from "../i18n/translations";
+import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 
 // ========== Helpers ==========
 
@@ -59,6 +60,36 @@ function makeBoxGeometry(w: number, d: number, height: number): THREE.BufferGeom
 
 function makeBoxMesh(w: number, d: number, height: number): THREE.Mesh {
   return new THREE.Mesh(makeBoxGeometry(w, d, height));
+}
+
+function makeBakedQuantizedBoxGeometry(
+  w: number,
+  d: number,
+  height: number,
+  translation: THREE.Vector3 = new THREE.Vector3(),
+): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  const max = 65535;
+  const positions = new Uint16Array([
+    0, 0, 0,  max, 0, 0,  max, max, 0,  0, max, 0,
+    0, 0, max,  max, 0, max,  max, max, max,  0, max, max,
+  ]);
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3, true));
+  geo.setIndex([
+    0, 2, 1,  0, 3, 2,
+    4, 5, 6,  4, 6, 7,
+    0, 1, 5,  0, 5, 4,
+    2, 3, 7,  2, 7, 6,
+    0, 4, 7,  0, 7, 3,
+    1, 2, 6,  1, 6, 5,
+  ]);
+  const mesh = new THREE.Mesh(geo);
+  mesh.position.copy(translation);
+  mesh.scale.set(w, d, height);
+  mesh.updateWorldMatrix(true, false);
+  materializePositionAttributeForGeometryBake(geo);
+  geo.applyMatrix4(mesh.matrixWorld);
+  return geo;
 }
 
 afterEach(() => {
@@ -172,6 +203,27 @@ describe("OutlineFrame3D — Unit Tests", () => {
         if (result!.grid[i] === 1) count++;
       }
       expect(count).toBeGreaterThan(0);
+    });
+
+    it("rasterizes baked quantized GLB geometry using millimetre coordinates", () => {
+      const geo = makeBakedQuantizedBoxGeometry(
+        10,
+        20,
+        5,
+        new THREE.Vector3(2, 3, 0.5),
+      );
+      const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
+      expect(posAttr.array).toBeInstanceOf(Float32Array);
+      expect(posAttr.normalized).toBe(false);
+
+      const result = rasterizeMeshToGrid(geo);
+
+      expect(result).not.toBeNull();
+      expect(result!.originX).toBeCloseTo(2, 5);
+      expect(result!.originY).toBeCloseTo(3, 5);
+      expect(result!.maxZ).toBeCloseTo(5.5, 5);
+      expect(result!.gridW).toBeGreaterThan(10);
+      expect(result!.gridH).toBeGreaterThan(20);
     });
 
     it("rasterizes multiple color meshes as their union instead of their bounding rectangle", () => {

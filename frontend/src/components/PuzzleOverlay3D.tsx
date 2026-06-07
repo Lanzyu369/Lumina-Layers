@@ -11,6 +11,7 @@ export interface PuzzleOverlay3DProps {
   enabled: boolean;
   overlayUrl: string | null;
   modelBounds: PuzzleOverlayBounds | null;
+  previewCanvasBounds?: PuzzleOverlayBounds | null;
   spacerThick: number;
   enableRelief: boolean;
   colorHeightMap: Record<string, number>;
@@ -27,6 +28,7 @@ export default function PuzzleOverlay3D({
   enabled,
   overlayUrl,
   modelBounds,
+  previewCanvasBounds = null,
   spacerThick,
   enableRelief,
   colorHeightMap,
@@ -47,9 +49,11 @@ export default function PuzzleOverlay3D({
         enableOutline,
         enableCloisonne,
         wireHeightMm,
+        previewCanvasBounds,
       ),
     [
       modelBounds,
+      previewCanvasBounds,
       spacerThick,
       enableRelief,
       colorHeightMap,

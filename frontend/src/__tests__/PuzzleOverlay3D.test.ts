@@ -36,6 +36,36 @@ describe("computePuzzleOverlayPlacement", () => {
     });
     expect(placement?.z).toBeCloseTo(3.95, 6);
   });
+
+  it("uses preview canvas bounds instead of cropped model bounds when present", () => {
+    const placement = computePuzzleOverlayPlacement(
+      {
+        minX: -25.15,
+        maxX: 25.15,
+        minY: -25,
+        maxY: 25,
+        maxZ: 2.2,
+      },
+      1.2,
+      false,
+      {},
+      false,
+      false,
+      0.5,
+      {
+        minX: -30.55,
+        maxX: 29.45,
+        minY: -30.1,
+        maxY: 29.9,
+        maxZ: 0,
+      },
+    );
+
+    expect(placement?.centerX).toBeCloseTo(-0.55, 6);
+    expect(placement?.centerY).toBeCloseTo(-0.1, 6);
+    expect(placement?.width).toBeCloseTo(60, 6);
+    expect(placement?.height).toBeCloseTo(60, 6);
+  });
 });
 
 describe("computePuzzleOverlayTextureSize", () => {
