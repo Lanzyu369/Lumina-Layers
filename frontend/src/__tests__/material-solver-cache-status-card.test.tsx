@@ -239,7 +239,44 @@ describe("MaterialSolverCacheStatusCard", () => {
     });
     expect(buildButton).toBeDisabled();
     expect(
-      screen.getByText(/降低穷举数量或减少耗材\/层数/),
+      screen.getByText(/超过穷举或内存预算/),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(buildButton);
+    });
+    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
+  });
+
+  it("disables cache build for low-grid extreme combination counts", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={Array.from(
+          { length: 22 },
+          (_, idx) => `mat-${idx}`,
+        )}
+        layerCount={8}
+        layerHeightMm={0.08}
+      />,
+    );
+
+    const buildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    expect(buildButton).toBeDisabled();
+    expect(
+      screen.getByText(/超过穷举或内存预算/),
     ).toBeInTheDocument();
 
     await act(async () => {

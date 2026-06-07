@@ -716,6 +716,32 @@ class TestInternalConsistency:
         assert "grid_resolution=2048" in message
         assert "lower grid_resolution" in message
 
+    def test_low_grid_extreme_combination_build_exceeds_default_budget(self):
+        report = estimate_material_solver_cache_build_budget(
+            material_count=22,
+            layer_count=8,
+            grid_resolution=64,
+        )
+
+        assert report.total_combinations == 22 ** 8
+        assert report.total_combinations > report.max_total_combinations
+        assert report.estimated_peak_bytes <= report.memory_limit_bytes
+        assert report.is_allowed is False
+
+    def test_low_grid_extreme_combination_build_is_rejected_by_validator(self):
+        with pytest.raises(MaterialSolverCacheBudgetError) as exc_info:
+            validate_material_solver_cache_build_budget(
+                material_count=22,
+                layer_count=8,
+                grid_resolution=64,
+            )
+
+        message = str(exc_info.value)
+        assert "22 materials" in message
+        assert "8 layers" in message
+        assert "grid_resolution=64" in message
+        assert "combination limit" in message
+
     def test_bucketed_build_materializes_without_np_stack_peak(self, monkeypatch):
         original_stack = np.stack
 

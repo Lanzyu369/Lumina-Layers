@@ -1340,13 +1340,14 @@ async def material_solver_cache_build(
     except MaterialSolverCacheBudgetError as exc:
         report = exc.report
         log.warning(
-            "Material solver cache build rejected by memory budget",
+            "Material solver cache build rejected by safety budget",
             extra={
                 "event": "material_solver_cache_build_rejected",
                 "material_count": report.material_count,
                 "layer_count": report.layer_count,
                 "grid_resolution": report.grid_resolution,
                 "total_combinations": report.total_combinations,
+                "max_total_combinations": report.max_total_combinations,
                 "estimated_valid_cell_count": report.estimated_valid_cell_count,
                 "estimated_peak_bytes": report.estimated_peak_bytes,
                 "memory_limit_bytes": report.memory_limit_bytes,

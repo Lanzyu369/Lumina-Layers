@@ -41,6 +41,7 @@ const SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO = 0.12;
 const SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL = 768;
 const SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024;
 export const SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024;
+export const SOLVER_CACHE_BUILD_MAX_COMBINATIONS = 12_000_000_000;
 
 export interface SolverCacheBuildBudgetEstimate {
   totalCombinations: number;
@@ -48,6 +49,7 @@ export interface SolverCacheBuildBudgetEstimate {
   estimatedValidCellCount: number;
   estimatedPeakBytes: number;
   memoryLimitBytes: number;
+  maxTotalCombinations: number;
   isAllowed: boolean;
 }
 
@@ -84,7 +86,10 @@ export function estimateSolverCacheBuildBudget(
     estimatedValidCellCount,
     estimatedPeakBytes,
     memoryLimitBytes: SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
-    isAllowed: estimatedPeakBytes <= SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
+    maxTotalCombinations: SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
+    isAllowed:
+      estimatedPeakBytes <= SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES &&
+      totalCombinations <= SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
   };
 }
 

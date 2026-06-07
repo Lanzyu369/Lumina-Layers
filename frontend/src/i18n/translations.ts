@@ -3375,8 +3375,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Enumerating {combinations} combinations and writing to disk — about {seconds} seconds.",
   },
   basic_material_cache_budget_warning: {
-    zh: "当前组合约 {combinations} 种配方，grid={grid} 的缓存构建可能超过内存预算。请降低穷举数量或减少耗材/层数。",
-    en: "This combination has about {combinations} recipes; building grid={grid} may exceed the memory budget. Lower the density or reduce materials/layers.",
+    zh: "当前组合约 {combinations} 种配方，grid={grid} 的缓存构建可能超过穷举或内存预算。请减少耗材/层数；若是高密度档位，也可降低 grid。",
+    en: "This combination has about {combinations} recipes; building grid={grid} may exceed the enumeration or memory budget. Reduce materials/layers; for high-density builds, lower grid.",
   },
   basic_material_cache_rebuild_button: {
     zh: "重新构建",
