@@ -180,6 +180,10 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "material_solver_runtime_delete_done",
     "material_solver_runtime_details_done",
 }
+MATERIAL_SYNC_STRUCTURED_EVENTS = {
+    "material_sync_status_done",
+    "material_sync_install_done",
+}
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",
     "converter_replace_color_done",
@@ -275,6 +279,7 @@ SLICER_STRUCTURED_EVENTS = {
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
+    | MATERIAL_SYNC_STRUCTURED_EVENTS
     | CONVERTER_STRUCTURED_EVENTS
     | CALIBRATION_STRUCTURED_EVENTS
     | FIVE_COLOR_STRUCTURED_EVENTS

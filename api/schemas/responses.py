@@ -394,6 +394,17 @@ class MaterialSyncStatusResponse(BaseModel):
     local_overrides_count: int = 0
 
 
+class MaterialSyncInstallResponse(BaseModel):
+    """Local material package install response.
+    本地耗材包安装响应。
+    """
+
+    status: str
+    message: str
+    installed_count: int
+    installed_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
+
+
 class MaterialSolverCacheEntryResponse(BaseModel):
     """Metadata for a single persisted material-solver cache entry.
     单个耗材求解器缓存条目的元数据。
