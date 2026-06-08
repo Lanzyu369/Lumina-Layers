@@ -16,6 +16,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "feedback.py",
     ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "lut.py",
+    ROOT / "api" / "routers" / "material_sync.py",
     ROOT / "api" / "routers" / "slicer.py",
     ROOT / "api" / "routers" / "system.py",
     ROOT / "api" / "routers" / "vectorizer.py",

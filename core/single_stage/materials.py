@@ -137,6 +137,7 @@ _INVALID_WINDOWS_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MATERIAL_EXPORT_MANIFEST_FILENAME = "lumina_material_export.json"
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_PACKAGE_SCHEMA_VERSION = "2.0"
+_MATERIAL_SYNC_INDEX_SCHEMA_VERSION = "1.0"
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _WARP_PIXELS_PER_MM = 20.0
@@ -1578,39 +1579,111 @@ def _verify_material_bundle_package(
         raise ValueError(f"Material bundle content hash mismatch: {material_id}")
 
 
-def _load_material_sync_index(target_root: Path) -> dict[str, Any]:
+def _empty_material_sync_index() -> dict[str, Any]:
+    return {
+        "schema_version": _MATERIAL_SYNC_INDEX_SCHEMA_VERSION,
+        "last_sync_at": None,
+        "registries": {},
+        "installed": {},
+        "local_overrides": {},
+    }
+
+
+def _load_material_sync_index_with_state(target_root: Path) -> tuple[dict[str, Any], str]:
     index_path = target_root / "_sync" / "index.json"
     if not index_path.is_file():
-        return {
-            "schema_version": "1.0",
-            "last_sync_at": None,
-            "registries": {},
-            "installed": {},
-            "local_overrides": {},
-        }
+        return _empty_material_sync_index(), "missing"
     try:
         index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {
-            "schema_version": "1.0",
-            "last_sync_at": None,
-            "registries": {},
-            "installed": {},
-            "local_overrides": {},
-        }
+        return _empty_material_sync_index(), "invalid"
     if not isinstance(index, dict):
-        return {
-            "schema_version": "1.0",
-            "last_sync_at": None,
-            "registries": {},
-            "installed": {},
-            "local_overrides": {},
-        }
-    index.setdefault("schema_version", "1.0")
+        return _empty_material_sync_index(), "invalid"
+    index.setdefault("schema_version", _MATERIAL_SYNC_INDEX_SCHEMA_VERSION)
     index.setdefault("registries", {})
     index.setdefault("installed", {})
     index.setdefault("local_overrides", {})
+    return index, "ready"
+
+
+def _load_material_sync_index(target_root: Path) -> dict[str, Any]:
+    index, _index_state = _load_material_sync_index_with_state(target_root)
     return index
+
+
+def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, Any]:
+    """Return local material sync-index status for API and future cloud sync.
+    返回本地耗材同步索引状态，供 API 与后续云同步流程使用。
+
+    Args:
+        materials_dir: Optional materials root override. (可选的耗材根目录覆盖)
+
+    Returns:
+        dict[str, Any]: Stable status payload with index health and installed
+            package presence flags. (包含索引健康状态和已安装包本地存在标记的稳定载荷)
+    """
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    index, index_state = _load_material_sync_index_with_state(target_root)
+    raw_installed = index.get("installed")
+    installed_map = raw_installed if isinstance(raw_installed, dict) else {}
+    installed_entries: list[dict[str, Any]] = []
+    for raw_material_id, raw_entry in installed_map.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        material_id = str(raw_material_id)
+        raw_local_directory = str(raw_entry.get("local_directory") or "").strip()
+        local_directory = raw_local_directory
+        local_exists = False
+        material_file_exists = False
+        if raw_local_directory:
+            try:
+                local_directory = _normalize_relative_directory_name(raw_local_directory)
+                root_resolved = target_root.resolve()
+                material_dir = (target_root / Path(local_directory)).resolve()
+                material_dir.relative_to(root_resolved)
+                local_exists = material_dir.is_dir()
+                material_file_exists = (material_dir / "material.json").is_file()
+            except (OSError, ValueError):
+                local_exists = False
+                material_file_exists = False
+        installed_entries.append(
+            {
+                "material_id": material_id,
+                "revision_id": str(raw_entry.get("revision_id") or ""),
+                "content_hash": str(raw_entry.get("content_hash") or ""),
+                "channel": str(raw_entry.get("channel") or "manual"),
+                "source": str(raw_entry.get("source") or "package"),
+                "local_directory": local_directory,
+                "display_brand": str(raw_entry.get("display_brand") or ""),
+                "display_name": str(raw_entry.get("display_name") or ""),
+                "installed_at": raw_entry.get("installed_at"),
+                "updated_at": raw_entry.get("updated_at"),
+                "local_exists": local_exists,
+                "material_file_exists": material_file_exists,
+            }
+        )
+    installed_entries.sort(
+        key=lambda entry: (
+            str(entry["display_brand"]).casefold(),
+            str(entry["display_name"]).casefold(),
+            str(entry["material_id"]),
+        )
+    )
+    registries = index.get("registries") if isinstance(index.get("registries"), dict) else {}
+    local_overrides = (
+        index.get("local_overrides")
+        if isinstance(index.get("local_overrides"), dict)
+        else {}
+    )
+    return {
+        "schema_version": str(index.get("schema_version") or _MATERIAL_SYNC_INDEX_SCHEMA_VERSION),
+        "index_state": index_state,
+        "last_sync_at": index.get("last_sync_at"),
+        "registries": registries,
+        "installed_count": len(installed_entries),
+        "installed": installed_entries,
+        "local_overrides_count": len(local_overrides),
+    }
 
 
 def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None:

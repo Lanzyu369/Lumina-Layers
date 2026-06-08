@@ -43,6 +43,7 @@ MAIN_APP_MATERIAL_LUT_PREFIXES: List[str] = [
 MAIN_APP_SINGLE_STAGE_PATHS: List[str] = [
     "/api/extractor/gradient-card-materials",
     "/api/extractor/material-solver-cache/status",
+    "/api/material-sync/status",
 ]
 
 

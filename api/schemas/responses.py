@@ -359,6 +359,41 @@ class GradientCardMaterialBulkImportResponse(BaseModel):
     imported_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
 
 
+class MaterialSyncInstalledEntryResponse(BaseModel):
+    """One material package recorded in the local sync index.
+    本地同步索引记录的单个耗材包。
+    """
+
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    source: str
+    local_directory: str
+    display_brand: str
+    display_name: str
+    installed_at: str | None = None
+    updated_at: str | None = None
+    local_exists: bool = False
+    material_file_exists: bool = False
+
+
+class MaterialSyncStatusResponse(BaseModel):
+    """Local material sync-index status response.
+    本地耗材同步索引状态响应。
+    """
+
+    status: str
+    message: str
+    schema_version: str
+    index_state: Literal["missing", "ready", "invalid"]
+    last_sync_at: str | None = None
+    registries: dict[str, Any] = Field(default_factory=dict)
+    installed_count: int = 0
+    installed: list[MaterialSyncInstalledEntryResponse] = Field(default_factory=list)
+    local_overrides_count: int = 0
+
+
 class MaterialSolverCacheEntryResponse(BaseModel):
     """Metadata for a single persisted material-solver cache entry.
     单个耗材求解器缓存条目的元数据。
