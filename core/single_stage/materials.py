@@ -139,6 +139,8 @@ _MATERIAL_EXPORT_MANIFEST_FILENAME = "lumina_material_export.json"
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_PACKAGE_SCHEMA_VERSION = "2.0"
 _MATERIAL_SYNC_INDEX_SCHEMA_VERSION = "1.0"
+_MATERIAL_SYNC_REFRESH_LOCK_FILENAME = "refresh.lock"
+_MATERIAL_SYNC_LOCK_STALE_SECONDS = 2 * 60 * 60
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _WARP_PIXELS_PER_MM = 20.0
@@ -1660,6 +1662,7 @@ def _empty_material_sync_index() -> dict[str, Any]:
         "last_sync_at": None,
         "registries": {},
         "installed": {},
+        "revisions": {},
         "local_overrides": {},
     }
 
@@ -1677,6 +1680,7 @@ def _load_material_sync_index_with_state(target_root: Path) -> tuple[dict[str, A
     index.setdefault("schema_version", _MATERIAL_SYNC_INDEX_SCHEMA_VERSION)
     index.setdefault("registries", {})
     index.setdefault("installed", {})
+    index.setdefault("revisions", {})
     index.setdefault("local_overrides", {})
     return index, "ready"
 
@@ -1701,6 +1705,8 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
     index, index_state = _load_material_sync_index_with_state(target_root)
     raw_installed = index.get("installed")
     installed_map = raw_installed if isinstance(raw_installed, dict) else {}
+    raw_revisions = index.get("revisions")
+    revision_map = raw_revisions if isinstance(raw_revisions, dict) else {}
     installed_entries: list[dict[str, Any]] = []
     for raw_material_id, raw_entry in installed_map.items():
         if not isinstance(raw_entry, dict):
@@ -1735,6 +1741,14 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
                 "updated_at": raw_entry.get("updated_at"),
                 "local_exists": local_exists,
                 "material_file_exists": material_file_exists,
+                "available_revisions": sorted(
+                    str(revision_id)
+                    for revision_id in (
+                        revision_map.get(material_id, {})
+                        if isinstance(revision_map.get(material_id), dict)
+                        else {}
+                    ).keys()
+                ),
             }
         )
     installed_entries.sort(
@@ -1759,6 +1773,32 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
         "installed": installed_entries,
         "local_overrides_count": len(local_overrides),
     }
+
+
+def _material_sync_metadata_by_directory(target_root: Path) -> dict[str, dict[str, Any]]:
+    index = _load_material_sync_index(target_root)
+    installed = index.get("installed")
+    if not isinstance(installed, dict):
+        return {}
+    metadata: dict[str, dict[str, Any]] = {}
+    for material_id, raw_entry in installed.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        local_directory_raw = str(raw_entry.get("local_directory") or "").strip()
+        if not local_directory_raw:
+            continue
+        try:
+            local_directory = _normalize_relative_directory_name(local_directory_raw)
+        except ValueError:
+            continue
+        channel = str(raw_entry.get("channel") or "")
+        metadata[local_directory] = {
+            "sync_material_id": str(material_id),
+            "sync_revision_id": str(raw_entry.get("revision_id") or ""),
+            "sync_channel": channel,
+            "sync_official": channel == "official",
+        }
+    return metadata
 
 
 def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None:
@@ -1786,10 +1826,23 @@ def _record_material_sync_entries(
     if not isinstance(installed, dict):
         installed = {}
         index["installed"] = installed
+    revisions = index.setdefault("revisions", {})
+    if not isinstance(revisions, dict):
+        revisions = {}
+        index["revisions"] = revisions
     for package, destination_dir in installed_packages:
         material_id = str(package["material_id"])
         display = package.get("display") if isinstance(package.get("display"), dict) else {}
-        installed[material_id] = {
+        material_revisions = revisions.setdefault(material_id, {})
+        if not isinstance(material_revisions, dict):
+            material_revisions = {}
+            revisions[material_id] = material_revisions
+        previous_entry = installed.get(material_id)
+        if isinstance(previous_entry, dict):
+            previous_revision_id = str(previous_entry.get("revision_id") or "")
+            if previous_revision_id:
+                material_revisions[previous_revision_id] = dict(previous_entry)
+        next_entry = {
             "revision_id": str(package["revision_id"]),
             "content_hash": str(package["content_hash"]),
             "channel": str(package.get("channel") or "manual"),
@@ -1800,6 +1853,8 @@ def _record_material_sync_entries(
             "installed_at": now,
             "updated_at": now,
         }
+        material_revisions[str(next_entry["revision_id"])] = dict(next_entry)
+        installed[material_id] = next_entry
     index["last_sync_at"] = now
     _write_material_sync_index(target_root, index)
 
@@ -1861,6 +1916,136 @@ def _installed_material_bundle_revision_path(
     if (material_dir / "material.json").is_file():
         return material_dir
     return None
+
+
+class _MaterialSyncRefreshFileLock:
+    """Best-effort cross-process lock for one materials root refresh.
+    单个 materials 根目录刷新用的跨进程锁。
+    """
+
+    def __init__(self, target_root: Path) -> None:
+        self._sync_dir = target_root / "_sync"
+        self._lock_path = self._sync_dir / _MATERIAL_SYNC_REFRESH_LOCK_FILENAME
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_MaterialSyncRefreshFileLock":
+        self._sync_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._fd = os.open(
+                str(self._lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError as exc:
+            if self._is_stale_lock():
+                try:
+                    self._lock_path.unlink()
+                except OSError as unlink_exc:
+                    raise RuntimeError(
+                        "Material sync refresh is already running"
+                    ) from unlink_exc
+                return self.__enter__()
+            raise RuntimeError("Material sync refresh is already running") from exc
+        lock_payload = json.dumps(
+            {"pid": os.getpid(), "created_at": _now_iso()},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        os.write(self._fd, lock_payload)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            finally:
+                self._fd = None
+        try:
+            self._lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _is_stale_lock(self) -> bool:
+        try:
+            raw_stale_seconds = os.environ.get(
+                "LUMINA_MATERIAL_SYNC_LOCK_STALE_S",
+                str(_MATERIAL_SYNC_LOCK_STALE_SECONDS),
+            )
+            stale_seconds = max(1.0, float(raw_stale_seconds))
+        except ValueError:
+            stale_seconds = float(_MATERIAL_SYNC_LOCK_STALE_SECONDS)
+        try:
+            lock_age = datetime.now(timezone.utc).timestamp() - self._lock_path.stat().st_mtime
+        except OSError:
+            return False
+        return lock_age > stale_seconds
+
+
+def rollback_material_sync_revision(
+    *,
+    material_id: str,
+    revision_id: str,
+    materials_dir: str | None = None,
+) -> dict[str, Any]:
+    """Make a previously installed material revision current again.
+    将历史耗材 revision 重新设为当前版本。
+
+    Args:
+        material_id: Stable synced material identity. (稳定耗材身份)
+        revision_id: Revision to restore. (要恢复的 revision)
+        materials_dir: Optional materials root override. (可选耗材根目录覆盖)
+
+    Returns:
+        dict[str, Any]: Current installed sync entry after rollback.
+            回滚后的当前同步条目。
+    """
+    cleaned_material_id = str(material_id or "").strip()
+    cleaned_revision_id = str(revision_id or "").strip()
+    if not cleaned_material_id or not cleaned_revision_id:
+        raise ValueError("material_id and revision_id are required")
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    index = _load_material_sync_index(target_root)
+    installed = index.setdefault("installed", {})
+    revisions = index.setdefault("revisions", {})
+    if not isinstance(installed, dict) or not isinstance(revisions, dict):
+        raise ValueError("Material sync index is invalid")
+    material_revisions = revisions.get(cleaned_material_id)
+    if not isinstance(material_revisions, dict):
+        raise FileNotFoundError(
+            f"Material sync revision not found: {cleaned_material_id}/{cleaned_revision_id}"
+        )
+    target_entry = material_revisions.get(cleaned_revision_id)
+    if not isinstance(target_entry, dict):
+        raise FileNotFoundError(
+            f"Material sync revision not found: {cleaned_material_id}/{cleaned_revision_id}"
+        )
+    local_directory = _normalize_relative_directory_name(
+        str(target_entry.get("local_directory") or "")
+    )
+    material_dir = target_root / local_directory
+    if not (material_dir / "material.json").is_file():
+        raise FileNotFoundError(
+            f"Material sync rollback target is missing material.json: {local_directory}"
+        )
+
+    current_entry = installed.get(cleaned_material_id)
+    if isinstance(current_entry, dict):
+        current_revision_id = str(current_entry.get("revision_id") or "")
+        if current_revision_id:
+            material_revisions[current_revision_id] = dict(current_entry)
+
+    next_entry = dict(target_entry)
+    next_entry["revision_id"] = cleaned_revision_id
+    next_entry["updated_at"] = _now_iso()
+    material_revisions[cleaned_revision_id] = dict(next_entry)
+    installed[cleaned_material_id] = next_entry
+    index["last_sync_at"] = next_entry["updated_at"]
+    _write_material_sync_index(target_root, index)
+    return {
+        "material_id": cleaned_material_id,
+        "revision_id": cleaned_revision_id,
+        "content_hash": str(next_entry.get("content_hash") or ""),
+        "channel": str(next_entry.get("channel") or ""),
+        "local_directory": local_directory,
+    }
 
 
 def _copy_material_bundle_package_files(
@@ -4065,121 +4250,122 @@ def refresh_material_sync_from_registry(
             timeout_s = 30.0
     target_root = Path(materials_dir or MATERIALS_DIR)
     target_root.mkdir(parents=True, exist_ok=True)
-    headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-    client_kwargs: dict[str, Any] = {
-        "timeout": float(timeout_s),
-        "follow_redirects": True,
-    }
-    if transport is not None:
-        client_kwargs["transport"] = transport
+    with _MaterialSyncRefreshFileLock(target_root):
+        headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        client_kwargs: dict[str, Any] = {
+            "timeout": float(timeout_s),
+            "follow_redirects": True,
+        }
+        if transport is not None:
+            client_kwargs["transport"] = transport
 
-    with httpx.Client(**client_kwargs) as client:
-        try:
-            catalog_response = client.get(
-                _material_registry_catalog_url(normalized_registry_url),
-                params=[("channel", channel) for channel in normalized_channels],
-                headers=headers,
-            )
-            catalog_response.raise_for_status()
-            catalog_payload = catalog_response.json()
-            catalog_entries = _material_registry_catalog_entries(catalog_payload)
-        except httpx.HTTPError as exc:
-            raise RuntimeError("Material registry catalog request failed") from exc
-        except ValueError as exc:
-            raise ValueError("Material registry catalog response is invalid") from exc
-
-        installed_materials: list[dict[str, Any]] = []
-        failures: list[dict[str, str]] = []
-        skipped_count = 0
-        for entry in catalog_entries:
-            material_id = str(entry.get("material_id") or "").strip()
-            revision_id = str(entry.get("revision_id") or "").strip()
-            package_url = str(entry.get("package_url") or "").strip()
+        with httpx.Client(**client_kwargs) as client:
             try:
-                content_hash = str(entry.get("content_hash") or "").strip()
-                if not material_id or not revision_id or not content_hash:
-                    raise ValueError(
-                        "Material registry catalog entry is missing material identity"
-                    )
-                if _installed_material_bundle_revision_path(
-                    target_root=target_root,
-                    package={
-                        "material_id": material_id,
-                        "revision_id": revision_id,
-                        "content_hash": content_hash,
-                    },
-                ) is not None:
-                    skipped_count += 1
-                    continue
+                catalog_response = client.get(
+                    _material_registry_catalog_url(normalized_registry_url),
+                    params=[("channel", channel) for channel in normalized_channels],
+                    headers=headers,
+                )
+                catalog_response.raise_for_status()
+                catalog_payload = catalog_response.json()
+                catalog_entries = _material_registry_catalog_entries(catalog_payload)
+            except httpx.HTTPError as exc:
+                raise RuntimeError("Material registry catalog request failed") from exc
+            except ValueError as exc:
+                raise ValueError("Material registry catalog response is invalid") from exc
 
-                resolved_package_url = _material_registry_package_url(
-                    normalized_registry_url,
-                    package_url,
-                )
-                expected_package_sha256 = _sha256_hex_from_catalog(
-                    entry.get("package_sha256")
-                )
-                package_response = client.get(resolved_package_url, headers=headers)
-                package_response.raise_for_status()
-                package_bytes = package_response.content
-                actual_package_sha256 = _sha256_bytes(package_bytes)
-                if actual_package_sha256 != expected_package_sha256:
-                    raise ValueError(
-                        "Material registry package_sha256 mismatch: "
-                        f"{material_id}/{revision_id}"
-                    )
-                temp_package_path = _write_temp_material_registry_package(package_bytes)
+            installed_materials: list[dict[str, Any]] = []
+            failures: list[dict[str, str]] = []
+            skipped_count = 0
+            for entry in catalog_entries:
+                material_id = str(entry.get("material_id") or "").strip()
+                revision_id = str(entry.get("revision_id") or "").strip()
+                package_url = str(entry.get("package_url") or "").strip()
                 try:
-                    import_result = import_saved_stage_a_material_archives(
-                        archive_path=str(temp_package_path),
-                        materials_dir=str(target_root),
-                    )
-                finally:
-                    try:
-                        temp_package_path.unlink()
-                    except OSError:
-                        pass
-                installed_materials.extend(import_result.imported_materials)
-            except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                failures.append(
-                    {
-                        "material_id": material_id,
-                        "revision_id": revision_id,
-                        "package_url": package_url,
-                        "error": str(exc),
-                    }
-                )
+                    content_hash = str(entry.get("content_hash") or "").strip()
+                    if not material_id or not revision_id or not content_hash:
+                        raise ValueError(
+                            "Material registry catalog entry is missing material identity"
+                        )
+                    if _installed_material_bundle_revision_path(
+                        target_root=target_root,
+                        package={
+                            "material_id": material_id,
+                            "revision_id": revision_id,
+                            "content_hash": content_hash,
+                        },
+                    ) is not None:
+                        skipped_count += 1
+                        continue
 
-    checked_count = len(catalog_entries)
-    installed_count = len(installed_materials)
-    failed_count = len(failures)
-    cursor = (
-        catalog_payload.get("cursor")
-        if isinstance(catalog_payload, dict)
-        else None
-    )
-    _record_material_registry_refresh(
-        target_root=target_root,
-        registry_url=normalized_registry_url,
-        channels=normalized_channels,
-        cursor=cursor,
-        checked_count=checked_count,
-        installed_count=installed_count,
-        skipped_count=skipped_count,
-        failed_count=failed_count,
-    )
-    return {
-        "registry_url": normalized_registry_url,
-        "channels": normalized_channels,
-        "checked_count": checked_count,
-        "installed_count": installed_count,
-        "skipped_count": skipped_count,
-        "failed_count": failed_count,
-        "installed_materials": installed_materials,
-        "failures": failures,
-    }
+                    resolved_package_url = _material_registry_package_url(
+                        normalized_registry_url,
+                        package_url,
+                    )
+                    expected_package_sha256 = _sha256_hex_from_catalog(
+                        entry.get("package_sha256")
+                    )
+                    package_response = client.get(resolved_package_url, headers=headers)
+                    package_response.raise_for_status()
+                    package_bytes = package_response.content
+                    actual_package_sha256 = _sha256_bytes(package_bytes)
+                    if actual_package_sha256 != expected_package_sha256:
+                        raise ValueError(
+                            "Material registry package_sha256 mismatch: "
+                            f"{material_id}/{revision_id}"
+                        )
+                    temp_package_path = _write_temp_material_registry_package(package_bytes)
+                    try:
+                        import_result = import_saved_stage_a_material_archives(
+                            archive_path=str(temp_package_path),
+                            materials_dir=str(target_root),
+                        )
+                    finally:
+                        try:
+                            temp_package_path.unlink()
+                        except OSError:
+                            pass
+                    installed_materials.extend(import_result.imported_materials)
+                except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                    failures.append(
+                        {
+                            "material_id": material_id,
+                            "revision_id": revision_id,
+                            "package_url": package_url,
+                            "error": str(exc),
+                        }
+                    )
+
+        checked_count = len(catalog_entries)
+        installed_count = len(installed_materials)
+        failed_count = len(failures)
+        cursor = (
+            catalog_payload.get("cursor")
+            if isinstance(catalog_payload, dict)
+            else None
+        )
+        _record_material_registry_refresh(
+            target_root=target_root,
+            registry_url=normalized_registry_url,
+            channels=normalized_channels,
+            cursor=cursor,
+            checked_count=checked_count,
+            installed_count=installed_count,
+            skipped_count=skipped_count,
+            failed_count=failed_count,
+        )
+        return {
+            "registry_url": normalized_registry_url,
+            "channels": normalized_channels,
+            "checked_count": checked_count,
+            "installed_count": installed_count,
+            "skipped_count": skipped_count,
+            "failed_count": failed_count,
+            "installed_materials": installed_materials,
+            "failures": failures,
+        }
 
 
 def list_saved_stage_a_material_archives(
@@ -4204,6 +4390,7 @@ def list_saved_stage_a_material_archives(
         path for path in target_root.rglob("material.json") if path.is_file()
     ]
     filtered_archive_paths = _filter_nested_material_archive_paths(archive_paths)
+    sync_metadata_by_directory = _material_sync_metadata_by_directory(target_root)
 
     for archive_path in sorted(
         filtered_archive_paths,
@@ -4215,13 +4402,13 @@ def list_saved_stage_a_material_archives(
             archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
-        items.append(
-            _saved_material_library_item_from_archive(
-                target_root,
-                material_dir,
-                archive_payload,
-            )
+        item = _saved_material_library_item_from_archive(
+            target_root,
+            material_dir,
+            archive_payload,
         )
+        item.update(sync_metadata_by_directory.get(item["directory_name"], {}))
+        items.append(item)
     return items
 
 

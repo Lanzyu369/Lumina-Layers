@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import zipfile
 from pathlib import Path, PureWindowsPath
 from typing import Any, Sequence
@@ -26,7 +27,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _registry_packages_root(packages_dir: str | None = None) -> Path:
+def _registry_packages_root(
+    packages_dir: str | None = None,
+    *,
+    create: bool = False,
+) -> Path:
     raw_dir = str(
         packages_dir
         if packages_dir is not None
@@ -35,6 +40,8 @@ def _registry_packages_root(packages_dir: str | None = None) -> Path:
     if not raw_dir:
         raise ValueError("Material registry packages directory is not configured")
     root = Path(raw_dir)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     if not root.is_dir():
         raise ValueError(f"Material registry packages directory does not exist: {raw_dir}")
     return root.resolve()
@@ -104,6 +111,196 @@ def _package_url_for_path(root: Path, zip_path: Path) -> str:
     return f"{_MATERIAL_REGISTRY_PACKAGE_URL_PREFIX}/{quote(relative, safe='/')}"
 
 
+def _safe_registry_filename_segment(value: Any, fallback: str) -> str:
+    segment = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return segment or fallback
+
+
+def _package_material_entries(
+    *,
+    root: Path,
+    zip_path: Path,
+    manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    package_sha256 = _sha256_file(zip_path)
+    package_bytes = int(zip_path.stat().st_size)
+    package_url = _package_url_for_path(root, zip_path)
+    materials: list[dict[str, Any]] = []
+    raw_packages = manifest.get("packages")
+    if not isinstance(raw_packages, list):
+        return materials
+    for raw_package in raw_packages:
+        if not isinstance(raw_package, dict):
+            continue
+        channel = str(raw_package.get("channel") or "official")
+        display = raw_package.get("display")
+        compatibility = raw_package.get("compatibility")
+        materials.append(
+            {
+                "material_id": str(raw_package.get("material_id") or ""),
+                "revision_id": str(raw_package.get("revision_id") or ""),
+                "content_hash": str(raw_package.get("content_hash") or ""),
+                "channel": channel,
+                "visibility": str(raw_package.get("visibility") or channel),
+                "local_directory": str(raw_package.get("local_directory") or ""),
+                "display": display if isinstance(display, dict) else {},
+                "compatibility": compatibility if isinstance(compatibility, dict) else {},
+                "package_url": package_url,
+                "package_sha256": package_sha256,
+                "package_bytes": package_bytes,
+            }
+        )
+    return materials
+
+
+def _rewrite_material_registry_package_channel(
+    *,
+    source_zip_path: Path,
+    destination_zip_path: Path,
+    channel: str,
+) -> dict[str, Any]:
+    manifest = _load_bundle_manifest(source_zip_path)
+    if manifest is None:
+        raise ValueError("Material registry package manifest is invalid")
+    updated_manifest = json.loads(json.dumps(manifest))
+    raw_packages = updated_manifest.get("packages")
+    if not isinstance(raw_packages, list) or not raw_packages:
+        raise ValueError("Material registry package manifest is invalid")
+    for raw_package in raw_packages:
+        if isinstance(raw_package, dict):
+            raw_package["channel"] = channel
+            raw_package["visibility"] = channel
+
+    destination_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(source_zip_path, "r") as source_archive:
+        with zipfile.ZipFile(
+            destination_zip_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as destination_archive:
+            for member in source_archive.infolist():
+                if member.filename == _MATERIAL_BUNDLE_MANIFEST_FILENAME:
+                    continue
+                destination_archive.writestr(member, source_archive.read(member.filename))
+            destination_archive.writestr(
+                _MATERIAL_BUNDLE_MANIFEST_FILENAME,
+                json.dumps(updated_manifest, ensure_ascii=False, indent=2),
+            )
+    return updated_manifest
+
+
+def _store_material_registry_package(
+    *,
+    source_zip_path: Path,
+    channel: str,
+    packages_dir: str | None = None,
+) -> dict[str, Any]:
+    normalized_channel = normalize_material_registry_channels([channel])[0]
+    root = _registry_packages_root(packages_dir, create=True)
+    manifest = _load_bundle_manifest(source_zip_path)
+    if manifest is None:
+        raise ValueError("Material registry package manifest is invalid")
+    packages = manifest.get("packages")
+    if not isinstance(packages, list) or not packages or not isinstance(packages[0], dict):
+        raise ValueError("Material registry package manifest is invalid")
+    first_package = packages[0]
+    material_segment = _safe_registry_filename_segment(
+        first_package.get("material_id"),
+        "material",
+    )
+    revision_segment = _safe_registry_filename_segment(
+        first_package.get("revision_id"),
+        "revision",
+    )
+    tmp_dir = root / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix="material_registry_package_",
+        suffix=".zip",
+        dir=tmp_dir,
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        updated_manifest = _rewrite_material_registry_package_channel(
+            source_zip_path=source_zip_path,
+            destination_zip_path=tmp_path,
+            channel=normalized_channel,
+        )
+        package_sha256 = _sha256_file(tmp_path)
+        destination_path = (
+            root
+            / normalized_channel
+            / material_segment
+            / f"{revision_segment}-{package_sha256[:12]}.zip"
+        )
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.replace(destination_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+    relative = destination_path.relative_to(root).as_posix()
+    materials = _package_material_entries(
+        root=root,
+        zip_path=destination_path,
+        manifest=updated_manifest,
+    )
+    return {
+        "channel": normalized_channel,
+        "package_path": relative,
+        "package_url": _package_url_for_path(root, destination_path),
+        "package_sha256": _sha256_file(destination_path),
+        "package_bytes": int(destination_path.stat().st_size),
+        "materials": materials,
+    }
+
+
+def upload_material_registry_package(
+    *,
+    archive_path: str,
+    channel: str = "pending",
+    packages_dir: str | None = None,
+) -> dict[str, Any]:
+    """Store an uploaded material package in the Registry package root.
+    将上传的耗材包保存到 Registry 包目录。
+    """
+    return _store_material_registry_package(
+        source_zip_path=Path(archive_path),
+        channel=channel,
+        packages_dir=packages_dir,
+    )
+
+
+def approve_material_registry_package(
+    *,
+    package_path: str,
+    official_password: str,
+    packages_dir: str | None = None,
+) -> dict[str, Any]:
+    """Approve a Registry package into the public official channel.
+    将 Registry 包审批为公开 official 频道。
+    """
+    expected_password = os.environ.get(
+        "LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD",
+        "",
+    ).strip()
+    if not expected_password:
+        raise PermissionError("Material registry official approval password is not configured")
+    if str(official_password or "").strip() != expected_password:
+        raise PermissionError("Material registry official approval password is invalid")
+    source_path = resolve_material_registry_package_path(
+        package_path=package_path,
+        packages_dir=packages_dir,
+    )
+    return _store_material_registry_package(
+        source_zip_path=source_path,
+        channel="official",
+        packages_dir=packages_dir,
+    )
+
+
 def build_material_registry_catalog(
     *,
     channels: Sequence[str] | None = None,
@@ -130,23 +327,15 @@ def build_material_registry_catalog(
             channel = str(raw_package.get("channel") or "official")
             if channel not in channel_set:
                 continue
-            display = raw_package.get("display")
-            compatibility = raw_package.get("compatibility")
-            materials.append(
-                {
-                    "material_id": str(raw_package.get("material_id") or ""),
-                    "revision_id": str(raw_package.get("revision_id") or ""),
-                    "content_hash": str(raw_package.get("content_hash") or ""),
-                    "channel": channel,
-                    "visibility": str(raw_package.get("visibility") or channel),
-                    "local_directory": str(raw_package.get("local_directory") or ""),
-                    "display": display if isinstance(display, dict) else {},
-                    "compatibility": compatibility if isinstance(compatibility, dict) else {},
-                    "package_url": package_url,
-                    "package_sha256": package_sha256,
-                    "package_bytes": package_bytes,
-                }
-            )
+            entry = _package_material_entries(
+                root=root,
+                zip_path=zip_path,
+                manifest={"packages": [raw_package]},
+            )[0]
+            entry["package_sha256"] = package_sha256
+            entry["package_bytes"] = package_bytes
+            entry["package_url"] = package_url
+            materials.append(entry)
     materials.sort(
         key=lambda entry: (
             str(entry["channel"]),

@@ -13,6 +13,7 @@ export type TabId =
   | "gradient-card-generate"
   | "gradient-card-extract"
   | "material-library"
+  | "material-cloud-sync"
   | "material-recipe"
   | "lut-manager"
   | "lut-details"

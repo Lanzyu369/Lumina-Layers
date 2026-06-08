@@ -844,6 +844,10 @@ export interface SavedMaterialLibraryItem {
   usage_by_color_mode?: Record<string, number>;
   usage_last_used_at?: string | null;
   usage_last_used_color_mode?: string | null;
+  sync_material_id?: string | null;
+  sync_revision_id?: string | null;
+  sync_channel?: string | null;
+  sync_official?: boolean;
 }
 
 export interface GradientCardMaterialLibraryResponse {
@@ -905,6 +909,7 @@ export interface MaterialSyncInstalledEntry {
   updated_at?: string | null;
   local_exists: boolean;
   material_file_exists: boolean;
+  available_revisions: string[];
 }
 
 export interface MaterialSyncStatusResponse {
@@ -937,6 +942,41 @@ export interface MaterialSyncRefreshResponse {
   failed_count: number;
   installed_materials: SavedMaterialSummary[];
   failures: MaterialSyncRefreshFailure[];
+}
+
+export interface MaterialSyncRollbackResponse {
+  status: string;
+  message: string;
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  local_directory: string;
+}
+
+export interface MaterialRegistryCatalogEntry {
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  visibility: string;
+  local_directory: string;
+  display: Record<string, unknown>;
+  compatibility: Record<string, unknown>;
+  package_url: string;
+  package_sha256: string;
+  package_bytes: number;
+}
+
+export interface MaterialRegistryPackageMutationResponse {
+  status: string;
+  message: string;
+  channel: string;
+  package_path: string;
+  package_url: string;
+  package_sha256: string;
+  package_bytes: number;
+  materials: MaterialRegistryCatalogEntry[];
 }
 
 // ========== Material solver cache (64³ Lab-grid recipe lookup) ==========

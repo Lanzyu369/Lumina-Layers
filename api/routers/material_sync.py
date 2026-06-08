@@ -9,9 +9,11 @@ import os
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from api.file_bridge import upload_to_tempfile
+from api.schemas.single_stage import MaterialSyncRollbackRequest
 from api.schemas.responses import (
     MaterialSyncInstallResponse,
     MaterialSyncRefreshResponse,
+    MaterialSyncRollbackResponse,
     MaterialSyncStatusResponse,
 )
 from api.structured_logging import get_logger
@@ -19,6 +21,7 @@ from core.single_stage import (
     get_material_sync_status,
     import_saved_stage_a_material_archives,
     refresh_material_sync_from_registry,
+    rollback_material_sync_revision,
 )
 
 router = APIRouter(prefix="/api/material-sync", tags=["Material Sync"])
@@ -142,5 +145,40 @@ async def material_sync_refresh() -> MaterialSyncRefreshResponse:
             f"Installed {result['installed_count']} material packages; "
             f"skipped {result['skipped_count']}; failed {result['failed_count']}"
         ),
+        **result,
+    )
+
+
+@router.post("/rollback", response_model=MaterialSyncRollbackResponse)
+async def material_sync_rollback(
+    payload: MaterialSyncRollbackRequest,
+) -> MaterialSyncRollbackResponse:
+    """Rollback one synced material to a previously installed revision.
+    将一个已同步耗材回滚到历史 revision。
+    """
+    try:
+        result = rollback_material_sync_revision(
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    log.info(
+        "Material sync rollback completed",
+        extra={
+            "event": "material_sync_rollback_done",
+            "material_id": result["material_id"],
+            "revision_id": result["revision_id"],
+            "channel": result["channel"],
+        },
+    )
+    return MaterialSyncRollbackResponse(
+        status="ok",
+        message=f"Rolled back {result['material_id']} to {result['revision_id']}",
         **result,
     )

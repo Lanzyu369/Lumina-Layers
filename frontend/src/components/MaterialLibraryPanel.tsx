@@ -10,14 +10,7 @@ import {
   listGradientCardMaterials,
   updateGradientCardMaterial,
 } from "../api/extractor";
-import {
-  fetchMaterialSyncStatus,
-  refreshMaterialSyncFromRegistry,
-} from "../api/materialSync";
-import type {
-  MaterialSyncStatusResponse,
-  SavedMaterialLibraryItem,
-} from "../api/types";
+import type { SavedMaterialLibraryItem } from "../api/types";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
 import { useSingleStageStore } from "../stores/singleStageStore";
@@ -121,12 +114,8 @@ export default function MaterialLibraryPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [isSyncStatusLoading, setIsSyncStatusLoading] = useState(false);
-  const [isSyncRefreshing, setIsSyncRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<MaterialSyncStatusResponse | null>(null);
   const [pendingDeleteDirectoryName, setPendingDeleteDirectoryName] = useState<string | null>(null);
   const [pendingUpdateDirectoryName, setPendingUpdateDirectoryName] = useState<string | null>(null);
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
@@ -166,26 +155,6 @@ export default function MaterialLibraryPanel() {
     void refreshMaterials();
   }, [refreshMaterials]);
 
-  const refreshSyncStatus = useCallback(async () => {
-    setIsSyncStatusLoading(true);
-    setSyncError(null);
-    try {
-      const response = await fetchMaterialSyncStatus();
-      setSyncStatus(response);
-      return response;
-    } catch (err) {
-      setSyncError(err instanceof Error ? err.message : t("mat_sync_status_failed"));
-      setSyncStatus(null);
-      return null;
-    } finally {
-      setIsSyncStatusLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
-    void refreshSyncStatus();
-  }, [refreshSyncStatus]);
-
   const dateFormatter = useMemo(
     () => new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
       dateStyle: "medium",
@@ -204,27 +173,6 @@ export default function MaterialLibraryPanel() {
     }
     return dateFormatter.format(parsed);
   }, [dateFormatter]);
-
-  const syncIndexStateLabel = syncStatus
-    ? t(`mat_sync_state_${syncStatus.index_state}`)
-    : t("mat_sync_state_unknown");
-
-  const handleRefreshFromRegistry = useCallback(async () => {
-    setIsSyncRefreshing(true);
-    setError(null);
-    setSyncError(null);
-    setSuccess(null);
-    try {
-      const response = await refreshMaterialSyncFromRegistry();
-      await refreshMaterials();
-      await refreshSyncStatus();
-      setSuccess(response.message || t("mat_sync_refresh_success"));
-    } catch (err) {
-      setSyncError(err instanceof Error ? err.message : t("mat_sync_refresh_failed"));
-    } finally {
-      setIsSyncRefreshing(false);
-    }
-  }, [refreshMaterials, refreshSyncStatus, t]);
 
   const selectedCount = selectedDirectoryNames.length;
   const allSelected = materials.length > 0 && selectedCount === materials.length;
@@ -485,66 +433,6 @@ export default function MaterialLibraryPanel() {
           />
         </div>
       </div>
-
-      <section
-        data-testid="material-sync-panel"
-        className={`${mutedSectionCardClass} grid gap-4 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}
-      >
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-            {t("mat_sync_title")}
-          </p>
-          <dl className="mt-3 grid gap-3 sm:grid-cols-3">
-            <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_sync_index_state_label")}
-              </dt>
-              <dd className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {syncIndexStateLabel}
-              </dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_sync_installed_count_label")}
-              </dt>
-              <dd
-                data-testid="material-sync-installed-count"
-                className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50"
-              >
-                {syncStatus?.installed_count ?? 0}
-              </dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_sync_last_sync_label")}
-              </dt>
-              <dd className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {syncStatus?.last_sync_at ? formatCreatedAt(syncStatus.last_sync_at) : "-"}
-              </dd>
-            </div>
-          </dl>
-        </div>
-        <Button
-          label={t("mat_sync_refresh_btn")}
-          variant="secondary"
-          onClick={() => void handleRefreshFromRegistry()}
-          disabled={
-            isSyncStatusLoading ||
-            isLoading ||
-            isImporting ||
-            isExporting ||
-            pendingDeleteDirectoryName !== null
-          }
-          loading={isSyncRefreshing}
-          className="w-full lg:w-auto"
-        />
-      </section>
-
-      {syncError ? (
-        <StatusBanner data-testid="material-sync-error" tone="error">
-          {syncError}
-        </StatusBanner>
-      ) : null}
 
       {error ? (
         <StatusBanner data-testid="material-library-error" tone="error">
@@ -841,6 +729,14 @@ export default function MaterialLibraryPanel() {
                           />
                           <div className="min-w-0 flex-1">
                             <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+                              {item.sync_official ? (
+                                <span
+                                  data-testid="material-library-official-badge"
+                                  className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 dark:border-amber-400/60 dark:bg-amber-500/15 dark:text-amber-200"
+                                >
+                                  {t("mat_sync_official_badge")}
+                                </span>
+                              ) : null}
                               <span
                                 data-testid="material-library-brand-tag"
                                 className="max-w-full truncate rounded-full border border-slate-200/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"

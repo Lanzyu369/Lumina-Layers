@@ -6,16 +6,25 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query
+import os
+
+from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
-from api.schemas.responses import MaterialRegistryCatalogResponse
+from api.file_bridge import upload_to_tempfile
+from api.schemas.responses import (
+    MaterialRegistryCatalogResponse,
+    MaterialRegistryPackageMutationResponse,
+)
+from api.schemas.single_stage import MaterialRegistryApproveRequest
 from api.structured_logging import get_logger
 from core.material_registry import (
+    approve_material_registry_package,
     build_material_registry_catalog,
     material_registry_package_channels,
     normalize_material_registry_channels,
     resolve_material_registry_package_path,
+    upload_material_registry_package,
     verify_material_registry_read_access,
 )
 
@@ -52,6 +61,87 @@ async def material_registry_catalog(
         },
     )
     return MaterialRegistryCatalogResponse(**catalog)
+
+
+@router.post("/packages/upload", response_model=MaterialRegistryPackageMutationResponse)
+async def material_registry_package_upload(
+    archive: UploadFile = File(...),
+) -> MaterialRegistryPackageMutationResponse:
+    """Upload one package into the pending Registry channel.
+    上传一个耗材包到 Registry pending 频道。
+    """
+    filename = archive.filename or ""
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Uploaded file must be a ZIP archive: {filename or '<unnamed>'}",
+        )
+    archive_path: str | None = None
+    try:
+        archive_path = await upload_to_tempfile(archive, suffix=".zip")
+        result = upload_material_registry_package(archive_path=archive_path)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        if archive_path is not None:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+
+    log.info(
+        "Material registry package uploaded",
+        extra={
+            "event": "material_registry_package_upload_done",
+            "channel": result["channel"],
+            "package_path": result["package_path"],
+            "material_count": len(result["materials"]),
+        },
+    )
+    return MaterialRegistryPackageMutationResponse(
+        status="ok",
+        message="Material package uploaded for review",
+        **result,
+    )
+
+
+@router.post(
+    "/packages/{package_path:path}/approve",
+    response_model=MaterialRegistryPackageMutationResponse,
+)
+async def material_registry_package_approve(
+    package_path: str,
+    payload: MaterialRegistryApproveRequest,
+) -> MaterialRegistryPackageMutationResponse:
+    """Approve one Registry package into the official channel.
+    将一个 Registry 耗材包审批进入 official 频道。
+    """
+    try:
+        result = approve_material_registry_package(
+            package_path=package_path,
+            official_password=payload.official_password,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    log.info(
+        "Material registry package approved",
+        extra={
+            "event": "material_registry_package_approve_done",
+            "channel": result["channel"],
+            "package_path": result["package_path"],
+            "material_count": len(result["materials"]),
+        },
+    )
+    return MaterialRegistryPackageMutationResponse(
+        status="ok",
+        message="Material package approved as official",
+        **result,
+    )
 
 
 @router.get("/packages/{package_path:path}")

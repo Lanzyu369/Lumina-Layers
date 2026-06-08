@@ -16,6 +16,7 @@ from api.material_sync_scheduler import (
 def test_material_sync_auto_refresh_is_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", raising=False)
     monkeypatch.delenv("LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S", raising=False)
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_URL", raising=False)
 
     async def _run() -> None:
         tasks = start_material_sync_auto_refresh_tasks()
@@ -23,6 +24,22 @@ def test_material_sync_auto_refresh_is_disabled_by_default(monkeypatch) -> None:
         assert tasks == []
 
     asyncio.run(_run())
+
+
+def test_material_sync_auto_refresh_defaults_to_startup_and_six_hours_when_registry_is_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", raising=False)
+    monkeypatch.delenv("LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S", raising=False)
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_URL", "https://registry.test/v1")
+
+    from api.material_sync_scheduler import (
+        material_sync_refresh_interval_s,
+        material_sync_startup_refresh_enabled,
+    )
+
+    assert material_sync_startup_refresh_enabled() is True
+    assert material_sync_refresh_interval_s() == 21_600.0
 
 
 def test_material_sync_startup_refresh_schedules_one_refresh(monkeypatch) -> None:

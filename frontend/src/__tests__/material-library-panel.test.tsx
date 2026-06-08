@@ -9,10 +9,6 @@ import {
   listGradientCardMaterials,
   updateGradientCardMaterial,
 } from "../api/extractor";
-import {
-  fetchMaterialSyncStatus,
-  refreshMaterialSyncFromRegistry,
-} from "../api/materialSync";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
@@ -27,37 +23,9 @@ vi.mock("../api/extractor", () => ({
   updateGradientCardMaterial: vi.fn(),
 }));
 
-vi.mock("../api/materialSync", () => ({
-  fetchMaterialSyncStatus: vi.fn(),
-  refreshMaterialSyncFromRegistry: vi.fn(),
-}));
-
 describe("MaterialLibraryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(fetchMaterialSyncStatus).mockResolvedValue({
-      status: "ok",
-      message: "Material sync status loaded",
-      schema_version: "1.0",
-      index_state: "missing",
-      last_sync_at: null,
-      registries: {},
-      installed_count: 0,
-      installed: [],
-      local_overrides_count: 0,
-    });
-    vi.mocked(refreshMaterialSyncFromRegistry).mockResolvedValue({
-      status: "ok",
-      message: "Installed 0 material packages; skipped 0; failed 0",
-      registry_url: "https://materials.example/v1",
-      channels: ["official"],
-      checked_count: 0,
-      installed_count: 0,
-      skipped_count: 0,
-      failed_count: 0,
-      installed_materials: [],
-      failures: [],
-    });
     useWidgetStore.setState({ activeTab: "material-library" });
     useSingleStageStore.setState({
       materialName: "",
@@ -100,6 +68,10 @@ describe("MaterialLibraryPanel", () => {
               black_detected_orientation: "rotate_90_cw",
             },
           ],
+          sync_material_id: "mat_official",
+          sync_revision_id: "rev_official",
+          sync_channel: "official",
+          sync_official: true,
         },
       ],
     });
@@ -114,6 +86,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText(/下载 material\.json|download material\.json/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
+    expect(screen.getByTestId("material-library-official-badge")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
@@ -671,94 +644,4 @@ describe("MaterialLibraryPanel", () => {
     expect((screen.getByTestId("material-library-select-pla-basic") as HTMLInputElement).checked).toBe(true);
   });
 
-  it("shows read-only cloud sync status and refreshes materials from registry", async () => {
-    vi.mocked(listGradientCardMaterials)
-      .mockResolvedValueOnce({
-        status: "ok",
-        message: "Loaded 0 saved materials",
-        materials: [],
-      })
-      .mockResolvedValueOnce({
-        status: "ok",
-        message: "Loaded 1 saved materials",
-        materials: [
-          {
-            material_name: "PLA Synced",
-            directory_name: "official/pla-synced",
-            brand: "Official",
-            created_at: "2026-06-08T10:00:00Z",
-            updated_at: "2026-06-08T10:00:00Z",
-            archive_path: "materials/official/pla-synced/material.json",
-            stage_a_params_path: "materials/official/pla-synced/stage_A_parameters.json",
-            material_file_url: "/api/files/material-json",
-            stage_a_params_url: "/api/files/stage-a-json",
-            estimated_rgb: [120, 130, 140],
-            layer_height_mm: 0.04,
-            mean_delta_e: 1.2,
-            verification_count: 1,
-          },
-        ],
-      });
-    vi.mocked(fetchMaterialSyncStatus)
-      .mockResolvedValueOnce({
-        status: "ok",
-        message: "Material sync status loaded",
-        schema_version: "1.0",
-        index_state: "ready",
-        last_sync_at: "2026-06-08T01:02:03Z",
-        registries: {},
-        installed_count: 1,
-        installed: [],
-        local_overrides_count: 0,
-      })
-      .mockResolvedValueOnce({
-        status: "ok",
-        message: "Material sync status loaded",
-        schema_version: "1.0",
-        index_state: "ready",
-        last_sync_at: "2026-06-08T02:03:04Z",
-        registries: {},
-        installed_count: 2,
-        installed: [],
-        local_overrides_count: 0,
-      });
-    vi.mocked(refreshMaterialSyncFromRegistry).mockResolvedValueOnce({
-      status: "ok",
-      message: "Installed 1 material packages; skipped 0; failed 0",
-      registry_url: "https://materials.example/v1",
-      channels: ["official"],
-      checked_count: 1,
-      installed_count: 1,
-      skipped_count: 0,
-      failed_count: 0,
-      installed_materials: [],
-      failures: [],
-    });
-
-    render(<MaterialLibraryPanel />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("material-sync-panel")).toBeInTheDocument();
-    });
-    expect(screen.getByText(/云端同步|Cloud Sync/i)).toBeInTheDocument();
-    expect(screen.getByTestId("material-sync-installed-count")).toHaveTextContent("1");
-
-    const syncButton = screen.getByRole("button", { name: /同步云端耗材|sync cloud materials/i });
-    await waitFor(() => {
-      expect(syncButton).not.toBeDisabled();
-    });
-    fireEvent.click(syncButton);
-
-    await waitFor(() => {
-      expect(refreshMaterialSyncFromRegistry).toHaveBeenCalledOnce();
-    });
-    await waitFor(() => {
-      expect(screen.getByText("PLA Synced")).toBeInTheDocument();
-    });
-    expect(listGradientCardMaterials).toHaveBeenCalledTimes(2);
-    expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("material-library-success")).toHaveTextContent(
-      "Installed 1 material packages; skipped 0; failed 0",
-    );
-  });
 });

@@ -186,6 +186,7 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
     "material_sync_install_done",
     "material_sync_refresh_done",
+    "material_sync_rollback_done",
     "material_sync_auto_refresh_scheduled",
     "material_sync_auto_refresh_done",
     "material_sync_auto_refresh_failed",
@@ -194,6 +195,8 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
 MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
     "material_registry_catalog_done",
     "material_registry_package_download_done",
+    "material_registry_package_upload_done",
+    "material_registry_package_approve_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",

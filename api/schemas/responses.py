@@ -329,6 +329,10 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     usage_by_color_mode: dict[str, int] = Field(default_factory=dict)
     usage_last_used_at: str | None = None
     usage_last_used_color_mode: str | None = None
+    sync_material_id: str | None = None
+    sync_revision_id: str | None = None
+    sync_channel: str | None = None
+    sync_official: bool = False
 
 
 class GradientCardMaterialLibraryResponse(BaseModel):
@@ -376,6 +380,7 @@ class MaterialSyncInstalledEntryResponse(BaseModel):
     updated_at: str | None = None
     local_exists: bool = False
     material_file_exists: bool = False
+    available_revisions: list[str] = Field(default_factory=list)
 
 
 class MaterialSyncStatusResponse(BaseModel):
@@ -433,6 +438,20 @@ class MaterialSyncRefreshResponse(BaseModel):
     failures: list[MaterialSyncRefreshFailureResponse] = Field(default_factory=list)
 
 
+class MaterialSyncRollbackResponse(BaseModel):
+    """Local synced material rollback response.
+    本地已同步耗材回滚响应。
+    """
+
+    status: str
+    message: str
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    local_directory: str
+
+
 class MaterialRegistryCatalogEntryResponse(BaseModel):
     """One published material package revision in the read-only Registry catalog.
     只读 Registry catalog 中的单个已发布耗材包 revision。
@@ -459,6 +478,21 @@ class MaterialRegistryCatalogResponse(BaseModel):
     schema_version: str
     channels: list[str] = Field(default_factory=list)
     count: int
+    materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
+
+
+class MaterialRegistryPackageMutationResponse(BaseModel):
+    """Registry package upload/approval response.
+    Registry 耗材包上传/审批响应。
+    """
+
+    status: str
+    message: str
+    channel: str
+    package_path: str
+    package_url: str
+    package_sha256: str
+    package_bytes: int
     materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
 
 

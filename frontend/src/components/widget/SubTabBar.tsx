@@ -17,6 +17,7 @@ type MaterialSubTabId =
   | 'gradient-card-generate'
   | 'gradient-card-extract'
   | 'material-library'
+  | 'material-cloud-sync'
   | 'material-recipe';
 
 const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
@@ -84,6 +85,11 @@ const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNod
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H9l1.5 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
     </svg>
   ),
+  'material-cloud-sync': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17.5A3.5 3.5 0 017.5 14H8a5 5 0 019.7-1.7A3.5 3.5 0 0117.5 21h-10A3.5 3.5 0 014 17.5z" />
+    </svg>
+  ),
   'material-recipe': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
@@ -109,6 +115,7 @@ const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
 
 const MATERIAL_SECONDARY_TAB_LIST: { id: MaterialSubTabId; titleKey: string }[] = [
   { id: 'material-library', titleKey: 'tab.materialLibrary' },
+  { id: 'material-cloud-sync', titleKey: 'tab.materialCloudSync' },
   { id: 'gradient-card-generate', titleKey: 'tab.gradientCardGenerate' },
   { id: 'gradient-card-extract', titleKey: 'tab.gradientCardExtract' },
   { id: 'material-recipe', titleKey: 'tab.materialRecipe' },

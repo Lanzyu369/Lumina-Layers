@@ -208,3 +208,86 @@ def test_material_registry_package_download_rejects_traversal(
     )
 
     assert response.status_code == 422
+
+
+def test_material_registry_upload_stores_package_as_pending(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    source_package = tmp_path / "upload.zip"
+    _write_v2_registry_package(
+        source_package,
+        material_id="mat_upload_test",
+        revision_id="rev_upload_test",
+        channel="manual",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload",
+        files={
+            "archive": (
+                "upload.zip",
+                source_package.read_bytes(),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["channel"] == "pending"
+    assert body["materials"][0]["material_id"] == "mat_upload_test"
+    assert body["materials"][0]["channel"] == "pending"
+    assert body["package_path"].startswith("pending/")
+
+    catalog = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params={"channel": "pending"},
+        headers={"Authorization": "Bearer team-token"},
+    )
+    assert catalog.status_code == 403
+
+
+def test_material_registry_approve_requires_official_password(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    pending_path = packages_dir / "pending" / "upload.zip"
+    _write_v2_registry_package(
+        pending_path,
+        material_id="mat_approve_test",
+        revision_id="rev_approve_test",
+        channel="pending",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    wrong = _client().post(
+        "/api/material-registry/v1/packages/pending/upload.zip/approve",
+        json={"official_password": "wrong"},
+    )
+    approved = _client().post(
+        "/api/material-registry/v1/packages/pending/upload.zip/approve",
+        json={"official_password": "approve-secret"},
+    )
+
+    assert wrong.status_code == 403
+    assert approved.status_code == 200
+    body = approved.json()
+    assert body["status"] == "ok"
+    assert body["channel"] == "official"
+    assert body["materials"][0]["channel"] == "official"
+    assert body["package_path"].startswith("official/")
+
+    catalog = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params={"channel": "official"},
+    )
+    assert catalog.status_code == 200
+    entries = catalog.json()["materials"]
+    assert entries[0]["material_id"] == "mat_approve_test"
+    assert entries[0]["channel"] == "official"

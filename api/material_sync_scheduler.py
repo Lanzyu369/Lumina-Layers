@@ -16,7 +16,13 @@ from core.single_stage import refresh_material_sync_from_registry
 log = get_logger(__name__)
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+_DEFAULT_REFRESH_INTERVAL_S = 6 * 60 * 60
 _REFRESH_LOCK = threading.Lock()
+
+
+def _material_registry_url_configured() -> bool:
+    return bool(os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "").strip())
 
 
 def material_sync_startup_refresh_enabled() -> bool:
@@ -27,8 +33,13 @@ def material_sync_startup_refresh_enabled() -> bool:
         bool: ``True`` when ``LUMINA_MATERIAL_SYNC_STARTUP_REFRESH`` is truthy.
             当环境变量为真值时返回 ``True``。
     """
-    raw_value = os.environ.get("LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", "")
-    return raw_value.strip().lower() in _TRUE_ENV_VALUES
+    raw_value = os.environ.get("LUMINA_MATERIAL_SYNC_STARTUP_REFRESH")
+    if raw_value is None or not raw_value.strip():
+        return _material_registry_url_configured()
+    normalized = raw_value.strip().lower()
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    return normalized in _TRUE_ENV_VALUES
 
 
 def material_sync_refresh_interval_s() -> float:
@@ -39,9 +50,9 @@ def material_sync_refresh_interval_s() -> float:
         float: Positive interval seconds, or ``0.0`` when disabled/invalid.
             正数表示启用定时刷新；无效或未配置时返回 ``0.0``。
     """
-    raw_value = os.environ.get("LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S", "")
-    if not raw_value.strip():
-        return 0.0
+    raw_value = os.environ.get("LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S")
+    if raw_value is None or not raw_value.strip():
+        return float(_DEFAULT_REFRESH_INTERVAL_S) if _material_registry_url_configured() else 0.0
     try:
         interval = float(raw_value)
     except ValueError:

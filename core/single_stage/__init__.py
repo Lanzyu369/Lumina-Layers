@@ -27,6 +27,7 @@ from .materials import (
     record_material_usage,
     refresh_material_sync_from_registry,
     resolve_saved_material_dir,
+    rollback_material_sync_revision,
     save_stage_a_material_archive,
     update_saved_stage_a_material_archive_metadata,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "record_material_usage",
     "refresh_material_sync_from_registry",
     "resolve_saved_material_dir",
+    "rollback_material_sync_revision",
     "save_stage_a_material_archive",
     "update_saved_stage_a_material_archive_metadata",
     "resolve_single_stage_colorchecker_assets",

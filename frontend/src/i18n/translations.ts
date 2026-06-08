@@ -1499,6 +1499,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材库",
     en: "Material Library",
   },
+  "tab.materialCloudSync": {
+    zh: "云端同步",
+    en: "Cloud Sync",
+  },
   "tab.materialRecipe": {
     zh: "配方查询",
     en: "Recipe Query",
@@ -6670,6 +6674,78 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_refresh_failed: {
     zh: "云端耗材同步失败",
     en: "Cloud material sync failed",
+  },
+  mat_sync_official_badge: {
+    zh: "官方",
+    en: "Official",
+  },
+  mat_sync_upload_title: {
+    zh: "测试服务器上传与审批",
+    en: "Test Server Upload & Approval",
+  },
+  mat_sync_upload_empty: {
+    zh: "上传耗材包后，可用官方密码批准为 official 耗材。",
+    en: "After uploading a material package, approve it as official with the official password.",
+  },
+  mat_sync_upload_btn: {
+    zh: "上传耗材包",
+    en: "Upload Package",
+  },
+  mat_sync_upload_success: {
+    zh: "耗材包已上传到待审核队列。",
+    en: "Material package uploaded to the review queue.",
+  },
+  mat_sync_upload_failed: {
+    zh: "耗材包上传失败",
+    en: "Material package upload failed",
+  },
+  mat_sync_approve_official_btn: {
+    zh: "批准为官方耗材",
+    en: "Approve as Official",
+  },
+  mat_sync_approve_success: {
+    zh: "耗材包已批准为官方耗材。",
+    en: "Material package approved as official.",
+  },
+  mat_sync_approve_failed: {
+    zh: "官方耗材审批失败",
+    en: "Official approval failed",
+  },
+  mat_sync_official_password_placeholder: {
+    zh: "官方审批密码",
+    en: "Official approval password",
+  },
+  mat_sync_package_path_label: {
+    zh: "包路径",
+    en: "Package Path",
+  },
+  mat_sync_package_size_label: {
+    zh: "体积",
+    en: "Size",
+  },
+  mat_sync_material_id_label: {
+    zh: "耗材 ID",
+    en: "Material ID",
+  },
+  mat_sync_revision_label: {
+    zh: "版本",
+    en: "Revision",
+  },
+  mat_sync_rollback_btn: {
+    zh: "回滚到 {revisionId}",
+    en: "Rollback to {revisionId}",
+  },
+  mat_sync_rollback_success: {
+    zh: "耗材版本已回滚。",
+    en: "Material revision rolled back.",
+  },
+  mat_sync_rollback_failed: {
+    zh: "耗材版本回滚失败",
+    en: "Material rollback failed",
+  },
+  mat_sync_no_rollback: {
+    zh: "暂无可回滚版本",
+    en: "No rollback revision",
   },
   mat_gradient_library_selection_summary: {
     zh: "已选择 {selected} / {total} 个耗材",

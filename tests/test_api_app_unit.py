@@ -45,8 +45,11 @@ MAIN_APP_SINGLE_STAGE_PATHS: List[str] = [
     "/api/extractor/material-solver-cache/status",
     "/api/material-registry/v1/materials/catalog",
     "/api/material-registry/v1/packages/{package_path}",
+    "/api/material-registry/v1/packages/upload",
+    "/api/material-registry/v1/packages/{package_path}/approve",
     "/api/material-sync/install",
     "/api/material-sync/refresh",
+    "/api/material-sync/rollback",
     "/api/material-sync/status",
 ]
 

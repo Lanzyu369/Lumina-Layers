@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import apiClient from "../api/client";
 import {
+  approveMaterialRegistryPackage,
   fetchMaterialSyncStatus,
   refreshMaterialSyncFromRegistry,
+  rollbackMaterialSyncRevision,
+  uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 
 vi.mock("../api/client", () => ({
@@ -69,5 +72,83 @@ describe("material sync API client", () => {
       { timeout: 3_600_000 },
     );
     expect(response.installed_count).toBe(1);
+  });
+
+  it("posts a material sync rollback request", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "rolled back",
+        material_id: "mat_test",
+        revision_id: "rev_old",
+        content_hash: "sha256:old",
+        channel: "official",
+        local_directory: "BrandA/pla-basic",
+      },
+    });
+
+    const response = await rollbackMaterialSyncRevision("mat_test", "rev_old");
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/material-sync/rollback",
+      { material_id: "mat_test", revision_id: "rev_old" },
+      { timeout: 60_000 },
+    );
+    expect(response.revision_id).toBe("rev_old");
+  });
+
+  it("uploads a material registry package as multipart form data", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "uploaded",
+        channel: "pending",
+        package_path: "pending/mat/rev.zip",
+        package_url: "/api/material-registry/v1/packages/pending/mat/rev.zip",
+        package_sha256: "abc",
+        package_bytes: 10,
+        materials: [],
+      },
+    });
+    const file = new File(["zip"], "material.zip", { type: "application/zip" });
+
+    const response = await uploadMaterialRegistryPackage(file);
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/material-registry/v1/packages/upload",
+      expect.any(FormData),
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 3_600_000,
+      },
+    );
+    expect(response.channel).toBe("pending");
+  });
+
+  it("approves a registry package with the official password", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "approved",
+        channel: "official",
+        package_path: "official/mat/rev.zip",
+        package_url: "/api/material-registry/v1/packages/official/mat/rev.zip",
+        package_sha256: "abc",
+        package_bytes: 10,
+        materials: [],
+      },
+    });
+
+    const response = await approveMaterialRegistryPackage(
+      "pending/mat/rev.zip",
+      "approve-secret",
+    );
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/material-registry/v1/packages/pending/mat/rev.zip/approve",
+      { official_password: "approve-secret" },
+      { timeout: 60_000 },
+    );
+    expect(response.channel).toBe("official");
   });
 });

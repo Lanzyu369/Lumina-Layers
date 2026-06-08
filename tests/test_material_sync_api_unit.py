@@ -11,7 +11,10 @@ import httpx
 from fastapi.testclient import TestClient
 
 from api.app import create_app
-from core.single_stage import refresh_material_sync_from_registry
+from core.single_stage import (
+    refresh_material_sync_from_registry,
+    rollback_material_sync_revision,
+)
 
 
 def _client() -> TestClient:
@@ -399,6 +402,7 @@ def test_material_sync_status_lists_installed_package_and_local_presence(
         "updated_at": "2026-06-08T01:02:03+00:00",
         "local_exists": True,
         "material_file_exists": True,
+        "available_revisions": [],
     }
 
 
@@ -419,3 +423,193 @@ def test_material_sync_status_handles_corrupt_index_without_traceback(
     assert body["index_state"] == "invalid"
     assert body["installed_count"] == 0
     assert body["installed"] == []
+
+
+def test_material_library_api_marks_official_synced_material(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "material_name": "PLA Basic",
+                "brand": "BrandA",
+                "stage_a_params_file": "stage_A_parameters.json",
+                "material_summary": {"estimated_rgb": [120, 130, 140]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text("{}", encoding="utf-8")
+    (materials_root / "_sync").mkdir()
+    (materials_root / "_sync" / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "installed": {
+                    "mat_official": {
+                        "revision_id": "rev_official",
+                        "content_hash": "sha256:official",
+                        "channel": "official",
+                        "source": "package",
+                        "local_directory": "BrandA/pla-basic",
+                        "display_brand": "BrandA",
+                        "display_name": "PLA Basic",
+                    }
+                },
+                "revisions": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+
+    response = _client().get("/api/extractor/gradient-card-materials")
+
+    assert response.status_code == 200
+    material = response.json()["materials"][0]
+    assert material["sync_material_id"] == "mat_official"
+    assert material["sync_revision_id"] == "rev_official"
+    assert material["sync_channel"] == "official"
+    assert material["sync_official"] is True
+
+
+def test_material_sync_rollback_switches_installed_revision(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    old_dir = materials_root / "BrandA" / "pla-basic"
+    new_dir = materials_root / "BrandA" / "pla-basic-new"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    (old_dir / "material.json").write_text("{}", encoding="utf-8")
+    (new_dir / "material.json").write_text("{}", encoding="utf-8")
+    (materials_root / "_sync").mkdir()
+    (materials_root / "_sync" / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "installed": {
+                    "mat_test": {
+                        "revision_id": "rev_new",
+                        "content_hash": "sha256:new",
+                        "channel": "official",
+                        "source": "package",
+                        "local_directory": "BrandA/pla-basic-new",
+                        "display_brand": "BrandA",
+                        "display_name": "PLA Basic",
+                        "installed_at": "2026-06-08T02:00:00+00:00",
+                        "updated_at": "2026-06-08T02:00:00+00:00",
+                    }
+                },
+                "revisions": {
+                    "mat_test": {
+                        "rev_old": {
+                            "revision_id": "rev_old",
+                            "content_hash": "sha256:old",
+                            "channel": "official",
+                            "source": "package",
+                            "local_directory": "BrandA/pla-basic",
+                            "display_brand": "BrandA",
+                            "display_name": "PLA Basic",
+                            "installed_at": "2026-06-08T01:00:00+00:00",
+                            "updated_at": "2026-06-08T01:00:00+00:00",
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+
+    response = _client().post(
+        "/api/material-sync/rollback",
+        json={"material_id": "mat_test", "revision_id": "rev_old"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["material_id"] == "mat_test"
+    assert body["revision_id"] == "rev_old"
+    assert body["local_directory"] == "BrandA/pla-basic"
+
+    index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
+    assert index["installed"]["mat_test"]["revision_id"] == "rev_old"
+    assert "rev_new" in index["revisions"]["mat_test"]
+
+
+def test_rollback_material_sync_revision_rejects_missing_local_files(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    (materials_root / "_sync").mkdir(parents=True)
+    (materials_root / "_sync" / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "installed": {},
+                "revisions": {
+                    "mat_test": {
+                        "rev_missing": {
+                            "revision_id": "rev_missing",
+                            "content_hash": "sha256:missing",
+                            "channel": "official",
+                            "source": "package",
+                            "local_directory": "BrandA/missing",
+                            "display_brand": "BrandA",
+                            "display_name": "Missing",
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        rollback_material_sync_revision(
+            material_id="mat_test",
+            revision_id="rev_missing",
+            materials_dir=str(materials_root),
+        )
+    except FileNotFoundError as exc:
+        assert "material.json" in str(exc)
+    else:
+        raise AssertionError("rollback should reject missing material files")
+
+
+def test_refresh_material_sync_from_registry_uses_cross_process_lock(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    sync_dir = materials_root / "_sync"
+    sync_dir.mkdir(parents=True)
+    (sync_dir / "refresh.lock").write_text("active", encoding="utf-8")
+    request_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(500)
+
+    try:
+        refresh_material_sync_from_registry(
+            registry_url="https://registry.test/v1",
+            materials_dir=str(materials_root),
+            transport=httpx.MockTransport(_handler),
+        )
+    except RuntimeError as exc:
+        assert "already running" in str(exc)
+    else:
+        raise AssertionError("refresh should reject an active file lock")
+
+    assert request_count == 0
