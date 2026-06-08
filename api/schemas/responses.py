@@ -433,6 +433,35 @@ class MaterialSyncRefreshResponse(BaseModel):
     failures: list[MaterialSyncRefreshFailureResponse] = Field(default_factory=list)
 
 
+class MaterialRegistryCatalogEntryResponse(BaseModel):
+    """One published material package revision in the read-only Registry catalog.
+    只读 Registry catalog 中的单个已发布耗材包 revision。
+    """
+
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    visibility: str
+    local_directory: str
+    display: dict[str, Any] = Field(default_factory=dict)
+    compatibility: dict[str, Any] = Field(default_factory=dict)
+    package_url: str
+    package_sha256: str
+    package_bytes: int
+
+
+class MaterialRegistryCatalogResponse(BaseModel):
+    """Read-only material Registry catalog response.
+    只读耗材 Registry catalog 响应。
+    """
+
+    schema_version: str
+    channels: list[str] = Field(default_factory=list)
+    count: int
+    materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
+
+
 class MaterialSolverCacheEntryResponse(BaseModel):
     """Metadata for a single persisted material-solver cache entry.
     单个耗材求解器缓存条目的元数据。

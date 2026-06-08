@@ -16,6 +16,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "feedback.py",
     ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "lut.py",
+    ROOT / "api" / "routers" / "material_registry.py",
     ROOT / "api" / "routers" / "material_sync.py",
     ROOT / "api" / "routers" / "slicer.py",
     ROOT / "api" / "routers" / "system.py",
@@ -185,6 +186,10 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_install_done",
     "material_sync_refresh_done",
 }
+MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
+    "material_registry_catalog_done",
+    "material_registry_package_download_done",
+}
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",
     "converter_replace_color_done",
@@ -281,6 +286,7 @@ REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
     | MATERIAL_SYNC_STRUCTURED_EVENTS
+    | MATERIAL_REGISTRY_STRUCTURED_EVENTS
     | CONVERTER_STRUCTURED_EVENTS
     | CALIBRATION_STRUCTURED_EVENTS
     | FIVE_COLOR_STRUCTURED_EVENTS
