@@ -18,6 +18,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "lut.py",
     ROOT / "api" / "routers" / "material_registry.py",
     ROOT / "api" / "routers" / "material_sync.py",
+    ROOT / "api" / "material_sync_scheduler.py",
     ROOT / "api" / "routers" / "slicer.py",
     ROOT / "api" / "routers" / "system.py",
     ROOT / "api" / "routers" / "vectorizer.py",
@@ -185,6 +186,10 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
     "material_sync_install_done",
     "material_sync_refresh_done",
+    "material_sync_auto_refresh_scheduled",
+    "material_sync_auto_refresh_done",
+    "material_sync_auto_refresh_failed",
+    "material_sync_auto_refresh_skipped",
 }
 MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
     "material_registry_catalog_done",

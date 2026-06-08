@@ -67,6 +67,10 @@ from api.dependencies import (
     worker_pool,
 )
 from api.file_bridge import file_to_response
+from api.material_sync_scheduler import (
+    cancel_material_sync_auto_refresh_tasks,
+    start_material_sync_auto_refresh_tasks,
+)
 from api.routers import (
     calibration_router,
     converter_router,
@@ -245,11 +249,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
 
     cleanup_task = asyncio.create_task(_cleanup_loop())
+    material_sync_refresh_tasks = start_material_sync_auto_refresh_tasks()
 
     yield
 
     # --- Shutdown ---
     cleanup_task.cancel()
+    await cancel_material_sync_auto_refresh_tasks(material_sync_refresh_tasks)
     worker_pool.shutdown(wait=True)
     log.info("Worker pool shutdown complete", extra={"event": "worker_pool_shutdown"})
 
