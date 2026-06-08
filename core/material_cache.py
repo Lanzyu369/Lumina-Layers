@@ -173,6 +173,21 @@ _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
 默认单次分桶求解缓存构建峰值内存预算。
 """
 
+_SOLVER_CACHE_BUILD_MAX_COMBINATIONS_ENV = (
+    "LUMINA_SOLVER_CACHE_BUILD_MAX_COMBINATIONS"
+)
+_DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS = 12_000_000_000
+"""Default exhaustive-combination budget for one solver-cache build.
+
+The build still scans every theoretical recipe even when a low Lab grid makes
+the retained sparse cache look small. Keep the default above the historical
+10-material × 10-layer scale, but below 22-material × 8-layer incidents.
+
+默认单次求解缓存构建的穷举组合数上限。即使低 Lab 网格让最终稀疏缓存看起来
+很小，构建仍然会扫描所有理论配方；默认值允许历史上的 10 耗材 × 10 层量级，
+但拦截 22 耗材 × 8 层这类事故。
+"""
+
 _ESTIMATED_VALID_CELL_RATIO = 0.12
 """Conservative reachable-bucket estimate for high-resolution bucketed builds.
 
@@ -199,8 +214,8 @@ MITM 表、分块临时数组和最终数组的固定构建开销估算。
 
 @dataclass(frozen=True)
 class MaterialSolverCacheBuildBudget:
-    """Estimated memory budget for a material solver-cache build.
-    耗材求解缓存构建的内存预算估算。
+    """Estimated safety budget for a material solver-cache build.
+    耗材求解缓存构建的安全预算估算。
 
     Attributes:
         material_count: Number of selected materials. (耗材数量)
@@ -211,6 +226,7 @@ class MaterialSolverCacheBuildBudget:
         estimated_valid_cell_count: Estimated retained buckets. (估计保留桶数)
         estimated_peak_bytes: Estimated peak build RSS. (估计峰值内存)
         memory_limit_bytes: Configured safety limit. (配置的安全上限)
+        max_total_combinations: Configured recipe-scan limit. (配置的穷举上限)
         is_allowed: Whether the estimate fits the limit. (是否允许构建)
     """
 
@@ -222,12 +238,13 @@ class MaterialSolverCacheBuildBudget:
     estimated_valid_cell_count: int
     estimated_peak_bytes: int
     memory_limit_bytes: int
+    max_total_combinations: int
     is_allowed: bool
 
 
 class MaterialSolverCacheBudgetError(ValueError):
-    """Raised when a solver-cache build would exceed the memory budget.
-    当求解缓存构建预计超过内存预算时抛出。
+    """Raised when a solver-cache build would exceed a safety budget.
+    当求解缓存构建预计超过安全预算时抛出。
     """
 
     def __init__(self, report: MaterialSolverCacheBuildBudget) -> None:
@@ -246,10 +263,37 @@ def _format_solver_cache_budget_error(
 ) -> str:
     """Build an actionable validation message for unsafe cache builds."""
 
-    return (
+    prefix = (
         "Unsafe material solver cache build: "
         f"{report.material_count} materials x {report.layer_count} layers at "
-        f"grid_resolution={report.grid_resolution} estimates "
+        f"grid_resolution={report.grid_resolution} "
+    )
+    exceeds_combination_limit = (
+        report.total_combinations > report.max_total_combinations
+    )
+    exceeds_memory_limit = report.estimated_peak_bytes > report.memory_limit_bytes
+    if exceeds_combination_limit and not exceeds_memory_limit:
+        return (
+            prefix
+            + f"requires scanning {report.total_combinations:,} combinations, "
+            f"above the configured {report.max_total_combinations:,} "
+            "combination limit. Please reduce the material/layer count."
+        )
+    if exceeds_combination_limit and exceeds_memory_limit:
+        return (
+            prefix
+            + f"requires scanning {report.total_combinations:,} combinations, "
+            f"above the configured {report.max_total_combinations:,} "
+            f"combination limit, and estimates "
+            f"{report.estimated_valid_cell_count:,} retained buckets and "
+            f"{_format_bytes_gib(report.estimated_peak_bytes)} peak memory, "
+            f"above the configured {_format_bytes_gib(report.memory_limit_bytes)} "
+            "memory limit. Please lower grid_resolution or reduce the "
+            "material/layer count."
+        )
+    return (
+        prefix
+        + "estimates "
         f"{report.estimated_valid_cell_count:,} retained buckets and "
         f"{_format_bytes_gib(report.estimated_peak_bytes)} peak memory, above "
         f"the configured {_format_bytes_gib(report.memory_limit_bytes)} limit. "
@@ -287,29 +331,65 @@ def _resolve_solver_cache_build_memory_limit(
     return value_mb * 1024 * 1024
 
 
+def _resolve_solver_cache_build_max_combinations(
+    max_total_combinations: int | None = None,
+) -> int:
+    """Resolve the recipe-scan limit from an explicit value or environment.
+    从显式入参或环境变量解析穷举组合数上限。
+    """
+
+    if max_total_combinations is not None:
+        return max(1, int(max_total_combinations))
+
+    raw_limit = os.environ.get(_SOLVER_CACHE_BUILD_MAX_COMBINATIONS_ENV)
+    if raw_limit is None or raw_limit.strip() == "":
+        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
+    try:
+        value = int(raw_limit)
+    except ValueError:
+        _log.warning(
+            "Invalid material solver cache combination budget; using default",
+            extra={
+                "event": "material_solver_cache_budget_invalid",
+                "raw_value": raw_limit,
+                "fallback_combinations": (
+                    _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
+                ),
+            },
+        )
+        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
+    if value <= 0:
+        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
+    return value
+
+
 def estimate_material_solver_cache_build_budget(
     *,
     material_count: int,
     layer_count: int,
     grid_resolution: int,
     memory_limit_bytes: int | None = None,
+    max_total_combinations: int | None = None,
 ) -> MaterialSolverCacheBuildBudget:
-    """Estimate whether a bucketed solver-cache build fits the memory budget.
-    估算分桶求解缓存构建是否落在内存预算内。
+    """Estimate whether a bucketed solver-cache build fits safety budgets.
+    估算分桶求解缓存构建是否落在安全预算内。
 
     The estimate intentionally runs before enumeration. It therefore uses a
-    conservative retained-bucket approximation instead of exact ``valid_count``.
-    This protects the API from issue #230-class OOMs without doing the costly
-    work first.
+    conservative retained-bucket approximation and an independent recipe-scan
+    limit instead of doing the costly work first.
 
     估算必须在枚举前完成，因此使用保守的保留桶近似值，而不是精确
-    ``valid_count``。这样可以在执行昂贵工作前拦截 issue #230 这类 OOM。
+    ``valid_count``，并叠加独立的配方扫描上限。这样可以在执行昂贵工作前
+    拦截 issue #230 这类 OOM 以及低 grid 的超大穷举请求。
     """
 
     safe_material_count = max(0, int(material_count))
     safe_layer_count = max(0, int(layer_count))
     safe_grid_resolution = max(1, int(grid_resolution))
     limit = _resolve_solver_cache_build_memory_limit(memory_limit_bytes)
+    combination_limit = _resolve_solver_cache_build_max_combinations(
+        max_total_combinations,
+    )
 
     total_combinations = (
         safe_material_count ** safe_layer_count
@@ -338,7 +418,11 @@ def estimate_material_solver_cache_build_budget(
         estimated_valid_cell_count=int(estimated_valid),
         estimated_peak_bytes=int(estimated_peak),
         memory_limit_bytes=int(limit),
-        is_allowed=estimated_peak <= limit,
+        max_total_combinations=int(combination_limit),
+        is_allowed=(
+            estimated_peak <= limit
+            and total_combinations <= combination_limit
+        ),
     )
 
 
@@ -348,9 +432,10 @@ def validate_material_solver_cache_build_budget(
     layer_count: int,
     grid_resolution: int,
     memory_limit_bytes: int | None = None,
+    max_total_combinations: int | None = None,
 ) -> MaterialSolverCacheBuildBudget:
-    """Raise if a solver-cache build exceeds the configured memory budget.
-    如果求解缓存构建超过配置的内存预算则抛错。
+    """Raise if a solver-cache build exceeds configured safety budgets.
+    如果求解缓存构建超过配置的安全预算则抛错。
     """
 
     report = estimate_material_solver_cache_build_budget(
@@ -358,6 +443,7 @@ def validate_material_solver_cache_build_budget(
         layer_count=layer_count,
         grid_resolution=grid_resolution,
         memory_limit_bytes=memory_limit_bytes,
+        max_total_combinations=max_total_combinations,
     )
     if not report.is_allowed:
         raise MaterialSolverCacheBudgetError(report)

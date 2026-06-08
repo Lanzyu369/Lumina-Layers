@@ -1,19 +1,18 @@
-"""Regression tests for the P03 on-the-fly cache build fallback.
-P03 临时缓存构建回退路径的回归测试。
+"""Regression tests for the P03 bounded runtime fallback.
+P03 有界运行时回退路径的回归测试。
 
-When no persisted ``MaterialSolverCache`` is found on disk, P03 now builds a
-temporary low-resolution (64 cubed) cache in-memory via
-:func:`core.material_cache.build_material_solver_cache` and uses it for
-lookup.  The cross-N ``ensure_not_worse_than_smaller_N`` step is skipped for
-cache-based paths (both persisted and on-the-fly).
+When no persisted ``MaterialSolverCache`` is found on disk, P03 now resolves a
+lookup-compatible bounded runtime via :func:`core.material_lut_provider.load_solver_runtime`.
+The old temporary 64-grid exhaustive builder must not be called.
 
-没有持久化缓存时，P03 现在会现场构建一个最低分辨率 (64^3) 的临时缓存，
-用于颜色匹配。缓存路径（持久化和临时）均跳过跨 N 比较。
+没有持久化求解缓存时，P03 现在通过 ``load_solver_runtime`` 解析一个查找兼容
+的有界运行时，不能再调用旧的 64-grid 临时穷举构建器。
 
 Locks in:
-    * ``solver_path == "cache_built_on_the_fly"`` in ``material_solver_info``;
-    * ``build_material_solver_cache`` is invoked exactly once;
-    * the cross-N fallback helper is NOT invoked for the on-the-fly cache path;
+    * ``solver_path == "cache"`` with ``cache_mode == "candidate_hybrid"``;
+    * ``load_solver_runtime`` is invoked exactly once;
+    * the old ``build_material_solver_cache`` fallback is not invoked;
+    * the cross-N fallback helper is NOT invoked for the bounded runtime path;
     * ``material_matrix`` still carries correct Top2Bottom recipes after reversal.
 """
 
@@ -68,6 +67,12 @@ def _write_solid_color_png(path: Path, rgb: tuple[int, int, int], size: int = 4)
     return path
 
 
+def _write_transparent_png(path: Path, size: int = 4) -> Path:
+    arr = np.zeros((size, size, 4), dtype=np.uint8)
+    Image.fromarray(arr, mode="RGBA").save(path)
+    return path
+
+
 def _make_ctx(image_path: Path, *, layer_count: int = 6) -> dict:
     return {
         "image_path": str(image_path),
@@ -96,6 +101,7 @@ class _FakeCache:
         self._delta_e = delta_e
         self._layer_count = layer_count
         self.valid_cell_count = 1
+        self.mode = "candidate_hybrid"
         self.metadata = {
             "palette_hash": "test",
             "grid_resolution": 64,
@@ -132,12 +138,11 @@ class _FakeCache:
 # ---------------------------------------------------------------------------
 
 
-class TestP03OnTheFlyCacheBuild:
-    def test_solver_meta_reports_cache_built_on_the_fly(
+class TestP03BoundedRuntimeFallback:
+    def test_solver_meta_reports_candidate_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When no persisted cache exists, ``material_solver_info`` must report
-        ``solver_path == "cache_built_on_the_fly"`` with build metadata."""
+        """When no persisted cache exists, P03 must report bounded runtime metadata."""
         image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
         ctx = _make_ctx(image_path, layer_count=6)
 
@@ -148,22 +153,24 @@ class TestP03OnTheFlyCacheBuild:
         fake_cache = _FakeCache(matched_rgb, recipe, delta_e, 6)
 
         monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("old temporary exhaustive cache must not build")
+            ),
+            raising=False,
         )
         monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
+            "core.material_lut_provider.load_solver_runtime",
+            lambda **kwargs: (fake_cache, 64),
         )
 
         result = _run_material_archive_branch(ctx)
         solver_info = result["material_solver_info"]
 
-        assert solver_info["path"] == "cache_built_on_the_fly"
-        assert "build_time_seconds" in solver_info
+        assert solver_info["path"] == "cache"
+        assert solver_info["cache_mode"] == "candidate_hybrid"
         assert solver_info["grid_resolution"] == 64
-        assert solver_info["grid_fallback_used"] is True
-        assert solver_info["reason"] == "no_persisted_cache"
+        assert solver_info["grid_fallback_used"] is False
         assert solver_info["mean_delta_e"] == pytest.approx(1.5)
         assert solver_info["max_delta_e"] == pytest.approx(1.5)
 
@@ -191,12 +198,15 @@ class TestP03OnTheFlyCacheBuild:
         )
 
         monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("old temporary exhaustive cache must not build")
+            ),
+            raising=False,
         )
         monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
+            "core.material_lut_provider.load_solver_runtime",
+            lambda **kwargs: (fake_cache, 64),
         )
 
         result = _run_material_archive_branch(ctx)
@@ -214,12 +224,11 @@ class TestP03OnTheFlyCacheBuild:
             )
 
 
-class TestP03OnTheFlyCacheGuards:
+class TestP03BoundedRuntimeGuards:
     def test_cross_n_fallback_is_not_invoked(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``ensure_not_worse_than_smaller_N`` must NOT be called when the
-        on-the-fly cache is used — it is an exhaustive grid result already."""
+        """``ensure_not_worse_than_smaller_N`` must NOT be called for runtime lookup."""
         image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
         ctx = _make_ctx(image_path, layer_count=6)
 
@@ -233,12 +242,15 @@ class TestP03OnTheFlyCacheGuards:
         )
 
         monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("old temporary exhaustive cache must not build")
+            ),
+            raising=False,
         )
         monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
+            "core.material_lut_provider.load_solver_runtime",
+            lambda **kwargs: (fake_cache, 64),
         )
 
         call_counter = {"n": 0}
@@ -256,11 +268,10 @@ class TestP03OnTheFlyCacheGuards:
         assert call_counter["n"] == 0
         assert "not_worse_fallback" not in result["material_solver_info"]
 
-    def test_build_cache_is_invoked_exactly_once(
+    def test_load_solver_runtime_is_invoked_exactly_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pipeline must invoke ``build_material_solver_cache`` exactly once
-        when no persisted cache is found."""
+        """Pipeline must resolve the bounded runtime exactly once."""
         image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
         ctx = _make_ctx(image_path, layer_count=6)
 
@@ -273,22 +284,48 @@ class TestP03OnTheFlyCacheGuards:
             6,
         )
 
-        monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
-        )
-
         call_counter = {"n": 0}
 
-        def _mock_build(**kwargs):
+        def _mock_load_runtime(**kwargs):
             call_counter["n"] += 1
             assert kwargs["grid_resolution"] == 64
-            return fake_cache
+            return fake_cache, 64
 
         monkeypatch.setattr(
             "core.material_cache.build_material_solver_cache",
-            _mock_build,
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("old temporary exhaustive cache must not build")
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "core.material_lut_provider.load_solver_runtime",
+            _mock_load_runtime,
         )
 
         _run_material_archive_branch(ctx)
         assert call_counter["n"] == 1
+
+    def test_transparent_image_does_not_build_candidate_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fully transparent inputs have no visible colours to solve."""
+        image_path = _write_transparent_png(tmp_path / "transparent.png")
+        ctx = _make_ctx(image_path, layer_count=6)
+
+        monkeypatch.setattr(
+            "core.material_lut_provider.load_solver_cache",
+            lambda **kwargs: (None, None),
+        )
+        monkeypatch.setattr(
+            "core.material_lut_provider.load_solver_runtime",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("transparent image must not build candidate runtime")
+            ),
+        )
+
+        result = _run_material_archive_branch(ctx)
+
+        assert result["material_solver_info"]["unique_color_count"] == 0
+        assert result["material_solver_info"]["cache_mode"] == "none"
+        assert np.all(result["material_matrix"] == -1)

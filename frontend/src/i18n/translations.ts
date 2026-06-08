@@ -3375,8 +3375,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Enumerating {combinations} combinations and writing to disk — about {seconds} seconds.",
   },
   basic_material_cache_budget_warning: {
-    zh: "当前组合约 {combinations} 种配方，grid={grid} 的缓存构建可能超过内存预算。请降低穷举数量或减少耗材/层数。",
-    en: "This combination has about {combinations} recipes; building grid={grid} may exceed the memory budget. Lower the density or reduce materials/layers.",
+    zh: "当前组合约 {combinations} 种配方，grid={grid} 的缓存构建可能超过穷举或内存预算。请减少耗材/层数；若是高密度档位，也可降低 grid。",
+    en: "This combination has about {combinations} recipes; building grid={grid} may exceed the enumeration or memory budget. Reduce materials/layers; for high-density builds, lower grid.",
   },
   basic_material_cache_rebuild_button: {
     zh: "重新构建",
@@ -3445,6 +3445,126 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_cache_delete_error: {
     zh: "删除失败：{message}",
     en: "Delete failed: {message}",
+  },
+  basic_material_runtime_section_title: {
+    zh: "智能配方缓存",
+    en: "Smart Recipe Cache",
+  },
+  basic_material_runtime_section_description: {
+    zh: "为大耗材组合预生成覆盖广的配方，加速颜色匹配。",
+    en: "Precompute broad recipe coverage for large material palettes to speed color matching.",
+  },
+  basic_material_runtime_status_idle: {
+    zh: "请选择至少一种耗材后查看智能缓存状态。",
+    en: "Select at least one material to view smart cache status.",
+  },
+  basic_material_runtime_status_checking: {
+    zh: "正在检查智能缓存…",
+    en: "Checking smart cache…",
+  },
+  basic_material_runtime_status_ready: {
+    zh: "智能缓存已就绪",
+    en: "Smart cache ready",
+  },
+  basic_material_runtime_status_missing: {
+    zh: "配方缓存未构建",
+    en: "Smart recipe cache not built",
+  },
+  basic_material_runtime_status_error: {
+    zh: "智能缓存状态查询失败",
+    en: "Failed to query smart cache status",
+  },
+  basic_material_runtime_budget_label: {
+    zh: "缓存规模",
+    en: "Cache size",
+  },
+  basic_material_runtime_budget_option_1048576: {
+    zh: "快速 1M",
+    en: "Fast 1M",
+  },
+  basic_material_runtime_budget_option_4194304: {
+    zh: "标准 4M",
+    en: "Standard 4M",
+  },
+  basic_material_runtime_budget_option_8388608: {
+    zh: "高精度 8M",
+    en: "High 8M",
+  },
+  basic_material_runtime_budget_option_33554432: {
+    zh: "推荐 32M",
+    en: "Recommended 32M",
+  },
+  basic_material_runtime_budget_option_67108864: {
+    zh: "极高 64M",
+    en: "Extreme 64M",
+  },
+  basic_material_runtime_missing_hint: {
+    zh: "未构建时，系统会按需临时生成一份小规模配方缓存。",
+    en: "When no smart cache is saved, the system builds a small recipe cache on demand.",
+  },
+  basic_material_runtime_build_button: {
+    zh: "构建智能缓存",
+    en: "Build smart cache",
+  },
+  basic_material_runtime_rebuild_button: {
+    zh: "重建智能缓存",
+    en: "Rebuild smart cache",
+  },
+  basic_material_runtime_delete_button: {
+    zh: "删除智能缓存",
+    en: "Delete smart cache",
+  },
+  basic_material_runtime_charts_show_button: {
+    zh: "查看配方覆盖图",
+    en: "View recipe coverage",
+  },
+  basic_material_runtime_charts_hide_button: {
+    zh: "收起配方覆盖图",
+    en: "Hide recipe coverage",
+  },
+  basic_material_runtime_charts_loading: {
+    zh: "正在加载配方覆盖图…",
+    en: "Loading recipe coverage…",
+  },
+  basic_material_runtime_charts_error: {
+    zh: "配方覆盖图加载失败：{message}",
+    en: "Failed to load recipe coverage: {message}",
+  },
+  basic_material_runtime_building_label: {
+    zh: "正在构建智能缓存…",
+    en: "Building smart cache…",
+  },
+  basic_material_runtime_building_hint: {
+    zh: "正在生成 {budget} 条配方并保存。",
+    en: "Generating and saving {budget} recipes.",
+  },
+  basic_material_runtime_confirm_delete: {
+    zh: "确认删除当前组合的智能配方缓存？",
+    en: "Delete the smart recipe cache for this combination?",
+  },
+  basic_material_runtime_candidates_label: {
+    zh: "配方数",
+    en: "Recipe count",
+  },
+  basic_material_runtime_inverse_label: {
+    zh: "反推精修",
+    en: "Inverse refinement",
+  },
+  basic_material_runtime_enabled: {
+    zh: "启用",
+    en: "Enabled",
+  },
+  basic_material_runtime_disabled: {
+    zh: "关闭",
+    en: "Disabled",
+  },
+  basic_material_runtime_build_error: {
+    zh: "智能缓存构建失败：{message}",
+    en: "Smart cache build failed: {message}",
+  },
+  basic_material_runtime_delete_error: {
+    zh: "智能缓存删除失败：{message}",
+    en: "Smart cache delete failed: {message}",
   },
   basic_source_kind_label: {
     zh: "颜色源类型",

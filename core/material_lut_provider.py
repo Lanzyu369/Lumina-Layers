@@ -24,10 +24,21 @@ from config import MATERIALS_DIR
 from core import material_cache as _material_cache
 from core import material_lut_synthesis as _material_lut_synthesis
 from core.material_cache import DEFAULT_GRID_RESOLUTION
+from core.material_candidate_cache import (
+    MaterialCandidateCacheConfig,
+    DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    LEGACY_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
+    PREVIEW_SAFE_CANDIDATE_BUDGET,
+    QUALITY_8M_CANDIDATE_BUDGET,
+    build_material_candidate_runtime,
+    load_material_candidate_runtime,
+)
 from core.material_color_solver import MaterialParams
 
 if TYPE_CHECKING:
     from core.material_cache import MaterialSolverCache
+    from core.material_candidate_cache import MaterialCandidateRuntime
 
 # ---------------------------------------------------------------------------
 # Process-local memo caches
@@ -180,6 +191,96 @@ def load_solver_cache(
         grid_resolution=grid_resolution,
         cache_root=cache_root,
     )
+
+
+def load_solver_runtime(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    grid_resolution: int = DEFAULT_GRID_RESOLUTION,
+    cache_root: str | Path | None = None,
+    candidate_budget: int | None = None,
+) -> tuple["MaterialSolverCache | MaterialCandidateRuntime | None", int | None]:
+    """Load a lookup-compatible material solver runtime for hot paths.
+    为热路径加载一个与求解缓存 ``lookup`` 兼容的运行时。
+
+    Existing persisted :class:`MaterialSolverCache` files still take priority.
+    When none is available, this builds a bounded
+    :class:`MaterialCandidateRuntime` instead of falling back to the legacy
+    low-grid exhaustive builder.
+
+    已有持久化 ``MaterialSolverCache`` 优先；缺失时构建有候选数量上限的
+    ``MaterialCandidateRuntime``，不再回退到旧的低 grid 穷举构建器。
+
+    Args:
+        materials: Palette to match. (调色板)
+        layer_count: Number of layers per pixel. (每像素层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"``. (基底)
+        grid_resolution: Preferred legacy cache grid resolution. (旧缓存优先网格)
+        cache_root: Optional legacy cache directory override. (旧缓存目录覆盖)
+        candidate_budget: Optional runtime candidate budget override.
+            (可选候选数量覆盖)
+
+    Returns:
+        tuple: ``(runtime, actual_grid)`` where runtime exposes ``lookup``.
+            (运行时与实际诊断分辨率)
+    """
+    cache, actual_grid = load_solver_cache(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        grid_resolution=grid_resolution,
+        cache_root=cache_root,
+    )
+    if cache is not None:
+        return cache, actual_grid
+
+    if candidate_budget is None:
+        for budget in (
+            MAX_PERSISTED_CANDIDATE_BUDGET,
+            DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+            QUALITY_8M_CANDIDATE_BUDGET,
+            LEGACY_PERSISTED_CANDIDATE_BUDGET,
+            PREVIEW_SAFE_CANDIDATE_BUDGET,
+        ):
+            persisted_runtime = load_material_candidate_runtime(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+                candidate_budget=int(budget),
+                cache_root=cache_root,
+            )
+            if persisted_runtime is not None:
+                return persisted_runtime, persisted_runtime.grid_resolution
+        config = MaterialCandidateCacheConfig.preview_safe()
+    else:
+        config = MaterialCandidateCacheConfig.persisted_for_budget(
+            int(candidate_budget)
+        )
+        persisted_runtime = load_material_candidate_runtime(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=int(config.candidate_budget),
+            cache_root=cache_root,
+        )
+        if persisted_runtime is not None:
+            return persisted_runtime, persisted_runtime.grid_resolution
+
+    runtime = build_material_candidate_runtime(
+        materials=materials,
+        layer_count=int(layer_count),
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        config=config,
+    )
+    return runtime, runtime.grid_resolution
 
 
 def clear_memo_caches() -> None:

@@ -6,6 +6,10 @@ import type {
   MaterialSolverCacheDetailsResponse,
   MaterialSolverCacheListResponse,
   MaterialSolverCacheStatusResponse,
+  MaterialSolverRuntimeBuildResponse,
+  MaterialSolverRuntimeDeleteResponse,
+  MaterialSolverRuntimeDetailsResponse,
+  MaterialSolverRuntimeStatusResponse,
 } from "./types";
 
 /**
@@ -26,6 +30,23 @@ export interface MaterialSolverCacheKey {
   layerHeightMm: number;
   substrate: "white" | "black";
 }
+
+/**
+ * User-facing bounded-runtime candidate budgets.
+ * 面向用户的有界运行时候选预算档位。
+ */
+export type MaterialSolverRuntimeCandidateBudget =
+  | 1_048_576
+  | 4_194_304
+  | 8_388_608
+  | 33_554_432
+  | 67_108_864;
+
+export const MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGETS: readonly MaterialSolverRuntimeCandidateBudget[] =
+  [1_048_576, 4_194_304, 8_388_608, 33_554_432, 67_108_864] as const;
+
+export const DEFAULT_MATERIAL_SOLVER_RUNTIME_CANDIDATE_BUDGET: MaterialSolverRuntimeCandidateBudget =
+  33_554_432;
 
 function _formData(
   key: MaterialSolverCacheKey,
@@ -105,6 +126,93 @@ export async function deleteMaterialSolverCache(
     "/extractor/material-solver-cache/delete",
     _formData(key, extra),
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Query whether a bounded hybrid runtime is persisted for the given key.
+ * 查询指定组合的有界 hybrid runtime 是否已持久化。
+ */
+export async function fetchMaterialSolverRuntimeStatus(
+  key: MaterialSolverCacheKey,
+  options?: { candidateBudget?: number },
+): Promise<MaterialSolverRuntimeStatusResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.candidateBudget != null) {
+    extra.candidate_budget = String(options.candidateBudget);
+  }
+  const response = await apiClient.post<MaterialSolverRuntimeStatusResponse>(
+    "/extractor/material-solver-runtime/status",
+    _formData(key, extra),
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Build and persist a bounded hybrid runtime.
+ * 构建并持久化有界 hybrid runtime。
+ */
+export async function buildMaterialSolverRuntime(
+  key: MaterialSolverCacheKey,
+  options?: { candidateBudget?: number; timeoutMs?: number },
+): Promise<MaterialSolverRuntimeBuildResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.candidateBudget != null) {
+    extra.candidate_budget = String(options.candidateBudget);
+  }
+  const response = await apiClient.post<MaterialSolverRuntimeBuildResponse>(
+    "/extractor/material-solver-runtime/build",
+    _formData(key, extra),
+    { timeout: options?.timeoutMs ?? 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Delete a persisted bounded hybrid runtime entry.
+ * 删除已持久化的有界 hybrid runtime 条目。
+ */
+export async function deleteMaterialSolverRuntime(
+  key: MaterialSolverCacheKey,
+  options?: { candidateBudget?: number },
+): Promise<MaterialSolverRuntimeDeleteResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.candidateBudget != null) {
+    extra.candidate_budget = String(options.candidateBudget);
+  }
+  const response = await apiClient.post<MaterialSolverRuntimeDeleteResponse>(
+    "/extractor/material-solver-runtime/delete",
+    _formData(key, extra),
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Fetch the LUT-details-shaped color-distribution payload for a runtime.
+ * 拉取有界 hybrid runtime 的色彩分布图载荷（结构与 LUT 详情同构）。
+ */
+export async function fetchMaterialSolverRuntimeDetails(
+  key: MaterialSolverCacheKey,
+  options?: {
+    candidateBudget?: number;
+    maxPoints?: number;
+    signal?: AbortSignal;
+  },
+): Promise<MaterialSolverRuntimeDetailsResponse> {
+  const extra: Record<string, string> = {};
+  if (options?.candidateBudget != null) {
+    extra.candidate_budget = String(options.candidateBudget);
+  }
+  if (options?.maxPoints != null) {
+    extra.max_points = String(options.maxPoints);
+  }
+  const response = await apiClient.post<MaterialSolverRuntimeDetailsResponse>(
+    "/extractor/material-solver-runtime/details",
+    _formData(key, extra),
+    { timeout: 3_600_000, signal: options?.signal },
   );
   return response.data;
 }
