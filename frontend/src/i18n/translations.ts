@@ -6623,6 +6623,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "可一次选择多个 ZIP；导出文件也可再次批量导入。",
     en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
   },
+  mat_sync_title: {
+    zh: "云端同步",
+    en: "Cloud Sync",
+  },
+  mat_sync_index_state_label: {
+    zh: "索引状态",
+    en: "Index",
+  },
+  mat_sync_installed_count_label: {
+    zh: "已同步",
+    en: "Synced",
+  },
+  mat_sync_last_sync_label: {
+    zh: "上次同步",
+    en: "Last Sync",
+  },
+  mat_sync_state_missing: {
+    zh: "未建立",
+    en: "Missing",
+  },
+  mat_sync_state_ready: {
+    zh: "正常",
+    en: "Ready",
+  },
+  mat_sync_state_invalid: {
+    zh: "异常",
+    en: "Invalid",
+  },
+  mat_sync_state_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  mat_sync_refresh_btn: {
+    zh: "同步云端耗材",
+    en: "Sync Cloud Materials",
+  },
+  mat_sync_status_failed: {
+    zh: "读取耗材同步状态失败",
+    en: "Failed to load material sync status",
+  },
+  mat_sync_refresh_success: {
+    zh: "云端耗材同步完成。",
+    en: "Cloud material sync completed.",
+  },
+  mat_sync_refresh_failed: {
+    zh: "云端耗材同步失败",
+    en: "Cloud material sync failed",
+  },
   mat_gradient_library_selection_summary: {
     zh: "已选择 {selected} / {total} 个耗材",
     en: "Selected {selected} / {total} materials",

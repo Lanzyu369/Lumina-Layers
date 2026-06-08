@@ -892,6 +892,53 @@ export interface GradientCardMaterialBulkImportResponse {
   imported_materials: SavedMaterialSummary[];
 }
 
+export interface MaterialSyncInstalledEntry {
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  source: string;
+  local_directory: string;
+  display_brand: string;
+  display_name: string;
+  installed_at?: string | null;
+  updated_at?: string | null;
+  local_exists: boolean;
+  material_file_exists: boolean;
+}
+
+export interface MaterialSyncStatusResponse {
+  status: string;
+  message: string;
+  schema_version: string;
+  index_state: "missing" | "ready" | "invalid";
+  last_sync_at?: string | null;
+  registries: Record<string, unknown>;
+  installed_count: number;
+  installed: MaterialSyncInstalledEntry[];
+  local_overrides_count: number;
+}
+
+export interface MaterialSyncRefreshFailure {
+  material_id: string;
+  revision_id: string;
+  package_url: string;
+  error: string;
+}
+
+export interface MaterialSyncRefreshResponse {
+  status: "ok" | "partial" | string;
+  message: string;
+  registry_url: string;
+  channels: string[];
+  checked_count: number;
+  installed_count: number;
+  skipped_count: number;
+  failed_count: number;
+  installed_materials: SavedMaterialSummary[];
+  failures: MaterialSyncRefreshFailure[];
+}
+
 // ========== Material solver cache (64³ Lab-grid recipe lookup) ==========
 
 /** Metadata for one persisted material-solver cache entry. */
