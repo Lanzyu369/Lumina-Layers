@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 from core.single_stage import (
+    install_material_registry_package,
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
@@ -105,6 +106,99 @@ def _write_v2_material_package(
             ),
         )
     return f"sha256:{content_hash}"
+
+
+def _write_v2_multi_material_package(zip_path: Path) -> dict[str, str]:
+    package_records: list[dict[str, object]] = []
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for suffix in ("selected", "other"):
+            local_directory = f"BrandA/pla-{suffix}"
+            material_payload = json.dumps(
+                {
+                    "brand": "BrandA",
+                    "material_name": f"PLA {suffix.title()}",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+            stage_a_payload = json.dumps(
+                {
+                    "meta": {},
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": f"PLA {suffix.title()}",
+                                "E": [0.1, 0.2, 0.3],
+                                "k": [1.0, 1.1, 1.2],
+                            }
+                        ],
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+            material_hash = hashlib.sha256(material_payload).hexdigest()
+            stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
+            content_hash = hashlib.sha256(
+                (
+                    f"material.json:{material_hash}\n"
+                    f"stage_A_parameters.json:{stage_a_hash}"
+                ).encode("utf-8")
+            ).hexdigest()
+            material_path = f"materials/{local_directory}/material.json"
+            stage_a_path = f"materials/{local_directory}/stage_A_parameters.json"
+            archive.writestr(material_path, material_payload)
+            archive.writestr(stage_a_path, stage_a_payload)
+            package_records.append(
+                {
+                    "material_id": f"mat_{suffix}",
+                    "revision_id": f"rev_{suffix}",
+                    "content_hash": f"sha256:{content_hash}",
+                    "channel": "team",
+                    "visibility": "team",
+                    "local_directory": local_directory,
+                    "display": {
+                        "brand": "BrandA",
+                        "material_name": f"PLA {suffix.title()}",
+                    },
+                    "files": [
+                        {
+                            "path": material_path,
+                            "role": "material_archive",
+                            "sha256": material_hash,
+                            "bytes": len(material_payload),
+                            "required": True,
+                        },
+                        {
+                            "path": stage_a_path,
+                            "role": "stage_a_parameters",
+                            "sha256": stage_a_hash,
+                            "bytes": len(stage_a_payload),
+                            "required": True,
+                        },
+                    ],
+                }
+            )
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "exported_at": "2026-06-08T00:00:00+00:00",
+                    "material_count": len(package_records),
+                    "packages": package_records,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+    return {
+        "selected_material_id": "mat_selected",
+        "selected_revision_id": "rev_selected",
+        "package_sha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
+    }
 
 
 def test_material_sync_status_returns_empty_state_when_index_is_missing(
@@ -222,6 +316,266 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
     assert body["channels"] == ["official"]
     assert body["installed_count"] == 1
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+
+
+def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installing(
+    monkeypatch,
+) -> None:
+    def _fake_list_material_registry_catalog() -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 1,
+            "materials": [
+                {
+                    "material_id": "mat_cloud_test",
+                    "revision_id": "rev_cloud_test",
+                    "content_hash": "sha256:cloud",
+                    "channel": "official",
+                    "visibility": "official",
+                    "local_directory": "BrandA/pla-basic",
+                    "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/material_package.zip",
+                    "package_sha256": "a" * 64,
+                    "package_bytes": 1234,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+
+    response = _client().get("/api/material-sync/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["materials"][0]["material_id"] == "mat_cloud_test"
+
+
+def test_material_sync_install_from_registry_endpoint_installs_selected_package(
+    monkeypatch,
+) -> None:
+    def _fake_list_material_registry_catalog() -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 1,
+            "materials": [
+                {
+                    "material_id": "mat_cloud_test",
+                    "revision_id": "rev_cloud_test",
+                    "content_hash": "sha256:cloud",
+                    "channel": "official",
+                    "visibility": "official",
+                    "local_directory": "BrandA/pla-basic",
+                    "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/material_package.zip",
+                    "package_sha256": "a" * 64,
+                    "package_bytes": 1234,
+                }
+            ],
+        }
+
+    def _fake_install_material_registry_package(
+        *,
+        package_url: str,
+        package_sha256: str,
+        material_id: str,
+        revision_id: str,
+    ) -> dict[str, object]:
+        assert package_url == "/v1/packages/material_package.zip"
+        assert package_sha256 == "a" * 64
+        assert material_id == "mat_cloud_test"
+        assert revision_id == "rev_cloud_test"
+        return {
+            "registry_url": "https://registry.test/v1",
+            "material_id": material_id,
+            "revision_id": revision_id,
+            "installed_count": 1,
+            "installed_materials": [
+                {
+                    "material_name": "PLA Basic",
+                    "directory_name": "BrandA/pla-basic",
+                    "brand": "BrandA",
+                    "archive_path": "materials/BrandA/pla-basic/material.json",
+                    "stage_a_params_path": (
+                        "materials/BrandA/pla-basic/stage_A_parameters.json"
+                    ),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+    monkeypatch.setattr(
+        "api.routers.material_sync.install_material_registry_package",
+        _fake_install_material_registry_package,
+    )
+
+    response = _client().post(
+        "/api/material-sync/install-from-registry",
+        json={
+            "package_url": "/v1/packages/material_package.zip",
+            "package_sha256": "a" * 64,
+            "material_id": "mat_cloud_test",
+            "revision_id": "rev_cloud_test",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["installed_count"] == 1
+    assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+
+
+def test_material_sync_install_from_registry_rejects_package_not_in_catalog(
+    monkeypatch,
+) -> None:
+    install_called = False
+
+    def _fake_list_material_registry_catalog() -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 1,
+            "materials": [
+                {
+                    "material_id": "mat_cloud_test",
+                    "revision_id": "rev_cloud_test",
+                    "content_hash": "sha256:cloud",
+                    "channel": "official",
+                    "visibility": "official",
+                    "local_directory": "BrandA/pla-basic",
+                    "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/material_package.zip",
+                    "package_sha256": "a" * 64,
+                    "package_bytes": 1234,
+                }
+            ],
+        }
+
+    def _fake_install_material_registry_package(**_: object) -> dict[str, object]:
+        nonlocal install_called
+        install_called = True
+        return {
+            "registry_url": "https://registry.test/v1",
+            "material_id": "mat_cloud_test",
+            "revision_id": "rev_cloud_test",
+            "installed_count": 0,
+            "installed_materials": [],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+    monkeypatch.setattr(
+        "api.routers.material_sync.install_material_registry_package",
+        _fake_install_material_registry_package,
+    )
+
+    response = _client().post(
+        "/api/material-sync/install-from-registry",
+        json={
+            "package_url": "https://evil.test/material_package.zip",
+            "package_sha256": "a" * 64,
+            "material_id": "mat_cloud_test",
+            "revision_id": "rev_cloud_test",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "current material registry catalog" in response.json()["detail"]
+    assert install_called is False
+
+
+def test_material_sync_install_from_registry_maps_invalid_package_to_502(
+    monkeypatch,
+) -> None:
+    def _fake_list_material_registry_catalog() -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 1,
+            "materials": [
+                {
+                    "material_id": "mat_cloud_test",
+                    "revision_id": "rev_cloud_test",
+                    "content_hash": "sha256:cloud",
+                    "channel": "official",
+                    "visibility": "official",
+                    "local_directory": "BrandA/pla-basic",
+                    "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/material_package.zip",
+                    "package_sha256": "a" * 64,
+                    "package_bytes": 1234,
+                }
+            ],
+        }
+
+    def _fake_install_material_registry_package(**_: object) -> dict[str, object]:
+        raise FileNotFoundError("Saved material archive not found in ZIP")
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+    monkeypatch.setattr(
+        "api.routers.material_sync.install_material_registry_package",
+        _fake_install_material_registry_package,
+    )
+
+    response = _client().post(
+        "/api/material-sync/install-from-registry",
+        json={
+            "package_url": "/v1/packages/material_package.zip",
+            "package_sha256": "a" * 64,
+            "material_id": "mat_cloud_test",
+            "revision_id": "rev_cloud_test",
+        },
+    )
+
+    assert response.status_code == 502
+    assert "Saved material archive" in response.json()["detail"]
+
+
+def test_install_material_registry_package_imports_only_selected_material(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "multi_material_package.zip"
+    package_info = _write_v2_multi_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/packages/multi_material_package.zip":
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    result = install_material_registry_package(
+        registry_url="https://registry.test/v1",
+        package_url="/v1/packages/multi_material_package.zip",
+        package_sha256=package_info["package_sha256"],
+        material_id=package_info["selected_material_id"],
+        revision_id=package_info["selected_revision_id"],
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert result["installed_count"] == 1
+    assert result["installed_materials"][0]["directory_name"] == "BrandA/pla-selected"
+    assert (materials_root / "BrandA" / "pla-selected" / "material.json").is_file()
+    assert (materials_root / "BrandA" / "pla-other" / "material.json").exists() is False
 
 
 def test_refresh_material_sync_from_registry_installs_new_revision_and_skips_same_revision(

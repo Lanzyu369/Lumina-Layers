@@ -6,6 +6,8 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 import uuid
 import zipfile
 from dataclasses import asdict, dataclass, fields
@@ -141,8 +143,11 @@ _MATERIAL_PACKAGE_SCHEMA_VERSION = "2.0"
 _MATERIAL_SYNC_INDEX_SCHEMA_VERSION = "1.0"
 _MATERIAL_SYNC_REFRESH_LOCK_FILENAME = "refresh.lock"
 _MATERIAL_SYNC_LOCK_STALE_SECONDS = 2 * 60 * 60
+_MATERIAL_SYNC_STATUS_CACHE_TTL_S = 5 * 60
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
+_MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
+_MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
 _C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
@@ -1690,6 +1695,123 @@ def _load_material_sync_index(target_root: Path) -> dict[str, Any]:
     return index
 
 
+def _material_sync_signature(entry: dict[str, Any]) -> tuple[str, str] | None:
+    local_directory = str(entry.get("local_directory") or "").strip()
+    content_hash = str(entry.get("content_hash") or "").strip()
+    if not local_directory or not content_hash:
+        return None
+    try:
+        local_directory = _normalize_relative_directory_name(local_directory)
+    except ValueError:
+        return None
+    return local_directory, content_hash
+
+
+def _local_material_sync_entries(target_root: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if not target_root.exists():
+        return entries
+    root_resolved = target_root.resolve()
+    for material_dir in _discover_saved_material_dirs(target_root):
+        try:
+            package_manifest, _files_to_write = _build_material_bundle_package_manifest(
+                target_root=target_root,
+                material_dir=material_dir,
+            )
+            local_directory = _normalize_relative_directory_name(
+                str(package_manifest.get("local_directory") or "")
+            )
+            resolved_material_dir = (target_root / Path(local_directory)).resolve()
+            resolved_material_dir.relative_to(root_resolved)
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
+            continue
+        display = package_manifest.get("display")
+        display_payload = display if isinstance(display, dict) else {}
+        revision_id = str(package_manifest.get("revision_id") or "")
+        entries.append(
+            {
+                "material_id": str(package_manifest.get("material_id") or ""),
+                "revision_id": revision_id,
+                "content_hash": str(package_manifest.get("content_hash") or ""),
+                "channel": "local",
+                "source": "local",
+                "local_directory": local_directory,
+                "display_brand": str(display_payload.get("brand") or ""),
+                "display_name": str(display_payload.get("material_name") or material_dir.name),
+                "installed_at": None,
+                "updated_at": None,
+                "local_exists": resolved_material_dir.is_dir(),
+                "material_file_exists": (resolved_material_dir / "material.json").is_file(),
+                "available_revisions": [revision_id] if revision_id else [],
+            }
+        )
+    return entries
+
+
+def _material_sync_status_cache_key(target_root: Path) -> str:
+    try:
+        return str(target_root.resolve())
+    except OSError:
+        return str(target_root.absolute())
+
+
+def _material_sync_index_marker(target_root: Path) -> tuple[int, int]:
+    index_path = target_root / "_sync" / "index.json"
+    try:
+        stat = index_path.stat()
+    except OSError:
+        return (0, -1)
+    return (int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _cached_material_sync_status(
+    target_root: Path,
+    index_marker: tuple[int, int],
+) -> dict[str, Any] | None:
+    cache_key = _material_sync_status_cache_key(target_root)
+    now = time.monotonic()
+    with _MATERIAL_SYNC_STATUS_CACHE_LOCK:
+        cached = _MATERIAL_SYNC_STATUS_CACHE.get(cache_key)
+        if not cached:
+            return None
+        if cached.get("index_marker") != index_marker:
+            return None
+        cached_at = float(cached.get("cached_at") or 0.0)
+        if now - cached_at > _MATERIAL_SYNC_STATUS_CACHE_TTL_S:
+            return None
+        payload = cached.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return _json_clone(payload)
+
+
+def _store_material_sync_status_cache(
+    target_root: Path,
+    index_marker: tuple[int, int],
+    payload: dict[str, Any],
+) -> None:
+    cache_key = _material_sync_status_cache_key(target_root)
+    with _MATERIAL_SYNC_STATUS_CACHE_LOCK:
+        _MATERIAL_SYNC_STATUS_CACHE[cache_key] = {
+            "cached_at": time.monotonic(),
+            "index_marker": index_marker,
+            "payload": _json_clone(payload),
+        }
+
+
+def _invalidate_material_sync_status_cache(target_root: Path) -> None:
+    cache_key = _material_sync_status_cache_key(target_root)
+    with _MATERIAL_SYNC_STATUS_CACHE_LOCK:
+        _MATERIAL_SYNC_STATUS_CACHE.pop(cache_key, None)
+
+
 def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, Any]:
     """Return local material sync-index status for API and future cloud sync.
     返回本地耗材同步索引状态，供 API 与后续云同步流程使用。
@@ -1702,12 +1824,17 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
             package presence flags. (包含索引健康状态和已安装包本地存在标记的稳定载荷)
     """
     target_root = Path(materials_dir or MATERIALS_DIR)
+    index_marker = _material_sync_index_marker(target_root)
+    cached_status = _cached_material_sync_status(target_root, index_marker)
+    if cached_status is not None:
+        return cached_status
     index, index_state = _load_material_sync_index_with_state(target_root)
     raw_installed = index.get("installed")
     installed_map = raw_installed if isinstance(raw_installed, dict) else {}
     raw_revisions = index.get("revisions")
     revision_map = raw_revisions if isinstance(raw_revisions, dict) else {}
     installed_entries: list[dict[str, Any]] = []
+    seen_signatures: set[tuple[str, str]] = set()
     for raw_material_id, raw_entry in installed_map.items():
         if not isinstance(raw_entry, dict):
             continue
@@ -1727,30 +1854,41 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
             except (OSError, ValueError):
                 local_exists = False
                 material_file_exists = False
-        installed_entries.append(
-            {
-                "material_id": material_id,
-                "revision_id": str(raw_entry.get("revision_id") or ""),
-                "content_hash": str(raw_entry.get("content_hash") or ""),
-                "channel": str(raw_entry.get("channel") or "manual"),
-                "source": str(raw_entry.get("source") or "package"),
-                "local_directory": local_directory,
-                "display_brand": str(raw_entry.get("display_brand") or ""),
-                "display_name": str(raw_entry.get("display_name") or ""),
-                "installed_at": raw_entry.get("installed_at"),
-                "updated_at": raw_entry.get("updated_at"),
-                "local_exists": local_exists,
-                "material_file_exists": material_file_exists,
-                "available_revisions": sorted(
-                    str(revision_id)
-                    for revision_id in (
-                        revision_map.get(material_id, {})
-                        if isinstance(revision_map.get(material_id), dict)
-                        else {}
-                    ).keys()
-                ),
-            }
-        )
+        entry = {
+            "material_id": material_id,
+            "revision_id": str(raw_entry.get("revision_id") or ""),
+            "content_hash": str(raw_entry.get("content_hash") or ""),
+            "channel": str(raw_entry.get("channel") or "manual"),
+            "source": str(raw_entry.get("source") or "package"),
+            "local_directory": local_directory,
+            "display_brand": str(raw_entry.get("display_brand") or ""),
+            "display_name": str(raw_entry.get("display_name") or ""),
+            "installed_at": raw_entry.get("installed_at"),
+            "updated_at": raw_entry.get("updated_at"),
+            "local_exists": local_exists,
+            "material_file_exists": material_file_exists,
+            "available_revisions": sorted(
+                str(revision_id)
+                for revision_id in (
+                    revision_map.get(material_id, {})
+                    if isinstance(revision_map.get(material_id), dict)
+                    else {}
+                ).keys()
+            ),
+        }
+        signature = _material_sync_signature(entry)
+        if signature is not None:
+            seen_signatures.add(signature)
+        installed_entries.append(entry)
+
+    for local_entry in _local_material_sync_entries(target_root):
+        signature = _material_sync_signature(local_entry)
+        if signature is not None and signature in seen_signatures:
+            continue
+        if signature is not None:
+            seen_signatures.add(signature)
+        installed_entries.append(local_entry)
+
     installed_entries.sort(
         key=lambda entry: (
             str(entry["display_brand"]).casefold(),
@@ -1764,15 +1902,21 @@ def get_material_sync_status(*, materials_dir: str | None = None) -> dict[str, A
         if isinstance(index.get("local_overrides"), dict)
         else {}
     )
-    return {
+    status_payload = {
         "schema_version": str(index.get("schema_version") or _MATERIAL_SYNC_INDEX_SCHEMA_VERSION),
         "index_state": index_state,
         "last_sync_at": index.get("last_sync_at"),
         "registries": registries,
-        "installed_count": len(installed_entries),
+        "installed_count": sum(
+            1
+            for entry in installed_entries
+            if bool(entry.get("local_exists")) and bool(entry.get("material_file_exists"))
+        ),
         "installed": installed_entries,
         "local_overrides_count": len(local_overrides),
     }
+    _store_material_sync_status_cache(target_root, index_marker, status_payload)
+    return _json_clone(status_payload)
 
 
 def _material_sync_metadata_by_directory(target_root: Path) -> dict[str, dict[str, Any]]:
@@ -1811,6 +1955,7 @@ def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None
         encoding="utf-8",
     )
     tmp_path.replace(index_path)
+    _invalidate_material_sync_status_cache(target_root)
 
 
 def _record_material_sync_entries(
@@ -2176,6 +2321,159 @@ def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
     with os.fdopen(fd, "wb") as handle:
         handle.write(package_bytes)
     return Path(temp_name)
+
+
+def list_material_registry_catalog(
+    *,
+    registry_url: str | None = None,
+    channels: Sequence[str] | None = None,
+    token: str | None = None,
+    timeout_s: float | None = None,
+    transport: Any = None,
+) -> dict[str, Any]:
+    """Fetch the remote material Registry catalog without installing packages.
+    只读取远程耗材 Registry catalog，不安装任何耗材包。
+    """
+    import httpx
+
+    normalized_registry_url = _normalize_material_registry_url(registry_url)
+    normalized_channels = _normalize_material_registry_channels(channels)
+    auth_token = str(
+        token
+        if token is not None
+        else os.environ.get("LUMINA_MATERIAL_REGISTRY_TOKEN", "")
+    ).strip()
+    if timeout_s is None:
+        raw_timeout = os.environ.get("LUMINA_MATERIAL_REGISTRY_TIMEOUT_S", "30")
+        try:
+            timeout_s = float(raw_timeout)
+        except ValueError:
+            timeout_s = 30.0
+
+    headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    client_kwargs: dict[str, Any] = {
+        "timeout": float(timeout_s),
+        "follow_redirects": True,
+    }
+    if transport is not None:
+        client_kwargs["transport"] = transport
+
+    with httpx.Client(**client_kwargs) as client:
+        try:
+            catalog_response = client.get(
+                _material_registry_catalog_url(normalized_registry_url),
+                params=[("channel", channel) for channel in normalized_channels],
+                headers=headers,
+            )
+            catalog_response.raise_for_status()
+            catalog_payload = catalog_response.json()
+            catalog_entries = _material_registry_catalog_entries(catalog_payload)
+        except httpx.HTTPError as exc:
+            raise RuntimeError("Material registry catalog request failed") from exc
+        except ValueError as exc:
+            raise ValueError("Material registry catalog response is invalid") from exc
+
+    return {
+        "schema_version": str(
+            catalog_payload.get("schema_version")
+            if isinstance(catalog_payload, dict)
+            else "1.0"
+        )
+        or "1.0",
+        "channels": normalized_channels,
+        "count": len(catalog_entries),
+        "materials": catalog_entries,
+    }
+
+
+def install_material_registry_package(
+    *,
+    package_url: str,
+    package_sha256: str,
+    material_id: str,
+    revision_id: str,
+    registry_url: str | None = None,
+    token: str | None = None,
+    materials_dir: str | None = None,
+    timeout_s: float | None = None,
+    transport: Any = None,
+) -> dict[str, Any]:
+    """Install one selected Registry package into the local material library.
+    将用户选择的单个 Registry 耗材包安装到本地耗材库。
+    """
+    import httpx
+
+    normalized_registry_url = _normalize_material_registry_url(registry_url)
+    material_id = str(material_id or "").strip()
+    revision_id = str(revision_id or "").strip()
+    if not material_id or not revision_id:
+        raise ValueError("Material registry package identity is required")
+    resolved_package_url = _material_registry_package_url(
+        normalized_registry_url,
+        package_url,
+    )
+    expected_package_sha256 = _sha256_hex_from_catalog(package_sha256)
+    auth_token = str(
+        token
+        if token is not None
+        else os.environ.get("LUMINA_MATERIAL_REGISTRY_TOKEN", "")
+    ).strip()
+    if timeout_s is None:
+        raw_timeout = os.environ.get("LUMINA_MATERIAL_REGISTRY_TIMEOUT_S", "30")
+        try:
+            timeout_s = float(raw_timeout)
+        except ValueError:
+            timeout_s = 30.0
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    client_kwargs: dict[str, Any] = {
+        "timeout": float(timeout_s),
+        "follow_redirects": True,
+    }
+    if transport is not None:
+        client_kwargs["transport"] = transport
+
+    with _MaterialSyncRefreshFileLock(target_root):
+        with httpx.Client(**client_kwargs) as client:
+            try:
+                package_response = client.get(resolved_package_url, headers=headers)
+                package_response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise RuntimeError("Material registry package request failed") from exc
+            package_bytes = package_response.content
+        actual_package_sha256 = _sha256_bytes(package_bytes)
+        if actual_package_sha256 != expected_package_sha256:
+            raise ValueError(
+                "Material registry package_sha256 mismatch: "
+                f"{material_id}/{revision_id}"
+            )
+        temp_package_path = _write_temp_material_registry_package(package_bytes)
+        try:
+            import_result = import_saved_stage_a_material_archives(
+                archive_path=str(temp_package_path),
+                materials_dir=str(target_root),
+                selected_material_id=material_id,
+                selected_revision_id=revision_id,
+            )
+        finally:
+            try:
+                temp_package_path.unlink()
+            except OSError:
+                pass
+
+    return {
+        "registry_url": normalized_registry_url,
+        "material_id": material_id,
+        "revision_id": revision_id,
+        "installed_count": len(import_result.imported_materials),
+        "installed_materials": import_result.imported_materials,
+    }
 
 
 
@@ -4055,6 +4353,8 @@ def import_saved_stage_a_material_archives(
     *,
     archive_path: str,
     materials_dir: str | None = None,
+    selected_material_id: str | None = None,
+    selected_revision_id: str | None = None,
 ) -> MaterialArchiveImportResult:
     """Import one ZIP file containing one or more saved Stage A material archives.
     导入一个包含一个或多个已保存 Stage A 耗材档案的 ZIP 文件。
@@ -4062,10 +4362,20 @@ def import_saved_stage_a_material_archives(
     Args:
         archive_path: ZIP archive path to import. (要导入的 ZIP 归档路径)
         materials_dir: Optional materials root override. (可选的 materials 根目录覆盖)
+        selected_material_id: Optional package material_id to import from a
+            bundle. (可选：从 bundle 中只导入指定 material_id)
+        selected_revision_id: Optional package revision_id to import from a
+            bundle. (可选：从 bundle 中只导入指定 revision_id)
 
     Returns:
         MaterialArchiveImportResult: Imported material summaries. (导入后的耗材摘要)
     """
+    selected_material_id = str(selected_material_id or "").strip()
+    selected_revision_id = str(selected_revision_id or "").strip()
+    if bool(selected_material_id) != bool(selected_revision_id):
+        raise ValueError(
+            "selected_material_id and selected_revision_id must be provided together"
+        )
     target_root = Path(materials_dir or MATERIALS_DIR)
     target_root.mkdir(parents=True, exist_ok=True)
     extract_root = Path(
@@ -4094,9 +4404,19 @@ def import_saved_stage_a_material_archives(
         if bundle_manifest is not None:
             raw_packages = bundle_manifest["packages"]
             normalized_directory_names = []
+            selected_package_found = False
             for raw_package in raw_packages:
                 if not isinstance(raw_package, dict):
                     raise ValueError("Material bundle manifest contains invalid package")
+                raw_material_id = str(raw_package.get("material_id") or "").strip()
+                raw_revision_id = str(raw_package.get("revision_id") or "").strip()
+                if selected_material_id:
+                    if (
+                        raw_material_id != selected_material_id
+                        or raw_revision_id != selected_revision_id
+                    ):
+                        continue
+                    selected_package_found = True
                 _verify_material_bundle_package(
                     extracted_root=manifest_root,
                     package=raw_package,
@@ -4106,6 +4426,11 @@ def import_saved_stage_a_material_archives(
                 )
                 normalized_directory_names.append(normalized_directory_name)
                 package_by_directory[normalized_directory_name] = raw_package
+            if selected_material_id and not selected_package_found:
+                raise ValueError(
+                    "Selected material bundle package not found: "
+                    f"{selected_material_id}/{selected_revision_id}"
+                )
             normalized_directory_names = _normalize_material_directory_names(
                 normalized_directory_names
             )

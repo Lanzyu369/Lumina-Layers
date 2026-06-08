@@ -240,6 +240,23 @@ class MaterialSyncRollbackRequest(BaseModel):
         return cleaned
 
 
+class MaterialRegistryInstallRequest(BaseModel):
+    """Request model for installing one selected Registry package."""
+
+    package_url: str = Field(..., description="Registry package URL from catalog.")
+    package_sha256: str = Field(..., description="Expected ZIP SHA-256.")
+    material_id: str = Field(..., description="Stable material identity.")
+    revision_id: str = Field(..., description="Selected material revision.")
+
+    @field_validator("package_url", "package_sha256", "material_id", "revision_id")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be blank")
+        return cleaned
+
+
 class MaterialRegistryApproveRequest(BaseModel):
     """Request model for approving one Registry package into official channel."""
 

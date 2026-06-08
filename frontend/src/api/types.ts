@@ -968,6 +968,27 @@ export interface MaterialRegistryCatalogEntry {
   package_bytes: number;
 }
 
+export interface MaterialRegistryCatalogResponse {
+  schema_version: string;
+  channels: string[];
+  count: number;
+  materials: MaterialRegistryCatalogEntry[];
+}
+
+export interface MaterialRegistryInstallRequest {
+  material_id: string;
+  revision_id: string;
+  package_url: string;
+  package_sha256: string;
+}
+
+export interface MaterialSyncInstallResponse {
+  status: string;
+  message: string;
+  installed_count: number;
+  installed_materials: SavedMaterialSummary[];
+}
+
 export interface MaterialRegistryPackageMutationResponse {
   status: string;
   message: string;

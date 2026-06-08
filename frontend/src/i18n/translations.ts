@@ -1500,8 +1500,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Material Library",
   },
   "tab.materialCloudSync": {
-    zh: "云端同步",
-    en: "Cloud Sync",
+    zh: "云端耗材库",
+    en: "Cloud Material Library",
   },
   "tab.materialRecipe": {
     zh: "配方查询",
@@ -6628,20 +6628,32 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
   },
   mat_sync_title: {
-    zh: "云端同步",
-    en: "Cloud Sync",
+    zh: "云端耗材库",
+    en: "Cloud Material Library",
+  },
+  mat_sync_catalog_count_label: {
+    zh: "云端条目",
+    en: "Cloud Items",
   },
   mat_sync_index_state_label: {
     zh: "索引状态",
     en: "Index",
   },
   mat_sync_installed_count_label: {
-    zh: "已同步",
-    en: "Synced",
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_update_count_label: {
+    zh: "可更新",
+    en: "Updates",
   },
   mat_sync_last_sync_label: {
     zh: "上次同步",
     en: "Last Sync",
+  },
+  mat_sync_last_sync_inline: {
+    zh: "本地索引更新时间：{time}",
+    en: "Local index updated: {time}",
   },
   mat_sync_state_missing: {
     zh: "未建立",
@@ -6660,12 +6672,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Unknown",
   },
   mat_sync_refresh_btn: {
-    zh: "同步云端耗材",
-    en: "Sync Cloud Materials",
+    zh: "刷新云端目录",
+    en: "Refresh Catalog",
   },
   mat_sync_status_failed: {
-    zh: "读取耗材同步状态失败",
-    en: "Failed to load material sync status",
+    zh: "读取云端耗材库失败",
+    en: "Failed to load cloud material library",
+  },
+  mat_sync_catalog_refresh_success: {
+    zh: "云端耗材目录已刷新。",
+    en: "Cloud material catalog refreshed.",
   },
   mat_sync_refresh_success: {
     zh: "云端耗材同步完成。",
@@ -6678,6 +6694,90 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_official_badge: {
     zh: "官方",
     en: "Official",
+  },
+  mat_sync_search_placeholder: {
+    zh: "搜索品牌、名称、目录或 ID",
+    en: "Search brand, name, directory, or ID",
+  },
+  mat_sync_filter_group_label: {
+    zh: "云端耗材筛选",
+    en: "Cloud material filters",
+  },
+  mat_sync_filter_all: {
+    zh: "全部",
+    en: "All",
+  },
+  mat_sync_filter_official: {
+    zh: "官方",
+    en: "Official",
+  },
+  mat_sync_filter_not_installed: {
+    zh: "未安装",
+    en: "Not Installed",
+  },
+  mat_sync_filter_updates: {
+    zh: "可更新",
+    en: "Updates",
+  },
+  mat_sync_filter_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_install_btn: {
+    zh: "下载到本地",
+    en: "Download",
+  },
+  mat_sync_update_btn: {
+    zh: "更新到 {revisionId}",
+    en: "Update to {revisionId}",
+  },
+  mat_sync_installed_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_local_available_btn: {
+    zh: "本地已有版本",
+    en: "Local revision available",
+  },
+  mat_sync_install_success: {
+    zh: "耗材已下载并安装到本地。",
+    en: "Material downloaded and installed locally.",
+  },
+  mat_sync_install_failed: {
+    zh: "耗材下载失败",
+    en: "Material download failed",
+  },
+  mat_sync_catalog_state_not_installed: {
+    zh: "未安装",
+    en: "Not installed",
+  },
+  mat_sync_catalog_state_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_catalog_state_update_available: {
+    zh: "有新版本",
+    en: "Update available",
+  },
+  mat_sync_catalog_state_local_available: {
+    zh: "本地已有版本",
+    en: "Local revision available",
+  },
+  mat_sync_catalog_state_local_missing: {
+    zh: "本地文件缺失",
+    en: "Local files missing",
+  },
+  mat_sync_local_section_title: {
+    zh: "本地已安装 / 版本回滚",
+    en: "Local Installed / Rollback",
+  },
+  mat_sync_catalog_empty: {
+    zh: "没有匹配的云端耗材。",
+    en: "No matching cloud materials.",
+  },
+  mat_sync_admin_section_title: {
+    zh: "贡献者 / 管理员入口",
+    en: "Contributor / Admin",
   },
   mat_sync_upload_title: {
     zh: "测试服务器上传与审批",

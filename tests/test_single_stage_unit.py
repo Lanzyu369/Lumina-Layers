@@ -6,6 +6,7 @@ import json
 import hashlib
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import numpy as np
 import pytest
@@ -2304,6 +2305,211 @@ def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_syn
     assert installed["content_hash"] == f"sha256:{content_hash}"
     assert installed["channel"] == "team"
     assert installed["local_directory"] == "BrandA/pla-basic"
+
+
+def test_material_sync_status_reports_matching_local_material_without_sync_index(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "PLA Basic",
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps({"parameters": {"revision": 1}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    exported_zip = tmp_path / "materials_export.zip"
+    export_saved_stage_a_material_archives(
+        directory_names=["BrandA/pla-basic"],
+        materials_dir=str(materials_root),
+        output_path=str(exported_zip),
+    )
+    with zipfile.ZipFile(exported_zip, "r") as archive:
+        package = json.loads(
+            archive.read("lumina_material_bundle.json").decode("utf-8")
+        )["packages"][0]
+
+    status = materials_module.get_material_sync_status(materials_dir=str(materials_root))
+
+    assert status["index_state"] == "missing"
+    assert status["installed_count"] == 1
+    entry = status["installed"][0]
+    assert entry["source"] == "local"
+    assert entry["material_id"] == package["material_id"]
+    assert entry["revision_id"] == package["revision_id"]
+    assert entry["content_hash"] == package["content_hash"]
+    assert entry["local_directory"] == "BrandA/pla-basic"
+    assert entry["display_brand"] == "BrandA"
+    assert entry["display_name"] == "PLA Basic"
+    assert entry["local_exists"] is True
+    assert entry["material_file_exists"] is True
+    assert entry["available_revisions"] == [package["revision_id"]]
+
+
+def test_material_sync_status_count_excludes_missing_index_entries(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    sync_dir = materials_root / "_sync"
+    sync_dir.mkdir(parents=True)
+    (sync_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "last_sync_at": "2026-06-08T00:00:00Z",
+                "registries": {},
+                "installed": {
+                    "mat_missing": {
+                        "revision_id": "rev_missing",
+                        "content_hash": "sha256:missing",
+                        "channel": "official",
+                        "source": "package",
+                        "local_directory": "BrandA/missing-material",
+                        "display_brand": "BrandA",
+                        "display_name": "Missing Material",
+                    }
+                },
+                "revisions": {
+                    "mat_missing": {
+                        "rev_missing": {
+                            "revision_id": "rev_missing",
+                            "content_hash": "sha256:missing",
+                            "local_directory": "BrandA/missing-material",
+                        }
+                    }
+                },
+                "local_overrides": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    status = materials_module.get_material_sync_status(materials_dir=str(materials_root))
+
+    assert status["index_state"] == "ready"
+    assert status["installed_count"] == 0
+    assert len(status["installed"]) == 1
+    assert status["installed"][0]["local_exists"] is False
+    assert status["installed"][0]["material_file_exists"] is False
+
+
+def test_material_sync_status_reuses_cached_local_signature_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials_root = tmp_path / "materials"
+    materials_root.mkdir()
+    calls = 0
+
+    def fake_local_entries(_target_root: Path) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "material_id": "mat_local",
+                "revision_id": "rev_local",
+                "content_hash": "sha256:local",
+                "channel": "local",
+                "source": "local",
+                "local_directory": "BrandA/pla-basic",
+                "display_brand": "BrandA",
+                "display_name": "PLA Basic",
+                "installed_at": None,
+                "updated_at": None,
+                "local_exists": True,
+                "material_file_exists": True,
+                "available_revisions": ["rev_local"],
+            }
+        ]
+
+    monkeypatch.setattr(
+        materials_module,
+        "_local_material_sync_entries",
+        fake_local_entries,
+    )
+
+    first_status = materials_module.get_material_sync_status(
+        materials_dir=str(materials_root),
+    )
+    second_status = materials_module.get_material_sync_status(
+        materials_dir=str(materials_root),
+    )
+
+    assert calls == 1
+    assert first_status["installed"] == second_status["installed"]
+
+
+def test_material_sync_status_cache_invalidates_after_index_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials_root = tmp_path / "materials"
+    materials_root.mkdir()
+    calls = 0
+
+    def fake_local_entries(_target_root: Path) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "material_id": "mat_local",
+                "revision_id": f"rev_local_{calls}",
+                "content_hash": f"sha256:local{calls}",
+                "channel": "local",
+                "source": "local",
+                "local_directory": "BrandA/pla-basic",
+                "display_brand": "BrandA",
+                "display_name": f"PLA Basic {calls}",
+                "installed_at": None,
+                "updated_at": None,
+                "local_exists": True,
+                "material_file_exists": True,
+                "available_revisions": [f"rev_local_{calls}"],
+            }
+        ]
+
+    monkeypatch.setattr(
+        materials_module,
+        "_local_material_sync_entries",
+        fake_local_entries,
+    )
+
+    first_status = materials_module.get_material_sync_status(
+        materials_dir=str(materials_root),
+    )
+    materials_module._write_material_sync_index(
+        materials_root,
+        {
+            "schema_version": "1.0",
+            "last_sync_at": "2026-06-09T00:00:00Z",
+            "registries": {},
+            "installed": {},
+            "revisions": {},
+            "local_overrides": {},
+        },
+    )
+    second_status = materials_module.get_material_sync_status(
+        materials_dir=str(materials_root),
+    )
+
+    assert calls == 2
+    assert first_status["installed"][0]["display_name"] == "PLA Basic 1"
+    assert second_status["installed"][0]["display_name"] == "PLA Basic 2"
+    assert second_status["index_state"] == "ready"
+    assert second_status["last_sync_at"] == "2026-06-09T00:00:00Z"
 
 
 def test_import_saved_stage_a_material_archives_v2_ignores_undeclared_local_only_files(

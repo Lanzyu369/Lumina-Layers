@@ -9,8 +9,12 @@ import os
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from api.file_bridge import upload_to_tempfile
-from api.schemas.single_stage import MaterialSyncRollbackRequest
+from api.schemas.single_stage import (
+    MaterialRegistryInstallRequest,
+    MaterialSyncRollbackRequest,
+)
 from api.schemas.responses import (
+    MaterialRegistryCatalogResponse,
     MaterialSyncInstallResponse,
     MaterialSyncRefreshResponse,
     MaterialSyncRollbackResponse,
@@ -20,12 +24,52 @@ from api.structured_logging import get_logger
 from core.single_stage import (
     get_material_sync_status,
     import_saved_stage_a_material_archives,
+    install_material_registry_package,
+    list_material_registry_catalog,
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
 
 router = APIRouter(prefix="/api/material-sync", tags=["Material Sync"])
 log = get_logger(__name__)
+
+
+def _canonical_package_sha256(value: object) -> str:
+    raw_value = str(value or "").strip().lower()
+    if raw_value.startswith("sha256:"):
+        raw_value = raw_value.split(":", 1)[1]
+    return raw_value
+
+
+def _select_catalog_install_entry(
+    catalog: dict[str, object],
+    payload: MaterialRegistryInstallRequest,
+) -> dict[str, object]:
+    entries = catalog.get("materials")
+    if not isinstance(entries, list):
+        raise ValueError("Material registry catalog response is invalid")
+
+    requested_package_url = payload.package_url.strip()
+    requested_package_sha256 = _canonical_package_sha256(payload.package_sha256)
+    for raw_entry in entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        if str(raw_entry.get("material_id") or "").strip() != payload.material_id:
+            continue
+        if str(raw_entry.get("revision_id") or "").strip() != payload.revision_id:
+            continue
+        if str(raw_entry.get("package_url") or "").strip() != requested_package_url:
+            continue
+        if (
+            _canonical_package_sha256(raw_entry.get("package_sha256"))
+            != requested_package_sha256
+        ):
+            continue
+        return raw_entry
+
+    raise ValueError(
+        "Selected material registry package is not in current material registry catalog"
+    )
 
 
 @router.get("/status", response_model=MaterialSyncStatusResponse)
@@ -52,6 +96,34 @@ async def material_sync_status() -> MaterialSyncStatusResponse:
             "event": "material_sync_status_done",
             "index_state": response.index_state,
             "installed_count": response.installed_count,
+        },
+    )
+    return response
+
+
+@router.get("/catalog", response_model=MaterialRegistryCatalogResponse)
+async def material_sync_catalog() -> MaterialRegistryCatalogResponse:
+    """Return the configured remote Registry catalog without installing.
+    返回已配置远程 Registry catalog，不安装耗材。
+    """
+    try:
+        catalog = list_material_registry_catalog()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    response = MaterialRegistryCatalogResponse(**catalog)
+    log.info(
+        "Material registry catalog fetched for library",
+        extra={
+            "event": "material_sync_catalog_done",
+            "channels": response.channels,
+            "material_count": response.count,
         },
     )
     return response
@@ -106,6 +178,49 @@ async def material_sync_install(
         message=f"Installed {len(result.imported_materials)} material packages",
         installed_count=len(result.imported_materials),
         installed_materials=result.imported_materials,
+    )
+
+
+@router.post("/install-from-registry", response_model=MaterialSyncInstallResponse)
+async def material_sync_install_from_registry(
+    payload: MaterialRegistryInstallRequest,
+) -> MaterialSyncInstallResponse:
+    """Install one selected remote Registry package into the local library.
+    将用户选中的单个远程 Registry 耗材包安装到本地耗材库。
+    """
+    try:
+        catalog = list_material_registry_catalog()
+        catalog_entry = _select_catalog_install_entry(catalog, payload)
+        result = install_material_registry_package(
+            package_url=str(catalog_entry.get("package_url") or ""),
+            package_sha256=str(catalog_entry.get("package_sha256") or ""),
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    installed_materials = result["installed_materials"]
+    log.info(
+        "Material registry package installed from catalog",
+        extra={
+            "event": "material_sync_install_from_registry_done",
+            "material_id": result["material_id"],
+            "revision_id": result["revision_id"],
+            "installed_count": len(installed_materials),
+        },
+    )
+    return MaterialSyncInstallResponse(
+        status="ok",
+        message=f"Installed {len(installed_materials)} material packages",
+        installed_count=len(installed_materials),
+        installed_materials=installed_materials,
     )
 
 

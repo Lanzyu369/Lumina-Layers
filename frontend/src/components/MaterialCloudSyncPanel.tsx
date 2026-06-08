@@ -4,12 +4,15 @@ import { motion } from "framer-motion";
 
 import {
   approveMaterialRegistryPackage,
+  fetchMaterialRegistryCatalog,
   fetchMaterialSyncStatus,
-  refreshMaterialSyncFromRegistry,
+  installMaterialRegistryCatalogEntry,
   rollbackMaterialSyncRevision,
   uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 import type {
+  MaterialRegistryCatalogEntry,
+  MaterialRegistryCatalogResponse,
   MaterialRegistryPackageMutationResponse,
   MaterialSyncInstalledEntry,
   MaterialSyncStatusResponse,
@@ -20,10 +23,32 @@ import { tRuntime } from "../i18n/runtime";
 import Button from "./ui/Button";
 import {
   StatusBanner,
+  cx,
   mutedSectionCardClass,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
+
+type CatalogFilter = "all" | "not_installed" | "updates" | "installed";
+type CatalogInstallState = "not_installed" | "installed" | "update_available" | "local_missing" | "local_available";
+
+interface CatalogDisplay {
+  brand: string;
+  name: string;
+}
+
+interface LoadCatalogAndStatusResult {
+  statusResponse: MaterialSyncStatusResponse | null;
+  catalogResponse: MaterialRegistryCatalogResponse | null;
+  hasError: boolean;
+}
+
+const catalogFilters: CatalogFilter[] = [
+  "all",
+  "not_installed",
+  "updates",
+  "installed",
+];
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -39,17 +64,89 @@ const formatBytes = (bytes: number): string => {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 };
 
+const readDisplayString = (
+  display: Record<string, unknown>,
+  keys: string[],
+): string | null => {
+  for (const key of keys) {
+    const value = display[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+};
+
+const resolveCatalogDisplay = (entry: MaterialRegistryCatalogEntry): CatalogDisplay => ({
+  brand: readDisplayString(entry.display, ["brand", "manufacturer", "vendor"]) ?? "",
+  name: readDisplayString(entry.display, ["material_name", "name", "display_name"])
+    ?? entry.local_directory
+    ?? entry.material_id,
+});
+
+const materialLocalSignatureKey = (
+  localDirectory: string | null | undefined,
+  contentHash: string | null | undefined,
+): string | null => {
+  const directory = (localDirectory ?? "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+  const hash = (contentHash ?? "").trim().toLowerCase();
+  if (!directory || !hash) {
+    return null;
+  }
+  return `${directory}\n${hash}`;
+};
+
+const resolveInstallState = (
+  entry: MaterialRegistryCatalogEntry,
+  installed?: MaterialSyncInstalledEntry,
+): CatalogInstallState => {
+  if (!installed) {
+    return "not_installed";
+  }
+  if (!installed.local_exists || !installed.material_file_exists) {
+    return "local_missing";
+  }
+  if (
+    materialLocalSignatureKey(installed.local_directory, installed.content_hash)
+    === materialLocalSignatureKey(entry.local_directory, entry.content_hash)
+  ) {
+    return "installed";
+  }
+  if (installed.revision_id === entry.revision_id) {
+    return "installed";
+  }
+  if (installed.available_revisions.includes(entry.revision_id)) {
+    return "local_available";
+  }
+  return "update_available";
+};
+
+const resolveRollbackRevisions = (installed: MaterialSyncInstalledEntry): string[] =>
+  Array.from(new Set(installed.available_revisions.filter(
+    (revisionId) => revisionId && revisionId !== installed.revision_id,
+  )));
+
+const resolveErrorMessage = (err: unknown, fallback: string): string =>
+  err instanceof Error ? err.message : fallback;
+
 export default function MaterialCloudSyncPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<MaterialSyncStatusResponse | null>(null);
+  const [catalog, setCatalog] = useState<MaterialRegistryCatalogResponse | null>(null);
   const [lastUploaded, setLastUploaded] = useState<MaterialRegistryPackageMutationResponse | null>(null);
   const [officialPassword, setOfficialPassword] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<CatalogFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [pendingInstall, setPendingInstall] = useState<string | null>(null);
   const [pendingRollback, setPendingRollback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -73,40 +170,118 @@ export default function MaterialCloudSyncPanel() {
     return dateFormatter.format(parsed);
   }, [dateFormatter]);
 
-  const refreshStatus = useCallback(async () => {
+  const installedByMaterialId = useMemo(() => {
+    const result = new Map<string, MaterialSyncInstalledEntry>();
+    for (const entry of status?.installed ?? []) {
+      result.set(entry.material_id, entry);
+    }
+    return result;
+  }, [status]);
+
+  const installedByLocalSignature = useMemo(() => {
+    const result = new Map<string, MaterialSyncInstalledEntry>();
+    for (const entry of status?.installed ?? []) {
+      if (!entry.local_exists || !entry.material_file_exists) {
+        continue;
+      }
+      const signatureKey = materialLocalSignatureKey(entry.local_directory, entry.content_hash);
+      if (signatureKey) {
+        result.set(signatureKey, entry);
+      }
+    }
+    return result;
+  }, [status]);
+
+  const resolveCatalogInstalledEntry = useCallback((entry: MaterialRegistryCatalogEntry) => {
+    const signatureKey = materialLocalSignatureKey(entry.local_directory, entry.content_hash);
+    if (signatureKey) {
+      const localMatch = installedByLocalSignature.get(signatureKey);
+      if (localMatch) {
+        return localMatch;
+      }
+    }
+    return installedByMaterialId.get(entry.material_id);
+  }, [installedByLocalSignature, installedByMaterialId]);
+
+  const updateCount = useMemo(() => {
+    return (catalog?.materials ?? []).filter((entry) => {
+      const installed = resolveCatalogInstalledEntry(entry);
+      return resolveInstallState(entry, installed) === "update_available";
+    }).length;
+  }, [catalog, resolveCatalogInstalledEntry]);
+
+  const loadCatalogAndStatus = useCallback(async (): Promise<LoadCatalogAndStatusResult> => {
     setIsLoading(true);
     setError(null);
+    const [statusResult, catalogResult] = await Promise.allSettled([
+      fetchMaterialSyncStatus(),
+      fetchMaterialRegistryCatalog(),
+    ] as const);
+
+    const statusResponse = statusResult.status === "fulfilled" ? statusResult.value : null;
+    const catalogResponse = catalogResult.status === "fulfilled" ? catalogResult.value : null;
+    const failures: string[] = [];
+
+    if (statusResult.status === "rejected") {
+      failures.push(resolveErrorMessage(statusResult.reason, t("mat_sync_status_failed")));
+    }
+    if (catalogResult.status === "rejected") {
+      failures.push(resolveErrorMessage(catalogResult.reason, t("mat_sync_status_failed")));
+    }
+
+    setStatus(statusResponse);
+    setCatalog(catalogResponse);
+    if (failures.length > 0) {
+      setError(failures.join(" / "));
+    }
     try {
-      const response = await fetchMaterialSyncStatus();
-      setStatus(response);
-      return response;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_status_failed"));
-      setStatus(null);
-      return null;
+      return {
+        statusResponse,
+        catalogResponse,
+        hasError: failures.length > 0,
+      };
     } finally {
       setIsLoading(false);
     }
   }, [t]);
 
   useEffect(() => {
-    void refreshStatus();
-  }, [refreshStatus]);
+    void loadCatalogAndStatus();
+  }, [loadCatalogAndStatus]);
 
-  const handleRefreshFromRegistry = useCallback(async () => {
+  const refreshCatalog = useCallback(async () => {
     setIsRefreshing(true);
-    setError(null);
     setSuccess(null);
     try {
-      const response = await refreshMaterialSyncFromRegistry();
-      await refreshStatus();
-      setSuccess(response.message || t("mat_sync_refresh_success"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_refresh_failed"));
+      const result = await loadCatalogAndStatus();
+      if (!result.hasError) {
+        setSuccess(t("mat_sync_catalog_refresh_success"));
+      }
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshStatus, t]);
+  }, [loadCatalogAndStatus, t]);
+
+  const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
+    const installKey = `${entry.material_id}:${entry.revision_id}`;
+    setPendingInstall(installKey);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await installMaterialRegistryCatalogEntry({
+        material_id: entry.material_id,
+        revision_id: entry.revision_id,
+        package_url: entry.package_url,
+        package_sha256: entry.package_sha256,
+      });
+      await loadCatalogAndStatus();
+      setSuccess(response.message || t("mat_sync_install_success"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mat_sync_install_failed"));
+    } finally {
+      setPendingInstall(null);
+    }
+  }, [loadCatalogAndStatus, t]);
 
   const handleRollback = useCallback(async (entry: MaterialSyncInstalledEntry, revisionId: string) => {
     const rollbackKey = `${entry.material_id}:${revisionId}`;
@@ -115,14 +290,14 @@ export default function MaterialCloudSyncPanel() {
     setSuccess(null);
     try {
       const response = await rollbackMaterialSyncRevision(entry.material_id, revisionId);
-      await refreshStatus();
+      await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_rollback_success"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_sync_rollback_failed"));
     } finally {
       setPendingRollback(null);
     }
-  }, [refreshStatus, t]);
+  }, [loadCatalogAndStatus, t]);
 
   const handleUploadPackage = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -158,17 +333,99 @@ export default function MaterialCloudSyncPanel() {
       );
       setLastUploaded(response);
       setOfficialPassword("");
+      await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_approve_success"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
     } finally {
       setIsApproving(false);
     }
-  }, [lastUploaded, officialPassword, t]);
+  }, [lastUploaded, officialPassword, loadCatalogAndStatus, t]);
 
   const syncIndexStateLabel = status
     ? t(`mat_sync_state_${status.index_state}`)
     : t("mat_sync_state_unknown");
+  const installedEntries = useMemo(
+    () => (status?.installed ?? []).filter(
+      (entry) => (
+        entry.local_exists
+        && entry.material_file_exists
+        && resolveRollbackRevisions(entry).length > 0
+      ),
+    ),
+    [status],
+  );
+
+  const filteredCatalogEntries = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return (catalog?.materials ?? []).filter((entry) => {
+      const installed = resolveCatalogInstalledEntry(entry);
+      const installState = resolveInstallState(entry, installed);
+      if (activeFilter === "not_installed" && installState !== "not_installed" && installState !== "local_missing") {
+        return false;
+      }
+      if (activeFilter === "updates" && installState !== "update_available") {
+        return false;
+      }
+      if (activeFilter === "installed" && installState !== "installed") {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const display = resolveCatalogDisplay(entry);
+      const haystack = [
+        display.brand,
+        display.name,
+        entry.material_id,
+        entry.revision_id,
+        entry.local_directory,
+        entry.channel,
+        entry.visibility,
+      ].join(" ").toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [activeFilter, catalog, resolveCatalogInstalledEntry, searchQuery]);
+
+  const renderCatalogAction = (
+    entry: MaterialRegistryCatalogEntry,
+    installState: CatalogInstallState,
+  ) => {
+    const installKey = `${entry.material_id}:${entry.revision_id}`;
+    const isPending = pendingInstall === installKey;
+    if (installState === "installed") {
+      return (
+        <Button
+          label={t("mat_sync_installed_btn")}
+          variant="secondary"
+          disabled
+          className="w-full"
+        />
+      );
+    }
+    if (installState === "local_available") {
+      return (
+        <Button
+          label={t("mat_sync_local_available_btn")}
+          variant="secondary"
+          disabled
+          className="w-full"
+        />
+      );
+    }
+    const label = installState === "update_available"
+      ? tRuntime("mat_sync_update_btn", { revisionId: entry.revision_id })
+      : t("mat_sync_install_btn");
+    return (
+      <Button
+        label={label}
+        onClick={() => void handleInstall(entry)}
+        disabled={pendingInstall !== null}
+        loading={isPending}
+        className="w-full"
+      />
+    );
+  };
 
   return (
     <motion.aside
@@ -192,17 +449,20 @@ export default function MaterialCloudSyncPanel() {
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
             {t("mat_sync_title")}
           </p>
-          <dl className="mt-3 grid gap-3 sm:grid-cols-3">
+          <dl className="mt-3 grid gap-3 sm:grid-cols-4">
             <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_sync_index_state_label")}
+              <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {t("mat_sync_catalog_count_label")}
               </dt>
-              <dd className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {syncIndexStateLabel}
+              <dd
+                data-testid="material-cloud-catalog-count"
+                className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50"
+              >
+                {catalog?.count ?? 0}
               </dd>
             </div>
             <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
                 {t("mat_sync_installed_count_label")}
               </dt>
               <dd
@@ -213,71 +473,68 @@ export default function MaterialCloudSyncPanel() {
               </dd>
             </div>
             <div className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t("mat_sync_last_sync_label")}
+              <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {t("mat_sync_update_count_label")}
+              </dt>
+              <dd
+                data-testid="material-cloud-update-count"
+                className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50"
+              >
+                {updateCount}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {t("mat_sync_index_state_label")}
               </dt>
               <dd className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {formatDate(status?.last_sync_at)}
+                {syncIndexStateLabel}
               </dd>
             </div>
           </dl>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            {tRuntime("mat_sync_last_sync_inline", { time: formatDate(status?.last_sync_at) })}
+          </p>
         </div>
         <Button
           label={t("mat_sync_refresh_btn")}
           variant="secondary"
-          onClick={() => void handleRefreshFromRegistry()}
+          onClick={() => void refreshCatalog()}
           disabled={isLoading || isRefreshing}
           loading={isRefreshing}
           className="w-full lg:w-auto"
         />
       </section>
 
-      <section className={`${resolveSectionCardClass(workspace.mode)} grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end`}>
-        <div className="min-w-0">
-          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("mat_sync_upload_title")}
-          </h3>
-          {lastUploaded ? (
-            <dl className="mt-3 grid gap-2 text-sm text-slate-600 dark:text-slate-300">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <dt className="font-semibold">{t("mat_sync_package_path_label")}</dt>
-                <dd className="break-all font-mono text-xs">{lastUploaded.package_path}</dd>
-              </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <dt className="font-semibold">{t("mat_sync_package_size_label")}</dt>
-                <dd>{formatBytes(lastUploaded.package_bytes)}</dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-              {t("mat_sync_upload_empty")}
-            </p>
-          )}
-        </div>
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_auto_auto]">
+      <section className={`${resolveSectionCardClass(workspace.mode)} grid gap-3`}>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <input
-            data-testid="material-cloud-official-password-input"
-            type="password"
-            value={officialPassword}
-            onChange={(event) => setOfficialPassword(event.target.value)}
-            placeholder={t("mat_sync_official_password_placeholder")}
-            className="min-h-10 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
+            data-testid="material-cloud-search-input"
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={t("mat_sync_search_placeholder")}
+            className="min-h-11 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
           />
-          <Button
-            label={t("mat_sync_upload_btn")}
-            variant="secondary"
-            onClick={() => uploadInputRef.current?.click()}
-            disabled={isUploading || isApproving}
-            loading={isUploading}
-            className="w-full"
-          />
-          <Button
-            label={t("mat_sync_approve_official_btn")}
-            onClick={() => void handleApproveOfficial()}
-            disabled={!lastUploaded || !officialPassword.trim() || isApproving || isUploading}
-            loading={isApproving}
-            className="w-full"
-          />
+          <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={t("mat_sync_filter_group_label")}>
+            {catalogFilters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                data-testid={`material-cloud-filter-${filter}`}
+                aria-pressed={activeFilter === filter}
+                onClick={() => setActiveFilter(filter)}
+                className={cx(
+                  "min-h-9 rounded-xl border px-3 py-1.5 text-xs font-semibold transition",
+                  activeFilter === filter
+                    ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/70 dark:bg-blue-500/15 dark:text-blue-200"
+                    : "border-slate-200/80 bg-[var(--surface-panel)] text-slate-600 hover:border-slate-300 dark:border-slate-700/80 dark:text-slate-300",
+                )}
+              >
+                {t(`mat_sync_filter_${filter}`)}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -292,36 +549,112 @@ export default function MaterialCloudSyncPanel() {
         </StatusBanner>
       ) : null}
 
+      {installedEntries.length > 0 ? (
+        <section
+          data-testid="material-cloud-local-installed-section"
+          className={`${resolveSectionCardClass(workspace.mode)} grid gap-4`}
+        >
+          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+            {t("mat_sync_local_section_title")}
+          </h2>
+          <div className="grid divide-y divide-slate-200/70 dark:divide-slate-700/70">
+            {installedEntries.map((installed) => {
+              const rollbackRevisions = resolveRollbackRevisions(installed);
+              const displayName = installed.display_name || installed.local_directory || installed.material_id;
+              return (
+                <div
+                  key={installed.material_id}
+                  data-testid="material-cloud-local-installed-card"
+                  className="grid gap-3 py-3 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,auto)] lg:items-center"
+                >
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {displayName}
+                    </h3>
+                    {installed.display_brand ? (
+                      <p className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                        {installed.display_brand}
+                      </p>
+                    ) : null}
+                    <dl className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <div className="min-w-0">
+                        <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                          {t("mat_sync_material_id_label")}
+                        </dt>
+                        <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
+                          {installed.material_id}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                          {t("mat_sync_revision_label")}
+                        </dt>
+                        <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
+                          {installed.revision_id}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                          {t("mat_gradient_library_directory_label")}
+                        </dt>
+                        <dd className="mt-1 break-all text-xs font-semibold text-slate-700 dark:text-slate-200">
+                          {installed.local_directory}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+                  <div className="grid gap-2">
+                    {rollbackRevisions.length > 0 ? rollbackRevisions.map((revisionId) => (
+                      <Button
+                        key={revisionId}
+                        label={tRuntime("mat_sync_rollback_btn", { revisionId })}
+                        variant="secondary"
+                        onClick={() => void handleRollback(installed, revisionId)}
+                        disabled={pendingRollback !== null}
+                        loading={pendingRollback === `${installed.material_id}:${revisionId}`}
+                        className="w-full"
+                      />
+                    )) : (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {t("mat_sync_no_rollback")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       {isLoading ? (
         <section className={`${mutedSectionCardClass} flex min-h-40 items-center justify-center`}>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_loading")}</p>
         </section>
-      ) : (
+      ) : filteredCatalogEntries.length > 0 ? (
         <div className="grid gap-4">
-          {(status?.installed ?? []).map((entry) => {
-            const rollbackRevisions = entry.available_revisions.filter(
-              (revisionId) => revisionId && revisionId !== entry.revision_id,
-            );
+          {filteredCatalogEntries.map((entry) => {
+            const installed = resolveCatalogInstalledEntry(entry);
+            const installState = resolveInstallState(entry, installed);
+            const display = resolveCatalogDisplay(entry);
             return (
               <section
-                key={entry.material_id}
-                className={`${resolveSectionCardClass(workspace.mode)} grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}
+                key={`${entry.material_id}:${entry.revision_id}`}
+                data-testid="material-cloud-catalog-card"
+                className={`${resolveSectionCardClass(workspace.mode)} grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,auto)] lg:items-center`}
               >
                 <div className="min-w-0">
                   <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
-                    {entry.channel === "official" ? (
-                      <span
-                        data-testid="material-cloud-official-badge"
-                        className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 dark:border-amber-400/60 dark:bg-amber-500/15 dark:text-amber-200"
-                      >
-                        {t("mat_sync_official_badge")}
-                      </span>
-                    ) : null}
-                    <span className="truncate">{entry.display_name || entry.local_directory}</span>
+                    <span className="min-w-0 truncate">{display.name}</span>
                   </h3>
-                  <dl className="mt-3 grid gap-3 sm:grid-cols-3">
+                  {display.brand ? (
+                    <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">
+                      {display.brand}
+                    </p>
+                  ) : null}
+                  <dl className="mt-3 grid gap-3 sm:grid-cols-4">
                     <div className="min-w-0">
-                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
                         {t("mat_sync_material_id_label")}
                       </dt>
                       <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
@@ -329,7 +662,7 @@ export default function MaterialCloudSyncPanel() {
                       </dd>
                     </div>
                     <div className="min-w-0">
-                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
                         {t("mat_sync_revision_label")}
                       </dt>
                       <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
@@ -337,37 +670,92 @@ export default function MaterialCloudSyncPanel() {
                       </dd>
                     </div>
                     <div className="min-w-0">
-                      <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
                         {t("mat_gradient_library_directory_label")}
                       </dt>
                       <dd className="mt-1 break-all text-xs font-semibold text-slate-700 dark:text-slate-200">
                         {entry.local_directory}
                       </dd>
                     </div>
+                    <div className="min-w-0">
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                        {t("mat_sync_package_size_label")}
+                      </dt>
+                      <dd className="mt-1 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                        {formatBytes(entry.package_bytes)}
+                      </dd>
+                    </div>
                   </dl>
                 </div>
                 <div className="grid gap-2">
-                  {rollbackRevisions.length > 0 ? rollbackRevisions.map((revisionId) => (
-                    <Button
-                      key={revisionId}
-                      label={tRuntime("mat_sync_rollback_btn", { revisionId })}
-                      variant="secondary"
-                      onClick={() => void handleRollback(entry, revisionId)}
-                      disabled={pendingRollback !== null}
-                      loading={pendingRollback === `${entry.material_id}:${revisionId}`}
-                      className="w-full"
-                    />
-                  )) : (
-                    <span className="text-sm text-slate-500 dark:text-slate-400">
-                      {t("mat_sync_no_rollback")}
-                    </span>
-                  )}
+                  <span
+                    data-testid={`material-cloud-state-${entry.material_id}`}
+                    className="text-sm font-semibold text-slate-700 dark:text-slate-200"
+                  >
+                    {t(`mat_sync_catalog_state_${installState}`)}
+                  </span>
+                  {renderCatalogAction(entry, installState)}
                 </div>
               </section>
             );
           })}
         </div>
+      ) : (
+        <section className={`${mutedSectionCardClass} flex min-h-32 items-center justify-center`}>
+          <p className="text-sm text-slate-500 dark:text-slate-400">{t("mat_sync_catalog_empty")}</p>
+        </section>
       )}
+
+      <details className={`${resolveSectionCardClass(workspace.mode)} group`}>
+        <summary className="cursor-pointer text-base font-semibold text-slate-900 dark:text-slate-50">
+          {t("mat_sync_admin_section_title")}
+        </summary>
+        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
+            {lastUploaded ? (
+              <dl className="grid gap-2 text-sm text-slate-600 dark:text-slate-300">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <dt className="font-semibold">{t("mat_sync_package_path_label")}</dt>
+                  <dd className="break-all font-mono text-xs">{lastUploaded.package_path}</dd>
+                </div>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <dt className="font-semibold">{t("mat_sync_package_size_label")}</dt>
+                  <dd>{formatBytes(lastUploaded.package_bytes)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {t("mat_sync_upload_empty")}
+              </p>
+            )}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_auto_auto]">
+            <input
+              data-testid="material-cloud-official-password-input"
+              type="password"
+              value={officialPassword}
+              onChange={(event) => setOfficialPassword(event.target.value)}
+              placeholder={t("mat_sync_official_password_placeholder")}
+              className="min-h-10 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
+            />
+            <Button
+              label={t("mat_sync_upload_btn")}
+              variant="secondary"
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={isUploading || isApproving}
+              loading={isUploading}
+              className="w-full"
+            />
+            <Button
+              label={t("mat_sync_approve_official_btn")}
+              onClick={() => void handleApproveOfficial()}
+              disabled={!lastUploaded || !officialPassword.trim() || isApproving || isUploading}
+              loading={isApproving}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </details>
     </motion.aside>
   );
 }

@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import apiClient from "../api/client";
 import {
   approveMaterialRegistryPackage,
+  fetchMaterialRegistryCatalog,
   fetchMaterialSyncStatus,
+  installMaterialRegistryCatalogEntry,
   refreshMaterialSyncFromRegistry,
   rollbackMaterialSyncRevision,
   uploadMaterialRegistryPackage,
@@ -42,7 +44,7 @@ describe("material sync API client", () => {
     const response = await fetchMaterialSyncStatus();
 
     expect(mockGet).toHaveBeenCalledWith("/material-sync/status", {
-      timeout: 30_000,
+      timeout: 120_000,
     });
     expect(response.index_state).toBe("ready");
     expect(response.installed_count).toBe(1);
@@ -72,6 +74,68 @@ describe("material sync API client", () => {
       { timeout: 3_600_000 },
     );
     expect(response.installed_count).toBe(1);
+  });
+
+  it("fetches the remote material catalog without installing packages", async () => {
+    mockGet.mockResolvedValueOnce({
+      data: {
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        materials: [
+          {
+            material_id: "mat_cloud",
+            revision_id: "rev_cloud",
+            content_hash: "sha256:cloud",
+            channel: "official",
+            visibility: "official",
+            local_directory: "BrandA/pla-basic",
+            display: { brand: "BrandA", material_name: "PLA Basic" },
+            compatibility: {},
+            package_url: "/v1/packages/material.zip",
+            package_sha256: "a".repeat(64),
+            package_bytes: 1234,
+          },
+        ],
+      },
+    });
+
+    const response = await fetchMaterialRegistryCatalog();
+
+    expect(mockGet).toHaveBeenCalledWith("/material-sync/catalog", {
+      timeout: 120_000,
+    });
+    expect(response.count).toBe(1);
+    expect(response.materials[0].material_id).toBe("mat_cloud");
+  });
+
+  it("installs one selected remote material catalog entry", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "Installed 1 material packages",
+        installed_count: 1,
+        installed_materials: [],
+      },
+    });
+
+    await installMaterialRegistryCatalogEntry({
+      material_id: "mat_cloud",
+      revision_id: "rev_cloud",
+      package_url: "/v1/packages/material.zip",
+      package_sha256: "a".repeat(64),
+    });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/material-sync/install-from-registry",
+      {
+        material_id: "mat_cloud",
+        revision_id: "rev_cloud",
+        package_url: "/v1/packages/material.zip",
+        package_sha256: "a".repeat(64),
+      },
+      { timeout: 3_600_000 },
+    );
   });
 
   it("posts a material sync rollback request", async () => {

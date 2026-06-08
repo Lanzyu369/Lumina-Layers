@@ -1,10 +1,15 @@
 import apiClient from "./client";
 import type {
+  MaterialRegistryCatalogResponse,
+  MaterialRegistryInstallRequest,
   MaterialRegistryPackageMutationResponse,
+  MaterialSyncInstallResponse,
   MaterialSyncRefreshResponse,
   MaterialSyncRollbackResponse,
   MaterialSyncStatusResponse,
 } from "./types";
+
+const MATERIAL_SYNC_READ_TIMEOUT_MS = 120_000;
 
 /**
  * Fetch local material sync-index status.
@@ -13,7 +18,7 @@ import type {
 export async function fetchMaterialSyncStatus(): Promise<MaterialSyncStatusResponse> {
   const response = await apiClient.get<MaterialSyncStatusResponse>(
     "/material-sync/status",
-    { timeout: 30_000 },
+    { timeout: MATERIAL_SYNC_READ_TIMEOUT_MS },
   );
   return response.data;
 }
@@ -26,6 +31,38 @@ export async function refreshMaterialSyncFromRegistry(): Promise<MaterialSyncRef
   const response = await apiClient.post<MaterialSyncRefreshResponse>(
     "/material-sync/refresh",
     {},
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Fetch the remote material Registry catalog without installing packages.
+ * 只读取远端耗材 Registry 目录，不安装任何耗材包。
+ */
+export async function fetchMaterialRegistryCatalog(): Promise<MaterialRegistryCatalogResponse> {
+  const response = await apiClient.get<MaterialRegistryCatalogResponse>(
+    "/material-sync/catalog",
+    { timeout: MATERIAL_SYNC_READ_TIMEOUT_MS },
+  );
+  return response.data;
+}
+
+/**
+ * Install one selected material package from the remote Registry catalog.
+ * 从远端 Registry 目录中安装用户选中的单个耗材包。
+ */
+export async function installMaterialRegistryCatalogEntry(
+  entry: MaterialRegistryInstallRequest,
+): Promise<MaterialSyncInstallResponse> {
+  const response = await apiClient.post<MaterialSyncInstallResponse>(
+    "/material-sync/install-from-registry",
+    {
+      material_id: entry.material_id,
+      revision_id: entry.revision_id,
+      package_url: entry.package_url,
+      package_sha256: entry.package_sha256,
+    },
     { timeout: 3_600_000 },
   );
   return response.data;

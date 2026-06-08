@@ -6,6 +6,8 @@
 
 **Architecture:** Keep the current saved-material directory layout and existing v1 ZIP manifest for compatibility. Add a root-level `lumina_material_bundle.json` v2 manifest that records stable material/revision identities, file hashes, content hash, display metadata, and source directory. On v2 import, verify hashes before copying and record installed revisions in `materials/_sync/index.json`.
 
+**Identity model:** `material_id` is the cloud lineage identity, `revision_id` is one immutable published version, `content_hash` proves core material content equivalence, and `local_directory` is the local install path. Installed-state matching should prefer `local_directory + content_hash` for exact local-content matches, then fall back to `material_id` for lineage/update/rollback decisions. The full Chinese design note lives in `docs/superpowers/specs/2026-06-08-material-registry-sync-design.md`.
+
 **Tech Stack:** Python stdlib `zipfile`, `hashlib`, `json`, existing `core/single_stage/materials.py`, pytest.
 
 ---

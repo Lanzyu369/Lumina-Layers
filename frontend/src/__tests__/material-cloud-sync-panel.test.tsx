@@ -4,16 +4,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import MaterialCloudSyncPanel from "../components/MaterialCloudSyncPanel";
 import {
   approveMaterialRegistryPackage,
+  fetchMaterialRegistryCatalog,
   fetchMaterialSyncStatus,
-  refreshMaterialSyncFromRegistry,
+  installMaterialRegistryCatalogEntry,
   rollbackMaterialSyncRevision,
   uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 
 vi.mock("../api/materialSync", () => ({
   approveMaterialRegistryPackage: vi.fn(),
+  fetchMaterialRegistryCatalog: vi.fn(),
   fetchMaterialSyncStatus: vi.fn(),
-  refreshMaterialSyncFromRegistry: vi.fn(),
+  installMaterialRegistryCatalogEntry: vi.fn(),
   rollbackMaterialSyncRevision: vi.fn(),
   uploadMaterialRegistryPackage: vi.fn(),
 }));
@@ -28,7 +30,7 @@ describe("MaterialCloudSyncPanel", () => {
       index_state: "ready",
       last_sync_at: "2026-06-08T01:02:03Z",
       registries: {},
-      installed_count: 1,
+      installed_count: 2,
       installed: [
         {
           material_id: "mat_test",
@@ -45,20 +47,75 @@ describe("MaterialCloudSyncPanel", () => {
           material_file_exists: true,
           available_revisions: ["rev_old", "rev_new"],
         },
+        {
+          material_id: "mat_update",
+          revision_id: "rev_1",
+          content_hash: "sha256:old",
+          channel: "official",
+          source: "package",
+          local_directory: "BrandA/pla-pro",
+          display_brand: "BrandA",
+          display_name: "PLA Pro",
+          installed_at: "2026-06-08T01:02:03Z",
+          updated_at: "2026-06-08T01:02:03Z",
+          local_exists: true,
+          material_file_exists: true,
+          available_revisions: ["rev_1"],
+        },
       ],
       local_overrides_count: 0,
     });
-    vi.mocked(refreshMaterialSyncFromRegistry).mockResolvedValue({
+    vi.mocked(fetchMaterialRegistryCatalog).mockResolvedValue({
+      schema_version: "1.0",
+      channels: ["official", "community"],
+      count: 3,
+      materials: [
+        {
+          material_id: "mat_test",
+          revision_id: "rev_new",
+          content_hash: "sha256:new",
+          channel: "official",
+          visibility: "official",
+          local_directory: "BrandA/pla-basic",
+          display: { brand: "BrandA", material_name: "PLA Basic" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_test/rev_new.zip",
+          package_sha256: "a".repeat(64),
+          package_bytes: 2048,
+        },
+        {
+          material_id: "mat_update",
+          revision_id: "rev_2",
+          content_hash: "sha256:newer",
+          channel: "official",
+          visibility: "official",
+          local_directory: "BrandA/pla-pro",
+          display: { brand: "BrandA", material_name: "PLA Pro" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_update/rev_2.zip",
+          package_sha256: "b".repeat(64),
+          package_bytes: 4096,
+        },
+        {
+          material_id: "mat_cloud",
+          revision_id: "rev_cloud",
+          content_hash: "sha256:cloud",
+          channel: "community",
+          visibility: "community",
+          local_directory: "BrandB/petg-silk",
+          display: { brand: "BrandB", material_name: "Silk PETG" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
+          package_sha256: "c".repeat(64),
+          package_bytes: 8192,
+        },
+      ],
+    });
+    vi.mocked(installMaterialRegistryCatalogEntry).mockResolvedValue({
       status: "ok",
-      message: "Installed 0 material packages; skipped 1; failed 0",
-      registry_url: "https://materials.example/v1",
-      channels: ["official"],
-      checked_count: 1,
-      installed_count: 0,
-      skipped_count: 1,
-      failed_count: 0,
+      message: "installed",
+      installed_count: 1,
       installed_materials: [],
-      failures: [],
     });
     vi.mocked(rollbackMaterialSyncRevision).mockResolvedValue({
       status: "ok",
@@ -91,13 +148,257 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
-  it("renders cloud sync status and rolls back a previous revision", async () => {
+  it("renders the cloud catalog and installs a selected material", async () => {
     render(<MaterialCloudSyncPanel />);
 
     expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
-    expect(screen.getByText("PLA Basic")).toBeInTheDocument();
-    expect(screen.getByTestId("material-cloud-official-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("material-cloud-catalog-count")).toHaveTextContent("3");
+    expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("material-cloud-update-count")).toHaveTextContent("1");
+    expect(screen.getByText("Silk PETG")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "PETG" },
+    });
+    expect(screen.getByText("Silk PETG")).toBeInTheDocument();
+    expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
+
+    await waitFor(() => {
+      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
+        material_id: "mat_cloud",
+        revision_id: "rev_cloud",
+        package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
+        package_sha256: "c".repeat(64),
+      });
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates an installed material when the catalog revision is newer", async () => {
+    render(<MaterialCloudSyncPanel />);
+
+    expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /更新到 rev_2|update to rev_2/i }));
+
+    await waitFor(() => {
+      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
+        material_id: "mat_update",
+        revision_id: "rev_2",
+        package_url: "/v1/packages/mat_update/rev_2.zip",
+        package_sha256: "b".repeat(64),
+      });
+    });
+  });
+
+  it("does not count locally available historical catalog revisions as updates", async () => {
+    vi.mocked(fetchMaterialRegistryCatalog).mockResolvedValue({
+      schema_version: "1.0",
+      channels: ["official", "community"],
+      count: 3,
+      materials: [
+        {
+          material_id: "mat_test",
+          revision_id: "rev_old",
+          content_hash: "sha256:old",
+          channel: "official",
+          visibility: "official",
+          local_directory: "BrandA/pla-basic",
+          display: { brand: "BrandA", material_name: "PLA Basic" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_test/rev_old.zip",
+          package_sha256: "d".repeat(64),
+          package_bytes: 2048,
+        },
+        {
+          material_id: "mat_update",
+          revision_id: "rev_2",
+          content_hash: "sha256:newer",
+          channel: "official",
+          visibility: "official",
+          local_directory: "BrandA/pla-pro",
+          display: { brand: "BrandA", material_name: "PLA Pro" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_update/rev_2.zip",
+          package_sha256: "b".repeat(64),
+          package_bytes: 4096,
+        },
+        {
+          material_id: "mat_cloud",
+          revision_id: "rev_cloud",
+          content_hash: "sha256:cloud",
+          channel: "community",
+          visibility: "community",
+          local_directory: "BrandB/petg-silk",
+          display: { brand: "BrandB", material_name: "Silk PETG" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
+          package_sha256: "c".repeat(64),
+          package_bytes: 8192,
+        },
+      ],
+    });
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect((await screen.findAllByText("PLA Basic")).length).toBeGreaterThan(0);
+    expect(screen.getByTestId("material-cloud-update-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("material-cloud-state-mat_test")).not.toHaveTextContent(/有新版本|update available/i);
+    expect(screen.queryByRole("button", { name: /更新到 rev_old|update to rev_old/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /更新到 rev_2|update to rev_2/i })).toBeInTheDocument();
+  });
+
+  it("treats matching local directory and content hash as installed when material ids differ", async () => {
+    vi.mocked(fetchMaterialSyncStatus).mockResolvedValue({
+      status: "ok",
+      message: "Material sync status loaded",
+      schema_version: "1.0",
+      index_state: "ready",
+      last_sync_at: "2026-06-08T01:02:03Z",
+      registries: {},
+      installed_count: 1,
+      installed: [
+        {
+          material_id: "mat_local_identity",
+          revision_id: "rev_local",
+          content_hash: "sha256:exact",
+          channel: "local",
+          source: "local",
+          local_directory: "BrandC/pla-local",
+          display_brand: "BrandC",
+          display_name: "PLA Local",
+          installed_at: null,
+          updated_at: null,
+          local_exists: true,
+          material_file_exists: true,
+          available_revisions: ["rev_local"],
+        },
+      ],
+      local_overrides_count: 0,
+    });
+    vi.mocked(fetchMaterialRegistryCatalog).mockResolvedValue({
+      schema_version: "1.0",
+      channels: ["official"],
+      count: 1,
+      materials: [
+        {
+          material_id: "mat_cloud_identity",
+          revision_id: "rev_cloud",
+          content_hash: "sha256:exact",
+          channel: "official",
+          visibility: "official",
+          local_directory: "BrandC/pla-local",
+          display: { brand: "BrandC", material_name: "PLA Local" },
+          compatibility: {},
+          package_url: "/v1/packages/mat_cloud_identity/rev_cloud.zip",
+          package_sha256: "d".repeat(64),
+          package_bytes: 8192,
+        },
+      ],
+    });
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect((await screen.findAllByText("PLA Local")).length).toBeGreaterThan(0);
     expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("material-cloud-update-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("material-cloud-state-mat_cloud_identity")).toHaveTextContent(/已安装|installed/i);
+    expect(
+      screen.getAllByRole("button", { name: /已安装|installed/i }).some((button) => button.hasAttribute("disabled")),
+    ).toBe(true);
+    expect(screen.queryByTestId("material-cloud-local-installed-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /下载到本地|download/i })).not.toBeInTheDocument();
+  });
+
+  it("does not render missing sync-index entries as local installed cards", async () => {
+    vi.mocked(fetchMaterialSyncStatus).mockResolvedValue({
+      status: "ok",
+      message: "Material sync status loaded",
+      schema_version: "1.0",
+      index_state: "ready",
+      last_sync_at: "2026-06-08T01:02:03Z",
+      registries: {},
+      installed_count: 0,
+      installed: [
+        {
+          material_id: "mat_missing",
+          revision_id: "rev_missing",
+          content_hash: "sha256:missing",
+          channel: "official",
+          source: "package",
+          local_directory: "BrandD/missing",
+          display_brand: "BrandD",
+          display_name: "Missing PLA",
+          installed_at: "2026-06-08T01:02:03Z",
+          updated_at: "2026-06-08T01:02:03Z",
+          local_exists: false,
+          material_file_exists: false,
+          available_revisions: ["rev_missing"],
+        },
+      ],
+      local_overrides_count: 0,
+    });
+    vi.mocked(fetchMaterialRegistryCatalog).mockResolvedValue({
+      schema_version: "1.0",
+      channels: ["official"],
+      count: 0,
+      materials: [],
+    });
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("0");
+    expect(screen.queryByTestId("material-cloud-local-installed-card")).not.toBeInTheDocument();
+    expect(screen.queryByText("Missing PLA")).not.toBeInTheDocument();
+  });
+
+  it("rolls back from the local installed section when catalog search hides the card", async () => {
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "Silk" },
+    });
+
+    expect(screen.getByText("Silk PETG")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
+
+    await waitFor(() => {
+      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
+    });
+  });
+
+  it("keeps local rollback controls available when catalog loading fails", async () => {
+    vi.mocked(fetchMaterialRegistryCatalog).mockRejectedValue(new Error("catalog unavailable"));
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-error")).toHaveTextContent("catalog unavailable");
+
+    fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
+
+    await waitFor(() => {
+      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
+    });
+  });
+
+  it("renders installed catalog status and rolls back a previous revision", async () => {
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
+    expect(screen.getAllByText("PLA Basic").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("material-cloud-official-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("material-cloud-filter-official")).not.toBeInTheDocument();
+    expect(screen.getByTestId("material-cloud-sync-installed-count")).toHaveTextContent("2");
+    expect(
+      screen.getAllByRole("button", { name: /已安装|installed/i }).some((button) => button.hasAttribute("disabled")),
+    ).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
 
@@ -105,6 +406,7 @@ describe("MaterialCloudSyncPanel", () => {
       expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
     });
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(2);
   });
 
   it("uploads a package and approves it with the official password", async () => {

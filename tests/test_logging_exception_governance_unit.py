@@ -184,7 +184,9 @@ EXTRACTOR_STRUCTURED_EVENTS = {
 }
 MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
+    "material_sync_catalog_done",
     "material_sync_install_done",
+    "material_sync_install_from_registry_done",
     "material_sync_refresh_done",
     "material_sync_rollback_done",
     "material_sync_auto_refresh_scheduled",
