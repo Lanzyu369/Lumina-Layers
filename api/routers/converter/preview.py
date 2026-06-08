@@ -284,8 +284,6 @@ def _enforce_preview_cache_size_limit(
             "estimated_layers": layers,
         },
     )
-
-
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
     """Best-effort cleanup for temp files created before a session exists."""
 
@@ -578,6 +576,7 @@ async def convert_preview(
         None,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     ),
+    large_format_enabled: bool = Form(False, description="是否处于大画幅模式"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -660,15 +659,21 @@ async def convert_preview(
         temp_path = await ensure_png_tempfile(image)
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
-        _enforce_preview_cache_size_limit(
-            image_path=temp_path,
-            target_width_mm=target_width_mm,
-            modeling_mode=modeling_mode,
-            svg_pixels_per_mm=svg_pixels_per_mm,
-            color_layers=color_layers,
-            material_layer_count=material_layer_count,
-            material_source=material_source,
+        skip_cache_size_guard = (
+            large_format_enabled
+            and modeling_mode == "vector"
+            and is_svg_upload
         )
+        if not skip_cache_size_guard:
+            _enforce_preview_cache_size_limit(
+                image_path=temp_path,
+                target_width_mm=target_width_mm,
+                modeling_mode=modeling_mode,
+                svg_pixels_per_mm=svg_pixels_per_mm,
+                color_layers=color_layers,
+                material_layer_count=material_layer_count,
+                material_source=material_source,
+            )
         if modeling_mode == "vector" and is_svg_upload:
             svg_large_format_policy = {
                 **inspect_svg_large_format_support(temp_path),

@@ -300,6 +300,7 @@ describe("converter store relief generate flow", () => {
 
     expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
     const [, largeFormatRequest] = mocks.convertGenerateLargeFormat.mock.calls[0];
+    expect(largeFormatRequest.target_height_mm).toBeUndefined();
     expect(largeFormatRequest.params.color_height_map).toEqual({
       "111111": 2.88,
     });
