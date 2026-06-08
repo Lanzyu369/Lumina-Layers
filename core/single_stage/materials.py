@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -133,6 +135,10 @@ class _WarpCandidate:
 
 _INVALID_WINDOWS_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MATERIAL_EXPORT_MANIFEST_FILENAME = "lumina_material_export.json"
+_MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
+_MATERIAL_PACKAGE_SCHEMA_VERSION = "2.0"
+_MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
+_MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
 _C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
@@ -1304,6 +1310,161 @@ def _normalize_material_directory_names(directory_names: list[str]) -> list[str]
     return normalized_names
 
 
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_local_only_material_file(relative_path: Path) -> bool:
+    if relative_path.name in _MATERIAL_LOCAL_ONLY_FILENAMES:
+        return True
+    return any(part in _MATERIAL_LOCAL_ONLY_DIRNAMES for part in relative_path.parts)
+
+
+def _material_bundle_file_role(relative_path: Path, stage_a_relative_path: Path) -> str:
+    if relative_path.as_posix() == "material.json":
+        return "material_archive"
+    if relative_path.as_posix() == stage_a_relative_path.as_posix():
+        return "stage_a_parameters"
+    return "sidecar"
+
+
+def _material_content_hash_from_file_records(
+    file_records: list[dict[str, Any]],
+) -> str:
+    required_records = [
+        record
+        for record in file_records
+        if str(record.get("role") or "") in {"material_archive", "stage_a_parameters"}
+    ]
+    logical_lines = []
+    for record in sorted(required_records, key=lambda item: str(item.get("role") or "")):
+        role = str(record.get("role") or "")
+        logical_path = (
+            "material.json"
+            if role == "material_archive"
+            else Path(str(record.get("path") or "")).name
+        )
+        logical_lines.append(f"{logical_path}:{record['sha256']}")
+    return f"sha256:{_sha256_bytes(chr(10).join(logical_lines).encode('utf-8'))}"
+
+
+def _material_package_identity(
+    *,
+    relative_directory_name: str,
+    material_name: str,
+    content_hash: str,
+) -> tuple[str, str]:
+    material_seed = f"{relative_directory_name}\n{material_name}\n{content_hash}"
+    material_id = f"mat_{_sha256_bytes(material_seed.encode('utf-8'))[:26]}"
+    revision_id = f"rev_{content_hash.removeprefix('sha256:')[:26]}"
+    return material_id, revision_id
+
+
+def _display_payload_from_material_archive(
+    archive_payload: dict[str, Any],
+    relative_directory_name: str,
+) -> dict[str, str]:
+    path_parts = Path(relative_directory_name).parts
+    fallback_brand = path_parts[0] if len(path_parts) > 1 else ""
+    fallback_name = path_parts[-1] if path_parts else relative_directory_name
+    display: dict[str, str] = {
+        "brand": str(archive_payload.get("brand") or fallback_brand),
+        "material_name": str(archive_payload.get("material_name") or fallback_name),
+    }
+    for source_key, target_key in (
+        ("material_type", "material_type"),
+        ("color_name", "color_name"),
+    ):
+        value = archive_payload.get(source_key)
+        if isinstance(value, str) and value.strip():
+            display[target_key] = value.strip()
+    return display
+
+
+def _build_material_bundle_package_manifest(
+    *,
+    target_root: Path,
+    material_dir: Path,
+) -> tuple[dict[str, Any], list[tuple[Path, str]]]:
+    relative_directory_name = _relative_directory_name(target_root, material_dir)
+    material_archive_path = material_dir / "material.json"
+    archive_payload = _load_json_object(
+        material_archive_path,
+        "Saved material archive is not valid UTF-8 JSON",
+    )
+    stage_a_params_path = _resolve_stage_a_params_path(material_dir, archive_payload)
+    stage_a_relative_path = stage_a_params_path.relative_to(material_dir)
+    file_records: list[dict[str, Any]] = []
+    files_to_write: list[tuple[Path, str]] = []
+    material_files = sorted(path for path in material_dir.rglob("*") if path.is_file())
+    for file_path in material_files:
+        material_relative_path = file_path.relative_to(material_dir)
+        if _is_local_only_material_file(material_relative_path):
+            continue
+        zip_path = (
+            Path("materials")
+            .joinpath(relative_directory_name)
+            .joinpath(material_relative_path)
+            .as_posix()
+        )
+        role = _material_bundle_file_role(material_relative_path, stage_a_relative_path)
+        file_records.append(
+            {
+                "path": zip_path,
+                "role": role,
+                "sha256": _sha256_file(file_path),
+                "bytes": int(file_path.stat().st_size),
+                "required": role in {"material_archive", "stage_a_parameters"},
+            }
+        )
+        files_to_write.append((file_path, zip_path))
+
+    roles = {str(record.get("role") or "") for record in file_records}
+    if "material_archive" not in roles or "stage_a_parameters" not in roles:
+        raise FileNotFoundError(
+            f"Saved material archive is missing required files: {relative_directory_name}"
+        )
+    content_hash = _material_content_hash_from_file_records(file_records)
+    display = _display_payload_from_material_archive(
+        archive_payload,
+        relative_directory_name,
+    )
+    material_id, revision_id = _material_package_identity(
+        relative_directory_name=relative_directory_name,
+        material_name=display["material_name"],
+        content_hash=content_hash,
+    )
+    return (
+        {
+            "material_id": material_id,
+            "revision_id": revision_id,
+            "content_hash": content_hash,
+            "channel": "manual",
+            "visibility": "private",
+            "local_directory": relative_directory_name,
+            "display": display,
+            "files": file_records,
+            "compatibility": {
+                "min_app_version": "0.0.0",
+                "material_schema_version": str(
+                    archive_payload.get("schema_version")
+                    or archive_payload.get("material_schema_version")
+                    or "1"
+                ),
+            },
+        },
+        files_to_write,
+    )
+
+
 def _safe_extract_material_zip(zip_path: str, dest_dir: Path) -> Path:
     resolved_dest_dir = dest_dir.resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1339,6 +1500,216 @@ def _load_material_export_manifest(extracted_root: Path) -> dict[str, Any] | Non
     if str(manifest.get("kind") or "") != "lumina_material_export":
         raise ValueError("Material export manifest is invalid")
     return manifest
+
+
+def _load_material_bundle_manifest(extracted_root: Path) -> dict[str, Any] | None:
+    manifest_path = extracted_root / _MATERIAL_BUNDLE_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return None
+    manifest = _load_json_object(
+        manifest_path,
+        "Material bundle manifest is not valid UTF-8 JSON",
+    )
+    if str(manifest.get("kind") or "") != "lumina_material_bundle":
+        raise ValueError("Material bundle manifest is invalid")
+    if str(manifest.get("schema_version") or "") != _MATERIAL_PACKAGE_SCHEMA_VERSION:
+        raise ValueError("Material bundle manifest schema_version is unsupported")
+    packages = manifest.get("packages")
+    if not isinstance(packages, list) or not packages:
+        raise ValueError("Material bundle manifest is missing packages")
+    return manifest
+
+
+def _safe_manifest_relative_path(raw_path: Any) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("Material bundle file path must be a non-empty string")
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"Unsafe material bundle file path: {raw_path}")
+    return relative
+
+
+def _verify_material_bundle_package(
+    *,
+    extracted_root: Path,
+    package: dict[str, Any],
+) -> None:
+    material_id = str(package.get("material_id") or "")
+    revision_id = str(package.get("revision_id") or "")
+    if not material_id or not revision_id:
+        raise ValueError("Material bundle package is missing material_id or revision_id")
+    files = package.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError(f"Material bundle package {material_id} is missing files")
+
+    normalized_records: list[dict[str, Any]] = []
+    roles: set[str] = set()
+    for record in files:
+        if not isinstance(record, dict):
+            raise ValueError(f"Material bundle package {material_id} has invalid file record")
+        relative_path = _safe_manifest_relative_path(record.get("path"))
+        file_path = extracted_root / relative_path
+        if not file_path.is_file():
+            raise FileNotFoundError(f"Material bundle file is missing: {relative_path.as_posix()}")
+        expected_size = record.get("bytes")
+        if expected_size is not None and int(expected_size) != int(file_path.stat().st_size):
+            raise ValueError(f"Material bundle file size mismatch: {relative_path.as_posix()}")
+        expected_hash = str(record.get("sha256") or "")
+        actual_hash = _sha256_file(file_path)
+        if expected_hash != actual_hash:
+            raise ValueError(f"Material bundle file hash mismatch: {relative_path.as_posix()}")
+        role = str(record.get("role") or "")
+        roles.add(role)
+        normalized_records.append(
+            {
+                "path": relative_path.as_posix(),
+                "role": role,
+                "sha256": actual_hash,
+                "bytes": int(file_path.stat().st_size),
+                "required": bool(record.get("required")),
+            }
+        )
+
+    if "material_archive" not in roles or "stage_a_parameters" not in roles:
+        raise ValueError(f"Material bundle package {material_id} is missing required roles")
+    expected_content_hash = str(package.get("content_hash") or "")
+    actual_content_hash = _material_content_hash_from_file_records(normalized_records)
+    if expected_content_hash != actual_content_hash:
+        raise ValueError(f"Material bundle content hash mismatch: {material_id}")
+
+
+def _load_material_sync_index(target_root: Path) -> dict[str, Any]:
+    index_path = target_root / "_sync" / "index.json"
+    if not index_path.is_file():
+        return {
+            "schema_version": "1.0",
+            "last_sync_at": None,
+            "registries": {},
+            "installed": {},
+            "local_overrides": {},
+        }
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {
+            "schema_version": "1.0",
+            "last_sync_at": None,
+            "registries": {},
+            "installed": {},
+            "local_overrides": {},
+        }
+    if not isinstance(index, dict):
+        return {
+            "schema_version": "1.0",
+            "last_sync_at": None,
+            "registries": {},
+            "installed": {},
+            "local_overrides": {},
+        }
+    index.setdefault("schema_version", "1.0")
+    index.setdefault("registries", {})
+    index.setdefault("installed", {})
+    index.setdefault("local_overrides", {})
+    return index
+
+
+def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None:
+    sync_dir = target_root / "_sync"
+    sync_dir.mkdir(parents=True, exist_ok=True)
+    index_path = sync_dir / "index.json"
+    tmp_path = sync_dir / f"index.json.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    tmp_path.write_text(
+        json.dumps(index, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(index_path)
+
+
+def _record_material_sync_entries(
+    *,
+    target_root: Path,
+    installed_packages: list[tuple[dict[str, Any], Path]],
+) -> None:
+    if not installed_packages:
+        return
+    now = _now_iso()
+    index = _load_material_sync_index(target_root)
+    installed = index.setdefault("installed", {})
+    if not isinstance(installed, dict):
+        installed = {}
+        index["installed"] = installed
+    for package, destination_dir in installed_packages:
+        material_id = str(package["material_id"])
+        display = package.get("display") if isinstance(package.get("display"), dict) else {}
+        installed[material_id] = {
+            "revision_id": str(package["revision_id"]),
+            "content_hash": str(package["content_hash"]),
+            "channel": str(package.get("channel") or "manual"),
+            "source": "package",
+            "local_directory": _relative_directory_name(target_root, destination_dir),
+            "display_brand": str(display.get("brand") or ""),
+            "display_name": str(display.get("material_name") or destination_dir.name),
+            "installed_at": now,
+            "updated_at": now,
+        }
+    index["last_sync_at"] = now
+    _write_material_sync_index(target_root, index)
+
+
+def _installed_material_bundle_revision_path(
+    *,
+    target_root: Path,
+    package: dict[str, Any],
+) -> Path | None:
+    material_id = str(package.get("material_id") or "")
+    if not material_id:
+        return None
+    index = _load_material_sync_index(target_root)
+    installed = index.get("installed")
+    if not isinstance(installed, dict):
+        return None
+    entry = installed.get(material_id)
+    if not isinstance(entry, dict):
+        return None
+    if str(entry.get("revision_id") or "") != str(package.get("revision_id") or ""):
+        return None
+    if str(entry.get("content_hash") or "") != str(package.get("content_hash") or ""):
+        return None
+    local_directory = entry.get("local_directory")
+    if not isinstance(local_directory, str) or not local_directory.strip():
+        return None
+    material_dir = target_root / _normalize_relative_directory_name(local_directory)
+    if (material_dir / "material.json").is_file():
+        return material_dir
+    return None
+
+
+def _copy_material_bundle_package_files(
+    *,
+    manifest_root: Path,
+    staged_material_dir: Path,
+    destination_dir: Path,
+    package: dict[str, Any],
+) -> None:
+    destination_dir.mkdir(parents=True, exist_ok=False)
+    raw_files = package.get("files")
+    if not isinstance(raw_files, list):
+        raise ValueError("Material bundle package files must be a list")
+    for raw_record in raw_files:
+        if not isinstance(raw_record, dict):
+            raise ValueError("Material bundle package contains invalid file record")
+        source_path = manifest_root / _safe_manifest_relative_path(raw_record.get("path"))
+        try:
+            material_relative_path = source_path.relative_to(staged_material_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"Material bundle file is outside material directory: {raw_record.get('path')}"
+            ) from exc
+        if _is_local_only_material_file(material_relative_path):
+            continue
+        target_path = destination_dir / material_relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
 
 
 def _discover_saved_material_dirs(material_root: Path) -> list[Path]:
@@ -3178,6 +3549,13 @@ def export_saved_stage_a_material_archives(
         "directory_names": normalized_names,
         "material_count": len(normalized_names),
     }
+    bundle_manifest = {
+        "schema_version": _MATERIAL_PACKAGE_SCHEMA_VERSION,
+        "kind": "lumina_material_bundle",
+        "exported_at": manifest["exported_at"],
+        "material_count": len(normalized_names),
+        "packages": [],
+    }
     try:
         with zipfile.ZipFile(
             zip_output_path,
@@ -3199,17 +3577,19 @@ def export_saved_stage_a_material_archives(
                     target_root,
                     material_dir,
                 )
-                material_files = sorted(
-                    path for path in material_dir.rglob("*") if path.is_file()
-                )
-                for file_path in material_files:
-                    archive.write(
-                        file_path,
-                        Path("materials")
-                        .joinpath(relative_directory_name)
-                        .joinpath(file_path.relative_to(material_dir))
-                        .as_posix(),
+                package_manifest, files_to_write = (
+                    _build_material_bundle_package_manifest(
+                        target_root=target_root,
+                        material_dir=material_dir,
                     )
+                )
+                bundle_manifest["packages"].append(package_manifest)
+                for file_path, zip_path in files_to_write:
+                    archive.write(file_path, zip_path)
+            archive.writestr(
+                _MATERIAL_BUNDLE_MANIFEST_FILENAME,
+                json.dumps(bundle_manifest, ensure_ascii=False, indent=2),
+            )
     except Exception:
         try:
             zip_output_path.unlink()
@@ -3246,13 +3626,47 @@ def import_saved_stage_a_material_archives(
     )
     try:
         extracted_root = _safe_extract_material_zip(archive_path, extract_root)
-        manifest = _load_material_export_manifest(extracted_root)
+        manifest_root = extracted_root
+        if not (
+            (manifest_root / _MATERIAL_BUNDLE_MANIFEST_FILENAME).is_file()
+            or (manifest_root / _MATERIAL_EXPORT_MANIFEST_FILENAME).is_file()
+        ):
+            if (
+                (extract_root / _MATERIAL_BUNDLE_MANIFEST_FILENAME).is_file()
+                or (extract_root / _MATERIAL_EXPORT_MANIFEST_FILENAME).is_file()
+            ):
+                manifest_root = extract_root
+        bundle_manifest = _load_material_bundle_manifest(manifest_root)
+        manifest = _load_material_export_manifest(manifest_root)
         material_root = (
             extracted_root / "materials"
             if (extracted_root / "materials").is_dir()
             else extracted_root
         )
-        if manifest is not None:
+        package_by_directory: dict[str, dict[str, Any]] = {}
+        if bundle_manifest is not None:
+            raw_packages = bundle_manifest["packages"]
+            normalized_directory_names = []
+            for raw_package in raw_packages:
+                if not isinstance(raw_package, dict):
+                    raise ValueError("Material bundle manifest contains invalid package")
+                _verify_material_bundle_package(
+                    extracted_root=manifest_root,
+                    package=raw_package,
+                )
+                normalized_directory_name = _normalize_relative_directory_name(
+                    str(raw_package.get("local_directory") or "")
+                )
+                normalized_directory_names.append(normalized_directory_name)
+                package_by_directory[normalized_directory_name] = raw_package
+            normalized_directory_names = _normalize_material_directory_names(
+                normalized_directory_names
+            )
+            staged_material_dirs = [
+                material_root / Path(directory_name)
+                for directory_name in normalized_directory_names
+            ]
+        elif manifest is not None:
             raw_directory_names = manifest.get("directory_names")
             if not isinstance(raw_directory_names, list) or not raw_directory_names:
                 raise ValueError(
@@ -3278,12 +3692,19 @@ def import_saved_stage_a_material_archives(
 
         imported_materials: list[dict[str, Any]] = []
         created_material_dirs: list[Path] = []
+        installed_packages: list[tuple[dict[str, Any], Path]] = []
         try:
             for staged_material_dir in staged_material_dirs:
                 relative_directory_name = _relative_directory_name(
                     material_root,
                     staged_material_dir,
                 )
+                package = package_by_directory.get(relative_directory_name)
+                if package is not None and _installed_material_bundle_revision_path(
+                    target_root=target_root,
+                    package=package,
+                ) is not None:
+                    continue
                 material_archive_path = staged_material_dir / "material.json"
                 if not material_archive_path.is_file():
                     raise FileNotFoundError(
@@ -3310,12 +3731,22 @@ def import_saved_stage_a_material_archives(
                     relative_directory_name,
                 )
                 try:
-                    shutil.copytree(staged_material_dir, destination_dir)
+                    if package is not None:
+                        _copy_material_bundle_package_files(
+                            manifest_root=manifest_root,
+                            staged_material_dir=staged_material_dir,
+                            destination_dir=destination_dir,
+                            package=package,
+                        )
+                    else:
+                        shutil.copytree(staged_material_dir, destination_dir)
                 except Exception:
                     if destination_dir.exists():
                         shutil.rmtree(destination_dir, ignore_errors=True)
                     raise
                 created_material_dirs.append(destination_dir)
+                if package is not None:
+                    installed_packages.append((package, destination_dir))
                 imported_materials.append(
                     _material_summary_from_saved_archive(
                         target_root,
@@ -3323,6 +3754,10 @@ def import_saved_stage_a_material_archives(
                         archive_payload,
                     )
                 )
+            _record_material_sync_entries(
+                target_root=target_root,
+                installed_packages=installed_packages,
+            )
         except Exception:
             for created_dir in reversed(created_material_dirs):
                 parent_dir = created_dir.parent
