@@ -144,10 +144,13 @@ _MATERIAL_SYNC_INDEX_SCHEMA_VERSION = "1.0"
 _MATERIAL_SYNC_REFRESH_LOCK_FILENAME = "refresh.lock"
 _MATERIAL_SYNC_LOCK_STALE_SECONDS = 2 * 60 * 60
 _MATERIAL_SYNC_STATUS_CACHE_TTL_S = 5 * 60
+_MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_TTL_S = 5 * 60
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
 _MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
+_MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK = threading.RLock()
+_MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[tuple[str, tuple[str, ...], str, int | None], dict[str, Any]] = {}
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
 _C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
@@ -2323,6 +2326,92 @@ def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
     return Path(temp_name)
 
 
+def _material_registry_remote_catalog_cache_key(
+    *,
+    registry_url: str,
+    channels: Sequence[str],
+    token: str,
+    transport: Any,
+) -> tuple[str, tuple[str, ...], str, int | None]:
+    token_fingerprint = _sha256_bytes(token.encode("utf-8")) if token else ""
+    transport_identity = id(transport) if transport is not None else None
+    return registry_url, tuple(channels), token_fingerprint, transport_identity
+
+
+def _cached_material_registry_remote_catalog(
+    *,
+    registry_url: str,
+    channels: Sequence[str],
+    token: str,
+    transport: Any,
+) -> dict[str, Any] | None:
+    cache_key = _material_registry_remote_catalog_cache_key(
+        registry_url=registry_url,
+        channels=channels,
+        token=token,
+        transport=transport,
+    )
+    now = time.monotonic()
+    with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
+        cached = _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE.get(cache_key)
+        if not cached:
+            return None
+        cached_at = float(cached.get("cached_at") or 0.0)
+        if now - cached_at > _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_TTL_S:
+            _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE.pop(cache_key, None)
+            return None
+        payload = cached.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return _json_clone(payload)
+
+
+def _store_material_registry_remote_catalog_cache(
+    *,
+    registry_url: str,
+    channels: Sequence[str],
+    token: str,
+    transport: Any,
+    payload: dict[str, Any],
+) -> None:
+    cache_key = _material_registry_remote_catalog_cache_key(
+        registry_url=registry_url,
+        channels=channels,
+        token=token,
+        transport=transport,
+    )
+    with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
+        _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE[cache_key] = {
+            "cached_at": time.monotonic(),
+            "payload": _json_clone(payload),
+        }
+
+
+def invalidate_material_registry_remote_catalog_cache(
+    *,
+    registry_url: str | None = None,
+) -> None:
+    """Clear cached remote material Registry catalog payloads.
+    清理远端耗材 Registry catalog 缓存。
+    """
+    normalized_registry_url = (
+        _normalize_material_registry_url(registry_url)
+        if registry_url is not None
+        else None
+    )
+    with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
+        if normalized_registry_url is None:
+            _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE.clear()
+            return
+        stale_keys = [
+            cache_key
+            for cache_key in _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE
+            if cache_key[0] == normalized_registry_url
+        ]
+        for cache_key in stale_keys:
+            _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE.pop(cache_key, None)
+
+
 def list_material_registry_catalog(
     *,
     registry_url: str | None = None,
@@ -2330,6 +2419,7 @@ def list_material_registry_catalog(
     token: str | None = None,
     timeout_s: float | None = None,
     transport: Any = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Fetch the remote material Registry catalog without installing packages.
     只读取远程耗材 Registry catalog，不安装任何耗材包。
@@ -2343,6 +2433,16 @@ def list_material_registry_catalog(
         if token is not None
         else os.environ.get("LUMINA_MATERIAL_REGISTRY_TOKEN", "")
     ).strip()
+    if use_cache:
+        cached_catalog = _cached_material_registry_remote_catalog(
+            registry_url=normalized_registry_url,
+            channels=normalized_channels,
+            token=auth_token,
+            transport=transport,
+        )
+        if cached_catalog is not None:
+            return cached_catalog
+
     if timeout_s is None:
         raw_timeout = os.environ.get("LUMINA_MATERIAL_REGISTRY_TIMEOUT_S", "30")
         try:
@@ -2375,7 +2475,7 @@ def list_material_registry_catalog(
         except ValueError as exc:
             raise ValueError("Material registry catalog response is invalid") from exc
 
-    return {
+    catalog = {
         "schema_version": str(
             catalog_payload.get("schema_version")
             if isinstance(catalog_payload, dict)
@@ -2386,6 +2486,15 @@ def list_material_registry_catalog(
         "count": len(catalog_entries),
         "materials": catalog_entries,
     }
+    if use_cache:
+        _store_material_registry_remote_catalog_cache(
+            registry_url=normalized_registry_url,
+            channels=normalized_channels,
+            token=auth_token,
+            transport=transport,
+            payload=catalog,
+        )
+    return _json_clone(catalog)
 
 
 def install_material_registry_package(

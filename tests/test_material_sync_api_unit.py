@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 from core.single_stage import (
     install_material_registry_package,
+    list_material_registry_catalog,
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
@@ -354,6 +355,51 @@ def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installin
     body = response.json()
     assert body["count"] == 1
     assert body["materials"][0]["material_id"] == "mat_cloud_test"
+
+
+def test_list_material_registry_catalog_reuses_remote_catalog_cache() -> None:
+    request_counts = {"catalog": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            request_counts["catalog"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": "mat_cloud",
+                            "revision_id": "rev_cloud",
+                            "content_hash": "sha256:cloud",
+                            "channel": "official",
+                            "visibility": "official",
+                            "local_directory": "BrandA/pla-basic",
+                            "package_url": "/v1/packages/material_package.zip",
+                            "package_sha256": "a" * 64,
+                            "package_bytes": 10,
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+
+    first = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        transport=transport,
+    )
+    second = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        transport=transport,
+    )
+
+    assert request_counts == {"catalog": 1}
+    assert first == second
+    assert second["count"] == 1
 
 
 def test_material_sync_install_from_registry_endpoint_installs_selected_package(

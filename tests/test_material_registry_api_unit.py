@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+import core.material_registry as material_registry_module
 
 
 def _client() -> TestClient:
@@ -135,6 +136,82 @@ def test_material_registry_catalog_lists_official_package_and_serves_zip(
 
     assert download.status_code == 200
     assert download.content == package_path.read_bytes()
+
+
+def test_material_registry_catalog_reuses_cached_package_scan(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    package_path = packages_dir / "official-pla.zip"
+    _write_v2_registry_package(package_path, channel="official")
+    calls = 0
+    original_load_bundle_manifest = material_registry_module._load_bundle_manifest
+
+    def counting_load_bundle_manifest(zip_path: Path) -> dict[str, object] | None:
+        nonlocal calls
+        calls += 1
+        return original_load_bundle_manifest(zip_path)
+
+    monkeypatch.setattr(
+        material_registry_module,
+        "_load_bundle_manifest",
+        counting_load_bundle_manifest,
+    )
+
+    first = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+    second = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+
+    assert calls == 1
+    assert first == second
+    assert second["count"] == 1
+
+
+def test_material_registry_catalog_cache_invalidates_after_upload(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    existing_package = packages_dir / "official" / "existing.zip"
+    upload_package = tmp_path / "upload.zip"
+    _write_v2_registry_package(
+        existing_package,
+        material_id="mat_existing",
+        revision_id="rev_existing",
+        channel="official",
+    )
+    _write_v2_registry_package(
+        upload_package,
+        material_id="mat_uploaded",
+        revision_id="rev_uploaded",
+        channel="manual",
+    )
+
+    first = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+    material_registry_module.upload_material_registry_package(
+        archive_path=str(upload_package),
+        channel="official",
+        packages_dir=str(packages_dir),
+    )
+    second = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+
+    assert first["count"] == 1
+    assert second["count"] == 2
+    assert {entry["material_id"] for entry in second["materials"]} == {
+        "mat_existing",
+        "mat_uploaded",
+    }
 
 
 def test_material_registry_team_channel_requires_bearer_token(

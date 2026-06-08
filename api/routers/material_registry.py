@@ -27,6 +27,7 @@ from core.material_registry import (
     upload_material_registry_package,
     verify_material_registry_read_access,
 )
+from core.single_stage import invalidate_material_registry_remote_catalog_cache
 
 router = APIRouter(prefix="/api/material-registry/v1", tags=["Material Registry"])
 log = get_logger(__name__)
@@ -80,6 +81,7 @@ async def material_registry_package_upload(
     try:
         archive_path = await upload_to_tempfile(archive, suffix=".zip")
         result = upload_material_registry_package(archive_path=archive_path)
+        invalidate_material_registry_remote_catalog_cache()
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
@@ -121,6 +123,7 @@ async def material_registry_package_approve(
             package_path=package_path,
             official_password=payload.official_password,
         )
+        invalidate_material_registry_remote_catalog_cache()
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except FileNotFoundError as exc:

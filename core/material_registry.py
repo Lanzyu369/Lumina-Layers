@@ -9,6 +9,8 @@ import json
 import os
 import re
 import tempfile
+import threading
+import time
 import zipfile
 from pathlib import Path, PureWindowsPath
 from typing import Any, Sequence
@@ -17,6 +19,13 @@ from urllib.parse import quote
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION = "1.0"
 _MATERIAL_REGISTRY_PACKAGE_URL_PREFIX = "/api/material-registry/v1/packages"
+_MATERIAL_REGISTRY_CATALOG_CACHE_TTL_S = 5 * 60
+_MATERIAL_REGISTRY_CATALOG_CACHE_LOCK = threading.RLock()
+_MATERIAL_REGISTRY_CATALOG_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+
+
+def _json_clone(payload: Any) -> Any:
+    return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
 def _sha256_file(path: Path) -> str:
@@ -121,10 +130,13 @@ def _package_material_entries(
     root: Path,
     zip_path: Path,
     manifest: dict[str, Any],
+    package_sha256: str | None = None,
+    package_bytes: int | None = None,
+    package_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    package_sha256 = _sha256_file(zip_path)
-    package_bytes = int(zip_path.stat().st_size)
-    package_url = _package_url_for_path(root, zip_path)
+    resolved_package_sha256 = package_sha256 or _sha256_file(zip_path)
+    resolved_package_bytes = package_bytes if package_bytes is not None else int(zip_path.stat().st_size)
+    resolved_package_url = package_url or _package_url_for_path(root, zip_path)
     materials: list[dict[str, Any]] = []
     raw_packages = manifest.get("packages")
     if not isinstance(raw_packages, list):
@@ -145,12 +157,66 @@ def _package_material_entries(
                 "local_directory": str(raw_package.get("local_directory") or ""),
                 "display": display if isinstance(display, dict) else {},
                 "compatibility": compatibility if isinstance(compatibility, dict) else {},
-                "package_url": package_url,
-                "package_sha256": package_sha256,
-                "package_bytes": package_bytes,
+                "package_url": resolved_package_url,
+                "package_sha256": resolved_package_sha256,
+                "package_bytes": resolved_package_bytes,
             }
         )
     return materials
+
+
+def _material_registry_catalog_cache_key(
+    root: Path,
+    channels: Sequence[str],
+) -> tuple[str, tuple[str, ...]]:
+    return str(root), tuple(channels)
+
+
+def _cached_material_registry_catalog(
+    *,
+    root: Path,
+    channels: Sequence[str],
+) -> dict[str, Any] | None:
+    cache_key = _material_registry_catalog_cache_key(root, channels)
+    now = time.monotonic()
+    with _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK:
+        cached = _MATERIAL_REGISTRY_CATALOG_CACHE.get(cache_key)
+        if not cached:
+            return None
+        cached_at = float(cached.get("cached_at") or 0.0)
+        if now - cached_at > _MATERIAL_REGISTRY_CATALOG_CACHE_TTL_S:
+            _MATERIAL_REGISTRY_CATALOG_CACHE.pop(cache_key, None)
+            return None
+        payload = cached.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return _json_clone(payload)
+
+
+def _store_material_registry_catalog_cache(
+    *,
+    root: Path,
+    channels: Sequence[str],
+    payload: dict[str, Any],
+) -> None:
+    cache_key = _material_registry_catalog_cache_key(root, channels)
+    with _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK:
+        _MATERIAL_REGISTRY_CATALOG_CACHE[cache_key] = {
+            "cached_at": time.monotonic(),
+            "payload": _json_clone(payload),
+        }
+
+
+def _invalidate_material_registry_catalog_cache(root: Path) -> None:
+    root_key = str(root)
+    with _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK:
+        stale_keys = [
+            cache_key
+            for cache_key in _MATERIAL_REGISTRY_CATALOG_CACHE
+            if cache_key[0] == root_key
+        ]
+        for cache_key in stale_keys:
+            _MATERIAL_REGISTRY_CATALOG_CACHE.pop(cache_key, None)
 
 
 def _rewrite_material_registry_package_channel(
@@ -247,6 +313,7 @@ def _store_material_registry_package(
         zip_path=destination_path,
         manifest=updated_manifest,
     )
+    _invalidate_material_registry_catalog_cache(root)
     return {
         "channel": normalized_channel,
         "package_path": relative,
@@ -312,6 +379,13 @@ def build_material_registry_catalog(
     normalized_channels = normalize_material_registry_channels(channels)
     channel_set = set(normalized_channels)
     root = _registry_packages_root(packages_dir)
+    cached_catalog = _cached_material_registry_catalog(
+        root=root,
+        channels=normalized_channels,
+    )
+    if cached_catalog is not None:
+        return cached_catalog
+
     materials: list[dict[str, Any]] = []
     for zip_path in sorted(root.rglob("*.zip"), key=lambda path: path.as_posix()):
         manifest = _load_bundle_manifest(zip_path)
@@ -331,10 +405,10 @@ def build_material_registry_catalog(
                 root=root,
                 zip_path=zip_path,
                 manifest={"packages": [raw_package]},
+                package_sha256=package_sha256,
+                package_bytes=package_bytes,
+                package_url=package_url,
             )[0]
-            entry["package_sha256"] = package_sha256
-            entry["package_bytes"] = package_bytes
-            entry["package_url"] = package_url
             materials.append(entry)
     materials.sort(
         key=lambda entry: (
@@ -345,12 +419,18 @@ def build_material_registry_catalog(
             str(entry["revision_id"]),
         )
     )
-    return {
+    catalog = {
         "schema_version": _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION,
         "channels": normalized_channels,
         "count": len(materials),
         "materials": materials,
     }
+    _store_material_registry_catalog_cache(
+        root=root,
+        channels=normalized_channels,
+        payload=catalog,
+    )
+    return _json_clone(catalog)
 
 
 def material_registry_package_channels(zip_path: Path) -> list[str]:
