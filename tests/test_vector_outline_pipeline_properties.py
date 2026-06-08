@@ -1052,34 +1052,21 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Negative regression guard for the preview-rendering scope gap (P1).
-# P1 预览渲染范围声明的负向回归守卫。
+# Preview cache handoff guard (P1).
+# P1 预览缓存交接回归守卫。
 # ---------------------------------------------------------------------------
 #
-# Per the SVG vector outline acceptance-notes OQ-5 follow-up
-# (and review feedback from 2026-05-29):
-# this spec exposes the outline mesh in the preview cache as metadata only.
-# The user-visible 2D preview (cache["preview_rgba"] / cache["matched_rgb"])
-# and the user-visible 3D preview built by ``generate_segmented_glb`` do not
-# yet consume ``cache["outline_geometry"]``. That preview-pixel rendering is
-# explicitly tracked as a follow-up spec; this test pins the current shape
-# so a future implementer can flip it from "negative" to "positive" together
-# with the actual rendering wiring.
+# Vector preview must expose the same SVG-derived outline mesh that downstream
+# preview GLB export consumes. Keep this branch-level assertion separate from
+# the segmented-GLB unit test so failures tell us whether the issue is upstream
+# cache handoff or downstream GLB export.
 #
-# 设计文档 OQ-5 的 follow-up：本 spec 仅在 preview cache 暴露 outline 元数据；
-# 用户可见的 2D / 3D 预览像素层目前不消费它。这一测试锁住"当前 preview cache
-# 暴露 outline_geometry 但 generate_segmented_glb / 2D 渲染不读"的事实，
-# 等 follow-up spec 真正把渲染补上时，再翻成正向断言。
+# 矢量预览分支必须把来自 SVG shape union 的 outline mesh 交给下游；分色 GLB
+# 导出是否消费该 mesh 由 segmented GLB 单测覆盖。
 
 
-def test_preview_cache_exposes_outline_geometry_metadata_only() -> None:
-    """Vector preview branch sets ``cache["outline_geometry"]`` /
-    ``cache["outline_added"]`` when ``enable_outline=True``, but the user-
-    visible 2D / 3D preview rendering does not yet consume these keys.
-
-    See ``progress/svg-vector-outline-acceptance-checkpoint.md`` OQ-5
-    follow-up.
-    """
+def test_preview_cache_exposes_outline_geometry_for_glb_export() -> None:
+    """Vector preview branch sets outline geometry for downstream GLB export."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1089,22 +1076,15 @@ def test_preview_cache_exposes_outline_geometry_metadata_only() -> None:
         ) as dst:
             dst.write(src.read())
 
-        # Reuse the existing preview-side helper that scans ctx + cache
-        # for any of {outline_added, outline_geometry, outline_mesh}.
+        # Reuse the existing preview-side helper that scans ctx + cache for
+        # any of {outline_added, outline_geometry, outline_mesh}.
         # 复用既有 helper：它扫描 ctx + cache 中 outline 相关字段是否 truthy。
         prev_present = _preview_outline_present(svg_path, "8-Color Max", 2.0)
 
-        # Metadata exists in ctx + cache (this is what Task 3.3 wires up).
-        # The actual user-visible 2D / 3D preview pixel rendering is
-        # explicitly out of scope per the OQ-5 follow-up notes; this test
-        # pins the current shape so a future renderer can flip it from
-        # "metadata-only" to "actually rendered" without re-deriving.
-        # 元数据存在：Task 3.3 在 ctx 与 cache 都写过。用户可见的 2D / 3D
-        # 像素渲染明确归 follow-up spec；本测试钉住"当前至少在 cache 暴露
-        # outline 元数据"这个最低契约。
+        # GLB export consumes the cached outline in tests/test_segmented_glb_unit.py.
+        # This assertion keeps the upstream vector preview branch from dropping it.
+        # GLB 导出消费逻辑在 segmented GLB 单测中覆盖；这里防止上游分支丢失。
         assert prev_present is True, (
-            "preview branch must expose outline metadata in ctx/cache when "
-            "enable_outline=True (outline_added / outline_geometry truthy); "
-            "see progress/svg-vector-outline-acceptance-checkpoint.md "
-            "OQ-5 follow-up for actual pixel rendering"
+            "preview branch must expose outline geometry in ctx/cache when "
+            "enable_outline=True so segmented GLB export can render it"
         )
