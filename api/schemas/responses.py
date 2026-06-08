@@ -405,6 +405,34 @@ class MaterialSyncInstallResponse(BaseModel):
     installed_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
 
 
+class MaterialSyncRefreshFailureResponse(BaseModel):
+    """One package-level failure during read-only material Registry refresh.
+    耗材 Registry 只读刷新中的单个包级失败。
+    """
+
+    material_id: str = ""
+    revision_id: str = ""
+    package_url: str = ""
+    error: str
+
+
+class MaterialSyncRefreshResponse(BaseModel):
+    """Read-only material Registry refresh response.
+    耗材 Registry 只读刷新响应。
+    """
+
+    status: str
+    message: str
+    registry_url: str
+    channels: list[str] = Field(default_factory=list)
+    checked_count: int
+    installed_count: int
+    skipped_count: int
+    failed_count: int
+    installed_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
+    failures: list[MaterialSyncRefreshFailureResponse] = Field(default_factory=list)
+
+
 class MaterialSolverCacheEntryResponse(BaseModel):
     """Metadata for a single persisted material-solver cache entry.
     单个耗材求解器缓存条目的元数据。

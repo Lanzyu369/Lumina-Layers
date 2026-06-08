@@ -183,6 +183,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
 MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
     "material_sync_install_done",
+    "material_sync_refresh_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",

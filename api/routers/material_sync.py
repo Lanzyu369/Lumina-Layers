@@ -9,9 +9,17 @@ import os
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from api.file_bridge import upload_to_tempfile
-from api.schemas.responses import MaterialSyncInstallResponse, MaterialSyncStatusResponse
+from api.schemas.responses import (
+    MaterialSyncInstallResponse,
+    MaterialSyncRefreshResponse,
+    MaterialSyncStatusResponse,
+)
 from api.structured_logging import get_logger
-from core.single_stage import get_material_sync_status, import_saved_stage_a_material_archives
+from core.single_stage import (
+    get_material_sync_status,
+    import_saved_stage_a_material_archives,
+    refresh_material_sync_from_registry,
+)
 
 router = APIRouter(prefix="/api/material-sync", tags=["Material Sync"])
 log = get_logger(__name__)
@@ -95,4 +103,44 @@ async def material_sync_install(
         message=f"Installed {len(result.imported_materials)} material packages",
         installed_count=len(result.imported_materials),
         installed_materials=result.imported_materials,
+    )
+
+
+@router.post("/refresh", response_model=MaterialSyncRefreshResponse)
+async def material_sync_refresh() -> MaterialSyncRefreshResponse:
+    """Pull read-only material package updates from the configured Registry.
+    从已配置 Registry 只读拉取耗材包更新。
+
+    Returns:
+        MaterialSyncRefreshResponse: Refresh summary and per-package failures.
+            （刷新摘要与包级失败明细）
+    """
+    try:
+        result = refresh_material_sync_from_registry()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    log.info(
+        "Material registry refresh completed",
+        extra={
+            "event": "material_sync_refresh_done",
+            "registry_url": result["registry_url"],
+            "channels": result["channels"],
+            "checked_count": result["checked_count"],
+            "installed_count": result["installed_count"],
+            "skipped_count": result["skipped_count"],
+            "failed_count": result["failed_count"],
+        },
+    )
+    return MaterialSyncRefreshResponse(
+        status="ok" if int(result["failed_count"]) == 0 else "partial",
+        message=(
+            f"Installed {result['installed_count']} material packages; "
+            f"skipped {result['skipped_count']}; failed {result['failed_count']}"
+        ),
+        **result,
     )

@@ -7,9 +7,11 @@ import hashlib
 import zipfile
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from core.single_stage import refresh_material_sync_from_registry
 
 
 def _client() -> TestClient:
@@ -164,6 +166,178 @@ def test_material_sync_install_rejects_non_zip_upload(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_material_sync_refresh_requires_registry_url(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_URL", raising=False)
+
+    response = _client().post("/api/material-sync/refresh")
+
+    assert response.status_code == 422
+    assert "Material registry URL is not configured" in response.json()["detail"]
+
+
+def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> None:
+    def _fake_refresh_material_sync_from_registry() -> dict[str, object]:
+        return {
+            "registry_url": "https://registry.test/v1",
+            "channels": ["official"],
+            "checked_count": 1,
+            "installed_count": 1,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "installed_materials": [
+                {
+                    "material_name": "PLA Basic Imported",
+                    "directory_name": "BrandA/pla-basic",
+                    "brand": "BrandA",
+                    "archive_path": "materials/BrandA/pla-basic/material.json",
+                    "stage_a_params_path": (
+                        "materials/BrandA/pla-basic/stage_A_parameters.json"
+                    ),
+                }
+            ],
+            "failures": [],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.refresh_material_sync_from_registry",
+        _fake_refresh_material_sync_from_registry,
+    )
+
+    response = _client().post("/api/material-sync/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["registry_url"] == "https://registry.test/v1"
+    assert body["channels"] == ["official"]
+    assert body["installed_count"] == 1
+    assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+
+
+def test_refresh_material_sync_from_registry_installs_new_revision_and_skips_same_revision(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_registry_test",
+        revision_id="rev_registry_test",
+    )
+    package_bytes = package_path.read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    request_counts = {"catalog": 0, "package": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            request_counts["catalog"] += 1
+            assert request.headers["authorization"] == "Bearer team-token"
+            assert request.url.params.get_list("channel") == ["official", "team"]
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "cursor": "cursor-1",
+                    "materials": [
+                        {
+                            "material_id": "mat_registry_test",
+                            "revision_id": "rev_registry_test",
+                            "content_hash": content_hash,
+                            "channel": "team",
+                            "package_url": "/v1/packages/material_package.zip",
+                            "package_sha256": package_sha256,
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            request_counts["package"] += 1
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+
+    first = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        channels=["official", "team"],
+        token="team-token",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+    second = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        channels=["official", "team"],
+        token="team-token",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+
+    assert first["checked_count"] == 1
+    assert first["installed_count"] == 1
+    assert first["skipped_count"] == 0
+    assert first["failed_count"] == 0
+    assert first["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+    assert second["installed_count"] == 0
+    assert second["skipped_count"] == 1
+    assert request_counts == {"catalog": 2, "package": 1}
+
+    index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
+    assert "https://registry.test/v1" in index["registries"]
+    assert index["registries"]["https://registry.test/v1"]["channels"] == [
+        "official",
+        "team",
+    ]
+
+
+def test_refresh_material_sync_from_registry_reports_corrupt_package_without_install(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": "mat_sync_test",
+                            "revision_id": "rev_sync_test",
+                            "content_hash": content_hash,
+                            "channel": "official",
+                            "package_url": "/v1/packages/material_package.zip",
+                            "package_sha256": "sha256:deadbeef",
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    result = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert result["checked_count"] == 1
+    assert result["installed_count"] == 0
+    assert result["failed_count"] == 1
+    assert result["failures"][0]["material_id"] == "mat_sync_test"
+    assert "package_sha256" in result["failures"][0]["error"]
+    assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
 
 
 def test_material_sync_status_lists_installed_package_and_local_presence(

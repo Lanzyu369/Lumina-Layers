@@ -10,8 +10,9 @@ import uuid
 import zipfile
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Sequence
+from urllib.parse import urljoin
 
 import cv2
 import numpy as np
@@ -1362,9 +1363,14 @@ def _material_package_identity(
     relative_directory_name: str,
     material_name: str,
     content_hash: str,
+    existing_material_id: Any = None,
 ) -> tuple[str, str]:
-    material_seed = f"{relative_directory_name}\n{material_name}\n{content_hash}"
-    material_id = f"mat_{_sha256_bytes(material_seed.encode('utf-8'))[:26]}"
+    existing_id = str(existing_material_id or "").strip()
+    if existing_id:
+        material_id = existing_id
+    else:
+        material_seed = f"{relative_directory_name}\n{material_name}"
+        material_id = f"mat_{_sha256_bytes(material_seed.encode('utf-8'))[:26]}"
     revision_id = f"rev_{content_hash.removeprefix('sha256:')[:26]}"
     return material_id, revision_id
 
@@ -1442,6 +1448,7 @@ def _build_material_bundle_package_manifest(
         relative_directory_name=relative_directory_name,
         material_name=display["material_name"],
         content_hash=content_hash,
+        existing_material_id=archive_payload.get("material_id"),
     )
     return (
         {
@@ -1524,7 +1531,19 @@ def _load_material_bundle_manifest(extracted_root: Path) -> dict[str, Any] | Non
 def _safe_manifest_relative_path(raw_path: Any) -> Path:
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise ValueError("Material bundle file path must be a non-empty string")
-    relative = Path(raw_path)
+    normalized = raw_path.strip().replace("\\", "/")
+    windows_relative = PureWindowsPath(raw_path.strip())
+    if (
+        windows_relative.is_absolute()
+        or windows_relative.drive
+        or windows_relative.anchor
+        or normalized.startswith("/")
+    ):
+        raise ValueError(f"Unsafe material bundle file path: {raw_path}")
+    parts = [segment for segment in normalized.split("/") if segment]
+    if not parts or any(segment in {".", ".."} for segment in parts):
+        raise ValueError(f"Unsafe material bundle file path: {raw_path}")
+    relative = Path(*parts)
     if (
         relative.is_absolute()
         or relative.drive
@@ -1548,12 +1567,67 @@ def _verify_material_bundle_package(
     if not isinstance(files, list) or not files:
         raise ValueError(f"Material bundle package {material_id} is missing files")
 
-    normalized_records: list[dict[str, Any]] = []
-    roles: set[str] = set()
+    normalized_local_directory = _normalize_relative_directory_name(
+        str(package.get("local_directory") or "")
+    )
+    material_dir_relative = Path("materials").joinpath(
+        *normalized_local_directory.split("/")
+    )
+    expected_material_archive_path = material_dir_relative / "material.json"
+
+    required_roles = {"material_archive", "stage_a_parameters"}
+    parsed_records: list[tuple[dict[str, Any], Path, str]] = []
+    required_role_paths: dict[str, Path] = {}
     for record in files:
         if not isinstance(record, dict):
             raise ValueError(f"Material bundle package {material_id} has invalid file record")
         relative_path = _safe_manifest_relative_path(record.get("path"))
+        role = str(record.get("role") or "")
+        if role in required_roles:
+            if role in required_role_paths:
+                raise ValueError(
+                    f"Material bundle package {material_id} has duplicate required role: {role}"
+                )
+            required_role_paths[role] = relative_path
+        parsed_records.append((record, relative_path, role))
+
+    if required_roles - set(required_role_paths):
+        raise ValueError(f"Material bundle package {material_id} is missing required roles")
+
+    material_archive_role_path = required_role_paths["material_archive"]
+    if material_archive_role_path.as_posix() != expected_material_archive_path.as_posix():
+        raise ValueError(
+            "Material bundle package "
+            f"{material_id} material_archive role must point to "
+            f"{expected_material_archive_path.as_posix()}"
+        )
+
+    material_archive_file_path = extracted_root / expected_material_archive_path
+    if not material_archive_file_path.is_file():
+        raise FileNotFoundError(
+            "Material bundle file is missing: "
+            f"{expected_material_archive_path.as_posix()}"
+        )
+    archive_payload = _load_json_object(
+        material_archive_file_path,
+        "Material bundle material archive is not valid UTF-8 JSON",
+    )
+    expected_stage_a_path = material_dir_relative / (
+        _resolve_stage_a_params_path(
+            material_archive_file_path.parent,
+            archive_payload,
+        ).relative_to(material_archive_file_path.parent)
+    )
+    stage_a_role_path = required_role_paths["stage_a_parameters"]
+    if stage_a_role_path.as_posix() != expected_stage_a_path.as_posix():
+        raise ValueError(
+            "Material bundle package "
+            f"{material_id} stage_a_parameters role must point to "
+            f"{expected_stage_a_path.as_posix()}"
+        )
+
+    normalized_records: list[dict[str, Any]] = []
+    for record, relative_path, role in parsed_records:
         file_path = extracted_root / relative_path
         if not file_path.is_file():
             raise FileNotFoundError(f"Material bundle file is missing: {relative_path.as_posix()}")
@@ -1564,8 +1638,6 @@ def _verify_material_bundle_package(
         actual_hash = _sha256_file(file_path)
         if expected_hash != actual_hash:
             raise ValueError(f"Material bundle file hash mismatch: {relative_path.as_posix()}")
-        role = str(record.get("role") or "")
-        roles.add(role)
         normalized_records.append(
             {
                 "path": relative_path.as_posix(),
@@ -1576,8 +1648,6 @@ def _verify_material_bundle_package(
             }
         )
 
-    if "material_archive" not in roles or "stage_a_parameters" not in roles:
-        raise ValueError(f"Material bundle package {material_id} is missing required roles")
     expected_content_hash = str(package.get("content_hash") or "")
     actual_content_hash = _material_content_hash_from_file_records(normalized_records)
     if expected_content_hash != actual_content_hash:
@@ -1734,6 +1804,37 @@ def _record_material_sync_entries(
     _write_material_sync_index(target_root, index)
 
 
+def _record_material_registry_refresh(
+    *,
+    target_root: Path,
+    registry_url: str,
+    channels: list[str],
+    cursor: Any,
+    checked_count: int,
+    installed_count: int,
+    skipped_count: int,
+    failed_count: int,
+) -> None:
+    now = _now_iso()
+    index = _load_material_sync_index(target_root)
+    registries = index.setdefault("registries", {})
+    if not isinstance(registries, dict):
+        registries = {}
+        index["registries"] = registries
+    registries[registry_url] = {
+        "url": registry_url,
+        "channels": list(channels),
+        "last_refresh_at": now,
+        "last_cursor": str(cursor) if cursor is not None else None,
+        "checked_count": checked_count,
+        "installed_count": installed_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+    }
+    index["last_sync_at"] = now
+    _write_material_sync_index(target_root, index)
+
+
 def _installed_material_bundle_revision_path(
     *,
     target_root: Path,
@@ -1807,6 +1908,89 @@ def _import_target_material_dir(target_root: Path, directory_name: str) -> Path:
         candidate = requested_path.parent / f"{requested_path.name}_{suffix}_{collision_index}"
         collision_index += 1
     return candidate
+
+
+def _normalize_material_registry_url(registry_url: str | None) -> str:
+    raw_url = str(
+        registry_url
+        if registry_url is not None
+        else os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "")
+    ).strip()
+    if not raw_url:
+        raise ValueError("Material registry URL is not configured")
+    if not raw_url.startswith(("http://", "https://")):
+        raise ValueError("Material registry URL must be http:// or https://")
+    return raw_url.rstrip("/")
+
+
+def _normalize_material_registry_channels(channels: Sequence[str] | None) -> list[str]:
+    if channels is None:
+        raw_channels = os.environ.get("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official")
+        candidates = re.split(r"[,;\s]+", raw_channels)
+    else:
+        candidates = [str(channel) for channel in channels]
+    normalized: list[str] = []
+    for raw_channel in candidates:
+        channel = str(raw_channel).strip()
+        if not channel:
+            continue
+        if not re.fullmatch(r"[a-z0-9_-]+", channel):
+            raise ValueError(f"Material registry channel is invalid: {channel}")
+        if channel not in normalized:
+            normalized.append(channel)
+    return normalized or ["official"]
+
+
+def _sha256_hex_from_catalog(value: Any) -> str:
+    raw_value = str(value or "").strip().lower()
+    if raw_value.startswith("sha256:"):
+        raw_value = raw_value.split(":", 1)[1]
+    if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
+        raise ValueError("Material registry package_sha256 is invalid")
+    return raw_value
+
+
+def _material_registry_catalog_entries(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise ValueError("Material registry catalog response must be a JSON object")
+    entries = payload.get("materials")
+    if entries is None:
+        entries = payload.get("packages")
+    if not isinstance(entries, list):
+        raise ValueError("Material registry catalog response is missing materials")
+    normalized_entries: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Material registry catalog contains invalid entry")
+        normalized_entries.append(entry)
+    return normalized_entries
+
+
+def _material_registry_catalog_url(registry_url: str) -> str:
+    return f"{registry_url}/materials/catalog"
+
+
+def _material_registry_package_url(registry_url: str, raw_package_url: Any) -> str:
+    package_url = str(raw_package_url or "").strip()
+    if not package_url:
+        raise ValueError("Material registry catalog entry is missing package_url")
+    resolved_url = urljoin(f"{registry_url}/", package_url)
+    if not resolved_url.startswith(("http://", "https://")):
+        raise ValueError("Material registry package_url must be http:// or https://")
+    return resolved_url
+
+
+def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
+    temp_root = Path(TEMP_DIR)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix="material_registry_package_",
+        suffix=".zip",
+        dir=temp_root,
+    )
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(package_bytes)
+    return Path(temp_name)
 
 
 
@@ -3846,6 +4030,156 @@ def import_saved_stage_a_material_archives(
         return MaterialArchiveImportResult(imported_materials=imported_materials)
     finally:
         shutil.rmtree(extract_root, ignore_errors=True)
+
+
+def refresh_material_sync_from_registry(
+    *,
+    registry_url: str | None = None,
+    channels: Sequence[str] | None = None,
+    token: str | None = None,
+    materials_dir: str | None = None,
+    timeout_s: float | None = None,
+    transport: Any = None,
+) -> dict[str, Any]:
+    """Pull read-only material package revisions from a configured Registry.
+    从配置的 Registry 只读拉取耗材包 revision 并安装到本地库。
+
+    The Registry is only a download source in this MVP: no publish/upload
+    capability is exposed here, so ordinary clients remain read-only.
+    MVP 阶段该 Registry 只作为下载源；这里不提供发布/上传能力，普通客户端保持只读。
+    """
+    import httpx
+
+    normalized_registry_url = _normalize_material_registry_url(registry_url)
+    normalized_channels = _normalize_material_registry_channels(channels)
+    auth_token = str(
+        token
+        if token is not None
+        else os.environ.get("LUMINA_MATERIAL_REGISTRY_TOKEN", "")
+    ).strip()
+    if timeout_s is None:
+        raw_timeout = os.environ.get("LUMINA_MATERIAL_REGISTRY_TIMEOUT_S", "30")
+        try:
+            timeout_s = float(raw_timeout)
+        except ValueError:
+            timeout_s = 30.0
+    target_root = Path(materials_dir or MATERIALS_DIR)
+    target_root.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    client_kwargs: dict[str, Any] = {
+        "timeout": float(timeout_s),
+        "follow_redirects": True,
+    }
+    if transport is not None:
+        client_kwargs["transport"] = transport
+
+    with httpx.Client(**client_kwargs) as client:
+        try:
+            catalog_response = client.get(
+                _material_registry_catalog_url(normalized_registry_url),
+                params=[("channel", channel) for channel in normalized_channels],
+                headers=headers,
+            )
+            catalog_response.raise_for_status()
+            catalog_payload = catalog_response.json()
+            catalog_entries = _material_registry_catalog_entries(catalog_payload)
+        except httpx.HTTPError as exc:
+            raise RuntimeError("Material registry catalog request failed") from exc
+        except ValueError as exc:
+            raise ValueError("Material registry catalog response is invalid") from exc
+
+        installed_materials: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        skipped_count = 0
+        for entry in catalog_entries:
+            material_id = str(entry.get("material_id") or "").strip()
+            revision_id = str(entry.get("revision_id") or "").strip()
+            package_url = str(entry.get("package_url") or "").strip()
+            try:
+                content_hash = str(entry.get("content_hash") or "").strip()
+                if not material_id or not revision_id or not content_hash:
+                    raise ValueError(
+                        "Material registry catalog entry is missing material identity"
+                    )
+                if _installed_material_bundle_revision_path(
+                    target_root=target_root,
+                    package={
+                        "material_id": material_id,
+                        "revision_id": revision_id,
+                        "content_hash": content_hash,
+                    },
+                ) is not None:
+                    skipped_count += 1
+                    continue
+
+                resolved_package_url = _material_registry_package_url(
+                    normalized_registry_url,
+                    package_url,
+                )
+                expected_package_sha256 = _sha256_hex_from_catalog(
+                    entry.get("package_sha256")
+                )
+                package_response = client.get(resolved_package_url, headers=headers)
+                package_response.raise_for_status()
+                package_bytes = package_response.content
+                actual_package_sha256 = _sha256_bytes(package_bytes)
+                if actual_package_sha256 != expected_package_sha256:
+                    raise ValueError(
+                        "Material registry package_sha256 mismatch: "
+                        f"{material_id}/{revision_id}"
+                    )
+                temp_package_path = _write_temp_material_registry_package(package_bytes)
+                try:
+                    import_result = import_saved_stage_a_material_archives(
+                        archive_path=str(temp_package_path),
+                        materials_dir=str(target_root),
+                    )
+                finally:
+                    try:
+                        temp_package_path.unlink()
+                    except OSError:
+                        pass
+                installed_materials.extend(import_result.imported_materials)
+            except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                failures.append(
+                    {
+                        "material_id": material_id,
+                        "revision_id": revision_id,
+                        "package_url": package_url,
+                        "error": str(exc),
+                    }
+                )
+
+    checked_count = len(catalog_entries)
+    installed_count = len(installed_materials)
+    failed_count = len(failures)
+    cursor = (
+        catalog_payload.get("cursor")
+        if isinstance(catalog_payload, dict)
+        else None
+    )
+    _record_material_registry_refresh(
+        target_root=target_root,
+        registry_url=normalized_registry_url,
+        channels=normalized_channels,
+        cursor=cursor,
+        checked_count=checked_count,
+        installed_count=installed_count,
+        skipped_count=skipped_count,
+        failed_count=failed_count,
+    )
+    return {
+        "registry_url": normalized_registry_url,
+        "channels": normalized_channels,
+        "checked_count": checked_count,
+        "installed_count": installed_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+        "installed_materials": installed_materials,
+        "failures": failures,
+    }
 
 
 def list_saved_stage_a_material_archives(

@@ -44,6 +44,7 @@ MAIN_APP_SINGLE_STAGE_PATHS: List[str] = [
     "/api/extractor/gradient-card-materials",
     "/api/extractor/material-solver-cache/status",
     "/api/material-sync/install",
+    "/api/material-sync/refresh",
     "/api/material-sync/status",
 ]
 

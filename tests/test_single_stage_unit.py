@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import hashlib
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import core.single_stage.materials as materials_module
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
@@ -2099,6 +2100,61 @@ def test_export_saved_stage_a_material_archives_writes_v2_bundle_manifest_and_ex
     )
 
 
+def test_export_saved_stage_a_material_archives_keeps_material_id_stable_across_revisions(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "PLA Basic",
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    first_zip = tmp_path / "materials_export_first.zip"
+    second_zip = tmp_path / "materials_export_second.zip"
+
+    stage_a_path.write_text(
+        json.dumps({"parameters": {"revision": 1}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    export_saved_stage_a_material_archives(
+        directory_names=["BrandA/pla-basic"],
+        materials_dir=str(materials_root),
+        output_path=str(first_zip),
+    )
+    stage_a_path.write_text(
+        json.dumps({"parameters": {"revision": 2}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    export_saved_stage_a_material_archives(
+        directory_names=["BrandA/pla-basic"],
+        materials_dir=str(materials_root),
+        output_path=str(second_zip),
+    )
+
+    with zipfile.ZipFile(first_zip, "r") as archive:
+        first_package = json.loads(
+            archive.read("lumina_material_bundle.json").decode("utf-8")
+        )["packages"][0]
+    with zipfile.ZipFile(second_zip, "r") as archive:
+        second_package = json.loads(
+            archive.read("lumina_material_bundle.json").decode("utf-8")
+        )["packages"][0]
+
+    assert second_package["material_id"] == first_package["material_id"]
+    assert second_package["revision_id"] != first_package["revision_id"]
+    assert second_package["content_hash"] != first_package["content_hash"]
+
+
 def test_import_saved_stage_a_material_archives_copies_materials_and_renames_collisions(
     tmp_path: Path,
 ) -> None:
@@ -2428,6 +2484,278 @@ def test_import_saved_stage_a_material_archives_rejects_v2_hash_mismatch(
     assert (materials_root / "_sync" / "index.json").exists() is False
 
 
+def test_import_saved_stage_a_material_archives_rejects_v2_role_path_mismatch(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_role_mismatch.zip"
+    material_payload = json.dumps(
+        {
+            "brand": "BrandA",
+            "material_name": "PLA Basic Imported",
+            "stage_a_params_file": "stage_A_parameters.json",
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    sidecar_payload = b'{"not":"material archive"}'
+    stage_a_payload = json.dumps(
+        {"parameters": {}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    sidecar_hash = hashlib.sha256(sidecar_payload).hexdigest()
+    stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
+    content_hash = hashlib.sha256(
+        f"material.json:{sidecar_hash}\nstage_A_parameters.json:{stage_a_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("materials/BrandA/pla-basic/material.json", material_payload)
+        archive.writestr("materials/BrandA/pla-basic/sidecar.json", sidecar_payload)
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            stage_a_payload,
+        )
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_role_mismatch",
+                            "revision_id": "rev_role_mismatch",
+                            "content_hash": f"sha256:{content_hash}",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {
+                                "brand": "BrandA",
+                                "material_name": "PLA Basic Imported",
+                            },
+                            "files": [
+                                {
+                                    "path": "materials/BrandA/pla-basic/sidecar.json",
+                                    "role": "material_archive",
+                                    "sha256": sidecar_hash,
+                                    "bytes": len(sidecar_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                    "role": "stage_a_parameters",
+                                    "sha256": stage_a_hash,
+                                    "bytes": len(stage_a_payload),
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    materials_root = tmp_path / "materials"
+    with pytest.raises(ValueError, match="material_archive role"):
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
+def test_import_saved_stage_a_material_archives_rejects_v2_stage_a_role_path_mismatch(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_stage_role_mismatch.zip"
+    material_payload = json.dumps(
+        {
+            "brand": "BrandA",
+            "material_name": "PLA Basic Imported",
+            "stage_a_params_file": "stage_A_parameters.json",
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    stage_a_payload = json.dumps(
+        {"parameters": {}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    sidecar_payload = b'{"not":"stage a parameters"}'
+    material_hash = hashlib.sha256(material_payload).hexdigest()
+    sidecar_hash = hashlib.sha256(sidecar_payload).hexdigest()
+    content_hash = hashlib.sha256(
+        f"material.json:{material_hash}\nsidecar.json:{sidecar_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("materials/BrandA/pla-basic/material.json", material_payload)
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            stage_a_payload,
+        )
+        archive.writestr("materials/BrandA/pla-basic/sidecar.json", sidecar_payload)
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_stage_role_mismatch",
+                            "revision_id": "rev_stage_role_mismatch",
+                            "content_hash": f"sha256:{content_hash}",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {
+                                "brand": "BrandA",
+                                "material_name": "PLA Basic Imported",
+                            },
+                            "files": [
+                                {
+                                    "path": "materials/BrandA/pla-basic/material.json",
+                                    "role": "material_archive",
+                                    "sha256": material_hash,
+                                    "bytes": len(material_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": "materials/BrandA/pla-basic/sidecar.json",
+                                    "role": "stage_a_parameters",
+                                    "sha256": sidecar_hash,
+                                    "bytes": len(sidecar_payload),
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    materials_root = tmp_path / "materials"
+    with pytest.raises(ValueError, match="stage_a_parameters role"):
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
+def test_import_saved_stage_a_material_archives_rejects_v2_duplicate_required_roles(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_duplicate_role.zip"
+    material_payload = json.dumps(
+        {
+            "brand": "BrandA",
+            "material_name": "PLA Basic Imported",
+            "stage_a_params_file": "stage_A_parameters.json",
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    stage_a_payload = json.dumps(
+        {"parameters": {}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    sidecar_payload = b'{"duplicate":"material role"}'
+    material_hash = hashlib.sha256(material_payload).hexdigest()
+    stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
+    sidecar_hash = hashlib.sha256(sidecar_payload).hexdigest()
+    content_hash = hashlib.sha256(
+        f"material.json:{material_hash}\nstage_A_parameters.json:{stage_a_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("materials/BrandA/pla-basic/material.json", material_payload)
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            stage_a_payload,
+        )
+        archive.writestr("materials/BrandA/pla-basic/sidecar.json", sidecar_payload)
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_duplicate_role",
+                            "revision_id": "rev_duplicate_role",
+                            "content_hash": f"sha256:{content_hash}",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {
+                                "brand": "BrandA",
+                                "material_name": "PLA Basic Imported",
+                            },
+                            "files": [
+                                {
+                                    "path": "materials/BrandA/pla-basic/material.json",
+                                    "role": "material_archive",
+                                    "sha256": material_hash,
+                                    "bytes": len(material_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": "materials/BrandA/pla-basic/sidecar.json",
+                                    "role": "material_archive",
+                                    "sha256": sidecar_hash,
+                                    "bytes": len(sidecar_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                    "role": "stage_a_parameters",
+                                    "sha256": stage_a_hash,
+                                    "bytes": len(stage_a_payload),
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    materials_root = tmp_path / "materials"
+    with pytest.raises(ValueError, match="duplicate required role"):
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
 def test_import_saved_stage_a_material_archives_rejects_v2_drive_relative_manifest_path(
     tmp_path: Path,
 ) -> None:
@@ -2488,6 +2816,15 @@ def test_import_saved_stage_a_material_archives_rejects_v2_drive_relative_manife
     assert materials_root.exists() is True
     assert (materials_root / "BrandA" / "pla-basic").exists() is False
     assert (materials_root / "_sync" / "index.json").exists() is False
+
+
+def test_material_bundle_manifest_rejects_windows_drive_relative_path_under_posix_semantics(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(materials_module, "Path", PurePosixPath)
+
+    with pytest.raises(ValueError, match="Unsafe material bundle file path"):
+        materials_module._safe_manifest_relative_path("C:material.json")
 
 
 def test_import_saved_stage_a_material_archives_skips_same_v2_revision(
