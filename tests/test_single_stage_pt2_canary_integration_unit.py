@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
+import threading
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -706,7 +709,7 @@ class TestMaterialSolverRuntimeCanary:
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.load_material_candidate_runtime",
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
             lambda *args, **kwargs: None,
             raising=False,
         )
@@ -738,6 +741,55 @@ class TestMaterialSolverRuntimeCanary:
         assert record.material_count == 2
         assert record.candidate_budget == 32
 
+    def test_material_solver_runtime_status_uses_metadata_without_loading_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        cache_path = tmp_path / "candidate-runtime.npz"
+        cache_path.write_bytes(b"x" * 64)
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+
+        def _fail_full_runtime_load(*args, **kwargs):
+            raise AssertionError("status endpoint must not load runtime arrays")
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            _fail_full_runtime_load,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                cache_file_path=cache_path,
+                cache_file_size_bytes=cache_path.stat().st_size,
+            ),
+            raising=False,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-runtime/status",
+            data=_solver_runtime_form_data(),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cached"] is True
+        assert body["entry"]["candidate_count"] == 32
+        assert body["entry"]["cache_file_size_bytes"] == 64
+        assert body["entry"]["cache_file_path"] == str(cache_path)
+
     def test_material_solver_runtime_build_logs_sessionless_canary(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -753,6 +805,10 @@ class TestMaterialSolverRuntimeCanary:
                 SimpleNamespace(directory_name=name) for name in directory_names
             ],
         )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
 
         seen_configs = []
 
@@ -766,6 +822,11 @@ class TestMaterialSolverRuntimeCanary:
         monkeypatch.setattr(
             "api.routers.single_stage.build_material_candidate_runtime",
             _build_runtime_stub,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: None,
             raising=False,
         )
         monkeypatch.setattr(
@@ -808,6 +869,90 @@ class TestMaterialSolverRuntimeCanary:
         assert record.candidate_budget == 32
         assert record.candidate_count == 32
         assert record.cache_file_size_bytes == 64
+
+    def test_material_solver_runtime_build_single_flights_same_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        cache_path = tmp_path / "candidate-runtime.npz"
+        build_started = threading.Event()
+        release_build = threading.Event()
+        calls_lock = threading.Lock()
+        build_call_count = 0
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+
+        def _metadata_if_saved(*args, **kwargs):
+            if not cache_path.exists():
+                return None
+            return SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                cache_file_path=cache_path,
+                cache_file_size_bytes=cache_path.stat().st_size,
+            )
+
+        def _build_runtime_stub(*args, **kwargs):
+            nonlocal build_call_count
+            with calls_lock:
+                build_call_count += 1
+            build_started.set()
+            assert release_build.wait(timeout=5)
+            return SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            )
+
+        def _save_runtime_stub(runtime):
+            cache_path.write_bytes(b"x" * 64)
+            return cache_path
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            _metadata_if_saved,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_candidate_runtime",
+            _build_runtime_stub,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_candidate_runtime",
+            _save_runtime_stub,
+            raising=False,
+        )
+
+        def _post_build():
+            return client.post(
+                "/api/extractor/material-solver-runtime/build",
+                data=_solver_runtime_form_data(),
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(_post_build)
+            assert build_started.wait(timeout=5)
+            second = executor.submit(_post_build)
+            time.sleep(0.1)
+            release_build.set()
+            first_response = first.result(timeout=5)
+            second_response = second.result(timeout=5)
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert build_call_count == 1
+        assert first_response.json()["entry"]["cache_file_size_bytes"] == 64
+        assert second_response.json()["entry"]["cache_file_size_bytes"] == 64
 
     def test_material_solver_runtime_details_logs_sessionless_canary(
         self,

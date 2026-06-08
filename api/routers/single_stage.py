@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 import zipfile
 from typing import Any, Callable
@@ -82,10 +83,11 @@ from core.material_candidate_cache import (
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
     MAX_PERSISTED_CANDIDATE_BUDGET,
     MaterialCandidateCacheConfig,
+    MaterialCandidateRuntimeMetadata,
     build_material_candidate_runtime,
-    candidate_cache_file_path,
     delete_material_candidate_runtime,
     load_material_candidate_runtime,
+    load_material_candidate_runtime_metadata,
     save_material_candidate_runtime,
 )
 from core.material_color_solver import (
@@ -118,6 +120,9 @@ GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
 MaterialCacheEvictor = Callable[[str], int]
+_RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
+_RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
+_RUNTIME_BUILD_GLOBAL_SEMAPHORE = threading.BoundedSemaphore(1)
 
 
 def _noop_material_cache_evictor(_directory_name: str) -> int:
@@ -1276,6 +1281,42 @@ def _runtime_entry_from_metadata(
     )
 
 
+def _runtime_entry_from_metadata_record(record: Any) -> MaterialSolverRuntimeEntryResponse:
+    return _runtime_entry_from_metadata(
+        record.metadata,
+        cache_file_size_bytes=int(record.cache_file_size_bytes),
+        cache_file_path=str(record.cache_file_path),
+    )
+
+
+def _runtime_build_key(
+    *,
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    candidate_budget: int,
+) -> tuple[str, int, str, str, int]:
+    return (
+        str(palette_hash),
+        int(layer_count),
+        f"{float(layer_height_mm):.12g}",
+        str(substrate),
+        int(candidate_budget),
+    )
+
+
+def _get_runtime_build_lock(
+    key: tuple[str, int, str, str, int],
+) -> threading.Lock:
+    with _RUNTIME_BUILD_LOCKS_GUARD:
+        lock = _RUNTIME_BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _RUNTIME_BUILD_LOCKS[key] = lock
+        return lock
+
+
 @router.get("/material-solver-caches")
 async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
     """List every persisted solver-cache entry with its metadata.
@@ -1549,14 +1590,14 @@ async def material_solver_runtime_status(
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
     palette_hash = fingerprint_palette(materials)
-    runtime = load_material_candidate_runtime(
+    metadata_record = load_material_candidate_runtime_metadata(
         materials,
         layer_count,
         layer_height_mm,
         substrate,
         candidate_budget=candidate_budget,
     )
-    cached_flag = runtime is not None
+    cached_flag = metadata_record is not None
     log.info(
         "Material solver runtime status checked",
         extra={
@@ -1570,7 +1611,7 @@ async def material_solver_runtime_status(
             "candidate_budget": candidate_budget,
         },
     )
-    if runtime is None:
+    if metadata_record is None:
         return MaterialSolverRuntimeStatusResponse(
             status="ok",
             message="No hybrid runtime found for this combination",
@@ -1583,22 +1624,7 @@ async def material_solver_runtime_status(
             entry=None,
         )
 
-    npz_path = candidate_cache_file_path(
-        materials,
-        layer_count,
-        layer_height_mm,
-        substrate,
-        candidate_budget=candidate_budget,
-    )
-    try:
-        file_size = npz_path.stat().st_size
-    except OSError:
-        file_size = 0
-    entry = _runtime_entry_from_metadata(
-        runtime.metadata,
-        cache_file_size_bytes=file_size,
-        cache_file_path=str(npz_path),
-    )
+    entry = _runtime_entry_from_metadata_record(metadata_record)
     return MaterialSolverRuntimeStatusResponse(
         status="ok",
         message="Hybrid runtime found",
@@ -1627,62 +1653,96 @@ async def material_solver_runtime_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
     )
+    build_key = _runtime_build_key(
+        palette_hash=palette_hash,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        candidate_budget=candidate_budget,
+    )
 
-    def _run_build():
-        return build_material_candidate_runtime(
-            materials=materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
-            config=config,
+    def _load_existing_metadata():
+        return load_material_candidate_runtime_metadata(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=candidate_budget,
         )
 
+    def _run_build_or_reuse():
+        key_lock = _get_runtime_build_lock(build_key)
+        with key_lock:
+            metadata_record = _load_existing_metadata()
+            if metadata_record is not None:
+                return metadata_record, False
+            with _RUNTIME_BUILD_GLOBAL_SEMAPHORE:
+                metadata_record = _load_existing_metadata()
+                if metadata_record is not None:
+                    return metadata_record, False
+                runtime = build_material_candidate_runtime(
+                    materials=materials,
+                    layer_count=layer_count,
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    config=config,
+                )
+                try:
+                    npz_path = save_material_candidate_runtime(runtime)
+                except OSError as exc:
+                    raise RuntimeError(f"Failed to save runtime: {exc}") from exc
+                try:
+                    file_size = npz_path.stat().st_size
+                except OSError:
+                    file_size = 0
+                return (
+                    MaterialCandidateRuntimeMetadata(
+                        metadata=runtime.metadata,
+                        cache_file_path=npz_path,
+                        cache_file_size_bytes=file_size,
+                    ),
+                    True,
+                )
+
     try:
-        runtime = await anyio.to_thread.run_sync(_run_build)
+        metadata_record, built = await anyio.to_thread.run_sync(_run_build_or_reuse)
     except (ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    try:
-        npz_path = await anyio.to_thread.run_sync(
-            save_material_candidate_runtime,
-            runtime,
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save runtime: {exc}")
-
-    try:
-        file_size = npz_path.stat().st_size
-    except OSError:
-        file_size = 0
-    entry = _runtime_entry_from_metadata(
-        runtime.metadata,
-        cache_file_size_bytes=file_size,
-        cache_file_path=str(npz_path),
-    )
+    entry = _runtime_entry_from_metadata_record(metadata_record)
     log.info(
-        "Material solver runtime built",
+        "Material solver runtime build checked",
         extra={
             "event": "material_solver_runtime_build_done",
+            "built": bool(built),
             "material_count": len(dir_names),
             "layer_count": layer_count,
             "layer_height_mm": layer_height_mm,
             "substrate": substrate,
             "candidate_budget": candidate_budget,
             "candidate_count": entry.candidate_count,
-            "cache_file_size_bytes": file_size,
+            "cache_file_size_bytes": entry.cache_file_size_bytes,
         },
     )
     return MaterialSolverRuntimeBuildResponse(
         status="ok",
         message=(
-            f"Built hybrid material solver runtime for {len(dir_names)} materials, "
-            f"N={layer_count}, t={layer_height_mm} mm, substrate={substrate}, "
-            f"budget={candidate_budget} ({entry.candidate_count} candidates)"
+            (
+                f"Built hybrid material solver runtime for {len(dir_names)} materials"
+                if built
+                else f"Hybrid material solver runtime already exists for {len(dir_names)} materials"
+            )
+            + (
+                f", N={layer_count}, t={layer_height_mm} mm, "
+                f"substrate={substrate}, budget={candidate_budget} "
+                f"({entry.candidate_count} candidates)"
+            )
         ),
         entry=entry,
     )

@@ -735,6 +735,78 @@ def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded.metadata["batch_recipe_count"] == 524_288
 
 
+def test_candidate_runtime_metadata_load_does_not_open_npz_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.material_candidate_cache import (
+        load_material_candidate_runtime_metadata,
+        save_material_candidate_runtime,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
+    )
+    npz_path = save_material_candidate_runtime(runtime, cache_root=tmp_path)
+
+    def _fail_np_load(*args, **kwargs):
+        raise AssertionError("status metadata path must not load runtime arrays")
+
+    monkeypatch.setattr("core.material_candidate_cache.np.load", _fail_np_load)
+
+    entry = load_material_candidate_runtime_metadata(
+        SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        candidate_budget=32,
+        cache_root=tmp_path,
+    )
+
+    assert entry is not None
+    assert entry.metadata["schema_version"] == "2.0"
+    assert entry.metadata["mode"] == "candidate_hybrid"
+    assert entry.metadata["candidate_count"] == runtime.valid_cell_count
+    assert entry.cache_file_size_bytes == npz_path.stat().st_size
+    assert entry.cache_file_path == npz_path
+
+
+def test_candidate_runtime_save_uses_unique_temp_path_per_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.material_candidate_cache import save_material_candidate_runtime
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
+    )
+    original_savez_compressed = np.savez_compressed
+    temp_names: list[str] = []
+
+    def _spy_savez_compressed(handle, *args, **kwargs):
+        temp_names.append(Path(handle.name).name)
+        return original_savez_compressed(handle, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "core.material_candidate_cache.np.savez_compressed",
+        _spy_savez_compressed,
+    )
+
+    save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    save_material_candidate_runtime(runtime, cache_root=tmp_path)
+
+    assert len(temp_names) == 2
+    assert len(set(temp_names)) == 2
+
+
 def test_candidate_runtime_keeps_uint8_recipes_for_82_materials(
     tmp_path: Path,
 ) -> None:

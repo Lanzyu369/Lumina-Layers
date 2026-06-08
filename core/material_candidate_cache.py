@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1068,6 +1069,20 @@ class MaterialCandidateRuntime:
         return matched_rgb, recipes_user, best_delta
 
 
+@dataclass(frozen=True)
+class MaterialCandidateRuntimeMetadata:
+    """Metadata-only persisted runtime entry.
+    只包含元数据的持久化 runtime 条目。
+
+    This is for lightweight status checks; it must not open the large ``.npz``
+    array payload.
+    """
+
+    metadata: dict[str, Any]
+    cache_file_path: Path
+    cache_file_size_bytes: int
+
+
 def build_material_candidate_runtime(
     *,
     materials: list[MaterialParams],
@@ -1205,22 +1220,120 @@ def save_material_candidate_runtime(
         }
     )
 
-    tmp_npz = npz_path.with_name(npz_path.name + ".tmp")
-    with tmp_npz.open("wb") as handle:
-        np.savez_compressed(
-            handle,
-            candidate_recipes=recipes_to_save,
-            achieved_srgb=runtime.achieved_srgb,
-            achieved_lab=runtime.achieved_lab,
-            pinned_mask=runtime.pinned_mask,
+    tmp_suffix = f".tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    tmp_npz = npz_path.with_name(npz_path.name + tmp_suffix)
+    tmp_meta = meta_path.with_name(meta_path.name + tmp_suffix)
+    try:
+        with tmp_npz.open("wb") as handle:
+            np.savez_compressed(
+                handle,
+                candidate_recipes=recipes_to_save,
+                achieved_srgb=runtime.achieved_srgb,
+                achieved_lab=runtime.achieved_lab,
+                pinned_mask=runtime.pinned_mask,
+            )
+        tmp_meta.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-    tmp_npz.replace(npz_path)
-    meta_path.write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        tmp_npz.replace(npz_path)
+        tmp_meta.replace(meta_path)
+    finally:
+        for tmp_path in (tmp_npz, tmp_meta):
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
     runtime.metadata.update(metadata)
     return npz_path
+
+
+def _validated_candidate_runtime_metadata(
+    metadata: dict[str, Any],
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    candidate_budget: int,
+) -> dict[str, Any] | None:
+    try:
+        if metadata.get("schema_version") != HYBRID_CANDIDATE_SCHEMA_VERSION:
+            return None
+        if metadata.get("mode") != "candidate_hybrid":
+            return None
+        if metadata.get("palette_hash") != fingerprint_palette(materials):
+            return None
+        if int(metadata.get("layer_count", -1)) != int(layer_count):
+            return None
+        stored_layer_height = float(metadata.get("layer_height_mm", -1.0))
+        if abs(stored_layer_height - float(layer_height_mm)) > 1e-12:
+            return None
+        if str(metadata.get("substrate", "")) != str(substrate):
+            return None
+        if int(metadata.get("candidate_budget", -1)) != int(candidate_budget):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return dict(metadata)
+
+
+def load_material_candidate_runtime_metadata(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    candidate_budget: int,
+    cache_root: str | Path | None = None,
+) -> MaterialCandidateRuntimeMetadata | None:
+    """Load persisted hybrid runtime metadata without opening array payloads.
+    只加载持久化 hybrid runtime 元数据，不打开大型数组载荷。
+
+    Args:
+        materials: Material palette used to validate the fingerprint. (耗材调色板)
+        layer_count: Recipe layer count. (配方层数)
+        layer_height_mm: Layer thickness in mm. (层厚 mm)
+        substrate: ``"white"`` or ``"black"`` substrate. (基底)
+        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        cache_root: Optional cache directory override. (可选缓存目录)
+
+    Returns:
+        MaterialCandidateRuntimeMetadata | None: Valid metadata entry or
+        ``None`` when missing/invalid. (有效元数据条目，或 ``None``)
+    """
+    npz_path = candidate_cache_file_path(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=int(candidate_budget),
+        cache_root=cache_root,
+    )
+    meta_path = _candidate_cache_meta_path_for(npz_path)
+    if not npz_path.exists() or not meta_path.exists():
+        return None
+
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        file_size = npz_path.stat().st_size
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+    validated = _validated_candidate_runtime_metadata(
+        metadata,
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget,
+    )
+    if validated is None:
+        return None
+    return MaterialCandidateRuntimeMetadata(
+        metadata=validated,
+        cache_file_path=npz_path,
+        cache_file_size_bytes=int(file_size),
+    )
 
 
 def load_material_candidate_runtime(
@@ -1260,6 +1373,21 @@ def load_material_candidate_runtime(
         return None
 
     try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+    metadata = _validated_candidate_runtime_metadata(
+        metadata,
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget,
+    )
+    if metadata is None:
+        return None
+    try:
         with np.load(npz_path) as loaded:
             candidate_recipes = loaded["candidate_recipes"]
             if candidate_recipes.dtype not in (np.uint8, np.uint16):
@@ -1267,24 +1395,7 @@ def load_material_candidate_runtime(
             achieved_srgb = loaded["achieved_srgb"].astype(np.uint8)
             achieved_lab = loaded["achieved_lab"].astype(np.float32)
             pinned_mask = loaded["pinned_mask"].astype(bool)
-        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, KeyError, json.JSONDecodeError):
-        return None
-
-    if metadata.get("schema_version") != HYBRID_CANDIDATE_SCHEMA_VERSION:
-        return None
-    if metadata.get("mode") != "candidate_hybrid":
-        return None
-    if metadata.get("palette_hash") != fingerprint_palette(materials):
-        return None
-    if int(metadata.get("layer_count", -1)) != int(layer_count):
-        return None
-    stored_layer_height = float(metadata.get("layer_height_mm", -1.0))
-    if abs(stored_layer_height - float(layer_height_mm)) > 1e-12:
-        return None
-    if str(metadata.get("substrate", "")) != str(substrate):
-        return None
-    if int(metadata.get("candidate_budget", -1)) != int(candidate_budget):
+    except (OSError, ValueError, KeyError):
         return None
     if (
         candidate_recipes.ndim != 2
