@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, Sequence
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import cv2
 import numpy as np
@@ -2045,6 +2045,7 @@ def _installed_material_bundle_revision_path(
     *,
     target_root: Path,
     package: dict[str, Any],
+    include_revision_history: bool = False,
 ) -> Path | None:
     material_id = str(package.get("material_id") or "")
     if not material_id:
@@ -2054,8 +2055,43 @@ def _installed_material_bundle_revision_path(
     if not isinstance(installed, dict):
         return None
     entry = installed.get(material_id)
-    if not isinstance(entry, dict):
-        return None
+    if isinstance(entry, dict):
+        material_dir = _material_sync_revision_entry_path(
+            target_root=target_root,
+            entry=entry,
+            package=package,
+        )
+        if material_dir is not None:
+            return material_dir
+    if include_revision_history:
+        revisions = index.get("revisions")
+        material_revisions = (
+            revisions.get(material_id)
+            if isinstance(revisions, dict)
+            else None
+        )
+        revision_entry = (
+            material_revisions.get(str(package.get("revision_id") or ""))
+            if isinstance(material_revisions, dict)
+            else None
+        )
+        if isinstance(revision_entry, dict):
+            material_dir = _material_sync_revision_entry_path(
+                target_root=target_root,
+                entry=revision_entry,
+                package=package,
+            )
+            if material_dir is not None:
+                return material_dir
+    return None
+
+
+def _material_sync_revision_entry_path(
+    *,
+    target_root: Path,
+    entry: dict[str, Any],
+    package: dict[str, Any],
+) -> Path | None:
     if str(entry.get("revision_id") or "") != str(package.get("revision_id") or ""):
         return None
     if str(entry.get("content_hash") or "") != str(package.get("content_hash") or ""):
@@ -2306,6 +2342,18 @@ def _material_registry_catalog_url(registry_url: str) -> str:
     return f"{registry_url}/materials/catalog"
 
 
+def _material_registry_url_origin_key(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is None and scheme == "https":
+        port = 443
+    elif port is None and scheme == "http":
+        port = 80
+    return scheme, hostname, port
+
+
 def _material_registry_package_url(registry_url: str, raw_package_url: Any) -> str:
     package_url = str(raw_package_url or "").strip()
     if not package_url:
@@ -2313,6 +2361,10 @@ def _material_registry_package_url(registry_url: str, raw_package_url: Any) -> s
     resolved_url = urljoin(f"{registry_url}/", package_url)
     if not resolved_url.startswith(("http://", "https://")):
         raise ValueError("Material registry package_url must be http:// or https://")
+    if _material_registry_url_origin_key(resolved_url) != _material_registry_url_origin_key(
+        registry_url
+    ):
+        raise ValueError("Material registry package_url must use the same origin")
     return resolved_url
 
 
@@ -4980,6 +5032,7 @@ def refresh_material_sync_from_registry(
                             "revision_id": revision_id,
                             "content_hash": content_hash,
                         },
+                        include_revision_history=True,
                     ) is not None:
                         skipped_count += 1
                         continue
