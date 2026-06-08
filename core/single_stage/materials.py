@@ -150,7 +150,10 @@ _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
 _MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK = threading.RLock()
-_MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[tuple[str, tuple[str, ...], str, int | None], dict[str, Any]] = {}
+_MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[
+    tuple[str, tuple[str, ...], str, int | None, int | None, int],
+    dict[str, Any],
+] = {}
 _WARP_PIXELS_PER_MM = 20.0
 _SAMPLE_INSET_RATIO = 0.18
 _C0_WHITE_OVERBRIGHT_THRESHOLD: float = 0.95
@@ -2332,10 +2335,68 @@ def _material_registry_remote_catalog_cache_key(
     channels: Sequence[str],
     token: str,
     transport: Any,
-) -> tuple[str, tuple[str, ...], str, int | None]:
+    limit: int | None,
+    offset: int,
+) -> tuple[str, tuple[str, ...], str, int | None, int | None, int]:
     token_fingerprint = _sha256_bytes(token.encode("utf-8")) if token else ""
     transport_identity = id(transport) if transport is not None else None
-    return registry_url, tuple(channels), token_fingerprint, transport_identity
+    return (
+        registry_url,
+        tuple(channels),
+        token_fingerprint,
+        transport_identity,
+        limit,
+        offset,
+    )
+
+
+def _normalize_material_registry_catalog_pagination(
+    *,
+    limit: int | None = None,
+    offset: int | None = 0,
+) -> tuple[int | None, int]:
+    normalized_offset = 0 if offset is None else int(offset)
+    if normalized_offset < 0:
+        raise ValueError("Material registry catalog offset must be non-negative")
+    if limit is None:
+        return None, normalized_offset
+    normalized_limit = int(limit)
+    if normalized_limit <= 0:
+        raise ValueError("Material registry catalog limit must be positive")
+    return normalized_limit, normalized_offset
+
+
+def _page_material_registry_catalog_entries(
+    entries: list[dict[str, Any]],
+    *,
+    limit: int | None,
+    offset: int,
+) -> list[dict[str, Any]]:
+    if limit is None:
+        return entries[offset:]
+    return entries[offset : offset + limit]
+
+
+def _page_material_registry_catalog(
+    catalog: dict[str, Any],
+    *,
+    limit: int | None,
+    offset: int,
+) -> dict[str, Any]:
+    raw_entries = catalog.get("materials")
+    entries = raw_entries if isinstance(raw_entries, list) else []
+    paged_entries = _page_material_registry_catalog_entries(
+        entries,
+        limit=limit,
+        offset=offset,
+    )
+    payload = dict(catalog)
+    payload["count"] = len(paged_entries)
+    payload["total_count"] = int(catalog.get("total_count") or len(entries))
+    payload["offset"] = offset
+    payload["limit"] = limit
+    payload["materials"] = paged_entries
+    return _json_clone(payload)
 
 
 def _cached_material_registry_remote_catalog(
@@ -2344,12 +2405,16 @@ def _cached_material_registry_remote_catalog(
     channels: Sequence[str],
     token: str,
     transport: Any,
+    limit: int | None,
+    offset: int,
 ) -> dict[str, Any] | None:
     cache_key = _material_registry_remote_catalog_cache_key(
         registry_url=registry_url,
         channels=channels,
         token=token,
         transport=transport,
+        limit=limit,
+        offset=offset,
     )
     now = time.monotonic()
     with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
@@ -2372,6 +2437,8 @@ def _store_material_registry_remote_catalog_cache(
     channels: Sequence[str],
     token: str,
     transport: Any,
+    limit: int | None,
+    offset: int,
     payload: dict[str, Any],
 ) -> None:
     cache_key = _material_registry_remote_catalog_cache_key(
@@ -2379,6 +2446,8 @@ def _store_material_registry_remote_catalog_cache(
         channels=channels,
         token=token,
         transport=transport,
+        limit=limit,
+        offset=offset,
     )
     with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
         _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE[cache_key] = {
@@ -2420,6 +2489,8 @@ def list_material_registry_catalog(
     timeout_s: float | None = None,
     transport: Any = None,
     use_cache: bool = True,
+    limit: int | None = None,
+    offset: int | None = 0,
 ) -> dict[str, Any]:
     """Fetch the remote material Registry catalog without installing packages.
     只读取远程耗材 Registry catalog，不安装任何耗材包。
@@ -2428,6 +2499,10 @@ def list_material_registry_catalog(
 
     normalized_registry_url = _normalize_material_registry_url(registry_url)
     normalized_channels = _normalize_material_registry_channels(channels)
+    normalized_limit, normalized_offset = _normalize_material_registry_catalog_pagination(
+        limit=limit,
+        offset=offset,
+    )
     auth_token = str(
         token
         if token is not None
@@ -2439,9 +2514,26 @@ def list_material_registry_catalog(
             channels=normalized_channels,
             token=auth_token,
             transport=transport,
+            limit=normalized_limit,
+            offset=normalized_offset,
         )
         if cached_catalog is not None:
             return cached_catalog
+        if normalized_limit is not None or normalized_offset:
+            cached_full_catalog = _cached_material_registry_remote_catalog(
+                registry_url=normalized_registry_url,
+                channels=normalized_channels,
+                token=auth_token,
+                transport=transport,
+                limit=None,
+                offset=0,
+            )
+            if cached_full_catalog is not None:
+                return _page_material_registry_catalog(
+                    cached_full_catalog,
+                    limit=normalized_limit,
+                    offset=normalized_offset,
+                )
 
     if timeout_s is None:
         raw_timeout = os.environ.get("LUMINA_MATERIAL_REGISTRY_TIMEOUT_S", "30")
@@ -2460,11 +2552,19 @@ def list_material_registry_catalog(
     if transport is not None:
         client_kwargs["transport"] = transport
 
+    catalog_params: list[tuple[str, str | int]] = [
+        ("channel", channel) for channel in normalized_channels
+    ]
+    if normalized_limit is not None or normalized_offset:
+        catalog_params.append(("offset", normalized_offset))
+    if normalized_limit is not None:
+        catalog_params.append(("limit", normalized_limit))
+
     with httpx.Client(**client_kwargs) as client:
         try:
             catalog_response = client.get(
                 _material_registry_catalog_url(normalized_registry_url),
-                params=[("channel", channel) for channel in normalized_channels],
+                params=catalog_params,
                 headers=headers,
             )
             catalog_response.raise_for_status()
@@ -2475,7 +2575,50 @@ def list_material_registry_catalog(
         except ValueError as exc:
             raise ValueError("Material registry catalog response is invalid") from exc
 
-    catalog = {
+    remote_has_pagination = (
+        isinstance(catalog_payload, dict)
+        and (
+            "total_count" in catalog_payload
+            or "offset" in catalog_payload
+            or "limit" in catalog_payload
+        )
+    )
+    if remote_has_pagination:
+        paged_entries = catalog_entries
+        total_count = int(catalog_payload.get("total_count") or len(catalog_entries))
+        response_offset = int(catalog_payload.get("offset") or normalized_offset)
+        response_limit = (
+            None
+            if catalog_payload.get("limit") is None
+            else int(catalog_payload.get("limit"))
+        )
+        catalog = {
+            "schema_version": str(
+                catalog_payload.get("schema_version")
+                if isinstance(catalog_payload, dict)
+                else "1.0"
+            )
+            or "1.0",
+            "channels": normalized_channels,
+            "count": len(paged_entries),
+            "total_count": total_count,
+            "offset": response_offset,
+            "limit": response_limit,
+            "materials": paged_entries,
+        }
+        if use_cache:
+            _store_material_registry_remote_catalog_cache(
+                registry_url=normalized_registry_url,
+                channels=normalized_channels,
+                token=auth_token,
+                transport=transport,
+                limit=normalized_limit,
+                offset=normalized_offset,
+                payload=catalog,
+            )
+        return _json_clone(catalog)
+
+    full_catalog = {
         "schema_version": str(
             catalog_payload.get("schema_version")
             if isinstance(catalog_payload, dict)
@@ -2484,6 +2627,9 @@ def list_material_registry_catalog(
         or "1.0",
         "channels": normalized_channels,
         "count": len(catalog_entries),
+        "total_count": len(catalog_entries),
+        "offset": 0,
+        "limit": None,
         "materials": catalog_entries,
     }
     if use_cache:
@@ -2492,9 +2638,15 @@ def list_material_registry_catalog(
             channels=normalized_channels,
             token=auth_token,
             transport=transport,
-            payload=catalog,
+            limit=None,
+            offset=0,
+            payload=full_catalog,
         )
-    return _json_clone(catalog)
+    return _page_material_registry_catalog(
+        full_catalog,
+        limit=normalized_limit,
+        offset=normalized_offset,
+    )
 
 
 def install_material_registry_package(

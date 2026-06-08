@@ -138,6 +138,44 @@ def test_material_registry_catalog_lists_official_package_and_serves_zip(
     assert download.content == package_path.read_bytes()
 
 
+def test_material_registry_catalog_paginates_after_channel_filter(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    for index in range(3):
+        _write_v2_registry_package(
+            packages_dir / f"official-{index}.zip",
+            material_id=f"mat_registry_{index}",
+            revision_id=f"rev_registry_{index}",
+            channel="official",
+            local_directory=f"BrandA/pla-basic-{index}",
+        )
+    _write_v2_registry_package(
+        packages_dir / "team-only.zip",
+        material_id="mat_team_only",
+        revision_id="rev_team_only",
+        channel="team",
+        local_directory="BrandA/team-only",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+
+    response = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params={"channel": "official", "limit": "1", "offset": "1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["total_count"] == 3
+    assert body["offset"] == 1
+    assert body["limit"] == 1
+    assert [entry["material_id"] for entry in body["materials"]] == [
+        "mat_registry_1"
+    ]
+
+
 def test_material_registry_catalog_reuses_cached_package_scan(
     monkeypatch,
     tmp_path: Path,

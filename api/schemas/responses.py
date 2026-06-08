@@ -478,6 +478,9 @@ class MaterialRegistryCatalogResponse(BaseModel):
     schema_version: str
     channels: list[str] = Field(default_factory=list)
     count: int
+    total_count: int | None = None
+    offset: int = 0
+    limit: int | None = None
     materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
 
 

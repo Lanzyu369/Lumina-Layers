@@ -219,6 +219,50 @@ def _invalidate_material_registry_catalog_cache(root: Path) -> None:
             _MATERIAL_REGISTRY_CATALOG_CACHE.pop(cache_key, None)
 
 
+def _normalize_material_registry_pagination(
+    *,
+    limit: int | None = None,
+    offset: int | None = 0,
+) -> tuple[int | None, int]:
+    normalized_offset = 0 if offset is None else int(offset)
+    if normalized_offset < 0:
+        raise ValueError("Material registry catalog offset must be non-negative")
+    if limit is None:
+        return None, normalized_offset
+    normalized_limit = int(limit)
+    if normalized_limit <= 0:
+        raise ValueError("Material registry catalog limit must be positive")
+    return normalized_limit, normalized_offset
+
+
+def _paginate_material_registry_catalog(
+    catalog: dict[str, Any],
+    *,
+    limit: int | None = None,
+    offset: int | None = 0,
+) -> dict[str, Any]:
+    normalized_limit, normalized_offset = _normalize_material_registry_pagination(
+        limit=limit,
+        offset=offset,
+    )
+    raw_materials = catalog.get("materials")
+    materials = raw_materials if isinstance(raw_materials, list) else []
+    total_count = int(catalog.get("total_count") or len(materials))
+    if normalized_limit is None:
+        paged_materials = materials[normalized_offset:]
+    else:
+        paged_materials = materials[
+            normalized_offset : normalized_offset + normalized_limit
+        ]
+    payload = dict(catalog)
+    payload["materials"] = paged_materials
+    payload["count"] = len(paged_materials)
+    payload["total_count"] = total_count
+    payload["offset"] = normalized_offset
+    payload["limit"] = normalized_limit
+    return _json_clone(payload)
+
+
 def _rewrite_material_registry_package_channel(
     *,
     source_zip_path: Path,
@@ -372,6 +416,8 @@ def build_material_registry_catalog(
     *,
     channels: Sequence[str] | None = None,
     packages_dir: str | None = None,
+    limit: int | None = None,
+    offset: int | None = 0,
 ) -> dict[str, Any]:
     """Build a catalog from local v2 package ZIP files.
     从本地 v2 耗材包 ZIP 文件构建 catalog。
@@ -384,7 +430,11 @@ def build_material_registry_catalog(
         channels=normalized_channels,
     )
     if cached_catalog is not None:
-        return cached_catalog
+        return _paginate_material_registry_catalog(
+            cached_catalog,
+            limit=limit,
+            offset=offset,
+        )
 
     materials: list[dict[str, Any]] = []
     for zip_path in sorted(root.rglob("*.zip"), key=lambda path: path.as_posix()):
@@ -423,6 +473,9 @@ def build_material_registry_catalog(
         "schema_version": _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION,
         "channels": normalized_channels,
         "count": len(materials),
+        "total_count": len(materials),
+        "offset": 0,
+        "limit": None,
         "materials": materials,
     }
     _store_material_registry_catalog_cache(
@@ -430,7 +483,11 @@ def build_material_registry_catalog(
         channels=normalized_channels,
         payload=catalog,
     )
-    return _json_clone(catalog)
+    return _paginate_material_registry_catalog(
+        catalog,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def material_registry_package_channels(zip_path: Path) -> list[str]:

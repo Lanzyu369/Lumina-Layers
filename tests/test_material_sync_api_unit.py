@@ -322,7 +322,7 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
 def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installing(
     monkeypatch,
 ) -> None:
-    def _fake_list_material_registry_catalog() -> dict[str, object]:
+    def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
         return {
             "schema_version": "1.0",
             "channels": ["official"],
@@ -400,6 +400,109 @@ def test_list_material_registry_catalog_reuses_remote_catalog_cache() -> None:
     assert request_counts == {"catalog": 1}
     assert first == second
     assert second["count"] == 1
+
+
+def test_list_material_registry_catalog_requests_remote_page() -> None:
+    observed_queries: list[dict[str, str]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            observed_queries.append(dict(request.url.params.multi_items()))
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "count": 1,
+                    "total_count": 3,
+                    "offset": 1,
+                    "limit": 1,
+                    "materials": [
+                        {
+                            "material_id": "mat_cloud_1",
+                            "revision_id": "rev_cloud_1",
+                            "content_hash": "sha256:cloud1",
+                            "channel": "official",
+                            "visibility": "official",
+                            "local_directory": "BrandA/pla-basic-1",
+                            "package_url": "/v1/packages/material_package_1.zip",
+                            "package_sha256": "b" * 64,
+                            "package_bytes": 10,
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    catalog = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        limit=1,
+        offset=1,
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert observed_queries == [
+        {"channel": "official", "offset": "1", "limit": "1"}
+    ]
+    assert catalog["count"] == 1
+    assert catalog["total_count"] == 3
+    assert catalog["offset"] == 1
+    assert catalog["limit"] == 1
+    assert catalog["materials"][0]["material_id"] == "mat_cloud_1"
+
+
+def test_list_material_registry_catalog_reuses_full_cache_for_legacy_paging() -> None:
+    request_counts = {"catalog": 0}
+
+    def _catalog_entry(index: int) -> dict[str, object]:
+        return {
+            "material_id": f"mat_cloud_{index}",
+            "revision_id": f"rev_cloud_{index}",
+            "content_hash": f"sha256:cloud{index}",
+            "channel": "official",
+            "visibility": "official",
+            "local_directory": f"BrandA/pla-basic-{index}",
+            "package_url": f"/v1/packages/material_package_{index}.zip",
+            "package_sha256": str(index) * 64,
+            "package_bytes": 10,
+        }
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            request_counts["catalog"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [_catalog_entry(0), _catalog_entry(1)],
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+
+    first_page = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        limit=1,
+        offset=0,
+        transport=transport,
+    )
+    second_page = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        limit=1,
+        offset=1,
+        transport=transport,
+    )
+
+    assert request_counts == {"catalog": 1}
+    assert first_page["count"] == 1
+    assert first_page["total_count"] == 2
+    assert first_page["materials"][0]["material_id"] == "mat_cloud_0"
+    assert second_page["count"] == 1
+    assert second_page["total_count"] == 2
+    assert second_page["materials"][0]["material_id"] == "mat_cloud_1"
 
 
 def test_material_sync_install_from_registry_endpoint_installs_selected_package(

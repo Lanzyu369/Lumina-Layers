@@ -103,10 +103,35 @@ describe("material sync API client", () => {
     const response = await fetchMaterialRegistryCatalog();
 
     expect(mockGet).toHaveBeenCalledWith("/material-sync/catalog", {
+      params: {},
       timeout: 120_000,
     });
     expect(response.count).toBe(1);
     expect(response.materials[0].material_id).toBe("mat_cloud");
+  });
+
+  it("passes optional pagination params when fetching the remote material catalog", async () => {
+    mockGet.mockResolvedValueOnce({
+      data: {
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        total_count: 3,
+        offset: 1,
+        limit: 1,
+        materials: [],
+      },
+    });
+
+    const response = await fetchMaterialRegistryCatalog({ limit: 1, offset: 1 });
+
+    expect(mockGet).toHaveBeenCalledWith("/material-sync/catalog", {
+      params: { limit: 1, offset: 1 },
+      timeout: 120_000,
+    });
+    expect(response.total_count).toBe(3);
+    expect(response.offset).toBe(1);
+    expect(response.limit).toBe(1);
   });
 
   it("installs one selected remote material catalog entry", async () => {

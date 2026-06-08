@@ -972,6 +972,9 @@ export interface MaterialRegistryCatalogResponse {
   schema_version: string;
   channels: string[];
   count: number;
+  total_count: number | null;
+  offset: number;
+  limit: number | null;
   materials: MaterialRegistryCatalogEntry[];
 }
 
