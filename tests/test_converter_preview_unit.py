@@ -1230,3 +1230,25 @@ class TestLargeFormatSvgPreviewCacheSizing:
                 assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
             else:
                 raise AssertionError("uncapped tall SVG preview should exceed the cache guardrail")
+
+    def test_large_format_svg_preview_uses_higher_guardrail(self, tmp_path) -> None:
+        """Tall large-format SVG previews can run full-res without removing all guardrails."""
+        svg_path = tmp_path / "tall.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="647.179993" height="4091" viewBox="0 0 647.179993 4091">'
+            '<path d="M0 0H647.179993V4091H0Z" fill="#ffffff"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+
+        _enforce_preview_cache_size_limit(
+            image_path=str(svg_path),
+            target_width_mm=170,
+            modeling_mode="vector",
+            svg_pixels_per_mm=10,
+            color_layers=None,
+            material_layer_count=5,
+            material_source="material_archive",
+            max_bytes=1024 * 1024 * 1024,
+        )

@@ -77,6 +77,23 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
+    "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
+)
+DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+
+
+def _get_large_format_svg_preview_cache_max_bytes() -> int:
+    """Return the cache guardrail for full-resolution large-format SVG previews."""
+
+    raw = os.getenv(LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
+    return max(1, parsed)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
 
@@ -240,6 +257,7 @@ def _enforce_preview_cache_size_limit(
     color_layers: int | None,
     material_layer_count: int | None,
     material_source: str,
+    max_bytes: int | None = None,
 ) -> None:
     """Reject previews whose estimated cache arrays exceed the guardrail.
 
@@ -266,8 +284,8 @@ def _enforce_preview_cache_size_limit(
         layers,
         include_original=True,
     )
-    max_bytes = get_preview_cache_max_bytes()
-    if estimate_bytes <= max_bytes:
+    resolved_max_bytes = max_bytes if max_bytes is not None else get_preview_cache_max_bytes()
+    if estimate_bytes <= resolved_max_bytes:
         return
 
     raise HTTPException(
@@ -278,12 +296,14 @@ def _enforce_preview_cache_size_limit(
                 "Estimated preview cache arrays exceed the configured limit."
             ),
             "estimate_bytes": estimate_bytes,
-            "max_bytes": max_bytes,
+            "max_bytes": resolved_max_bytes,
             "estimated_width": width,
             "estimated_height": height,
             "estimated_layers": layers,
         },
     )
+
+
 def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
     """Best-effort cleanup for temp files created before a session exists."""
 
@@ -659,21 +679,25 @@ async def convert_preview(
         temp_path = await ensure_png_tempfile(image)
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
-        skip_cache_size_guard = (
+        use_large_format_svg_guard = (
             large_format_enabled
             and modeling_mode == "vector"
             and is_svg_upload
         )
-        if not skip_cache_size_guard:
-            _enforce_preview_cache_size_limit(
-                image_path=temp_path,
-                target_width_mm=target_width_mm,
-                modeling_mode=modeling_mode,
-                svg_pixels_per_mm=svg_pixels_per_mm,
-                color_layers=color_layers,
-                material_layer_count=material_layer_count,
-                material_source=material_source,
-            )
+        _enforce_preview_cache_size_limit(
+            image_path=temp_path,
+            target_width_mm=target_width_mm,
+            modeling_mode=modeling_mode,
+            svg_pixels_per_mm=svg_pixels_per_mm,
+            color_layers=color_layers,
+            material_layer_count=material_layer_count,
+            material_source=material_source,
+            max_bytes=(
+                _get_large_format_svg_preview_cache_max_bytes()
+                if use_large_format_svg_guard
+                else None
+            ),
+        )
         if modeling_mode == "vector" and is_svg_upload:
             svg_large_format_policy = {
                 **inspect_svg_large_format_support(temp_path),
