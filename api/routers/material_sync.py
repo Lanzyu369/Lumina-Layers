@@ -103,6 +103,7 @@ async def material_sync_status() -> MaterialSyncStatusResponse:
 
 @router.get("/catalog", response_model=MaterialRegistryCatalogResponse)
 async def material_sync_catalog(
+    q: str | None = Query(default=None, max_length=200),
     limit: int | None = Query(default=None, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> MaterialRegistryCatalogResponse:
@@ -110,7 +111,7 @@ async def material_sync_catalog(
     返回已配置远程 Registry catalog，不安装耗材。
     """
     try:
-        catalog = list_material_registry_catalog(limit=limit, offset=offset)
+        catalog = list_material_registry_catalog(query=q, limit=limit, offset=offset)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -130,6 +131,7 @@ async def material_sync_catalog(
             "total_count": response.total_count,
             "offset": response.offset,
             "limit": response.limit,
+            "query": q,
         },
     )
     return response

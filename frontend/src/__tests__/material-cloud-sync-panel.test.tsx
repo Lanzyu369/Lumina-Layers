@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialCloudSyncPanel from "../components/MaterialCloudSyncPanel";
 import {
@@ -160,8 +160,17 @@ describe("MaterialCloudSyncPanel", () => {
     fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
       target: { value: "PETG" },
     });
-    expect(screen.getByText("Silk PETG")).toBeInTheDocument();
-    expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({
+        limit: 50,
+        offset: 0,
+        q: "PETG",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+    });
+    expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
 
@@ -173,8 +182,8 @@ describe("MaterialCloudSyncPanel", () => {
         package_sha256: "c".repeat(64),
       });
     });
-    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(2);
-    expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(3);
+    expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(3);
   });
 
   it("loads the cloud catalog page by page", async () => {
@@ -239,6 +248,80 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(await screen.findByText("Page One PETG")).toBeInTheDocument();
     expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(2);
+  });
+
+  it("reloads the first cloud catalog page when searching", async () => {
+    vi.mocked(fetchMaterialRegistryCatalog)
+      .mockResolvedValueOnce({
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        total_count: 2,
+        offset: 0,
+        limit: 50,
+        materials: [
+          {
+            material_id: "mat_page_0",
+            revision_id: "rev_page_0",
+            content_hash: "sha256:page0",
+            channel: "official",
+            visibility: "official",
+            local_directory: "BrandA/pla-basic",
+            display: { brand: "BrandA", material_name: "PLA Basic" },
+            compatibility: {},
+            package_url: "/v1/packages/mat_page_0/rev_page_0.zip",
+            package_sha256: "0".repeat(64),
+            package_bytes: 1024,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        total_count: 1,
+        offset: 0,
+        limit: 50,
+        materials: [
+          {
+            material_id: "mat_petg",
+            revision_id: "rev_petg",
+            content_hash: "sha256:petg",
+            channel: "official",
+            visibility: "official",
+            local_directory: "BrandB/petg-silk",
+            display: { brand: "BrandB", material_name: "Silk PETG" },
+            compatibility: {},
+            package_url: "/v1/packages/mat_petg/rev_petg.zip",
+            package_sha256: "1".repeat(64),
+            package_bytes: 2048,
+          },
+        ],
+      });
+
+    render(<MaterialCloudSyncPanel />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+    });
+    expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("PLA Basic")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "PETG" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({
+        limit: 50,
+        offset: 0,
+        q: "PETG",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+    });
+    const searchCard = screen.getAllByTestId("material-cloud-catalog-card")[0];
+    expect(within(searchCard).getByText("Silk PETG")).toBeInTheDocument();
+    expect(within(searchCard).queryByText("PLA Basic")).not.toBeInTheDocument();
   });
 
   it("updates an installed material when the catalog revision is newer", async () => {
@@ -429,7 +512,10 @@ describe("MaterialCloudSyncPanel", () => {
       target: { value: "Silk" },
     });
 
-    expect(screen.getByText("Silk PETG")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(1);
+    });
+    expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
 

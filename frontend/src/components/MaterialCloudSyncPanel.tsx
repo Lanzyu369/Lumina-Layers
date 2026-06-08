@@ -183,6 +183,7 @@ export default function MaterialCloudSyncPanel() {
   const [pendingRollback, setPendingRollback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const catalogQuery = searchQuery.trim();
 
   const dateFormatter = useMemo(
     () => new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
@@ -251,6 +252,7 @@ export default function MaterialCloudSyncPanel() {
       fetchMaterialRegistryCatalog({
         limit: MATERIAL_CATALOG_PAGE_SIZE,
         offset: 0,
+        ...(catalogQuery ? { q: catalogQuery } : {}),
       }),
     ] as const);
 
@@ -279,7 +281,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoading(false);
     }
-  }, [t]);
+  }, [catalogQuery, t]);
 
   useEffect(() => {
     void loadCatalogAndStatus();
@@ -310,6 +312,7 @@ export default function MaterialCloudSyncPanel() {
       const nextPage = await fetchMaterialRegistryCatalog({
         limit: MATERIAL_CATALOG_PAGE_SIZE,
         offset: loadedCount,
+        ...(catalogQuery ? { q: catalogQuery } : {}),
       });
       setCatalog((current) => mergeCatalogPage(current, nextPage));
     } catch (err) {
@@ -317,7 +320,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [catalog, isLoadingMore, t]);
+  }, [catalog, catalogQuery, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;

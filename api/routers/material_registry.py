@@ -36,6 +36,7 @@ log = get_logger(__name__)
 @router.get("/materials/catalog", response_model=MaterialRegistryCatalogResponse)
 async def material_registry_catalog(
     channel: Annotated[list[str] | None, Query()] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int | None, Query(ge=1, le=500)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     authorization: Annotated[str | None, Header()] = None,
@@ -53,6 +54,7 @@ async def material_registry_catalog(
             channels=channels,
             limit=limit,
             offset=offset,
+            query=q,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -68,6 +70,7 @@ async def material_registry_catalog(
             "total_count": catalog.get("total_count"),
             "offset": catalog.get("offset"),
             "limit": catalog.get("limit"),
+            "query": q,
         },
     )
     return MaterialRegistryCatalogResponse(**catalog)

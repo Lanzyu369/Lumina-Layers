@@ -451,6 +451,55 @@ def test_list_material_registry_catalog_requests_remote_page() -> None:
     assert catalog["materials"][0]["material_id"] == "mat_cloud_1"
 
 
+def test_list_material_registry_catalog_requests_remote_search() -> None:
+    observed_queries: list[dict[str, str]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            observed_queries.append(dict(request.url.params.multi_items()))
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "count": 1,
+                    "total_count": 1,
+                    "offset": 0,
+                    "limit": 50,
+                    "materials": [
+                        {
+                            "material_id": "mat_petg",
+                            "revision_id": "rev_petg",
+                            "content_hash": "sha256:petg",
+                            "channel": "official",
+                            "visibility": "official",
+                            "local_directory": "BrandB/petg-silk",
+                            "display": {"brand": "BrandB", "material_name": "Silk PETG"},
+                            "package_url": "/v1/packages/petg.zip",
+                            "package_sha256": "c" * 64,
+                            "package_bytes": 10,
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    catalog = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        query="petg",
+        limit=50,
+        offset=0,
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert observed_queries == [
+        {"channel": "official", "q": "petg", "offset": "0", "limit": "50"}
+    ]
+    assert catalog["count"] == 1
+    assert catalog["total_count"] == 1
+    assert catalog["materials"][0]["material_id"] == "mat_petg"
+
+
 def test_list_material_registry_catalog_reuses_full_cache_for_legacy_paging() -> None:
     request_counts = {"catalog": 0}
 
@@ -503,6 +552,53 @@ def test_list_material_registry_catalog_reuses_full_cache_for_legacy_paging() ->
     assert second_page["count"] == 1
     assert second_page["total_count"] == 2
     assert second_page["materials"][0]["material_id"] == "mat_cloud_1"
+
+
+def test_list_material_registry_catalog_filters_legacy_remote_search_locally() -> None:
+    request_counts = {"catalog": 0}
+
+    def _catalog_entry(index: int, name: str) -> dict[str, object]:
+        return {
+            "material_id": f"mat_cloud_{index}",
+            "revision_id": f"rev_cloud_{index}",
+            "content_hash": f"sha256:cloud{index}",
+            "channel": "official",
+            "visibility": "official",
+            "local_directory": f"BrandA/{name.lower().replace(' ', '-')}",
+            "display": {"brand": "BrandA", "material_name": name},
+            "package_url": f"/v1/packages/material_package_{index}.zip",
+            "package_sha256": str(index) * 64,
+            "package_bytes": 10,
+        }
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            request_counts["catalog"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        _catalog_entry(0, "PLA Basic"),
+                        _catalog_entry(1, "Silk PETG"),
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    catalog = list_material_registry_catalog(
+        registry_url="https://registry.test/v1",
+        channels=["official"],
+        query="petg",
+        limit=50,
+        offset=0,
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert request_counts == {"catalog": 1}
+    assert catalog["count"] == 1
+    assert catalog["total_count"] == 1
+    assert catalog["materials"][0]["material_id"] == "mat_cloud_1"
 
 
 def test_material_sync_install_from_registry_endpoint_installs_selected_package(

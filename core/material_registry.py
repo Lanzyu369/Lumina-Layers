@@ -263,6 +263,57 @@ def _paginate_material_registry_catalog(
     return _json_clone(payload)
 
 
+def _normalize_material_registry_query(query: str | None = None) -> str:
+    return " ".join(str(query or "").casefold().split())
+
+
+def _material_registry_entry_matches_query(
+    entry: dict[str, Any],
+    query: str,
+) -> bool:
+    if not query:
+        return True
+    searchable_values: list[str] = [
+        str(entry.get("material_id") or ""),
+        str(entry.get("revision_id") or ""),
+        str(entry.get("content_hash") or ""),
+        str(entry.get("channel") or ""),
+        str(entry.get("visibility") or ""),
+        str(entry.get("local_directory") or ""),
+    ]
+    for key in ("display", "compatibility"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            searchable_values.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    haystack = " ".join(searchable_values).casefold()
+    return all(token in haystack for token in query.split())
+
+
+def _filter_material_registry_catalog(
+    catalog: dict[str, Any],
+    *,
+    query: str | None = None,
+) -> dict[str, Any]:
+    normalized_query = _normalize_material_registry_query(query)
+    if not normalized_query:
+        return _json_clone(catalog)
+    raw_materials = catalog.get("materials")
+    materials = raw_materials if isinstance(raw_materials, list) else []
+    filtered_materials = [
+        entry
+        for entry in materials
+        if isinstance(entry, dict)
+        and _material_registry_entry_matches_query(entry, normalized_query)
+    ]
+    payload = dict(catalog)
+    payload["materials"] = filtered_materials
+    payload["count"] = len(filtered_materials)
+    payload["total_count"] = len(filtered_materials)
+    payload["offset"] = 0
+    payload["limit"] = None
+    return _json_clone(payload)
+
+
 def _rewrite_material_registry_package_channel(
     *,
     source_zip_path: Path,
@@ -418,6 +469,7 @@ def build_material_registry_catalog(
     packages_dir: str | None = None,
     limit: int | None = None,
     offset: int | None = 0,
+    query: str | None = None,
 ) -> dict[str, Any]:
     """Build a catalog from local v2 package ZIP files.
     从本地 v2 耗材包 ZIP 文件构建 catalog。
@@ -431,7 +483,7 @@ def build_material_registry_catalog(
     )
     if cached_catalog is not None:
         return _paginate_material_registry_catalog(
-            cached_catalog,
+            _filter_material_registry_catalog(cached_catalog, query=query),
             limit=limit,
             offset=offset,
         )
@@ -484,7 +536,7 @@ def build_material_registry_catalog(
         payload=catalog,
     )
     return _paginate_material_registry_catalog(
-        catalog,
+        _filter_material_registry_catalog(catalog, query=query),
         limit=limit,
         offset=offset,
     )

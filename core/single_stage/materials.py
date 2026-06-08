@@ -151,7 +151,7 @@ _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
 _MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[
-    tuple[str, tuple[str, ...], str, int | None, int | None, int],
+    tuple[str, tuple[str, ...], str, int | None, int | None, int, str],
     dict[str, Any],
 ] = {}
 _WARP_PIXELS_PER_MM = 20.0
@@ -2337,7 +2337,8 @@ def _material_registry_remote_catalog_cache_key(
     transport: Any,
     limit: int | None,
     offset: int,
-) -> tuple[str, tuple[str, ...], str, int | None, int | None, int]:
+    query: str,
+) -> tuple[str, tuple[str, ...], str, int | None, int | None, int, str]:
     token_fingerprint = _sha256_bytes(token.encode("utf-8")) if token else ""
     transport_identity = id(transport) if transport is not None else None
     return (
@@ -2347,6 +2348,7 @@ def _material_registry_remote_catalog_cache_key(
         transport_identity,
         limit,
         offset,
+        query,
     )
 
 
@@ -2399,6 +2401,56 @@ def _page_material_registry_catalog(
     return _json_clone(payload)
 
 
+def _normalize_material_registry_catalog_query(query: str | None = None) -> str:
+    return " ".join(str(query or "").casefold().split())
+
+
+def _material_registry_catalog_entry_matches_query(
+    entry: dict[str, Any],
+    query: str,
+) -> bool:
+    if not query:
+        return True
+    searchable_values: list[str] = [
+        str(entry.get("material_id") or ""),
+        str(entry.get("revision_id") or ""),
+        str(entry.get("content_hash") or ""),
+        str(entry.get("channel") or ""),
+        str(entry.get("visibility") or ""),
+        str(entry.get("local_directory") or ""),
+    ]
+    for key in ("display", "compatibility"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            searchable_values.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    haystack = " ".join(searchable_values).casefold()
+    return all(token in haystack for token in query.split())
+
+
+def _filter_material_registry_catalog(
+    catalog: dict[str, Any],
+    *,
+    query: str,
+) -> dict[str, Any]:
+    if not query:
+        return _json_clone(catalog)
+    raw_entries = catalog.get("materials")
+    entries = raw_entries if isinstance(raw_entries, list) else []
+    filtered_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and _material_registry_catalog_entry_matches_query(entry, query)
+    ]
+    payload = dict(catalog)
+    payload["materials"] = filtered_entries
+    payload["count"] = len(filtered_entries)
+    payload["total_count"] = len(filtered_entries)
+    payload["offset"] = 0
+    payload["limit"] = None
+    return _json_clone(payload)
+
+
 def _cached_material_registry_remote_catalog(
     *,
     registry_url: str,
@@ -2407,6 +2459,7 @@ def _cached_material_registry_remote_catalog(
     transport: Any,
     limit: int | None,
     offset: int,
+    query: str,
 ) -> dict[str, Any] | None:
     cache_key = _material_registry_remote_catalog_cache_key(
         registry_url=registry_url,
@@ -2415,6 +2468,7 @@ def _cached_material_registry_remote_catalog(
         transport=transport,
         limit=limit,
         offset=offset,
+        query=query,
     )
     now = time.monotonic()
     with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
@@ -2439,6 +2493,7 @@ def _store_material_registry_remote_catalog_cache(
     transport: Any,
     limit: int | None,
     offset: int,
+    query: str,
     payload: dict[str, Any],
 ) -> None:
     cache_key = _material_registry_remote_catalog_cache_key(
@@ -2448,6 +2503,7 @@ def _store_material_registry_remote_catalog_cache(
         transport=transport,
         limit=limit,
         offset=offset,
+        query=query,
     )
     with _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK:
         _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE[cache_key] = {
@@ -2485,6 +2541,7 @@ def list_material_registry_catalog(
     *,
     registry_url: str | None = None,
     channels: Sequence[str] | None = None,
+    query: str | None = None,
     token: str | None = None,
     timeout_s: float | None = None,
     transport: Any = None,
@@ -2503,6 +2560,7 @@ def list_material_registry_catalog(
         limit=limit,
         offset=offset,
     )
+    normalized_query = _normalize_material_registry_catalog_query(query)
     auth_token = str(
         token
         if token is not None
@@ -2516,6 +2574,7 @@ def list_material_registry_catalog(
             transport=transport,
             limit=normalized_limit,
             offset=normalized_offset,
+            query=normalized_query,
         )
         if cached_catalog is not None:
             return cached_catalog
@@ -2527,10 +2586,41 @@ def list_material_registry_catalog(
                 transport=transport,
                 limit=None,
                 offset=0,
+                query=normalized_query,
             )
             if cached_full_catalog is not None:
                 return _page_material_registry_catalog(
                     cached_full_catalog,
+                    limit=normalized_limit,
+                    offset=normalized_offset,
+                )
+        if normalized_query:
+            cached_unfiltered_catalog = _cached_material_registry_remote_catalog(
+                registry_url=normalized_registry_url,
+                channels=normalized_channels,
+                token=auth_token,
+                transport=transport,
+                limit=None,
+                offset=0,
+                query="",
+            )
+            if cached_unfiltered_catalog is not None:
+                filtered_catalog = _filter_material_registry_catalog(
+                    cached_unfiltered_catalog,
+                    query=normalized_query,
+                )
+                _store_material_registry_remote_catalog_cache(
+                    registry_url=normalized_registry_url,
+                    channels=normalized_channels,
+                    token=auth_token,
+                    transport=transport,
+                    limit=None,
+                    offset=0,
+                    query=normalized_query,
+                    payload=filtered_catalog,
+                )
+                return _page_material_registry_catalog(
+                    filtered_catalog,
                     limit=normalized_limit,
                     offset=normalized_offset,
                 )
@@ -2555,6 +2645,8 @@ def list_material_registry_catalog(
     catalog_params: list[tuple[str, str | int]] = [
         ("channel", channel) for channel in normalized_channels
     ]
+    if normalized_query:
+        catalog_params.append(("q", normalized_query))
     if normalized_limit is not None or normalized_offset:
         catalog_params.append(("offset", normalized_offset))
     if normalized_limit is not None:
@@ -2614,6 +2706,7 @@ def list_material_registry_catalog(
                 transport=transport,
                 limit=normalized_limit,
                 offset=normalized_offset,
+                query=normalized_query,
                 payload=catalog,
             )
         return _json_clone(catalog)
@@ -2632,6 +2725,10 @@ def list_material_registry_catalog(
         "limit": None,
         "materials": catalog_entries,
     }
+    filtered_full_catalog = _filter_material_registry_catalog(
+        full_catalog,
+        query=normalized_query,
+    )
     if use_cache:
         _store_material_registry_remote_catalog_cache(
             registry_url=normalized_registry_url,
@@ -2640,10 +2737,11 @@ def list_material_registry_catalog(
             transport=transport,
             limit=None,
             offset=0,
-            payload=full_catalog,
+            query=normalized_query,
+            payload=filtered_full_catalog,
         )
     return _page_material_registry_catalog(
-        full_catalog,
+        filtered_full_catalog,
         limit=normalized_limit,
         offset=normalized_offset,
     )

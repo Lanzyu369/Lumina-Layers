@@ -14,6 +14,7 @@ const MATERIAL_SYNC_READ_TIMEOUT_MS = 120_000;
 export interface MaterialRegistryCatalogQuery {
   limit?: number;
   offset?: number;
+  q?: string;
 }
 
 /**

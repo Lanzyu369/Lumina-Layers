@@ -176,6 +176,39 @@ def test_material_registry_catalog_paginates_after_channel_filter(
     ]
 
 
+def test_material_registry_catalog_searches_before_pagination(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    _write_v2_registry_package(
+        packages_dir / "pla-basic.zip",
+        material_id="mat_registry_pla",
+        revision_id="rev_registry_pla",
+        channel="official",
+        local_directory="BrandA/pla-basic",
+    )
+    _write_v2_registry_package(
+        packages_dir / "petg-silk.zip",
+        material_id="mat_registry_petg",
+        revision_id="rev_registry_petg",
+        channel="official",
+        local_directory="BrandB/petg-silk",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+
+    response = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params={"channel": "official", "q": "petg", "limit": "1", "offset": "0"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["total_count"] == 1
+    assert body["materials"][0]["material_id"] == "mat_registry_petg"
+
+
 def test_material_registry_catalog_reuses_cached_package_scan(
     monkeypatch,
     tmp_path: Path,
