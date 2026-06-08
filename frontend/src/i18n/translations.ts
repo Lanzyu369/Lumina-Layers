@@ -6635,6 +6635,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "云端条目",
     en: "Cloud Items",
   },
+  mat_sync_catalog_loaded_inline: {
+    zh: "已加载 {loaded} / {total} 个云端耗材",
+    en: "Loaded {loaded} / {total} cloud materials",
+  },
   mat_sync_index_state_label: {
     zh: "索引状态",
     en: "Index",
@@ -6674,6 +6678,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_refresh_btn: {
     zh: "刷新云端目录",
     en: "Refresh Catalog",
+  },
+  mat_sync_load_more_btn: {
+    zh: "加载更多",
+    en: "Load More",
   },
   mat_sync_status_failed: {
     zh: "读取云端耗材库失败",

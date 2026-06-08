@@ -177,6 +177,70 @@ describe("MaterialCloudSyncPanel", () => {
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
   });
 
+  it("loads the cloud catalog page by page", async () => {
+    vi.mocked(fetchMaterialRegistryCatalog)
+      .mockResolvedValueOnce({
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        total_count: 2,
+        offset: 0,
+        limit: 50,
+        materials: [
+          {
+            material_id: "mat_page_0",
+            revision_id: "rev_page_0",
+            content_hash: "sha256:page0",
+            channel: "official",
+            visibility: "official",
+            local_directory: "BrandA/page-0",
+            display: { brand: "BrandA", material_name: "Page Zero PLA" },
+            compatibility: {},
+            package_url: "/v1/packages/mat_page_0/rev_page_0.zip",
+            package_sha256: "0".repeat(64),
+            package_bytes: 1024,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        schema_version: "1.0",
+        channels: ["official"],
+        count: 1,
+        total_count: 2,
+        offset: 1,
+        limit: 50,
+        materials: [
+          {
+            material_id: "mat_page_1",
+            revision_id: "rev_page_1",
+            content_hash: "sha256:page1",
+            channel: "official",
+            visibility: "official",
+            local_directory: "BrandA/page-1",
+            display: { brand: "BrandA", material_name: "Page One PETG" },
+            compatibility: {},
+            package_url: "/v1/packages/mat_page_1/rev_page_1.zip",
+            package_sha256: "1".repeat(64),
+            package_bytes: 2048,
+          },
+        ],
+      });
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByText("Page Zero PLA")).toBeInTheDocument();
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 0 });
+    expect(screen.queryByText("Page One PETG")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /加载更多|load more/i }));
+
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 1 });
+    });
+    expect(await screen.findByText("Page One PETG")).toBeInTheDocument();
+    expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(2);
+  });
+
   it("updates an installed material when the catalog revision is newer", async () => {
     render(<MaterialCloudSyncPanel />);
 

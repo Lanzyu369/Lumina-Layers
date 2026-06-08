@@ -49,6 +49,7 @@ const catalogFilters: CatalogFilter[] = [
   "updates",
   "installed",
 ];
+const MATERIAL_CATALOG_PAGE_SIZE = 50;
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -132,6 +133,37 @@ const resolveRollbackRevisions = (installed: MaterialSyncInstalledEntry): string
 const resolveErrorMessage = (err: unknown, fallback: string): string =>
   err instanceof Error ? err.message : fallback;
 
+const mergeCatalogPage = (
+  current: MaterialRegistryCatalogResponse | null,
+  nextPage: MaterialRegistryCatalogResponse,
+): MaterialRegistryCatalogResponse => {
+  if (!current || (nextPage.offset ?? 0) <= 0) {
+    return {
+      ...nextPage,
+      count: nextPage.materials.length,
+      total_count: nextPage.total_count ?? nextPage.materials.length,
+      offset: nextPage.offset ?? 0,
+      limit: nextPage.limit ?? MATERIAL_CATALOG_PAGE_SIZE,
+    };
+  }
+  const existingKeys = new Set(
+    current.materials.map((entry) => `${entry.material_id}:${entry.revision_id}`),
+  );
+  const appended = nextPage.materials.filter(
+    (entry) => !existingKeys.has(`${entry.material_id}:${entry.revision_id}`),
+  );
+  const materials = [...current.materials, ...appended];
+  return {
+    ...nextPage,
+    channels: nextPage.channels.length > 0 ? nextPage.channels : current.channels,
+    materials,
+    count: materials.length,
+    total_count: nextPage.total_count ?? current.total_count ?? materials.length,
+    offset: current.offset ?? 0,
+    limit: nextPage.limit ?? current.limit ?? MATERIAL_CATALOG_PAGE_SIZE,
+  };
+};
+
 export default function MaterialCloudSyncPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
@@ -144,6 +176,7 @@ export default function MaterialCloudSyncPanel() {
   const [activeFilter, setActiveFilter] = useState<CatalogFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [pendingInstall, setPendingInstall] = useState<string | null>(null);
@@ -215,7 +248,10 @@ export default function MaterialCloudSyncPanel() {
     setError(null);
     const [statusResult, catalogResult] = await Promise.allSettled([
       fetchMaterialSyncStatus(),
-      fetchMaterialRegistryCatalog(),
+      fetchMaterialRegistryCatalog({
+        limit: MATERIAL_CATALOG_PAGE_SIZE,
+        offset: 0,
+      }),
     ] as const);
 
     const statusResponse = statusResult.status === "fulfilled" ? statusResult.value : null;
@@ -230,7 +266,7 @@ export default function MaterialCloudSyncPanel() {
     }
 
     setStatus(statusResponse);
-    setCatalog(catalogResponse);
+    setCatalog(catalogResponse ? mergeCatalogPage(null, catalogResponse) : null);
     if (failures.length > 0) {
       setError(failures.join(" / "));
     }
@@ -261,6 +297,27 @@ export default function MaterialCloudSyncPanel() {
       setIsRefreshing(false);
     }
   }, [loadCatalogAndStatus, t]);
+
+  const loadMoreCatalog = useCallback(async () => {
+    const loadedCount = catalog?.materials.length ?? 0;
+    const totalCount = catalog?.total_count ?? catalog?.count ?? loadedCount;
+    if (!catalog || loadedCount >= totalCount || isLoadingMore) {
+      return;
+    }
+    setIsLoadingMore(true);
+    setError(null);
+    try {
+      const nextPage = await fetchMaterialRegistryCatalog({
+        limit: MATERIAL_CATALOG_PAGE_SIZE,
+        offset: loadedCount,
+      });
+      setCatalog((current) => mergeCatalogPage(current, nextPage));
+    } catch (err) {
+      setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [catalog, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;
@@ -355,6 +412,9 @@ export default function MaterialCloudSyncPanel() {
     ),
     [status],
   );
+  const catalogLoadedCount = catalog?.materials.length ?? 0;
+  const catalogTotalCount = catalog?.total_count ?? catalog?.count ?? catalogLoadedCount;
+  const hasMoreCatalogEntries = catalogLoadedCount < catalogTotalCount;
 
   const filteredCatalogEntries = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -458,7 +518,7 @@ export default function MaterialCloudSyncPanel() {
                 data-testid="material-cloud-catalog-count"
                 className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50"
               >
-                {catalog?.count ?? 0}
+                {catalogTotalCount}
               </dd>
             </div>
             <div className="min-w-0">
@@ -699,6 +759,27 @@ export default function MaterialCloudSyncPanel() {
               </section>
             );
           })}
+          {hasMoreCatalogEntries ? (
+            <div className={`${mutedSectionCardClass} grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center`}>
+              <p
+                data-testid="material-cloud-loaded-count"
+                className="text-sm font-medium text-slate-600 dark:text-slate-300"
+              >
+                {tRuntime("mat_sync_catalog_loaded_inline", {
+                  loaded: catalogLoadedCount,
+                  total: catalogTotalCount,
+                })}
+              </p>
+              <Button
+                label={t("mat_sync_load_more_btn")}
+                variant="secondary"
+                onClick={() => void loadMoreCatalog()}
+                disabled={isLoadingMore}
+                loading={isLoadingMore}
+                className="w-full sm:w-auto"
+              />
+            </div>
+          ) : null}
         </div>
       ) : (
         <section className={`${mutedSectionCardClass} flex min-h-32 items-center justify-center`}>
