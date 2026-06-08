@@ -1525,7 +1525,12 @@ def _safe_manifest_relative_path(raw_path: Any) -> Path:
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise ValueError("Material bundle file path must be a non-empty string")
     relative = Path(raw_path)
-    if relative.is_absolute() or ".." in relative.parts:
+    if (
+        relative.is_absolute()
+        or relative.drive
+        or relative.anchor
+        or ".." in relative.parts
+    ):
         raise ValueError(f"Unsafe material bundle file path: {raw_path}")
     return relative
 

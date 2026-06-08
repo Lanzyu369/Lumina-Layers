@@ -2428,6 +2428,68 @@ def test_import_saved_stage_a_material_archives_rejects_v2_hash_mismatch(
     assert (materials_root / "_sync" / "index.json").exists() is False
 
 
+def test_import_saved_stage_a_material_archives_rejects_v2_drive_relative_manifest_path(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_drive_relative.zip"
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_drive_relative",
+                            "revision_id": "rev_drive_relative",
+                            "content_hash": "sha256:unused",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {
+                                "brand": "BrandA",
+                                "material_name": "PLA Basic Imported",
+                            },
+                            "files": [
+                                {
+                                    "path": "C:material.json",
+                                    "role": "material_archive",
+                                    "sha256": "0" * 64,
+                                    "bytes": 1,
+                                    "required": True,
+                                },
+                                {
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                    "role": "stage_a_parameters",
+                                    "sha256": "0" * 64,
+                                    "bytes": 1,
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    materials_root = tmp_path / "materials"
+    with pytest.raises(ValueError, match="Unsafe material bundle file path"):
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    assert materials_root.exists() is True
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
 def test_import_saved_stage_a_material_archives_skips_same_v2_revision(
     tmp_path: Path,
 ) -> None:
