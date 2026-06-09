@@ -18,10 +18,16 @@ def _read_repo_text(relative_path: str) -> str:
 
 
 def test_local_docker_image_installs_glb_v2_dependencies() -> None:
-    requirements = _read_repo_text("requirements.txt")
+    base_requirements = _read_repo_text("requirements.txt")
+    v2_requirements = _read_repo_text("requirements-glb-v2.txt")
+    dockerfile = _read_repo_text("Dockerfile")
 
-    assert "rasterio" in requirements
-    assert "manifold3d" in requirements
+    assert "rasterio" not in base_requirements
+    assert "manifold3d" not in base_requirements
+    assert "rasterio" in v2_requirements
+    assert "manifold3d" in v2_requirements
+    assert "COPY requirements.txt requirements-glb-v2.txt /app/" in dockerfile
+    assert "pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt" in dockerfile
 
 
 def test_local_docker_deploy_enables_glb_kernel_v2_by_default_with_rollback() -> None:

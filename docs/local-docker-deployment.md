@@ -75,6 +75,8 @@ bind-mounted runtime directories.
 
 该路径通过 `LUMINA_GLB_KERNEL=v2` 启用 `rasterio + manifold3d` 挤出实现；
 如果依赖不可用或运行时失败，后端仍会回退到旧的 Shapely v1 路径。
+这些原生依赖保存在 `requirements-glb-v2.txt`，由 Docker 镜像安装；普通
+`pip install -r requirements.txt` 仍只安装默认 V1 路径需要的基础依赖。
 `LUMINA_VECTOR_GLB_KERNEL=v2` 启用 SVG/vector 最终生成链路的 preview GLB
 descriptor exporter；遇到冰箱贴凹槽、涂层或不支持的复杂几何时整次回退 V1。
 

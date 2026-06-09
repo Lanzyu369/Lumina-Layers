@@ -34,8 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g pnpm@10.33.2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-glb-v2.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt
 
 COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
 RUN cd frontend && pnpm install --frozen-lockfile
