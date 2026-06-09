@@ -3,6 +3,7 @@ import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
 import { relayBugReport, submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
+import { trackLuminaEvent } from "../analytics/umami";
 import { useI18n } from "../i18n/context";
 import { collectBugReportContext } from "../utils/bugReportContext";
 import { loadPersistedLogs } from "../utils/clientLog";
@@ -434,7 +435,13 @@ export function BugReportModal({
       setCopied(false);
       setSubmittedReportCopied(false);
       setRelayState("idle");
-    } catch {
+      trackLuminaEvent("lumina_bug_report_done", {
+        active_tab: context.active_tab,
+        has_screenshot: Boolean(screenshotDataUrl),
+        relay: false,
+        delivery_status: response.email_status,
+      });
+    } catch (err) {
       setNotice({
         tone: "error",
         message: t("bug_report_toast_error"),
@@ -444,6 +451,12 @@ export function BugReportModal({
         copied: false,
       });
       setSubmitting(false);
+      trackLuminaEvent("lumina_bug_report_failed", {
+        active_tab: context.active_tab,
+        has_screenshot: Boolean(screenshotDataUrl),
+        relay: false,
+        error_type: err instanceof Error ? err.name : typeof err,
+      });
     }
   };
 
@@ -482,11 +495,23 @@ export function BugReportModal({
         tone: "success",
         message: t("bug_report_relay_success"),
       });
-    } catch {
+      trackLuminaEvent("lumina_bug_report_done", {
+        active_tab: submittedPayload.context.active_tab,
+        has_screenshot: Boolean(submittedPayload.screenshot_data_url),
+        relay: true,
+        delivery_status: "relayed",
+      });
+    } catch (err) {
       setRelayState("failed");
       setNotice({
         tone: "error",
         message: t("bug_report_relay_failed"),
+      });
+      trackLuminaEvent("lumina_bug_report_failed", {
+        active_tab: submittedPayload.context.active_tab,
+        has_screenshot: Boolean(submittedPayload.screenshot_data_url),
+        relay: true,
+        error_type: err instanceof Error ? err.name : typeof err,
       });
     }
   };
