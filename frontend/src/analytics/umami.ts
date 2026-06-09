@@ -237,7 +237,11 @@ export function trackLuminaEvent(
     }
     return;
   }
-  track(safeName, safePayload);
+  try {
+    track(safeName, safePayload);
+  } catch {
+    // Analytics is best-effort and must never affect product workflows.
+  }
 }
 
 function flushPendingLuminaEvents(): void {
@@ -250,6 +254,10 @@ function flushPendingLuminaEvents(): void {
   }
   const events = pendingEvents.splice(0);
   for (const event of events) {
-    track(event.eventName, event.payload);
+    try {
+      track(event.eventName, event.payload);
+    } catch {
+      // Continue flushing later events even if the tracker rejects one.
+    }
   }
 }
