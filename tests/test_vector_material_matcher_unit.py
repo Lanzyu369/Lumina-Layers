@@ -218,3 +218,54 @@ class TestMaterialVectorMatcherIgnoresInvalidInput:
         m.solve_for_fills([])
         assert m.lut_rgb.shape == (0, 3)
         assert m.kdtree is None
+
+
+class TestMaterialVectorMatcherFactory:
+    def test_from_materials_uses_candidate_runtime_resolver_without_bucketed_builder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import core.material_lut_provider as provider
+
+        runtime_stub = _StubSolverCache(layer_count=5)
+        calls = {"runtime": 0}
+
+        def fake_load_solver_runtime(*args, **kwargs):
+            calls["runtime"] += 1
+            return runtime_stub, 64
+
+        monkeypatch.setattr(provider, "load_solver_runtime", fake_load_solver_runtime)
+        monkeypatch.setattr(
+            "core.material_cache.load_material_solver_cache_with_fallback",
+            lambda *args, **kwargs: (None, None),
+        )
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("vector fallback must not call old bucketed builder")
+            ),
+        )
+
+        materials = [object() for _ in range(3)]
+        preview_colors = {
+            0: (0, 0, 0, 255),
+            1: (80, 80, 80, 255),
+            2: (160, 160, 160, 255),
+        }
+        matcher = MaterialVectorMatcher.from_materials(
+            materials=materials,
+            layer_count=5,
+            layer_height_mm=0.08,
+            substrate="white",
+            slot_names=["M0", "M1", "M2"],
+            preview_colors=preview_colors,
+            color_conf={
+                "name": "Material",
+                "slots": ["M0", "M1", "M2"],
+                "preview": preview_colors,
+                "map": {"M0": 0, "M1": 1, "M2": 2},
+            },
+            grid_resolution=64,
+        )
+
+        assert matcher._solver_cache is runtime_stub  # noqa: SLF001
+        assert calls["runtime"] == 1

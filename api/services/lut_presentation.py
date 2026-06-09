@@ -1,17 +1,17 @@
-"""Session-free LUT presentation helpers shared across HTTP surfaces.
-跨 HTTP 出口共享的、会话无关的 LUT 展示层辅助函数。
+"""Session-free LUT presentation helpers used by local API routers.
+本地主应用 API 路由使用的、会话无关的 LUT 展示层辅助函数。
 
 These helpers were previously private functions inside
 ``api/routers/lut.py``. They are pure (no FastAPI session/state dependency)
-and are now shared so the decoupled Material-LUT Studio service can build the
-exact same response shapes without copy-pasting the logic. The main router
-re-exports them to preserve its existing module-level names (some are
-monkeypatched by canary tests).
+and stay shared within the main app so LUT endpoints keep identical response
+shapes without copy-pasting the logic. The main router re-exports them to
+preserve its existing module-level names (some are monkeypatched by canary
+tests).
 
 这些辅助函数原本是 ``api/routers/lut.py`` 内的私有函数。它们是纯函数（不依赖
-FastAPI 会话/状态），现在抽出共享，让解耦后的 Material-LUT Studio 服务无需
-复制逻辑即可构造完全一致的响应结构。主路由会再导出它们以保留原有的模块级
-名称（部分被 canary 测试 monkeypatch）。
+FastAPI 会话/状态），现在作为主应用内部共享逻辑保留，避免 LUT 端点间复制
+粘贴响应组装代码。主路由会再导出它们以保留原有的模块级名称（部分被 canary
+测试 monkeypatch）。
 """
 
 from __future__ import annotations

@@ -40,6 +40,10 @@ from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    externalize_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.routers.converter import async_glb as async_glb_module
 from api.session_store import SessionStore
 
@@ -118,6 +122,22 @@ def _seed_session(tmp_path: Path) -> str:
     _test_store.put(sid, "layer_height_mm", 0.08)
     _test_store.put(sid, "material_source", "lut")
     return sid
+
+
+def _convert_seeded_session_to_artifact(sid: str, tmp_path: Path) -> dict:
+    session_data = _test_store.get(sid)
+    assert session_data is not None
+    cache = dict(session_data["preview_cache"])
+    cache["original_matched_rgb"] = session_data["original_matched_rgb"]
+    cache["original_material_matrix"] = session_data["original_material_matrix"]
+    ref = externalize_preview_cache(
+        sid,
+        _test_store,
+        cache,
+        root_dir=tmp_path,
+    )
+    _test_store.put(sid, "preview_cache", ref)
+    return ref
 
 
 def _install_glb_stub(
@@ -292,6 +312,60 @@ class TestGlbStatusLifecycle:
         final = _wait_for_status(sid, lambda b: b["status"] == "error")
         assert final["glb_url"] is None
         assert "simulated mesh failure" in (final["error"] or "")
+
+    def test_artifact_cache_schedule_and_worker_store_glb_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        ref = _convert_seeded_session_to_artifact(sid, tmp_path)
+        matched_path = ref["fields"]["matched_rgb"]["path"]
+        submitted: list[tuple] = []
+
+        class FakeExecutor:
+            def submit(self, *args: object) -> None:
+                submitted.append(args)
+
+        monkeypatch.setattr(async_glb_module, "_GLB_EXECUTOR", FakeExecutor())
+        job_token = async_glb_module.schedule_glb_build(
+            sid,
+            _test_store,
+            _test_registry,
+            ref,
+        )
+
+        scheduled_ref = _test_store.get(sid)["preview_cache"]
+        assert is_preview_cache_artifact_ref(scheduled_ref)
+        assert scheduled_ref["fields"]["matched_rgb"]["path"] == matched_path
+        assert scheduled_ref["metadata"]["glb_job_token"] == job_token
+        assert async_glb_module.get_glb_status(scheduled_ref)["status"] == "pending"
+        assert submitted
+
+        stub_glb_path = tmp_path / "artifact.glb"
+        stub_glb_path.write_bytes(b"artifact-glb")
+
+        def builder(cache: dict, *, output_path: str) -> str:
+            assert isinstance(cache["matched_rgb"], np.ndarray)
+            assert isinstance(cache["material_matrix"], np.ndarray)
+            cache["color_contours"] = {"#ff0000": [[[0.0, 0.0], [1.0, 1.0]]]}
+            return str(stub_glb_path)
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            _test_store,
+            _test_registry,
+        )
+
+        completed_ref = _test_store.get(sid)["preview_cache"]
+        assert is_preview_cache_artifact_ref(completed_ref)
+        assert completed_ref["fields"]["matched_rgb"]["path"] == matched_path
+        status = async_glb_module.get_glb_status(completed_ref)
+        assert status["status"] == "ready"
+        assert status["glb_url"].startswith("/api/files/")
+        assert completed_ref["metadata"]["color_contours"] == {
+            "#ff0000": [[[0.0, 0.0], [1.0, 1.0]]]
+        }
 
 
 class TestJobTokenGuard:

@@ -4,13 +4,8 @@
  */
 
 // ===== TAB ID =====
-// The main converter app navigates only converter / vectorizer / settings
-// (see MAIN_RENDERABLE_TABS in the widget store). The remaining ids drive the
-// standalone Material-LUT Studio (MLS) frontend, which reuses these panel
-// components and the shared widget store as its router (Route B, option A).
-// 主转换器应用只导航 converter / vectorizer / settings；其余 id 用于独立的
-// Material-LUT Studio (MLS) 前端——它复用这些面板组件并以共享 widget store
-// 作为路由（路线 B，选项 A）。
+// The main app owns converter, Material/LUT, vectorizer, and settings tabs.
+// 主应用拥有 converter、耗材/LUT、vectorizer 和 settings 全部标签。
 export type TabId =
   | "converter"
   | "calibration"
@@ -43,7 +38,11 @@ export type WidgetId =
   | "keychain-loop"
   | "fridge-magnet-settings"
   | "puzzle-settings"
-  | "action-bar";
+  | "action-bar"
+  | "calibration"
+  | "extractor"
+  | "lut-manager"
+  | "five-color";
 
 // ===== Widget 布局状态 =====
 export interface WidgetLayoutState {

@@ -1460,13 +1460,16 @@ def extractor_manual_fix(
         "lut_preview.png",
         ttl_seconds=None if has_valid_session else EPHEMERAL_PREVIEW_TTL_SECONDS,
     )
+    cell_coord_row = int(request.cell_coord[0]) if request.cell_coord is not None else None
+    cell_coord_col = int(request.cell_coord[1]) if request.cell_coord is not None else None
 
     log.info(
         "Extractor manual fix completed",
         extra={
             "event": "extractor_manual_fix_done",
-            "cell_coord_row": int(request.cell_coord[0]),
-            "cell_coord_col": int(request.cell_coord[1]),
+            "cell_coord_row": cell_coord_row,
+            "cell_coord_col": cell_coord_col,
+            "row_index": int(request.row_index) if request.row_index is not None else None,
             "override_color": str(request.override_color),
             "has_session": bool(has_valid_session),
             "manual_fix_ms": round(manual_fix_ms, 2),

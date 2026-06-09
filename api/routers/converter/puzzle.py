@@ -23,6 +23,11 @@ from PIL import Image
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    get_preview_cache_metadata,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.schemas.converter import (
     ConvertGenerateRequest,
     ModelingMode,
@@ -52,7 +57,6 @@ from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 from .common import (
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
-    _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
 )
@@ -78,6 +82,40 @@ class _PuzzleGenerateBody(BaseModel):
 
     session_id: str
     params: PuzzleGenerateRequest
+
+
+def _require_puzzle_cache(
+    session_data: dict[str, Any],
+    *,
+    fields: set[str],
+) -> dict[str, Any]:
+    """Load only the preview-cache fields needed by puzzle routes.
+
+    只加载拼图路由实际需要的 preview-cache 字段。
+    """
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+        )
+    if not is_preview_cache_artifact_ref(cache):
+        return cache
+
+    loaded = get_preview_cache_metadata(cache)
+    loaded.update(
+        hydrate_preview_cache(
+            cache,
+            fields=fields,
+            mmap_mode="r",
+        )
+    )
+    return loaded
 
 
 def _piece_boundary_geometry_payload(piece: PuzzlePiece, bbox_px: tuple[int, int, int, int]) -> dict[str, Any]:
@@ -569,7 +607,10 @@ async def puzzle_layout_preview(
     """
 
     session_data = _require_session(store, body.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_puzzle_cache(
+        session_data,
+        fields={"matched_rgb", "mask_solid"},
+    )
 
     try:
         layout, layout_cache_key = _resolve_layout(
@@ -654,7 +695,10 @@ async def generate_puzzle(
     """
 
     session_data = _require_session(store, body.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_puzzle_cache(
+        session_data,
+        fields={"matched_rgb", "mask_solid", "preview_rgba"},
+    )
 
     request = body.params
     generate_params = request.params

@@ -902,7 +902,11 @@ def apply_matched_rgb_overrides_to_analysis(
                 stack = ref_stacks[lut_idx]
         else:
             stack = ref_stacks[lut_idx]
-        new_recipe = [min(int(stack[z]), num_channels - 1) for z in range(min(num_layers, len(stack)))]
+        new_recipe = _normalise_cached_stack_for_vector_recipe(
+            stack,
+            target_layers=num_layers,
+            num_channels=num_channels,
+        )
 
         prev_rgb = shape.get("matched_rgb")
         prev_recipe = [int(v) for v in shape.get("recipe", [])]
@@ -961,6 +965,37 @@ def apply_matched_rgb_overrides_to_analysis(
             },
         )
     return changed
+
+
+def _normalise_cached_stack_for_vector_recipe(
+    stack: np.ndarray,
+    *,
+    target_layers: int,
+    num_channels: int,
+) -> list[int]:
+    """Return a full-length vector recipe from a cached material stack."""
+    if target_layers <= 0 or num_channels <= 0:
+        return []
+
+    flat = np.asarray(stack, dtype=np.int32).reshape(-1)
+    clamped_values = [
+        min(int(value), int(num_channels) - 1)
+        for value in flat[:target_layers].tolist()
+        if int(value) >= 0
+    ]
+    filler = int(clamped_values[-1]) if clamped_values else 0
+
+    recipe: list[int] = []
+    for raw_value in flat[:target_layers]:
+        value = int(raw_value)
+        if value < 0:
+            recipe.append(filler)
+        else:
+            recipe.append(min(value, int(num_channels) - 1))
+
+    if len(recipe) < target_layers:
+        recipe.extend([filler] * (target_layers - len(recipe)))
+    return recipe
 
 
 class VectorProcessor:

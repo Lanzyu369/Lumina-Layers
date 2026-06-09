@@ -31,6 +31,7 @@ import pytest
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
@@ -471,6 +472,73 @@ class TestGenerateParameterCompleteness:
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
 
+    def test_color_card_endpoint_reads_artifact_metadata_without_hydrating(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "card.3mf"
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+                "color_palette": [
+                    {"hex": "#ff0000"},
+                    {"hex": "#00ff00"},
+                ],
+                "color_mode": "4-Color (RYBW)",
+                "color_conf": {"layer_count": 5},
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        captured: dict[str, object] = {}
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            captured["hex_colors"] = list(hex_colors)
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        with (
+            patch(
+                "api.routers.converter.common.hydrate_preview_cache",
+                side_effect=AssertionError("color-card must not hydrate artifact arrays"),
+            ),
+            patch("core.color_card.generate_color_card_svg", _fake_generate_color_card_svg),
+        ):
+            response = client.post(
+                "/api/convert/color-card",
+                json={"session_id": sid},
+            )
+
+        assert response.status_code == 200, response.text
+        assert captured["hex_colors"] == ["#ff0000", "#00ff00"]
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["color_layers"] == 5
+
     def test_material_archive_vector_forwards_cached_material_matrix_without_region_replace(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         preview_cache = _test_store.get(sid)["preview_cache"]
@@ -508,6 +576,67 @@ class TestGenerateParameterCompleteness:
             np.load(submitted_params["material_matrix_path"]),
             preview_cache["material_matrix"],
         )
+
+    def test_generate_artifact_cache_forwards_field_paths_without_hydrating(
+        self,
+        tmp_path,
+    ) -> None:
+        """Artifact-backed generate must not hydrate arrays in the main process."""
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        with patch(
+            "api.routers.converter.common.hydrate_preview_cache",
+            side_effect=AssertionError("generate must not fully hydrate artifact cache"),
+        ):
+            response = client.post(
+                "/api/convert/generate",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "lut_name": "test_lut",
+                        "use_cached_matched_rgb": True,
+                    },
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+        assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
+        assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
 
     def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
@@ -1013,6 +1142,77 @@ class TestLargeFormatDimensionsAndRouting:
             assert os.path.exists(kwargs["recipe_override_masks_path"])
         finally:
             _test_store.clear_all()
+
+    def test_large_format_artifact_cache_uses_metadata_without_hydrating(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        Image.fromarray(np.zeros((8, 12, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 60.0,
+                "matched_rgb": np.zeros((8, 12, 3), dtype=np.uint8),
+                "mask_solid": np.ones((8, 12), dtype=bool),
+                "material_matrix": np.zeros((8, 12, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 1,
+            "grid_cols": 1,
+            "grid_rows": 1,
+            "warnings": [],
+        }
+
+        with (
+            patch(
+                "api.routers.converter.common.hydrate_preview_cache",
+                side_effect=AssertionError("large-format must not fully hydrate artifact cache"),
+            ),
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=raster_response,
+            ) as raster_helper,
+        ):
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "target_height_mm": 80.0,
+                        "tile_width_mm": 40.0,
+                        "tile_height_mm": 40.0,
+                        "params": {
+                            "lut_name": "test_lut",
+                            "modeling_mode": "high-fidelity",
+                            "target_width_mm": 120.0,
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        raster_helper.assert_called_once()
+        assert raster_helper.call_args.kwargs["material_matrix_path"] is None
 
     def test_large_format_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid, image_path, lut_path = _create_raster_large_format_session(_test_store)

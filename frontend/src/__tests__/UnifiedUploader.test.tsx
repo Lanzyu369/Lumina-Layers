@@ -38,6 +38,19 @@ describe("UnifiedUploader", () => {
     expect(img).toHaveAttribute("src", "data:image/png;base64,fakedata");
   });
 
+  it("uses a full-width preview frame so viewBox-only SVG previews keep a nonzero layout size", () => {
+    render(
+      <UnifiedUploader
+        {...defaultProps}
+        singlePreview="blob:svg-preview"
+      />,
+    );
+
+    const img = screen.getByRole("img");
+    expect(img).toHaveClass("block");
+    expect(img.parentElement).toHaveClass("w-full");
+  });
+
   it("renders file list with file names in BatchMode", () => {
     const files = [
       new File(["a"], "photo1.jpg", { type: "image/jpeg" }),

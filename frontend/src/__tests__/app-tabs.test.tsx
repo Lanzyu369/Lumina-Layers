@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Reset widget store to default layout before each test
   useWidgetStore.getState().resetLayout();
+  useWidgetStore.getState().setActiveTab("converter");
 });
 
 describe("App Widget Toggles", () => {
@@ -56,6 +57,19 @@ describe("App Widget Toggles", () => {
     expect(screen.queryByTestId("widget-toggle-extractor")).not.toBeInTheDocument();
     expect(screen.queryByTestId("widget-toggle-lut-manager")).not.toBeInTheDocument();
     expect(screen.queryByTestId("widget-toggle-five-color")).not.toBeInTheDocument();
+  });
+
+  it("does not show widget toggles on LUT pages rendered as full panels", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId("tab-lut-management"));
+    openWidgetMenu();
+
+    expect(screen.queryByTestId("widget-toggle-calibration")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("widget-toggle-extractor")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("widget-toggle-lut-manager")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("widget-toggle-five-color")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("widget-reset-layout")).not.toBeInTheDocument();
   });
 
   it("converter tab widgets are visible by default", () => {

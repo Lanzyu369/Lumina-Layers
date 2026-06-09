@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
+import threading
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 import numpy as np
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from api.routers.single_stage import _validate_candidate_budget
 
 
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
@@ -128,6 +133,130 @@ def _solver_cache_suggest_form_data() -> dict[str, str]:
         }
     )
     return data
+
+
+def _solver_runtime_form_data() -> dict[str, str]:
+    return {
+        "material_directory_names": json.dumps(
+            ["stub_material_a", "stub_material_b"]
+        ),
+        "layer_count": "8",
+        "layer_height_mm": "0.04",
+        "substrate": "white",
+        "candidate_budget": "32",
+    }
+
+
+def _solver_runtime_metadata(
+    *,
+    palette_hash: str = "stub_hash",
+    layer_count: int = 8,
+    layer_height_mm: float = 0.04,
+    substrate: str = "white",
+    candidate_budget: int = 32,
+) -> dict[str, object]:
+    return {
+        "schema_version": "2.0",
+        "mode": "candidate_hybrid",
+        "palette_hash": palette_hash,
+        "canonical_materials": [
+            {"directory_name": "stub_material_a"},
+            {"directory_name": "stub_material_b"},
+        ],
+        "layer_count": layer_count,
+        "layer_height_mm": layer_height_mm,
+        "substrate": substrate,
+        "grid_resolution": 64,
+        "lab_grid_resolution": 64,
+        "candidate_budget": candidate_budget,
+        "candidate_count": 32,
+        "candidate_pool_multiplier": 2,
+        "build_memory_budget_bytes": 8 * 1024 * 1024 * 1024,
+        "batch_recipe_count": 524288,
+        "seed": 0,
+        "inverse_refinement": {
+            "enabled": True,
+            "max_refine_materials": 8,
+            "max_refine_top_suffixes": 4096,
+            "max_refine_bottom_prefixes": 4096,
+            "refine_bottom_neighbors": 2,
+        },
+        "built_at": "2024-01-01T00:00:00",
+    }
+
+
+def test_material_solver_runtime_candidate_budget_accepts_64m_limit() -> None:
+    _validate_candidate_budget(67_108_864)
+
+    with pytest.raises(HTTPException):
+        _validate_candidate_budget(67_108_865)
+
+
+def _axis_range_stub(min_value: float, max_value: float) -> SimpleNamespace:
+    return SimpleNamespace(min=min_value, max=max_value)
+
+
+def _runtime_details_stub() -> SimpleNamespace:
+    coverage_stats = SimpleNamespace(
+        entry_count=32,
+        plotted_point_count=2,
+        l_range=_axis_range_stub(10.0, 90.0),
+        a_range=_axis_range_stub(-20.0, 30.0),
+        b_range=_axis_range_stub(-10.0, 40.0),
+        r_range=_axis_range_stub(1.0, 200.0),
+        g_range=_axis_range_stub(2.0, 210.0),
+        b_rgb_range=_axis_range_stub(3.0, 220.0),
+    )
+    lab_points = [
+        SimpleNamespace(
+            x=1.0,
+            y=2.0,
+            hex_color="#010203",
+            rgb=(1, 2, 3),
+            label="1",
+        ),
+        SimpleNamespace(
+            x=3.0,
+            y=4.0,
+            hex_color="#040506",
+            rgb=(4, 5, 6),
+            label="2",
+        ),
+    ]
+    lab_points_3d = [
+        SimpleNamespace(
+            l=10.0,
+            a=1.0,
+            b=2.0,
+            hex_color="#010203",
+            rgb=(1, 2, 3),
+            label="1",
+        ),
+        SimpleNamespace(
+            l=20.0,
+            a=3.0,
+            b=4.0,
+            hex_color="#040506",
+            rgb=(4, 5, 6),
+            label="2",
+        ),
+    ]
+    return SimpleNamespace(
+        palette_hash="stub_hash",
+        layer_count=8,
+        layer_height_mm=0.04,
+        substrate="white",
+        grid_resolution=64,
+        valid_cell_count=32,
+        total_cell_count=32,
+        candidate_budget=32,
+        candidate_count=32,
+        coverage_stats=coverage_stats,
+        lab_points=lab_points,
+        lab_points_3d=lab_points_3d,
+        lab_hull=((1.0, 2.0), (3.0, 4.0), (5.0, 6.0)),
+        rgb_points=lab_points,
+    )
 
 
 class _StubSuggestion:
@@ -412,6 +541,99 @@ class TestMaterialSolverCacheSuggestColorsCanary:
 
 
 class TestMaterialSolverCacheBuildCanary:
+    def test_material_solver_cache_build_rejects_unsafe_budget_before_build(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        build_called = False
+        material_names = [f"mat_{idx}" for idx in range(12)]
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+
+        def _build_should_not_run(*args, **kwargs):
+            nonlocal build_called
+            build_called = True
+            return SimpleNamespace(metadata=_solver_cache_metadata())
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_solver_cache",
+            _build_should_not_run,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-cache/build",
+            data={
+                "material_directory_names": json.dumps(material_names),
+                "layer_count": "8",
+                "layer_height_mm": "0.04",
+                "substrate": "white",
+                "grid_resolution": "2048",
+            },
+        )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "12 materials" in detail
+        assert "8 layers" in detail
+        assert "grid_resolution=2048" in detail
+        assert "lower grid_resolution" in detail
+        assert build_called is False
+
+    def test_material_solver_cache_build_rejects_low_grid_extreme_combinations(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        build_called = False
+        material_names = [f"mat_{idx}" for idx in range(22)]
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+
+        def _build_should_not_run(*args, **kwargs):
+            nonlocal build_called
+            build_called = True
+            return SimpleNamespace(metadata=_solver_cache_metadata())
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_solver_cache",
+            _build_should_not_run,
+        )
+        fake_cache_path = tmp_path / "solver-cache.npz"
+        fake_cache_path.write_bytes(b"stub")
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_solver_cache",
+            lambda cache: fake_cache_path,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-cache/build",
+            data={
+                "material_directory_names": json.dumps(material_names),
+                "layer_count": "8",
+                "layer_height_mm": "0.04",
+                "substrate": "white",
+                "grid_resolution": "64",
+            },
+        )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "22 materials" in detail
+        assert "8 layers" in detail
+        assert "grid_resolution=64" in detail
+        assert "combination limit" in detail
+        assert build_called is False
+
     def test_material_solver_cache_build_logs_sessionless_canary(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -467,6 +689,379 @@ class TestMaterialSolverCacheBuildCanary:
         assert record.total_cell_count == 256
         assert record.mean_delta_e == 1.5
         assert record.cache_file_size_bytes == 64
+
+
+class TestMaterialSolverRuntimeCanary:
+    def test_material_solver_runtime_status_cache_miss_logs_canary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
+        target_logger = _capture_single_stage_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/extractor/material-solver-runtime/status",
+                data=_solver_runtime_form_data(),
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["cached"] is False
+        assert body["palette_hash"] == "stub_hash"
+        assert body["candidate_budget"] == 32
+        assert body["entry"] is None
+
+        records = _records_for_event(caplog, "material_solver_runtime_status_done")
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert "session_id" not in record.__dict__
+        assert record.cached is False
+        assert record.palette_hash == "stub_hash"
+        assert record.material_count == 2
+        assert record.candidate_budget == 32
+
+    def test_material_solver_runtime_status_uses_metadata_without_loading_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        cache_path = tmp_path / "candidate-runtime.npz"
+        cache_path.write_bytes(b"x" * 64)
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+
+        def _fail_full_runtime_load(*args, **kwargs):
+            raise AssertionError("status endpoint must not load runtime arrays")
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            _fail_full_runtime_load,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                cache_file_path=cache_path,
+                cache_file_size_bytes=cache_path.stat().st_size,
+            ),
+            raising=False,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-runtime/status",
+            data=_solver_runtime_form_data(),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cached"] is True
+        assert body["entry"]["candidate_count"] == 32
+        assert body["entry"]["cache_file_size_bytes"] == 64
+        assert body["entry"]["cache_file_path"] == str(cache_path)
+
+    def test_material_solver_runtime_build_logs_sessionless_canary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        cache_path = tmp_path / "candidate-runtime.npz"
+        cache_path.write_bytes(b"x" * 64)
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+
+        seen_configs = []
+
+        def _build_runtime_stub(*args, **kwargs):
+            seen_configs.append(kwargs["config"])
+            return SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            )
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_candidate_runtime",
+            _build_runtime_stub,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_candidate_runtime",
+            lambda runtime: cache_path,
+            raising=False,
+        )
+        target_logger = _capture_single_stage_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/extractor/material-solver-runtime/build",
+                data=_solver_runtime_form_data(),
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["entry"]["mode"] == "candidate_hybrid"
+        assert body["entry"]["candidate_budget"] == 32
+        assert body["entry"]["candidate_count"] == 32
+        assert body["entry"]["cache_file_size_bytes"] == 64
+        assert len(seen_configs) == 1
+        assert seen_configs[0].candidate_budget == 32
+        assert seen_configs[0].build_memory_budget_bytes == 8 * 1024 * 1024 * 1024
+        assert seen_configs[0].max_refine_top_suffixes == 32_768
+        assert seen_configs[0].max_refine_bottom_prefixes == 65_536
+
+        records = _records_for_event(caplog, "material_solver_runtime_build_done")
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert "session_id" not in record.__dict__
+        assert record.material_count == 2
+        assert record.layer_count == 8
+        assert record.layer_height_mm == 0.04
+        assert record.substrate == "white"
+        assert record.candidate_budget == 32
+        assert record.candidate_count == 32
+        assert record.cache_file_size_bytes == 64
+
+    def test_material_solver_runtime_build_single_flights_same_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        cache_path = tmp_path / "candidate-runtime.npz"
+        build_started = threading.Event()
+        release_build = threading.Event()
+        calls_lock = threading.Lock()
+        build_call_count = 0
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+
+        def _metadata_if_saved(*args, **kwargs):
+            if not cache_path.exists():
+                return None
+            return SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                cache_file_path=cache_path,
+                cache_file_size_bytes=cache_path.stat().st_size,
+            )
+
+        def _build_runtime_stub(*args, **kwargs):
+            nonlocal build_call_count
+            with calls_lock:
+                build_call_count += 1
+            build_started.set()
+            assert release_build.wait(timeout=5)
+            return SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            )
+
+        def _save_runtime_stub(runtime):
+            cache_path.write_bytes(b"x" * 64)
+            return cache_path
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            _metadata_if_saved,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_candidate_runtime",
+            _build_runtime_stub,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_candidate_runtime",
+            _save_runtime_stub,
+            raising=False,
+        )
+
+        def _post_build():
+            return client.post(
+                "/api/extractor/material-solver-runtime/build",
+                data=_solver_runtime_form_data(),
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(_post_build)
+            assert build_started.wait(timeout=5)
+            second = executor.submit(_post_build)
+            time.sleep(0.1)
+            release_build.set()
+            first_response = first.result(timeout=5)
+            second_response = second.result(timeout=5)
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert build_call_count == 1
+        assert first_response.json()["entry"]["cache_file_size_bytes"] == 64
+        assert second_response.json()["entry"]["cache_file_size_bytes"] == 64
+
+    def test_material_solver_runtime_details_logs_sessionless_canary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            lambda *args, **kwargs: SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_runtime_details",
+            lambda *args, **kwargs: _runtime_details_stub(),
+            raising=False,
+        )
+        target_logger = _capture_single_stage_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/extractor/material-solver-runtime/details",
+                data={**_solver_runtime_form_data(), "max_points": "512"},
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["palette_hash"] == "stub_hash"
+        assert body["candidate_budget"] == 32
+        assert body["candidate_count"] == 32
+        assert body["coverage_stats"]["entry_count"] == 32
+        assert len(body["lab_points"]) == 2
+        assert len(body["rgb_points"]) == 2
+
+        records = _records_for_event(caplog, "material_solver_runtime_details_done")
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert "session_id" not in record.__dict__
+        assert record.palette_hash == "stub_hash"
+        assert record.material_count == 2
+        assert record.candidate_budget == 32
+        assert record.candidate_count == 32
+        assert record.plotted_point_count == 2
+
+    @pytest.mark.parametrize("deleted", [True, False])
+    def test_material_solver_runtime_delete_logs_sessionless_canary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        deleted: bool,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.delete_material_candidate_runtime",
+            lambda *args, **kwargs: deleted,
+            raising=False,
+        )
+        target_logger = _capture_single_stage_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/extractor/material-solver-runtime/delete",
+                data=_solver_runtime_form_data(),
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["deleted"] is deleted
+        assert body["palette_hash"] == "stub_hash"
+        assert body["candidate_budget"] == 32
+
+        records = _records_for_event(caplog, "material_solver_runtime_delete_done")
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.INFO
+        assert "session_id" not in record.__dict__
+        assert record.deleted is deleted
+        assert record.palette_hash == "stub_hash"
+        assert record.candidate_budget == 32
 
 
 class TestMaterialSolverCacheDeleteCanary:

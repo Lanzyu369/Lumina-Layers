@@ -23,6 +23,41 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     },
     sections: [
       {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "当一张图里的颜色能匹配到多个同样接近的材料组合时，现在会稳定选择同一个结果；重复预览或生成不再出现细微飘动。",
+            en: "When an artwork colour is equally close to multiple material mixes, Lumina now picks the same result every time, so repeated previews and 3MF exports no longer drift slightly.",
+          },
+          {
+            zh: "在耗材档案里替换区域颜色时，如果作品层数比默认配方更多，新增层现在也会一起更新，不会留下旧颜色或导致生成失败。",
+            en: "When replacing a region colour in the material archive workflow, extra layers beyond the default recipe are now updated too, instead of keeping old colours or failing during generation.",
+          },
+        ],
+      },
+      {
+        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        items: [
+          {
+            zh: "提取器里只按行做手动修正时，现在也能正常继续处理，不会因为没有选中单个色块而中断。",
+            en: "Manual fixes in the Extractor now keep working when you correct a whole row without selecting one individual patch.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 预览里做过区域改色或自定义配方后，即使生成时调整了 SVG 精细度，导出的 3MF 也会保留这些修改。",
+            en: "SVG region recolours and custom recipes now carry into the exported 3MF even when you generate with a different SVG detail setting.",
+          },
+          {
+            zh: "线稿类作品在缺少临时预览数据时也能继续提取线框，不会在生成中途停止。",
+            en: "Line-art style generation can now continue extracting outlines even when temporary preview data is unavailable.",
+          },
+        ],
+      },
+      {
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {

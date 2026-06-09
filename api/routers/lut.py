@@ -7,6 +7,7 @@ Provides endpoints for LUT preset listing, information queries, and merge operat
 
 import os
 import shutil
+import threading
 import tempfile
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api.dependencies import get_session_store
+from api.preview_cache_artifacts import is_preview_cache_artifact_ref
 from api.session_store import SessionStore
 from api.services.lut_presentation import (
     build_lut_info_from_path as _build_lut_info_from_path,
@@ -70,6 +72,50 @@ log = get_logger(__name__)
 
 _VALID_PRIMARY_MODES = {"6-Color", "8-Color", "8-Color Max"}
 _lut_details_service = None
+_LUT_LIST_SIGNATURE_TTL_SECONDS = 5.0
+_lut_list_cache_lock = threading.Lock()
+_lut_list_cache_checked_at: float | None = None
+_lut_list_cache_file_map: tuple[tuple[str, str], ...] | None = None
+_lut_list_cache_signature: tuple[tuple[str, str, int, int], ...] | None = None
+_lut_list_cache_response: LUTListResponse | None = None
+
+
+def _build_lut_list_file_map(lut_dict: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((display_name, file_path) for display_name, file_path in lut_dict.items()))
+
+
+def _build_lut_list_signature(lut_dict: dict[str, str]) -> tuple[tuple[str, str, int, int], ...]:
+    """Build a cheap file-state signature for the LUT list response cache.
+    为 LUT 列表响应缓存构建轻量文件状态签名。
+    """
+
+    signature: list[tuple[str, str, int, int]] = []
+    for display_name, file_path in sorted(lut_dict.items()):
+        try:
+            stat = Path(file_path).stat()
+            mtime_ns = int(stat.st_mtime_ns)
+            size = int(stat.st_size)
+        except OSError:
+            mtime_ns = -1
+            size = -1
+        signature.append((display_name, file_path, mtime_ns, size))
+    return tuple(signature)
+
+
+def _is_lut_list_signature_cacheable(signature: tuple[tuple[str, str, int, int], ...]) -> bool:
+    return all(mtime_ns >= 0 and size >= 0 for _display_name, _file_path, mtime_ns, size in signature)
+
+
+def _clear_lut_list_cache() -> None:
+    """Drop the route-level LUT list response cache. (清空 LUT 列表响应缓存)"""
+
+    global _lut_list_cache_checked_at, _lut_list_cache_file_map
+    global _lut_list_cache_signature, _lut_list_cache_response
+    with _lut_list_cache_lock:
+        _lut_list_cache_checked_at = None
+        _lut_list_cache_file_map = None
+        _lut_list_cache_signature = None
+        _lut_list_cache_response = None
 
 
 def _resolve_lut_details_service():
@@ -84,12 +130,16 @@ def _resolve_lut_details_service():
 
 
 def _invalidate_lut_details_service_cache() -> None:
-    """Drop cached LUT details service state after LUT files change.
-    在 LUT 文件变更后丢弃缓存的 LUT 详情服务状态。
+    """Drop cached LUT catalog/list state after LUT files change.
+    在 LUT 文件变更后丢弃 LUT 目录/列表缓存状态。
     """
 
     global _lut_details_service
     _lut_details_service = None
+    _clear_lut_list_cache()
+    LUTManager.invalidate_preset_cache()
+    LUTManager.invalidate_source_catalog_cache()
+    LUTManager.invalidate_native_source_index_cache()
     get_lut_details_service.cache_clear()
 
 
@@ -98,7 +148,33 @@ def list_luts() -> LUTListResponse:
     """Return all available LUT presets as a list of LutInfo objects.
     返回所有可用 LUT 预设，以 LutInfo 对象列表形式返回。
     """
+    global _lut_list_cache_checked_at, _lut_list_cache_file_map
+    global _lut_list_cache_signature, _lut_list_cache_response
+
     lut_dict: dict[str, str] = LUTManager.get_all_lut_files()
+    lut_file_map = _build_lut_list_file_map(lut_dict)
+    now = time.monotonic()
+    with _lut_list_cache_lock:
+        if (
+            _lut_list_cache_response is not None
+            and _lut_list_cache_checked_at is not None
+            and _lut_list_cache_file_map == lut_file_map
+            and now - _lut_list_cache_checked_at <= _LUT_LIST_SIGNATURE_TTL_SECONDS
+        ):
+            return _lut_list_cache_response.model_copy(deep=True)
+
+    signature = _build_lut_list_signature(lut_dict)
+    cacheable = _is_lut_list_signature_cacheable(signature)
+    with _lut_list_cache_lock:
+        if (
+            cacheable
+            and _lut_list_cache_response is not None
+            and _lut_list_cache_signature == signature
+        ):
+            _lut_list_cache_checked_at = now
+            _lut_list_cache_file_map = lut_file_map
+            return _lut_list_cache_response.model_copy(deep=True)
+
     lut_list: list[LutInfo] = []
     for display_name, file_path in lut_dict.items():
         try:
@@ -115,7 +191,19 @@ def list_luts() -> LUTListResponse:
                 fingerprint=fingerprint,
             )
         )
-    return LUTListResponse(luts=lut_list)
+    response = LUTListResponse(luts=lut_list)
+    with _lut_list_cache_lock:
+        if cacheable:
+            _lut_list_cache_checked_at = now
+            _lut_list_cache_file_map = lut_file_map
+            _lut_list_cache_signature = signature
+            _lut_list_cache_response = response
+        else:
+            _lut_list_cache_checked_at = None
+            _lut_list_cache_file_map = None
+            _lut_list_cache_signature = None
+            _lut_list_cache_response = None
+    return response
 
 
 @router.get("/catalog", response_model=LutSourceCatalogResponse)
@@ -594,6 +682,8 @@ def _build_material_archive_lut_info(session_data: dict) -> LutInfoResponseV2:
         )
 
     cache = session_data.get("preview_cache") or {}
+    if is_preview_cache_artifact_ref(cache):
+        cache = cache.get("metadata") or {}
     if not isinstance(cache, dict):
         cache = {}
     raw_slot_names = cache.get("slot_names") or []

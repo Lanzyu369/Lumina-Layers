@@ -18,7 +18,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from PIL import Image
 
-from tests._migrated_app import app
+from api.app import app
 from api.schemas.calibration import (
     MAX_BACKING_THICKNESS_MM,
     MIN_BACKING_THICKNESS_MM,

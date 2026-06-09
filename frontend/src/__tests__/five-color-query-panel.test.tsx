@@ -3,7 +3,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import FiveColorQueryPanel from "../components/FiveColorQueryPanel";
 import { useFiveColorStore } from "../stores/fiveColorStore";
 import { useConverterStore } from "../stores/converter";
-import { useMlsAuthStore } from "../stores/mlsAuthStore";
 import { translations } from "../i18n/translations";
 import type { FiveColorCardCoordinate, FiveColorNeighborhoodCell } from "../api/types";
 
@@ -118,12 +117,6 @@ describe("FiveColorQueryPanel target color match", () => {
     useConverterStore.setState({
       lutList: ["test-lut"],
       fetchLutList: vi.fn(),
-    });
-    useMlsAuthStore.setState({
-      password: "",
-      passwordRequired: false,
-      writeEnabled: true,
-      ready: true,
     });
   });
 
@@ -290,32 +283,6 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.getByRole("button", { name: "双面" })).toBeInTheDocument();
     expect(screen.queryByText("five_color_swatch_single_sided")).not.toBeInTheDocument();
     expect(screen.queryByText("five_color_swatch_double_sided")).not.toBeInTheDocument();
-  });
-
-  it("hides swatch generation actions in MLS read-only mode", () => {
-    useMlsAuthStore.setState({
-      password: "",
-      passwordRequired: true,
-      writeEnabled: false,
-      ready: true,
-    });
-    useFiveColorStore.setState({
-      collectedRecipes: [
-        {
-          id: "recipe-1",
-          selectedIndices: [0, 1, 2, 3, 4],
-          resultHex: "#F00A00",
-          baseColorNames: ["Red", "Green", "Blue", "Yellow", "White"],
-          baseColorHexes: ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FFFFFF"],
-          label: "Recipe 1",
-        },
-      ],
-    });
-
-    render(<FiveColorQueryPanel />);
-
-    expect(screen.queryByRole("button", { name: /生成色卡|Generate swatch/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /清空收藏|Clear collection/ })).toBeInTheDocument();
   });
 
   it("shows the localized explanation when a target color has no five-layer recipe", () => {

@@ -5,7 +5,6 @@ import type { BaseColorEntry, FiveColorMatchResponse, FiveColorQueryResponse } f
 import { useFiveColorStore } from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
 import Dropdown from "./ui/Dropdown"
-import { useMlsReadOnly } from "../hooks/useMlsReadOnly"
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode"
 import { useI18n } from "../i18n/context"
 import FiveColorCanvas from "./FiveColorCanvas"
@@ -20,7 +19,6 @@ import {
 export default function FiveColorQueryPanel() {
   const { t } = useI18n()
   const workspace = useWorkspaceMode()
-  const isMlsReadOnly = useMlsReadOnly()
   const [targetHex, setTargetHex] = useState("")
   const {
     lutName, baseColors, combinations, selectedIndices, queryResult,
@@ -319,9 +317,8 @@ export default function FiveColorQueryPanel() {
 
             {collectedRecipes.length > 0 && (
               <div className="flex flex-col gap-3 pt-1">
-                {!isMlsReadOnly && (
-                  <>
-                    <div className="grid grid-cols-3 gap-2">
+                <>
+                  <div className="grid grid-cols-3 gap-2">
                       <label className="flex flex-col gap-1">
                         <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_block_size")}</span>
                         <input
@@ -358,9 +355,9 @@ export default function FiveColorQueryPanel() {
                           className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                         />
                       </label>
-                    </div>
+                  </div>
 
-                    <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-1">
                       <span className="text-xs text-slate-500 dark:text-slate-400">{t("five_color_swatch_structure")}</span>
                       <div className="grid grid-cols-2 gap-1.5">
                         {(["Single-sided", "Double-sided"] as const).map((mode) => {
@@ -382,9 +379,9 @@ export default function FiveColorQueryPanel() {
                           )
                         })}
                       </div>
-                    </div>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                       <Button
                         onClick={() => void generateSwatch()}
                         disabled={isGeneratingSwatch}
@@ -405,21 +402,20 @@ export default function FiveColorQueryPanel() {
                           variant="secondary"
                         />
                       )}
+                  </div>
+
+                  {swatchPreviewUrl && (
+                    <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
+                      <img
+                        src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
+                        alt={t("five_color_swatch_legend_alt")}
+                        className="w-full h-auto"
+                      />
                     </div>
+                  )}
+                </>
 
-                    {swatchPreviewUrl && (
-                      <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
-                        <img
-                          src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
-                          alt={t("five_color_swatch_legend_alt")}
-                          className="w-full h-auto"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {(isMlsReadOnly || swatchDownloadUrl) && (
+                {swatchDownloadUrl && (
                   <Button
                     onClick={clearCollection}
                     label={t("five_color_collection_clear")}

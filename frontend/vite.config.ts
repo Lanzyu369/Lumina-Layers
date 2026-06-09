@@ -54,18 +54,15 @@ export default defineConfig({
       "zustand/react/shallow",
     ],
   },
-  // Isolate the converter app's pre-bundle cache from the MLS entry
-  // (``vite.mls.config.ts`` writes to ``node_modules/.vite-mls``). They
-  // share the same project files but discover different entry trees, so a
-  // shared cache dir means restarting one scrambles the other's
-  // ``deps/_metadata.json`` and triggers white-screens in the live tab.
-  // 把转换器应用的预打包缓存与 MLS 入口隔开（MLS 写到 ``.vite-mls``）；两者共享
-  // 工程文件但入口树不同，共用缓存目录会导致一边重启时弄乱另一边的
-  // ``deps/_metadata.json``，触发活动标签白屏。
+  // Keep Vite's pre-bundle cache in one stable project-local directory.
+  // Combined with the explicit optimizeDeps list above, this makes local
+  // restarts deterministic and prevents stale module hashes from blanking
+  // the live tab.
+  // 将 Vite 预打包缓存固定在项目本地目录；配合上方显式 optimizeDeps 列表，
+  // 使本地重启稳定，避免旧模块 hash 触发白屏。
   cacheDir: "node_modules/.vite",
   server: {
     ...resolveDevServerConfig(process.env),
-    allowedHosts: ["online.luminastudio.com.cn"],
     proxy: {
       "/api": {
         target: "http://localhost:8000",

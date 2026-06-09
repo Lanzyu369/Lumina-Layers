@@ -35,9 +35,6 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
     "puzzle-settings",
     "action-bar",
   ],
-  // Material/LUT tabs are rendered as full-page panels (in the MLS frontend),
-  // not as dock widgets, so they own no WidgetId entries here.
-  // 耗材/LUT 标签在 MLS 前端以整页面板渲染，非可停靠 widget，故无 WidgetId。
   calibration: [],
   extractor: [],
   "gradient-card-generate": [],
@@ -51,42 +48,6 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   vectorizer: [],
   settings: [],
 };
-
-// ===== Main-app renderable tabs =====
-// The main converter app (port :5174) only renders these three tabs; every
-// other TabId belongs to the standalone Material-LUT Studio (MLS) frontend
-// (port :5180), which reuses this same store as its router. Because the
-// persist migration/rehydrate logic below is shared by BOTH entries, it must
-// stay permissive (it cannot coerce MLS tabs away, or MLS would lose its
-// last-tab persistence on every reload). Each app instead coerces a foreign
-// ``activeTab`` to its own default at its boundary: MLS does it in MlsApp,
-// the main app does it via :func:`isMainRenderableTab` in App.tsx.
-// 主转换器应用（:5174）只渲染这三个标签；其余 TabId 属于独立的 MLS 前端
-// （:5180），后者复用同一个 store 作为路由。由于下方的持久化迁移/水合逻辑被两个
-// 入口共享，它必须保持宽松（不能把 MLS 标签清掉，否则 MLS 每次刷新都会丢失上次
-// 标签）。两个应用各自在边界把外来的 ``activeTab`` 归位到自己的默认值：MLS 在
-// MlsApp 处理，主应用通过 App.tsx 中的 :func:`isMainRenderableTab` 处理。
-export const MAIN_RENDERABLE_TABS: ReadonlySet<TabId> = new Set<TabId>([
-  "converter",
-  "vectorizer",
-  "settings",
-]);
-
-/**
- * Whether a tab has renderable content in the main converter app.
- * 判断某标签在主转换器应用中是否有可渲染内容。
- *
- * A persisted ``activeTab`` pointing at an MLS-only material/LUT tab (e.g.
- * ``calibration``/``lut-manager`` from before the MLS decouple) has no content
- * branch in App.tsx, so the user would land on an empty workspace. The main
- * app calls this to coerce such tabs back to ``converter``.
- * 持久化的 ``activeTab`` 若指向 MLS 专用的耗材/LUT 标签（如解耦前遗留的
- * ``calibration``/``lut-manager``），在 App.tsx 中没有对应内容分支，用户会落到空
- * 工作区。主应用据此把这类标签归位到 ``converter``。
- */
-export function isMainRenderableTab(tab: TabId): boolean {
-  return MAIN_RENDERABLE_TABS.has(tab);
-}
 
 // ===== Converter sub-tab → Widget 映射 =====
 // 核心设置：只有基础设置、操作栏、高级设置 3 个面板，专注于 3MF 生成所需的主要参数。
@@ -205,6 +166,43 @@ export const DEFAULT_LAYOUT: Record<WidgetId, WidgetLayoutState> = {
     stackOrder: 8,
     expandedHeight: EXPANDED_HEIGHT,
   },
+  // --- Material/LUT pages: one dockable control widget each ---
+  calibration: {
+    id: "calibration",
+    position: { x: 0, y: 0 },
+    collapsed: false,
+    visible: true,
+    snapEdge: "left",
+    stackOrder: 0,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
+  extractor: {
+    id: "extractor",
+    position: { x: 0, y: 0 },
+    collapsed: false,
+    visible: true,
+    snapEdge: "left",
+    stackOrder: 0,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
+  "lut-manager": {
+    id: "lut-manager",
+    position: { x: 0, y: 0 },
+    collapsed: false,
+    visible: true,
+    snapEdge: "left",
+    stackOrder: 0,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
+  "five-color": {
+    id: "five-color",
+    position: { x: 0, y: 0 },
+    collapsed: false,
+    visible: true,
+    snapEdge: "left",
+    stackOrder: 0,
+    expandedHeight: EXPANDED_HEIGHT,
+  },
 };
 
 // ===== Widget 注册表（静态配置，不含 component 字段）=====
@@ -278,6 +276,34 @@ export const WIDGET_REGISTRY: Omit<WidgetConfig, "component">[] = [
     id: "action-bar",
     titleKey: "widget.actionBar",
     icon: "play",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
+  {
+    id: "calibration",
+    titleKey: "widget.calibration",
+    icon: "grid",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
+  {
+    id: "extractor",
+    titleKey: "widget.extractor",
+    icon: "eyedropper",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
+  {
+    id: "lut-manager",
+    titleKey: "widget.lutManager",
+    icon: "table",
+    defaultWidth: 350,
+    minWidth: 300,
+  },
+  {
+    id: "five-color",
+    titleKey: "widget.fiveColor",
+    icon: "palette",
     defaultWidth: 350,
     minWidth: 300,
   },
@@ -720,13 +746,11 @@ export const useWidgetStore = create<WidgetStore>()(
           void _drop;
           return _sanitizePersistedState({ ...rest, widgets });
         }
-        // v7 -> v8: Material/LUT tabs & widgets moved to the standalone MLS
-        // service (Route B). Drop their persisted widget layouts and reset a
-        // removed ``activeTab`` to "converter" so old localStorage never points
-        // at a tab/widget that no longer exists (which crashed WidgetToggles).
-        // v7 -> v8：耗材/LUT 标签与 widget 已迁移到独立 MLS 服务。丢弃它们的持久化
-        // 布局，并把已删除的 ``activeTab`` 重置为 "converter"，避免旧 localStorage
-        // 指向不存在的标签/widget（曾导致 WidgetToggles 崩溃白屏）。
+        // v8 keeps the defensive sanitizer but Material/LUT widgets are part
+        // of DEFAULT_LAYOUT again, so old localStorage is backfilled instead
+        // of being coerced away.
+        // v8 保留防御性清洗；耗材/LUT widget 已恢复到 DEFAULT_LAYOUT，因此旧
+        // localStorage 会被补齐，而不是被归位到 converter。
         return _sanitizePersistedState(persistedState);
       },
       partialize: (state) => ({

@@ -6,11 +6,13 @@ import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
+import { useColorcheckerArtifactLease } from "./hooks/useColorcheckerArtifactLease";
 import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
 import { getSettings } from "./api/system";
 import Scene3D from "./components/Scene3D";
+import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
 import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
@@ -19,15 +21,29 @@ import { BugReportModal } from "./components/BugReportModal";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
-import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP, isMainRenderableTab } from "./stores/widgetStore";
+import { useWidgetStore, WIDGET_REGISTRY, TAB_WIDGET_MAP, CONVERTER_SUB_TAB_WIDGET_MAP } from "./stores/widgetStore";
 import TabNavBar, { hasSubTabs } from "./components/widget/TabNavBar";
 import SubTabBar from "./components/widget/SubTabBar";
+import CalibrationPanel from "./components/CalibrationPanel";
+import ExtractorPanel from "./components/ExtractorPanel";
+import ColorcheckerConfirmDialogExtractor from "./components/ColorcheckerConfirmDialog";
+import GradientCardGeneratePanel from "./components/GradientCardGeneratePanel";
+import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
+import MaterialLibraryPanel from "./components/MaterialLibraryPanel";
+import MaterialRecipeQueryPanel from "./components/MaterialRecipeQueryPanel";
+import LutComparePanel from "./components/LutComparePanel";
+import LutManagerPanel from "./components/LutManagerPanel";
+import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
-import { useConverterStore } from "./stores/converter";
+import { useSingleStageStore } from "./stores/singleStageStore";
+import { useExtractorStore } from "./stores/extractorStore";
+import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { useElectronLanguageSync } from "./integrations/electron";
+
+import LutDetailsPanel from "./components/LutDetailsPanel";
 
 /* ---------- Error Boundary ---------- */
 
@@ -196,11 +212,16 @@ function AppContent() {
   const { t } = useI18n();
   const announcement = useAnnouncement();
   const converterSessionId = useConverterStore((s) => s.sessionId);
+  const converterKeepFileIds = useConverterStore(
+    useShallow((s) => collectConverterKeepFileIds(s)),
+  );
+  const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
   const hydrateDeviceSettingsFromBackend = useSettingsStore(
     (s) => s.hydrateDeviceSettingsFromBackend,
   );
 
-  useSessionLease(converterSessionId);
+  useSessionLease(converterSessionId, "converter", converterKeepFileIds);
+  useSessionLease(singleStageSessionId, "single_stage");
   useActionHistoryBootstrap();
   useAutoPreview();
   usePuzzleLayoutPreview();
@@ -213,43 +234,61 @@ function AppContent() {
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
+  const extractorColorcheckerFullIds = useExtractorStore(
+    useShallow((s) => [
+      s.colorchecker_phase === "done" ? s.calibratedFullFileId : null,
+      s.colorchecker_phase === "confirming"
+        ? s.previousCalibratedFullFileId
+        : null,
+    ]),
+  );
+  const extractorColorcheckerPreviewUrls = useExtractorStore(
+    useShallow((s) => [
+      s.colorchecker_phase === "done"
+        ? s.calibratedPreviewUrl ?? s.imagePreviewUrl
+        : null,
+      s.colorchecker_phase === "done" && s.calibratedFullFileId
+        ? s.originalPreviewUrl
+        : null,
+      s.colorchecker_phase === "confirming" ? s.imagePreviewUrl : null,
+      s.colorchecker_phase === "confirming" ? s.calibratedPreviewUrl : null,
+    ]),
+  );
+  const gradientColorcheckerFullIds = useSingleStageStore(
+    useShallow((s) => [s.whiteColorcheckerFileId, s.blackColorcheckerFileId]),
+  );
+  const gradientColorcheckerPreviewUrls = useSingleStageStore(
+    useShallow((s) => [
+      s.whiteColorcheckerFileId ? s.whiteImagePreviewUrl : null,
+      s.blackColorcheckerFileId ? s.blackImagePreviewUrl : null,
+      s.whiteColorcheckerFileId ? s.originalWhitePreviewUrl : null,
+      s.blackColorcheckerFileId ? s.originalBlackPreviewUrl : null,
+    ]),
+  );
+  useColorcheckerArtifactLease([
+    ...extractorColorcheckerFullIds,
+    ...gradientColorcheckerFullIds,
+  ], true, [
+    ...extractorColorcheckerPreviewUrls,
+    ...gradientColorcheckerPreviewUrls,
+  ]);
+  const clearMaterialVerification = useSingleStageStore(
+    (s) => s.clearMaterialVerification,
+  );
 
-  // The shared widget store persists ``activeTab`` for both this app and the
-  // standalone MLS frontend (same store, separate origins). A localStorage
-  // value left over from before the MLS decouple — or written by the MLS app —
-  // can point at a material/LUT tab this app has no content branch for, which
-  // would render an empty workspace. Coerce any non-renderable tab back to
-  // "converter" at this boundary (mirrors how MlsApp coerces foreign tabs to
-  // its own default), keeping the shared migration logic permissive.
-  // 共享 widget store 为本应用与独立 MLS 前端同时持久化 ``activeTab``（同一 store、
-  // 不同 origin）。解耦前遗留或由 MLS 写入的值可能指向本应用没有内容分支的耗材/LUT
-  // 标签，导致空工作区。在此边界把不可渲染的标签归位到 "converter"（与 MlsApp 把
-  // 外来标签归位到自身默认值的做法对称），从而让共享迁移逻辑保持宽松。
-  useEffect(() => {
-    if (!isMainRenderableTab(activeTab)) {
-      setActiveTab("converter");
-    }
-  }, [activeTab, setActiveTab]);
-
-  // Render against a coerced tab so the very first paint (before the effect
-  // above commits the corrected store value) never shows an empty workspace
-  // for a non-renderable persisted tab.
-  // 用归位后的标签渲染，使首帧（在上面的 effect 提交修正值之前）也不会因不可渲染
-  // 的持久化标签而出现空工作区。
-  const renderTab = isMainRenderableTab(activeTab) ? activeTab : "converter";
-
-  // Material/LUT extract / generate / query (and their ColorChecker capture
-  // flows) moved to the standalone Material-LUT Studio (MLS) service, so the
-  // converter app no longer manages single-stage sessions or ColorChecker
-  // artifact leases here. Tab switching is now a plain store update.
-  // 耗材/LUT 的提取/生成/查询（及其 ColorChecker 采集流程）已迁移到独立的 MLS
-  // 服务，转换器应用不再在此管理单段会话或 ColorChecker 工件租约；标签切换变为
-  // 直接的 store 更新。
+  // Clicking the gradient-card extract sub-tab from navigation starts a fresh
+  // extraction and clears stale verification state. Re-verification from the
+  // material library bypasses this handler by setting the store directly.
+  // 用户从导航栏点击「提取耗材」视为全新提取，清除遗留校验状态；耗材库再次校验
+  // 直接调 store，不受这里影响。
   const handleTabChange = useCallback(
     (tab: typeof activeTab) => {
+      if (tab === "gradient-card-extract") {
+        clearMaterialVerification();
+      }
       setActiveTab(tab);
     },
-    [setActiveTab],
+    [setActiveTab, clearMaterialVerification],
   );
 
   useEffect(() => {
@@ -288,7 +327,7 @@ function AppContent() {
         className={`relative z-50 border-b border-slate-200 dark:border-slate-800 ${
           workspace.isCompact
             ? "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 sm:px-4"
-            : "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] lg:px-6 lg:py-4"
+            : "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:px-6 lg:py-4"
         }`}
       >
         <div className="flex min-w-0 items-center gap-3">
@@ -338,7 +377,7 @@ function AppContent() {
         </div>
 
         {/* Center: Tabs */}
-        <div className={`min-w-0 w-full ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
+        <div className={`min-w-0 ${workspace.isCompact ? "col-span-3 row-start-2" : "col-span-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"}`}>
           <TabNavBar
             activeTab={activeTab}
             onTabChange={handleTabChange}
@@ -348,10 +387,11 @@ function AppContent() {
       </header>
 
       <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
-        {hasSubTabs(renderTab) && (
+        {hasSubTabs(activeTab) && (
           <div className="shrink-0 border-b border-slate-200/80 bg-slate-100/50 px-3 py-2 dark:border-slate-800/80 dark:bg-slate-900/50 sm:px-4 lg:px-6">
             <SubTabBar
-              activeTab={renderTab}
+              activeTab={activeTab}
+              onTabChange={handleTabChange}
               compact={workspace.isCompact}
             />
           </div>
@@ -359,7 +399,7 @@ function AppContent() {
 
         <div className="relative min-h-0 flex-1">
         {/* Converter: WidgetWorkspace + Scene3D */}
-        {renderTab === 'converter' && (
+        {activeTab === 'converter' && (
           <div className="h-full min-h-0">
             <WidgetWorkspace>
               <SceneErrorBoundary
@@ -377,8 +417,31 @@ function AppContent() {
           </div>
         )}
 
-        {renderTab === 'vectorizer' && <VectorizerPanel />}
-        {renderTab === 'settings' && <SettingsPanel />}
+        {activeTab === 'calibration' && <CalibrationPanel />}
+        {activeTab === 'gradient-card-generate' && <GradientCardGeneratePanel />}
+        {activeTab === 'gradient-card-extract' && <GradientCardExtractPanel />}
+        {activeTab === 'material-library' && <MaterialLibraryPanel />}
+        {activeTab === 'material-recipe' && <MaterialRecipeQueryPanel />}
+
+        {activeTab === 'extractor' && (
+          <div className="flex h-full min-h-0 flex-col xl:flex-row">
+            <ExtractorPanel />
+            <div className="relative min-h-[min(54vh,40rem)] flex-1 overflow-hidden border-t border-slate-200/70 dark:border-slate-800/80 xl:min-h-0 xl:border-l xl:border-t-0">
+              <ExtractorCanvas />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lut-manager' && <LutManagerPanel />}
+        {activeTab === 'lut-details' && <LutDetailsPanel />}
+        {activeTab === 'lut-compare' && <LutComparePanel />}
+        {activeTab === 'five-color' && (
+          <div className="flex h-full min-h-0">
+            <FiveColorQueryPanel />
+          </div>
+        )}
+        {activeTab === 'vectorizer' && <VectorizerPanel />}
+        {activeTab === 'settings' && <SettingsPanel />}
         </div>
       </main>
       <AnnouncementDialog
@@ -396,6 +459,10 @@ function AppContent() {
           it appears regardless of whether the extractor is opened as the
           full-page tab or as a dockable widget; it self-gates on the
           extractor store's colorchecker phase. */}
+      {/* 提取器 ColorChecker 校色弹窗：挂载在应用根部，无论提取器是以整页标签
+          还是可停靠 widget 形式打开都能弹出；其显隐由提取器 store 的
+          colorchecker 阶段自行控制。 */}
+      <ColorcheckerConfirmDialogExtractor />
     </div>
   );
 }

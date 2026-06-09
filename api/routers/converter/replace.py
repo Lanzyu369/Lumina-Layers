@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 
 import cv2
@@ -68,6 +69,14 @@ from core.recipe_order import (
     pad_recipe_to_layer_count,
 )
 from utils.lut_manager import LUTManager
+from api.preview_cache_artifacts import (
+    PreviewCacheRevisionConflict,
+    get_preview_cache_metadata,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+    persist_preview_cache,
+    preview_cache_transaction,
+)
 from api.structured_logging import get_logger
 
 from .common import (
@@ -85,6 +94,68 @@ router = APIRouter()
 log = get_logger(__name__)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
+
+
+def _require_preview_cache_fields(
+    session_data: dict,
+    *,
+    fields: set[str],
+) -> dict:
+    """Load only selected preview-cache fields for replace routes.
+
+    只为替换相关路由加载指定 preview-cache 字段。
+    """
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+        )
+    if not is_preview_cache_artifact_ref(cache):
+        return cache
+    loaded = get_preview_cache_metadata(cache)
+    loaded.update(
+        hydrate_preview_cache(
+            cache,
+            fields=fields,
+            mmap_mode="r",
+        )
+    )
+    return loaded
+
+
+def _dirty_array_fields(cache: dict, *field_names: str) -> set[str]:
+    return {
+        field_name
+        for field_name in field_names
+        if isinstance(cache.get(field_name), np.ndarray)
+    }
+
+
+def _preview_cache_transaction(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    *,
+    fields: set[str],
+):
+    cache = session_data.get("preview_cache")
+    if cache is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No preview cache. Call POST /api/convert/preview first.",
+        )
+    if not isinstance(cache, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+        )
+    return preview_cache_transaction(session_id, store, session_data, fields=fields)
 
 
 def _recalc_matched_rgb_for_padded_pixels(
@@ -172,7 +243,8 @@ def _schedule_or_run_overridden_glb_build(
 ) -> str | None:
     """Schedule the normal GLB build, or run an overridden builder inline."""
     if generate_segmented_glb is _DEFAULT_GENERATE_SEGMENTED_GLB:
-        schedule_glb_build(session_id, store, registry, cache)
+        persisted_cache = persist_preview_cache(session_id, store, cache)
+        schedule_glb_build(session_id, store, registry, persisted_cache)
         return None
 
     target_path = os.path.join(
@@ -196,7 +268,7 @@ def _schedule_or_run_overridden_glb_build(
     if not glb_path:
         return None
 
-    store.put(session_id, "preview_cache", cache)
+    persist_preview_cache(session_id, store, cache)
     glb_id = registry.register_path(session_id, glb_path, filename)
     return f"/api/files/{glb_id}"
 
@@ -228,6 +300,11 @@ def _select_all_color_mask_for_region_id(
     cache = session_data.get("preview_cache")
     if not isinstance(cache, dict):
         return None
+    if is_preview_cache_artifact_ref(cache):
+        cache = hydrate_preview_cache(
+            cache,
+            fields={"matched_rgb", "mask_solid"},
+        )
     matched_rgb = cache.get("matched_rgb")
     mask_solid = cache.get("mask_solid")
     if matched_rgb is None or mask_solid is None:
@@ -474,10 +551,15 @@ def _sync_material_archive_matrix_for_diff(
     if recipes.shape[1] > 1:
         recipes = np.ascontiguousarray(recipes[:, ::-1])
 
-    new_material_matrix = _upgrade_material_matrix_layers(
-        np.asarray(material_matrix),
-        int(recipes.shape[1]),
-    )
+    recipe_layers = int(recipes.shape[1])
+    material_matrix_arr = np.asarray(material_matrix)
+    if material_matrix_arr.shape[2] > recipe_layers:
+        new_material_matrix = material_matrix_arr[:, :, :recipe_layers].copy()
+    else:
+        new_material_matrix = _upgrade_material_matrix_layers(
+            material_matrix_arr,
+            recipe_layers,
+        )
     color_masks = [
         np.all(updated_rgb == color, axis=-1) & diff_mask for color in target_rgbs
     ]
@@ -564,66 +646,78 @@ def replace_color(
         HTTPException(409): No preview cache available. (无预览缓存)
         HTTPException(500): Internal processing error. (内部处理错误)
     """
-    session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
-
     try:
-        # Parse hex colors to RGB tuples
-        selected_rgb = ColorReplacementManager._hex_to_color(request.selected_color)
-        replacement_rgb = ColorReplacementManager._hex_to_color(request.replacement_color)
-
-        # Build manager from all existing replacement_regions
-        manager = ColorReplacementManager()
-        for record in session_data.get("replacement_regions", []):
-            orig = ColorReplacementManager._hex_to_color(record["selected_color"])
-            repl = ColorReplacementManager._hex_to_color(record["replacement_color"])
-            manager.add_replacement(orig, repl)
-
-        # Add the new replacement
-        manager.add_replacement(selected_rgb, replacement_rgb)
-
-        # Apply all replacements to the original matched_rgb
-        matched_rgb: np.ndarray = cache["matched_rgb"]
-        previous_rgb = matched_rgb.copy()
-        replaced_rgb = manager.apply_to_image(matched_rgb)
-
-        # --- diagnostic logging ---
-        diff_pixels = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
-        log.debug(
-            "replace-color diag",
-            extra={
-                "event": "converter_replace_color_diag",
-                "selected_color": request.selected_color,
-                "replacement_color": request.replacement_color,
-                "material_source": session_data.get("material_source"),
-                "matched_rgb_shape": list(matched_rgb.shape),
-                "diff_pixel_count": diff_pixels,
-                "replacement_region_count": len(session_data.get("replacement_regions", [])),
-                "has_material_matrix": cache.get("material_matrix") is not None,
-                "has_mask_solid": cache.get("mask_solid") is not None,
-            },
-        )
-        # --- end diagnostic logging ---
-
-        # Update cache so 3D preview reflects replacements
-        cache["matched_rgb"] = replaced_rgb
-        _sync_material_matrix_after_rgb_change(
+        session_data = _require_session(store, request.session_id)
+        with _preview_cache_transaction(
+            request.session_id,
+            store,
             session_data,
-            cache,
-            previous_rgb,
-            replaced_rgb,
-        )
-        store.put(request.session_id, "preview_cache", cache)
+            fields={"matched_rgb", "material_matrix", "mask_solid"},
+        ) as cache:
+            # Parse hex colors to RGB tuples
+            selected_rgb = ColorReplacementManager._hex_to_color(request.selected_color)
+            replacement_rgb = ColorReplacementManager._hex_to_color(request.replacement_color)
 
-        # Generate styled preview PNG (with bed grid and transparency)
-        preview_bytes = _render_styled_preview_bytes(replaced_rgb, cache)
-        preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_replaced.png")
+            # Build manager from all existing replacement_regions
+            manager = ColorReplacementManager()
+            for record in session_data.get("replacement_regions", []):
+                orig = ColorReplacementManager._hex_to_color(record["selected_color"])
+                repl = ColorReplacementManager._hex_to_color(record["replacement_color"])
+                manager.add_replacement(orig, repl)
+
+            # Add the new replacement
+            manager.add_replacement(selected_rgb, replacement_rgb)
+
+            # Apply all replacements to the original matched_rgb
+            matched_rgb: np.ndarray = cache["matched_rgb"]
+            previous_rgb = matched_rgb.copy()
+            replaced_rgb = manager.apply_to_image(matched_rgb)
+
+            # --- diagnostic logging ---
+            diff_pixels = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
+            log.debug(
+                "replace-color diag",
+                extra={
+                    "event": "converter_replace_color_diag",
+                    "selected_color": request.selected_color,
+                    "replacement_color": request.replacement_color,
+                    "material_source": session_data.get("material_source"),
+                    "matched_rgb_shape": list(matched_rgb.shape),
+                    "diff_pixel_count": diff_pixels,
+                    "replacement_region_count": len(session_data.get("replacement_regions", [])),
+                    "has_material_matrix": cache.get("material_matrix") is not None,
+                    "has_mask_solid": cache.get("mask_solid") is not None,
+                },
+            )
+            # --- end diagnostic logging ---
+
+            # Update cache so 3D preview reflects replacements
+            cache["matched_rgb"] = replaced_rgb
+            _sync_material_matrix_after_rgb_change(
+                session_data,
+                cache,
+                previous_rgb,
+                replaced_rgb,
+            )
+
+            # Generate styled preview PNG (with bed grid and transparency)
+            preview_bytes = _render_styled_preview_bytes(replaced_rgb, cache)
+            preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_replaced.png")
+            persisted_cache = cache.commit(
+                _dirty_array_fields(
+                    cache,
+                    "matched_rgb",
+                    "material_matrix",
+                    "preview_rgba",
+                ),
+                metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+            )
 
         # Schedule async segmented-GLB rebuild so this response returns
         # immediately after the PNG is ready. Frontend polls
         # /api/convert/glb-status/{session_id} to pick up the new GLB URL.
         # 异步重建分段 GLB：响应在 PNG 就绪后立即返回，前端轮询 glb-status。
-        schedule_glb_build(request.session_id, store, registry, cache)
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
 
         # Save history snapshot (deep copy of regions before this change) for undo
@@ -644,6 +738,8 @@ def replace_color(
 
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color replacement")
 
@@ -694,43 +790,62 @@ def reset_replacements(
         HTTPException(409): No preview cache available. (无预览缓存)
         HTTPException(500): Internal processing error. (内部处理错误)
     """
-    session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
-
     try:
-        regions_cleared = len(session_data.get("replacement_regions", []))
-        # Clear replacement state
-        store.put(request.session_id, "replacement_regions", [])
-        store.put(request.session_id, "replacement_history", [])
-        history_truncated = 0
-        previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
+        session_data = _require_session(store, request.session_id)
+        with _preview_cache_transaction(
+            request.session_id,
+            store,
+            session_data,
+            fields={
+                "matched_rgb",
+                "material_matrix",
+                "original_matched_rgb",
+                "original_material_matrix",
+                "mask_solid",
+            },
+        ) as cache:
+            regions_cleared = len(session_data.get("replacement_regions", []))
+            # Clear replacement state
+            store.put(request.session_id, "replacement_regions", [])
+            store.put(request.session_id, "replacement_history", [])
+            history_truncated = 0
+            previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
-        # Restore matched_rgb from the pristine original saved at preview time.
-        # region-replace mutates cache["matched_rgb"] in-place, so we must
-        # use the untouched copy to truly reset.
-        original_rgb: np.ndarray | None = session_data.get("original_matched_rgb")
-        if original_rgb is not None:
-            # Restore cache to original state
-            cache["matched_rgb"] = original_rgb.copy()
-            source_rgb = original_rgb
-        else:
-            # Fallback: no original saved (legacy session), use current cache
-            source_rgb = cache["matched_rgb"]
-
-        original_material_matrix: np.ndarray | None = session_data.get(
-            "original_material_matrix"
-        )
-        if original_material_matrix is not None:
-            cache["material_matrix"] = original_material_matrix.copy()
-        elif original_rgb is not None:
-            _sync_material_matrix_after_rgb_change(
-                session_data,
-                cache,
-                previous_rgb,
-                cache["matched_rgb"],
+            # Restore matched_rgb from the pristine original saved at preview time.
+            # region-replace mutates cache["matched_rgb"] in-place, so we must
+            # use the untouched copy to truly reset.
+            original_rgb: np.ndarray | None = session_data.get(
+                "original_matched_rgb"
             )
-        cache["color_palette"] = extract_color_palette(cache)
-        store.put(request.session_id, "preview_cache", cache)
+            if original_rgb is None:
+                original_rgb = cache.get("original_matched_rgb")
+            if original_rgb is not None:
+                # Restore cache to original state
+                cache["matched_rgb"] = original_rgb.copy()
+                source_rgb = original_rgb
+            else:
+                # Fallback: no original saved (legacy session), use current cache
+                source_rgb = cache["matched_rgb"]
+
+            original_material_matrix: np.ndarray | None = session_data.get(
+                "original_material_matrix"
+            )
+            if original_material_matrix is None:
+                original_material_matrix = cache.get("original_material_matrix")
+            if original_material_matrix is not None:
+                cache["material_matrix"] = original_material_matrix.copy()
+            elif original_rgb is not None:
+                _sync_material_matrix_after_rgb_change(
+                    session_data,
+                    cache,
+                    previous_rgb,
+                    cache["matched_rgb"],
+                )
+            cache["color_palette"] = extract_color_palette(cache)
+            persisted_cache = cache.commit(
+                _dirty_array_fields(cache, "matched_rgb", "material_matrix"),
+                metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+            )
 
         # Regenerate preview from original matched_rgb (no replacements applied)
         preview_bytes = _image_to_png_bytes(source_rgb)
@@ -739,10 +854,12 @@ def reset_replacements(
         # Async GLB rebuild from restored matched_rgb. Same rationale as
         # /replace-color: keep HTTP response snappy, let the frontend poll.
         # 异步 GLB 重建，理由同 /replace-color。
-        schedule_glb_build(request.session_id, store, registry, cache)
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Reset replacements")
 
@@ -787,10 +904,20 @@ def source_color_pick(
             (坐标越界或点在背景上)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={
+            "original_matched_rgb",
+            "matched_rgb",
+            "quantized_image",
+            "mask_solid",
+        },
+    )
 
     try:
         source_rgb = session_data.get("original_matched_rgb")
+        if source_rgb is None:
+            source_rgb = cache.get("original_matched_rgb")
         if source_rgb is None:
             source_rgb = cache.get("matched_rgb")
 
@@ -888,7 +1015,10 @@ def color_highlight(
         ColorHighlightResponse: Highlighted preview URL. (高亮预览图 URL)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={"matched_rgb", "mask_solid"},
+    )
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -1117,7 +1247,10 @@ def region_detect(
         HTTPException(500): Internal processing error. (内部处理错误)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={"quantized_image", "mask_solid", "matched_rgb"},
+    )
 
     try:
         quantized_image: np.ndarray | None = cache.get("quantized_image")
@@ -1261,7 +1394,13 @@ def region_replace(
         HTTPException(500): Internal processing error. (内部处理错误)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache_context = _preview_cache_transaction(
+        request.session_id,
+        store,
+        session_data,
+        fields={"matched_rgb", "material_matrix", "mask_solid"},
+    )
+    cache = cache_context.__enter__()
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -1405,13 +1544,20 @@ def region_replace(
                 "original_rgb_sample": matched_rgb[region_mask][0].tolist() if _region_pixels > 0 else None,
             },
         )
-        store.put(request.session_id, "preview_cache", cache)
-
         # Generate styled preview PNG (with bed grid and transparency)
         _t_png = _time.perf_counter()
         preview_bytes: bytes = _render_styled_preview_bytes(replaced_rgb, cache)
         preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "preview_region_replaced.png")
         _png_ms = (_time.perf_counter() - _t_png) * 1000
+        persisted_cache = cache.commit(
+            _dirty_array_fields(
+                cache,
+                "matched_rgb",
+                "material_matrix",
+                "preview_rgba",
+            ),
+            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+        )
 
         # Async GLB rebuild: /region-replace previously spent ~77% of its
         # wall time here; now the HTTP response returns in ~10s (sync +
@@ -1422,7 +1568,7 @@ def region_replace(
             request.session_id,
             store,
             registry,
-            cache,
+            persisted_cache,
             "preview_region_replaced.glb",
         )
 
@@ -1459,8 +1605,12 @@ def region_replace(
 
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Region replacement")
+    finally:
+        cache_context.__exit__(*sys.exc_info())
 
     return RegionReplaceResponse(
         preview_url=f"/api/files/{preview_id}",
@@ -1515,7 +1665,13 @@ def region_requantize(
     from PIL import Image
 
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache_context = _preview_cache_transaction(
+        request.session_id,
+        store,
+        session_data,
+        fields={"matched_rgb", "material_matrix", "mask_solid"},
+    )
+    cache = cache_context.__enter__()
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -1763,8 +1919,6 @@ def region_requantize(
         if new_cap > previous_cap:
             cache["glb_max_meshes"] = new_cap
 
-        store.put(request.session_id, "preview_cache", cache)
-
         # Re-run gradient-group analysis so the Gradient Groups panel and
         # the cached ``gradient_region_id_map`` both reflect the new
         # ``matched_rgb``. Without this the panel still shows the pre-
@@ -1790,7 +1944,21 @@ def region_requantize(
             "preview_region_requantized.png",
         )
         _png_ms = (_time.perf_counter() - _t_png) * 1000
-        schedule_glb_build(request.session_id, store, registry, cache)
+        persisted_cache = cache.commit(
+            _dirty_array_fields(
+                cache,
+                "matched_rgb",
+                "material_matrix",
+                "preview_rgba",
+            ),
+            metadata_fields={
+                "color_palette",
+                "color_layers",
+                "layer_height_mm",
+                "glb_max_meshes",
+            },
+        )
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
 
         log.info(
             "region-requantize done",
@@ -1822,8 +1990,12 @@ def region_requantize(
         contours_data: dict | None = cache.get("color_contours")
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except REPLACE_HANDLED_ERRORS as exc:
         _handle_core_error(exc, "Region re-quantisation")
+    finally:
+        cache_context.__exit__(*sys.exc_info())
 
     return RegionReplaceResponse(
         preview_url=f"/api/files/{preview_id}",
@@ -1988,7 +2160,13 @@ def replace_colors_batch(
         HTTPException(409): No preview cache. (无预览缓存)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache_context = _preview_cache_transaction(
+        request.session_id,
+        store,
+        session_data,
+        fields={"matched_rgb", "material_matrix", "mask_solid"},
+    )
+    cache = cache_context.__enter__()
 
     try:
         matched_rgb: np.ndarray = cache["matched_rgb"]
@@ -2025,7 +2203,6 @@ def replace_colors_batch(
         _sync_material_matrix_after_rgb_change(
             session_data, cache, previous_rgb, replaced_rgb
         )
-        store.put(request.session_id, "preview_cache", cache)
 
         # One PNG render + one GLB rebuild for the whole batch.
         # 整个批次只渲染一次 PNG、重建一次 GLB。
@@ -2033,11 +2210,20 @@ def replace_colors_batch(
         preview_id = registry.register_bytes(
             request.session_id, preview_bytes, "preview_batch_replaced.png"
         )
+        persisted_cache = cache.commit(
+            _dirty_array_fields(
+                cache,
+                "matched_rgb",
+                "material_matrix",
+                "preview_rgba",
+            ),
+            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+        )
 
         # Async GLB rebuild for the entire batch. Matches the single-pair
         # behaviour and keeps batch-swap responses as snappy as PNG render.
         # 批量颜色替换的 GLB 重建也改为异步，响应只等 PNG。
-        schedule_glb_build(request.session_id, store, registry, cache)
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
 
         # One snapshot to history, append all new pairs to replacement_regions.
@@ -2059,8 +2245,12 @@ def replace_colors_batch(
 
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch color replacement")
+    finally:
+        cache_context.__exit__(*sys.exc_info())
 
     log.info(
         "replace-colors-batch completed",
@@ -2100,7 +2290,18 @@ def region_replace_batch(
     内摊薄。
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache_context = _preview_cache_transaction(
+        request.session_id,
+        store,
+        session_data,
+        fields={
+            "matched_rgb",
+            "material_matrix",
+            "mask_solid",
+            "quantized_image",
+        },
+    )
+    cache = cache_context.__enter__()
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -2133,18 +2334,26 @@ def region_replace_batch(
         _sync_material_matrix_after_rgb_change(
             session_data, cache, previous_rgb, working_rgb
         )
-        store.put(request.session_id, "preview_cache", cache)
 
         preview_bytes = _render_styled_preview_bytes(working_rgb, cache)
         preview_id = registry.register_bytes(
             request.session_id, preview_bytes, "preview_region_batch_replaced.png"
+        )
+        persisted_cache = cache.commit(
+            _dirty_array_fields(
+                cache,
+                "matched_rgb",
+                "material_matrix",
+                "preview_rgba",
+            ),
+            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
         )
 
         # Async GLB rebuild for the whole batch of region edits. See
         # schedule_glb_build for job-token semantics when a newer replace
         # arrives before the background thread finishes.
         # 批量区域替换的 GLB 重建改为异步；重入竞争由 job_token 守护。
-        schedule_glb_build(request.session_id, store, registry, cache)
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
 
         contours_data: dict | None = cache.get("color_contours")
@@ -2170,8 +2379,12 @@ def region_replace_batch(
 
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch region replacement")
+    finally:
+        cache_context.__exit__(*sys.exc_info())
 
     log.info(
         "region-replace-batch completed",
@@ -2681,7 +2894,13 @@ def apply_recipe_override(
 ) -> RecipeOverrideApplyResponse:
     """Apply a custom recipe override to the selected regions and update preview cache."""
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache_context = _preview_cache_transaction(
+        request.session_id,
+        store,
+        session_data,
+        fields={"matched_rgb", "material_matrix", "mask_solid"},
+    )
+    cache = cache_context.__enter__()
 
     matched_rgb: np.ndarray | None = cache.get("matched_rgb")
     material_matrix: np.ndarray | None = cache.get("material_matrix")
@@ -3041,7 +3260,6 @@ def apply_recipe_override(
             "override": True,
             "source": prediction_source,
         }
-        store.put(request.session_id, "preview_cache", cache)
 
         existing_overrides = list(session_data.get("recipe_overrides") or [])
         # Persist the per-region virtual materials alongside the recipe so the
@@ -3082,14 +3300,33 @@ def apply_recipe_override(
             preview_bytes,
             "preview_recipe_override.png",
         )
+        persisted_cache = cache.commit(
+            _dirty_array_fields(
+                cache,
+                "matched_rgb",
+                "material_matrix",
+                "preview_rgba",
+            ),
+            metadata_fields={
+                "color_layers",
+                "layer_height_mm",
+                "lut_metadata",
+                "lut_match_info",
+                "preview_colors",
+                "slot_names",
+                "color_conf",
+            },
+        )
 
         # Async GLB rebuild for the newly applied recipe override. Keeps
         # the override response fast; GLB arrives via /glb-status polling.
         # 配方覆盖也走异步 GLB 重建，保持响应延迟与其他 replace 端点一致。
-        schedule_glb_build(request.session_id, store, registry, cache)
+        schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
     except HTTPException:
         raise
+    except PreviewCacheRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         import traceback
         log.error(
@@ -3105,6 +3342,8 @@ def apply_recipe_override(
             },
         )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        cache_context.__exit__(*sys.exc_info())
 
     log.info(
         "apply-recipe-override completed",
@@ -3200,7 +3439,10 @@ def region_recipe(
             or no regions to sample.
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={"material_matrix"},
+    )
 
     material_matrix: np.ndarray | None = cache.get("material_matrix")
     if material_matrix is None:
@@ -3323,7 +3565,10 @@ def merge_colors(
         HTTPException(500): Internal processing error. (内部处理错误)
     """
     session_data = _require_session(store, request.session_id)
-    cache = _require_preview_cache(session_data)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={"matched_rgb", "mask_solid"},
+    )
 
     try:
         # Extract palette from preview cache

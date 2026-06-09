@@ -30,6 +30,7 @@ from core.lut_details.service import (
     LutPlotPoint3D,
 )
 from core.material_cache import MaterialSolverCache
+from core.material_candidate_cache import MaterialCandidateRuntime
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,43 @@ class MaterialSolverCacheDetails:
     lab_points_3d: tuple[LutPlotPoint3D, ...]
     lab_hull: tuple[tuple[float, float], ...]
     rgb_points: tuple[LutPlotPoint, ...]
+
+
+@dataclass(frozen=True)
+class MaterialSolverRuntimeDetails:
+    """Aggregated visualization payload for one hybrid candidate runtime.
+    单份 hybrid candidate runtime 的聚合可视化载荷。
+
+    The chart fields mirror :class:`MaterialSolverCacheDetails`; candidate
+    metadata is kept separately so API/UI callers can distinguish bounded
+    runtime coverage from exhaustive Lab-grid cache coverage.
+    图表字段与 :class:`MaterialSolverCacheDetails` 同构；候选元数据单独保留，
+    便于 API/UI 区分有界 runtime 覆盖与穷举 Lab-grid 缓存覆盖。
+    """
+
+    palette_hash: str
+    layer_count: int
+    layer_height_mm: float
+    substrate: str
+    grid_resolution: int
+    valid_cell_count: int
+    total_cell_count: int
+    candidate_budget: int
+    candidate_count: int
+    coverage_stats: LutCoverageStats
+    lab_points: tuple[LutPlotPoint, ...]
+    lab_points_3d: tuple[LutPlotPoint3D, ...]
+    lab_hull: tuple[tuple[float, float], ...]
+    rgb_points: tuple[LutPlotPoint, ...]
+
+
+@dataclass(frozen=True)
+class _MaterialDetailsArrayView:
+    """Minimal array view consumed by :func:`build_material_cache_details`."""
+
+    achieved_srgb: np.ndarray
+    achieved_lab: np.ndarray
+    metadata: dict[str, Any]
 
 
 def _axis_range(values: np.ndarray) -> AxisRange:
@@ -157,7 +195,7 @@ def _downsample_points(
 
 
 def build_material_cache_details(
-    cache: MaterialSolverCache,
+    cache: MaterialSolverCache | _MaterialDetailsArrayView,
     *,
     palette_hash: str,
     grid_resolution: int,
@@ -264,4 +302,60 @@ def build_material_cache_details(
         lab_points_3d=lab_points_3d,
         lab_hull=_compute_lab_hull(lab_full),
         rgb_points=rgb_points,
+    )
+
+
+def build_material_runtime_details(
+    runtime: MaterialCandidateRuntime,
+    *,
+    max_points: int = 8000,
+) -> MaterialSolverRuntimeDetails:
+    """Build a LUT-details-shaped payload from a hybrid candidate runtime.
+    从 hybrid candidate runtime 生成与 LUT 详情同构的可视化载荷。
+
+    Args:
+        runtime: Loaded or newly built candidate runtime. (候选运行时)
+        max_points: Upper bound on plotted scatter points; values above are
+            uniformly downsampled. (散点数上限)
+
+    Returns:
+        MaterialSolverRuntimeDetails: Chart-ready visualization payload.
+            (可直接用于图表渲染的可视化载荷)
+    """
+    metadata = dict(runtime.metadata if isinstance(runtime.metadata, dict) else {})
+    candidate_budget = int(
+        metadata.get("candidate_budget", runtime.valid_cell_count)
+    )
+    candidate_count = int(
+        metadata.get("candidate_count", runtime.valid_cell_count)
+    )
+    metadata["total_cell_count"] = candidate_budget
+    grid_resolution = int(
+        metadata.get("lab_grid_resolution", metadata.get("grid_resolution", 64))
+    )
+    details = build_material_cache_details(
+        _MaterialDetailsArrayView(
+            achieved_srgb=np.asarray(runtime.achieved_srgb),
+            achieved_lab=np.asarray(runtime.achieved_lab),
+            metadata=metadata,
+        ),
+        palette_hash=runtime.palette_hash,
+        grid_resolution=grid_resolution,
+        max_points=max_points,
+    )
+    return MaterialSolverRuntimeDetails(
+        palette_hash=details.palette_hash,
+        layer_count=details.layer_count,
+        layer_height_mm=details.layer_height_mm,
+        substrate=details.substrate,
+        grid_resolution=details.grid_resolution,
+        valid_cell_count=details.valid_cell_count,
+        total_cell_count=details.total_cell_count,
+        candidate_budget=candidate_budget,
+        candidate_count=candidate_count,
+        coverage_stats=details.coverage_stats,
+        lab_points=details.lab_points,
+        lab_points_3d=details.lab_points_3d,
+        lab_hull=details.lab_hull,
+        rgb_points=details.rgb_points,
     )

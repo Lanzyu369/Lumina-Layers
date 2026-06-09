@@ -13,6 +13,10 @@ from PIL import Image
 
 from api.errors import to_http_exception
 from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
+from api.preview_cache_artifacts import (
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
@@ -72,6 +76,8 @@ def _require_preview_cache(session_data: dict) -> dict:
     cache = session_data.get("preview_cache")
     if cache is None:
         raise HTTPException(status_code=409, detail="No preview cache. Call POST /api/convert/preview first.")
+    if is_preview_cache_artifact_ref(cache):
+        return hydrate_preview_cache(cache)
     return cache
 
 

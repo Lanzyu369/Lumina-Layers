@@ -73,6 +73,26 @@ class _FakeCache:
         )
 
 
+def _patch_solver_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_cache: _FakeCache,
+    calls: dict[str, int],
+) -> None:
+    import core.material_lut_provider as provider
+
+    def fake_load_solver_runtime(*args, **kwargs):
+        calls["runtime"] += 1
+        return fake_cache, 64
+
+    monkeypatch.setattr(provider, "load_solver_runtime", fake_load_solver_runtime)
+    monkeypatch.setattr(
+        "core.material_cache.build_material_solver_cache",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("P03 fallback must not call old bucketed builder")
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -148,17 +168,11 @@ class TestLayerOrderConversion:
         mocked_delta_e = np.asarray([0.0], dtype=np.float64)
         fake_cache = _FakeCache(mocked_matched_rgb, recipe_bottom_to_top, mocked_delta_e, 5)
 
-        # Ensure no on-disk cache is found so the on-the-fly build runs.
-        monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
-        )
-        monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
-        )
+        calls = {"runtime": 0}
+        _patch_solver_runtime(monkeypatch, fake_cache, calls)
 
         result = _run_material_archive_branch(ctx)
+        assert calls["runtime"] == 1
 
         material_matrix = result["material_matrix"]
         assert material_matrix.ndim == 3
@@ -205,16 +219,11 @@ class TestLayerOrderConversion:
             np.asarray([0.0], dtype=np.float64), 5,
         )
 
-        monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
-        )
-        monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
-        )
+        calls = {"runtime": 0}
+        _patch_solver_runtime(monkeypatch, fake_cache, calls)
 
         result = _run_material_archive_branch(ctx)
+        assert calls["runtime"] == 1
 
         material_matrix = result["material_matrix"]
         mask_solid = result["mask_solid"]
@@ -254,16 +263,11 @@ class TestLayerOrderConversion:
         mocked_delta_e = np.asarray([0.0], dtype=np.float64)
         fake_cache = _FakeCache(mocked_matched_rgb, recipe, mocked_delta_e, 1)
 
-        monkeypatch.setattr(
-            "core.material_cache.load_material_solver_cache",
-            lambda *args, **kwargs: None,
-        )
-        monkeypatch.setattr(
-            "core.material_cache.build_material_solver_cache",
-            lambda **kwargs: fake_cache,
-        )
+        calls = {"runtime": 0}
+        _patch_solver_runtime(monkeypatch, fake_cache, calls)
 
         result = _run_material_archive_branch(ctx)
+        assert calls["runtime"] == 1
         material_matrix = result["material_matrix"]
         assert material_matrix.shape[-1] == 1
         mask_solid = result["mask_solid"]

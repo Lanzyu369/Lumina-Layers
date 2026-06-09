@@ -1,15 +1,17 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import {
   beaconCloseSession,
   closeSession,
   heartbeatSession,
+  isSessionCloseRequested,
 } from "../api/session";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import type { Workstream } from "../types/actionHistory";
 
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 const SESSION_CLOSE_DELAY_MS = 0;
+const EMPTY_KEEP_FILE_IDS: readonly string[] = [];
 const pendingSessionCloseTimers = new Map<string, number>();
 
 function cancelPendingSessionClose(sessionId: string): void {
@@ -22,11 +24,25 @@ function cancelPendingSessionClose(sessionId: string): void {
   pendingSessionCloseTimers.delete(sessionId);
 }
 
-function scheduleSessionClose(sessionId: string): void {
+function normalizeKeepFileIds(keepFileIds: readonly string[]): string[] {
+  return Array.from(new Set(keepFileIds));
+}
+
+function scheduleSessionClose(
+  sessionId: string,
+  keepFileIds: readonly string[] = EMPTY_KEEP_FILE_IDS,
+): void {
   cancelPendingSessionClose(sessionId);
+  if (isSessionCloseRequested(sessionId)) {
+    return;
+  }
+  const keepFileIdsSnapshot = normalizeKeepFileIds(keepFileIds);
   const timerId = window.setTimeout(() => {
     pendingSessionCloseTimers.delete(sessionId);
-    void closeSession(sessionId);
+    if (isSessionCloseRequested(sessionId)) {
+      return;
+    }
+    void closeSession(sessionId, keepFileIdsSnapshot);
   }, SESSION_CLOSE_DELAY_MS);
   pendingSessionCloseTimers.set(sessionId, timerId);
 }
@@ -34,7 +50,11 @@ function scheduleSessionClose(sessionId: string): void {
 export function useSessionLease(
   sessionId: string | null | undefined,
   workstream: Workstream = "converter",
+  keepFileIds: readonly string[] = EMPTY_KEEP_FILE_IDS,
 ): void {
+  const keepFileIdsRef = useRef<string[]>([]);
+  keepFileIdsRef.current = normalizeKeepFileIds(keepFileIds);
+
   useEffect(() => {
     if (!sessionId) {
       return;
@@ -59,7 +79,10 @@ export function useSessionLease(
     }, HEARTBEAT_INTERVAL_MS);
 
     const handleBeforeUnload = () => {
-      beaconCloseSession(sessionId);
+      if (isSessionCloseRequested(sessionId)) {
+        return;
+      }
+      beaconCloseSession(sessionId, keepFileIdsRef.current);
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -67,7 +90,7 @@ export function useSessionLease(
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      scheduleSessionClose(sessionId);
+      scheduleSessionClose(sessionId, keepFileIdsRef.current);
     };
   }, [sessionId, workstream]);
 }

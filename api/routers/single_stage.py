@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 import anyio
 import numpy as np
@@ -41,6 +42,11 @@ from api.schemas.responses import (
     MaterialSolverCacheEntryResponse,
     MaterialSolverCacheListResponse,
     MaterialSolverCacheStatusResponse,
+    MaterialSolverRuntimeBuildResponse,
+    MaterialSolverRuntimeDeleteResponse,
+    MaterialSolverRuntimeDetailsResponse,
+    MaterialSolverRuntimeEntryResponse,
+    MaterialSolverRuntimeStatusResponse,
     SingleStageExtractResponse,
     StageAFitResponse,
 )
@@ -57,6 +63,7 @@ from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
     DEFAULT_GRID_RESOLUTION,
+    MaterialSolverCacheBudgetError,
     build_material_solver_cache,
     cache_file_path,
     delete_cached_entry,
@@ -65,8 +72,24 @@ from core.material_cache import (
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
     save_material_solver_cache,
+    validate_material_solver_cache_build_budget,
 )
-from core.material_cache_visualization import build_material_cache_details
+from core.material_cache_visualization import (
+    build_material_cache_details,
+    build_material_runtime_details,
+)
+from core.material_candidate_cache import (
+    DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
+    DEFAULT_PERSISTED_CANDIDATE_BUDGET,
+    MAX_PERSISTED_CANDIDATE_BUDGET,
+    MaterialCandidateCacheConfig,
+    MaterialCandidateRuntimeMetadata,
+    build_material_candidate_runtime,
+    delete_material_candidate_runtime,
+    load_material_candidate_runtime,
+    load_material_candidate_runtime_metadata,
+    save_material_candidate_runtime,
+)
 from core.material_color_solver import (
     DEFAULT_SUGGEST_MAX_COMBINATIONS,
     DEFAULT_SUGGEST_MIN_SPACING,
@@ -96,6 +119,45 @@ log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
+MaterialCacheEvictor = Callable[[str], int]
+_RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
+_RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
+_RUNTIME_BUILD_GLOBAL_SEMAPHORE = threading.BoundedSemaphore(1)
+
+
+def _noop_material_cache_evictor(_directory_name: str) -> int:
+    """Default material-cache eviction callback for the main app.
+    主应用默认的耗材缓存失效回调。
+    """
+    return 0
+
+
+def get_material_cache_evictor() -> MaterialCacheEvictor:
+    """Return the callback used after saved-material writes.
+    返回已保存耗材写入成功后使用的缓存失效回调。
+
+    The local main app does not keep a separate router-level material cache, so
+    this defaults to a no-op. The hook remains so tests and future local cache
+    layers can inject a targeted evictor without changing write endpoints.
+    本地主应用没有单独的路由级耗材缓存，因此默认 no-op；保留这个 hook 方便
+    测试或后续本地缓存层注入定向失效函数，而无需改写写入端点。
+
+    Returns:
+        MaterialCacheEvictor: Callback accepting a material directory name.
+            （接收耗材目录名的回调函数）
+    """
+    return _noop_material_cache_evictor
+
+
+def _saved_material_directory_name(material_summary: Any, fallback: str) -> str:
+    """Return the normalized saved-material directory name from a result.
+    从结果摘要中返回规范化的已保存耗材目录名。
+    """
+    if isinstance(material_summary, dict):
+        directory_name = material_summary.get("directory_name")
+        if isinstance(directory_name, str) and directory_name.strip():
+            return directory_name.strip()
+    return fallback
 
 
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
@@ -521,6 +583,7 @@ async def extractor_save_gradient_card_material(
     brand: str | None = Form(None),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialSaveResponse:
     """Persist a computed gradient-card Stage A material archive."""
     bind_session_id(session_id)
@@ -578,6 +641,7 @@ async def extractor_save_gradient_card_material(
             result.material_summary.get("directory_name")
             or os.path.splitext(os.path.basename(result.archive_path))[0]
         )
+    evict_material_cache(directory_name)
     log.info(
         "Gradient card material saved",
         extra={
@@ -606,6 +670,7 @@ async def extractor_save_gradient_card_material(
 @router.delete("/gradient-card-materials/{directory_name:path}")
 async def extractor_delete_gradient_card_material(
     directory_name: str,
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialDeleteResponse:
     """Delete a saved gradient-card material archive.
     删除已保存的梯度卡耗材档案。
@@ -617,6 +682,7 @@ async def extractor_delete_gradient_card_material(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    evict_material_cache(result.directory_name)
     log.info(
         "Gradient card material deleted",
         extra={
@@ -638,6 +704,7 @@ async def extractor_update_gradient_card_material(
     directory_name: str,
     payload: GradientCardMaterialUpdateRequest,
     registry: FileRegistry = Depends(get_file_registry),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialUpdateResponse:
     """Update saved gradient-card material metadata.
     更新已保存的梯度卡耗材元数据。
@@ -681,11 +748,16 @@ async def extractor_update_gradient_card_material(
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
     )
+    normalized_directory_name = _saved_material_directory_name(
+        result.material_summary,
+        directory_name,
+    )
+    evict_material_cache(normalized_directory_name)
     log.info(
         "Gradient card material metadata updated",
         extra={
             "event": "extractor_update_gradient_card_material_done",
-            "directory_name": directory_name,
+            "directory_name": normalized_directory_name,
             "material_name": material_name,
             "metadata_keys_updated": metadata_keys_updated,
         },
@@ -747,6 +819,7 @@ async def extractor_export_gradient_card_materials(
 @router.post("/gradient-card-materials/import")
 async def extractor_import_gradient_card_materials(
     archives: list[UploadFile] = File(...),
+    evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialBulkImportResponse:
     """Import one or more saved-material ZIP archives into the material library.
     导入一个或多个已保存耗材 ZIP 归档到耗材库。
@@ -800,6 +873,8 @@ async def extractor_import_gradient_card_materials(
             "archives_received": len(archives),
         },
     )
+    for dn in imported_directory_names:
+        evict_material_cache(dn)
     return GradientCardMaterialBulkImportResponse(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",
@@ -1152,6 +1227,96 @@ def _cache_entry_from_metadata(
     )
 
 
+def _validate_candidate_budget(candidate_budget: int) -> None:
+    if candidate_budget <= 0 or candidate_budget > MAX_PERSISTED_CANDIDATE_BUDGET:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "candidate_budget must be in "
+                f"[1, {MAX_PERSISTED_CANDIDATE_BUDGET}], got {candidate_budget}"
+            ),
+        )
+
+
+def _runtime_entry_from_metadata(
+    metadata: dict,
+    *,
+    cache_file_size_bytes: int,
+    cache_file_path: str | None,
+) -> MaterialSolverRuntimeEntryResponse:
+    canonical_materials = metadata.get("canonical_materials") or []
+    material_dir_names = [
+        str(entry.get("directory_name"))
+        for entry in canonical_materials
+        if isinstance(entry, dict) and entry.get("directory_name")
+    ]
+    inverse = metadata.get("inverse_refinement") or {}
+    return MaterialSolverRuntimeEntryResponse(
+        palette_hash=str(metadata.get("palette_hash", "")),
+        material_directory_names=material_dir_names,
+        layer_count=int(metadata.get("layer_count", 0)),
+        layer_height_mm=float(metadata.get("layer_height_mm", 0.0)),
+        substrate=str(metadata.get("substrate", "white")),
+        mode=str(metadata.get("mode", "candidate_hybrid")),
+        candidate_budget=int(metadata.get("candidate_budget", 0)),
+        candidate_count=int(
+            metadata.get("candidate_count", metadata.get("valid_cell_count", 0))
+        ),
+        candidate_pool_multiplier=int(metadata.get("candidate_pool_multiplier", 8)),
+        build_memory_budget_bytes=int(
+            metadata.get(
+                "build_memory_budget_bytes",
+                DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
+            )
+        ),
+        batch_recipe_count=int(metadata.get("batch_recipe_count", 0)),
+        lab_grid_resolution=int(
+            metadata.get("lab_grid_resolution", metadata.get("grid_resolution", 64))
+        ),
+        seed=int(metadata.get("seed", 0)),
+        inverse_refinement_enabled=bool(inverse.get("enabled", False)),
+        built_at=metadata.get("built_at"),
+        cache_file_size_bytes=int(cache_file_size_bytes),
+        cache_file_path=cache_file_path,
+    )
+
+
+def _runtime_entry_from_metadata_record(record: Any) -> MaterialSolverRuntimeEntryResponse:
+    return _runtime_entry_from_metadata(
+        record.metadata,
+        cache_file_size_bytes=int(record.cache_file_size_bytes),
+        cache_file_path=str(record.cache_file_path),
+    )
+
+
+def _runtime_build_key(
+    *,
+    palette_hash: str,
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    candidate_budget: int,
+) -> tuple[str, int, str, str, int]:
+    return (
+        str(palette_hash),
+        int(layer_count),
+        f"{float(layer_height_mm):.12g}",
+        str(substrate),
+        int(candidate_budget),
+    )
+
+
+def _get_runtime_build_lock(
+    key: tuple[str, int, str, str, int],
+) -> threading.Lock:
+    with _RUNTIME_BUILD_LOCKS_GUARD:
+        lock = _RUNTIME_BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _RUNTIME_BUILD_LOCKS[key] = lock
+        return lock
+
+
 @router.get("/material-solver-caches")
 async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
     """List every persisted solver-cache entry with its metadata.
@@ -1280,6 +1445,31 @@ async def material_solver_cache_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
+    try:
+        validate_material_solver_cache_build_budget(
+            material_count=len(materials),
+            layer_count=layer_count,
+            grid_resolution=grid_resolution,
+        )
+    except MaterialSolverCacheBudgetError as exc:
+        report = exc.report
+        log.warning(
+            "Material solver cache build rejected by safety budget",
+            extra={
+                "event": "material_solver_cache_build_rejected",
+                "material_count": report.material_count,
+                "layer_count": report.layer_count,
+                "grid_resolution": report.grid_resolution,
+                "total_combinations": report.total_combinations,
+                "max_total_combinations": report.max_total_combinations,
+                "estimated_valid_cell_count": report.estimated_valid_cell_count,
+                "estimated_peak_bytes": report.estimated_peak_bytes,
+                "memory_limit_bytes": report.memory_limit_bytes,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def _run_build():
         return build_material_solver_cache(
@@ -1292,7 +1482,7 @@ async def material_solver_cache_build(
 
     try:
         cache = await anyio.to_thread.run_sync(_run_build)
-    except (ValueError, TypeError, OSError) as exc:
+    except (MaterialSolverCacheBudgetError, ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -1381,6 +1571,361 @@ async def material_solver_cache_delete(
         layer_count=layer_count,
         layer_height_mm=layer_height_mm,
         substrate=substrate,
+    )
+
+
+@router.post("/material-solver-runtime/status")
+async def material_solver_runtime_status(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+) -> MaterialSolverRuntimeStatusResponse:
+    """Check whether a persisted hybrid candidate runtime exists.
+    查询指定组合是否已有持久化 hybrid candidate runtime。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_candidate_budget(candidate_budget)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+    metadata_record = load_material_candidate_runtime_metadata(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=candidate_budget,
+    )
+    cached_flag = metadata_record is not None
+    log.info(
+        "Material solver runtime status checked",
+        extra={
+            "event": "material_solver_runtime_status_done",
+            "cached": cached_flag,
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "candidate_budget": candidate_budget,
+        },
+    )
+    if metadata_record is None:
+        return MaterialSolverRuntimeStatusResponse(
+            status="ok",
+            message="No hybrid runtime found for this combination",
+            cached=False,
+            palette_hash=palette_hash,
+            layer_count=layer_count,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            candidate_budget=candidate_budget,
+            entry=None,
+        )
+
+    entry = _runtime_entry_from_metadata_record(metadata_record)
+    return MaterialSolverRuntimeStatusResponse(
+        status="ok",
+        message="Hybrid runtime found",
+        cached=True,
+        palette_hash=palette_hash,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        candidate_budget=candidate_budget,
+        entry=entry,
+    )
+
+
+@router.post("/material-solver-runtime/build")
+async def material_solver_runtime_build(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+) -> MaterialSolverRuntimeBuildResponse:
+    """Build and persist a hybrid candidate runtime synchronously.
+    同步构建并持久化 hybrid candidate runtime。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_candidate_budget(candidate_budget)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+    config = MaterialCandidateCacheConfig.persisted_for_budget(
+        int(candidate_budget)
+    )
+    build_key = _runtime_build_key(
+        palette_hash=palette_hash,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        candidate_budget=candidate_budget,
+    )
+
+    def _load_existing_metadata():
+        return load_material_candidate_runtime_metadata(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=candidate_budget,
+        )
+
+    def _run_build_or_reuse():
+        key_lock = _get_runtime_build_lock(build_key)
+        with key_lock:
+            metadata_record = _load_existing_metadata()
+            if metadata_record is not None:
+                return metadata_record, False
+            with _RUNTIME_BUILD_GLOBAL_SEMAPHORE:
+                metadata_record = _load_existing_metadata()
+                if metadata_record is not None:
+                    return metadata_record, False
+                runtime = build_material_candidate_runtime(
+                    materials=materials,
+                    layer_count=layer_count,
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    config=config,
+                )
+                try:
+                    npz_path = save_material_candidate_runtime(runtime)
+                except OSError as exc:
+                    raise RuntimeError(f"Failed to save runtime: {exc}") from exc
+                try:
+                    file_size = npz_path.stat().st_size
+                except OSError:
+                    file_size = 0
+                return (
+                    MaterialCandidateRuntimeMetadata(
+                        metadata=runtime.metadata,
+                        cache_file_path=npz_path,
+                        cache_file_size_bytes=file_size,
+                    ),
+                    True,
+                )
+
+    try:
+        metadata_record, built = await anyio.to_thread.run_sync(_run_build_or_reuse)
+    except (ValueError, TypeError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    entry = _runtime_entry_from_metadata_record(metadata_record)
+    log.info(
+        "Material solver runtime build checked",
+        extra={
+            "event": "material_solver_runtime_build_done",
+            "built": bool(built),
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "candidate_budget": candidate_budget,
+            "candidate_count": entry.candidate_count,
+            "cache_file_size_bytes": entry.cache_file_size_bytes,
+        },
+    )
+    return MaterialSolverRuntimeBuildResponse(
+        status="ok",
+        message=(
+            (
+                f"Built hybrid material solver runtime for {len(dir_names)} materials"
+                if built
+                else f"Hybrid material solver runtime already exists for {len(dir_names)} materials"
+            )
+            + (
+                f", N={layer_count}, t={layer_height_mm} mm, "
+                f"substrate={substrate}, budget={candidate_budget} "
+                f"({entry.candidate_count} candidates)"
+            )
+        ),
+        entry=entry,
+    )
+
+
+@router.post("/material-solver-runtime/delete")
+async def material_solver_runtime_delete(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+) -> MaterialSolverRuntimeDeleteResponse:
+    """Delete a persisted hybrid candidate runtime entry.
+    删除持久化 hybrid candidate runtime 条目。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_candidate_budget(candidate_budget)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+    deleted = delete_material_candidate_runtime(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=candidate_budget,
+    )
+    log.info(
+        "Material solver runtime delete checked",
+        extra={
+            "event": "material_solver_runtime_delete_done",
+            "deleted": bool(deleted),
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "candidate_budget": candidate_budget,
+        },
+    )
+    return MaterialSolverRuntimeDeleteResponse(
+        status="ok",
+        message=(
+            "Hybrid runtime deleted"
+            if deleted
+            else "No hybrid runtime entry found for the given parameters"
+        ),
+        deleted=bool(deleted),
+        palette_hash=palette_hash,
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        candidate_budget=candidate_budget,
+    )
+
+
+@router.post("/material-solver-runtime/details")
+async def material_solver_runtime_details(
+    material_directory_names: str = Form(...),
+    layer_count: int = Form(...),
+    layer_height_mm: float = Form(...),
+    substrate: str = Form("white"),
+    candidate_budget: int = Form(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
+    max_points: int = Form(8000, ge=128, le=50000),
+) -> MaterialSolverRuntimeDetailsResponse:
+    """Return a LUT-details-shaped payload for a built hybrid runtime.
+    返回已构建 hybrid runtime 的 LUT 详情同构可视化载荷。
+    """
+    dir_names = _parse_material_directory_names(material_directory_names)
+    _validate_cache_parameters(layer_count, layer_height_mm, substrate)
+    _validate_candidate_budget(candidate_budget)
+    materials = _load_palette_or_raise(dir_names)
+    palette_hash = fingerprint_palette(materials)
+    runtime = load_material_candidate_runtime(
+        materials,
+        layer_count,
+        layer_height_mm,
+        substrate,
+        candidate_budget=candidate_budget,
+    )
+    if runtime is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No hybrid runtime found for this combination. Build the "
+                "runtime first via /material-solver-runtime/build."
+            ),
+        )
+
+    details = build_material_runtime_details(runtime, max_points=int(max_points))
+    log.info(
+        "Material solver runtime details rendered",
+        extra={
+            "event": "material_solver_runtime_details_done",
+            "palette_hash": palette_hash,
+            "material_count": len(dir_names),
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "candidate_budget": candidate_budget,
+            "candidate_count": details.candidate_count,
+            "plotted_point_count": details.coverage_stats.plotted_point_count,
+        },
+    )
+
+    coverage = LutCoverageStatsResponse(
+        entry_count=details.coverage_stats.entry_count,
+        plotted_point_count=details.coverage_stats.plotted_point_count,
+        l_range=LutAxisRange(
+            min=details.coverage_stats.l_range.min,
+            max=details.coverage_stats.l_range.max,
+        ),
+        a_range=LutAxisRange(
+            min=details.coverage_stats.a_range.min,
+            max=details.coverage_stats.a_range.max,
+        ),
+        b_range=LutAxisRange(
+            min=details.coverage_stats.b_range.min,
+            max=details.coverage_stats.b_range.max,
+        ),
+        r_range=LutAxisRange(
+            min=details.coverage_stats.r_range.min,
+            max=details.coverage_stats.r_range.max,
+        ),
+        g_range=LutAxisRange(
+            min=details.coverage_stats.g_range.min,
+            max=details.coverage_stats.g_range.max,
+        ),
+        b_rgb_range=LutAxisRange(
+            min=details.coverage_stats.b_rgb_range.min,
+            max=details.coverage_stats.b_rgb_range.max,
+        ),
+    )
+    return MaterialSolverRuntimeDetailsResponse(
+        status="ok",
+        message=(
+            f"Runtime details for {len(dir_names)} materials, "
+            f"budget={candidate_budget}"
+        ),
+        palette_hash=palette_hash,
+        material_directory_names=list(dir_names),
+        layer_count=layer_count,
+        layer_height_mm=layer_height_mm,
+        substrate=substrate,
+        grid_resolution=details.grid_resolution,
+        valid_cell_count=details.valid_cell_count,
+        total_cell_count=details.total_cell_count,
+        candidate_budget=details.candidate_budget,
+        candidate_count=details.candidate_count,
+        coverage_stats=coverage,
+        lab_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.lab_points
+        ],
+        lab_points_3d=[
+            LutPlotPoint3D(
+                l=point.l,
+                a=point.a,
+                b=point.b,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.lab_points_3d
+        ],
+        lab_hull=[LutHullPoint(x=x, y=y) for x, y in details.lab_hull],
+        rgb_points=[
+            LutPlotPoint(
+                x=point.x,
+                y=point.y,
+                hex_color=point.hex_color,
+                rgb=point.rgb,
+                label=point.label,
+            )
+            for point in details.rgb_points
+        ],
     )
 
 
@@ -1473,13 +2018,11 @@ async def material_solver_cache_details(
     ``delete`` / ``suggest-colors`` endpoints (form-encoded, including a
     JSON-encoded ``material_directory_names`` array). It is **semantically
     read-only**: it loads the cache, computes derived statistics, and never
-    mutates disk state. The MLS write-auth allowlist therefore intentionally
-    excludes this path so it remains reachable in read-only mode.
+    mutates disk state.
 
     HTTP 语义说明：本端点用 ``POST`` 是为了与 ``status`` / ``build`` /
     ``delete`` / ``suggest-colors`` 兄弟端点保持参数风格一致（form-encoded，
     含 JSON 编码数组）。**语义上是只读的**：加载缓存并计算派生统计，从不改盘。
-    MLS 写入鉴权白名单刻意不收录此路径，使其在只读模式下仍可访问。
 
     Loads the cache for the given ``(palette, layer_count, layer_height_mm,
     substrate, grid_resolution)`` combination, projects its bucket centers

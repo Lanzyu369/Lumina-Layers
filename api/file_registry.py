@@ -134,6 +134,27 @@ class FileRegistry:
             entry["purpose"] = purpose
             return True
 
+    def detach_files(self, file_ids: set[str], ttl_seconds: int) -> int:
+        """Detach files from their owning session and assign an expiry.
+        将文件从所属 session 解绑，并设置过期时间。
+        """
+        if not file_ids:
+            return 0
+        now = time.time()
+        expires_at = now + ttl_seconds
+        detached = 0
+        with self._lock:
+            for file_id in file_ids:
+                entry = self._registry.get(file_id)
+                if entry is None:
+                    continue
+                entry["session_id"] = None
+                entry["lifecycle"] = "ephemeral"
+                entry["ttl_seconds"] = ttl_seconds
+                entry["expires_at"] = expires_at
+                detached += 1
+        return detached
+
     def get_session_entries(self, session_id: str) -> dict[str, dict]:
         """Return shallow copies of all entries owned by a session.
         返回指定 session 拥有的所有条目的浅拷贝。

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_file_registry, get_worker_pool
 from api.file_registry import FileRegistry
 

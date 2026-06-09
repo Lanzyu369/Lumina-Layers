@@ -20,7 +20,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import BaseModel
 
-from tests._migrated_app import create_app
+from api.app import create_app
 from api.dependencies import get_session_store
 from api.schemas.calibration import (
     MAX_BACKING_THICKNESS_MM,
@@ -199,6 +199,29 @@ class TestExtractorEndpoints:
 
         assert resp.status_code == 422
         assert "row_index or cell_coord" in resp.text
+
+    def test_post_manual_fix_accepts_row_index_only(self, client: TestClient) -> None:
+        """POST /api/extractor/manual-fix must not require cell_coord for logging."""
+        preview = np.zeros((2, 2, 3), dtype=np.uint8)
+        payload = {
+            "lut_path": "/tmp/test.json",
+            "row_index": 5,
+            "override_color": "#aabbcc",
+        }
+
+        with patch(
+            "api.routers.extractor.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+        ), patch(
+            "api.routers.extractor.manual_fix_cell",
+            return_value=(preview, "[OK] Cell updated"),
+        ):
+            resp = client.post("/api/extractor/manual-fix", json=payload)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["lut_preview_url"].startswith("/api/files/")
 
     def test_resolve_cell_invalid_card_index_returns_422(self) -> None:
         """POST /api/extractor/resolve-cell maps invalid card_index to 422."""

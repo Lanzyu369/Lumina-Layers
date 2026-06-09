@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import { useConverterStore } from "../stores/converter";
 import * as lutApi from "../api/lut";
-import * as mlsMaterialsApi from "../api/mlsMaterials";
+import * as extractorApi from "../api/extractor";
 import {
   ColorMode as ColorModeEnum,
   StructureMode as StructureModeEnum,
@@ -23,8 +23,14 @@ vi.mock("../api/lut", async () => {
   };
 });
 
-vi.mock("../api/mlsMaterials", () => ({
-  listMaterials: vi.fn(),
+vi.mock("../api/extractor", async () => {
+  const actual = await vi.importActual<typeof import("../api/extractor")>(
+    "../api/extractor",
+  );
+  return {
+    ...actual,
+    listGradientCardMaterials: vi.fn(),
+  };
 }));
 
 function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
@@ -109,7 +115,7 @@ beforeEach(() => {
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     color_count: 4,
   });
-  vi.mocked(mlsMaterialsApi.listMaterials).mockResolvedValue({
+  vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValue({
     status: "success",
     message: "ok",
     materials: [],
@@ -294,7 +300,7 @@ describe("BasicSettings", () => {
   });
 
   it("shows the inferred white material as the base plate when no backing is persisted", async () => {
-    vi.mocked(mlsMaterialsApi.listMaterials).mockResolvedValueOnce({
+    vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValueOnce({
       status: "success",
       message: "ok",
       materials: [

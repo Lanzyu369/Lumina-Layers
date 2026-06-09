@@ -66,6 +66,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    vi.unstubAllEnvs();
     localStorage.clear();
   });
 
@@ -109,6 +110,30 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(settingsStoreModule.SOLVER_CACHE_GRID_RESOLUTIONS).toEqual([
       64, 128, 256, 512, 1024, 2048,
     ]);
+  });
+
+  it("drops retired standalone service URL settings from persisted state", async () => {
+    localStorage.setItem(
+      "lumina-settings",
+      JSON.stringify({
+        state: {
+          mlsBaseUrl: "http://localhost:5180",
+          mlsBackendUrl: "http://localhost:8100",
+          theme: "dark",
+        },
+        version: 1,
+      }),
+    );
+
+    const settingsStoreModule = await import("../stores/settingsStore");
+    const state = settingsStoreModule.useSettingsStore.getState() as unknown as Record<
+      string,
+      unknown
+    >;
+
+    expect(state.mlsBaseUrl).toBeUndefined();
+    expect(state.mlsBackendUrl).toBeUndefined();
+    expect(state.theme).toBe("dark");
   });
 
   it("setSolverCacheGridResolution accepts whitelisted tiers and rejects others", async () => {

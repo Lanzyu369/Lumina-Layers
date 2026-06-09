@@ -950,6 +950,82 @@ export interface MaterialSolverCacheDeleteResponse {
   substrate: string;
 }
 
+// ========== Material solver hybrid runtime (bounded candidate lookup) ==========
+
+/** Metadata for one persisted hybrid material runtime. */
+export interface MaterialSolverRuntimeEntry {
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  mode: string;
+  candidate_budget: number;
+  candidate_count: number;
+  candidate_pool_multiplier: number;
+  build_memory_budget_bytes: number;
+  batch_recipe_count: number;
+  lab_grid_resolution: number;
+  seed: number;
+  inverse_refinement_enabled: boolean;
+  built_at?: string | null;
+  cache_file_size_bytes: number;
+  cache_file_path?: string | null;
+}
+
+/** Status response for a bounded hybrid runtime combination. */
+export interface MaterialSolverRuntimeStatusResponse {
+  status: string;
+  message: string;
+  cached: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  candidate_budget: number;
+  entry?: MaterialSolverRuntimeEntry | null;
+}
+
+/** Response after an explicit hybrid runtime build. */
+export interface MaterialSolverRuntimeBuildResponse {
+  status: string;
+  message: string;
+  entry: MaterialSolverRuntimeEntry;
+}
+
+/** Delete response for a hybrid runtime entry. */
+export interface MaterialSolverRuntimeDeleteResponse {
+  status: string;
+  message: string;
+  deleted: boolean;
+  palette_hash: string;
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  candidate_budget: number;
+}
+
+/** Visualization payload for one persisted hybrid runtime entry. */
+export interface MaterialSolverRuntimeDetailsResponse {
+  status: string;
+  message: string;
+  palette_hash: string;
+  material_directory_names: string[];
+  layer_count: number;
+  layer_height_mm: number;
+  substrate: string;
+  grid_resolution: number;
+  valid_cell_count: number;
+  total_cell_count: number;
+  candidate_budget: number;
+  candidate_count: number;
+  coverage_stats: LutDetailsCoverageStats;
+  lab_points: LutDetailsPoint[];
+  lab_points_3d: LutDetailsPoint3D[];
+  lab_hull: Array<{ x: number; y: number }>;
+  rgb_points: LutDetailsPoint[];
+}
+
 /**
  * Color-distribution visualization payload for one solver-cache entry.
  * Mirrors the LUT details ``lab_points`` / ``rgb_points`` / ``coverage_stats``

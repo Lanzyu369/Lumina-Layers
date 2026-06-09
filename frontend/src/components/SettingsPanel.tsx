@@ -14,8 +14,6 @@ import {
   SVG_PIXELS_PER_MM_MIN,
   SVG_PIXELS_PER_MM_STEP,
   SOLVER_CACHE_GRID_RESOLUTIONS,
-  MLS_DEFAULT_BASE_URL,
-  MLS_DEFAULT_BACKEND_URL,
   useSettingsStore,
   type SolverCacheGridResolution,
 } from "../stores/settingsStore";
@@ -52,8 +50,6 @@ export default function SettingsPanel() {
   const [clearing, setClearing] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [customSlicerPathInput, setCustomSlicerPathInput] = useState("");
-  const [mlsBaseUrlInput, setMlsBaseUrlInput] = useState("");
-  const [mlsBackendUrlInput, setMlsBackendUrlInput] = useState("");
 
   // Printer list state (task 5.2)
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
@@ -104,10 +100,6 @@ export default function SettingsPanel() {
   const setAutoReplaceGradientBanding = useSettingsStore(
     (s) => s.setAutoReplaceGradientBanding,
   );
-  const mlsBaseUrl = useSettingsStore((s) => s.mlsBaseUrl);
-  const setMlsBaseUrl = useSettingsStore((s) => s.setMlsBaseUrl);
-  const mlsBackendUrl = useSettingsStore((s) => s.mlsBackendUrl);
-  const setMlsBackendUrl = useSettingsStore((s) => s.setMlsBackendUrl);
   const isValidatingCustomPath = useSlicerStore(
     (s) => s.isValidatingCustomPath,
   );
@@ -121,14 +113,6 @@ export default function SettingsPanel() {
   useEffect(() => {
     setCustomSlicerPathInput(customSlicerPath);
   }, [customSlicerPath]);
-
-  useEffect(() => {
-    setMlsBaseUrlInput(mlsBaseUrl);
-  }, [mlsBaseUrl]);
-
-  useEffect(() => {
-    setMlsBackendUrlInput(mlsBackendUrl);
-  }, [mlsBackendUrl]);
 
   // Load printers and slicers on mount
   useEffect(() => {
@@ -272,23 +256,6 @@ export default function SettingsPanel() {
   const handleClearCustomSlicerPath = () => {
     setCustomSlicerPathInput("");
     clearCustomSlicerPath();
-  };
-
-  const resolvedMlsBaseUrl = (mlsBaseUrl || MLS_DEFAULT_BASE_URL).replace(/\/+$/, "");
-
-  const handleSaveMlsBaseUrl = () => {
-    const trimmed = mlsBaseUrlInput.trim();
-    setMlsBaseUrl(trimmed || MLS_DEFAULT_BASE_URL);
-  };
-
-  const handleSaveMlsBackendUrl = () => {
-    const trimmed = mlsBackendUrlInput.trim();
-    setMlsBackendUrl(trimmed || MLS_DEFAULT_BACKEND_URL);
-  };
-
-  const handleOpenMls = () => {
-    const target = (mlsBaseUrlInput.trim() || resolvedMlsBaseUrl).replace(/\/+$/, "");
-    window.open(target, "_blank", "noopener,noreferrer");
   };
 
   const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
@@ -647,86 +614,6 @@ export default function SettingsPanel() {
         </div>
       </section>
 
-      <section
-        data-testid="settings-mls-section"
-        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
-      >
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.advanced")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.mls_heading")}
-          </h4>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.mls_description")}
-        </p>
-        <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
-          <div>
-            <label
-              htmlFor="mls-base-url"
-              className="text-sm font-medium text-slate-900 dark:text-slate-50"
-            >
-              {t("settings.mls_base_url_label")}
-            </label>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {t("settings.mls_base_url_help")}
-            </p>
-          </div>
-          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto_auto]"}`}>
-            <input
-              id="mls-base-url"
-              value={mlsBaseUrlInput}
-              onChange={(event) => setMlsBaseUrlInput(event.target.value)}
-              onBlur={handleSaveMlsBaseUrl}
-              placeholder={t("settings.mls_base_url_placeholder")}
-              className={workstationInputClass}
-            />
-            <Button
-              label={t("settings.mls_save_url_button")}
-              onClick={handleSaveMlsBaseUrl}
-              variant="secondary"
-              disabled={mlsBaseUrlInput.trim() === mlsBaseUrl}
-              className={workspace.isCompact ? "w-full" : ""}
-            />
-            <Button
-              label={t("settings.mls_open_button")}
-              onClick={handleOpenMls}
-              className={workspace.isCompact ? "w-full" : ""}
-            />
-          </div>
-
-          <div className="border-t border-slate-200/60 pt-3 dark:border-slate-700/60">
-            <label
-              htmlFor="mls-backend-url"
-              className="text-sm font-medium text-slate-900 dark:text-slate-50"
-            >
-              {t("settings.mls_backend_url_label")}
-            </label>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {t("settings.mls_backend_url_help")}
-            </p>
-          </div>
-          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
-            <input
-              id="mls-backend-url"
-              value={mlsBackendUrlInput}
-              onChange={(event) => setMlsBackendUrlInput(event.target.value)}
-              onBlur={handleSaveMlsBackendUrl}
-              placeholder={t("settings.mls_backend_url_placeholder")}
-              className={workstationInputClass}
-            />
-            <Button
-              label={t("settings.mls_save_url_button")}
-              onClick={handleSaveMlsBackendUrl}
-              variant="secondary"
-              disabled={mlsBackendUrlInput.trim() === mlsBackendUrl}
-              className={workspace.isCompact ? "w-full" : ""}
-            />
-          </div>
-        </div>
-      </section>
     </motion.aside>
   );
 }

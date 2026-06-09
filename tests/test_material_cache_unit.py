@@ -17,18 +17,21 @@ import pytest
 
 from core.material_cache import (
     DEFAULT_GRID_RESOLUTION,
+    MaterialSolverCacheBudgetError,
     MaterialSolverCache,
     build_material_solver_cache,
     cache_file_path,
     canonical_palette_order,
     default_cache_directory,
     delete_cached_entry,
+    estimate_material_solver_cache_build_budget,
     find_any_cached_grid,
     fingerprint_palette,
     list_cached_entries,
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
     save_material_solver_cache,
+    validate_material_solver_cache_build_budget,
 )
 from core.material_color_solver import (
     MaterialParams,
@@ -688,6 +691,80 @@ class TestListingAndDeletion:
 
 
 class TestInternalConsistency:
+    def test_issue_230_sized_build_exceeds_default_memory_budget(self):
+        report = estimate_material_solver_cache_build_budget(
+            material_count=12,
+            layer_count=8,
+            grid_resolution=2048,
+        )
+
+        assert report.total_combinations == 12 ** 8
+        assert report.estimated_peak_bytes > report.memory_limit_bytes
+        assert report.is_allowed is False
+
+    def test_issue_230_sized_build_is_rejected_by_budget_validator(self):
+        with pytest.raises(MaterialSolverCacheBudgetError) as exc_info:
+            validate_material_solver_cache_build_budget(
+                material_count=12,
+                layer_count=8,
+                grid_resolution=2048,
+            )
+
+        message = str(exc_info.value)
+        assert "12 materials" in message
+        assert "8 layers" in message
+        assert "grid_resolution=2048" in message
+        assert "lower grid_resolution" in message
+
+    def test_low_grid_extreme_combination_build_exceeds_default_budget(self):
+        report = estimate_material_solver_cache_build_budget(
+            material_count=22,
+            layer_count=8,
+            grid_resolution=64,
+        )
+
+        assert report.total_combinations == 22 ** 8
+        assert report.total_combinations > report.max_total_combinations
+        assert report.estimated_peak_bytes <= report.memory_limit_bytes
+        assert report.is_allowed is False
+
+    def test_low_grid_extreme_combination_build_is_rejected_by_validator(self):
+        with pytest.raises(MaterialSolverCacheBudgetError) as exc_info:
+            validate_material_solver_cache_build_budget(
+                material_count=22,
+                layer_count=8,
+                grid_resolution=64,
+            )
+
+        message = str(exc_info.value)
+        assert "22 materials" in message
+        assert "8 layers" in message
+        assert "grid_resolution=64" in message
+        assert "combination limit" in message
+
+    def test_bucketed_build_materializes_without_np_stack_peak(self, monkeypatch):
+        original_stack = np.stack
+
+        def _stack_forbidden(values, *args, **kwargs):
+            if len(values) > len(SMALL_PALETTE):
+                raise AssertionError(
+                    "bucketed cache materialization must preallocate"
+                )
+            return original_stack(values, *args, **kwargs)
+
+        monkeypatch.setattr("core.material_cache.np.stack", _stack_forbidden)
+
+        cache = build_material_solver_cache(
+            SMALL_PALETTE,
+            _BUCKETED_LAYER_COUNT,
+            0.08,
+            "white",
+            grid_resolution=32,
+        )
+
+        assert cache.valid_cell_count > 0
+        assert cache.recipes.shape[0] == cache.valid_cell_count
+
     def test_metadata_statistics_match_arrays(self):
         cache = build_material_solver_cache(
             SMALL_PALETTE, 5, 0.08, "white", grid_resolution=32,

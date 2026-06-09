@@ -344,6 +344,36 @@ class TestApplyMatchedRgbOverrides:
         assert analysis.matched_shapes[0]["matched_rgb"] == (255, 0, 0)
         assert analysis.matched_shapes[0]["recipe"] == [3, 1, 1, 1, 1]
 
+    def test_short_cached_material_stack_is_padded_to_requested_layers(self):
+        """A stale/short cached stack must not leave requested vector layers as air."""
+        analysis = _make_two_shape_analysis()
+        analysis.num_layers = 10
+        analysis.matched_shapes[0]["recipe"] = [1] * 10
+        analysis.matched_shapes[1]["recipe"] = [2] * 10
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.zeros((h_px, w_px, 5), dtype=np.int32)
+        material_matrix[: h_px // 2, :, :] = 3
+        material_matrix[h_px // 2 :, :, :] = 2
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+        )
+
+        assert changed == 1
+        assert analysis.matched_shapes[0]["recipe"] == [3] * 10
+        assert analysis.matched_shapes[1]["recipe"] == [2] * 10
+        runs = _ve.VectorProcessor._build_channel_runs(
+            analysis.matched_shapes[0]["recipe"],
+            analysis.num_layers,
+            analysis.num_channels,
+        )
+        assert runs[3] == [(0, 9)]
+
     def test_pixels_outside_mask_solid_are_ignored(self):
         """Mutations on background pixels (``mask_solid == False``) must
         not influence the per-shape dominant colour vote.
@@ -464,6 +494,7 @@ class TestRunVectorBranchWiring:
         helper_call_log: list[dict],
         *,
         helper_result: int = 0,
+        recipe_call_log: list[dict] | None = None,
     ):
         """Build the patch context shared by both wiring tests.
 
@@ -515,6 +546,10 @@ class TestRunVectorBranchWiring:
             helper_call_log.append({"args": args, "kwargs": kwargs})
             return helper_result
 
+        def _fake_recipe_helper(*args, **kwargs):
+            if recipe_call_log is not None:
+                recipe_call_log.append({"args": args, "kwargs": kwargs})
+
         def _fake_export_scene_with_bambu_metadata(**kwargs):
             captured.update(kwargs)
             return kwargs["output_path"]
@@ -523,6 +558,7 @@ class TestRunVectorBranchWiring:
             "core.vector_engine",
             VectorProcessor=_FakeVectorProcessor,
             apply_matched_rgb_overrides_to_analysis=_fake_helper,
+            apply_recipe_overrides_to_analysis=_fake_recipe_helper,
         ), patch(
             "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
             side_effect=_fake_export_scene_with_bambu_metadata,
@@ -572,6 +608,7 @@ class TestRunVectorBranchWiring:
                 "printer_id": "bambu-h2d",
                 "slicer": "BambuStudio",
                 "nozzle_size": "0.4",
+                "svg_pixels_per_mm": 5.0,
                 "matched_rgb_path": str(matched_rgb_path),
                 "mask_solid_path": str(mask_solid_path),
                 "material_matrix_path": str(material_matrix_path),
@@ -585,6 +622,9 @@ class TestRunVectorBranchWiring:
         assert "matched_rgb" in kwargs
         assert "mask_solid" in kwargs
         assert "material_matrix" in kwargs
+        # These arrays come from the preview cache, which is currently built
+        # at 10 px/mm even when the generate request uses another SVG density.
+        assert kwargs["pixels_per_mm"] == 10.0
         assert kwargs["material_matrix"].shape == (4, 4, 5)
         # img_processor must be the FakeVectorProcessor's stub attribute,
         # not some unrelated object — the helper relies on its KDTree.
@@ -634,6 +674,63 @@ class TestRunVectorBranchWiring:
 
         assert "error" not in result
         assert helper_calls == []
+
+    def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path):
+        """Recipe override masks are preview-cache artifacts, not generation rasters."""
+        import pickle
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.pipeline import coordinator
+
+        masks_path = tmp_path / "recipe-masks.pkl"
+        with open(masks_path, "wb") as handle:
+            pickle.dump({"region-A": np.ones((4, 4), dtype=bool)}, handle)
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+        recipe_calls: list[dict] = []
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            recipe_call_log=recipe_calls,
+        )
+
+        with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+            "config.MODELS_DIR", str(tmp_path)
+        ), patch("config.OUTPUT_DIR", str(tmp_path)):
+            ctx = {
+                "image_path": str(tmp_path / "vector.svg"),
+                "actual_lut_path": str(tmp_path / "fake.json"),
+                "color_mode": "5-Color Extended",
+                "modeling_mode": ModelingMode.HIGH_FIDELITY,
+                "target_width_mm": 40.0,
+                "spacer_thick": 1.6,
+                "structure_mode": "单面",
+                "need_2d_preview": False,
+                "printer_id": "bambu-h2d",
+                "slicer": "BambuStudio",
+                "nozzle_size": "0.4",
+                "svg_pixels_per_mm": 5.0,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-A",
+                        "recipe": [1, 2, 3, 4, 0],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+                "recipe_override_masks_path": str(masks_path),
+                "color_layers": 5,
+            }
+
+            result = coordinator._run_vector_branch(ctx)
+
+        assert "error" not in result
+        assert helper_calls == []
+        assert len(recipe_calls) == 1
+        kwargs = recipe_calls[0]["kwargs"]
+        assert kwargs["pixels_per_mm"] == 10.0
+        assert kwargs["region_masks"]["region-A"].shape == (4, 4)
 
     def test_vector_branch_logs_structured_events(self, tmp_path, caplog):
         """The coordinator vector branch must emit explicit structured events."""

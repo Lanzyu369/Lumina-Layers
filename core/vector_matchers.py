@@ -211,13 +211,10 @@ class MaterialVectorMatcher:
             already resolved. ``solve_for_fills`` must be called once
             before any ``kdtree.query`` is issued.
         """
-        from core.material_cache import (
-            DEFAULT_GRID_RESOLUTION,
-            build_material_solver_cache,
-            load_material_solver_cache_with_fallback,
-        )
+        from core.material_cache import DEFAULT_GRID_RESOLUTION
+        from core.material_lut_provider import load_solver_runtime
 
-        cache, actual_grid = load_material_solver_cache_with_fallback(
+        cache, actual_grid = load_solver_runtime(
             materials=materials,
             layer_count=int(layer_count),
             layer_height_mm=float(layer_height_mm),
@@ -225,19 +222,7 @@ class MaterialVectorMatcher:
             grid_resolution=int(grid_resolution or DEFAULT_GRID_RESOLUTION),
         )
         if cache is None:
-            # Fallback identical to P03's "no cache found" path so the
-            # vector branch never raises in production where the
-            # palette has not been pre-baked yet.
-            # 与 P03 同样的回退：现场构建一份 64³ 内存缓存。
-            _MIN_FALLBACK_GRID = 64
-            cache = build_material_solver_cache(
-                materials=materials,
-                layer_count=int(layer_count),
-                layer_height_mm=float(layer_height_mm),
-                substrate=str(substrate),
-                grid_resolution=_MIN_FALLBACK_GRID,
-            )
-            actual_grid = _MIN_FALLBACK_GRID
+            raise RuntimeError("No material solver runtime could be built")
 
         return cls(
             materials=materials,

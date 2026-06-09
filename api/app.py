@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
 from api.env_loader import load_env_local
+from api.runtime_limits import configure_blas_thread_limits
 
 # Populate process env from <repo>/.env.local before any module reads
 # os.environ. This must happen before logging setup (which reads
@@ -42,6 +43,7 @@ from api.env_loader import load_env_local
 # 应用的入口：api_server.py、``python -m uvicorn api.app:app``、
 # debugpy 启动、start_dev.py 子进程、Docker / CI 等。
 load_env_local()
+configure_blas_thread_limits()
 
 from api.logger import setup_file_logging
 from api.structured_logging import (
@@ -66,12 +68,16 @@ from api.dependencies import (
 )
 from api.file_bridge import file_to_response
 from api.routers import (
+    calibration_router,
     converter_router,
+    extractor_router,
     feedback_router,
+    five_color_router,
     health_router,
     lut_router,
     session_router,
     slicer_router,
+    single_stage_router,
     system_router,
     vectorizer_router,
 )
@@ -356,23 +362,17 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(converter_router)
+    app.include_router(extractor_router)
     app.include_router(feedback_router)
+    app.include_router(calibration_router)
+    app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
     app.include_router(session_router)
     app.include_router(slicer_router)
+    app.include_router(single_stage_router)
     app.include_router(system_router)
     app.include_router(vectorizer_router)
-    # Material/LUT extract / generate / query routers (extractor, single_stage,
-    # calibration, five_color) are no longer registered here: they were moved to
-    # the standalone Material-LUT Studio (MLS) service (Route B). The main app
-    # reaches that functionality over HTTP and, for hot-path conversion data,
-    # via ``core.material_lut_provider`` -> MLS data API. The router modules
-    # remain in the shared codebase because MLS imports them.
-    # 耗材/LUT 的提取/生成/查询路由（extractor、single_stage、calibration、
-    # five_color）已迁移到独立的 Material-LUT Studio (MLS) 服务，主应用不再注册；
-    # 主应用通过 HTTP 访问这些功能，转换热路径数据经 material_lut_provider →
-    # MLS 数据 API 获取。模块文件因 MLS 复用而保留在共享代码库中。
 
     @app.get("/api/files/{file_id}")
     def serve_file(

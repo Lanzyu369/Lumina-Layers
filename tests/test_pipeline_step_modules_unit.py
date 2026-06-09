@@ -137,13 +137,11 @@ class TestS01InputValidation:
         ctx["selected_materials"] = ["fake/material"]
 
         # Phase 0 Sub-PR C (PR #128) extracted the material-archive branch into
-        # core.pipeline._input_validation_common. Route B then routed the
-        # material load through core.material_lut_provider.load_materials (a
-        # prefetch + local-cache seam), which the validation module imports as
-        # ``load_materials``; mock that name at the caller module.
-        # PR #128 把 material-archive 分支抽到了 _input_validation_common；路线 B
-        # 又将耗材加载改为经 core.material_lut_provider.load_materials（预取+本地
-        # 缓存接缝），验证模块以 ``load_materials`` 导入，故在调用方 mock 该名字。
+        # core.pipeline._input_validation_common. The validation module imports
+        # the local hot-path provider as ``load_materials``; mock that caller
+        # module name directly.
+        # PR #128 把 material-archive 分支抽到了 _input_validation_common；验证
+        # 模块以 ``load_materials`` 导入本地热路径 provider，故在调用方 mock 该名字。
         with patch(
             "core.pipeline._input_validation_common.load_materials",
             return_value=[object()],
@@ -406,6 +404,27 @@ class TestS06VoxelBuilding:
         assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [3] * (
             backing_end - backing_start + 1
         )
+
+    def test_cloisonne_builds_wireframe_without_processor(self):
+        """Cloisonne mode must not require ctx["processor"] in material-archive flows."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 20, 20
+        ctx = self._make_valid_ctx()
+        ctx["material_matrix"] = np.zeros((h, w, 5), dtype=int)
+        ctx["mask_solid"] = np.ones((h, w), dtype=bool)
+        ctx["matched_rgb"] = np.zeros((h, w, 3), dtype=np.uint8)
+        ctx["matched_rgb"][:, w // 2 :] = [255, 255, 255]
+        ctx["enable_cloisonne"] = True
+        ctx["wire_width_mm"] = 0.4
+        ctx["wire_height_mm"] = 0.4
+        ctx.pop("processor", None)
+        ctx.pop("target_w", None)
+
+        result = run(ctx)
+
+        assert result["backing_metadata"]["is_cloisonne"] is True
+        assert np.any(result["full_matrix"] == -3)
 
     def test_missing_material_matrix_raises_key_error(self):
         """缺失 material_matrix 键应抛出 KeyError。"""

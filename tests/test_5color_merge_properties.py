@@ -17,7 +17,7 @@ from hypothesis import given, settings, assume
 import hypothesis.strategies as st
 import pytest
 
-from tests._migrated_app import app
+from api.app import app
 from fastapi.testclient import TestClient
 
 client: TestClient = TestClient(app)

@@ -174,6 +174,10 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "material_solver_cache_delete_done",
     "material_solver_cache_details_done",
     "material_solver_cache_suggest_colors_done",
+    "material_solver_runtime_status_done",
+    "material_solver_runtime_build_done",
+    "material_solver_runtime_delete_done",
+    "material_solver_runtime_details_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",

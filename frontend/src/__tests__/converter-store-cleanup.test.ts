@@ -5,6 +5,7 @@ const cleanupSessionFilesMock = vi.hoisted(() => vi.fn());
 const fetchLayerImagesMock = vi.hoisted(() => vi.fn());
 const beaconCleanupSessionFilesMock = vi.hoisted(() => vi.fn());
 const convertPuzzleLayoutPreviewMock = vi.hoisted(() => vi.fn());
+const closeSessionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/converter", async () => {
   const actual = await vi.importActual<typeof import("../api/converter")>("../api/converter");
@@ -16,6 +17,10 @@ vi.mock("../api/converter", async () => {
     convertPuzzleLayoutPreview: convertPuzzleLayoutPreviewMock,
   };
 });
+
+vi.mock("../api/session", () => ({
+  closeSession: closeSessionMock,
+}));
 
 async function loadStore() {
   const mod = await import("../stores/converter");
@@ -101,6 +106,45 @@ describe("converter store cleanup behavior", () => {
         "layer-2",
       ]),
     );
+  });
+
+  it("closes the backend session after download cleanup to release preview cache", async () => {
+    const useConverterStore = await loadStore();
+
+    useConverterStore.setState({
+      sessionId: "sess-close",
+      downloadUrl: "/api/files/download-close",
+      previewImageUrl: "/api/files/preview-close",
+      previewBaseImageUrl: "/api/files/preview-base-close",
+      originalPreviewUrl: "/api/files/original-close",
+      previewGlbUrl: "/api/files/glb-close",
+    });
+
+    useConverterStore.getState().cleanupAfterDownload();
+
+    expect(cleanupSessionFilesMock).toHaveBeenCalledWith(
+      "sess-close",
+      expect.arrayContaining([
+        "download-close",
+        "preview-close",
+        "preview-base-close",
+        "original-close",
+        "glb-close",
+      ]),
+    );
+    expect(closeSessionMock).toHaveBeenCalledOnce();
+    expect(closeSessionMock).toHaveBeenCalledWith(
+      "sess-close",
+      expect.arrayContaining([
+        "download-close",
+        "preview-close",
+        "preview-base-close",
+        "original-close",
+        "glb-close",
+      ]),
+    );
+    expect(useConverterStore.getState().sessionId).toBeNull();
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/download-close");
   });
 
   it("ignores stale layer image responses after the session changes", async () => {

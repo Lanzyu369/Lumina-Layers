@@ -1,34 +1,48 @@
-# Use an official Python runtime as a parent image
 FROM python:3.13-slim
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies required for pycairo and opencv
-# libcairo2-dev, pkg-config -> for pycairo
-# libgl1, libglib2.0-0 -> for opencv-python
-RUN apt-get update && apt-get install -y \
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VITE_DEV_HOST=0.0.0.0 \
+    VITE_ALLOW_ALL_HOSTS=true \
+    LUMINA_BACKEND=memory \
+    LUMINA_LOG_DIR=/app/logs \
+    LUMINA_FEEDBACK_DUMP_DIR=/app/feedback \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1
+
+# System dependencies:
+# - cairo/pkg-config/OpenGL libs are required by the image and mesh pipeline.
+# - node/npm/pnpm are required because start_all.py launches the Vite frontend.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
     gcc \
-    pkg-config \
+    g++ \
+    git \
     libcairo2-dev \
     libgl1 \
     libglib2.0-0 \
+    make \
+    nodejs \
+    npm \
+    pkg-config \
+    && npm install -g pnpm@10.33.2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container at /app
 COPY requirements.txt /app/
-
-# Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
+RUN cd frontend && pnpm install --frozen-lockfile
+
 COPY . /app/
+RUN mkdir -p /app/output /app/logs /app/feedback
 
-# Expose the port FastAPI runs on
-EXPOSE 8000
+EXPOSE 4174 8000
 
-# Define environment variable to ensure output is flushed
-ENV PYTHONUNBUFFERED=1
-
-# Run the application
-CMD ["python", "api_server.py"]
+CMD ["python", "start_all.py"]
