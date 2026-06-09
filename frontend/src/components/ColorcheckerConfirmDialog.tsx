@@ -1768,7 +1768,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
   const rejectCalibrated = useExtractorStore((s) => s.rejectCalibrated);
   const closeDialog = useExtractorStore((s) => s.closeColorcheckerDialog);
 
-  const resolvedPhase = enabled ? phase ?? "calibrating" : phase;
+  const resolvedPhase = enabled ? phase : null;
   const open =
     imageFile !== null &&
     (resolvedPhase === "calibrating" || resolvedPhase === "confirming");

@@ -14,8 +14,11 @@ import {
   colorcheckerWarpPreview,
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
-import { ColorcheckerConfirmDialogInner } from "../components/ColorcheckerConfirmDialog";
+import ColorcheckerConfirmDialogExtractor, {
+  ColorcheckerConfirmDialogInner,
+} from "../components/ColorcheckerConfirmDialog";
 import { I18nProvider } from "../i18n/context";
+import { useExtractorStore } from "../stores/extractorStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("read-excel-file/browser", () => ({
@@ -1048,6 +1051,38 @@ describe("ColorcheckerConfirmDialog", () => {
         cache: "no-store",
       }),
     );
+  });
+
+  it("keeps the extractor modal closed after closeDialog clears the phase", () => {
+    useExtractorStore.setState({
+      imageFile,
+      colorchecker_enabled: true,
+      colorchecker_phase: null,
+    });
+
+    render(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogExtractor />
+      </I18nProvider>,
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens the extractor modal only for active calibration phases", () => {
+    useExtractorStore.setState({
+      imageFile,
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+    });
+
+    render(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogExtractor />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("closes the store dialog when the inline tool unmounts", async () => {
