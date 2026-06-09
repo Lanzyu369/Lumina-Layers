@@ -1721,6 +1721,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "喷嘴尺寸",
     en: "Nozzle Size",
   },
+  "settings.device_profile": {
+    zh: "设备配置",
+    en: "Device Profile",
+  },
   "settings.base_layer_height_modifier": {
     zh: "底板层高修改器",
     en: "Base-plate layer-height modifier",

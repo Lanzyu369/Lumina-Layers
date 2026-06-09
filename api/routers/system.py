@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from PIL import Image
 
 import config
@@ -47,6 +48,13 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
 
 
 def _try_load_machine_registry():
@@ -102,6 +110,10 @@ def _registry_device_profiles_by_machine() -> tuple[
         if device.thumbnail and key not in thumbnails_by_machine:
             thumbnails_by_machine[key] = device.thumbnail
     return profiles_by_machine, thumbnails_by_machine
+
+
+def _machine_registry_root() -> Path:
+    return Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry")).resolve()
 
 
 def _purge_subdir(subdir: str) -> tuple[int, int]:
@@ -378,6 +390,28 @@ def get_printers() -> PrinterListResponse:
             )
         )
     return PrinterListResponse(status="success", printers=printers)
+
+
+@router.get("/machine-registry/assets/{asset_path:path}")
+def get_machine_registry_asset(asset_path: str) -> FileResponse:
+    """Serve a generated machine-registry image asset.
+    返回生成机器注册表中的图片资产。
+    """
+    registry_root = _machine_registry_root()
+    requested = (registry_root / asset_path).resolve()
+    try:
+        inside_registry = os.path.commonpath([str(registry_root), str(requested)]) == str(registry_root)
+    except ValueError:
+        inside_registry = False
+    if not inside_registry:
+        raise HTTPException(status_code=400, detail="Invalid machine registry asset path")
+
+    media_type = MACHINE_REGISTRY_ASSET_MEDIA_TYPES.get(requested.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="Machine registry asset not found")
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail="Machine registry asset not found")
+    return FileResponse(path=requested, media_type=media_type)
 
 
 # ---------------------------------------------------------------------------

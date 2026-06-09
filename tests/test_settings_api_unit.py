@@ -238,3 +238,27 @@ class TestGetPrinters:
                 "supported": True,
             }
         ]
+
+    def test_machine_registry_asset_serves_thumbnail_inside_registry(self, tmp_path, monkeypatch) -> None:
+        registry_root = tmp_path / "machine_registry"
+        asset_path = registry_root / "slicers" / "BambuStudio" / "assets" / "h2d.png"
+        asset_path.parent.mkdir(parents=True)
+        asset_path.write_bytes(b"fake-thumbnail")
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+        response = client.get("/api/system/machine-registry/assets/slicers/BambuStudio/assets/h2d.png")
+
+        assert response.status_code == 200
+        assert response.content == b"fake-thumbnail"
+        assert response.headers["content-type"].startswith("image/png")
+
+    def test_machine_registry_asset_rejects_path_traversal(self, tmp_path, monkeypatch) -> None:
+        registry_root = tmp_path / "machine_registry"
+        registry_root.mkdir()
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"outside")
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+        response = client.get("/api/system/machine-registry/assets/../outside.png")
+
+        assert response.status_code in {400, 404}

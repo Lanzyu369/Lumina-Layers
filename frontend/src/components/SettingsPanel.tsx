@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import { clearCache, getPrinters, getSlicers } from "../api/system";
+import { clearCache, getMachineRegistryAssetUrl, getPrinters, getSlicers } from "../api/system";
 import {
   SVG_PIXELS_PER_MM_DEFAULT,
   SVG_PIXELS_PER_MM_MAX,
@@ -162,6 +162,22 @@ export default function SettingsPanel() {
     resolvedSlicerSoftware
   );
   const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
+  const resolvedNozzleSize = resolveNozzleSizeOption(
+    nozzleSize,
+    selectedPrinter,
+    resolvedSlicerSoftware,
+  );
+  const resolvedDeviceProfileId = resolveDeviceProfileOptionId(
+    deviceProfileId,
+    selectedPrinter,
+    resolvedSlicerSoftware,
+    resolvedNozzleSize,
+  );
+  const selectedDeviceProfile =
+    selectedPrinter?.device_profiles?.find(
+      (profile) => profile.device_profile_id === resolvedDeviceProfileId,
+    ) ?? null;
+  const selectedPrinterThumbnailUrl = getMachineRegistryAssetUrl(selectedPrinter?.thumbnail);
 
   useEffect(() => {
     if (slicersLoading || printersLoading || slicers.length === 0 || printers.length === 0) {
@@ -375,7 +391,7 @@ export default function SettingsPanel() {
           <div>
             <Dropdown
               label={t("settings.nozzle_size")}
-              value={resolveNozzleSizeOption(nozzleSize, selectedPrinter, resolvedSlicerSoftware)}
+              value={resolvedNozzleSize}
               onChange={handleNozzleSizeChange}
               disabled={printersLoading || !selectedPrinter}
               options={getPrinterNozzleSizeOptions(selectedPrinter, resolvedSlicerSoftware).map((size) => ({
@@ -386,14 +402,36 @@ export default function SettingsPanel() {
           </div>
         </div>
         {selectedPrinter && (
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-            <span>
-              {t("settings.bed_size")}: {selectedPrinter.bed_width}&times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
-            </span>
-            <span className="text-slate-300 dark:text-slate-600">|</span>
-            <span>
-              {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter, resolvedSlicerSoftware)} {t("common_unit_mm")}
-            </span>
+          <div
+            data-testid="machine-adapter-summary"
+            className="flex min-w-0 items-center gap-3 text-xs text-slate-500 dark:text-slate-400"
+          >
+            {selectedPrinterThumbnailUrl && (
+              <img
+                src={selectedPrinterThumbnailUrl}
+                alt={selectedPrinter.display_name}
+                className="h-16 w-16 shrink-0 object-contain"
+                loading="lazy"
+              />
+            )}
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {selectedPrinter.display_name}
+                </span>
+                <span>
+                  {t("settings.bed_size")}: {selectedPrinter.bed_width}&times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
+                </span>
+                <span>
+                  {t("settings.nozzle_size")}: {resolvedNozzleSize} {t("common_unit_mm")}
+                </span>
+              </div>
+              {selectedDeviceProfile && (
+                <span className="truncate">
+                  {t("settings.device_profile")}: {selectedDeviceProfile.source_profile_name}
+                </span>
+              )}
+            </div>
           </div>
         )}
         <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">

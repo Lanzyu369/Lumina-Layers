@@ -12,6 +12,19 @@ import type {
   SlicerListResponse,
 } from "./types";
 
+/** Convert a generated machine-registry asset path into a backend URL. */
+export function getMachineRegistryAssetUrl(path: string | null | undefined): string {
+  const trimmed = path?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const normalized = trimmed.replace(/^\/+/, "");
+  return `/api/system/machine-registry/assets/${normalized
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`;
+}
+
 /** 调用后端清除系统缓存，返回清理统计信息 */
 export async function clearCache(): Promise<ClearCacheResponse> {
   const response = await apiClient.post<ClearCacheResponse>(

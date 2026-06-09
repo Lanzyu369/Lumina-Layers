@@ -21,6 +21,9 @@ def test_run_import_writes_registry_and_templates(tmp_path):
     assert result.device_count == 1
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
     assert registry["slicers"][0]["slicer_id"] == "BambuStudio"
+    machine = registry["slicers"][0]["machines"][0]
+    assert machine["thumbnail"] == "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png"
+    assert (output_root / machine["thumbnail"]).read_bytes() == b"fake-png-bytes-for-machine-adapter-test\n"
     templates = list((output_root / "slicers").rglob("*.json"))
     assert templates
     template = json.loads(templates[0].read_text(encoding="utf-8"))

@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any
 
@@ -37,6 +38,32 @@ def _matches_machine_name(profile_name: str, settings: dict[str, Any], machine_n
     return profile_name.strip().casefold() == needle
 
 
+def _asset_slug(value: str) -> str:
+    return "-".join(part for part in value.strip().lower().replace("_", "-").split() if part)
+
+
+def _copy_thumbnail_asset(
+    *,
+    source_root: Path,
+    vendor_key: str,
+    display_name: str,
+    provider_id: str,
+    source_version: str,
+    output_root: Path,
+) -> str:
+    vendor_root = source_root / vendor_key
+    for suffix in (".png", ".jpg", ".jpeg", ".webp", ".svg"):
+        source_path = vendor_root / f"{display_name}_cover{suffix}"
+        if not source_path.exists():
+            continue
+        relative_path = Path("slicers") / provider_id / source_version / "assets" / f"{_asset_slug(display_name)}_cover{suffix}"
+        destination = output_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, destination)
+        return relative_path.as_posix()
+    return ""
+
+
 def run_import(
     *,
     slicer_id: str,
@@ -60,6 +87,14 @@ def run_import(
                 profile=profile,
             )
             machine_id = str(entry["machine_profile_id"])
+            thumbnail = _copy_thumbnail_asset(
+                source_root=source_root,
+                vendor_key=profile.vendor_key,
+                display_name=str(entry["display_name"]),
+                provider_id=provider.slicer_id,
+                source_version=source_version,
+                output_root=output_root,
+            )
             machine = machines.setdefault(
                 machine_id,
                 {
@@ -70,7 +105,7 @@ def run_import(
                     "bed_width": entry["bed_width"],
                     "bed_depth": entry["bed_depth"],
                     "bed_height": entry["bed_height"],
-                    "thumbnail": entry["thumbnail"],
+                    "thumbnail": thumbnail or entry["thumbnail"],
                     "nozzles": [],
                 },
             )
