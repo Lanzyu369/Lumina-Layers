@@ -2,6 +2,7 @@ import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { useConverterStore } from "../stores/converter";
 import { isValidImageType } from "../stores/converter";
+import type { BatchResponse } from "../api/types";
 
 // ========== Generators ==========
 
@@ -40,6 +41,18 @@ function resetStore(): void {
     enableCrop: false,
     cropModalOpen: false,
   });
+}
+
+function makeBatchResult(): BatchResponse {
+  return {
+    status: "success",
+    message: "old batch result",
+    download_url: "/old.zip",
+    threemf_disk_path: "/old.3mf",
+    preview_3d_url: "/old.glb",
+    results: [],
+    warnings: [],
+  };
 }
 
 // ========== Operation type for random sequences ==========
@@ -138,6 +151,43 @@ describe("Auto-Batch Multiselect Property-Based Tests", () => {
         }),
         { numRuns: 100 },
       );
+    });
+
+    it("clears stale batch results when appending from SingleMode", () => {
+      resetStore();
+      const existingFile = new File(["a"], "existing.png", { type: "image/png" });
+      const newFile = new File(["b"], "new.png", { type: "image/png" });
+
+      useConverterStore.setState({
+        imageFile: existingFile,
+        batchResult: makeBatchResult(),
+      });
+      useConverterStore.getState().handleFilesSelect([newFile]);
+
+      expect(useConverterStore.getState().batchFiles).toEqual([
+        existingFile,
+        newFile,
+      ]);
+      expect(useConverterStore.getState().batchResult).toBeNull();
+    });
+
+    it("clears stale batch results when appending while already in BatchMode", () => {
+      resetStore();
+      const existingFile = new File(["a"], "existing.png", { type: "image/png" });
+      const newFile = new File(["b"], "new.png", { type: "image/png" });
+
+      useConverterStore.setState({
+        batchFiles: [existingFile],
+        batchMode: true,
+        batchResult: makeBatchResult(),
+      });
+      useConverterStore.getState().handleFilesSelect([newFile]);
+
+      expect(useConverterStore.getState().batchFiles).toEqual([
+        existingFile,
+        newFile,
+      ]);
+      expect(useConverterStore.getState().batchResult).toBeNull();
     });
   });
 

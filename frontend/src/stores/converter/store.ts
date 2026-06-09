@@ -5947,17 +5947,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           selectedRegions: [],
           batchMode: false,
+          batchResult: null,
           hasManualPreview: false,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining });
+        set({ batchFiles: remaining, batchResult: null });
       }
     },
 
     clearBatchFiles: () =>
       set({
         batchFiles: [],
+        batchResult: null,
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         threemfDiskPath: null,
@@ -5983,6 +5985,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
           batchMode: true,
+          batchResult: null,
         });
         return;
       }
@@ -6018,6 +6021,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             hasManualPreview: false,
             layerImages: [],
             layerImagesOpen: false,
+            batchResult: null,
           });
           return;
         }
@@ -6047,6 +6051,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
+            batchResult: null,
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
@@ -6089,6 +6094,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           cropModalOpen: isSvg ? false : state.enableCrop,
           layerImages: [],
           layerImagesOpen: false,
+          batchResult: null,
           ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
         });
         return;
@@ -6126,6 +6132,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hasManualPreview: false,
         layerImages: [],
         layerImagesOpen: false,
+        batchResult: null,
       });
     },
 
