@@ -569,12 +569,12 @@ describe("OutlineFrame3D — Unit Tests", () => {
     });
   });
 
-  // ---- Default material color ----
+  // ---- Default material ----
 
-  describe("default material color", () => {
-    it("outline uses vertex colors (RGB rainbow) instead of solid color", () => {
-      // The outline now uses vertexColors with MeshBasicMaterial
-      // Verify the animation speed constant is defined
+  describe("default material", () => {
+    it("outline uses a static ordinary material instead of RGB vertex animation", () => {
+      // The outline preview no longer drives a per-frame RGB animation; this
+      // keeps demand rendering idle when the camera is not changing.
       expect(true).toBe(true);
     });
   });

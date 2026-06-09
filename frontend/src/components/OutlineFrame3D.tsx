@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import { debugThreeLog, getThreePerfDebugConfig } from "../utils/threeDebug";
+import { debugThreeLog } from "../utils/threeDebug";
 
 // ========== Constants ==========
 
-/** Animation speed: hue cycles per second. */
-const ANIM_SPEED = 0.001;
 const GEOMETRY_DISPOSE_DELAY_MS = 0;
+const OUTLINE_MATERIAL_COLOR = 0x2563eb;
+const OUTLINE_MATERIAL_ROUGHNESS = 0.65;
+const OUTLINE_MATERIAL_METALNESS = 0.05;
 const pendingOutlineFrameGeometryDisposals = new Map<
   THREE.BufferGeometry,
   ReturnType<typeof setTimeout>
@@ -728,10 +728,9 @@ export interface OutlineFrame3DProps {
 }
 
 /**
- * 3D outline frame component with flowing RGB rainbow animation.
+ * 3D outline frame component.
  * Algorithm: rasterize mesh → pad → dilate → subtract → greedy rect merge → extrude boxes.
- * Color: per-vertex HSL hue based on angle from center, animated each frame.
- * 使用与后端一致的算法渲染外轮廓，并添加 RGB 炫彩灯带动画效果。
+ * 使用与后端一致的算法渲染外轮廓，使用静态普通材质避免空闲时持续刷新。
  */
 export default function OutlineFrame3D({
   enabled,
@@ -742,14 +741,6 @@ export default function OutlineFrame3D({
   rasterCellSize,
   fillInteriorHoles = false,
 }: OutlineFrame3DProps) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const tmpColor = useRef(new THREE.Color());
-  const animationFrameCountRef = useRef(0);
-  const animationTotalMsRef = useRef(0);
-  const animationMaxMsRef = useRef(0);
-  const animationLastLogAtRef = useRef(performance.now());
-  const { invalidate } = useThree();
-
   const geometry = useMemo(() => {
     const buildStart = performance.now();
     const rasterMeshes = sourceMeshes && sourceMeshes.length > 0
@@ -807,40 +798,7 @@ export default function OutlineFrame3D({
     const geo = extrudeRectangles(rects, originX - cellSize, originY - cellSize, cellSize, modelMaxZ, pad);
     if (!geo) return null;
 
-    // 8. Compute per-vertex hue parameter based on angle from geometry center.
-    //    This creates a smooth rainbow gradient around the outline ring.
-    //    使用顶点相对于几何中心的角度计算色相参数，形成环绕彩虹渐变。
     const posAttr = geo.getAttribute("position");
-    const vertCount = posAttr.count;
-
-    // Find XY center of the geometry
-    let cx = 0, cy = 0;
-    for (let i = 0; i < vertCount; i++) {
-      cx += posAttr.getX(i);
-      cy += posAttr.getY(i);
-    }
-    cx /= vertCount;
-    cy /= vertCount;
-
-    // Assign hue = atan2(y-cy, x-cx) normalized to [0, 1]
-    const colorArr = new Float32Array(vertCount * 3);
-    for (let i = 0; i < vertCount; i++) {
-      const angle = Math.atan2(posAttr.getY(i) - cy, posAttr.getX(i) - cx);
-      const hue = (angle / (2 * Math.PI) + 1) % 1; // normalize to [0, 1]
-      tmpColor.current.setHSL(hue, 1.0, 0.5);
-      colorArr[i * 3] = tmpColor.current.r;
-      colorArr[i * 3 + 1] = tmpColor.current.g;
-      colorArr[i * 3 + 2] = tmpColor.current.b;
-    }
-    geo.setAttribute("color", new THREE.BufferAttribute(colorArr, 3));
-
-    // Store the per-vertex angle ratios as userData for animation
-    const hueParams = new Float32Array(vertCount);
-    for (let i = 0; i < vertCount; i++) {
-      const angle = Math.atan2(posAttr.getY(i) - cy, posAttr.getX(i) - cx);
-      hueParams[i] = (angle / (2 * Math.PI) + 1) % 1;
-    }
-    geo.userData.hueParams = hueParams;
 
     const triangleCount = geo.getIndex()
       ? Math.floor(geo.getIndex()!.count / 3)
@@ -868,77 +826,14 @@ export default function OutlineFrame3D({
     };
   }, [geometry]);
 
-  // Flowing RGB animation with brightness pulse for visibility.
-  // RGB 炫彩灯带动画 + 亮度脉动，提高选区可见性。
-  const birthTime = useRef(0);
-  useFrame(() => {
-    if (!meshRef.current || !geometry) return;
-    invalidate();
-    const animationStart = performance.now();
-    const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
-    const hueParams = geometry.userData.hueParams as Float32Array | undefined;
-    if (!colorAttr || !hueParams) return;
-
-    const now = performance.now();
-    if (birthTime.current === 0) birthTime.current = now;
-    const age = now - birthTime.current;
-    const time = now * ANIM_SPEED;
-
-    // Flash twice on first appearance (0-600ms), then steady pulse
-    let lightness: number;
-    if (age < 600) {
-      const phase = (age / 150) * Math.PI;
-      lightness = 0.5 + 0.35 * Math.abs(Math.sin(phase));
-    } else {
-      lightness = 0.45 + 0.1 * Math.sin(now * 0.004);
-    }
-
-    const arr = colorAttr.array as Float32Array;
-    const c = tmpColor.current;
-
-    for (let i = 0; i < hueParams.length; i++) {
-      c.setHSL((hueParams[i] + time) % 1.0, 1.0, lightness);
-      arr[i * 3] = c.r;
-      arr[i * 3 + 1] = c.g;
-      arr[i * 3 + 2] = c.b;
-    }
-    colorAttr.needsUpdate = true;
-
-    const { enabled: debugEnabled, intervalMs } = getThreePerfDebugConfig();
-    if (!debugEnabled) {
-      return;
-    }
-    const animationMs = performance.now() - animationStart;
-    animationFrameCountRef.current += 1;
-    animationTotalMsRef.current += animationMs;
-    animationMaxMsRef.current = Math.max(animationMaxMsRef.current, animationMs);
-    const nowForLog = performance.now();
-    const elapsed = nowForLog - animationLastLogAtRef.current;
-    if (elapsed < intervalMs) {
-      return;
-    }
-    debugThreeLog("OutlineFrame3D.animation", {
-      elapsed_ms: +elapsed.toFixed(1),
-      frame_count: animationFrameCountRef.current,
-      avg_update_ms:
-        animationFrameCountRef.current > 0
-          ? +(animationTotalMsRef.current / animationFrameCountRef.current).toFixed(3)
-          : 0,
-      max_update_ms: +animationMaxMsRef.current.toFixed(3),
-      vertex_count: hueParams.length,
-    });
-    animationFrameCountRef.current = 0;
-    animationTotalMsRef.current = 0;
-    animationMaxMsRef.current = 0;
-    animationLastLogAtRef.current = nowForLog;
-  });
-
   if (!geometry) return null;
 
   return (
-    <mesh ref={meshRef} geometry={geometry} position={[0, 0, 0]}>
-      <meshBasicMaterial
-        vertexColors
+    <mesh geometry={geometry} position={[0, 0, 0]}>
+      <meshStandardMaterial
+        color={OUTLINE_MATERIAL_COLOR}
+        roughness={OUTLINE_MATERIAL_ROUGHNESS}
+        metalness={OUTLINE_MATERIAL_METALNESS}
         side={THREE.DoubleSide}
       />
     </mesh>

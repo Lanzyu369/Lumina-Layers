@@ -10,7 +10,6 @@ import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useWidgetStore } from "../stores/widgetStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -183,27 +182,122 @@ function ThemeUpdater() {
   return null;
 }
 
+const ORBIT_DAMPING_SETTLE_MS = 500;
+const ORBIT_CHANGE_BURST_MS = 180;
+const ORBIT_PASSTHROUGH_MAX_MS = 10000;
+const ORBIT_PASSTHROUGH_CLASS = "lumina-canvas-orbiting";
+
+function setWidgetPassthroughForCanvasInteraction(enabled: boolean): void {
+  document.body.classList.toggle(ORBIT_PASSTHROUGH_CLASS, enabled);
+  if (enabled) {
+    return;
+  }
+  // Recover panels left non-interactive by older builds or interrupted HMR.
+  document.querySelectorAll<HTMLElement>("[data-widget-id]").forEach((panel) => {
+    if (
+      panel.style.pointerEvents === "none" &&
+      panel.style.getPropertyPriority("pointer-events") === "important"
+    ) {
+      panel.style.pointerEvents = "auto";
+    }
+  });
+}
+
 function CanvasInteractionBridge() {
-  const { controls } = useThree();
+  const { controls, invalidate } = useThree();
   useEffect(() => {
     if (!controls) return;
     const controlsWithEvents = controls as {
-      addEventListener: (type: "start" | "end", listener: () => void) => void;
-      removeEventListener: (type: "start" | "end", listener: () => void) => void;
+      addEventListener: (type: "start" | "change" | "end", listener: () => void) => void;
+      removeEventListener: (type: "start" | "change" | "end", listener: () => void) => void;
     };
 
-    const onStart = () => useWidgetStore.getState().setCanvasInteracting(true);
-    const onEnd = () => useWidgetStore.getState().setCanvasInteracting(false);
+    let rafId: number | null = null;
+    let passthroughTimerId: number | null = null;
+    let keepRenderingUntil = 0;
+    let interacting = false;
+
+    const stopLoop = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    };
+
+    const tick = () => {
+      invalidate();
+      if (interacting || performance.now() < keepRenderingUntil) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      rafId = null;
+    };
+
+    const ensureLoop = () => {
+      if (rafId === null) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    const stopPassthroughTimer = () => {
+      if (passthroughTimerId !== null) {
+        window.clearTimeout(passthroughTimerId);
+        passthroughTimerId = null;
+      }
+    };
+
+    const finishInteraction = () => {
+      if (!interacting) {
+        setWidgetPassthroughForCanvasInteraction(false);
+        return;
+      }
+      interacting = false;
+      keepRenderingUntil = performance.now() + ORBIT_DAMPING_SETTLE_MS;
+      stopPassthroughTimer();
+      setWidgetPassthroughForCanvasInteraction(false);
+      invalidate();
+      ensureLoop();
+    };
+
+    const onStart = () => {
+      interacting = true;
+      keepRenderingUntil = Number.POSITIVE_INFINITY;
+      setWidgetPassthroughForCanvasInteraction(true);
+      stopPassthroughTimer();
+      passthroughTimerId = window.setTimeout(finishInteraction, ORBIT_PASSTHROUGH_MAX_MS);
+      invalidate();
+      ensureLoop();
+    };
+
+    const onChange = () => {
+      if (!interacting) {
+        keepRenderingUntil = Math.max(keepRenderingUntil, performance.now() + ORBIT_CHANGE_BURST_MS);
+        ensureLoop();
+      }
+      invalidate();
+    };
 
     controlsWithEvents.addEventListener("start", onStart);
-    controlsWithEvents.addEventListener("end", onEnd);
+    controlsWithEvents.addEventListener("change", onChange);
+    controlsWithEvents.addEventListener("end", finishInteraction);
+    window.addEventListener("pointerup", finishInteraction);
+    window.addEventListener("pointercancel", finishInteraction);
+    window.addEventListener("blur", finishInteraction);
+    window.addEventListener("contextmenu", finishInteraction);
 
     return () => {
       controlsWithEvents.removeEventListener("start", onStart);
-      controlsWithEvents.removeEventListener("end", onEnd);
-      useWidgetStore.getState().setCanvasInteracting(false);
+      controlsWithEvents.removeEventListener("change", onChange);
+      controlsWithEvents.removeEventListener("end", finishInteraction);
+      window.removeEventListener("pointerup", finishInteraction);
+      window.removeEventListener("pointercancel", finishInteraction);
+      window.removeEventListener("blur", finishInteraction);
+      window.removeEventListener("contextmenu", finishInteraction);
+      stopLoop();
+      stopPassthroughTimer();
+      setWidgetPassthroughForCanvasInteraction(false);
     };
-  }, [controls]);
+  }, [controls, invalidate]);
   return null;
 }
 
