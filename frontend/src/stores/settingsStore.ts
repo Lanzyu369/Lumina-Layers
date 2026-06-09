@@ -113,6 +113,7 @@ export interface SettingsState {
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
+  deviceProfileId: string;
   customSlicerPath: string;
   customSlicerId: string;
   nozzleSize: "0.2" | "0.4";
@@ -164,6 +165,7 @@ export interface SettingsActions {
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
+  setDeviceProfileId: (id: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
   setNozzleSize: (size: "0.2" | "0.4") => void;
@@ -194,6 +196,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
+  deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
   customSlicerPath: "",
   customSlicerId: "",
   nozzleSize: "0.4",
@@ -387,6 +390,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setSlicerSoftware: (id: string) => {
         set({ slicerSoftware: id });
+        invalidateGeneratedArtifacts();
+      },
+
+      setDeviceProfileId: (id: string) => {
+        set({ deviceProfileId: id });
         invalidateGeneratedArtifacts();
       },
 

@@ -21,7 +21,9 @@ import { useSlicerStore } from "../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  getPrinterNozzleSizeOptions,
   isBambuFamilySlicer,
+  resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
@@ -64,6 +66,8 @@ export default function SettingsPanel() {
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
+  const deviceProfileId = useSettingsStore((s) => s.deviceProfileId);
+  const setDeviceProfileId = useSettingsStore((s) => s.setDeviceProfileId);
   const customSlicerPath = useSettingsStore((s) => s.customSlicerPath);
   const nozzleSize = useSettingsStore((s) => s.nozzleSize);
   const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
@@ -157,6 +161,7 @@ export default function SettingsPanel() {
     printers,
     resolvedSlicerSoftware
   );
+  const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
 
   useEffect(() => {
     if (slicersLoading || printersLoading || slicers.length === 0 || printers.length === 0) {
@@ -166,7 +171,13 @@ export default function SettingsPanel() {
     const nextSlicer = resolveSlicerOptionId(slicerSoftware, slicers);
     const nextPrinter = resolvePrinterOptionId(printerModel, printers, nextSlicer);
     const nextPrinterInfo = printers.find((printer) => printer.id === nextPrinter);
-    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, nextPrinterInfo);
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, nextPrinterInfo, nextSlicer);
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      nextPrinterInfo,
+      nextSlicer,
+      nextNozzleSize,
+    );
 
     let didNormalize = false;
 
@@ -188,13 +199,20 @@ export default function SettingsPanel() {
       didNormalize = true;
     }
 
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
+      didNormalize = true;
+    }
+
     if (didNormalize) {
       void syncToBackend();
     }
   }, [
+    deviceProfileId,
     printerModel,
     printers,
     printersLoading,
+    setDeviceProfileId,
     setLastBedLabel,
     setPrinterModel,
     setNozzleSize,
@@ -215,9 +233,18 @@ export default function SettingsPanel() {
     const selected = printers.find((p) => p.id === id);
     if (selected) {
       setLastBedLabel(`${selected.bed_width}×${selected.bed_depth} mm`);
-      const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected);
+      const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected, resolvedSlicerSoftware);
       if (nextNozzleSize !== nozzleSize) {
         setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      }
+      const nextDeviceProfileId = resolveDeviceProfileOptionId(
+        deviceProfileId,
+        selected,
+        resolvedSlicerSoftware,
+        nextNozzleSize,
+      );
+      if (nextDeviceProfileId !== deviceProfileId) {
+        setDeviceProfileId(nextDeviceProfileId);
       }
     }
     syncToBackend();
@@ -229,23 +256,42 @@ export default function SettingsPanel() {
     // If current printer doesn't support the new slicer, switch to first compatible
     const compatible = filterCompatiblePrinters(printers, id);
     const currentStillValid = compatible.some((p) => p.id === resolvedPrinterModel);
+    let resolvedPrinter =
+      compatible.find((p) => p.id === resolvedPrinterModel) ?? compatible[0];
     if (!currentStillValid && compatible.length > 0) {
       setPrinterModel(compatible[0].id);
       setLastBedLabel(
         `${compatible[0].bed_width}×${compatible[0].bed_depth} mm`
       );
+      resolvedPrinter = compatible[0];
     }
-    const resolvedPrinter =
-      compatible.find((p) => p.id === resolvedPrinterModel) ?? compatible[0];
-    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter);
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter, id);
     if (nextNozzleSize !== nozzleSize) {
       setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+    }
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      resolvedPrinter,
+      id,
+      nextNozzleSize,
+    );
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
     }
     syncToBackend();
   };
 
   const handleNozzleSizeChange = (value: string) => {
     setNozzleSize(value as "0.2" | "0.4");
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      selectedPrinter,
+      resolvedSlicerSoftware,
+      value,
+    );
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
+    }
     void syncToBackend();
   };
 
@@ -257,8 +303,6 @@ export default function SettingsPanel() {
     setCustomSlicerPathInput("");
     clearCustomSlicerPath();
   };
-
-  const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
 
   const handleClearCache = async () => {
     setClearing(true);
@@ -331,10 +375,10 @@ export default function SettingsPanel() {
           <div>
             <Dropdown
               label={t("settings.nozzle_size")}
-              value={resolveNozzleSizeOption(nozzleSize, selectedPrinter)}
+              value={resolveNozzleSizeOption(nozzleSize, selectedPrinter, resolvedSlicerSoftware)}
               onChange={handleNozzleSizeChange}
               disabled={printersLoading || !selectedPrinter}
-              options={(selectedPrinter?.supported_nozzle_sizes ?? ["0.2", "0.4"]).map((size) => ({
+              options={getPrinterNozzleSizeOptions(selectedPrinter, resolvedSlicerSoftware).map((size) => ({
                 label: `${size} mm`,
                 value: size,
               }))}
@@ -348,7 +392,7 @@ export default function SettingsPanel() {
             </span>
             <span className="text-slate-300 dark:text-slate-600">|</span>
             <span>
-              {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter)} {t("common_unit_mm")}
+              {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter, resolvedSlicerSoftware)} {t("common_unit_mm")}
             </span>
           </div>
         )}

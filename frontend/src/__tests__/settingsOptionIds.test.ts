@@ -4,9 +4,11 @@ import {
   filterCompatiblePrinters,
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
+  getPrinterNozzleSizeOptions,
   isBambuFamilySlicer,
   normalizePrinterOptionId,
   normalizeSlicerOptionId,
+  resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
@@ -29,6 +31,24 @@ const PRINTERS: PrinterInfo[] = [
     bed_height: 325,
     supported_nozzle_sizes: ["0.2", "0.4"],
     supported_slicers: ["BambuStudio", "OrcaSlicer"],
+    device_profiles: [
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.4",
+        source_profile_name: "Bambu Lab H2D 0.4 nozzle",
+        revision: "sha256:bambu",
+        supported: true,
+      },
+      {
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+        slicer_id: "OrcaSlicer",
+        nozzle_size: "0.2",
+        source_profile_name: "Bambu Lab H2D 0.2 nozzle",
+        revision: "sha256:orca",
+        supported: true,
+      },
+    ],
   },
   {
     id: "elegoo-cc2",
@@ -99,6 +119,25 @@ describe("settingsOptionIds", () => {
     expect(resolveNozzleSizeOption("0.2", PRINTERS[1])).toBe("0.4");
     expect(resolveNozzleSizeOption("0.2", PRINTERS[0])).toBe("0.2");
     expect(resolveNozzleSizeOption("", undefined)).toBe("0.4");
+  });
+
+  it("derives nozzle sizes from slicer-scoped registry device profiles", () => {
+    expect(getPrinterNozzleSizeOptions(PRINTERS[0], "BambuStudio")).toEqual(["0.4"]);
+    expect(getPrinterNozzleSizeOptions(PRINTERS[0], "OrcaSlicer")).toEqual(["0.2"]);
+  });
+
+  it("keeps slicer-scoped machine ids separate", () => {
+    expect("BambuStudio:bbl:bambu-lab-h2d:0.4").not.toBe(
+      "OrcaSlicer:bbl:bambu-lab-h2d:0.4",
+    );
+    expect(
+      resolveDeviceProfileOptionId(
+        "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+        PRINTERS[0],
+        "BambuStudio",
+        "0.4",
+      ),
+    ).toBe("BambuStudio:bbl:bambu-lab-h2d:0.4");
   });
 
   describe("isBambuFamilySlicer", () => {

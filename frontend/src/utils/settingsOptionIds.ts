@@ -116,6 +116,45 @@ export function filterCompatiblePrinters(
   return printers.filter((printer) => supportsSlicer(printer, slicerId));
 }
 
+export function getPrinterNozzleSizeOptions(
+  printer: PrinterInfo | undefined,
+  slicerId: string,
+): string[] {
+  const registryNozzles =
+    printer?.device_profiles
+      ?.filter((profile) => profile.supported !== false && profile.slicer_id === slicerId)
+      .map((profile) => profile.nozzle_size) ?? [];
+  const uniqueRegistryNozzles = [...new Set(registryNozzles)];
+  if (uniqueRegistryNozzles.length > 0) {
+    return uniqueRegistryNozzles;
+  }
+  return printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
+}
+
+export function resolveDeviceProfileOptionId(
+  currentValue: string,
+  printer: PrinterInfo | undefined,
+  slicerId: string,
+  nozzleSize: string,
+): string {
+  const profiles =
+    printer?.device_profiles?.filter(
+      (profile) => profile.supported !== false && profile.slicer_id === slicerId,
+    ) ?? [];
+  if (profiles.length === 0) {
+    return currentValue;
+  }
+  const exactCurrent = profiles.find(
+    (profile) =>
+      profile.device_profile_id === currentValue && profile.nozzle_size === nozzleSize,
+  );
+  if (exactCurrent) {
+    return exactCurrent.device_profile_id;
+  }
+  const matchingNozzle = profiles.find((profile) => profile.nozzle_size === nozzleSize);
+  return matchingNozzle?.device_profile_id ?? profiles[0].device_profile_id;
+}
+
 export function resolveSlicerOptionId(
   currentValue: string,
   slicers: SlicerOption[],
@@ -144,9 +183,12 @@ export function resolvePrinterOptionId(
 export function resolveNozzleSizeOption(
   currentValue: string,
   printer: PrinterInfo | undefined,
+  slicerId = "",
 ): string {
   const normalized = currentValue.trim() || "0.4";
-  const supported = printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
+  const supported = slicerId
+    ? getPrinterNozzleSizeOptions(printer, slicerId)
+    : printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
 
   if (supported.includes(normalized)) {
     return normalized;

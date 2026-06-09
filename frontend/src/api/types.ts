@@ -1683,6 +1683,15 @@ export interface RegionReplaceResponse {
 
 // ========== Printer Models ==========
 
+export interface DeviceProfileInfo {
+  device_profile_id: string;
+  slicer_id: string;
+  nozzle_size: string;
+  source_profile_name: string;
+  revision: string;
+  supported: boolean;
+}
+
 export interface PrinterInfo {
   id: string;
   display_name: string;
@@ -1692,6 +1701,8 @@ export interface PrinterInfo {
   bed_height: number;
   supported_nozzle_sizes: string[];
   supported_slicers: string[];
+  thumbnail?: string;
+  device_profiles?: DeviceProfileInfo[];
 }
 
 export interface PrinterListResponse {
