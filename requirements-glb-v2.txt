@@ -1,0 +1,5 @@
+# Optional GLB v2 preview mesh kernel dependencies.
+# Keep these outside requirements.txt so default V1 installs are not blocked
+# on platforms without native wheels or build tooling.
+rasterio>=1.5.0
+manifold3d>=3.4.0

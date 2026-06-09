@@ -198,6 +198,29 @@ class TestSingleColorImage:
         assert backing_mesh.bounds[1][0] > color_mesh.bounds[1][0]
         assert backing_mesh.bounds[1][1] > color_mesh.bounds[1][1]
 
+    def test_vector_preview_glb_exports_canvas_bounds_anchor_for_puzzle_overlay(
+        self,
+        out_path: str,
+    ) -> None:
+        """Puzzle overlay alignment needs full preview-canvas bounds, not cropped art bounds."""
+        h, w = 60, 60
+        red = np.array([255, 0, 0], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), red, dtype=np.uint8)
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[5:55, 5:55] = True
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=60.0)
+        cache["backing_mask"] = mask_solid.copy()
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        canvas_mesh = _get_node_mesh(scene, "preview_canvas_bounds")
+        assert canvas_mesh.bounds[0][0] == pytest.approx(0.0)
+        assert canvas_mesh.bounds[0][1] == pytest.approx(0.0)
+        assert canvas_mesh.bounds[1][0] == pytest.approx(60.0)
+        assert canvas_mesh.bounds[1][1] == pytest.approx(60.0)
+
 
 # ============================================================================
 # Test 3: Exactly 64 unique colors does NOT trigger merging

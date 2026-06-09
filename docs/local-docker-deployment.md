@@ -29,10 +29,12 @@ The deployment script bind-mounts these paths into the container:
 | `E:\Lumina-Layers\lumina-runtime\logs` | `/app/logs` | structured JSONL logs |
 | `E:\Lumina-Layers\lumina-runtime\feedback` | `/app/feedback` | bug-report bundles |
 | `E:\Lumina-Layers\lumina-runtime\lut-preset` | `/app/lut-preset` | local LUT presets used by the main app |
+| `E:\Lumina-Layers\lumina-runtime\materials` | `/app/materials` | local material library |
 | `E:\Lumina-Layers\lumina-runtime\user_settings.json` | `/app/user_settings.json` | backend settings |
 
 On first run, `lut-preset/` is seeded from the repository if the runtime copy is
-empty.
+empty. `materials/` follows the same rule and then stays on the runtime volume
+so Docker container replacement does not discard local material data.
 
 ## Build And Start
 
@@ -61,6 +63,40 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.
 
 Material and LUT data are served from the main app's local routes and the
 bind-mounted runtime directories.
+
+## GLB Preview Kernel
+
+本地 Docker 部署默认启用两条 GLB v2 预览链路：
+
+```powershell
+-GlbKernel v2
+-VectorGlbKernel v2
+```
+
+该路径通过 `LUMINA_GLB_KERNEL=v2` 启用 `rasterio + manifold3d` 挤出实现；
+如果依赖不可用或运行时失败，后端仍会回退到旧的 Shapely v1 路径。
+这些原生依赖保存在 `requirements-glb-v2.txt`，由 Docker 镜像安装；普通
+`pip install -r requirements.txt` 仍只安装默认 V1 路径需要的基础依赖。
+`LUMINA_VECTOR_GLB_KERNEL=v2` 启用 SVG/vector 最终生成链路的 preview GLB
+descriptor exporter；遇到冰箱贴凹槽、涂层或不支持的复杂几何时整次回退 V1。
+
+真实前端 SVG 预览模型走 `preview_cache -> generate_segmented_glb`，也就是
+`-GlbKernel` / `LUMINA_GLB_KERNEL` 这条链路。可用下面的本地 profile 入口
+对同一张 SVG 做 V1/V2 对照：
+
+```powershell
+python scripts\profile_vector_preview_segmented_glb.py `
+  "<path-to-complex-svg>" `
+  --json-out logs\vector_preview_segmented_complex_svg_v1_v2.json
+```
+
+如需回退旧实现，重启本地部署时显式指定：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1 `
+  -GlbKernel v1 `
+  -VectorGlbKernel v1
+```
 
 ## Operations
 

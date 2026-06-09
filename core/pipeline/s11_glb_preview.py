@@ -12,6 +12,7 @@ S11 — GLB 3D 预览导出。
 """
 
 from api.structured_logging import get_logger
+from functools import lru_cache
 import os
 import time
 from typing import Optional
@@ -19,6 +20,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import trimesh
+from trimesh.visual.material import PBRMaterial
 
 from config import PrinterConfig, OUTPUT_DIR, BedManager
 from core.naming import generate_preview_filename
@@ -50,6 +52,9 @@ _log = get_logger(__name__)
 # keep no Python-level mutable global so process-pool workers inherit the
 # choice via env automatically (see api/routers/converter/async_glb.py).
 _KERNEL_ENV_VAR = "LUMINA_GLB_KERNEL"
+_GLTF_UINT16_COMPONENT_TYPE = 5123
+_GLTF_UINT32_COMPONENT_TYPE = 5125
+PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds"
 
 
 def _resolve_kernel_choice() -> str:
@@ -99,6 +104,15 @@ _V2_IMPORT_ERROR: Optional[str] = None
 # ``_V2_IMPORT_OK`` 已经把 ``glb_kernel_v2_unavailable`` 控制为进程内只发
 # 一次，本锁让 ``glb_kernel_v2_requested_unavailable`` 也只发一次。
 _V2_REQUESTED_UNAVAILABLE_LOGGED: bool = False
+
+
+@lru_cache(maxsize=1)
+def _get_v2_mesh_kernel_modules():
+    """Return cached optional modules used by the v2 mesh builder."""
+    from rasterio.features import shapes as rio_shapes
+    import manifold3d as m3d
+
+    return rio_shapes, m3d
 
 
 def _v2_available(log_warning: bool = True) -> bool:
@@ -487,6 +501,9 @@ def _build_color_extruded_mesh_v2(
     height: int,
     total_layers: int,
     rgba: np.ndarray,
+    *,
+    assign_face_colors: bool = True,
+    component_compose_chunk_size: int | None = None,
 ) -> Optional[trimesh.Trimesh]:
     """Build an extruded Trimesh using rasterio polygonize + manifold3d extrude.
     使用 rasterio polygonize + manifold3d 挤出构建 Trimesh（v2 路径）。
@@ -529,6 +546,9 @@ def _build_color_extruded_mesh_v2(
         height (int): Image height used for Y-axis flip so image-up maps to world-up.
         total_layers (int): Number of Z layers for the extrusion height.
         rgba (np.ndarray): (4,) uint8 RGBA color for face coloring.
+        assign_face_colors (bool): Whether to allocate per-face preview colors.
+        component_compose_chunk_size (int | None): Optional number of
+            connected components to compose before each native extrusion.
 
     Returns:
         trimesh.Trimesh or None: Generated mesh, or None on empty mask / failure.
@@ -541,8 +561,7 @@ def _build_color_extruded_mesh_v2(
         return None
 
     try:
-        from rasterio.features import shapes as rio_shapes
-        import manifold3d as m3d
+        rio_shapes, m3d = _get_v2_mesh_kernel_modules()
     except Exception as exc:  # noqa: BLE001 — import-level fallback signal
         _log.warning(
             "v2 kernel import failed",
@@ -596,72 +615,110 @@ def _build_color_extruded_mesh_v2(
         return None
 
     extrude_h = float(total_layers)
-    manifolds = []
-    for component_idx, contours in enumerate(components):
-        try:
-            cs = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
-            man = cs.extrude(extrude_h)
-        except Exception as exc:  # noqa: BLE001 — per-component boundary guard
-            # Atomicity contract: a single bad component is enough to
-            # abort the whole color. Returning None here lets the
-            # dispatcher transparently fall back to shapely_v1 for the
-            # entire mask, which guarantees volume / XY-coverage parity
-            # with v1 (no partial-color geometry leaks). v1 is fully
-            # capable of handling the same input — manifold3d C-extension
-            # failures are the exception, not the rule, so the cost of
-            # rebuilding the whole color in v1 is acceptable.
-            # 任一 component 失败即丢弃整色：不允许 partial 输出，
-            # 保证 v2 与 v1 在 volume / XY 覆盖上严格一致；dispatcher
-            # 看到 None 后会用 v1 重建该色。
-            _log.warning(
-                "v2 kernel per-component extrude failed, aborting color",
-                extra={
-                    "event": "glb_kernel_v2_no_manifolds",
-                    "components": len(components),
-                    "failed_component_index": int(component_idx),
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc)[:200],
-                    "fallback_kernel": "shapely_v1",
-                },
-            )
-            return None
-        if man.is_empty():
-            # An empty manifold from a non-empty contour list is a
-            # geometry pathology (e.g. degenerate self-intersection that
-            # manifold3d collapses to nothing). Treat it the same as an
-            # exception: abort the color, let v1 rebuild.
-            # manifold 退化成空在拓扑上等价于失败，按同一策略丢色 fallback。
-            _log.warning(
-                "v2 kernel produced empty manifold for non-empty component",
-                extra={
-                    "event": "glb_kernel_v2_no_manifolds",
-                    "components": len(components),
-                    "failed_component_index": int(component_idx),
-                    "error_type": "EmptyManifold",
-                    "error_message": "CrossSection.extrude returned an empty Manifold",
-                    "fallback_kernel": "shapely_v1",
-                },
-            )
-            return None
-        manifolds.append(man)
-
-    if not manifolds:
-        # Only reachable if ``components`` was already empty above; defensive.
-        return None
-
+    mesh_data = None
     try:
-        combined = m3d.Manifold.compose(manifolds)
-        mesh_data = combined.to_mesh()
-    except Exception as exc:  # noqa: BLE001
-        _log.warning(
-            "v2 kernel manifold compose/to_mesh failed",
-            extra={
-                "event": "glb_kernel_v2_compose_failed",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        return None
+        chunk_size = int(component_compose_chunk_size or 0)
+        if len(components) == 1:
+            combined_cs = m3d.CrossSection(components[0], m3d.FillRule.EvenOdd)
+            combined = combined_cs.extrude(extrude_h)
+        elif chunk_size > 1 and chunk_size < len(components):
+            manifolds = []
+            for start in range(0, len(components), chunk_size):
+                group = components[start : start + chunk_size]
+                if len(group) == 1:
+                    cs = m3d.CrossSection(group[0], m3d.FillRule.EvenOdd)
+                else:
+                    cs = m3d.CrossSection.compose(
+                        [
+                            m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+                            for contours in group
+                        ]
+                    )
+                man = cs.extrude(extrude_h)
+                if man.is_empty():
+                    raise RuntimeError("CrossSection chunk extrude returned empty")
+                manifolds.append(man)
+            combined = m3d.Manifold.compose(manifolds)
+        else:
+            combined_cs = m3d.CrossSection.compose(
+                [
+                    m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+                    for contours in components
+                ]
+            )
+            combined = combined_cs.extrude(extrude_h)
+        if not combined.is_empty():
+            mesh_data = combined.to_mesh()
+    except Exception:
+        mesh_data = None
+
+    if mesh_data is None:
+        manifolds = []
+        for component_idx, contours in enumerate(components):
+            try:
+                cs = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+                man = cs.extrude(extrude_h)
+            except Exception as exc:  # noqa: BLE001 — per-component boundary guard
+                # Atomicity contract: a single bad component is enough to
+                # abort the whole color. Returning None here lets the
+                # dispatcher transparently fall back to shapely_v1 for the
+                # entire mask, which guarantees volume / XY-coverage parity
+                # with v1 (no partial-color geometry leaks). v1 is fully
+                # capable of handling the same input — manifold3d C-extension
+                # failures are the exception, not the rule, so the cost of
+                # rebuilding the whole color in v1 is acceptable.
+                # 任一 component 失败即丢弃整色：不允许 partial 输出，
+                # 保证 v2 与 v1 在 volume / XY 覆盖上严格一致；dispatcher
+                # 看到 None 后会用 v1 重建该色。
+                _log.warning(
+                    "v2 kernel per-component extrude failed, aborting color",
+                    extra={
+                        "event": "glb_kernel_v2_no_manifolds",
+                        "components": len(components),
+                        "failed_component_index": int(component_idx),
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:200],
+                        "fallback_kernel": "shapely_v1",
+                    },
+                )
+                return None
+            if man.is_empty():
+                # An empty manifold from a non-empty contour list is a
+                # geometry pathology (e.g. degenerate self-intersection that
+                # manifold3d collapses to nothing). Treat it the same as an
+                # exception: abort the color, let v1 rebuild.
+                # manifold 退化成空在拓扑上等价于失败，按同一策略丢色 fallback。
+                _log.warning(
+                    "v2 kernel produced empty manifold for non-empty component",
+                    extra={
+                        "event": "glb_kernel_v2_no_manifolds",
+                        "components": len(components),
+                        "failed_component_index": int(component_idx),
+                        "error_type": "EmptyManifold",
+                        "error_message": "CrossSection.extrude returned an empty Manifold",
+                        "fallback_kernel": "shapely_v1",
+                    },
+                )
+                return None
+            manifolds.append(man)
+
+        if not manifolds:
+            # Only reachable if ``components`` was already empty above; defensive.
+            return None
+
+        try:
+            combined = m3d.Manifold.compose(manifolds)
+            mesh_data = combined.to_mesh()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "v2 kernel manifold compose/to_mesh failed",
+                extra={
+                    "event": "glb_kernel_v2_compose_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            return None
 
     verts = np.asarray(mesh_data.vert_properties, dtype=np.float64)
     tris = np.asarray(mesh_data.tri_verts, dtype=np.int64)
@@ -671,8 +728,104 @@ def _build_color_extruded_mesh_v2(
         verts = verts[:, :3]
 
     result = trimesh.Trimesh(vertices=verts, faces=tris, process=False)
-    result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
+    result = _sort_mesh_vertices_spatially_for_gzip(result)
+    if assign_face_colors:
+        result.visual.face_colors = np.tile(rgba, (len(result.faces), 1))
     return result
+
+
+def _sort_mesh_vertices_spatially_for_gzip(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if len(vertices) == 0 or len(faces) == 0:
+        return mesh
+
+    order = np.lexsort((vertices[:, 2], vertices[:, 1], vertices[:, 0]))
+    if np.array_equal(order, np.arange(len(vertices))):
+        return mesh
+
+    inverse = np.empty(len(order), dtype=np.int64)
+    inverse[order] = np.arange(len(order), dtype=np.int64)
+    return trimesh.Trimesh(
+        vertices=vertices[order].copy(),
+        faces=inverse[faces].copy(),
+        process=False,
+    )
+
+
+def _ordered_key_at(mapping: dict, index: object) -> object | None:
+    try:
+        return list(mapping.keys())[int(index)]
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _sort_triangle_index_buffers_for_gzip(buffer_items: dict, tree: dict) -> None:
+    accessors = tree.get("accessors")
+    if not isinstance(accessors, dict):
+        return
+
+    sorted_views: set[tuple[object, int, int, str]] = set()
+    for mesh in tree.get("meshes", []) or []:
+        if not isinstance(mesh, dict):
+            continue
+        for primitive in mesh.get("primitives", []) or []:
+            if not isinstance(primitive, dict):
+                continue
+            if int(primitive.get("mode", 4) or 4) != 4:
+                continue
+            accessor_index = primitive.get("indices")
+            if accessor_index is None:
+                continue
+            accessor_key = _ordered_key_at(accessors, accessor_index)
+            if accessor_key is None:
+                continue
+            accessor = accessors.get(accessor_key)
+            if not isinstance(accessor, dict) or accessor.get("type") != "SCALAR":
+                continue
+            component_type = accessor.get("componentType")
+            if component_type == _GLTF_UINT16_COMPONENT_TYPE:
+                dtype = "<u2"
+            elif component_type == _GLTF_UINT32_COMPONENT_TYPE:
+                dtype = "<u4"
+            else:
+                continue
+            try:
+                count = int(accessor.get("count", 0) or 0)
+                buffer_view = int(accessor["bufferView"])
+                byte_offset = int(accessor.get("byteOffset", 0) or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if count <= 0 or count % 3 != 0:
+                continue
+            buffer_key = _ordered_key_at(buffer_items, buffer_view)
+            if buffer_key is None:
+                continue
+            raw = buffer_items.get(buffer_key)
+            if not isinstance(raw, (bytes, bytearray)):
+                continue
+            view_key = (buffer_key, byte_offset, count, dtype)
+            if view_key in sorted_views:
+                continue
+            itemsize = np.dtype(dtype).itemsize
+            byte_length = count * itemsize
+            if byte_offset < 0 or byte_offset + byte_length > len(raw):
+                continue
+            try:
+                indices = np.frombuffer(
+                    raw[byte_offset : byte_offset + byte_length],
+                    dtype=dtype,
+                ).reshape((-1, 3))
+            except ValueError:
+                continue
+            if len(indices) <= 1:
+                continue
+            order = np.lexsort((indices[:, 1], indices[:, 0]))
+            sorted_indices = indices[order].reshape(-1).astype(dtype, copy=False)
+            updated = bytearray(raw)
+            updated[byte_offset : byte_offset + byte_length] = sorted_indices.tobytes()
+            buffer_items[buffer_key] = bytes(updated)
+            sorted_views.add(view_key)
 
 
 def _build_color_extruded_mesh(
@@ -680,6 +833,8 @@ def _build_color_extruded_mesh(
     height: int,
     total_layers: int,
     rgba: np.ndarray,
+    *,
+    assign_face_colors: bool = True,
 ) -> Optional[trimesh.Trimesh]:
     """Dispatch to the active mesh kernel; transparently fall back to v1.
     根据 ``LUMINA_GLB_KERNEL`` 选择 kernel；失败自动回退到 v1。
@@ -721,7 +876,11 @@ def _build_color_extruded_mesh(
 
     if use_v2:
         mesh = _build_color_extruded_mesh_v2(
-            mask=mask, height=height, total_layers=total_layers, rgba=rgba
+            mask=mask,
+            height=height,
+            total_layers=total_layers,
+            rgba=rgba,
+            assign_face_colors=assign_face_colors,
         )
         if mesh is not None:
             return mesh
@@ -758,6 +917,20 @@ def _build_color_extruded_mesh(
     )
 
 
+def _assign_mesh_material_rgba(
+    mesh: trimesh.Trimesh,
+    rgba: np.ndarray,
+    *,
+    material_name: str,
+) -> None:
+    mesh.visual = trimesh.visual.TextureVisuals(
+        material=PBRMaterial(
+            name=material_name,
+            baseColorFactor=[int(value) for value in rgba],
+        )
+    )
+
+
 def _build_backing_plate_mesh(
     mask_solid: np.ndarray,
     height: int,
@@ -782,6 +955,37 @@ def _build_backing_plate_mesh(
     scale_transform[1, 1] = pixel_scale
     scale_transform[2, 2] = PrinterConfig.LAYER_HEIGHT
     mesh.apply_transform(scale_transform)
+    return mesh
+
+
+def _build_preview_canvas_bounds_mesh(
+    width: int,
+    height: int,
+    pixel_scale: float,
+) -> Optional[trimesh.Trimesh]:
+    """Build an invisible full-canvas bounds anchor for frontend overlay placement.
+    构建不可见的完整画布 bounds 锚点，用于前端叠线对齐。
+    """
+    if width <= 0 or height <= 0 or pixel_scale <= 0:
+        return None
+
+    canvas_w = float(width * pixel_scale)
+    canvas_h = float(height * pixel_scale)
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [canvas_w, 0.0, 0.0],
+            [canvas_w, canvas_h, 0.0],
+            [0.0, canvas_h, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int64)
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    mesh.visual.face_colors = np.tile(
+        np.array([0, 0, 0, 0], dtype=np.uint8),
+        (len(mesh.faces), 1),
+    )
     return mesh
 
 
@@ -1042,6 +1246,8 @@ def generate_segmented_glb(
         flat_total = width * height
         color_match_flat = np.zeros(flat_total, dtype=bool)
         _t_mask_build = 0.0
+        requested_kernel = _resolve_kernel_choice()
+        use_material_color = requested_kernel in {"rasterio_manifold3d", "auto"}
         for code_idx, code in enumerate(unique_codes):
             r = int((code >> 16) & 0xFF)
             g = int((code >> 8) & 0xFF)
@@ -1062,8 +1268,15 @@ def generate_segmented_glb(
                 height,
                 total_layers,
                 rgba,
+                assign_face_colors=not use_material_color,
             )
             if mesh is not None:
+                if use_material_color:
+                    _assign_mesh_material_rgba(
+                        mesh,
+                        rgba,
+                        material_name=f"color_{hex_name}_material",
+                    )
                 mesh.apply_transform(scale_transform)
                 min_z = mesh.vertices[:, 2].min()
                 if min_z != 0.0:
@@ -1105,13 +1318,27 @@ def generate_segmented_glb(
             _log.debug(f"Backing plate added ({backing_mesh.vertices.shape[0]} vertices)")
         _t_backing = time.perf_counter() - _t
 
+        canvas_bounds_mesh = _build_preview_canvas_bounds_mesh(
+            width=width,
+            height=height,
+            pixel_scale=pixel_scale,
+        )
+        if canvas_bounds_mesh is not None:
+            scene.add_geometry(
+                canvas_bounds_mesh,
+                node_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+            )
+
         cache["color_contours"] = contours_data
         _log.debug(f"Extracted contours for {len(contours_data)} colors")
 
         # 6. Export GLB
         _t = time.perf_counter()
         glb_path = output_path
-        scene.export(glb_path)
+        export_kwargs = {}
+        if _resolve_kernel_choice() in {"rasterio_manifold3d", "auto"}:
+            export_kwargs["buffer_postprocessor"] = _sort_triangle_index_buffers_for_gzip
+        scene.export(glb_path, file_type="glb", **export_kwargs)
         _t_export = time.perf_counter() - _t
 
         _t_glb_total = time.perf_counter() - _glb_t0

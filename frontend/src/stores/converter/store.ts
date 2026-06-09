@@ -254,6 +254,30 @@ export function buildLayerImagesSourceKey(
   ].join("|");
 }
 
+function buildPuzzlePreviewSourceKey(
+  state: Pick<
+    ConverterState,
+    | "sessionId"
+    | "previewGlbUrl"
+    | "previewBaseImageUrl"
+    | "previewImageUrl"
+    | "previewPixelWidth"
+    | "previewPixelHeight"
+  >,
+): string | null {
+  if (!state.sessionId) {
+    return null;
+  }
+
+  return [
+    state.sessionId,
+    state.previewGlbUrl ?? "",
+    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+    state.previewPixelWidth ?? "",
+    state.previewPixelHeight ?? "",
+  ].join("|");
+}
+
 function matchesColorHighlightSnapshot(
   state: Pick<ConverterState, "sessionId" | "selectionMode" | "selectedColors">,
   snapshot: {
@@ -3391,6 +3415,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       const requestedSessionId = state.sessionId;
       const requestedParams = buildPuzzlePreviewParams(state);
+      const requestedSourceKey = buildPuzzlePreviewSourceKey(state);
 
       try {
         const response = await apiConvertPuzzleLayoutPreview(
@@ -3399,10 +3424,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         );
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
@@ -3421,10 +3448,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
