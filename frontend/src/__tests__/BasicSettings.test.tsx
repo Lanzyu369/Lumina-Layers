@@ -268,6 +268,38 @@ describe("BasicSettings", () => {
     expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
   });
 
+  it("lets users append one more image after a single image has a preview", async () => {
+    const existingFile = new File(["existing"], "existing.jpg", { type: "image/jpeg" });
+    const newFile = new File(["new"], "new.jpg", { type: "image/jpeg" });
+    useConverterStore.setState({
+      imageFile: existingFile,
+      imagePreviewUrl: "data:image/jpeg;base64,fake",
+      previewImageUrl: "/api/files/preview.png",
+      batchMode: false,
+      batchFiles: [],
+    });
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText("点击更换或追加")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("点击更换或追加").closest("button")!);
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [newFile] } });
+
+    await waitFor(() => {
+      const state = useConverterStore.getState();
+      expect(state.imageFile).toBeNull();
+      expect(state.batchMode).toBe(true);
+      expect(state.batchFiles).toEqual([existingFile, newFile]);
+    });
+    expect(screen.getByText("existing.jpg")).toBeInTheDocument();
+    expect(screen.getByText("new.jpg")).toBeInTheDocument();
+  });
+
   it("renders large-format warnings when present", () => {
     useConverterStore.setState({
       largeFormatEnabled: false,

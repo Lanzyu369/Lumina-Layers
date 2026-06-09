@@ -5967,17 +5967,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           selectedRegions: [],
           batchMode: false,
+          batchResult: null,
           hasManualPreview: false,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining });
+        set({ batchFiles: remaining, batchResult: null });
       }
     },
 
     clearBatchFiles: () =>
       set({
         batchFiles: [],
+        batchResult: null,
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         threemfDiskPath: null,
@@ -6003,6 +6005,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
           batchMode: true,
+          batchResult: null,
         });
         return;
       }
@@ -6011,6 +6014,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const singleFile = validFiles[0];
         const isSvg = isSvgFile(singleFile);
         const autoModelingMode = isSvg ? ModelingModeEnum.VECTOR : undefined;
+
+        if (state.imageFile) {
+          const prev = state.imagePreviewUrl;
+          if (prev) URL.revokeObjectURL(prev);
+
+          set({
+            batchFiles: [state.imageFile, singleFile],
+            imageFile: null,
+            imagePreviewUrl: null,
+            aspectRatio: null,
+            previewImageUrl: null,
+            previewBaseImageUrl: null,
+            sessionId: null,
+            previewGlbUrl: null,
+            modelUrl: null,
+            batchPreviewItems: [],
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
+            ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            batchMode: true,
+            hasManualPreview: false,
+            layerImages: [],
+            layerImagesOpen: false,
+            batchResult: null,
+          });
+          return;
+        }
 
         if (isRawFileConverter(singleFile)) {
           const prev = state.imagePreviewUrl;
@@ -6037,6 +6071,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
+            batchResult: null,
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
@@ -6051,72 +6086,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           return;
         }
 
-        if (state.imageFile) {
-          const prev = state.imagePreviewUrl;
-          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        const previewUrl = URL.createObjectURL(singleFile);
+        const img = new Image();
+        img.onload = () => {
+          set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+        };
+        img.src = previewUrl;
 
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        } else {
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        }
+        set({
+          imageFile: singleFile,
+          imagePreviewUrl: previewUrl,
+          previewImageUrl: null,
+          previewBaseImageUrl: null,
+          sessionId: null,
+          previewGlbUrl: null,
+          modelUrl: null,
+          batchPreviewItems: [],
+          threemfDiskPath: null,
+          downloadUrl: null,
+          previewWarnings: [],
+          largeFormatWarnings: [],
+          ...EMPTY_LUT_MATCH_STATE,
+          puzzleEnabled: false,
+          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          batchMode: false,
+          hasManualPreview: false,
+          cropModalOpen: isSvg ? false : state.enableCrop,
+          layerImages: [],
+          layerImagesOpen: false,
+          batchResult: null,
+          ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
+        });
         return;
       }
 
@@ -6152,8 +6152,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hasManualPreview: false,
         layerImages: [],
         layerImagesOpen: false,
+        batchResult: null,
       });
-      console.log("[DEBUG] handleFilesSelect (batch): cleared layerImages");
     },
 
     submitBatch: async () => {
