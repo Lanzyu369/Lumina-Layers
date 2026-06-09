@@ -1,6 +1,11 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useConverterStore, ACCEPT_IMAGE_FORMATS, resolveConverterSourceSelection } from "../../stores/converter";
+import {
+  useConverterStore,
+  ACCEPT_IMAGE_FORMATS,
+  inferDefaultMaterialBackingDirName,
+  resolveConverterSourceSelection,
+} from "../../stores/converter";
 import {
   ColorMode,
   ModelingMode,
@@ -484,7 +489,7 @@ export default function BasicSettings() {
     materialBackingMaterialDirName &&
     selectedMaterialDirNames.includes(materialBackingMaterialDirName)
       ? materialBackingMaterialDirName
-      : (selectedMaterialDirNames[0] ?? "");
+      : (inferDefaultMaterialBackingDirName(selectedMaterialDirNames) ?? "");
 
   const materialLayerHeightOptions = [
     { label: "0.04 mm", value: "0.04" },

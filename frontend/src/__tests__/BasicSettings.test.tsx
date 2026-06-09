@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import { useConverterStore } from "../stores/converter";
 import * as lutApi from "../api/lut";
+import * as mlsMaterialsApi from "../api/mlsMaterials";
 import {
   ColorMode as ColorModeEnum,
   StructureMode as StructureModeEnum,
   ModelingMode as ModelingModeEnum,
 } from "../api/types";
-import type { LutDetailsCatalogGroup } from "../api/types";
+import type { LutDetailsCatalogGroup, SavedMaterialLibraryItem } from "../api/types";
 
 vi.mock("../api/lut", async () => {
   const actual = await vi.importActual<typeof import("../api/lut")>(
@@ -21,6 +22,10 @@ vi.mock("../api/lut", async () => {
     fetchLutDetailsCatalog: vi.fn(),
   };
 });
+
+vi.mock("../api/mlsMaterials", () => ({
+  listMaterials: vi.fn(),
+}));
 
 function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
   return [
@@ -103,6 +108,11 @@ beforeEach(() => {
     name: "A 4C",
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     color_count: 4,
+  });
+  vi.mocked(mlsMaterialsApi.listMaterials).mockResolvedValue({
+    status: "success",
+    message: "ok",
+    materials: [],
   });
   useConverterStore.setState({
     imageFile: null,
@@ -191,6 +201,19 @@ function makePredictiveBrand() {
   };
 }
 
+function makeMaterial(
+  directoryName: string,
+  materialName: string,
+): SavedMaterialLibraryItem {
+  return {
+    material_name: materialName,
+    directory_name: directoryName,
+    archive_path: `${directoryName}/material.json`,
+    material_file_url: `/materials/${directoryName}/material.json`,
+    estimated_rgb: [255, 255, 255],
+  };
+}
+
 function isMultipleOfStep(value: number, step: number): boolean {
   const ratio = value / step;
   return Math.abs(ratio - Math.round(ratio)) < 1e-9;
@@ -268,6 +291,34 @@ describe("BasicSettings", () => {
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "LUT" })).toBeInTheDocument();
+  });
+
+  it("shows the inferred white material as the base plate when no backing is persisted", async () => {
+    vi.mocked(mlsMaterialsApi.listMaterials).mockResolvedValueOnce({
+      status: "success",
+      message: "ok",
+      materials: [
+        makeMaterial("brand/pla-green", "Green PLA"),
+        makeMaterial("brand/pla-yellow", "Yellow PLA"),
+        makeMaterial("brand/pla-white", "White PLA"),
+      ],
+    });
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: [
+        "brand/pla-green",
+        "brand/pla-yellow",
+        "brand/pla-white",
+      ],
+      materialBackingMaterialDirName: null,
+    });
+
+    render(<BasicSettings />);
+
+    const backingDropdown = screen.getByRole("combobox", { name: "底板耗材" });
+    await waitFor(() => {
+      expect(backingDropdown).toHaveTextContent("3. White PLA");
+    });
   });
 
   it("shows brand options from the loaded legacy details catalog", () => {

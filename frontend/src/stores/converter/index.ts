@@ -6,6 +6,7 @@ export {
   RAW_EXTENSIONS_CONVERTER,
   DEFAULT_STATE,
   buildLayerImagesSourceKey,
+  inferDefaultMaterialBackingDirName,
   resolveConverterSourceSelection,
 } from "./store";
 

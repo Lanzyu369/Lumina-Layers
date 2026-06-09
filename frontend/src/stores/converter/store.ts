@@ -114,7 +114,7 @@ function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean 
   return tokens.includes("white") || tokens.includes("w");
 }
 
-function inferDefaultMaterialBackingDirName(names: string[]): string | null {
+export function inferDefaultMaterialBackingDirName(names: string[]): string | null {
   return names.find((name) => looksLikeWhiteMaterialLabel(name)) ?? names[0] ?? null;
 }
 
