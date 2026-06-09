@@ -296,6 +296,26 @@ describe("converter store — selectedMaterialDirNames persistence", () => {
     expect(localStorage.getItem(BACKING_KEY)).toBe("mat-c");
   });
 
+  it("defaults the base plate material to a selected white material", () => {
+    useConverterStore.getState().setSelectedMaterialDirNames([
+      "brand/pla-green",
+      "brand/pla-yellow",
+      "brand/pla-white",
+    ]);
+
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("brand/pla-white");
+    expect(localStorage.getItem(BACKING_KEY)).toBe("brand/pla-white");
+  });
+
+  it("detects Chinese white material names for the base plate default", () => {
+    useConverterStore.getState().setSelectedMaterialDirNames([
+      "瑞贝思/瑞贝思 PLA 绿",
+      "瑞贝思/瑞贝思 PLA 白",
+    ]);
+
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("瑞贝思/瑞贝思 PLA 白");
+  });
+
   it("changing only the base plate material preserves preview state", () => {
     useConverterStore.setState({
       sessionId: "session-1",
