@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import anyio
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
@@ -885,6 +885,10 @@ async def extractor_import_gradient_card_materials(
 
 @router.get("/gradient-card-materials")
 async def extractor_list_gradient_card_materials(
+    include_file_urls: bool = Query(
+        False,
+        description="Register temporary /api/files URLs for each material archive.",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialLibraryResponse:
     """List saved gradient-card material archives.
@@ -895,7 +899,11 @@ async def extractor_list_gradient_card_materials(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
+    persistent_registry_session = (
+        f"material-library:{uuid.uuid4().hex}"
+        if include_file_urls
+        else None
+    )
     response_items: list[dict[str, object]] = []
     for item in materials:
         material_file_url = (
@@ -904,6 +912,8 @@ async def extractor_list_gradient_card_materials(
                 str(item['archive_path']),
                 ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
             )}"
+            if persistent_registry_session is not None
+            else None
         )
         stage_a_path = item.get("stage_a_params_path")
         stage_a_params_url = (
@@ -912,7 +922,9 @@ async def extractor_list_gradient_card_materials(
                 str(stage_a_path),
                 ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
             )}"
-            if isinstance(stage_a_path, str) and stage_a_path
+            if persistent_registry_session is not None
+            and isinstance(stage_a_path, str)
+            and stage_a_path
             else None
         )
         response_items.append(

@@ -8,6 +8,7 @@ import {
   installMaterialRegistryCatalogEntry,
   refreshMaterialSyncFromRegistry,
   rollbackMaterialSyncRevision,
+  uploadLocalMaterialRegistryPackage,
   uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 
@@ -209,6 +210,38 @@ describe("material sync API client", () => {
       {
         headers: {
           "Content-Type": "multipart/form-data",
+          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+        },
+        timeout: 3_600_000,
+      },
+    );
+    expect(response.channel).toBe("pending");
+  });
+
+  it("uploads one local material directory to the registry review queue", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "uploaded",
+        channel: "pending",
+        package_path: "pending/mat/rev.zip",
+        package_url: "/api/material-registry/v1/packages/pending/mat/rev.zip",
+        package_sha256: "abc",
+        package_bytes: 10,
+        materials: [],
+      },
+    });
+
+    const response = await uploadLocalMaterialRegistryPackage(
+      "BrandA/pla-basic",
+      "approve-secret",
+    );
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/material-registry/v1/packages/upload-local",
+      { directory_name: "BrandA/pla-basic" },
+      {
+        headers: {
           "X-Lumina-Material-Registry-Official-Password": "approve-secret",
         },
         timeout: 3_600_000,

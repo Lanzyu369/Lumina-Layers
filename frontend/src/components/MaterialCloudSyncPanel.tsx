@@ -35,6 +35,7 @@ type CatalogInstallState = "not_installed" | "installed" | "update_available" | 
 interface CatalogDisplay {
   brand: string;
   name: string;
+  rgb: [number, number, number] | null;
 }
 
 interface LoadCatalogAndStatusResult {
@@ -78,12 +79,68 @@ const readDisplayString = (
   return null;
 };
 
+const readDisplayRgb = (
+  display: Record<string, unknown>,
+): [number, number, number] | null => {
+  const value = display.estimated_rgb ?? display.rgb;
+  if (!Array.isArray(value) || value.length < 3) {
+    return null;
+  }
+  const channels = value.slice(0, 3).map((channel) => Number(channel));
+  if (channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
+    return null;
+  }
+  return [channels[0], channels[1], channels[2]];
+};
+
+const toRgbCss = ([red, green, blue]: [number, number, number]): string =>
+  `rgb(${red}, ${green}, ${blue})`;
+
+const toHex = ([red, green, blue]: [number, number, number]): string =>
+  `#${[red, green, blue]
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+
 const resolveCatalogDisplay = (entry: MaterialRegistryCatalogEntry): CatalogDisplay => ({
   brand: readDisplayString(entry.display, ["brand", "manufacturer", "vendor"]) ?? "",
   name: readDisplayString(entry.display, ["material_name", "name", "display_name"])
     ?? entry.local_directory
     ?? entry.material_id,
+  rgb: readDisplayRgb(entry.display),
 });
+
+const shortContentFingerprint = (entry: MaterialRegistryCatalogEntry): string => {
+  const rawValue = (entry.content_hash || entry.revision_id || "").trim();
+  const normalized = rawValue
+    .replace(/^sha256:/i, "")
+    .replace(/^rev_/i, "");
+  return normalized ? normalized.slice(0, 12) : "-";
+};
+
+const catalogPackageKey = (entry: MaterialRegistryCatalogEntry): string =>
+  `${entry.package_url}\n${entry.package_sha256}`;
+
+const resolvePackagePathFromUrl = (packageUrl: string): string | null => {
+  const rawUrl = packageUrl.trim();
+  const marker = "/packages/";
+  const markerIndex = rawUrl.indexOf(marker);
+  const rawPath = markerIndex >= 0 ? rawUrl.slice(markerIndex + marker.length) : rawUrl;
+  const normalized = rawPath.replace(/^\/+/, "").split(/[?#]/)[0] ?? "";
+  if (!normalized || !normalized.toLowerCase().endsWith(".zip")) {
+    return null;
+  }
+  return normalized
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .join("/");
+};
 
 const materialLocalSignatureKey = (
   localDirectory: string | null | undefined,
@@ -177,10 +234,12 @@ export default function MaterialCloudSyncPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [pendingInstall, setPendingInstall] = useState<string | null>(null);
   const [pendingRollback, setPendingRollback] = useState<string | null>(null);
+  const [selectedCatalogPackageKeys, setSelectedCatalogPackageKeys] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const catalogQuery = searchQuery.trim();
@@ -294,6 +353,7 @@ export default function MaterialCloudSyncPanel() {
       const result = await loadCatalogAndStatus();
       if (!result.hasError) {
         setSuccess(t("mat_sync_catalog_refresh_success"));
+        setSelectedCatalogPackageKeys([]);
       }
     } finally {
       setIsRefreshing(false);
@@ -303,7 +363,7 @@ export default function MaterialCloudSyncPanel() {
   const loadMoreCatalog = useCallback(async () => {
     const loadedCount = catalog?.materials.length ?? 0;
     const totalCount = catalog?.total_count ?? catalog?.count ?? loadedCount;
-    if (!catalog || loadedCount >= totalCount || isLoadingMore) {
+    if (!catalog || loadedCount >= totalCount || isLoadingMore || isLoadingAll) {
       return;
     }
     setIsLoadingMore(true);
@@ -320,7 +380,40 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [catalog, catalogQuery, isLoadingMore, t]);
+  }, [catalog, catalogQuery, isLoadingAll, isLoadingMore, t]);
+
+  const loadAllCatalog = useCallback(async () => {
+    const loadedCount = catalog?.materials.length ?? 0;
+    let totalCount = catalog?.total_count ?? catalog?.count ?? loadedCount;
+    if (!catalog || loadedCount >= totalCount || isLoadingMore || isLoadingAll) {
+      return;
+    }
+    setIsLoadingAll(true);
+    setError(null);
+    try {
+      let mergedCatalog = catalog;
+      let nextOffset = loadedCount;
+      while (nextOffset < totalCount) {
+        const nextPage = await fetchMaterialRegistryCatalog({
+          limit: MATERIAL_CATALOG_PAGE_SIZE,
+          offset: nextOffset,
+          ...(catalogQuery ? { q: catalogQuery } : {}),
+        });
+        mergedCatalog = mergeCatalogPage(mergedCatalog, nextPage);
+        totalCount = nextPage.total_count ?? totalCount;
+        const pageCount = nextPage.count ?? nextPage.materials.length;
+        if (pageCount <= 0) {
+          break;
+        }
+        nextOffset += pageCount;
+      }
+      setCatalog(mergedCatalog);
+    } catch (err) {
+      setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+    } finally {
+      setIsLoadingAll(false);
+    }
+  }, [catalog, catalogQuery, isLoadingAll, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;
@@ -406,6 +499,15 @@ export default function MaterialCloudSyncPanel() {
     }
   }, [lastUploaded, officialPassword, loadCatalogAndStatus, t]);
 
+  const toggleCatalogPackageSelection = useCallback((entry: MaterialRegistryCatalogEntry) => {
+    const key = catalogPackageKey(entry);
+    setSelectedCatalogPackageKeys((current) => (
+      current.includes(key)
+        ? current.filter((selectedKey) => selectedKey !== key)
+        : [...current, key]
+    ));
+  }, []);
+
   const syncIndexStateLabel = status
     ? t(`mat_sync_state_${status.index_state}`)
     : t("mat_sync_state_unknown");
@@ -422,6 +524,41 @@ export default function MaterialCloudSyncPanel() {
   const catalogLoadedCount = catalog?.materials.length ?? 0;
   const catalogTotalCount = catalog?.total_count ?? catalog?.count ?? catalogLoadedCount;
   const hasMoreCatalogEntries = catalogLoadedCount < catalogTotalCount;
+
+  const selectedCatalogEntries = useMemo(() => {
+    const selectedKeys = new Set(selectedCatalogPackageKeys);
+    return (catalog?.materials ?? []).filter((entry) => (
+      selectedKeys.has(catalogPackageKey(entry)) && entry.channel !== "official"
+    ));
+  }, [catalog, selectedCatalogPackageKeys]);
+
+  const handleApproveSelectedCatalogEntries = useCallback(async () => {
+    const password = officialPassword.trim();
+    if (!password || selectedCatalogEntries.length <= 0) {
+      return;
+    }
+    setIsApproving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      for (const entry of selectedCatalogEntries) {
+        const packagePath = resolvePackagePathFromUrl(entry.package_url);
+        if (!packagePath) {
+          throw new Error(t("mat_sync_approve_package_path_invalid"));
+        }
+        await approveMaterialRegistryPackage(packagePath, password);
+      }
+      const approvedCount = selectedCatalogEntries.length;
+      setSelectedCatalogPackageKeys([]);
+      setOfficialPassword("");
+      await loadCatalogAndStatus();
+      setSuccess(tRuntime("mat_sync_approve_selected_success", { count: approvedCount }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
+    } finally {
+      setIsApproving(false);
+    }
+  }, [loadCatalogAndStatus, officialPassword, selectedCatalogEntries, t]);
 
   const filteredCatalogEntries = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -481,7 +618,7 @@ export default function MaterialCloudSyncPanel() {
       );
     }
     const label = installState === "update_available"
-      ? tRuntime("mat_sync_update_btn", { revisionId: entry.revision_id })
+      ? tRuntime("mat_sync_update_btn", { revisionId: shortContentFingerprint(entry) })
       : t("mat_sync_install_btn");
     return (
       <Button
@@ -699,75 +836,110 @@ export default function MaterialCloudSyncPanel() {
           <p className="text-sm text-slate-500 dark:text-slate-400">{t("mat_gradient_library_loading")}</p>
         </section>
       ) : filteredCatalogEntries.length > 0 ? (
-        <div className="grid gap-4">
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
           {filteredCatalogEntries.map((entry) => {
             const installed = resolveCatalogInstalledEntry(entry);
             const installState = resolveInstallState(entry, installed);
             const display = resolveCatalogDisplay(entry);
+            const packageKey = catalogPackageKey(entry);
+            const isCatalogPackageSelected = selectedCatalogPackageKeys.includes(packageKey);
+            const canApproveAsOfficial = entry.channel !== "official";
             return (
               <section
                 key={`${entry.material_id}:${entry.revision_id}`}
                 data-testid="material-cloud-catalog-card"
-                className={`${resolveSectionCardClass(workspace.mode)} grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,auto)] lg:items-center`}
+                className={`${resolveSectionCardClass(workspace.mode)} relative flex flex-col gap-4`}
               >
-                <div className="min-w-0">
-                  <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
-                    <span className="min-w-0 truncate">{display.name}</span>
-                  </h3>
-                  {display.brand ? (
-                    <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">
-                      {display.brand}
-                    </p>
-                  ) : null}
-                  <dl className="mt-3 grid gap-3 sm:grid-cols-4">
-                    <div className="min-w-0">
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {t("mat_sync_material_id_label")}
-                      </dt>
-                      <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
-                        {entry.material_id}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {t("mat_sync_revision_label")}
-                      </dt>
-                      <dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">
-                        {entry.revision_id}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {t("mat_gradient_library_directory_label")}
-                      </dt>
-                      <dd className="mt-1 break-all text-xs font-semibold text-slate-700 dark:text-slate-200">
-                        {entry.local_directory}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {t("mat_sync_package_size_label")}
-                      </dt>
-                      <dd className="mt-1 text-xs font-semibold text-slate-700 dark:text-slate-200">
-                        {formatBytes(entry.package_bytes)}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-                <div className="grid gap-2">
+                {entry.channel === "official" ? (
                   <span
-                    data-testid={`material-cloud-state-${entry.material_id}`}
-                    className="text-sm font-semibold text-slate-700 dark:text-slate-200"
+                    data-testid="material-cloud-official-badge"
+                    className="absolute right-3 top-3 rounded-bl-xl rounded-tr-2xl border border-amber-300/80 bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800 shadow-sm dark:border-amber-400/40 dark:bg-amber-400/15 dark:text-amber-100"
                   >
-                    {t(`mat_sync_catalog_state_${installState}`)}
+                    {t("mat_sync_official_badge")}
                   </span>
+                ) : null}
+                <div className="flex min-w-0 items-start gap-4">
+                  <input
+                    type="checkbox"
+                    data-testid="material-cloud-catalog-select"
+                    aria-label={tRuntime("mat_sync_select_catalog_item_label", { materialName: display.name })}
+                    checked={isCatalogPackageSelected}
+                    disabled={!canApproveAsOfficial || isApproving}
+                    onChange={() => toggleCatalogPackageSelection(entry)}
+                    className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40 dark:border-slate-600"
+                  />
+                  <div
+                    data-testid="material-cloud-catalog-swatch"
+                    className={cx(
+                      "flex h-20 w-20 shrink-0 items-center justify-center rounded-3xl border border-slate-200/80 text-lg font-semibold text-slate-500 dark:border-slate-700/80 dark:text-slate-300",
+                      display.rgb ? "" : "bg-slate-100 dark:bg-slate-800",
+                    )}
+                    style={display.rgb ? { backgroundColor: toRgbCss(display.rgb) } : undefined}
+                  >
+                    {display.rgb ? null : display.name.trim().slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1 pr-16">
+                    <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+                      <span
+                        data-testid="material-cloud-brand-tag"
+                        className="max-w-full truncate rounded-full border border-slate-200/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"
+                      >
+                        {display.brand || t("mat_gradient_library_brand_unassigned")}
+                      </span>
+                      <span className="min-w-0 truncate">{display.name}</span>
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                      {display.rgb ? toHex(display.rgb) : entry.channel}
+                    </p>
+                  </div>
+                </div>
+
+                <dl className="grid gap-3 sm:grid-cols-2">
+                  <div data-testid="material-cloud-card-meta" className={`${mutedSectionCardClass} px-4 py-3`}>
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_gradient_library_directory_label")}
+                    </dt>
+                    <dd className="mt-1 break-all text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {entry.local_directory}
+                    </dd>
+                  </div>
+                  <div data-testid="material-cloud-card-meta" className={`${mutedSectionCardClass} px-4 py-3`}>
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_sync_package_size_label")}
+                    </dt>
+                    <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {formatBytes(entry.package_bytes)}
+                    </dd>
+                  </div>
+                  <div data-testid="material-cloud-card-meta" className={`${mutedSectionCardClass} px-4 py-3`}>
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_sync_catalog_state_label")}
+                    </dt>
+                    <dd
+                      data-testid={`material-cloud-state-${entry.material_id}`}
+                      className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50"
+                    >
+                      {t(`mat_sync_catalog_state_${installState}`)}
+                    </dd>
+                  </div>
+                  <div data-testid="material-cloud-card-meta" className={`${mutedSectionCardClass} px-4 py-3`}>
+                    <dt className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t("mat_sync_content_fingerprint_label")}
+                    </dt>
+                    <dd className="mt-1 break-all font-mono text-xs font-semibold text-slate-900 dark:text-slate-50">
+                      {shortContentFingerprint(entry)}
+                    </dd>
+                  </div>
+                </dl>
+
+                <div className="grid gap-3">
                   {renderCatalogAction(entry, installState)}
                 </div>
               </section>
             );
           })}
           {hasMoreCatalogEntries ? (
-            <div className={`${mutedSectionCardClass} grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center`}>
+            <div className={`${mutedSectionCardClass} grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center`}>
               <p
                 data-testid="material-cloud-loaded-count"
                 className="text-sm font-medium text-slate-600 dark:text-slate-300"
@@ -781,8 +953,16 @@ export default function MaterialCloudSyncPanel() {
                 label={t("mat_sync_load_more_btn")}
                 variant="secondary"
                 onClick={() => void loadMoreCatalog()}
-                disabled={isLoadingMore}
+                disabled={isLoadingMore || isLoadingAll}
                 loading={isLoadingMore}
+                className="w-full sm:w-auto"
+              />
+              <Button
+                label={t("mat_sync_load_all_btn")}
+                variant="secondary"
+                onClick={() => void loadAllCatalog()}
+                disabled={isLoadingMore || isLoadingAll}
+                loading={isLoadingAll}
                 className="w-full sm:w-auto"
               />
             </div>
@@ -842,6 +1022,25 @@ export default function MaterialCloudSyncPanel() {
               className="w-full"
             />
           </div>
+        </div>
+        <div className="mt-4 grid gap-4 border-t border-slate-200/70 pt-4 dark:border-slate-700/70 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("mat_sync_approve_existing_title")}
+            </p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {selectedCatalogEntries.length > 0
+                ? tRuntime("mat_sync_approve_selected_summary", { count: selectedCatalogEntries.length })
+                : t("mat_sync_approve_existing_empty")}
+            </p>
+          </div>
+          <Button
+            label={t("mat_sync_approve_selected_btn")}
+            onClick={() => void handleApproveSelectedCatalogEntries()}
+            disabled={selectedCatalogEntries.length <= 0 || !officialPassword.trim() || isApproving || isUploading}
+            loading={isApproving && selectedCatalogEntries.length > 0}
+            className="w-full lg:w-auto"
+          />
         </div>
       </details>
     </motion.aside>

@@ -17,6 +17,7 @@ from core.single_stage import (
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
+import core.single_stage.materials as materials_module
 
 
 def _client() -> TestClient:
@@ -1238,6 +1239,78 @@ def test_material_library_api_marks_official_synced_material(
     material = response.json()["materials"][0]
     assert material["sync_material_id"] == "mat_official"
     assert material["sync_revision_id"] == "rev_official"
+    assert material["sync_channel"] == "official"
+    assert material["sync_official"] is True
+
+
+def test_material_library_api_marks_cloud_official_matching_local_material(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    material_payload = json.dumps(
+        {
+            "material_name": "PLA Basic",
+            "brand": "BrandA",
+            "stage_a_params_file": "stage_A_parameters.json",
+            "material_summary": {"estimated_rgb": [120, 130, 140]},
+        },
+        ensure_ascii=False,
+    )
+    stage_a_payload = json.dumps({"parameters": {}}, ensure_ascii=False)
+    (material_dir / "material.json").write_text(material_payload, encoding="utf-8")
+    (material_dir / "stage_A_parameters.json").write_text(
+        stage_a_payload,
+        encoding="utf-8",
+    )
+    material_hash = hashlib.sha256(material_payload.encode("utf-8")).hexdigest()
+    stage_a_hash = hashlib.sha256(stage_a_payload.encode("utf-8")).hexdigest()
+    content_hash = "sha256:" + hashlib.sha256(
+        f"material.json:{material_hash}\nstage_A_parameters.json:{stage_a_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+    def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 1,
+            "total_count": 1,
+            "offset": 0,
+            "limit": None,
+            "materials": [
+                {
+                    "material_id": "mat_cloud_official",
+                    "revision_id": "rev_cloud_official",
+                    "content_hash": content_hash,
+                    "channel": "official",
+                    "visibility": "official",
+                    "local_directory": "BrandA/pla-basic",
+                    "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/official/pla-basic.zip",
+                    "package_sha256": "a" * 64,
+                    "package_bytes": 1024,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        materials_module,
+        "list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+
+    response = _client().get("/api/extractor/gradient-card-materials")
+
+    assert response.status_code == 200
+    material = response.json()["materials"][0]
+    assert material["sync_material_id"] == "mat_cloud_official"
+    assert material["sync_revision_id"] == "rev_cloud_official"
     assert material["sync_channel"] == "official"
     assert material["sync_official"] is True
 

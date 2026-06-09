@@ -16,9 +16,13 @@ from api.schemas.responses import (
     MaterialRegistryCatalogResponse,
     MaterialRegistryPackageMutationResponse,
 )
-from api.schemas.single_stage import MaterialRegistryApproveRequest
+from api.schemas.single_stage import (
+    MaterialRegistryApproveRequest,
+    MaterialRegistryLocalUploadRequest,
+)
 from api.structured_logging import get_logger
 from core.material_registry import (
+    MaterialRegistryDuplicateError,
     approve_material_registry_package,
     build_material_registry_catalog,
     material_registry_package_channels,
@@ -28,7 +32,11 @@ from core.material_registry import (
     verify_material_registry_read_access,
     verify_material_registry_write_access,
 )
-from core.single_stage import invalidate_material_registry_remote_catalog_cache
+from core.single_stage import (
+    export_saved_stage_a_material_archives,
+    invalidate_material_library_cache,
+    invalidate_material_registry_remote_catalog_cache,
+)
 
 router = APIRouter(prefix="/api/material-registry/v1", tags=["Material Registry"])
 log = get_logger(__name__)
@@ -127,6 +135,58 @@ async def material_registry_package_upload(
     )
 
 
+@router.post("/packages/upload-local", response_model=MaterialRegistryPackageMutationResponse)
+async def material_registry_local_package_upload(
+    payload: MaterialRegistryLocalUploadRequest,
+    official_password: Annotated[
+        str | None,
+        Header(alias="X-Lumina-Material-Registry-Official-Password"),
+    ] = None,
+) -> MaterialRegistryPackageMutationResponse:
+    """Export one local material and upload it to the pending Registry channel.
+    导出一个本地耗材并上传到 Registry pending 频道。
+    """
+    archive_path: str | None = None
+    try:
+        verify_material_registry_write_access(official_password=official_password)
+        export_result = export_saved_stage_a_material_archives(
+            directory_names=[payload.directory_name],
+        )
+        archive_path = export_result.archive_path
+        result = upload_material_registry_package(archive_path=archive_path)
+        invalidate_material_registry_remote_catalog_cache()
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except MaterialRegistryDuplicateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        if archive_path is not None:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+
+    log.info(
+        "Local material registry package uploaded",
+        extra={
+            "event": "material_registry_local_package_upload_done",
+            "channel": result["channel"],
+            "package_path": result["package_path"],
+            "material_count": len(result["materials"]),
+            "directory_name": payload.directory_name,
+        },
+    )
+    return MaterialRegistryPackageMutationResponse(
+        status="ok",
+        message="Local material package uploaded for review",
+        **result,
+    )
+
+
 @router.post(
     "/packages/{package_path:path}/approve",
     response_model=MaterialRegistryPackageMutationResponse,
@@ -144,6 +204,7 @@ async def material_registry_package_approve(
             official_password=payload.official_password,
         )
         invalidate_material_registry_remote_catalog_cache()
+        invalidate_material_library_cache()
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except FileNotFoundError as exc:

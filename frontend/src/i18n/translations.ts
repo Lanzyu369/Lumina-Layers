@@ -6683,6 +6683,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "加载更多",
     en: "Load More",
   },
+  mat_sync_load_all_btn: {
+    zh: "加载全部",
+    en: "Load All",
+  },
   mat_sync_status_failed: {
     zh: "读取云端耗材库失败",
     en: "Failed to load cloud material library",
@@ -6755,6 +6759,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材下载失败",
     en: "Material download failed",
   },
+  mat_sync_catalog_state_label: {
+    zh: "状态",
+    en: "Status",
+  },
   mat_sync_catalog_state_not_installed: {
     zh: "未安装",
     en: "Not installed",
@@ -6819,6 +6827,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "官方耗材审批失败",
     en: "Official approval failed",
   },
+  mat_sync_approve_existing_title: {
+    zh: "审批已有云端耗材",
+    en: "Approve Existing Cloud Materials",
+  },
+  mat_sync_approve_existing_empty: {
+    zh: "在上方云端耗材卡片勾选非 official 耗材后，可在这里批准为官方耗材。",
+    en: "Select non-official cloud material cards above, then approve them as official here.",
+  },
+  mat_sync_approve_selected_summary: {
+    zh: "已选择 {count} 个云端耗材，审批后会进入 official 频道。",
+    en: "{count} cloud materials selected. Approval will publish them to the official channel.",
+  },
+  mat_sync_approve_selected_btn: {
+    zh: "批准选中云端耗材为官方",
+    en: "Approve Selected Cloud Materials",
+  },
+  mat_sync_approve_selected_success: {
+    zh: "已将 {count} 个云端耗材批准为官方耗材。",
+    en: "Approved {count} cloud materials as official.",
+  },
+  mat_sync_approve_package_path_invalid: {
+    zh: "无法解析所选云端耗材的包路径。",
+    en: "Could not resolve the selected cloud material package path.",
+  },
   mat_sync_official_password_placeholder: {
     zh: "官方审批密码",
     en: "Official approval password",
@@ -6838,6 +6870,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_revision_label: {
     zh: "版本",
     en: "Revision",
+  },
+  mat_sync_content_fingerprint_label: {
+    zh: "内容指纹",
+    en: "Fingerprint",
+  },
+  mat_sync_select_catalog_item_label: {
+    zh: "选择云端耗材「{materialName}」",
+    en: 'Select cloud material "{materialName}"',
   },
   mat_sync_rollback_btn: {
     zh: "回滚到 {revisionId}",
@@ -6970,6 +7010,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_reverify_btn: {
     zh: "再次验证",
     en: "Re-Verify",
+  },
+  mat_gradient_library_cloud_upload_btn: {
+    zh: "上传到云端",
+    en: "Upload to Cloud",
+  },
+  mat_gradient_library_cloud_upload_password_prompt: {
+    zh: "请输入官方审批密码，用于上传这个耗材到云端待审核队列。",
+    en: "Enter the official approval password to upload this material to the cloud review queue.",
+  },
+  mat_gradient_library_cloud_upload_success: {
+    zh: "耗材已提交到云端待审核队列。",
+    en: "Material uploaded to the cloud review queue.",
+  },
+  mat_gradient_library_cloud_upload_failed: {
+    zh: "上传到云端失败",
+    en: "Failed to upload material to cloud",
   },
   mat_gradient_library_delete_btn: {
     zh: "删除耗材",

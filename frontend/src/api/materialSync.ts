@@ -119,6 +119,27 @@ export async function uploadMaterialRegistryPackage(
   return response.data;
 }
 
+/**
+ * Export one saved local material and upload it to the Registry review queue.
+ * 导出一个本地已保存耗材并上传到 Registry 待审核队列。
+ */
+export async function uploadLocalMaterialRegistryPackage(
+  directoryName: string,
+  officialPassword: string,
+): Promise<MaterialRegistryPackageMutationResponse> {
+  const response = await apiClient.post<MaterialRegistryPackageMutationResponse>(
+    "/material-registry/v1/packages/upload-local",
+    { directory_name: directoryName.trim() },
+    {
+      headers: {
+        "X-Lumina-Material-Registry-Official-Password": officialPassword,
+      },
+      timeout: 3_600_000,
+    },
+  );
+  return response.data;
+}
+
 const encodePackagePathForRoute = (packagePath: string): string =>
   packagePath
     .split("/")

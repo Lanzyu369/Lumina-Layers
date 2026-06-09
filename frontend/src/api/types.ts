@@ -831,7 +831,7 @@ export interface SavedMaterialLibraryItem {
   updated_at?: string | null;
   archive_path: string;
   stage_a_params_path?: string | null;
-  material_file_url: string;
+  material_file_url: string | null;
   stage_a_params_url?: string | null;
   estimated_rgb: number[];
   layer_height_mm?: number | null;

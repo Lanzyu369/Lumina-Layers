@@ -269,3 +269,22 @@ class MaterialRegistryApproveRequest(BaseModel):
         if not cleaned:
             raise ValueError("official_password cannot be blank")
         return cleaned
+
+
+class MaterialRegistryLocalUploadRequest(BaseModel):
+    """Request model for uploading one local saved material into the Registry.
+    将一个本地已保存耗材上传到 Registry 待审核队列的请求模型。
+    """
+
+    directory_name: str = Field(
+        ...,
+        description="Saved material directory name to export and upload.",
+    )
+
+    @field_validator("directory_name")
+    @classmethod
+    def validate_directory_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("directory_name cannot be blank")
+        return cleaned

@@ -144,11 +144,14 @@ _MATERIAL_SYNC_INDEX_SCHEMA_VERSION = "1.0"
 _MATERIAL_SYNC_REFRESH_LOCK_FILENAME = "refresh.lock"
 _MATERIAL_SYNC_LOCK_STALE_SECONDS = 2 * 60 * 60
 _MATERIAL_SYNC_STATUS_CACHE_TTL_S = 5 * 60
+_MATERIAL_LIBRARY_CACHE_TTL_S = 5 * 60
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_TTL_S = 5 * 60
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
 _MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
+_MATERIAL_LIBRARY_CACHE_LOCK = threading.RLock()
+_MATERIAL_LIBRARY_CACHE: dict[str, dict[str, Any]] = {}
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[
     tuple[str, tuple[str, ...], str, Any, int | None, int, str],
@@ -1033,6 +1036,47 @@ def _json_clone(payload: Any) -> Any:
     return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
+def _material_library_cache_key(target_root: Path) -> str:
+    try:
+        return str(target_root.resolve())
+    except OSError:
+        return str(target_root.absolute())
+
+
+def _cached_material_library_items(target_root: Path) -> list[dict[str, Any]] | None:
+    cache_key = _material_library_cache_key(target_root)
+    now = time.monotonic()
+    with _MATERIAL_LIBRARY_CACHE_LOCK:
+        cached = _MATERIAL_LIBRARY_CACHE.get(cache_key)
+        if not cached:
+            return None
+        cached_at = float(cached.get("cached_at") or 0.0)
+        if now - cached_at > _MATERIAL_LIBRARY_CACHE_TTL_S:
+            _MATERIAL_LIBRARY_CACHE.pop(cache_key, None)
+            return None
+        payload = cached.get("payload")
+        if not isinstance(payload, list):
+            return None
+        return _json_clone(payload)
+
+
+def _store_material_library_cache(target_root: Path, payload: list[dict[str, Any]]) -> None:
+    cache_key = _material_library_cache_key(target_root)
+    with _MATERIAL_LIBRARY_CACHE_LOCK:
+        _MATERIAL_LIBRARY_CACHE[cache_key] = {
+            "cached_at": time.monotonic(),
+            "payload": _json_clone(payload),
+        }
+
+
+def _invalidate_material_library_cache(target_root: Path | None = None) -> None:
+    with _MATERIAL_LIBRARY_CACHE_LOCK:
+        if target_root is None:
+            _MATERIAL_LIBRARY_CACHE.clear()
+            return
+        _MATERIAL_LIBRARY_CACHE.pop(_material_library_cache_key(target_root), None)
+
+
 
 def _normalize_relative_directory_name(directory_name: str) -> str:
     """Normalize a user-provided material directory_name to a POSIX relative path.
@@ -1395,7 +1439,7 @@ def _display_payload_from_material_archive(
     path_parts = Path(relative_directory_name).parts
     fallback_brand = path_parts[0] if len(path_parts) > 1 else ""
     fallback_name = path_parts[-1] if path_parts else relative_directory_name
-    display: dict[str, str] = {
+    display: dict[str, Any] = {
         "brand": str(archive_payload.get("brand") or fallback_brand),
         "material_name": str(archive_payload.get("material_name") or fallback_name),
     }
@@ -1406,6 +1450,11 @@ def _display_payload_from_material_archive(
         value = archive_payload.get(source_key)
         if isinstance(value, str) and value.strip():
             display[target_key] = value.strip()
+    material_summary = archive_payload.get("material_summary")
+    if isinstance(material_summary, dict):
+        estimated_rgb = _safe_rgb_triplet(material_summary.get("estimated_rgb"))
+        if len(estimated_rgb) == 3 and all(0 <= channel <= 255 for channel in estimated_rgb):
+            display["estimated_rgb"] = estimated_rgb
     return display
 
 
@@ -1951,6 +2000,90 @@ def _material_sync_metadata_by_directory(target_root: Path) -> dict[str, dict[st
     return metadata
 
 
+def invalidate_material_library_cache(materials_dir: str | None = None) -> None:
+    """Clear cached saved-material library summaries.
+    清理已保存耗材库摘要缓存。
+    """
+    if materials_dir is None:
+        _invalidate_material_library_cache()
+        return
+    _invalidate_material_library_cache(Path(materials_dir or MATERIALS_DIR))
+
+
+def _local_material_content_hash(
+    material_dir: Path,
+    archive_payload: dict[str, Any],
+) -> str | None:
+    archive_path = material_dir / "material.json"
+    try:
+        stage_a_path = _resolve_stage_a_params_path(material_dir, archive_payload)
+    except ValueError:
+        return None
+    if not archive_path.is_file() or not stage_a_path.is_file():
+        return None
+    file_records = [
+        {
+            "path": archive_path.name,
+            "role": "material_archive",
+            "sha256": _sha256_file(archive_path),
+        },
+        {
+            "path": stage_a_path.name,
+            "role": "stage_a_parameters",
+            "sha256": _sha256_file(stage_a_path),
+        },
+    ]
+    return _material_content_hash_from_file_records(file_records)
+
+
+def _official_material_registry_metadata_by_signature() -> dict[tuple[str, str], dict[str, Any]]:
+    try:
+        catalog = list_material_registry_catalog(
+            channels=["official"],
+            limit=None,
+            offset=0,
+        )
+    except Exception:
+        return {}
+    metadata: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in _material_registry_catalog_entries(catalog):
+        if str(entry.get("channel") or "") != "official":
+            continue
+        signature = _material_sync_signature(entry)
+        if signature is None:
+            continue
+        metadata[signature] = {
+            "sync_material_id": str(entry.get("material_id") or ""),
+            "sync_revision_id": str(entry.get("revision_id") or ""),
+            "sync_channel": "official",
+            "sync_official": True,
+        }
+    return metadata
+
+
+def _apply_official_registry_metadata(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    official_by_signature = _official_material_registry_metadata_by_signature()
+    if not official_by_signature:
+        return items
+    for item in items:
+        if bool(item.get("sync_official")):
+            continue
+        signature = _material_sync_signature(
+            {
+                "local_directory": item.get("directory_name"),
+                "content_hash": item.get("content_hash"),
+            }
+        )
+        if signature is None:
+            continue
+        official_metadata = official_by_signature.get(signature)
+        if official_metadata:
+            item.update(official_metadata)
+    return items
+
+
 def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None:
     sync_dir = target_root / "_sync"
     sync_dir.mkdir(parents=True, exist_ok=True)
@@ -1962,6 +2095,7 @@ def _write_material_sync_index(target_root: Path, index: dict[str, Any]) -> None
     )
     tmp_path.replace(index_path)
     _invalidate_material_sync_status_cache(target_root)
+    _invalidate_material_library_cache(target_root)
 
 
 def _record_material_sync_entries(
@@ -4495,6 +4629,7 @@ def save_stage_a_material_archive(
         material_dir,
         archive_payload,
     )
+    _invalidate_material_library_cache(target_root)
     return MaterialArchiveSaveResult(
         archive_path=str(archive_path),
         stage_a_params_path=str(stage_a_params_path),
@@ -4623,6 +4758,7 @@ def update_saved_stage_a_material_archive_metadata(
         encoding="utf-8",
     )
 
+    _invalidate_material_library_cache(target_root)
     return MaterialArchiveUpdateResult(
         archive_path=str(archive_path),
         stage_a_params_path=str(stage_a_params_path),
@@ -4664,6 +4800,7 @@ def delete_saved_stage_a_material_archive(
     parent_dir = material_dir.parent
     shutil.rmtree(material_dir)
     _prune_empty_parents(parent_dir, target_root)
+    _invalidate_material_library_cache(target_root)
     return MaterialArchiveDeleteResult(
         directory_name=relative_directory_name,
         material_name=material_name,
@@ -4941,6 +5078,7 @@ def import_saved_stage_a_material_archives(
                 target_root=target_root,
                 installed_packages=installed_packages,
             )
+            _invalidate_material_library_cache(target_root)
         except Exception:
             for created_dir in reversed(created_material_dirs):
                 parent_dir = created_dir.parent
@@ -5121,6 +5259,9 @@ def list_saved_stage_a_material_archives(
     target_root = Path(materials_dir or MATERIALS_DIR)
     if not target_root.exists():
         return []
+    cached_items = _cached_material_library_items(target_root)
+    if cached_items is not None:
+        return _apply_official_registry_metadata(cached_items)
 
     items: list[dict[str, Any]] = []
     archive_paths = [
@@ -5144,8 +5285,13 @@ def list_saved_stage_a_material_archives(
             material_dir,
             archive_payload,
         )
+        content_hash = _local_material_content_hash(material_dir, archive_payload)
+        if content_hash:
+            item["content_hash"] = content_hash
         item.update(sync_metadata_by_directory.get(item["directory_name"], {}))
         items.append(item)
+    _apply_official_registry_metadata(items)
+    _store_material_library_cache(target_root, items)
     return items
 
 
@@ -5349,4 +5495,6 @@ def record_material_usage(
             # Auxiliary tracking must never break a successful generation.
             # 辅助统计写入失败时不应影响生成主流程。
             results[normalized_name] = {"error": f"write_failed: {exc}"}
+    if any("error" not in payload for payload in results.values()):
+        _invalidate_material_library_cache(target_root)
     return results

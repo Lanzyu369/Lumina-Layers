@@ -1890,6 +1890,65 @@ def test_list_saved_stage_a_material_archives_reads_saved_material_directory(tmp
     assert results[0]["verification_history"][0]["white_detected_orientation"] == "identity"
 
 
+def test_list_saved_stage_a_material_archives_reuses_cached_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps({"parameters": {}}),
+        encoding="utf-8",
+    )
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "material_name": "PLA Basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "stage_a_params_file": "stage_A_parameters.json",
+                "material_summary": {"estimated_rgb": [100, 120, 140]},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    calls = 0
+    original_builder = materials_module._saved_material_library_item_from_archive
+
+    def counting_builder(
+        target_root: Path,
+        material_dir: Path,
+        archive_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return original_builder(target_root, material_dir, archive_payload)
+
+    monkeypatch.setattr(
+        materials_module,
+        "_saved_material_library_item_from_archive",
+        counting_builder,
+    )
+
+    first = materials_module.list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root),
+    )
+    second = materials_module.list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root),
+    )
+    first[0]["material_name"] = "Mutated"
+    third = materials_module.list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root),
+    )
+
+    assert calls == 1
+    assert second[0]["material_name"] == "PLA Basic"
+    assert third[0]["material_name"] == "PLA Basic"
+
+
 def test_gradient_card_material_library_route_lists_saved_materials(
     monkeypatch,
     tmp_path: Path,
@@ -1948,6 +2007,46 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     assert item["verification_count"] == 3
     assert len(item["verification_history"]) == 1
     assert item["verification_history"][0]["rmse_linear"] == 0.015
+    assert item["material_file_url"] is None
+    assert item["stage_a_params_url"] is None
+    assert registry.cleanup_expired() == 0
+
+
+def test_gradient_card_material_library_route_can_include_file_urls(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    clock = {"now": 2_000.0}
+    monkeypatch.setattr("api.file_registry.time.time", lambda: clock["now"])
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    response = client.get("/api/extractor/gradient-card-materials?include_file_urls=true")
+
+    assert response.status_code == 200
+    item = response.json()["materials"][0]
     assert item["material_file_url"].startswith("/api/files/")
     assert item["stage_a_params_url"].startswith("/api/files/")
     material_resolved = registry.resolve(item["material_file_url"].split("/")[-1])
@@ -2048,6 +2147,7 @@ def test_export_saved_stage_a_material_archives_writes_v2_bundle_manifest_and_ex
                 "material_name": "PLA Basic",
                 "material_type": "PLA",
                 "color_name": "Blue",
+                "material_summary": {"estimated_rgb": [20, 120, 220]},
                 "stage_a_params_file": "stage_A_parameters.json",
             },
             ensure_ascii=False,
@@ -2092,6 +2192,7 @@ def test_export_saved_stage_a_material_archives_writes_v2_bundle_manifest_and_ex
     assert package["local_directory"] == "BrandA/pla-basic"
     assert package["display"]["brand"] == "BrandA"
     assert package["display"]["material_name"] == "PLA Basic"
+    assert package["display"]["estimated_rgb"] == [20, 120, 220]
     file_hashes = {item["path"]: item["sha256"] for item in package["files"]}
     assert file_hashes["materials/BrandA/pla-basic/material.json"] == (
         hashlib.sha256(material_bytes).hexdigest()

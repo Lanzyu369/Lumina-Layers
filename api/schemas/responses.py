@@ -316,7 +316,7 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     updated_at: str | None = None
     archive_path: str
     stage_a_params_path: str | None = None
-    material_file_url: str
+    material_file_url: str | None = None
     stage_a_params_url: str | None = None
     estimated_rgb: list[int] = Field(default_factory=list)
     layer_height_mm: float | None = None

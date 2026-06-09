@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 import core.material_registry as material_registry_module
+import core.single_stage.materials as single_stage_materials_module
 
 
 def _client() -> TestClient:
@@ -96,6 +97,38 @@ def _write_v2_registry_package(
     return hashlib.sha256(zip_path.read_bytes()).hexdigest()
 
 
+def _write_saved_material(
+    materials_root: Path,
+    directory_name: str = "BrandA/pla-basic",
+    *,
+    brand: str = "BrandA",
+    material_name: str = "PLA Basic",
+) -> Path:
+    material_dir = materials_root.joinpath(*directory_name.split("/"))
+    material_dir.mkdir(parents=True, exist_ok=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": brand,
+                "material_name": material_name,
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps(
+            {"parameters": {"channels": [{"color_name": material_name}]}},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return material_dir
+
+
 def test_material_registry_catalog_requires_package_directory(monkeypatch) -> None:
     monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", raising=False)
 
@@ -174,6 +207,46 @@ def test_material_registry_catalog_paginates_after_channel_filter(
     assert [entry["material_id"] for entry in body["materials"]] == [
         "mat_registry_1"
     ]
+
+
+def test_material_registry_catalog_prefers_official_duplicate_over_community(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    _write_v2_registry_package(
+        packages_dir / "community" / "pla-basic.zip",
+        material_id="mat_registry_duplicate",
+        revision_id="rev_registry_duplicate",
+        channel="community",
+        local_directory="BrandA/pla-basic",
+    )
+    _write_v2_registry_package(
+        packages_dir / "official" / "pla-basic.zip",
+        material_id="mat_registry_duplicate",
+        revision_id="rev_registry_duplicate",
+        channel="official",
+        local_directory="BrandA/pla-basic",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_TEAM_TOKEN", "team-token")
+
+    response = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params=[("channel", "official"), ("channel", "community")],
+        headers={"Authorization": "Bearer team-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["total_count"] == 1
+    assert body["materials"][0]["material_id"] == "mat_registry_duplicate"
+    assert body["materials"][0]["channel"] == "official"
+    assert body["materials"][0]["visibility"] == "official"
+    assert body["materials"][0]["package_url"] == (
+        "/api/material-registry/v1/packages/official/pla-basic.zip"
+    )
 
 
 def test_material_registry_catalog_searches_before_pagination(
@@ -261,6 +334,7 @@ def test_material_registry_catalog_cache_invalidates_after_upload(
         material_id="mat_uploaded",
         revision_id="rev_uploaded",
         channel="manual",
+        local_directory="BrandA/pla-uploaded",
     )
 
     first = material_registry_module.build_material_registry_catalog(
@@ -283,6 +357,39 @@ def test_material_registry_catalog_cache_invalidates_after_upload(
         "mat_existing",
         "mat_uploaded",
     }
+
+
+def test_material_registry_catalog_cache_invalidates_when_package_file_changes(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    package_path = packages_dir / "official" / "mutable.zip"
+    _write_v2_registry_package(
+        package_path,
+        material_id="mat_before",
+        revision_id="rev_before",
+        channel="official",
+        local_directory="BrandA/pla-before",
+    )
+
+    first = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+    _write_v2_registry_package(
+        package_path,
+        material_id="mat_after",
+        revision_id="rev_after",
+        channel="official",
+        local_directory="BrandA/pla-after",
+    )
+    second = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+
+    assert [entry["material_id"] for entry in first["materials"]] == ["mat_before"]
+    assert [entry["material_id"] for entry in second["materials"]] == ["mat_after"]
 
 
 def test_material_registry_team_channel_requires_bearer_token(
@@ -452,3 +559,76 @@ def test_material_registry_approve_requires_official_password(
     entries = catalog.json()["materials"]
     assert entries[0]["material_id"] == "mat_approve_test"
     assert entries[0]["channel"] == "official"
+
+
+def test_material_registry_upload_local_material_exports_and_stores_pending_package(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    packages_dir = tmp_path / "registry-packages"
+    _write_saved_material(materials_root, "BrandA/pla-basic")
+    monkeypatch.setattr(
+        single_stage_materials_module,
+        "MATERIALS_DIR",
+        str(materials_root),
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    unauthorized = _client().post(
+        "/api/material-registry/v1/packages/upload-local",
+        json={"directory_name": "BrandA/pla-basic"},
+    )
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload-local",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        json={"directory_name": "BrandA/pla-basic"},
+    )
+
+    assert unauthorized.status_code == 403
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["channel"] == "pending"
+    assert body["package_path"].startswith("pending/")
+    assert body["materials"][0]["local_directory"] == "BrandA/pla-basic"
+    assert body["materials"][0]["channel"] == "pending"
+
+    catalog = material_registry_module.build_material_registry_catalog(
+        channels=["pending"],
+        packages_dir=str(packages_dir),
+    )
+    assert catalog["count"] == 1
+    assert catalog["materials"][0]["local_directory"] == "BrandA/pla-basic"
+
+
+def test_material_registry_upload_local_material_rejects_duplicate_content(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    packages_dir = tmp_path / "registry-packages"
+    _write_saved_material(materials_root, "BrandA/pla-basic")
+    monkeypatch.setattr(
+        single_stage_materials_module,
+        "MATERIALS_DIR",
+        str(materials_root),
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    first = _client().post(
+        "/api/material-registry/v1/packages/upload-local",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        json={"directory_name": "BrandA/pla-basic"},
+    )
+    duplicate = _client().post(
+        "/api/material-registry/v1/packages/upload-local",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        json={"directory_name": "BrandA/pla-basic"},
+    )
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert "already exists" in duplicate.json()["detail"]

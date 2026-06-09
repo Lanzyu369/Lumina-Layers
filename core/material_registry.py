@@ -24,6 +24,12 @@ _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_CATALOG_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
 
 
+class MaterialRegistryDuplicateError(ValueError):
+    """Raised when a Registry package duplicates an existing material revision.
+    Registry 包与现有耗材 revision 重复时抛出。
+    """
+
+
 def _json_clone(payload: Any) -> Any:
     return json.loads(json.dumps(payload, ensure_ascii=False))
 
@@ -139,6 +145,27 @@ def _safe_registry_filename_segment(value: Any, fallback: str) -> str:
     return segment or fallback
 
 
+def _normalize_registry_local_directory(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .replace("\\", "/")
+        .strip("/")
+    )
+
+
+def _normalize_registry_content_hash(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _material_registry_duplicate_key(entry: dict[str, Any]) -> tuple[str, str] | None:
+    directory = _normalize_registry_local_directory(entry.get("local_directory"))
+    content_hash = _normalize_registry_content_hash(entry.get("content_hash"))
+    if not directory or not content_hash:
+        return None
+    return directory, content_hash
+
+
 def _package_material_entries(
     *,
     root: Path,
@@ -186,10 +213,23 @@ def _material_registry_catalog_cache_key(
     return str(root), tuple(channels)
 
 
+def _material_registry_package_marker(root: Path) -> tuple[tuple[str, int, int], ...]:
+    marker: list[tuple[str, int, int]] = []
+    for zip_path in sorted(root.rglob("*.zip"), key=lambda path: path.as_posix()):
+        try:
+            stat = zip_path.stat()
+            relative = zip_path.resolve().relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        marker.append((relative, int(stat.st_size), int(stat.st_mtime_ns)))
+    return tuple(marker)
+
+
 def _cached_material_registry_catalog(
     *,
     root: Path,
     channels: Sequence[str],
+    marker: tuple[tuple[str, int, int], ...],
 ) -> dict[str, Any] | None:
     cache_key = _material_registry_catalog_cache_key(root, channels)
     now = time.monotonic()
@@ -199,6 +239,9 @@ def _cached_material_registry_catalog(
             return None
         cached_at = float(cached.get("cached_at") or 0.0)
         if now - cached_at > _MATERIAL_REGISTRY_CATALOG_CACHE_TTL_S:
+            _MATERIAL_REGISTRY_CATALOG_CACHE.pop(cache_key, None)
+            return None
+        if cached.get("marker") != marker:
             _MATERIAL_REGISTRY_CATALOG_CACHE.pop(cache_key, None)
             return None
         payload = cached.get("payload")
@@ -211,12 +254,14 @@ def _store_material_registry_catalog_cache(
     *,
     root: Path,
     channels: Sequence[str],
+    marker: tuple[tuple[str, int, int], ...],
     payload: dict[str, Any],
 ) -> None:
     cache_key = _material_registry_catalog_cache_key(root, channels)
     with _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK:
         _MATERIAL_REGISTRY_CATALOG_CACHE[cache_key] = {
             "cached_at": time.monotonic(),
+            "marker": marker,
             "payload": _json_clone(payload),
         }
 
@@ -326,6 +371,42 @@ def _filter_material_registry_catalog(
     payload["offset"] = 0
     payload["limit"] = None
     return _json_clone(payload)
+
+
+def _material_registry_catalog_identity(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(entry.get("material_id") or ""),
+        str(entry.get("revision_id") or ""),
+        str(entry.get("content_hash") or "").lower(),
+    )
+
+
+def _material_registry_catalog_channel_priority(entry: dict[str, Any]) -> int:
+    channel = str(entry.get("channel") or "").strip()
+    return {
+        "official": 30,
+        "team": 20,
+        "community": 10,
+        "pending": 0,
+    }.get(channel, 0)
+
+
+def _deduplicate_material_registry_catalog_entries(
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    selected: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for entry in entries:
+        identity = _material_registry_catalog_identity(entry)
+        if not all(identity):
+            selected[(identity[0], identity[1], f"{identity[2]}:{len(selected)}")] = entry
+            continue
+        existing = selected.get(identity)
+        if existing is None or (
+            _material_registry_catalog_channel_priority(entry)
+            > _material_registry_catalog_channel_priority(existing)
+        ):
+            selected[identity] = entry
+    return list(selected.values())
 
 
 def _rewrite_material_registry_package_channel(
@@ -438,14 +519,95 @@ def upload_material_registry_package(
     archive_path: str,
     channel: str = "pending",
     packages_dir: str | None = None,
+    reject_duplicates: bool = True,
 ) -> dict[str, Any]:
     """Store an uploaded material package in the Registry package root.
     将上传的耗材包保存到 Registry 包目录。
     """
+    if reject_duplicates:
+        assert_material_registry_package_not_duplicate(
+            archive_path=archive_path,
+            packages_dir=packages_dir,
+        )
     return _store_material_registry_package(
         source_zip_path=Path(archive_path),
         channel=channel,
         packages_dir=packages_dir,
+    )
+
+
+def find_duplicate_material_registry_package_entries(
+    *,
+    archive_path: str,
+    packages_dir: str | None = None,
+    channels: Sequence[str] | None = ("official", "pending"),
+) -> list[dict[str, Any]]:
+    """Find Registry entries with the same local directory and content hash.
+    查找与待上传包 local_directory + content_hash 相同的 Registry 条目。
+    """
+    root = _registry_packages_root(packages_dir, create=True)
+    source_path = Path(archive_path)
+    manifest = _load_bundle_manifest(source_path)
+    if manifest is None:
+        raise ValueError("Material registry package manifest is invalid")
+    source_entries = _package_material_entries(
+        root=root,
+        zip_path=source_path,
+        manifest=manifest,
+        package_sha256="",
+        package_bytes=0,
+        package_url="local-upload.zip",
+    )
+    source_keys = {
+        key
+        for key in (
+            _material_registry_duplicate_key(entry)
+            for entry in source_entries
+        )
+        if key is not None
+    }
+    if not source_keys:
+        return []
+
+    catalog = build_material_registry_catalog(
+        channels=channels,
+        packages_dir=packages_dir,
+    )
+    duplicates: list[dict[str, Any]] = []
+    raw_entries = catalog.get("materials")
+    if not isinstance(raw_entries, list):
+        return duplicates
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        existing_key = _material_registry_duplicate_key(raw_entry)
+        if existing_key in source_keys:
+            duplicates.append(_json_clone(raw_entry))
+    return duplicates
+
+
+def assert_material_registry_package_not_duplicate(
+    *,
+    archive_path: str,
+    packages_dir: str | None = None,
+    channels: Sequence[str] | None = ("official", "pending"),
+) -> None:
+    """Raise when a package duplicates an existing pending/official entry.
+    若包与现有 pending/official 条目重复则抛出。
+    """
+    duplicates = find_duplicate_material_registry_package_entries(
+        archive_path=archive_path,
+        packages_dir=packages_dir,
+        channels=channels,
+    )
+    if not duplicates:
+        return
+    first = duplicates[0]
+    raise MaterialRegistryDuplicateError(
+        "Material registry package already exists: "
+        f"{first.get('local_directory')} "
+        f"{first.get('content_hash')} "
+        f"({first.get('channel')})"
     )
 
 
@@ -484,9 +646,11 @@ def build_material_registry_catalog(
     normalized_channels = normalize_material_registry_channels(channels)
     channel_set = set(normalized_channels)
     root = _registry_packages_root(packages_dir)
+    package_marker = _material_registry_package_marker(root)
     cached_catalog = _cached_material_registry_catalog(
         root=root,
         channels=normalized_channels,
+        marker=package_marker,
     )
     if cached_catalog is not None:
         return _paginate_material_registry_catalog(
@@ -519,6 +683,7 @@ def build_material_registry_catalog(
                 package_url=package_url,
             )[0]
             materials.append(entry)
+    materials = _deduplicate_material_registry_catalog_entries(materials)
     materials.sort(
         key=lambda entry: (
             str(entry["channel"]),
@@ -540,6 +705,7 @@ def build_material_registry_catalog(
     _store_material_registry_catalog_cache(
         root=root,
         channels=normalized_channels,
+        marker=package_marker,
         payload=catalog,
     )
     return _paginate_material_registry_catalog(
