@@ -25,6 +25,18 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _matches_machine_name(profile_name: str, settings: dict[str, Any], machine_name: str | None) -> bool:
+    if not machine_name:
+        return True
+    needle = machine_name.strip().casefold()
+    if not needle:
+        return True
+    printer_model = str(settings.get("printer_model") or "").strip().casefold()
+    if printer_model:
+        return printer_model == needle
+    return profile_name.strip().casefold() == needle
+
+
 def run_import(
     *,
     slicer_id: str,
@@ -32,6 +44,7 @@ def run_import(
     source_version: str,
     vendor_keys: tuple[str, ...],
     output_root: Path,
+    machine_name: str | None = None,
 ) -> ImportResult:
     provider = get_provider(slicer_id)
     machines: dict[str, dict[str, Any]] = {}
@@ -39,6 +52,8 @@ def run_import(
 
     for vendor_key in vendor_keys:
         for profile in resolve_machine_profiles(root=source_root, vendor_key=vendor_key):
+            if not _matches_machine_name(profile.name, profile.settings, machine_name):
+                continue
             entry, template = build_device_registry_entry(
                 provider=provider,
                 source_version=source_version,
@@ -104,6 +119,7 @@ def main() -> int:
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--source-version", required=True)
     parser.add_argument("--vendor", action="append", dest="vendors")
+    parser.add_argument("--machine-name")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -114,6 +130,7 @@ def main() -> int:
         source_version=args.source_version,
         vendor_keys=tuple(args.vendors or provider.default_vendor_keys),
         output_root=Path(args.output),
+        machine_name=args.machine_name,
     )
     print(f"Imported {result.device_count} device profiles")
     return 0
