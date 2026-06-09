@@ -31,7 +31,7 @@ vi.mock("../api/extractor", async () => {
     ...actual,
     listGradientCardMaterials: vi.fn(),
   };
-}));
+});
 
 function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
   return [
