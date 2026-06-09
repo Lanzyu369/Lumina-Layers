@@ -629,12 +629,95 @@ def _clip_vector_outline_buffer_to_expected_bounds(expanded, union, width_units:
     return clipped
 
 
+def _resolve_vector_outline_export_size_mm(
+    analysis,
+    scale_factor: float,
+) -> tuple[float, float] | None:
+    """Return the vector export width/height in millimetres, if available.
+    返回 vector 导出宽高（毫米），不可可靠解析时返回 ``None``。
+
+    ``VectorProcessor.build_mesh`` derives its final coordinate transforms
+    from ``analysis.bbox[2:4] * analysis.scale_factor``. The outline helper
+    must use the same source so auxiliary outline geometry lands in the same
+    XY coordinate system as the colour and backing meshes.
+
+    ``VectorProcessor.build_mesh`` 使用 ``analysis.bbox[2:4] *
+    analysis.scale_factor`` 计算最终坐标变换；Outline 必须使用同一来源，
+    才能与主体色块和底板落在同一个 XY 坐标系。
+    """
+    bbox_raw = getattr(analysis, "bbox", None)
+    if not isinstance(bbox_raw, (list, tuple, np.ndarray)) or len(bbox_raw) < 4:
+        return None
+    try:
+        width_mm = float(bbox_raw[2]) * float(scale_factor)
+        height_mm = float(bbox_raw[3]) * float(scale_factor)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(width_mm) or not np.isfinite(height_mm):
+        return None
+    if width_mm <= 0 or height_mm <= 0:
+        return None
+    return width_mm, height_mm
+
+
+def _apply_vector_outline_export_transform(
+    outline_mesh: trimesh.Trimesh,
+    *,
+    analysis,
+    ctx: dict,
+    scale_factor: float,
+    export_color_mode: object | None = None,
+) -> None:
+    """Apply the same XY export transform used by vector body meshes.
+    对 Outline 应用与 vector 主体网格一致的 XY 导出变换。
+
+    Body meshes are normalised in ``VectorProcessor.build_mesh`` after
+    extrusion: SVG's Y-down coordinates are flipped into printer Y-up space,
+    and non-5-colour single-sided exports are mirrored on X. The Outline mesh
+    is generated outside ``build_mesh``, so it must repeat those two transforms
+    explicitly.
+
+    主体网格在 ``VectorProcessor.build_mesh`` 里完成坐标归一：先把 SVG 的
+    Y-down 坐标翻到打印坐标，再对非 5 色单面导出做 X 镜像。Outline 是在
+    ``build_mesh`` 外部生成的，因此这里显式复用同一组变换。
+    """
+    size_mm = _resolve_vector_outline_export_size_mm(analysis, scale_factor)
+    if size_mm is None:
+        return
+    width_mm, height_mm = size_mm
+
+    y_flip = np.eye(4)
+    y_flip[1, 1] = -1.0
+    y_flip[1, 3] = float(height_mm)
+    outline_mesh.apply_transform(y_flip)
+
+    structure_mode_text = str(ctx.get("structure_mode", "") or "")
+    # Match VectorProcessor.build_mesh(), which uses the processor's
+    # color_mode for the single-sided X mirror decision. In material-archive
+    # mode that value is "Material Archive", not the UI color_mode stored in
+    # ctx.
+    color_mode_source = (
+        export_color_mode
+        if export_color_mode is not None
+        else ctx.get("color_mode", "")
+    )
+    color_mode_text = str(color_mode_source or "")
+    is_single_sided = "单面" in structure_mode_text or "Single" in structure_mode_text
+    is_5color = "5-Color Extended" in color_mode_text
+    if is_single_sided and not is_5color:
+        mirror_x = np.eye(4)
+        mirror_x[0, 0] = -1.0
+        mirror_x[0, 3] = float(width_mm)
+        outline_mesh.apply_transform(mirror_x)
+
+
 def _generate_vector_outline_mesh(
     analysis,
     outline_width_mm: float,
     base_aux_color: list[int],
     base_aux_material_name: str | None,
     ctx: dict,
+    export_color_mode: object | None = None,
 ) -> "trimesh.Trimesh | None":
     """Build a ring-shaped Outline mesh from ``analysis.matched_shapes``.
     从 ``analysis.matched_shapes`` 生成环形 Outline mesh。
@@ -850,6 +933,14 @@ def _generate_vector_outline_mesh(
         outline_mesh = meshes[0]
     else:
         outline_mesh = trimesh.util.concatenate(meshes)
+
+    _apply_vector_outline_export_transform(
+        outline_mesh,
+        analysis=analysis,
+        ctx=ctx,
+        scale_factor=scale_factor,
+        export_color_mode=export_color_mode,
+    )
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
@@ -1326,6 +1417,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
             )
             if outline_mesh is not None:
                 cache["outline_geometry"] = outline_mesh
@@ -1821,6 +1913,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=vec_processor.color_mode,
             )
             if outline_mesh is not None:
                 outline_name = "Outline"
